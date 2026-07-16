@@ -31,6 +31,7 @@ from dlightrag.api.models import (
     ResetResponse,
     RetrievalResponse,
     RetrieveRequest,
+    UploadIngestJobResponse,
 )
 from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
@@ -91,10 +92,15 @@ def _job_response(job: dict[str, Any]) -> JSONResponse:
     return JSONResponse(status_code=202, content=jsonable_encoder(job))
 
 
-@router.post("/ingest", response_model=None)
+@router.post(
+    "/ingest",
+    response_model=None,
+    status_code=202,
+    responses={202: {"model": IngestJobStatusResponse, "description": "Ingestion job accepted."}},
+)
 async def ingest(
     body: IngestRequest, request: Request, user: UserContext = Depends(get_current_user)
-) -> dict[str, Any] | JSONResponse:
+) -> JSONResponse:
     """Bulk document ingestion."""
     manager = get_manager(request)
     cfg = request_config(request)
@@ -308,7 +314,14 @@ async def answer(
     )
 
 
-@router.post("/ingest/blob", response_model=None)
+@router.post(
+    "/ingest/blob",
+    response_model=None,
+    status_code=202,
+    responses={
+        202: {"model": UploadIngestJobResponse, "description": "Upload ingestion job accepted."}
+    },
+)
 async def ingest_blob(
     request: Request,
     file: UploadFile = File(...),

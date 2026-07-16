@@ -5,7 +5,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import asyncpg
 
@@ -33,6 +33,9 @@ from dlightrag.web.conversation_models import (
 )
 from dlightrag.web.principal import principal_id_from_user
 from dlightrag.web.safe_html import safe_answer_done
+
+if TYPE_CHECKING:
+    from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -191,7 +194,7 @@ class WebConversationService:
     async def prepare_answer_turn(
         self,
         *,
-        manager: Any,
+        manager: RAGServiceManager,
         prepared: PreparedWebConversation,
         query: str,
         current_images: list[dict[str, Any]],
@@ -205,7 +208,7 @@ class WebConversationService:
         skips re-planning. Current images always come first and are never
         displaced by history selection.
         """
-        capability = getattr(manager, "answer_image_capability", None)
+        capability = manager.answer_image_capability
         effective = capability.effective_max_images if capability is not None else 0
         remaining = max(0, effective - len(current_images))
 

@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock
 
 import jwt
@@ -22,6 +23,14 @@ from dlightrag.core.answer_capability import AnswerImageCapability
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.conversations import PreparedWebConversation
+
+if TYPE_CHECKING:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+
+def _fake_manager(**attrs: object) -> RAGServiceManager:
+    return cast("RAGServiceManager", SimpleNamespace(**attrs))
+
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
 SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
@@ -526,6 +535,7 @@ class TestWebAnswer:
         class PreparedManager:
             def __init__(self) -> None:
                 self.config = test_config
+                self.answer_image_capability = None
                 self._aanswer_stream_prepared = AsyncMock(
                     return_value=({"chunks": []}, mock_tokens())
                 )
@@ -610,6 +620,7 @@ class TestWebAnswer:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
+                self.answer_image_capability = None
                 self._aanswer_stream_prepared = AsyncMock(
                     return_value=(
                         {
@@ -683,6 +694,7 @@ class TestWebAnswer:
 
         manager = SimpleNamespace(
             config=test_config,
+            answer_image_capability=None,
             _aanswer_stream_prepared=AsyncMock(
                 return_value=(
                     {
@@ -759,6 +771,7 @@ class TestWebSSEBoundary:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
+                self.answer_image_capability = None
                 self._aanswer_stream_prepared = AsyncMock(
                     return_value=(
                         {
@@ -815,6 +828,7 @@ class TestWebSSEBoundary:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
+                self.answer_image_capability = None
                 self._aanswer_stream_prepared = AsyncMock(
                     return_value=(
                         {
@@ -1546,7 +1560,7 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
             }
         ]
     }
-    manager = SimpleNamespace(config=SimpleNamespace(workspace="default"))
+    manager = _fake_manager(config=SimpleNamespace(workspace="default"))
     cfg = SimpleNamespace(input_dir_path=tmp_path / "inputs")
 
     payload = await answer_events._build_answer_done_payload(
@@ -1618,7 +1632,7 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
             }
         ]
     }
-    manager = SimpleNamespace(config=SimpleNamespace(workspace="default"))
+    manager = _fake_manager(config=SimpleNamespace(workspace="default"))
     cfg = SimpleNamespace(input_dir_path=tmp_path / "inputs")
 
     await answer_events._build_answer_done_payload(

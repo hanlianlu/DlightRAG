@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit tests for WebConversationService.prepare_answer_turn (merge wiring)."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag.core.answer_capability import AnswerImageCapability
 from dlightrag.core.query_planner import QueryPlan
@@ -10,6 +10,9 @@ from dlightrag.web.conversations import (
     PreparedWebConversation,
     WebConversationService,
 )
+
+if TYPE_CHECKING:
+    from dlightrag.core.servicemanager import RAGServiceManager
 
 _ID = "11111111-1111-1111-1111-111111111111"
 
@@ -104,7 +107,7 @@ async def test_prepare_answer_turn_injects_plan_and_orders_current_first() -> No
     current = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}}]
 
     turn = await service.prepare_answer_turn(
-        manager=manager,
+        manager=cast("RAGServiceManager", manager),
         prepared=_prepared(),
         query="explain that chart",
         current_images=current,
@@ -131,7 +134,7 @@ async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
     service = _service(store)
 
     turn = await service.prepare_answer_turn(
-        manager=manager,
+        manager=cast("RAGServiceManager", manager),
         prepared=_prepared(),
         query="q",
         current_images=[],

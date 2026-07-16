@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {bus} from '../events/bus.ts';
+import {isAbortError} from '../lib/errors.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
 import {installListboxArrowNavigation} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
@@ -46,10 +47,6 @@ function beginFileMutation(): void {
 
 function finishFileMutation(): void {
     activeFileMutations = Math.max(0, activeFileMutations - 1);
-}
-
-function isAbortError(error: unknown): boolean {
-    return error instanceof DOMException && error.name === 'AbortError';
 }
 
 function isFilesPanelActive(): boolean {

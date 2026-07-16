@@ -16,6 +16,7 @@ import {
     renderConversationHistoryError,
     renderConversationHistoryLoading,
 } from '../lib/chat_renderer.ts';
+import {isAbortError} from '../lib/errors.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {isQueryInFlight, isQueryStopping} from './chat.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
@@ -41,10 +42,6 @@ let renameDraft: string | null = null;
 let drawerOpen = false;
 let desktopCollapsed = window.localStorage.getItem(COLLAPSED_KEY) === 'true';
 let drawerReturnFocus: HTMLElement | null = null;
-
-function isAbortError(error: unknown): boolean {
-    return error instanceof DOMException && error.name === 'AbortError';
-}
 
 function isDesktop(): boolean {
     return window.matchMedia(DESKTOP_MEDIA).matches;

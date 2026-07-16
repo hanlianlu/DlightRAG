@@ -7,7 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
-from dlightrag.api.models import MetadataResponse, MetadataUpdateRequest, MetadataUpdateResponse
+from dlightrag.api.models import (
+    MetadataResponse,
+    MetadataUpdateRequest,
+    MetadataUpdateResponse,
+    SearchMetadataResponse,
+)
 
 from .deps import enforce_access, get_manager, resolve_workspace
 
@@ -65,14 +70,14 @@ async def update_metadata(
     return {"status": "success", "doc_id": doc_id}
 
 
-@router.post("/metadata/search", response_model=list[str])
+@router.post("/metadata/search", response_model=SearchMetadataResponse)
 async def search_metadata(
     filters: dict[str, Any],
     request: Request,
     workspace: str | None = None,
     user: UserContext = Depends(get_current_user),
-) -> list[str]:
-    """Return a list of document IDs matching all key-value pairs in 'filters'."""
+) -> dict[str, Any]:
+    """Return the document IDs matching all key-value pairs in 'filters'."""
     from pydantic import ValidationError
 
     from dlightrag.core.retrieval.models import MetadataFilter
@@ -83,9 +88,10 @@ async def search_metadata(
     try:
         validated = MetadataFilter.model_validate(filters)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        raise HTTPException(status_code=422, detail=f"Invalid metadata filter: {exc}") from exc
 
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
-    return await manager.asearch_metadata(ws, validated)
+    document_ids = await manager.asearch_metadata(ws, validated)
+    return {"document_ids": document_ids, "count": len(document_ids), "workspace": ws}
