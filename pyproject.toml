@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.7.3"
+version = "1.7.4"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -14,7 +14,7 @@ dependencies = [
     # LLM
     "openai>=2.45.0",
     "anthropic>=0.116.0",
-    "google-genai>=2.11.0",
+    "google-genai>=2.12.1",
     # PostgreSQL
     "asyncpg>=0.31.0",
     "pgvector>=0.5.0",
@@ -42,7 +42,7 @@ dependencies = [
     "mcp[cli]>=1.9.0",
     # REST API server
     "PyJWT>=2.8.0",
-    "fastapi>=0.135.1",
+    "fastapi>=0.139.2",
     "uvicorn[standard]>=0.51.0",
     "python-multipart>=0.0.22",
     # Web frontend
