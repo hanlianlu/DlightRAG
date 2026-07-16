@@ -111,6 +111,13 @@ def _prepare_documents(
     Text mode carries no image. Multimodal mode bounds each image once (PIL
     decode/resize/re-encode is CPU-bound); a chunk whose image is missing or
     exceeds the shared per-request budget degrades to text.
+
+    Each chunk maps to exactly one document -- never two competing entries.
+    Downstream, multimodal HTTP providers render each document as image XOR
+    text (``{"image": uri} if uri else text``), so a chunk carrying an image is
+    reranked by that image alone and its VLM ``content`` is omitted from the
+    rerank payload (it still feeds embedding, retrieval, and answer). Only the
+    listwise VLM reranker fuses image + description into one scored candidate.
     """
     if modality == "text":
         return [(_chunk_text(chunk), None) for chunk in chunks]
