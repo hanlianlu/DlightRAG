@@ -138,8 +138,10 @@ metadata:
   #     type: string
   #     filter_ops: ["exact"]
 
-## Entity guidance is product-level domain shaping. For deeper domain profiles,
-## prefer extraction.entity_type_prompt_file and prompts/entity_type/*.yaml.
+## kg_entity_types is a lightweight hint (one line of extraction guidance). For
+## type definitions plus few-shot examples, point extraction.entity_type_prompt_file
+## at a single YAML in prompts/entity_type/. A non-empty list here overrides that
+## file's guidance text (its examples still apply); clear it to use the file's.
 kg_entity_types:
   - Product
   - Component
