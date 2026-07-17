@@ -1,0 +1,36 @@
+# DlightRAG entity-type prompt profile — example.
+# Activate in config.yaml:  extraction.entity_type_prompt_file: domain-entities.yaml
+#
+# - entity_extraction_json_examples is REQUIRED (DlightRAG extracts in JSON mode).
+# - A non-empty kg_entity_types in config.yaml overrides entity_types_guidance
+#   below; the examples still apply. Clear kg_entity_types to use this guidance.
+
+entity_types_guidance: |
+  Classify each entity using one of the following types. If no type fits, use `Other`.
+
+  - Product: A shippable commercial hardware or software product
+  - Component: A physical or logical part inside a product
+  - Technology: A method, protocol, material, or technique a product uses
+  - Design: A design language, style, form factor, or visual approach
+  - Genre: A category or style of creative or media work
+  - Organization: A company, institution, studio, or standards body
+  - Standard: A published specification, certification, or format
+  - Biography: A person or their documented life and career
+  - Location: A geographic place (city, country, building, region)
+  - Event: An occurrence, launch, exhibition, or milestone
+
+# Few-shot examples (list of strings). Concrete values teach the domain style;
+# they are output-format templates, not source text.
+entity_extraction_json_examples:
+  - |
+    {
+      "entities": [
+        {"name": "Vega X1", "type": "Product", "description": "A laptop model launched by Orion Labs."},
+        {"name": "Orion Labs", "type": "Organization", "description": "The company that designs and sells the Vega X1."},
+        {"name": "PCIe 5.0", "type": "Standard", "description": "The bus specification the Vega X1 storage uses."}
+      ],
+      "relationships": [
+        {"source": "Orion Labs", "target": "Vega X1", "keywords": "manufactures, produces", "description": "Orion Labs designs and ships the Vega X1."},
+        {"source": "Vega X1", "target": "PCIe 5.0", "keywords": "conforms to, uses", "description": "The Vega X1 storage subsystem implements PCIe 5.0."}
+      ]
+    }
