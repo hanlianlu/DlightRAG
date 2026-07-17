@@ -17,6 +17,7 @@ from dlightrag.config import (
     LLMConfig,
     LLMRolesConfig,
     MetadataConfig,
+    MinerUSidecarConfig,
     ModelConfig,
     QueryImagesConfig,
     RerankConfig,
@@ -1036,6 +1037,42 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://shared-mineru.local:8210"
     assert os.environ["MINERU_LANGUAGE"] == "cyrillic"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "extended"
+
+
+def test_mineru_backend_maps_to_env_and_defers_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINERU_LOCAL_BACKEND", raising=False)
+
+    # Explicit backend is exported to LightRAG's MINERU_LOCAL_BACKEND env.
+    _settings_config(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        parser_sidecars={"mineru": {"backend": "pipeline"}},
+    )
+    assert os.environ["MINERU_LOCAL_BACKEND"] == "pipeline"
+
+    # Unset backend defers to LightRAG's own default: env is not emitted.
+    monkeypatch.delenv("MINERU_LOCAL_BACKEND", raising=False)
+    _settings_config(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        parser_sidecars={"mineru": {"language": "ch"}},
+    )
+    assert "MINERU_LOCAL_BACKEND" not in os.environ
+
+
+def test_mineru_backend_rejects_unknown_value() -> None:
+    with pytest.raises(ValidationError):
+        cast(Any, MinerUSidecarConfig)(backend="paddle")
 
 
 def test_sidecar_env_loader_does_not_export_service_helper_keys(

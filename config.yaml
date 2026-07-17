@@ -30,8 +30,8 @@
 llm:
   default:
     provider: openai
-    model: MiniMax-M3
-    base_url: https://api.minimaxi.com/v1
+    model: stepfun/step-3.7-flash
+    base_url: https://openrouter.ai/api/v1
     structured_output: json_schema
     temperature: 0.4
     timeout: 120.0
@@ -115,6 +115,11 @@ parser_sidecars:
     local_endpoint: http://127.0.0.1:8210
     language: ch
     auxiliary_block_policy: conservative
+    ## MinerU parse engine. Unset = LightRAG default (hybrid-auto-engine, VLM-assisted).
+    ## Set backend: pipeline for MinerU's non-VLM OCR engine (avoids VLM transcription
+    ## artifacts on hard scans; weaker on complex layout/charts).
+    ## Options: pipeline | vlm-engine | hybrid-engine | vlm-auto-engine | hybrid-auto-engine
+    # backend: pipeline
     # api_mode: official
     # official_endpoint: https://mineru.net
     ## Put DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN in .env.
