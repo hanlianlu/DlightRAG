@@ -203,7 +203,7 @@ async def stream_answer_events(
     *,
     manager: RAGServiceManager,
     cfg: Any,
-    turn: PreparedAnswerTurn,
+    query: str,
     workspaces: list[str] | None,
     workspace: str,
     scope: RequestScope | None = None,
@@ -213,7 +213,14 @@ async def stream_answer_events(
     validated_images: tuple[ValidatedWebImage, ...],
     submission_id: str,
 ) -> AsyncGenerator[str]:
-    """Yield browser SSE events for one answer request, under a request-root span."""
+    """Yield browser SSE events for one answer request, under a request-root span.
+
+    The request-root span is opened here, then query planning runs lazily inside
+    it (see ``_emit_answer_events``). Planning shares this task and OTEL context,
+    so ``query_planning`` nests under ``answer_stream_pipeline`` and the whole
+    turn -- plan, retrieve, generate, highlight -- lands in one trace. An
+    already-committed submission replays below without planning at all.
+    """
     ws_list = workspaces or [workspace or manager.config.workspace]
     if trace_sensitive_enabled():
         identity = {
@@ -230,14 +237,13 @@ async def stream_answer_events(
     metadata = {
         "workspaces": ws_list,
         **identity,
-        "history_turns_loaded": len(turn.text_history) // 2,
+        "history_turns_loaded": len(prepared_conversation.text_history) // 2,
         "current_image_count": len(validated_images),
-        **_capability_metrics(manager, turn),
     }
     async with trace_observation(
         "answer_stream_pipeline",
         as_type="chain",
-        input={"query": turn.current_query},
+        input={"query": query},
         metadata=metadata,
     ) as observation:
         if prepared_conversation.committed_submission is not None:
@@ -254,7 +260,7 @@ async def stream_answer_events(
         emitter = _emit_answer_events(
             manager=manager,
             cfg=cfg,
-            turn=turn,
+            query=query,
             ws_list=ws_list,
             workspace=workspace,
             scope=scope,
@@ -276,7 +282,7 @@ async def _emit_answer_events(
     *,
     manager: Any,
     cfg: Any,
-    turn: PreparedAnswerTurn,
+    query: str,
     ws_list: list[str],
     workspace: str,
     scope: RequestScope | None = None,
@@ -295,13 +301,26 @@ async def _emit_answer_events(
     persistence_started = False
     commit_task: asyncio.Task[CommitTurnResult] | None = None
     try:
-        history_kept = len(turn.text_history)
+        history_kept = len(prepared_conversation.text_history)
         yield sse_event("meta", AnswerMetaEvent(history_kept=history_kept))
 
         t0 = time.monotonic()
-        logger.debug("[SSE] query received: %s", log_safe(turn.current_query))
+        logger.debug("[SSE] query received: %s", log_safe(query))
 
         yield sse_event("progress", AnswerProgressEvent(phase="planning"))
+
+        # Plan inside the request-root span so query_planning nests under it
+        # (same task/OTEL context). The web layer owns the conversation image
+        # store, so planner-selected history images are materialized here too.
+        turn = await conversation_service.prepare_answer_turn(
+            manager=manager,
+            prepared=prepared_conversation,
+            query=query,
+            current_images=[image.model_block for image in validated_images],
+            workspaces=ws_list,
+        )
+        if observation is not None:
+            observation.update(metadata=_capability_metrics(manager, turn))
 
         contexts, token_iter = await manager._aanswer_stream_prepared(
             turn,
@@ -309,7 +328,7 @@ async def _emit_answer_events(
             scope=scope,
         )
         t1 = time.monotonic()
-        logger.info("[SSE] retrieval+stream setup done (%.1fs)", t1 - t0)
+        logger.info("[SSE] planning+retrieval+stream setup done (%.1fs)", t1 - t0)
 
         yield sse_event("progress", AnswerProgressEvent(phase="generating"))
         logger.info("[SSE] stream started")

@@ -908,13 +908,13 @@ class TestWebAnswerAdapter:
         assert resp.status_code == 200
         assert captured["manager"] is web_app.state.manager
         assert captured["cfg"] is test_config
-        assert captured["turn"].current_query == "hello"
-        assert captured["turn"].text_history == ({"role": "user", "content": "Earlier"},)
-        assert list(captured["turn"].materialized_query_images) == [
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
-        ]
+        # Planning moved into the stream: the route now passes the raw query and
+        # validated images; the presenter plans under the request-root span.
+        assert captured["query"] == "hello"
+        assert len(captured["validated_images"]) == 1
         assert captured["workspaces"] == ["default", "test_ws"]
         assert captured["workspace"] == "default"
+        assert "turn" not in captured
         assert "session_id" not in captured
         assert "conversation_history" not in captured
 

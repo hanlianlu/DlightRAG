@@ -67,14 +67,6 @@ class _TracedStream:
             yield token
 
 
-def _start_metadata(captured: dict[str, object]) -> dict[str, Any]:
-    start = captured["start"]
-    assert isinstance(start, dict)
-    metadata = start.get("metadata")
-    assert isinstance(metadata, dict)
-    return metadata
-
-
 def _metadata_updates(captured: dict[str, object]) -> list[dict[str, Any]]:
     updates = captured["updates"]
     assert isinstance(updates, list)
@@ -100,6 +92,9 @@ async def _collect(
 ):
     if result is not None:
         service.commit_answer.return_value = result
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="hello", retrieval_query="hello"
+    )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
@@ -117,7 +112,7 @@ async def _collect(
             cfg=SimpleNamespace(
                 citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))
             ),
-            turn=PreparedAnswerTurn(current_query="hello", retrieval_query="hello"),
+            query="hello",
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
@@ -184,6 +179,9 @@ async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
         raise RuntimeError("provider failed")
 
     service = AsyncMock()
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="hello", retrieval_query="hello"
+    )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, failing_tokens())),
@@ -200,7 +198,7 @@ async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
         async for event in stream_answer_events(
             manager=manager,
             cfg=SimpleNamespace(),
-            turn=PreparedAnswerTurn(current_query="hello", retrieval_query="hello"),
+            query="hello",
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
@@ -275,11 +273,12 @@ async def test_transport_and_capability_metrics_reach_observation(
         history_image_catalog_count=2,
         history_image_resolution_status="degraded",
     )
+    service.prepare_answer_turn.return_value = turn
 
     async for _event in stream_answer_events(
         manager=manager,
         cfg=SimpleNamespace(citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))),
-        turn=turn,
+        query="hi",
         workspaces=["default"],
         workspace="default",
         conversation_service=service,
@@ -289,13 +288,19 @@ async def test_transport_and_capability_metrics_reach_observation(
     ):
         pass
 
-    start = _start_metadata(captured)
-    assert start["answer_image_capability_status"] == "supported"
-    assert start["answer_image_configured_ceiling"] == 8
-    assert start["answer_image_effective_limit"] == 6
-    assert start["history_image_catalog_count"] == 2
-    assert start["history_images_selected"] == 1
-    assert start["history_image_resolution_status"] == "degraded"
+    capability = [
+        metadata
+        for metadata in _metadata_updates(captured)
+        if "answer_image_capability_status" in metadata
+    ]
+    assert capability, "capability metrics were not emitted"
+    caps = capability[-1]
+    assert caps["answer_image_capability_status"] == "supported"
+    assert caps["answer_image_configured_ceiling"] == 8
+    assert caps["answer_image_effective_limit"] == 6
+    assert caps["history_image_catalog_count"] == 2
+    assert caps["history_images_selected"] == 1
+    assert caps["history_image_resolution_status"] == "degraded"
 
     transport = [
         metadata for metadata in _metadata_updates(captured) if "answer_images_total" in metadata
@@ -316,6 +321,9 @@ async def test_current_image_payload_error_maps_to_limit_error(
 ) -> None:
     captured = _record_observations(monkeypatch)
     service = AsyncMock()
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="hi", retrieval_query="hi"
+    )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         answer_image_capability=None,
@@ -335,7 +343,7 @@ async def test_current_image_payload_error_maps_to_limit_error(
         async for event in stream_answer_events(
             manager=manager,
             cfg=SimpleNamespace(),
-            turn=PreparedAnswerTurn(current_query="hi", retrieval_query="hi"),
+            query="hi",
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
@@ -366,6 +374,9 @@ async def test_cancellation_propagates_without_committing(
         raise asyncio.CancelledError
 
     service = AsyncMock()
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="hello", retrieval_query="hello"
+    )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, cancelled_tokens())),
@@ -381,7 +392,7 @@ async def test_cancellation_propagates_without_committing(
         async for _event in stream_answer_events(
             manager=manager,
             cfg=SimpleNamespace(),
-            turn=PreparedAnswerTurn(current_query="hello", retrieval_query="hello"),
+            query="hello",
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
@@ -410,6 +421,9 @@ async def _run_failing_stream(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         raise RuntimeError("secret provider detail")
 
     service = AsyncMock()
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="private prompt", retrieval_query="private prompt"
+    )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, failing_tokens())),
@@ -426,9 +440,7 @@ async def _run_failing_stream(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         async for event in stream_answer_events(
             manager=manager,
             cfg=SimpleNamespace(),
-            turn=PreparedAnswerTurn(
-                current_query="private prompt", retrieval_query="private prompt"
-            ),
+            query="private prompt",
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
@@ -645,6 +657,9 @@ async def test_generator_close_after_saving_heartbeat_finishes_commit(
 
     service = AsyncMock()
     service.commit_answer.side_effect = commit_answer
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="hello", retrieval_query="hello"
+    )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
@@ -658,7 +673,7 @@ async def test_generator_close_after_saving_heartbeat_finishes_commit(
     stream = stream_answer_events(
         manager=manager,
         cfg=SimpleNamespace(citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))),
-        turn=PreparedAnswerTurn(current_query="hello", retrieval_query="hello"),
+        query="hello",
         workspaces=["default"],
         workspace="default",
         conversation_service=service,

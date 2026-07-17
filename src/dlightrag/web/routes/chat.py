@@ -165,19 +165,16 @@ async def answer_stream(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    turn = await conversation_service.prepare_answer_turn(
-        manager=manager,
-        prepared=prepared_conversation,
-        query=query,
-        current_images=[image.model_block for image in validated_images],
-        workspaces=target_workspaces,
-    )
 
+    # Planning runs lazily inside the stream (under the request-root span), not
+    # here: this keeps query_planning nested in the answer_stream_pipeline trace
+    # and lets an already-committed (duplicate) submission replay without
+    # re-planning. The handler stays synchronous request gating only.
     return StreamingResponse(
         stream_answer_events(
             manager=manager,
             cfg=cfg,
-            turn=turn,
+            query=query,
             workspaces=workspaces,
             workspace=workspace,
             scope=scope,
