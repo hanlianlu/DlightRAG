@@ -103,9 +103,8 @@ working_dir: ./dlightrag_storage
 
 extraction:
   language: English
-  ## YAML file name under PROMPT_DIR/entity_type (default ./prompts/entity_type).
-  ## Must be a file name such as domain-entities.yaml, not a path.
-  entity_type_prompt_file:
+  ## Must deactivate kg_entity_types if using entity_type_prompt_file
+  # entity_type_prompt_file: domain-entities.yaml
 
 parser_sidecars:
   vlm:
@@ -138,10 +137,7 @@ metadata:
   #     type: string
   #     filter_ops: ["exact"]
 
-## kg_entity_types is a lightweight hint (one line of extraction guidance). For
-## type definitions plus few-shot examples, point extraction.entity_type_prompt_file
-## at a single YAML in prompts/entity_type/. A non-empty list here overrides that
-## file's guidance text (its examples still apply); clear it to use the file's.
+## kg_entity_types is a lightweight hint (one line of extraction guidance).
 kg_entity_types:
   - Product
   - Component
