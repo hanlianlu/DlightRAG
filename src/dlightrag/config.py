@@ -52,6 +52,13 @@ MinerULanguage = Literal[
     "cyrillic",
     "devanagari",
 ]
+MinerULocalBackend = Literal[
+    "pipeline",
+    "vlm-engine",
+    "hybrid-engine",
+    "vlm-auto-engine",
+    "hybrid-auto-engine",
+]
 
 
 class LightRAGPipelineKwargs(TypedDict):
@@ -269,8 +276,8 @@ class MinerUSidecarConfig(BaseModel):
     """LightRAG MinerU parser sidecar settings.
 
     Only fields that are *necessary to route or override* are declared here.
-    Everything else — backend, parse method, table/formula, OCR, page ranges,
-    and MinerU-side image analysis — is left to LightRAG's built-in defaults.
+    Everything else — parse method, table/formula, OCR, page ranges, and
+    MinerU-side image analysis — is left to LightRAG's built-in defaults.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -280,6 +287,11 @@ class MinerUSidecarConfig(BaseModel):
     official_endpoint: str = "https://mineru.net"
     local_endpoint: str = "http://127.0.0.1:8210"
     language: MinerULanguage = "ch"
+    # None (default) defers to LightRAG's built-in MinerU engine
+    # (``hybrid-auto-engine``, VLM-assisted): when unset, MINERU_LOCAL_BACKEND is
+    # not emitted, so LightRAG's own default governs. Set an explicit engine to
+    # override — e.g. ``pipeline`` for MinerU's non-VLM OCR path.
+    backend: MinerULocalBackend | None = None
     force_reparse: bool = False
 
     # macOS MinerU hard-codes max_concurrent_requests=1 (see mineru/cli/fast_api.py).
@@ -299,6 +311,7 @@ class MinerUSidecarConfig(BaseModel):
         "official_endpoint": "MINERU_OFFICIAL_ENDPOINT",
         "local_endpoint": "MINERU_LOCAL_ENDPOINT",
         "language": "MINERU_LANGUAGE",
+        "backend": "MINERU_LOCAL_BACKEND",
         "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
         "max_polls": "MINERU_MAX_POLLS",
     }
