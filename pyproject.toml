@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.7.4"
+version = "1.7.5"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -12,8 +12,8 @@ dependencies = [
     # Core RAG
     "lightrag-hku>=1.5.4",
     # LLM
-    "openai>=2.45.0",
-    "anthropic>=0.116.0",
+    "openai>=2.46.0",
+    "anthropic>=0.117.0",
     "google-genai>=2.12.1",
     # PostgreSQL
     "asyncpg>=0.31.0",
@@ -37,7 +37,7 @@ dependencies = [
     "aiofiles",
     # Data sourcing
     "azure-storage-blob>=12.28.0",
-    "aiobotocore>=2.13.0",
+    "aiobotocore>=3.8.0",
     # MCP server
     "mcp[cli]>=1.9.0",
     # REST API server
