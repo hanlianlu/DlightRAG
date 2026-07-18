@@ -79,7 +79,7 @@ parser_sidecars:
     local_endpoint: http://127.0.0.1:8210
     language: ch
     # backend:            # unset ⇒ LightRAG default (hybrid-auto-engine)
-    max_polls: 1200
+    max_polls: 3600
     auxiliary_block_policy: conservative
 ```
 
