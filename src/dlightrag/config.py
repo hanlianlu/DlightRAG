@@ -295,10 +295,11 @@ class MinerUSidecarConfig(BaseModel):
     force_reparse: bool = False
 
     # macOS MinerU hard-codes max_concurrent_requests=1 (see mineru/cli/fast_api.py).
-    # Two large PDFs submitted in parallel will serialize, and the second one's poll
-    # clock starts counting from submit time — not from when it actually starts
-    # processing. 1200 polls × 2s = 40 min covers two large PDFs in serial.
-    max_polls: int = Field(default=1200, ge=1)
+    # Two large PDFs submitted in parallel serialize, and the second one's poll clock
+    # counts from submit time — not from when it actually starts processing. An
+    # image-dense 600-page textbook can take ~1h under the VLM (hybrid-auto-engine),
+    # so 3600 polls × 2s = 2h covers two such PDFs stacked in serial.
+    max_polls: int = Field(default=3600, ge=1)
 
     # DlightRAG-only: filter header/footer blocks that pollute chunk text.
     auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
