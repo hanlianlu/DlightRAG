@@ -21,12 +21,40 @@ def test_split_source_ids_whitespace():
     assert split_source_ids("  chunk1 ,  , chunk2  ") == ["chunk1", "chunk2"]
 
 
-def test_filter_content_basic():
-    content = "This is normal text.\nImage Path: /foo/bar.png\nMore text."
+def test_filter_content_wraps_equation_math():
+    content = "\\frac{M}{P} = Y L(i)\n[Equation Name]money_demand\n\nThis is the money demand."
     result = filter_content_for_display(content)
-    assert "Image Path:" not in result
-    assert "normal text" in result
-    assert "More text" in result
+    assert "$$\n\\frac{M}{P} = Y L(i)\n$$" in result
+    assert "[Equation Name]" not in result
+    assert "This is the money demand." in result
+
+
+def test_filter_content_equation_not_double_wrapped():
+    content = "$x = 1$\n[Equation Name]trivial\n\nDescription."
+    result = filter_content_for_display(content)
+    assert "$$" not in result
+    assert "$x = 1$" in result
+    assert "[Equation Name]" not in result
+
+
+def test_filter_content_strips_image_labels():
+    content = "[Image Name]money_shock\n[Image Type]Chart\n\nThis chart shows a shift."
+    result = filter_content_for_display(content)
+    assert "[Image Name]" not in result
+    assert "[Image Type]" not in result
+    assert result == "This chart shows a shift."
+
+
+def test_filter_content_strips_table_label():
+    content = "[Table Name]crisis_sim\n\nThis table simulates a crisis."
+    result = filter_content_for_display(content)
+    assert "[Table Name]" not in result
+    assert result == "This table simulates a crisis."
+
+
+def test_filter_content_plain_text_passthrough():
+    content = "Just some ordinary prose with no markers."
+    assert filter_content_for_display(content) == content
 
 
 def test_filter_content_preserves_tables():
@@ -39,10 +67,3 @@ def test_filter_content_truncate():
     content = "A" * 200
     result = filter_content_for_display(content, max_chars=50)
     assert len(result) <= 53  # 50 + "..."
-
-
-def test_filter_content_removes_caption_none():
-    content = "Text here.\nCaption: None\nMore text."
-    result = filter_content_for_display(content)
-    assert "Caption: None" not in result
-    assert "Text here" in result
