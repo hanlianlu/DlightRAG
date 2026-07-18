@@ -120,6 +120,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "args" not in answer_props
     assert "query" in answer_props
     assert "conversation_history" not in answer_props
+    assert "history" in answer_props
     assert "query_images" in answer_props
     image_block_schema = _query_image_schema(answer_tool.inputSchema, answer_props["query_images"])
     assert image_block_schema["type"] == "object"
@@ -135,6 +136,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
     retrieve_props = retrieve_tool.inputSchema["properties"]
     assert "semantic_highlights" not in retrieve_props
+    assert "history" not in retrieve_props
     assert "chunk_top_k" in retrieve_props
     assert "bm25_query" in retrieve_props
     assert "session_id" not in retrieve_props

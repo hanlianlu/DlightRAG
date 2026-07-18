@@ -877,6 +877,46 @@ class TestAnswerViaEngine:
         )
         assert result is expected_result
 
+    async def test_aanswer_threads_history_to_planning_and_generation(self, test_cfg) -> None:
+        """Caller history reaches retrieval planning and answer generation."""
+        manager = RAGServiceManager(config=test_cfg)
+        plan = SimpleNamespace(standalone_query="standalone")
+        prepared = SimpleNamespace(descriptions=[])
+        limits = SimpleNamespace(context_top_k=5)
+        retrieval = SimpleNamespace(contexts={"chunks": []}, trace={})
+        manager._plan_and_retrieve = AsyncMock(  # type: ignore[method-assign]
+            return_value=(plan, prepared, limits, retrieval)
+        )
+        mock_engine = AsyncMock()
+        mock_engine.generate.return_value = MagicMock(trace={})
+        manager._answer_engine = mock_engine
+        history = [{"role": "user", "content": "Earlier"}]
+
+        await manager.aanswer("follow up", workspace="ws_a", history=history)
+
+        plan_call = manager._plan_and_retrieve.await_args
+        assert plan_call is not None
+        assert plan_call.kwargs["text_history"] == history
+        generate_call = mock_engine.generate.await_args
+        assert generate_call is not None
+        assert generate_call.kwargs["conversation_history"] == history
+
+    async def test_aanswer_stream_threads_history_to_prepared_turn(self, test_cfg) -> None:
+        """Streaming answer carries caller history on the prepared turn."""
+        manager = RAGServiceManager(config=test_cfg)
+        manager._aanswer_stream_prepared = AsyncMock(  # type: ignore[method-assign]
+            return_value=({"chunks": []}, None)
+        )
+        history = [{"role": "user", "content": "Earlier"}]
+
+        await manager.aanswer_stream("follow up", workspaces=["ws_a"], history=history)
+
+        stream_call = manager._aanswer_stream_prepared.await_args
+        assert stream_call is not None
+        turn = stream_call.args[0]
+        assert turn.current_query == "follow up"
+        assert turn.text_history == ({"role": "user", "content": "Earlier"},)
+
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_semantic_highlights_are_opt_in(
         self, mock_create, test_cfg, monkeypatch: pytest.MonkeyPatch

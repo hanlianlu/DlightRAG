@@ -1,15 +1,48 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Transport-neutral client payload contracts."""
 
+from collections.abc import Sequence
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Caller-supplied conversation history is stateless: the client owns persistence
+# and re-sends prior turns each request; DlightRAG never stores them. The message
+# ceiling bounds request size (~50 prior turns); the planner independently
+# truncates to the configured token budget before prompting the model.
+MAX_HISTORY_MESSAGES = 100
+MAX_HISTORY_CONTENT_CHARS = 16000
 
 
 class ClientContractModel(BaseModel):
     """Base model for public client contracts."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class ConversationMessage(ClientContractModel):
+    """One prior, caller-supplied conversation message (stateless).
+
+    Callers own conversation persistence, so prior turns are re-sent on each
+    answer request and never stored. Historical images are not accepted here;
+    re-send them as current ``query_images`` when a follow-up depends on them.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=MAX_HISTORY_CONTENT_CHARS)
+
+
+def conversation_history_as_dicts(
+    history: Sequence[ConversationMessage] | None,
+) -> list[dict[str, Any]] | None:
+    """Project caller history messages to the engine's message-dict shape.
+
+    Returns ``None`` for empty history so callers pass the stateless-default
+    straight through to the planner and answer engine.
+    """
+    if not history:
+        return None
+    return [{"role": message.role, "content": message.content} for message in history]
 
 
 class ImageURL(ClientContractModel):
@@ -205,14 +238,18 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 
 __all__ = [
     "ClientContractModel",
+    "ConversationMessage",
     "ImageURL",
     "ImageURLContentBlock",
     "IngestDocument",
     "IngestPayload",
     "IngestSpec",
+    "MAX_HISTORY_CONTENT_CHARS",
+    "MAX_HISTORY_MESSAGES",
     "MetadataPolicy",
     "QueryImage",
     "SourceType",
+    "conversation_history_as_dicts",
     "dump_optional_list",
     "model_dump_json_safe",
 ]

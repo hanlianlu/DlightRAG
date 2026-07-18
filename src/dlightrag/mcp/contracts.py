@@ -6,7 +6,9 @@ from typing import Any
 from pydantic import Field
 
 from dlightrag.core.client_contracts import (
+    MAX_HISTORY_MESSAGES,
     ClientContractModel,
+    ConversationMessage,
     IngestPayload,
     MetadataPolicy,
     QueryImage,
@@ -32,6 +34,7 @@ class AnswerInput(RetrieveInput):
     chunk_top_k: int | None = None
     answer_context_top_k: int | None = None
     semantic_highlights: bool = False
+    history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
 
 
 class IngestInput(IngestPayload):
@@ -66,6 +69,7 @@ class DeleteFilesInput(MCPInput):
 
 __all__ = [
     "AnswerInput",
+    "ConversationMessage",
     "CreateWorkspaceInput",
     "DeleteFilesInput",
     "DeleteWorkspaceInput",

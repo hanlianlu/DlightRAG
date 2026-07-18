@@ -37,12 +37,19 @@ class PreparedAnswerTurn:
         cls,
         query: str,
         query_images: list[dict[str, Any]] | None = None,
+        *,
+        history: list[dict[str, Any]] | None = None,
     ) -> PreparedAnswerTurn:
-        """Create the empty-history turn used by public answer methods."""
+        """Create the turn used by public answer methods.
+
+        ``history`` holds caller-supplied prior messages (``role``/``content``).
+        It is stateless: the caller owns persistence and passes it per request.
+        """
         images = tuple(query_images or ())
         return cls(
             current_query=query,
             retrieval_query=query,
+            text_history=tuple(history or ()),
             materialized_query_images=images,
             current_query_images=images,
         )

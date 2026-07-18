@@ -425,9 +425,12 @@ Current-turn images always have priority. Referenced historical images are
 resolved by the planner and share one adaptive `answer.max_images` transport
 budget with current and RAG images.
 
-REST, MCP, and Python answer/retrieve calls remain stateless. They do not accept
-`conversation_id`, caller-supplied history, or durable historical-image IDs.
-Their `query_images` belong only to the current request and are never persisted.
+REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
+accept an optional caller-supplied `history` of prior `role`/`content` turns for
+multi-turn follow-ups, but DlightRAG never persists it: the client owns
+conversation storage and re-sends the turns it wants on each request. They do
+not accept a server `conversation_id` or durable historical-image IDs, and
+`query_images` belong only to the current request and are never persisted.
 
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 `DELETE /workspaces/{workspace}`), while the `/web/*` surface uses htmx action
@@ -497,6 +500,7 @@ async for token in token_iter:
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
+| `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages for multi-turn follow-ups. Stateless: never persisted, so the caller re-sends the turns it wants each request. Folded into the planner's standalone-query rewrite and answer generation. Capped at 100 messages. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
 
 ### REST API
