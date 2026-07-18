@@ -73,6 +73,16 @@ function scrollToBottom(turn: ChatTurn): void {
 // sessions don't accumulate an unbounded number of message nodes.
 const MAX_CHAT_MESSAGE_NODES = 200;
 
+// Auto-scroll sticks to the bottom only while the reader is already near it, so
+// scrolling up to re-read earlier text is not fought by incoming tokens.
+const STICK_TO_BOTTOM_PX = 160;
+
+// Presence check only: MathJax typesetting is skipped while streaming a preview
+// that has no math delimiters, avoiding a full re-typeset of the whole growing
+// answer on every 0.3s snapshot.
+const MATH_DELIMITER = /\$|\\\(|\\\[/;
+
+
 function pruneOldMessages(chatMessages: HTMLElement): void {
   while (chatMessages.childElementCount > MAX_CHAT_MESSAGE_NODES) {
     chatMessages.firstElementChild?.remove();
@@ -235,6 +245,22 @@ export function createAnswerRenderer(turn: ChatTurn) {
   let fullAnswer = '';
   let failed = false;
   let saveOutcome: DonePayload | null = null;
+  let scrollScheduled = false;
+
+  // Coalesce autoscroll into one write per animation frame, and only follow the
+  // stream while the reader is already near the bottom.
+  function scheduleAutoScroll(): void {
+    if (scrollScheduled) return;
+    scrollScheduled = true;
+    requestAnimationFrame(function () {
+      scrollScheduled = false;
+      const area = turn.chatArea;
+      if (!area) return;
+      if (area.scrollHeight - area.scrollTop - area.clientHeight <= STICK_TO_BOTTOM_PX) {
+        area.scrollTop = area.scrollHeight;
+      }
+    });
+  }
 
   function handleToken(data: SSEData): void {
     const text = parseData(data);
@@ -247,15 +273,16 @@ export function createAnswerRenderer(turn: ChatTurn) {
     const span = document.createElement('span');
     span.textContent = token;
     turn.contentDiv.appendChild(span);
-    scrollToBottom(turn);
+    scheduleAutoScroll();
   }
 
   function handlePreview(data: SSEData): void {
     const previewHtml = parseData(data);
-    setSanitizedLlmHtml(turn.contentDiv, typeof previewHtml === 'string' ? previewHtml : '');
-    renderMath(turn.contentDiv);
+    const previewText = typeof previewHtml === 'string' ? previewHtml : '';
+    setSanitizedLlmHtml(turn.contentDiv, previewText);
+    if (MATH_DELIMITER.test(previewText)) renderMath(turn.contentDiv);
     fixExternalLinks(turn.contentDiv);
-    scrollToBottom(turn);
+    scheduleAutoScroll();
   }
 
   function handleDone(data: SSEData): void {
@@ -284,12 +311,16 @@ export function createAnswerRenderer(turn: ChatTurn) {
   function handleProgress(data: SSEData): void {
     const info = parseData(data) as ProgressPayload;
     const label: string = PHASE_LABELS[info.phase as PhaseLabel] || info.phase;
-    const dot = turn.contentDiv.querySelector('.' + chatStyles.streamingDot);
-    if (dot) {
-      dot.textContent = '';
-      dot.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
-      dot.setAttribute('data-phase', label || '');
-    }
+    // Resolve the phase indicator, creating one when tokens have already
+    // replaced the initial streaming dot so late phases (e.g. "Saving…") stay
+    // visible. The done event replaces contentDiv, clearing any created node.
+    const existing = turn.contentDiv.querySelector<HTMLElement>(
+      '.' + chatStyles.progressPhase + ', .' + chatStyles.streamingDot,
+    );
+    const indicator = existing ?? turn.contentDiv.appendChild(document.createElement('span'));
+    indicator.textContent = '';
+    indicator.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
+    indicator.setAttribute('data-phase', label || '');
     const live = turn.aiDiv.querySelector('.sr-only');
     if (live) live.textContent = label || '';
   }
