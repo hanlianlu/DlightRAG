@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-const MATHJAX_SRC = 'https://cdn.jsdelivr.net/npm/mathjax@4.1.2/tex-mml-chtml.js';
+const MATHJAX_SRC = 'https://cdn.jsdelivr.net/npm/mathjax@4.1.3/tex-mml-chtml.js';
 
 let loading = false;
 

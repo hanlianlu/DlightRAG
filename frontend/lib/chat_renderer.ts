@@ -82,6 +82,24 @@ const STICK_TO_BOTTOM_PX = 160;
 // answer on every 0.3s snapshot.
 const MATH_DELIMITER = /\$|\\\(|\\\[/;
 
+// Marks the raw-token tail appended between previews (see createAnswerRenderer).
+const STREAM_TAIL_CLASS = 'stream-tail';
+
+// Split a sanitized answer-HTML snapshot into its top-level markdown blocks so
+// completed blocks can be frozen while only the trailing block is re-rendered.
+function answerBlocksFromHtml(html: string): HTMLElement[] {
+  const fragment = llmFragmentFromSanitizedHtml(html);
+  return Array.from(fragment.children).filter(
+    (node): node is HTMLElement => node instanceof HTMLElement,
+  );
+}
+
+// Typeset a block only when it contains math delimiters, so a frozen block is
+// typeset once and math-free blocks skip MathJax entirely.
+function typesetBlockMath(block: HTMLElement): void {
+  if (MATH_DELIMITER.test(block.textContent || '')) renderMath(block);
+}
+
 
 function pruneOldMessages(chatMessages: HTMLElement): void {
   while (chatMessages.childElementCount > MAX_CHAT_MESSAGE_NODES) {
@@ -241,11 +259,15 @@ export function setAnswerError(turn: ChatTurn, message: unknown): void {
 }
 
 export function createAnswerRenderer(turn: ChatTurn) {
-  let firstToken = true;
   let fullAnswer = '';
   let failed = false;
   let saveOutcome: DonePayload | null = null;
   let scrollScheduled = false;
+  let streamStarted = false;
+  // Count of leading answer blocks that are complete and frozen: rendered and
+  // typeset once, then never touched again so their MathJax output, text
+  // selection and scroll position survive the rest of the stream.
+  let frozenBlocks = 0;
 
   // Coalesce autoscroll into one write per animation frame, and only follow the
   // stream while the reader is already near the bottom.
@@ -262,26 +284,59 @@ export function createAnswerRenderer(turn: ChatTurn) {
     });
   }
 
+  // Clear the placeholder streaming dot / progress phase the first time real
+  // answer content arrives, so the block viewport starts from a clean slate.
+  function startStreamViewport(): void {
+    if (streamStarted) return;
+    turn.contentDiv.replaceChildren();
+    streamStarted = true;
+  }
+
+  // Append raw tokens to a trailing span for sub-preview smoothness; the next
+  // preview rebuilds the trailing region and absorbs this tail.
+  function appendStreamTail(token: string): void {
+    const last = turn.contentDiv.lastElementChild;
+    let tail: HTMLElement;
+    if (last instanceof HTMLElement && last.classList.contains(STREAM_TAIL_CLASS)) {
+      tail = last;
+    } else {
+      tail = document.createElement('span');
+      tail.className = STREAM_TAIL_CLASS;
+      turn.contentDiv.appendChild(tail);
+    }
+    tail.append(token);
+  }
+
   function handleToken(data: SSEData): void {
     const text = parseData(data);
     const token = typeof text === 'string' ? text : String(text);
-    if (firstToken) {
-      turn.contentDiv.textContent = '';
-      firstToken = false;
-    }
+    startStreamViewport();
     fullAnswer += token;
-    const span = document.createElement('span');
-    span.textContent = token;
-    turn.contentDiv.appendChild(span);
+    appendStreamTail(token);
     scheduleAutoScroll();
   }
 
+  // Server sends the whole accumulated answer HTML each preview. Rather than
+  // wiping and re-rendering it all (which re-typesets every equation and drops
+  // selection), freeze completed blocks and rebuild only the trailing one.
   function handlePreview(data: SSEData): void {
     const previewHtml = parseData(data);
-    const previewText = typeof previewHtml === 'string' ? previewHtml : '';
-    setSanitizedLlmHtml(turn.contentDiv, previewText);
-    if (MATH_DELIMITER.test(previewText)) renderMath(turn.contentDiv);
-    fixExternalLinks(turn.contentDiv);
+    const html = typeof previewHtml === 'string' ? previewHtml : '';
+    startStreamViewport();
+    const blocks = answerBlocksFromHtml(html);
+    // Drop the volatile trailing region (previous in-progress block + raw token
+    // tail); frozen leading blocks are left untouched.
+    while (turn.contentDiv.children.length > frozenBlocks) {
+      turn.contentDiv.lastElementChild?.remove();
+    }
+    for (let i = frozenBlocks; i < blocks.length; i += 1) {
+      const block = blocks[i].cloneNode(true) as HTMLElement;
+      turn.contentDiv.appendChild(block);
+      typesetBlockMath(block);
+      fixExternalLinks(block);
+    }
+    // Every block except the last is now complete, so freeze them.
+    frozenBlocks = Math.max(frozenBlocks, blocks.length - 1);
     scheduleAutoScroll();
   }
 
