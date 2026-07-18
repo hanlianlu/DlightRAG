@@ -9,6 +9,7 @@ every wrapper returns the original function unchanged (zero overhead).
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
 
@@ -381,6 +382,10 @@ async def _stream_with_observation(
         try:
             stream = await fn(messages, **call_kwargs)
             async for chunk in stream:
+                if not chunks:
+                    # First streamed chunk: record time-to-first-token so Langfuse
+                    # separates model start latency from total streaming duration.
+                    _safe_update(observation, completion_start_time=datetime.now(UTC))
                 chunks.append(chunk)
                 yield chunk
         except BaseException as caught:

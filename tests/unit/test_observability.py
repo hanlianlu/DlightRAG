@@ -3,6 +3,7 @@
 
 import uuid
 from collections.abc import Generator
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -252,7 +253,9 @@ async def test_chat_wrapper_traces_streaming_generation() -> None:
     obs = client.observations[0]
     assert obs.kwargs["as_type"] == "generation"
     assert obs.kwargs["name"] == "llm_stream"
-    assert obs.updates == [{"output": "hello"}]
+    assert set(obs.updates[0]) == {"completion_start_time"}
+    assert isinstance(obs.updates[0]["completion_start_time"], datetime)
+    assert obs.updates[1:] == [{"output": "hello"}]
     assert client.active == []
 
 
@@ -282,7 +285,10 @@ async def test_streaming_generation_attaches_usage_and_cost() -> None:
     result = [chunk async for chunk in token_iterator]
 
     assert result == ["hel", "lo"]
-    assert client.observations[0].updates == [
+    updates = client.observations[0].updates
+    assert set(updates[0]) == {"completion_start_time"}
+    assert isinstance(updates[0]["completion_start_time"], datetime)
+    assert updates[1:] == [
         {"output": "hello"},
         {"usage_details": {"input": 5, "output": 2, "total": 7}, "cost_details": {"total": 0.001}},
     ]
@@ -303,7 +309,36 @@ async def test_streaming_generation_no_usage_is_graceful() -> None:
 
     token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
     assert [chunk async for chunk in token_iterator] == ["x"]
-    assert client.observations[0].updates == [{"output": "x"}]
+    updates = client.observations[0].updates
+    assert set(updates[0]) == {"completion_start_time"}
+    assert isinstance(updates[0]["completion_start_time"], datetime)
+    assert updates[1:] == [{"output": "x"}]
+
+
+async def test_streaming_generation_records_time_to_first_token() -> None:
+    # completion_start_time (TTFT) is recorded once, on the first streamed chunk,
+    # before the terminal output/usage updates, as a timezone-aware datetime.
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+        async def stream() -> Any:
+            yield "a"
+            yield "b"
+            yield "c"
+
+        return stream()
+
+    wrapped = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
+    token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
+    assert [chunk async for chunk in token_iterator] == ["a", "b", "c"]
+
+    updates = client.observations[0].updates
+    ttft = [u for u in updates if "completion_start_time" in u]
+    assert len(ttft) == 1
+    assert updates[0] is ttft[0]
+    assert isinstance(ttft[0]["completion_start_time"], datetime)
+    assert ttft[0]["completion_start_time"].tzinfo is not None
 
 
 async def test_chat_func_root_starts_new_trace() -> None:
