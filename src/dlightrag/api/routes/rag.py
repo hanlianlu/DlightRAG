@@ -39,7 +39,7 @@ from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_toke
 from dlightrag.core.answer_errors import ANSWER_STREAM_FAILED, classify_answer_error
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
-from dlightrag.core.client_contracts import IngestSpec
+from dlightrag.core.client_contracts import IngestSpec, conversation_history_as_dicts
 from dlightrag.core.client_payloads import (
     answer_payload,
     project_contexts_for_client,
@@ -205,6 +205,7 @@ async def answer(
         resolved_workspaces,
     )
     scope = request_scope(user, resolved_workspaces)
+    history = conversation_history_as_dicts(body.history)
 
     if not body.stream:
         result = await manager.aanswer(
@@ -214,6 +215,7 @@ async def answer(
             chunk_top_k=body.chunk_top_k,
             answer_context_top_k=body.answer_context_top_k,
             semantic_highlights=body.semantic_highlights,
+            history=history,
             scope=scope,
             **kwargs,
         )
@@ -241,6 +243,7 @@ async def answer(
                     top_k=body.top_k,
                     chunk_top_k=body.chunk_top_k,
                     answer_context_top_k=body.answer_context_top_k,
+                    history=history,
                     scope=scope,
                     **kwargs,
                 )

@@ -1579,6 +1579,23 @@ class TestAnswerEndpoint:
         assert "conversation_history" not in call_kwargs
         assert call_kwargs["query_images"] == query_images
 
+    async def test_answer_accepts_caller_history(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        history = [
+            {"role": "user", "content": "What is the capital of France?"},
+            {"role": "assistant", "content": "Paris."},
+        ]
+
+        resp = await client.post(
+            "/answer",
+            json={"query": "And its population?", "stream": False, "history": history},
+        )
+
+        assert resp.status_code == 200
+        assert mock_manager.aanswer.call_args.kwargs["history"] == history
+
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:

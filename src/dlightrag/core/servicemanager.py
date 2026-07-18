@@ -1362,6 +1362,7 @@ class RAGServiceManager:
         answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         query_images: list[dict[str, Any]] | None = None,
+        history: list[dict[str, Any]] | None = None,
         semantic_highlights: bool = False,
         scope: RequestScope | None = None,
     ) -> RetrievalResult:
@@ -1370,6 +1371,10 @@ class RAGServiceManager:
         ``query_images`` are user-attached ``image_url`` blocks inlined into the
         answer LLM call; they inform answer generation and (via VLM descriptions)
         the retrieval plan, but are not embedded for retrieval.
+
+        ``history`` is caller-supplied prior turns (``role``/``content`` dicts).
+        It is stateless -- the caller owns persistence and passes it per request;
+        it feeds the planner's standalone-query rewrite and answer generation.
         """
         turn = PreparedAnswerTurn.stateless(query, query_images)
         ws_list = await self._resolve_manager_query_workspaces(
@@ -1407,7 +1412,7 @@ class RAGServiceManager:
                     input={"query": query},
                     metadata={
                         "workspaces": ws_list,
-                        "history_turns": 0,
+                        "history_turns": len(history or []),
                         "query_image_count": len(turn.materialized_query_images),
                         "semantic_highlights": semantic_highlights,
                     },
@@ -1415,7 +1420,7 @@ class RAGServiceManager:
                     plan, prepared, limits, retrieval = await self._plan_and_retrieve(
                         turn.current_query,
                         retrieval_query=turn.retrieval_query,
-                        text_history=None,
+                        text_history=history,
                         query_images=list(turn.current_query_images),
                         ws_list=ws_list,
                         scope=scoped,
@@ -1437,7 +1442,7 @@ class RAGServiceManager:
                             plan.standalone_query,
                             retrieval.contexts,
                             query_images=current_images or None,
-                            conversation_history=None,
+                            conversation_history=history,
                             context_top_k=limits.context_top_k,
                         )
                         generation_trace.update(output=_answer_output(result))
@@ -1483,14 +1488,15 @@ class RAGServiceManager:
         answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         query_images: list[dict[str, Any]] | None = None,
+        history: list[dict[str, Any]] | None = None,
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces: plan -> retrieve -> stream.
 
-        See ``aanswer`` for ``query_images`` semantics.
+        See ``aanswer`` for ``query_images`` and ``history`` semantics.
         """
         return await self._aanswer_stream_prepared(
-            PreparedAnswerTurn.stateless(query, query_images),
+            PreparedAnswerTurn.stateless(query, query_images, history=history),
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,

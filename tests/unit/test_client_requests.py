@@ -10,7 +10,14 @@ from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveReque
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.config import QueryImagesConfig
 from dlightrag.core.answer_turn import PreparedAnswerTurn
-from dlightrag.core.client_contracts import IngestDocument, IngestSpec
+from dlightrag.core.client_contracts import (
+    MAX_HISTORY_CONTENT_CHARS,
+    MAX_HISTORY_MESSAGES,
+    ConversationMessage,
+    IngestDocument,
+    IngestSpec,
+    conversation_history_as_dicts,
+)
 from dlightrag.core.client_requests import (
     ingest_kwargs_from_payload,
     ingest_spec_from_payload,
@@ -103,6 +110,45 @@ def test_public_requests_reject_conversation_fields() -> None:
                 model.model_validate(
                     {"query": "standalone", field: [] if field != "session_id" else "s"}
                 )
+
+
+def test_answer_contracts_accept_history_retrieve_rejects() -> None:
+    valid = {"role": "user", "content": "Earlier turn"}
+    for model in (AnswerRequest, AnswerInput):
+        assert "history" in model.model_fields
+        parsed = model.model_validate({"query": "follow up", "history": [valid]})
+        assert parsed.history is not None
+        assert parsed.history[0].role == "user"
+        assert parsed.history[0].content == "Earlier turn"
+    for model in (RetrieveRequest, RetrieveInput):
+        assert "history" not in model.model_fields
+        with pytest.raises(ValidationError):
+            model.model_validate({"query": "standalone", "history": [valid]})
+    with pytest.raises(ValidationError):
+        AnswerRequest.model_validate(
+            {"query": "q", "history": [valid] * (MAX_HISTORY_MESSAGES + 1)}
+        )
+
+
+def test_conversation_message_validation_and_projection() -> None:
+    with pytest.raises(ValidationError):
+        ConversationMessage.model_validate({"role": "system", "content": "x"})
+    with pytest.raises(ValidationError):
+        ConversationMessage.model_validate({"role": "user", "content": ""})
+    with pytest.raises(ValidationError):
+        ConversationMessage.model_validate(
+            {"role": "user", "content": "x" * (MAX_HISTORY_CONTENT_CHARS + 1)}
+        )
+    messages = [
+        ConversationMessage(role="user", content="hi"),
+        ConversationMessage(role="assistant", content="hello"),
+    ]
+    assert conversation_history_as_dicts(messages) == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    assert conversation_history_as_dicts(None) is None
+    assert conversation_history_as_dicts([]) is None
 
 
 def test_public_retrieval_response_has_no_session_image_ids() -> None:

@@ -21,8 +21,10 @@ from dlightrag.access_control import AccessAction, AccessDeniedError, access_con
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.answer_capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
+    MAX_HISTORY_MESSAGES,
     MetadataPolicy,
     SourceType,
+    conversation_history_as_dicts,
 )
 from dlightrag.core.client_payloads import (
     answer_payload,
@@ -42,6 +44,7 @@ from dlightrag.core.scope import RequestScope, current_request_scope, request_sc
 from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.mcp.contracts import (
     AnswerInput,
+    ConversationMessage,
     CreateWorkspaceInput,
     DeleteFilesInput,
     DeleteWorkspaceInput,
@@ -61,6 +64,16 @@ QueryImagesParam = Annotated[
     Field(
         max_length=3,
         description="User-attached image URLs or data URI blocks (max 3)",
+    ),
+]
+HistoryParam = Annotated[
+    list[ConversationMessage] | None,
+    Field(
+        max_length=MAX_HISTORY_MESSAGES,
+        description=(
+            "Prior conversation turns as role/content messages. Caller-owned and "
+            "stateless: re-send each request; never stored server-side."
+        ),
     ),
 ]
 
@@ -295,6 +308,7 @@ async def answer_tool(
         bool,
         Field(default=False, description="Include semantic highlight phrases in cited sources."),
     ] = False,
+    history: HistoryParam = None,
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
     manager = await _ensure_manager()
@@ -311,6 +325,7 @@ async def answer_tool(
         chunk_top_k=args.chunk_top_k,
         answer_context_top_k=args.answer_context_top_k,
         semantic_highlights=args.semantic_highlights,
+        history=conversation_history_as_dicts(args.history),
         scope=scope,
         **query_kwargs_from_payload(args),
     )

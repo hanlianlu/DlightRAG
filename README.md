@@ -177,9 +177,11 @@ reload persistence with 30-day inactivity retention. `Search in: All authorized
 workspaces` is the answer default; the independent `Files in` selector remains a
 single-workspace file-management target.
 
-REST, MCP, and Python answer/retrieve calls remain stateless. They accept only
-the current request and never accept a Web conversation ID or caller-supplied
-history. Web current-image admission is configurable and defaults to three
+REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
+accept an optional caller-supplied `history` of prior turns for multi-turn
+follow-ups, but never a Web conversation ID or server-stored history: the client
+owns conversation storage and re-sends the turns it wants on each request. Web
+current-image admission is configurable and defaults to three
 images at 15 MiB each. Durable current-turn images always have priority over any
 historical image selection; historical images that miss a transport slot
 contribute their stored text descriptions rather than raw pixels.

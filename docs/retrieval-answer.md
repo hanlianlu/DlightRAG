@@ -12,7 +12,9 @@ management, optional direct multimodal image search, PostgreSQL BM25, RRF
 fusion, reranking, citations, and answer generation.
 
 REST, MCP, and Python answer/retrieve calls remain stateless: each call owns
-only its current query, images, and search scope. The Web-only conversation
+only its current query, images, search scope, and any optional caller-supplied
+`history` of prior turns that answer calls fold into planning and generation.
+DlightRAG persists none of it. The Web-only conversation
 lifecycle is a principal-scoped adapter around the same answer pipeline. It
 loads server-owned text history, persists complete successful turns and current
 images, and applies 30-day inactivity retention without changing retrieval or
