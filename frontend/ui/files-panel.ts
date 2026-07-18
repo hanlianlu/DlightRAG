@@ -478,7 +478,7 @@ async function pollIngestStatus(workspace: string): Promise<void> {
         replaceIngestProgressHtml(html, workspace);
     } catch (error: unknown) {
         if (isAbortError(error)) return;
-        if (workspace === ingestStore.workspace) startIngestPolling(workspace);
+        if (workspace === ingestStore.workspace && isFilesPanelActive()) startIngestPolling(workspace);
     } finally {
         if (ingestPollController === controller) ingestPollController = null;
     }
@@ -597,6 +597,11 @@ export function setupFilesPanel(): void {
         ingestStore.set(nextWorkspace || workspaceStore.primary);
         updateIngestPillLabel();
         if (isFilesPanelActive()) void refreshFilePanel(ingestStore.workspace);
+    });
+
+    document.body.addEventListener('panelOpening', function(e) {
+        const title = (e as CustomEvent<{title?: string}>).detail?.title;
+        if (title && title !== 'FILES') stopIngestPolling();
     });
 
     document.body.addEventListener('panelClosed', function() {
