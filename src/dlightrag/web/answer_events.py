@@ -322,6 +322,8 @@ async def _emit_answer_events(
         if observation is not None:
             observation.update(metadata=_capability_metrics(manager, turn))
 
+        yield sse_event("progress", AnswerProgressEvent(phase="searching"))
+
         contexts, token_iter = await manager._aanswer_stream_prepared(
             turn,
             workspaces=ws_list,
@@ -346,7 +348,13 @@ async def _emit_answer_events(
             yield sse_event("token", chunk)
             now = time.monotonic()
             new_chars = len(accumulated_text) - last_preview_len
-            if now - last_preview_ts > 0.3 and new_chars > 20:
+            # Preview re-renders and resends the whole answer, so widen the
+            # cadence as it grows to keep the streamed cost near O(n) rather
+            # than O(n^2) for long answers.
+            answer_len = len(accumulated_text)
+            min_interval = 0.3 + answer_len / 8000.0
+            min_new_chars = max(20, answer_len // 30)
+            if now - last_preview_ts > min_interval and new_chars > min_new_chars:
                 yield sse_event("preview", safe_answer_preview(accumulated_text))
                 last_preview_ts = now
                 last_preview_len = len(accumulated_text)
