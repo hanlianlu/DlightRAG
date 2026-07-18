@@ -86,7 +86,7 @@ function shouldDismissPanelOnOutsideClick(target: EventTarget | null): boolean {
 export function openPanel(title?: string): void {
     const panel = document.getElementById('panel');
     if (!panel) return;
-    document.body.dispatchEvent(new CustomEvent('panelOpening'));
+    document.body.dispatchEvent(new CustomEvent('panelOpening', {detail: {title}}));
     if (!panel.classList.contains('open')) {
         panelReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     }
