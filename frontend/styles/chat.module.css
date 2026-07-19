@@ -25,7 +25,9 @@
 
 .userMessageWrapper {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: var(--space-tight);
   margin-left: auto;
   max-width: 85%;
   min-width: 0;
@@ -140,15 +142,8 @@
 
 /* === Thumbnail Strip === */
 
-.thumbnailStrip {
-  display: flex;
-  gap: var(--space-tight);
-  padding: 0 var(--space-tight) var(--space-tight) var(--space-tight);
-}
-
-.thumbnailStrip:empty {
-  display: none;
-}
+/* The strip container is server-rendered in the composer; its flex layout lives
+   in layout.css (.thumbnail-strip). Item/thumb/remove styles stay module-scoped. */
 
 .thumbnailItem {
   position: relative;
@@ -191,11 +186,16 @@
 
 /* === Message Image Thumbnails === */
 
+/* Attached images sit on the same row as the message bubble (to its left),
+   right-aligned with it. The strip stays a single horizontal run and scrolls
+   when it would otherwise squeeze the text bubble. */
 .messageImages {
   display: flex;
   gap: var(--space-tight);
-  justify-content: flex-end;
-  margin-bottom: var(--space-tight);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  overflow-x: auto;
 }
 
 .messageImg {

@@ -181,6 +181,19 @@ body.files-panel-open #files-btn {
     max-width: var(--layout-content-width);
 }
 
+/* Attached-image thumbnails, above the composer input. Horizontal run that
+   wraps to a new line once it fills the composer width. */
+.thumbnail-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+    padding: 0 var(--space-inline) var(--space-tight);
+}
+
+.thumbnail-strip:empty {
+    display: none;
+}
+
 /* Panel-open layout: primary app chrome shifts left */
 body.panel-open .topbar {
     margin-right: var(--layout-panel-width);
