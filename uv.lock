@@ -543,7 +543,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.7.7"
+version = "1.7.8"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -606,7 +606,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=2.12.1" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "jinja2", specifier = ">=3.1" },
-    { name = "json-repair", specifier = ">=0.58.0" },
+    { name = "json-repair", specifier = ">=0.61.6" },
     { name = "langchain-text-splitters" },
     { name = "langfuse", specifier = ">=4.14.0" },
     { name = "lightrag-hku", specifier = ">=1.5.4" },
@@ -1023,11 +1023,11 @@ wheels = [
 
 [[package]]
 name = "json-repair"
-version = "0.61.5"
+version = "0.61.6"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b3/43/189737dfa70d1f455fb26770935437f36645725e8cd54f5fff3e9fa2014f/json_repair-0.61.5.tar.gz", hash = "sha256:965cc39a7cddc84aad0a1b00a4ce44906cf14893bd0e3890a386d28ca21dd0f0", size = 51190, upload-time = "2026-07-15T18:59:50.262Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/27/b34afa132d79c2a73e944d91df2141d145163e863aa9cb6db99a3956cdee/json_repair-0.61.6.tar.gz", hash = "sha256:b10cf0c1570d9eac407520d1f164bc88316692f5bf83fbe35e69c9000c3ae5bc", size = 51428, upload-time = "2026-07-19T17:35:29.252Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/c9/d87adfa561f3de18631214a0d29d1414bb1dba7caaf1d025ea5fe892097c/json_repair-0.61.5-py3-none-any.whl", hash = "sha256:766a712a05b5a2673212ca0df0e27e6dbb446c9b59ab837613a369304b222886", size = 49720, upload-time = "2026-07-15T18:59:48.899Z" },
+    { url = "https://files.pythonhosted.org/packages/74/8a/c39e1500b09241eb56a41c42bf591f72308d5a33e8755fa6156b8d514b47/json_repair-0.61.6-py3-none-any.whl", hash = "sha256:00858025b19a1a6708f1b1311b76ca6e58e5628c3ba633583dcf2bd05a66333a", size = 49951, upload-time = "2026-07-19T17:35:27.875Z" },
 ]
 
 [[package]]
