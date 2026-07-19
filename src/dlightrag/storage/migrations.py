@@ -14,12 +14,6 @@ _CREATE_LEDGER = """CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations (
 )
 """
 
-_SELECT_APPLIED = """SELECT 1
-FROM dlightrag_schema_migrations
-WHERE scope = $1 AND version = $2
-LIMIT 1
-"""
-
 _INSERT_APPLIED = """INSERT INTO dlightrag_schema_migrations (scope, version, description)
 VALUES ($1, $2, $3)
 ON CONFLICT (scope, version) DO NOTHING
@@ -64,24 +58,6 @@ async def apply_migrations(conn: Any, *, scope: str, migrations: tuple[Migration
                 await conn.execute(_INSERT_APPLIED, scope, migration.version, migration.description)
     finally:
         await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
-
-
-async def verify_migrations(conn: Any, *, scope: str, migrations: tuple[Migration, ...]) -> None:
-    """Verify required migrations are present without running DDL."""
-    _validate_unique_versions(migrations)
-    for migration in migrations:
-        try:
-            applied = await conn.fetchval(_SELECT_APPLIED, scope, migration.version)
-        except Exception as exc:
-            raise RuntimeError(
-                f"{scope} schema migration ledger is missing or unreadable; "
-                "initialize it on the primary first"
-            ) from exc
-        if not applied:
-            raise RuntimeError(
-                f"{scope} schema migration {migration.version} is missing; "
-                "initialize it on the primary first"
-            )
 
 
 def _validate_unique_versions(migrations: tuple[Migration, ...]) -> None:
