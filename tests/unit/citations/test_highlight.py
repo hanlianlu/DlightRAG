@@ -104,19 +104,10 @@ class TestHighlightExtractor:
         return HighlightExtractor(llm_func=mock_llm, cache_size=10)
 
     @pytest.mark.asyncio
-    async def test_extract_highlights(self, extractor):
-        result = await extractor.extract_highlights(
-            citing_sentence="The market growth was impressive.",
-            chunk_content="Reports show market growth reached 15% in 2025.",
-            chunk_id="c1",
-        )
-        assert isinstance(result, HighlightPhrases)
-        assert "market growth" in result.phrases
-
-    @pytest.mark.asyncio
-    async def test_cache_hit(self, extractor):
-        r1 = await extractor.extract_highlights("sentence", "chunk content with data", "c1")
-        r2 = await extractor.extract_highlights("sentence", "chunk content with data", "c1")
+    async def test_batch_cache_hit(self, extractor):
+        item = ("c1", "chunk content with data", "sentence")
+        [(_, r1)] = await extractor.extract_highlight_batch([item])
+        [(_, r2)] = await extractor.extract_highlight_batch([item])
         assert r1.phrases == r2.phrases
 
     @pytest.mark.asyncio
@@ -182,10 +173,8 @@ class TestHighlightExtractor:
             return '{"phrases": ["hallucinated phrase", "actual text"], "confidence": 0.8}'
 
         ext = HighlightExtractor(llm_func=bad_llm, cache_size=10)
-        result = await ext.extract_highlights(
-            citing_sentence="The actual text matters.",
-            chunk_content="This has actual text in it.",
-            chunk_id="c1",
+        [(_, result)] = await ext.extract_highlight_batch(
+            [("c1", "This has actual text in it.", "The actual text matters.")]
         )
         assert "actual text" in result.phrases
         assert "hallucinated phrase" not in result.phrases

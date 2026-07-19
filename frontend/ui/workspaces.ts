@@ -16,10 +16,6 @@ const workspaceDismiss = createAutoDismiss({
     onDismiss: () => closeWorkspacePopover(),
 });
 
-export function getWorkspaceRecords(): readonly WorkspaceRecord[] {
-    return workspaceStore.records;
-}
-
 function normalizeRecord(record: string | WorkspaceEventDetail): WorkspaceRecord | null {
     if (typeof record === 'string') {
         return {workspace: record, displayName: record, embeddingModel: ''};

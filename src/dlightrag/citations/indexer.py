@@ -103,31 +103,12 @@ class CitationIndexer:
         """Return the normalized workspace ID recorded for a reference."""
         return self._doc_workspaces.get(str(ref_id))
 
-    def get_citation_tags(self, source_id: str | None) -> list[str]:
-        """Return citation tags for a source_id (single or comma-separated chunk_ids).
-
-        Example: source_id="c1,c2" → ["[1-1]", "[1-2]"]
-        """
-        if not source_id:
-            return []
-        tags: list[str] = []
-        seen: set[str] = set()
-        for cid in split_source_ids(source_id):
-            ref_info = self._chunk_to_ref.get(cid)
-            if ref_info:
-                tag = f"[{ref_info[0]}-{ref_info[1]}]"
-                if tag not in seen:
-                    seen.add(tag)
-                    tags.append(tag)
-        return tags
-
     def get_doc_tags(self, source_id: str | None) -> list[str]:
         """Return unique doc-level tags for a source_id.
 
-        Unlike :meth:`get_citation_tags` which returns chunk-level ``[n-m]``
-        tags, this returns doc-level ``[n]`` tags — suitable for KG context
-        where the LLM should know the source documents but cite specific
-        chunks from the Document Excerpts section instead.
+        Returns doc-level ``[n]`` tags (not chunk-level ``[n-m]``) — suitable
+        for KG context where the LLM should know the source documents but cite
+        specific chunks from the Document Excerpts section instead.
 
         Example: source_id="c1,c2,c5" (c1,c2 from doc 1, c5 from doc 2)
                  → ["[1]", "[2]"]
@@ -201,10 +182,6 @@ class CitationIndexer:
                 page_label = f"Page {page_idx}" if page_idx else f"Chunk {idx}"
                 lines.append(f"  [{ref_id}-{idx}] {page_label}")
         return "\n".join(lines)
-
-    @staticmethod
-    def format_citation(ref_id: str | int, chunk_idx: int) -> str:
-        return f"[{ref_id}-{chunk_idx}]"
 
 
 def build_citation_index(

@@ -49,11 +49,6 @@ def test_inject_chunk_idx():
     assert enriched[0]["chunk_idx"] == 1
 
 
-def test_format_citation():
-    indexer = CitationIndexer()
-    assert indexer.format_citation("1", 2) == "[1-2]"
-
-
 def test_build_citation_index_convenience():
     contexts = [
         {"chunk_id": "c1", "reference_id": "1", "content": "text"},
