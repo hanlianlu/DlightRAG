@@ -65,9 +65,7 @@ async def test_native_multimodal_provider_can_be_forced_to_text() -> None:
     try:
         assert embedder.supports_images is False
         with pytest.raises(ValueError, match="does not support image"):
-            embedder.build_fused_payload_for_test(
-                "x", Image.new("RGB", (1, 1), "white"), context="document"
-            )
+            await embedder.embed_index_fused([("x", Image.new("RGB", (1, 1), "white"))])
     finally:
         await embedder.aclose()
 
@@ -114,8 +112,8 @@ def test_multimodal_embedder_builds_fused_voyage_payload() -> None:
     )
 
     assert embedder.supports_images is True
-    payload = embedder.build_fused_payload_for_test(
-        "a bar chart", Image.new("RGB", (2, 2), "white"), context="document"
+    payload = embedder._build_fused_payload(
+        [("a bar chart", Image.new("RGB", (2, 2), "white"))], context="document"
     )
     content = payload["inputs"][0]["content"]
     assert content[0] == {"type": "text", "text": "a bar chart"}
@@ -132,8 +130,8 @@ def test_fused_payload_degrades_to_image_only_when_description_blank() -> None:
         provider=VoyageEmbedProvider(),
     )
 
-    payload = embedder.build_fused_payload_for_test(
-        "   ", Image.new("RGB", (2, 2), "white"), context="document"
+    payload = embedder._build_fused_payload(
+        [("   ", Image.new("RGB", (2, 2), "white"))], context="document"
     )
     content = payload["inputs"][0]["content"]
     assert len(content) == 1
@@ -152,8 +150,8 @@ def test_image_capable_provider_builds_fused_payload() -> None:
     )
 
     assert embedder.supports_images is True
-    payload = embedder.build_fused_payload_for_test(
-        "x", Image.new("RGB", (2, 2), "white"), context="document"
+    payload = embedder._build_fused_payload(
+        [("x", Image.new("RGB", (2, 2), "white"))], context="document"
     )
     parts = payload["content"]["parts"]
     assert parts[0] == {"text": "x"}
@@ -171,8 +169,8 @@ def test_image_embedder_uses_asymmetric_by_default_for_capable_provider() -> Non
     )
 
     image = Image.new("RGB", (1, 1), "white")
-    index_payload = embedder.build_fused_payload_for_test("chart", image, context="document")
-    query_payload = embedder.build_fused_payload_for_test("chart", image, context="query")
+    index_payload = embedder._build_fused_payload([("chart", image)], context="document")
+    query_payload = embedder._build_fused_payload([("chart", image)], context="query")
 
     assert embedder.supports_asymmetric is True
     assert index_payload["input_type"] == "document"
@@ -188,8 +186,8 @@ def test_image_embedder_bounds_oversized_images_before_send() -> None:
         provider=VoyageEmbedProvider(),
     )
 
-    payload = embedder.build_fused_payload_for_test(
-        "", Image.new("RGB", (6000, 5000), "white"), context="document"
+    payload = embedder._build_fused_payload(
+        [("", Image.new("RGB", (6000, 5000), "white"))], context="document"
     )
 
     data_uri = payload["inputs"][0]["content"][0]["image_base64"]
@@ -209,8 +207,8 @@ def test_image_embedder_can_disable_asymmetric_for_capable_provider() -> None:
         asymmetric="disable",
     )
 
-    payload = embedder.build_fused_payload_for_test(
-        "chart", Image.new("RGB", (1, 1), "white"), context="query"
+    payload = embedder._build_fused_payload(
+        [("chart", Image.new("RGB", (1, 1), "white"))], context="query"
     )
 
     assert embedder.supports_asymmetric is False
@@ -227,7 +225,7 @@ def test_dimension_mismatch_raises() -> None:
     )
 
     with pytest.raises(ValueError, match="Expected embedding dim 1024"):
-        embedder.validate_vectors_for_test([[0.1, 0.2, 0.3]])
+        embedder._validate_vectors([[0.1, 0.2, 0.3]])
 
 
 async def test_embed_texts_posts_document_context() -> None:

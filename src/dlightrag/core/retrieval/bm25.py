@@ -214,29 +214,6 @@ class PostgresBM25:
 
         await self._run(_operation)
 
-    async def verify_indexes(
-        self,
-        *,
-        k1: float = 1.2,
-        b: float = 0.75,
-    ) -> None:
-        """Verify BM25 indexes exist and match runtime config without DDL."""
-        options_by_profile = [
-            BM25IndexOptions(profile=profile, k1=k1, b=b) for profile in self._profiles
-        ]
-
-        async def _operation(conn: Any) -> None:
-            await self._verify_schema(conn)
-            for options in options_by_profile:
-                indexdef = await self._fetch_indexdef(conn, options.profile.index_name)
-                if not options.matches_indexdef(indexdef):
-                    raise RuntimeError(
-                        f"{options.profile.index_name} is missing or does not match configured "
-                        "BM25 options; create it on the primary first"
-                    )
-
-        await self._run(_operation)
-
     @staticmethod
     async def _ensure_schema(conn: Any) -> None:
         await conn.execute(
@@ -247,23 +224,6 @@ class PostgresBM25:
             f"CREATE INDEX IF NOT EXISTS {BM25_LANGUAGE_INDEX} "
             f"ON {BM25_TABLE}(workspace, {BM25_LANGUAGE_COLUMN})"
         )
-
-    @staticmethod
-    async def _verify_schema(conn: Any) -> None:
-        exists = await conn.fetchval(
-            """
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'lightrag_doc_chunks'
-              AND column_name = $1
-            LIMIT 1
-            """,
-            BM25_LANGUAGE_COLUMN,
-        )
-        if not exists:
-            raise RuntimeError(
-                f"{BM25_TABLE}.{BM25_LANGUAGE_COLUMN} is missing; initialize it on the primary first"
-            )
 
     @staticmethod
     async def _verify_text_config(conn: Any, text_config: str) -> None:

@@ -117,6 +117,21 @@ class MultimodalEmbedder:
         parts.append(ImageEmbeddingInput(data_uri=data_uri))
         return MultimodalEmbeddingInput(parts=parts)
 
+    def _build_fused_payload(
+        self, items: list[tuple[str, Image.Image]], *, context: EmbeddingContext
+    ) -> dict:
+        """Build the provider request body for fused (text+image) index vectors."""
+        inputs: list[EmbeddingInput] = [
+            self._fused_input(description, image) for description, image in items
+        ]
+        return self.provider.build_payload(
+            self.model,
+            inputs,
+            context=context,
+            asymmetric=self.asymmetric,
+            output_dimension=self.dim,
+        )
+
     async def embed_index_fused(self, items: list[tuple[str, Image.Image]]) -> list[list[float]]:
         """Embed (description, image) pairs as fused document vectors in one request.
 
@@ -131,16 +146,7 @@ class MultimodalEmbedder:
         self._ensure_image_support()
         if not items:
             return []
-        inputs: list[EmbeddingInput] = [
-            self._fused_input(description, image) for description, image in items
-        ]
-        payload = self.provider.build_payload(
-            self.model,
-            inputs,
-            context="document",
-            asymmetric=self.asymmetric,
-            output_dimension=self.dim,
-        )
+        payload = self._build_fused_payload(items, context="document")
         data = await self._post(payload)
         vectors = self.provider.parse_response(data)
         self._validate_vectors(vectors, expected_count=len(items))
@@ -178,23 +184,6 @@ class MultimodalEmbedder:
     async def probe_image_embedding(self) -> None:
         """Probe that the provider can embed an image (gates the direct-visual leg)."""
         await self.embed_query_images([Image.new("RGB", (1, 1), "white")])
-
-    def build_fused_payload_for_test(
-        self, description: str, image: Image.Image, *, context: EmbeddingContext
-    ) -> dict:
-        """Expose fused payload construction to unit tests without HTTP calls."""
-        self._ensure_image_support()
-        return self.provider.build_payload(
-            self.model,
-            [self._fused_input(description, image)],
-            context=context,
-            asymmetric=self.asymmetric,
-            output_dimension=self.dim,
-        )
-
-    def validate_vectors_for_test(self, vectors: list[list[float]]) -> None:
-        """Expose vector validation to unit tests."""
-        self._validate_vectors(vectors)
 
     async def _post(self, payload: dict) -> dict:
         url = f"{self.base_url}{self.provider.endpoint_for_model(self.model)}"
