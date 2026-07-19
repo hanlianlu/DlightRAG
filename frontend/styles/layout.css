@@ -35,8 +35,7 @@ body.files-panel-open #files-btn {
 }
 
 .topbar-btn,
-.upload-btn,
-.show-all-btn {
+.upload-btn {
     font-size: var(--font-size-caption);
     font-weight: 600;
     letter-spacing: 0;
@@ -372,6 +371,7 @@ body.conversation-sidebar-open .panel {
     flex: 0 0 var(--conversation-top-row-height);
     gap: var(--space-tight);
     padding: 0 var(--space-section);
+    position: relative;
 }
 
 #panel-title {
@@ -383,6 +383,32 @@ body.conversation-sidebar-open .panel {
 
 #panel-title:empty,
 #ingest-target:empty {
+    display: none;
+}
+
+.source-toggle-all {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background: transparent;
+    border: none;
+    color: var(--color-text-subtle);
+    cursor: pointer;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    letter-spacing: 0;
+    padding: var(--space-inline) var(--space-component);
+    border-radius: var(--radius-sm);
+    transition: color 0.15s, background 0.15s;
+}
+
+.source-toggle-all:hover {
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-elevated);
+}
+
+.source-toggle-all[hidden] {
     display: none;
 }
 

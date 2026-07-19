@@ -119,7 +119,6 @@ def _inject_answer_with_sources(page) -> None:
                   </div>
                 </div>
               </div>
-              <button class="show-all-btn" type="button" data-action="show-all-sources" hidden>Show all sources</button>
           `;
         }
         """
