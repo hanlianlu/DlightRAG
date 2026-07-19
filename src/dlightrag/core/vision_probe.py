@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Startup image capability probes for answer and rerank models.
 
-``probe_image_capability`` sends one 1×1 pixel PNG and treats transport
+``probe_image_capability`` sends one small 16×16 PNG and treats transport
 acceptance as the signal -- a completed request means the model accepts
 ``image_url`` blocks -- returning a tri-state outcome. The reply text is
 deliberately not inspected. Both the answer path and the rerank path use it.
@@ -11,12 +11,15 @@ Results are recorded on the owning ``RAGServiceManager`` (never on the provider)
 from dataclasses import dataclass
 from typing import Any, Literal
 
-# Minimal 1×1 white PNG — base64-encoded so no filesystem dependency.
-_ONE_PIXEL_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+"
-    "hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+# Minimal 16×16 gray PNG -- base64-encoded so no filesystem dependency. Kept at
+# 16px (not 1px) because some real vision providers reject sub-10px images (e.g.
+# Alibaba Qwen: "height/width must be larger than 10"), which the transport-only
+# probe would otherwise misclassify as an ``unknown`` capability failure.
+_PROBE_IMAGE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFElEQVR4nGOoJxEwjGoY1TB8NQAAjTl9"
+    "EJLDg8QAAAAASUVORK5CYII="
 )
-_ONE_PIXEL_DATA_URI = f"data:image/png;base64,{_ONE_PIXEL_PNG_B64}"
+_PROBE_IMAGE_DATA_URI = f"data:image/png;base64,{_PROBE_IMAGE_PNG_B64}"
 _VISION_PROBE_MAX_TOKENS = 512
 
 
@@ -30,6 +33,10 @@ _UNSUPPORTED_MARKERS = (
     "vision is not",
     "multimodal is not",
     "does not support vision",
+    # OpenRouter rejects a text-only model's image request with a 404 whose body
+    # reads "No endpoints found that support image input". Kept image-specific so
+    # a wrong slug ("No endpoints found for <model>") stays classified unknown.
+    "endpoints found that support image",
 )
 
 
@@ -72,7 +79,7 @@ async def probe_image_capability(
         return ImageProbeOutcome(status="unsupported", failure_kind="config_disabled")
     content: list[dict[str, Any]] = [
         {"type": "text", "text": "This is an image-capability probe."},
-        {"type": "image_url", "image_url": {"url": _ONE_PIXEL_DATA_URI}},
+        {"type": "image_url", "image_url": {"url": _PROBE_IMAGE_DATA_URI}},
     ]
     try:
         await provider.complete(
