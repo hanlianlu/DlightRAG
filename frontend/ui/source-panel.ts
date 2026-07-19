@@ -6,6 +6,57 @@ import {closestElement, openPanel} from './panel.ts';
 
 const AI_MESSAGE_SELECTOR = '.' + chatStyles.aiMessage;
 
+interface ActiveCitation {
+    ref: string;
+    chunk: string;
+}
+
+// Remembered citation highlight. Set when a citation badge is clicked and kept
+// through show-all / collapse-all / manual doc toggles so the gold-edge chunk
+// stays marked. Cleared when the panel closes, switches away from SOURCES, or
+// the user navigates via a different citation or a doc-level reference.
+let activeCitation: ActiveCitation | null = null;
+
+function getToggleAllBtn(): HTMLButtonElement | null {
+    return document.getElementById('source-toggle-all-btn') as HTMLButtonElement | null;
+}
+
+function applyActiveHighlight(scope: ParentNode): void {
+    scope.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
+        const active = activeCitation !== null
+            && c.dataset.ref === activeCitation.ref
+            && c.dataset.chunk === activeCitation.chunk;
+        c.classList.toggle('active', active);
+    });
+}
+
+function isFullyExpanded(panelContent: HTMLElement): boolean {
+    const docs = Array.from(panelContent.querySelectorAll<HTMLElement>('.source-doc'));
+    if (docs.length === 0) return false;
+    return docs.every(function(doc) {
+        if (!doc.classList.contains('expanded')) return false;
+        return Array.from(doc.querySelectorAll<HTMLElement>('.source-chunk'))
+            .every(function(c) { return !c.hidden; });
+    });
+}
+
+function updateToggleAllButton(): void {
+    const btn = getToggleAllBtn();
+    const panelContent = document.getElementById('panel-content');
+    if (!btn || !panelContent) return;
+    const hasSources = panelContent.querySelector('.source-doc') !== null;
+    btn.hidden = !hasSources;
+    if (!hasSources) return;
+    const expanded = isFullyExpanded(panelContent);
+    btn.textContent = expanded ? 'Collapse all' : 'Show all';
+    btn.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+}
+
+function hideToggleAllButton(): void {
+    const btn = getToggleAllBtn();
+    if (btn) btn.hidden = true;
+}
+
 function findSourceData(answerEl: Element): HTMLElement | null {
     for (const child of answerEl.children) {
         if (child instanceof HTMLElement && child.classList.contains('source-data')) return child;
@@ -37,17 +88,15 @@ function setExpandedSource(ref?: string, chunk?: string): void {
         doc.classList.toggle('expanded', isActiveDoc);
         if (chunksContainer) chunksContainer.hidden = !isActiveDoc;
 
-        if (isActiveDoc && chunk) {
+        if (isActiveDoc) {
             doc.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
-                const active = c.dataset.chunk === chunk;
-                c.hidden = !active;
-                c.classList.toggle('active', active);
+                c.hidden = chunk ? c.dataset.chunk !== chunk : false;
             });
         }
     });
 
-    const showAllBtn = panelContent.querySelector<HTMLElement>('.show-all-btn');
-    if (showAllBtn) showAllBtn.hidden = false;
+    applyActiveHighlight(panelContent);
+    updateToggleAllButton();
     renderExpandedSourceMath(panelContent);
 }
 
@@ -56,6 +105,7 @@ function openRefSource(refItem: HTMLElement): void {
     const answerEl = refItem.closest(AI_MESSAGE_SELECTOR);
     if (!answerEl) return;
     if (!copySourcePanelFromAnswer(answerEl)) return;
+    activeCitation = null;
     setExpandedSource(ref);
     openPanel('SOURCES');
 }
@@ -66,6 +116,7 @@ export function filterSource(badge: HTMLElement): void {
     const answerEl = badge.closest(AI_MESSAGE_SELECTOR);
     if (!answerEl) return;
     if (!copySourcePanelFromAnswer(answerEl)) return;
+    activeCitation = (ref && chunk) ? {ref, chunk} : null;
     setExpandedSource(ref, chunk);
     openPanel('SOURCES');
 }
@@ -96,11 +147,12 @@ function toggleDoc(header: Element): void {
         if (!wasOpen) {
             chunksContainer.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
                 c.hidden = false;
-                c.classList.remove('active');
             });
+            applyActiveHighlight(doc);
             renderExpandedSourceMath(doc);
         }
     }
+    updateToggleAllButton();
 }
 
 function showAllSources(): void {
@@ -113,13 +165,30 @@ function showAllSources(): void {
             chunks.hidden = false;
             chunks.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
                 c.hidden = false;
-                c.classList.remove('active');
             });
         }
     });
-    const showAllBtn = panelContent.querySelector<HTMLElement>('.show-all-btn');
-    if (showAllBtn) showAllBtn.hidden = true;
+    applyActiveHighlight(panelContent);
+    updateToggleAllButton();
     renderExpandedSourceMath(panelContent);
+}
+
+function collapseAllSources(): void {
+    const panelContent = document.getElementById('panel-content');
+    if (!panelContent) return;
+    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
+        doc.classList.remove('expanded');
+        const chunks = doc.querySelector<HTMLElement>('.source-doc-chunks');
+        if (chunks) chunks.hidden = true;
+    });
+    updateToggleAllButton();
+}
+
+function toggleAllSources(): void {
+    const panelContent = document.getElementById('panel-content');
+    if (!panelContent) return;
+    if (isFullyExpanded(panelContent)) collapseAllSources();
+    else showAllSources();
 }
 
 export function setupSourcePanel(): void {
@@ -152,16 +221,29 @@ export function setupSourcePanel(): void {
         }
     });
 
+    getToggleAllBtn()?.addEventListener('click', function() {
+        toggleAllSources();
+    });
+
+    document.body.addEventListener('panelOpening', function(e) {
+        const title = (e as CustomEvent<{title?: string}>).detail?.title;
+        if (title && title !== 'SOURCES') {
+            activeCitation = null;
+            hideToggleAllButton();
+        }
+    });
+
+    document.body.addEventListener('panelClosed', function() {
+        activeCitation = null;
+        hideToggleAllButton();
+    });
+
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
     panelContent.addEventListener('click', function(e) {
         const toggleButton = closestElement<HTMLElement>(e.target, '[data-action="toggle-doc"]');
         if (toggleButton) {
             toggleDoc(toggleButton);
-            return;
-        }
-        if (closestElement(e.target, '[data-action="show-all-sources"]')) {
-            showAllSources();
         }
     });
 }

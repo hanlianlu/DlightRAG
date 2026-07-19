@@ -209,29 +209,6 @@
     border-bottom: none;
 }
 
-/* === Show All Button === */
-
-.show-all-btn {
-    width: 100%;
-    padding: var(--space-component);
-    margin-top: var(--space-component);
-    background: transparent;
-    border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-subtle);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
-}
-
-.show-all-btn:hover {
-    border-color: var(--color-border-strong);
-    color: var(--color-text-tertiary);
-}
-
-.show-all-btn[hidden] {
-    display: none;
-}
-
 /* === Answer References (doc-level, visible at bottom) === */
 
 .answer-references {

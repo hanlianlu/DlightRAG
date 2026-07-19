@@ -103,7 +103,6 @@ _DATA_ACTIONS = {
     "filter-source",
     "open-lightbox",
     "open-ref-source",
-    "show-all-sources",
     "toggle-doc",
 }
 _ALLOWED_IDS = {"answer-content", "source-data"}
