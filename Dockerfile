@@ -14,8 +14,10 @@ ENV UV_LINK_MODE=copy
 COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/
 
 COPY pyproject.toml uv.lock ./
+# Deps only — binary-only (UV_NO_BUILD): never compile an sdist; the slim base has
+# no toolchain, so a missing wheel fails fast. Keep it off the project build below.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-install-project
+    UV_HTTP_TIMEOUT=300 UV_NO_BUILD=1 uv sync --frozen --no-dev --no-install-project
 
 COPY README.md ./
 COPY src/ src/
