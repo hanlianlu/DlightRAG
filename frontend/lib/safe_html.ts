@@ -68,12 +68,6 @@ export function setSanitizedHtml(element: Element, html: string): void {
   element.innerHTML = sanitizeHtml(html);
 }
 
-export function fragmentFromSanitizedHtml(html: string): DocumentFragment {
-  const template = document.createElement('template');
-  setSanitizedHtml(template, html);
-  return template.content;
-}
-
 export function setSanitizedLlmHtml(element: Element, html: string): void {
   element.innerHTML = DOMPurify.sanitize(html, LLM_SANITIZE_CONFIG) as string;
 }

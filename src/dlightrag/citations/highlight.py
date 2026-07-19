@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from dlightrag.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
-    HIGHLIGHT_USER_PROMPT,
 )
 from dlightrag.utils.concurrency import bounded_map
 
@@ -135,42 +134,6 @@ class HighlightExtractor:
                 idx = chunk_lower.index(phrase.lower())
                 validated.append(chunk_content[idx : idx + len(phrase)])
         result.phrases = validated
-        return result
-
-    async def extract_highlights(
-        self,
-        citing_sentence: str,
-        chunk_content: str,
-        chunk_id: str,
-    ) -> HighlightPhrases:
-        cache_key = self._cache_key(citing_sentence, chunk_id)
-        cached = self._cache_get(cache_key)
-        if cached is not None:
-            return cached
-
-        citing_sentence = citing_sentence[: self._max_input_chars]
-        chunk_content = chunk_content[: self._max_input_chars]
-
-        user_prompt = HIGHLIGHT_USER_PROMPT.format(
-            citing_sentence=citing_sentence,
-            chunk_content=chunk_content,
-        )
-        messages = [
-            {"role": "system", "content": HIGHLIGHT_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        try:
-            raw_response = await self._llm_func(messages=messages)
-            parsed = json.loads(_strip_json_fences(raw_response))
-            result = HighlightPhrases(**parsed)
-        except Exception:
-            logger.debug("Highlight extraction failed for chunk %s", chunk_id, exc_info=True)
-            result = HighlightPhrases()
-
-        result = self._validate_phrases(result, chunk_content)
-
-        self._cache_put(cache_key, result)
         return result
 
     async def extract_highlight_batch(

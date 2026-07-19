@@ -117,12 +117,6 @@ HIGHLIGHT_RESPONSE_FORMAT = (
     '"confidence": 0.8}. Confidence must be a number from 0.0 to 1.0.'
 )
 
-HIGHLIGHT_USER_PROMPT = (
-    "Citing sentence: {citing_sentence}\n\n"
-    "Source chunk:\n{chunk_content}\n\n"
-    "Extract 1-3 supporting phrases from the source chunk (must be exact substrings)."
-)
-
 HIGHLIGHT_BATCH_USER_PROMPT = (
     "For each item below, identify 1-3 short supporting phrases from source_chunk "
     "that most directly support citing_sentence. Return only exact substrings from "

@@ -124,34 +124,6 @@ class AzureBlobDataSource(AsyncDataSource):
                 if chunk:
                     out.write(chunk)
 
-    async def aupload_document(
-        self,
-        blob_name: str,
-        content: bytes,
-        content_type: str | None = None,
-    ) -> str:
-        """Async upload content to blob storage.
-
-        Returns:
-            Full blob URL in format: azure://{container}/{blob_name}
-        """
-        from azure.storage.blob import ContentSettings
-
-        client = await self._get_async_container_client()
-        blob_client = client.get_blob_client(blob_name)
-
-        content_settings = None
-        if content_type:
-            content_settings = ContentSettings(content_type=content_type)
-
-        await blob_client.upload_blob(
-            content,
-            overwrite=True,
-            content_settings=content_settings,
-        )
-
-        return f"azure://{self.container_name}/{blob_name}"
-
     async def aclose(self) -> None:
         """Close async clients."""
         if self._async_container_client:
