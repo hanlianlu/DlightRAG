@@ -91,9 +91,9 @@ hooks:
 
 ci:
 	uv sync --group dev
-	uv run ruff check src/ tests/ scripts/
-	uv run ruff check src/ scripts/ --select S
-	uv run ruff format --check src/ tests/ scripts/
+	uv run ruff check src/ tests/ scripts/ prerequisite_setup.py
+	uv run ruff check src/ scripts/ prerequisite_setup.py --select S
+	uv run ruff format --check src/ tests/ scripts/ prerequisite_setup.py
 	uv run pyright
 	uv run lint-imports
 	uv run shellcheck $$(git ls-files '*.sh')

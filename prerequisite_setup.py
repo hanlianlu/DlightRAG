@@ -311,7 +311,7 @@ def systemd_user_available() -> bool:
     if shutil.which("systemctl") is None:
         return False
     result = subprocess.run(
-        ["systemctl", "--user", "is-system-running"],
+        ["systemctl", "--user", "is-system-running"],  # noqa: S607 - fixed argv on PATH
         capture_output=True,
         text=True,
         check=False,
@@ -350,7 +350,7 @@ def build_mineru_local_commands(service_model: str, *, title_aided: bool) -> lis
 
 
 def _default_runner(cmd: list[str]) -> None:
-    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True)  # noqa: S603 - fixed make/docker/uv argv
 
 
 def _note_foreground_mineru() -> None:

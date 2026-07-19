@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """RAGAS evaluation adapter for DlightRAG.
 
 Reuses LightRAG's built-in :class:`RAGEvaluator` — RAGAS metrics
