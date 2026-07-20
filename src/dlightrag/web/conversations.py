@@ -361,15 +361,12 @@ class WebConversationService:
         chunks: list[Any] = []
         parse_errors: list[dict[str, str]] = []
         for document in documents:
-            document_bytes = getattr(document, "document_bytes", None)
-            if document_bytes is None:
-                document_bytes = getattr(document, "attachment_bytes", b"")
             bundle, meta = await service.achunks_for_attachment(
                 principal_id=prepared.principal_id,
                 conversation_id=prepared.conversation_id,
                 attachment_id=document.attachment_id,
                 filename=document.filename,
-                document_bytes=document_bytes,
+                document_bytes=document.document_bytes,
                 content_sha256=document.content_sha256,
             )
             if meta.get("attachment_parse_error"):
