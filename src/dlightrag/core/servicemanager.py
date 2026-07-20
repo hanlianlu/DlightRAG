@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
-    from dlightrag.core.query_images import QueryImageDescriber
+    from dlightrag.core.request.images import QueryImageDescriber
     from dlightrag.core.source_download import SourceDownloadTarget
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
@@ -35,12 +35,12 @@ from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
-from dlightrag.core.query_images import (
+from dlightrag.core.request.images import (
     PreparedQueryImages,
     prepare_query_images,
 )
-from dlightrag.core.query_planner import QueryPlan, QueryPlanner
-from dlightrag.core.query_workspaces import (
+from dlightrag.core.request.planner import QueryPlan, QueryPlanner
+from dlightrag.core.request.workspaces import (
     resolve_query_workspaces,
     validate_query_workspace_selection,
 )
@@ -965,7 +965,7 @@ class RAGServiceManager:
     def _get_query_image_describer(self) -> QueryImageDescriber:
         """Lazy-create the VLM query-image describer."""
         if self._query_image_describer is None:
-            from dlightrag.core.query_images import QueryImageDescriber
+            from dlightrag.core.request.images import QueryImageDescriber
             from dlightrag.models.llm import get_vlm_model_func
 
             cfg = self._config.query_images

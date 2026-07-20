@@ -106,7 +106,7 @@ async def _delete_principal(pool: Any, principal_id: str) -> None:
 @pytest.mark.usefixtures("pg_check")
 async def test_web_conversation_attachment_storage_round_trip() -> None:
     """Attachment insert/select/cache/cascade round-trips against live pg18."""
-    from dlightrag.core.query_attachments import (
+    from dlightrag.core.request.attachments import (
         AttachmentContextChunk,
         ParsedAttachmentBundle,
     )

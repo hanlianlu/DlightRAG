@@ -4,7 +4,7 @@
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.core.query_workspaces import (
+from dlightrag.core.request.workspaces import (
     NoQueryableWorkspacesError,
     QueryWorkspaceSelection,
     WorkspaceSelectionConflictError,

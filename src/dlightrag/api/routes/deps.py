@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.app_state import request_config
 from dlightrag.config import get_config
-from dlightrag.core.query_workspaces import (
+from dlightrag.core.request.workspaces import (
     NoQueryableWorkspacesError,
     WorkspaceSelectionConflictError,
     resolve_query_workspaces,

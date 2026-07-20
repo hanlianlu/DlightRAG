@@ -10,7 +10,7 @@ import inspect
 
 from lightrag import LightRAG
 
-from dlightrag.core.query_attachments import _ParseOwnerShim
+from dlightrag.core.request.attachments import _ParseOwnerShim
 
 
 def test_lightrag_exposes_parser_owner_contract() -> None:

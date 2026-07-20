@@ -24,8 +24,8 @@ from dlightrag.config import (
     set_config,
 )
 from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.query_images import prepare_query_images
-from dlightrag.core.query_planner import QueryPlan, QueryPlanner, QueryPlannerStructuredResponse
+from dlightrag.core.request.images import prepare_query_images
+from dlightrag.core.request.planner import QueryPlan, QueryPlanner, QueryPlannerStructuredResponse
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.base import SourceDocument

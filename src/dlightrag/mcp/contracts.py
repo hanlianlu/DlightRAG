@@ -14,7 +14,7 @@ from dlightrag.core.client_contracts import (
     QueryImage,
     SourceType,
 )
-from dlightrag.core.query_workspaces import QueryWorkspaceSelection
+from dlightrag.core.request.workspaces import QueryWorkspaceSelection
 
 
 class MCPInput(ClientContractModel):

@@ -14,7 +14,7 @@ from dlightrag.core.client_contracts import (
     IngestPayload,
     QueryImage,
 )
-from dlightrag.core.query_workspaces import QueryWorkspaceSelection
+from dlightrag.core.request.workspaces import QueryWorkspaceSelection
 
 # ═══════════════════════════════════════════════════════════════════
 # Request Models

@@ -1048,7 +1048,7 @@ async def test_prepare_answer_turn_passes_documents_to_web_planner(
     service_under_test,
     conversation_store: AsyncMock,
 ) -> None:
-    from dlightrag.core.query_planner import QueryPlan
+    from dlightrag.core.request.planner import QueryPlan
     from dlightrag.web.conversations import PreparedWebConversation
 
     conversation_store.list_image_catalog.return_value = []
@@ -1087,8 +1087,8 @@ async def test_prepare_answer_turn_merges_current_document_context(
     service_under_test,
     conversation_store: AsyncMock,
 ) -> None:
-    from dlightrag.core.query_attachments import build_text_attachment_chunk
-    from dlightrag.core.query_planner import QueryPlan
+    from dlightrag.core.request.attachments import build_text_attachment_chunk
+    from dlightrag.core.request.planner import QueryPlan
     from dlightrag.web.attachment_models import validate_web_documents
     from dlightrag.web.conversations import PreparedWebConversation
 

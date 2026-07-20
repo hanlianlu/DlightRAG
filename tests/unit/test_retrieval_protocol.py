@@ -207,7 +207,7 @@ class TestCanonicalizeReferenceIds:
 
 
 def test_attachment_context_rows_use_web_attachment_source_type() -> None:
-    from dlightrag.core.query_attachments import build_text_attachment_chunk
+    from dlightrag.core.request.attachments import build_text_attachment_chunk
 
     row = build_text_attachment_chunk(
         attachment_id="att-1",

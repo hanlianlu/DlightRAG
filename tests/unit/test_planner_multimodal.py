@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.core.query_planner import QueryPlanner, _convert_history_to_text
+from dlightrag.core.request.planner import QueryPlanner, _convert_history_to_text
 
 
 class TestConvertHistoryToText:

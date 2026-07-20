@@ -15,7 +15,7 @@ import pytest
 from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.answer.prompt import CurrentImagePayloadError
 from dlightrag.core.answer.turn import PreparedAnswerTurn
-from dlightrag.core.query_planner import QueryPlan
+from dlightrag.core.request.planner import QueryPlan
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils.images import ValidatedWebImage
 from dlightrag.web.answer_events import stream_answer_events

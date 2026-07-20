@@ -337,7 +337,7 @@ class WebConversationService:
 
     def _get_query_attachment_service(self, manager: RAGServiceManager, lightrag: Any) -> Any:
         """Construct the Web-only query-attachment service (store injected via DI)."""
-        from dlightrag.core.query_attachments import QueryAttachmentService
+        from dlightrag.core.request.attachments import QueryAttachmentService
 
         return QueryAttachmentService(
             lightrag=lightrag,
@@ -354,7 +354,7 @@ class WebConversationService:
         documents: list[Any],
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Parse/chunk documents then budget them into plain-dict context rows."""
-        from dlightrag.core.query_attachments import ParsedAttachmentBundle
+        from dlightrag.core.request.attachments import ParsedAttachmentBundle
 
         lightrag = await manager.aget_attachment_chunking_lightrag(workspaces)
         service = self._get_query_attachment_service(manager, lightrag)

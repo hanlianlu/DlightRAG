@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dlightrag.core.query_planner import (
+from dlightrag.core.request.planner import (
     QueryPlan,
     QueryPlanner,
     _build_custom_keys_hint,
@@ -148,7 +148,7 @@ class TestPlanWebVariant:
 
 
 def test_history_text_uses_placeholder_for_uncaptioned_images():
-    from dlightrag.core.query_planner import _convert_history_to_text
+    from dlightrag.core.request.planner import _convert_history_to_text
 
     history = [
         {
@@ -229,7 +229,7 @@ class TestPlanWithLLM:
 
         planner = QueryPlanner(llm_func=llm)
 
-        with patch("dlightrag.core.query_planner.asyncio.sleep", new=AsyncMock()):
+        with patch("dlightrag.core.request.planner.asyncio.sleep", new=AsyncMock()):
             plan = await planner.plan("what is X")
 
         assert plan.standalone_query == "what is X"
@@ -306,7 +306,7 @@ class TestPlanWithLLM:
         )
         planner = QueryPlanner(llm_func=llm)
 
-        with caplog.at_level(logging.INFO, logger="dlightrag.core.query_planner"):
+        with caplog.at_level(logging.INFO, logger="dlightrag.core.request.planner"):
             await planner.plan("find report.pdf")
 
         assert "[Planner] result" in caplog.text
@@ -408,7 +408,7 @@ class TestPlanFallback:
     async def test_llm_exception_returns_fallback(self):
         llm = AsyncMock(side_effect=RuntimeError("LLM error"))
         planner = QueryPlanner(llm_func=llm)
-        with patch("dlightrag.core.query_planner.asyncio.sleep", new=AsyncMock()):
+        with patch("dlightrag.core.request.planner.asyncio.sleep", new=AsyncMock()):
             plan = await planner.plan("query")
         assert plan.standalone_query == "query"
         assert plan.metadata_filter is None

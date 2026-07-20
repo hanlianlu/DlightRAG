@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from PIL import Image
 
-from dlightrag.core.query_images import QueryImageDescriber
+from dlightrag.core.request.images import QueryImageDescriber
 from dlightrag.utils.images import decode_image_base64, validate_web_images
 
 _PNG_B64 = (

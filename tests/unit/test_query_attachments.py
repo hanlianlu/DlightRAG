@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from lightrag.utils import TiktokenTokenizer
 
-from dlightrag.core import query_attachments
-from dlightrag.core.query_attachments import (
+from dlightrag.core.request import attachments
+from dlightrag.core.request.attachments import (
     ATTACHMENT_TEXT_TOKEN_BUDGET,
     AttachmentContextChunk,
     ParsedAttachmentBundle,
@@ -221,7 +221,7 @@ async def test_service_returns_cache_hit_without_parsing(monkeypatch: Any) -> No
     def _boom(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover - must not run
         raise AssertionError("parse must not run on a cache hit")
 
-    monkeypatch.setattr(query_attachments, "parse_attachment_to_bundle", _boom)
+    monkeypatch.setattr(attachments, "parse_attachment_to_bundle", _boom)
 
     service = QueryAttachmentService(lightrag=_FakeLightRAG(), store=store, parser_rules="")
     bundle, trace = await service.achunks_for_attachment(
@@ -245,7 +245,7 @@ async def test_service_cache_miss_parses_and_materializes(monkeypatch: Any) -> N
     async def _fake_parse(**_kwargs: Any) -> ParsedAttachmentBundle:
         return parsed
 
-    monkeypatch.setattr(query_attachments, "parse_attachment_to_bundle", _fake_parse)
+    monkeypatch.setattr(attachments, "parse_attachment_to_bundle", _fake_parse)
 
     service = QueryAttachmentService(lightrag=_FakeLightRAG(), store=store, parser_rules="")
     bundle, trace = await service.achunks_for_attachment(
@@ -268,7 +268,7 @@ async def test_service_parse_failure_is_attachment_scoped(monkeypatch: Any) -> N
     async def _fail(**_kwargs: Any) -> ParsedAttachmentBundle:
         raise RuntimeError("mineru exploded")
 
-    monkeypatch.setattr(query_attachments, "parse_attachment_to_bundle", _fail)
+    monkeypatch.setattr(attachments, "parse_attachment_to_bundle", _fail)
 
     service = QueryAttachmentService(lightrag=_FakeLightRAG(), store=store, parser_rules="")
     bundle, trace = await service.achunks_for_attachment(

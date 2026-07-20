@@ -36,7 +36,7 @@ from dlightrag.core.client_requests import (
     managed_local_ingest_path,
     query_kwargs_from_payload,
 )
-from dlightrag.core.query_workspaces import (
+from dlightrag.core.request.workspaces import (
     NoQueryableWorkspacesError,
     resolve_query_workspaces,
 )

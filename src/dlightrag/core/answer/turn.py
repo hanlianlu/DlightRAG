@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from dlightrag.core.query_planner import QueryPlan
+    from dlightrag.core.request.planner import QueryPlan
 
 
 @dataclass(frozen=True, slots=True)

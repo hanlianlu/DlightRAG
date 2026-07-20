@@ -10,7 +10,7 @@ from uuid import uuid4
 from dlightrag.storage.migrations import Migration, apply_migrations
 
 if TYPE_CHECKING:
-    from dlightrag.core.query_attachments import ParsedAttachmentBundle
+    from dlightrag.core.request.attachments import ParsedAttachmentBundle
 
 _CREATE_CONVERSATIONS = """
 CREATE TABLE IF NOT EXISTS web_conversations (
@@ -1116,7 +1116,7 @@ class PGWebConversationStore:
         id that shares the same bytes; chunk ids are remapped to the requested
         attachment so citations never point at a prior attachment.
         """
-        from dlightrag.core.query_attachments import (
+        from dlightrag.core.request.attachments import (
             AttachmentContextChunk,
             ParsedAttachmentBundle,
         )
