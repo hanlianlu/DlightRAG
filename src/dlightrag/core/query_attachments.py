@@ -111,12 +111,19 @@ def select_attachment_context(
     Image budgeting is intentionally NOT done here. Attachment rows keep their
     ``image_data`` so the single ``AnswerContextPacker`` + ``AnswerImageBudget``
     can decide which images are actually sent, shared with workspace and
-    current images.
+    current images. Visual chunks (rows carrying image bytes) therefore always
+    pass through regardless of the text budget; only pure-text chunks are
+    subject to the ``text_token_budget`` cutoff.
     """
     rows: list[dict[str, Any]] = []
     text_tokens = 0
     strategy: Literal["full", "budgeted"] = "full"
     for chunk in bundle.chunks:
+        if chunk.image_bytes is not None:
+            # Visual chunk: never dropped for text-budget reasons; the packer
+            # owns all image budgeting.
+            rows.append(chunk.to_context_row())
+            continue
         if text_tokens + chunk.token_estimate > text_token_budget:
             strategy = "budgeted"
             continue

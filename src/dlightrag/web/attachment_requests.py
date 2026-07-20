@@ -10,8 +10,23 @@ from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
-from dlightrag.web.attachment_models import ValidatedWebDocument, validate_web_documents
+from dlightrag.web.attachment_models import (
+    MAX_CURRENT_DOCUMENTS,
+    MAX_DOCUMENT_BYTES,
+    ValidatedWebDocument,
+    validate_web_documents,
+)
 from dlightrag.web.requests import WebAnswerRequest, read_limited_answer_body
+
+# Bound the multipart parse *before* buffering any bodies so a client cannot
+# push Starlette's default 1000 parts into memory/disk ahead of the document
+# caps. Allow one extra file part beyond the 3-document cap so an over-limit
+# request surfaces a precise 413 here instead of Starlette's generic 400; more
+# than that is stopped by Starlette's own parser guard. ``max_fields`` covers
+# the handful of non-file form fields (query/images/workspaces/conversation_id/
+# submission_id) plus slack.
+_MAX_DOCUMENT_FILE_PARTS = MAX_CURRENT_DOCUMENTS + 1
+_MAX_FORM_FIELDS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,14 +77,22 @@ async def parse_web_answer_request(
             documents=(),
         )
 
-    form = await request.form()
+    form = await request.form(
+        max_files=_MAX_DOCUMENT_FILE_PARTS,
+        max_fields=_MAX_FORM_FIELDS,
+        max_part_size=MAX_DOCUMENT_BYTES,
+    )
     files = form.getlist("documents")
+    document_parts = [item for item in files if isinstance(item, UploadFile) and item.filename]
+    if len(document_parts) > MAX_CURRENT_DOCUMENTS:
+        raise HTTPException(
+            status_code=413,
+            detail="Web answer accepts at most 3 documents per message",
+        )
     document_inputs: list[tuple[str, str | None, bytes]] = []
-    for item in files:
-        if not isinstance(item, UploadFile) or not item.filename:
-            continue
+    for item in document_parts:
         payload = await item.read()
-        document_inputs.append((item.filename, item.content_type, payload))
+        document_inputs.append((str(item.filename), item.content_type, payload))
     try:
         documents = validate_web_documents(document_inputs)
         images = [str(item) for item in _json_list(form.get("images"), field="images")]

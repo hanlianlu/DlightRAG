@@ -82,14 +82,34 @@ def test_select_attachment_context_respects_text_budget() -> None:
 
 
 def test_select_attachment_context_does_not_budget_images() -> None:
-    # A visual chunk with a large text token_estimate is still dropped by the
-    # text budget, but the reducer must not apply any separate image budget.
+    # A visual chunk must pass through to the single answer-context packer even
+    # when an over-budget pure-text chunk in the same bundle is dropped: text
+    # reduction budgets text chunks only and never budgets images.
+    bundle = ParsedAttachmentBundle(
+        chunks=[
+            text_chunk("t-big", ATTACHMENT_TEXT_TOKEN_BUDGET + 1),
+            visual_chunk("v1"),
+        ]
+    )
+
+    rows, trace = select_attachment_context(bundle, text_token_budget=ATTACHMENT_TEXT_TOKEN_BUDGET)
+
+    ids = [row["chunk_id"] for row in rows]
+    assert ids == ["v1"]
+    assert rows[0]["image_data"] == "cG5nLWJ5dGVz"
+    assert trace["attachment_context_strategy"] == "budgeted"
+
+
+def test_select_attachment_context_keeps_visual_chunks_under_tiny_budget() -> None:
+    # Even with a text budget of 1, a visual chunk survives untouched.
     bundle = ParsedAttachmentBundle(chunks=[visual_chunk("v1")])
 
     rows, trace = select_attachment_context(bundle, text_token_budget=1)
 
-    assert rows == []
-    assert trace["attachment_context_strategy"] == "budgeted"
+    assert [row["chunk_id"] for row in rows] == ["v1"]
+    assert rows[0]["image_data"] == "cG5nLWJ5dGVz"
+    # No text chunk was dropped, so the reducer reports a full pass-through.
+    assert trace["attachment_context_strategy"] == "full"
 
 
 class _FakeLightRAG:

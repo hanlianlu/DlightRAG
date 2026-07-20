@@ -162,6 +162,30 @@ WEB_CONVERSATION_MIGRATIONS = (
             "ON web_conversation_attachments (principal_id, conversation_id, created_at DESC)",
         ),
     ),
+    Migration(
+        "0004_web_conversation_attachment_chunks_cascade",
+        "Reclaim the parse cache when its owning conversation is removed",
+        (
+            # Drop any pre-existing orphan cache rows (from deployments that ran
+            # 0003 before this lifecycle fix) so the new FK validates cleanly.
+            "DELETE FROM web_conversation_attachment_chunks AS c "
+            "WHERE NOT EXISTS ("
+            "SELECT 1 FROM web_conversations AS w "
+            "WHERE w.principal_id = c.principal_id "
+            "AND w.conversation_id = c.conversation_id)",
+            # Cascade the content-addressed cache from its owning conversation.
+            # The conversation row already exists when pre-commit parsing writes
+            # the cache, and this references web_conversations (NOT the turn
+            # rows), so it does not break pre-commit parsing. Conversation
+            # deletion, principal prune, and TTL expiry all delete the
+            # web_conversations row, so the cache is reclaimed on every path.
+            "ALTER TABLE web_conversation_attachment_chunks "
+            "ADD CONSTRAINT web_conversation_attachment_chunks_conversation_fkey "
+            "FOREIGN KEY (principal_id, conversation_id) "
+            "REFERENCES web_conversations (principal_id, conversation_id) "
+            "ON DELETE CASCADE",
+        ),
+    ),
 )
 
 _SUMMARY_COLUMNS = """

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web-only durable conversation lifecycle routes."""
 
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -18,6 +19,22 @@ router = APIRouter()
 
 def _user(request: Request):
     return getattr(request.state, "user_context", None)
+
+
+def _attachment_content_disposition(filename: str) -> str:
+    """Build a latin-1-safe ``Content-Disposition`` value.
+
+    Mirrors Starlette's ``FileResponse`` encoding: non-ASCII filenames (e.g.
+    ``报告.pdf``) and any name that is not already URL-safe (e.g. one containing
+    a ``"``) are emitted as RFC 5987 ``filename*=utf-8''...``; only fully
+    URL-safe ASCII names use the plain quoted ``filename="..."`` form. This
+    avoids the latin-1 ``UnicodeEncodeError`` and the quote-breakout that a raw
+    interpolation would cause.
+    """
+    quoted = quote(filename)
+    if quoted != filename:
+        return f"attachment; filename*=utf-8''{quoted}"
+    return f'attachment; filename="{filename}"'
 
 
 @router.get("/conversations", response_model=list[ConversationSummary])
@@ -135,7 +152,7 @@ async def conversation_document(
         media_type=document.mime_type,
         headers={
             "Cache-Control": "private, max-age=3600",
-            "Content-Disposition": f'attachment; filename="{document.filename}"',
+            "Content-Disposition": _attachment_content_disposition(document.filename),
         },
     )
 
