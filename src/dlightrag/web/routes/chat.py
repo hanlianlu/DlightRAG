@@ -5,13 +5,13 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import ValidationError
 
 from dlightrag.access_control import AccessAction
 from dlightrag.utils import normalize_workspace
 from dlightrag.utils.images import validate_web_images
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.attachment_models import MAX_CURRENT_DOCUMENTS, MAX_DOCUMENT_BYTES
+from dlightrag.web.attachment_requests import parse_web_answer_request
 from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (
     enforce_web_access,
@@ -22,34 +22,10 @@ from dlightrag.web.deps import (
     get_workspace,
     templates,
 )
-from dlightrag.web.requests import WebAnswerRequest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-_WEB_ANSWER_JSON_OVERHEAD_BYTES = 64 * 1024
-
-
-async def _read_limited_answer_body(
-    request: Request, *, max_images: int, max_upload_bytes: int
-) -> bytes:
-    encoded_image_bytes = ((max_upload_bytes + 2) // 3) * 4
-    max_body_bytes = _WEB_ANSWER_JSON_OVERHEAD_BYTES + max(0, max_images) * encoded_image_bytes
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            if int(content_length) > max_body_bytes:
-                raise HTTPException(status_code=413, detail="Web answer request body is too large")
-        except ValueError:
-            # Malformed Content-Length header: ignore it and rely on the
-            # streaming byte cap below to bound the request body size.
-            pass
-    body = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > max_body_bytes:
-            raise HTTPException(status_code=413, detail="Web answer request body is too large")
-        body.extend(chunk)
-    return bytes(body)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -123,15 +99,11 @@ async def answer_stream(
     """Stream answer via SSE, then swap in enriched citations."""
     manager = get_manager(request)
     cfg = manager.config
-    try:
-        raw_body = await _read_limited_answer_body(
-            request,
-            max_images=cfg.query_images.max_current_images,
-            max_upload_bytes=cfg.query_images.max_upload_bytes,
-        )
-        body = WebAnswerRequest.model_validate_json(raw_body)
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    body = await parse_web_answer_request(
+        request,
+        max_images=cfg.query_images.max_current_images,
+        max_image_upload_bytes=cfg.query_images.max_upload_bytes,
+    )
 
     query = body.query
     if not query:
