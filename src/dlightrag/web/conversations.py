@@ -11,7 +11,7 @@ import asyncpg
 
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
-from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     CommitTurnResult,

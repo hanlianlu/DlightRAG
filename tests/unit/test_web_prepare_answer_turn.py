@@ -3,7 +3,7 @@
 
 from typing import TYPE_CHECKING, Any, cast
 
-from dlightrag.core.answer_capability import AnswerImageCapability
+from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.query_planner import QueryPlan
 from dlightrag.storage.web_conversations import StoredConversationImage
 from dlightrag.web.conversations import (

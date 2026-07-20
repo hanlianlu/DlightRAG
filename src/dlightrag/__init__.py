@@ -17,7 +17,7 @@ __credits__ = ["hllyu"]
 
 from dlightrag.access_control import AccessAction, AccessControl, access_control_from_config
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
-from dlightrag.core.answer_errors import (
+from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     ANSWER_STREAM_FAILED,
     CURRENT_IMAGE_LIMIT_EXCEEDED,

@@ -394,7 +394,7 @@ def test_source_templates_use_only_the_public_download_contract() -> None:
 
 def test_active_source_code_has_no_removed_path_fallbacks() -> None:
     engine = (ROOT / "src/dlightrag/core/ingestion/engine.py").read_text(encoding="utf-8")
-    answer_media = (ROOT / "src/dlightrag/core/answer_media.py").read_text(encoding="utf-8")
+    answer_media = (ROOT / "src/dlightrag/core/answer/media.py").read_text(encoding="utf-8")
 
     assert "metadata_path" not in engine
     assert 'getattr(source, "path"' not in answer_media

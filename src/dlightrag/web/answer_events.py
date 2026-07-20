@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING, Any
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
-from dlightrag.core.answer_errors import classify_answer_error
-from dlightrag.core.answer_highlights import enrich_semantic_highlights
-from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
-from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.core.answer.errors import classify_answer_error
+from dlightrag.core.answer.highlights import enrich_semantic_highlights
+from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
+from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.core.scope import RequestScope

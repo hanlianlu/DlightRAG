@@ -24,9 +24,9 @@ from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
-from dlightrag.core.answer_context import AnswerContextPacker
-from dlightrag.core.answer_images import AnswerImageBudget
-from dlightrag.core.answer_prompt import (
+from dlightrag.core.answer.context import AnswerContextPacker
+from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.core.answer.prompt import (
     AnswerPromptAssembler,
     AssembledImages,
     CurrentImagePayloadError,
@@ -168,7 +168,7 @@ class AnswerEngine:
         )
 
         # Convert sources to Reference objects for RetrievalResult
-        from dlightrag.core.answer_media import (
+        from dlightrag.core.answer.media import (
             answer_blocks_from_markdown,
             answer_images_from_sources,
         )

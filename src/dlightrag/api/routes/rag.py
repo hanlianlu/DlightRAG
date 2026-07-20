@@ -36,9 +36,9 @@ from dlightrag.api.models import (
 from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
-from dlightrag.core.answer_errors import ANSWER_STREAM_FAILED, classify_answer_error
-from dlightrag.core.answer_highlights import enrich_semantic_highlights
-from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
+from dlightrag.core.answer.errors import ANSWER_STREAM_FAILED, classify_answer_error
+from dlightrag.core.answer.highlights import enrich_semantic_highlights
+from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.client_contracts import IngestSpec, conversation_history_as_dicts
 from dlightrag.core.client_payloads import (
     answer_payload,

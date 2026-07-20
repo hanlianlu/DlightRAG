@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from dlightrag.core.answer_media import answer_images_from_sources
+from dlightrag.core.answer.media import answer_images_from_sources
 
 
 def _source(chunk_attrs: dict[str, Any]) -> Any:

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.core.answer_images import AnswerImageBudget
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.utils.concurrency import bounded_map
 from dlightrag.utils.images import image_url_block
 

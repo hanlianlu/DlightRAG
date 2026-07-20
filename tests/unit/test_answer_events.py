@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.core.answer_capability import AnswerImageCapability
-from dlightrag.core.answer_prompt import CurrentImagePayloadError
-from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.core.answer.prompt import CurrentImagePayloadError
+from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.query_planner import QueryPlan
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils.images import ValidatedWebImage

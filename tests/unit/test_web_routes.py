@@ -19,8 +19,8 @@ from PIL import Image
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
-from dlightrag.core.answer_capability import AnswerImageCapability
-from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.conversations import PreparedWebConversation
 
@@ -664,7 +664,7 @@ class TestWebAnswer:
         )
         monkeypatch.setattr("dlightrag.models.llm.get_query_model_func", fail_query_model)
         monkeypatch.setattr(
-            "dlightrag.core.answer_highlights.extract_highlights_for_sources",
+            "dlightrag.core.answer.highlights.extract_highlights_for_sources",
             fake_extract_highlights_for_sources,
         )
 

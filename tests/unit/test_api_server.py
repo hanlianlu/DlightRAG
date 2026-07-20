@@ -146,7 +146,7 @@ def mock_manager(mock_service, test_config):
     manager.is_degraded = lambda: False
     manager.get_warnings = lambda: []
     manager.get_error_info = lambda: {"last_error": None, "timestamp": None, "retry_after": 30.0}
-    from dlightrag.core.answer_capability import AnswerImageCapability
+    from dlightrag.core.answer.capability import AnswerImageCapability
 
     manager.answer_image_capability = AnswerImageCapability(
         status="supported",
@@ -2027,7 +2027,7 @@ class TestAnswerStreamMode:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         """A non-streaming capability rejection surfaces as HTTP 400 + stable error_kind."""
-        from dlightrag.core.answer_errors import CURRENT_IMAGES_UNSUPPORTED, AnswerImageError
+        from dlightrag.core.answer.errors import CURRENT_IMAGES_UNSUPPORTED, AnswerImageError
 
         mock_manager.aanswer = AsyncMock(
             side_effect=AnswerImageError(
@@ -2048,7 +2048,7 @@ class TestAnswerStreamMode:
         """A capability rejection during streaming surfaces as a classified SSE error."""
         import json as json_mod
 
-        from dlightrag.core.answer_errors import ANSWER_IMAGE_CAPABILITY_UNKNOWN, AnswerImageError
+        from dlightrag.core.answer.errors import ANSWER_IMAGE_CAPABILITY_UNKNOWN, AnswerImageError
 
         mock_manager.aanswer_stream = AsyncMock(
             side_effect=AnswerImageError(

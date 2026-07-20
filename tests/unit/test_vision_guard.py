@@ -5,8 +5,8 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.core.answer_capability import AnswerImageCapability, CapabilityStatus
-from dlightrag.core.answer_errors import (
+from dlightrag.core.answer.capability import AnswerImageCapability, CapabilityStatus
+from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,

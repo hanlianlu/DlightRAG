@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.core.answer import NO_CONTEXT_DISCLAIMER, AnswerEngine
+from dlightrag.core.answer.engine import NO_CONTEXT_DISCLAIMER, AnswerEngine
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 _PNG_B64 = (
@@ -309,7 +309,7 @@ class TestAnswerEngineGenerate:
         """Image budgeting and prompt packing should not run on the event loop."""
         from types import SimpleNamespace
 
-        import dlightrag.core.answer as answer_module
+        import dlightrag.core.answer.engine as answer_module
 
         calls = []
 
@@ -516,7 +516,7 @@ class TestAnswerEngineStream:
     async def test_generate_stream_prepares_model_payload_off_event_loop(self, monkeypatch) -> None:
         from types import SimpleNamespace
 
-        import dlightrag.core.answer as answer_module
+        import dlightrag.core.answer.engine as answer_module
 
         calls = []
 

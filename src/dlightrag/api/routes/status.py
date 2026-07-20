@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 
 from dlightrag.api.models import HealthResponse
 from dlightrag.app_state import request_config
-from dlightrag.core.answer_capability import answer_image_capability_summary
+from dlightrag.core.answer.capability import answer_image_capability_summary
 
 from .deps import get_manager
 

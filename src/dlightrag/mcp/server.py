@@ -19,7 +19,7 @@ from pydantic import Field
 import dlightrag
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
-from dlightrag.core.answer_capability import answer_image_capability_summary
+from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     MetadataPolicy,

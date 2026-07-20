@@ -71,7 +71,7 @@ def mock_mcp_manager(monkeypatch):
 async def test_get_capabilities_reports_answer_image_capability(
     mock_mcp_manager: AsyncMock,
 ) -> None:
-    from dlightrag.core.answer_capability import AnswerImageCapability
+    from dlightrag.core.answer.capability import AnswerImageCapability
 
     mock_mcp_manager.answer_image_capability = AnswerImageCapability(
         status="supported",

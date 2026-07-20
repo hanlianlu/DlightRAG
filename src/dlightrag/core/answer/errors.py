@@ -8,7 +8,7 @@ instead of parsing free-form messages.
 
 from __future__ import annotations
 
-from dlightrag.core.answer_prompt import CurrentImagePayloadError
+from dlightrag.core.answer.prompt import CurrentImagePayloadError
 
 CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
 CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"

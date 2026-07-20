@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.core.answer_prompt import AnswerPromptAssembler, CurrentImagePayloadError
+from dlightrag.core.answer.prompt import AnswerPromptAssembler, CurrentImagePayloadError
 
 
 def _img(tag: str) -> dict[str, object]:

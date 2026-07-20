@@ -7,7 +7,7 @@ import io
 import pytest
 from PIL import Image
 
-from dlightrag.core.answer_images import AnswerImageBudget
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.utils.images import (
     bounded_embedding_image_data_uri,
     bounded_image_data_uri,

@@ -22,14 +22,14 @@ if TYPE_CHECKING:
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
-from dlightrag.core.answer import AnswerEngine
-from dlightrag.core.answer_capability import AnswerImageCapability, derive_effective_max_images
-from dlightrag.core.answer_errors import (
+from dlightrag.core.answer.capability import AnswerImageCapability, derive_effective_max_images
+from dlightrag.core.answer.engine import AnswerEngine
+from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
 )
-from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
@@ -1520,14 +1520,14 @@ class RAGServiceManager:
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
                     if semantic_highlights:
-                        from dlightrag.core.answer_highlights import enrich_semantic_highlights
+                        from dlightrag.core.answer.highlights import enrich_semantic_highlights
 
                         result.sources = await enrich_semantic_highlights(
                             result.sources,
                             answer_text=result.answer,
                             config=self._config,
                         )
-                        from dlightrag.core.answer_media import (
+                        from dlightrag.core.answer.media import (
                             answer_blocks_from_markdown,
                             answer_images_from_sources,
                         )

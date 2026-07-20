@@ -127,7 +127,7 @@ def test_query_planner_has_no_historical_image_protocol() -> None:
 
 
 async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
-    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     turn = answer_turn.PreparedAnswerTurn(
         current_query="Follow up",
         retrieval_query="Standalone follow up",
@@ -149,9 +149,9 @@ async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
 
 async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> None:
     """Current images drive retrieval; history images only reach the answer model."""
-    from dlightrag.core.answer_capability import AnswerImageCapability
+    from dlightrag.core.answer.capability import AnswerImageCapability
 
-    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     current = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,CUR"}}]
     history = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,HIST"}}]
     turn = answer_turn.PreparedAnswerTurn(
@@ -185,7 +185,7 @@ async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> No
 
 async def test_prepared_stream_merges_attachment_context_chunks_first(test_cfg) -> None:
     """Web attachment rows are injected ahead of retrieved chunks pre-generation."""
-    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     plan = QueryPlan(original_query="q", standalone_query="q")
     retrieval = SimpleNamespace(
         contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
@@ -226,7 +226,7 @@ async def test_prepared_stream_grows_context_top_k_for_attachments(test_cfg) -> 
     grounding: the effective cap passed downstream grows by the attachment count
     so workspace chunks keep their normal allocation.
     """
-    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     plan = QueryPlan(original_query="q", standalone_query="q")
     workspace_chunks = [{"chunk_id": f"ws-{i}"} for i in range(30)]
     retrieval = SimpleNamespace(
@@ -269,7 +269,7 @@ async def test_prepared_stream_grows_context_top_k_for_attachments(test_cfg) -> 
 
 async def test_prepared_stream_leaves_context_top_k_when_no_cap(test_cfg) -> None:
     """A falsy context_top_k already means 'no cap'; leave it untouched."""
-    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     plan = QueryPlan(original_query="q", standalone_query="q")
     retrieval = SimpleNamespace(
         contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
@@ -303,7 +303,7 @@ async def test_prepared_stream_leaves_context_top_k_when_no_cap(test_cfg) -> Non
 
 def test_stateless_turn_carries_no_attachment_contexts() -> None:
     """REST/MCP/SDK turns cross the core boundary with empty attachments."""
-    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     turn = answer_turn.PreparedAnswerTurn.stateless("q")
     assert turn.attachment_context_chunks == ()
     assert turn.attachment_resolution_status == "ok"

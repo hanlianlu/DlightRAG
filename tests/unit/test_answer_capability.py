@@ -4,7 +4,7 @@
 import pytest
 
 from dlightrag.config import DlightragConfig, EmbeddingConfig
-from dlightrag.core.answer_capability import (
+from dlightrag.core.answer.capability import (
     AnswerImageCapability,
     CapabilityStatus,
     derive_effective_max_images,

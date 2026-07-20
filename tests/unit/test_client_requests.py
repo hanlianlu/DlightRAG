@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.config import QueryImagesConfig
-from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,

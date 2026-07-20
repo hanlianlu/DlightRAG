@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from dlightrag.citations.utils import split_source_ids
-from dlightrag.core.answer_images import AnswerImageBudget
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
 
 

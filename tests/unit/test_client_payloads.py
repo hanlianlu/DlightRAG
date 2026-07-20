@@ -290,7 +290,7 @@ def test_answer_payload_uses_public_contexts_and_existing_sources() -> None:
 
 
 def test_answer_helpers_derive_visual_images_and_blocks() -> None:
-    from dlightrag.core.answer_media import (
+    from dlightrag.core.answer.media import (
         answer_blocks_from_markdown,
         answer_images_from_sources,
     )
