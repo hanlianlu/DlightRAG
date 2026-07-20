@@ -620,3 +620,35 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
     page.wait_for_function("document.querySelector('#image-lightbox img')?.naturalWidth > 0")
 
     assert len(original_requests) == 1
+
+
+@pytest.mark.e2e
+def test_pending_document_is_an_unsaved_draft_and_clears_on_switch(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    # Attaching a document (no text) shows a compact chip in the shared strip.
+    page.locator("#attachment-input").set_input_files(
+        files={
+            "name": "notes.pdf",
+            "mimeType": "application/pdf",
+            "buffer": b"%PDF-1.4 draft document",
+        }
+    )
+    chip = page.locator('#thumbnail-strip [data-document-attachment="true"]')
+    chip.wait_for()
+    assert chip.count() == 1
+
+    # Switching conversations must treat the pending document as an unsaved draft.
+    page.get_by_role("button", name="New chat").click()
+    dialog = page.get_by_role("dialog", name="Discard draft?")
+    dialog.wait_for()
+    dialog.get_by_role("button", name="Discard and continue").click()
+
+    # Discarding the draft clears the pending document from the strip.
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'#thumbnail-strip [data-document-attachment=\"true\"]').length === 0"
+    )
+    assert chip.count() == 0

@@ -244,6 +244,21 @@
   background: var(--color-bg-elevated);
 }
 
+/* History document attachments render as a right-aligned chip row above the
+   user bubble, mirroring the message image layout. */
+.messageDocuments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-tight);
+  justify-content: flex-end;
+  margin-bottom: var(--space-tight);
+  max-width: 100%;
+}
+
+.messageDocuments .documentChip {
+  text-decoration: none;
+}
+
 /* === Message Image Thumbnails === */
 
 /* Attached images sit as a horizontal thumbnail row directly above the text

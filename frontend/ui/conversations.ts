@@ -20,7 +20,8 @@ import {isAbortError} from '../lib/errors.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {isQueryInFlight, isQueryStopping} from './chat.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
-import {clearImages, getPendingImageData} from './images.ts';
+import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
+import {getPendingImageData} from './images.ts';
 import {closePanel} from './panel.ts';
 import {syncPanelEffectiveWidth} from './resize.ts';
 import {showToast} from './toast.ts';
@@ -56,7 +57,11 @@ function focusComposer(): void {
 }
 
 function hasUnsavedDraft(): boolean {
-    return Boolean(composerInput()?.value) || getPendingImageData().length > 0;
+    return (
+        Boolean(composerInput()?.value)
+        || getPendingImageData().length > 0
+        || getPendingDocumentFiles().length > 0
+    );
 }
 
 function clearDraft(): void {
@@ -65,7 +70,7 @@ function clearDraft(): void {
         input.value = '';
         input.dispatchEvent(new Event('input', {bubbles: true}));
     }
-    clearImages();
+    clearAttachments();
 }
 
 function clearConversationSources(): void {

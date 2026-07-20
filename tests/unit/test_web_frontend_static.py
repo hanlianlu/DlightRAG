@@ -34,7 +34,7 @@ def test_web_answer_frontend_has_no_legacy_session_or_history_payload() -> None:
     )
     submission_key = chat_source.index("pendingSubmissionStore.getOrCreate")
     retry_loop = chat_source.index("for (let attempt = 0; attempt < 2")
-    request_body = chat_source.index("const requestBody = JSON.stringify")
+    request_body = chat_source.index("= buildAnswerRequestBody({")
     assert submission_key < request_body < retry_loop
     assert "body: requestBody" in chat_source[retry_loop:]
     assert "pendingSubmissionStore.getOrCreate" in chat_source
@@ -61,7 +61,7 @@ def test_frontend_has_no_browser_owned_prompt_history() -> None:
 def test_answer_request_sends_only_active_conversation() -> None:
     source = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
-    assert "conversation_id: conversationStore.activeConversationId" in source
+    assert "conversationId: conversationStore.activeConversationId" in source
     assert "session_id" not in source
 
 
@@ -217,7 +217,7 @@ def test_conversation_bootstrap_cannot_block_independent_ui_initializers() -> No
         "setupFilesPanel();",
         "setupPanelResize();",
         "setupHtmxInteractions();",
-        "setupImageInputs();",
+        "setupImageLightbox();",
         "setupQueryForm();",
     ):
         assert main_source.index(initializer) < bootstrap
