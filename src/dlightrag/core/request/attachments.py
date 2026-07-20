@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from dlightrag.utils.tokens import estimate_tokens
+
+logger = logging.getLogger(__name__)
 
 ATTACHMENT_TEXT_TOKEN_BUDGET = 210_000
 
@@ -498,8 +501,18 @@ class QueryAttachmentService:
                 parser_rules=self._parser_rules,
             )
         except Exception as exc:
-            # MinerU / parser failures are attachment-scoped: the rest of the
-            # turn continues with an attachment warning instead of a hard fail.
+            # Parser failures are attachment-scoped: the rest of the turn
+            # continues with an attachment warning instead of a hard fail. Log
+            # loudly so a swallowed parse error (e.g. a missing parser dependency
+            # or an unsupported document) is visible in server logs instead of
+            # silently dropping the attachment.
+            logger.warning(
+                "Attachment parse failed for %r (attachment_id=%s): %s",
+                filename,
+                attachment_id,
+                exc,
+                exc_info=exc,
+            )
             return ParsedAttachmentBundle(chunks=[]), {
                 "attachment_parse_error": type(exc).__name__,
                 "attachment_parse_cache_hit": False,

@@ -214,6 +214,33 @@ async def test_parse_attachment_to_bundle_native_path_writes_no_store(
     assert bundle.parser_signature.startswith("legacy:")
 
 
+async def test_parse_attachment_to_bundle_docx_native_path(tmp_path: Path) -> None:
+    # A .docx routes to the native engine, which imports python-docx AND
+    # defusedxml. Pin that path end-to-end: a missing parser dependency used to
+    # be swallowed as an attachment_parse_error (0 chunks, document silently
+    # dropped) instead of failing a test.
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("Fractions worksheet about numerators and denominators.")
+    doc.add_paragraph("Add the numerators; keep the denominator.")
+    path = tmp_path / "frac.docx"
+    doc.save(str(path))
+
+    bundle = await parse_attachment_to_bundle(
+        lightrag=_FakeLightRAG(),
+        attachment_id="att-docx",
+        filename="frac.docx",
+        document_bytes=path.read_bytes(),
+        parser_rules="docx:native-iteP,*:mineru-iteP",
+    )
+
+    assert bundle.chunks, "native docx parse produced no chunks"
+    assert all(chunk.attachment_id == "att-docx" for chunk in bundle.chunks)
+    assert "numerators" in " ".join(chunk.content for chunk in bundle.chunks).lower()
+    assert bundle.parser_signature.startswith("native")
+
+
 async def test_service_returns_cache_hit_without_parsing(monkeypatch: Any) -> None:
     cached = ParsedAttachmentBundle(chunks=[text_chunk("t1")], parser_signature="legacy:")
     store = _SpyStore(cached=cached)
