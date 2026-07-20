@@ -120,4 +120,24 @@ async def conversation_image_thumbnail(
     )
 
 
+@router.get("/conversations/{conversation_id}/documents/{attachment_id}")
+async def conversation_document(
+    conversation_id: UUID,
+    attachment_id: UUID,
+    request: Request,
+    service: WebConversationService = Depends(get_web_conversation_service),
+) -> Response:
+    document = await service.document(_user(request), str(conversation_id), str(attachment_id))
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return Response(
+        content=document.attachment_bytes,
+        media_type=document.mime_type,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Disposition": f'attachment; filename="{document.filename}"',
+        },
+    )
+
+
 __all__ = ["router"]

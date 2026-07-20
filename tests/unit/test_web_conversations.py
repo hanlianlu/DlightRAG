@@ -994,3 +994,51 @@ async def test_initialize_applies_schema_then_global_prune(
 
     conversation_store.initialize.assert_awaited_once_with()
     conversation_store.prune_expired.assert_awaited_once_with(ttl_days=30)
+
+
+def test_conversation_turn_projects_document_references() -> None:
+    from dlightrag.web.conversations import _conversation_turn
+
+    row = {
+        "turn_id": "00000000-0000-0000-0000-000000000010",
+        "turn_number": 2,
+        "user_text": "see attached",
+        "assistant_text": "answer",
+        "answer_sources": {},
+        "queried_workspaces": ["default"],
+        "images": [],
+        "attachments": [
+            {
+                "attachment_id": "00000000-0000-0000-0000-000000000011",
+                "ordinal": 1,
+                "filename": "report.pdf",
+                "mime_type": "application/pdf",
+                "byte_size": 8,
+                "content_sha256": "abc",
+                "parse_summary": "report summary",
+            }
+        ],
+        "created_at": "2026-07-20T00:00:00Z",
+    }
+
+    turn = _conversation_turn("00000000-0000-0000-0000-000000000001", row)
+
+    assert turn.user_documents[0].filename == "report.pdf"
+    assert turn.user_documents[0].url.endswith("/documents/00000000-0000-0000-0000-000000000011")
+
+
+def test_pending_conversation_attachment_shape() -> None:
+    from dlightrag.storage.web_conversations import PendingConversationAttachment
+
+    item = PendingConversationAttachment(
+        attachment_id="00000000-0000-0000-0000-000000000011",
+        ordinal=1,
+        filename="report.pdf",
+        mime_type="application/pdf",
+        suffix=".pdf",
+        attachment_bytes=b"%PDF",
+        content_sha256="abc",
+        parse_summary=None,
+    )
+
+    assert item.byte_size == 4

@@ -16,8 +16,10 @@ from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     CommitTurnResult,
     ConversationSnapshot,
+    PendingConversationAttachment,
     PendingConversationImage,
     PGWebConversationStore,
+    StoredConversationAttachment,
     StoredConversationImage,
 )
 from dlightrag.utils.images import (
@@ -25,7 +27,9 @@ from dlightrag.utils.images import (
     image_bytes_to_data_uri,
     thumbnail_bytes,
 )
+from dlightrag.web.attachment_models import ValidatedWebDocument
 from dlightrag.web.conversation_models import (
+    ConversationDocumentReference,
     ConversationHistory,
     ConversationImageReference,
     ConversationSummary,
@@ -283,6 +287,22 @@ class WebConversationService:
             )
         )
 
+    async def document(
+        self,
+        user: UserContext | None,
+        conversation_id: str,
+        attachment_id: str,
+    ) -> StoredConversationAttachment | None:
+        principal_id = principal_id_from_user(user)
+        return await self._store_call(
+            self._store.get_attachment(
+                principal_id,
+                conversation_id,
+                attachment_id,
+                ttl_days=self._ttl_days,
+            )
+        )
+
     async def thumbnail(
         self,
         user: UserContext | None,
@@ -323,6 +343,7 @@ class WebConversationService:
         queried_workspaces: list[str],
         images: tuple[ValidatedWebImage, ...],
         image_descriptions: dict[str, str],
+        documents: tuple[ValidatedWebDocument, ...] = (),
     ) -> CommitTurnResult:
         """Atomically append a completed answer against its captured revision."""
 
@@ -342,6 +363,18 @@ class WebConversationService:
             )
             for image in images
         ]
+        pending_documents = [
+            PendingConversationAttachment(
+                attachment_id=document.attachment_id,
+                ordinal=document.ordinal,
+                filename=document.filename,
+                mime_type=document.mime_type,
+                suffix=document.suffix,
+                attachment_bytes=document.document_bytes,
+                content_sha256=document.content_sha256,
+            )
+            for document in documents
+        ]
         try:
             async with asyncio.timeout(_COMMIT_ATTEMPT_TIMEOUT_SECONDS):
                 return await self._store.commit_turn(
@@ -354,6 +387,7 @@ class WebConversationService:
                     answer_sources=answer_sources,
                     queried_workspaces=queried_workspaces,
                     images=pending,
+                    attachments=pending_documents,
                     max_turns=self._max_turns,
                     ttl_days=self._ttl_days,
                 )
@@ -474,6 +508,10 @@ def _conversation_turn(conversation_id: str, row: dict[str, Any]) -> Conversatio
     images = [
         _image_reference(conversation_id, turn_number, image) for image in row.get("images", [])
     ]
+    documents = [
+        _document_reference(conversation_id, turn_number, attachment)
+        for attachment in row.get("attachments", [])
+    ]
     answer_sources, sources, answer_images = _answer_snapshot(row.get("answer_sources"))
     assistant_text = str(row["assistant_text"])
     return ConversationTurn(
@@ -482,6 +520,7 @@ def _conversation_turn(conversation_id: str, row: dict[str, Any]) -> Conversatio
         user_text=str(row["user_text"]),
         assistant_text=assistant_text,
         user_images=images,
+        user_documents=documents,
         answer_sources=answer_sources,
         answer_html=safe_answer_done(
             answer=assistant_text,
@@ -508,6 +547,26 @@ def _image_reference(
         url=url,
         thumbnail_url=url + "/thumbnail",
         label=f"Turn {turn_number}, image {ordinal}",
+    )
+
+
+def _document_reference(
+    conversation_id: str,
+    turn_number: int,
+    attachment: dict[str, Any],
+) -> ConversationDocumentReference:
+    attachment_id = str(attachment["attachment_id"])
+    ordinal = int(attachment["ordinal"])
+    parse_summary = attachment.get("parse_summary")
+    return ConversationDocumentReference(
+        attachment_id=attachment_id,
+        ordinal=ordinal,
+        filename=str(attachment["filename"]),
+        mime_type=str(attachment["mime_type"]),
+        byte_size=int(attachment["byte_size"]),
+        url=f"/web/conversations/{conversation_id}/documents/{attachment_id}",
+        label=f"Turn {turn_number}, document {ordinal}",
+        parse_summary=str(parse_summary) if parse_summary is not None else None,
     )
 
 

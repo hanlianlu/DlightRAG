@@ -25,12 +25,24 @@ class ConversationImageReference(ClientContractModel):
     label: str
 
 
+class ConversationDocumentReference(ClientContractModel):
+    attachment_id: str
+    ordinal: int
+    filename: str
+    mime_type: str
+    byte_size: int
+    url: str
+    label: str
+    parse_summary: str | None = None
+
+
 class ConversationTurn(ClientContractModel):
     turn_id: str
     turn_number: int
     user_text: str
     assistant_text: str
     user_images: list[ConversationImageReference] = Field(default_factory=list)
+    user_documents: list[ConversationDocumentReference] = Field(default_factory=list)
     answer_sources: dict[str, Any] = Field(default_factory=dict)
     answer_html: str
     queried_workspaces: list[str] = Field(default_factory=list)
@@ -55,6 +67,7 @@ class RenameConversationRequest(ClientContractModel):
 
 
 __all__ = [
+    "ConversationDocumentReference",
     "ConversationHistory",
     "ConversationImageReference",
     "ConversationSummary",

@@ -4,10 +4,13 @@
 import datetime
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from dlightrag.storage.migrations import Migration, apply_migrations
+
+if TYPE_CHECKING:
+    from dlightrag.core.query_attachments import ParsedAttachmentBundle
 
 _CREATE_CONVERSATIONS = """
 CREATE TABLE IF NOT EXISTS web_conversations (
@@ -63,6 +66,61 @@ CREATE TABLE IF NOT EXISTS web_conversation_images (
 )
 """
 
+_CREATE_ATTACHMENTS = """
+CREATE TABLE IF NOT EXISTS web_conversation_attachments (
+    attachment_id UUID NOT NULL,
+    principal_id TEXT NOT NULL,
+    conversation_id UUID NOT NULL,
+    turn_id UUID NOT NULL,
+    ordinal INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    suffix TEXT NOT NULL,
+    attachment_bytes BYTEA NOT NULL,
+    byte_size INTEGER NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    parse_summary TEXT,
+    parse_catalog JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (principal_id, conversation_id, attachment_id),
+    UNIQUE (principal_id, conversation_id, turn_id, ordinal),
+    FOREIGN KEY (principal_id, conversation_id, turn_id)
+      REFERENCES web_conversation_turns (principal_id, conversation_id, turn_id)
+      ON DELETE CASCADE
+)
+"""
+
+_CREATE_ATTACHMENT_CHUNKS = """
+CREATE TABLE IF NOT EXISTS web_conversation_attachment_chunks (
+    principal_id TEXT NOT NULL,
+    conversation_id UUID NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    parser_signature TEXT NOT NULL,
+    chunk_signature TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    page_idx INTEGER,
+    bbox JSONB,
+    sidecar_type TEXT,
+    image_bytes BYTEA,
+    image_mime_type TEXT,
+    token_estimate INTEGER NOT NULL DEFAULT 0,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    embedding_signature TEXT,
+    embedding_vector JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (
+        principal_id,
+        conversation_id,
+        content_sha256,
+        parser_signature,
+        chunk_signature,
+        chunk_id
+    )
+)
+"""
+
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_web_conversations_principal_updated "
     "ON web_conversations (principal_id, updated_at DESC, conversation_id DESC)",
@@ -92,6 +150,16 @@ WEB_CONVERSATION_MIGRATIONS = (
             "ALTER TABLE web_conversation_turns ALTER COLUMN submission_id SET NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_web_conversation_turns_submission "
             "ON web_conversation_turns (principal_id, conversation_id, submission_id)",
+        ),
+    ),
+    Migration(
+        "0003_web_conversation_attachments",
+        "Add scoped Web document attachments and content-addressed parse cache",
+        (
+            _CREATE_ATTACHMENTS,
+            _CREATE_ATTACHMENT_CHUNKS,
+            "CREATE INDEX IF NOT EXISTS idx_web_conversation_attachments_catalog "
+            "ON web_conversation_attachments (principal_id, conversation_id, created_at DESC)",
         ),
     ),
 )
@@ -199,7 +267,27 @@ SELECT
             ) ORDER BY i.ordinal
         ) FILTER (WHERE i.image_id IS NOT NULL),
         '[]'::jsonb
-    ) AS images
+    ) AS images,
+    COALESCE(
+        (
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'attachment_id', a.attachment_id::text,
+                    'ordinal', a.ordinal,
+                    'filename', a.filename,
+                    'mime_type', a.mime_type,
+                    'byte_size', a.byte_size,
+                    'content_sha256', a.content_sha256,
+                    'parse_summary', a.parse_summary
+                ) ORDER BY a.ordinal
+            )
+            FROM web_conversation_attachments AS a
+            WHERE a.principal_id = $1
+              AND a.conversation_id = $2::text::uuid
+              AND a.turn_id = recent_turns.turn_id
+        ),
+        '[]'::jsonb
+    ) AS attachments
 FROM recent_turns
 LEFT JOIN web_conversation_images AS i
   ON i.principal_id = $1
@@ -302,7 +390,27 @@ SELECT
             ) ORDER BY i.ordinal
         ) FILTER (WHERE i.image_id IS NOT NULL),
         '[]'::jsonb
-    ) AS images
+    ) AS images,
+    COALESCE(
+        (
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'attachment_id', a.attachment_id::text,
+                    'ordinal', a.ordinal,
+                    'filename', a.filename,
+                    'mime_type', a.mime_type,
+                    'byte_size', a.byte_size,
+                    'content_sha256', a.content_sha256,
+                    'parse_summary', a.parse_summary
+                ) ORDER BY a.ordinal
+            )
+            FROM web_conversation_attachments AS a
+            WHERE a.principal_id = t.principal_id
+              AND a.conversation_id = t.conversation_id
+              AND a.turn_id = t.turn_id
+        ),
+        '[]'::jsonb
+    ) AS attachments
 FROM web_conversation_turns AS t
 JOIN web_conversations AS c
   ON c.principal_id = t.principal_id
@@ -351,6 +459,58 @@ VALUES (
     $9,
     $10
 )
+"""
+
+_INSERT_ATTACHMENT = """
+INSERT INTO web_conversation_attachments (
+    attachment_id,
+    principal_id,
+    conversation_id,
+    turn_id,
+    ordinal,
+    filename,
+    mime_type,
+    suffix,
+    attachment_bytes,
+    byte_size,
+    content_sha256,
+    parse_summary,
+    parse_catalog
+)
+VALUES (
+    $1::text::uuid,
+    $2,
+    $3::text::uuid,
+    $4::text::uuid,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12,
+    $13::jsonb
+)
+"""
+
+_GET_ATTACHMENT = """
+SELECT
+    a.attachment_id::text AS attachment_id,
+    a.filename,
+    a.mime_type,
+    a.suffix,
+    a.attachment_bytes,
+    a.content_sha256
+FROM web_conversation_attachments AS a
+JOIN web_conversations AS c
+  ON c.principal_id = a.principal_id
+ AND c.conversation_id = a.conversation_id
+WHERE a.principal_id = $1
+  AND a.conversation_id = $2::text::uuid
+  AND a.attachment_id = $3::text::uuid
+  AND c.principal_id = $1
+  AND c.updated_at >= NOW() - ($4 * INTERVAL '1 day')
 """
 
 _TRIM_TURNS = """
@@ -407,6 +567,66 @@ WHERE i.principal_id = $1
 """
 
 
+_LOAD_ATTACHMENT_CHUNKS = """
+SELECT
+    c.chunk_id,
+    c.chunk_index,
+    c.content,
+    c.page_idx,
+    c.bbox,
+    c.sidecar_type,
+    c.image_bytes,
+    c.image_mime_type,
+    c.token_estimate,
+    c.metadata,
+    c.parser_signature,
+    c.chunk_signature
+FROM web_conversation_attachment_chunks AS c
+WHERE c.principal_id = $1
+  AND c.conversation_id = $2::text::uuid
+  AND c.content_sha256 = $3
+  AND c.parser_signature = $4
+  AND c.chunk_signature = $5
+ORDER BY c.chunk_index ASC
+"""
+
+_DELETE_ATTACHMENT_CHUNKS_FOR_SIGNATURE = """
+DELETE FROM web_conversation_attachment_chunks
+WHERE principal_id = $1
+  AND conversation_id = $2::text::uuid
+  AND content_sha256 = $3
+  AND parser_signature = $4
+  AND chunk_signature = $5
+"""
+
+_INSERT_ATTACHMENT_CHUNK = """
+INSERT INTO web_conversation_attachment_chunks (
+    principal_id, conversation_id, content_sha256, parser_signature, chunk_signature,
+    chunk_id, chunk_index, content, page_idx, bbox, sidecar_type,
+    image_bytes, image_mime_type, token_estimate, metadata
+)
+VALUES ($1, $2::text::uuid, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15::jsonb)
+"""
+
+_FETCH_DOCUMENTS_BY_IDS = """
+SELECT
+    a.attachment_id::text AS attachment_id,
+    a.filename,
+    a.mime_type,
+    a.suffix,
+    a.attachment_bytes,
+    a.content_sha256
+FROM web_conversation_attachments AS a
+JOIN web_conversations AS c
+  ON c.principal_id = a.principal_id
+ AND c.conversation_id = a.conversation_id
+WHERE a.principal_id = $1
+  AND a.conversation_id = $2::text::uuid
+  AND a.attachment_id = ANY($3::uuid[])
+  AND c.updated_at >= NOW() - ($4 * INTERVAL '1 day')
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class ConversationSnapshot:
     principal_id: str
@@ -429,12 +649,30 @@ class PendingConversationImage:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingConversationAttachment:
+    attachment_id: str
+    ordinal: int
+    filename: str
+    mime_type: str
+    suffix: str
+    attachment_bytes: bytes
+    content_sha256: str
+    parse_summary: str | None = None
+    parse_catalog: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def byte_size(self) -> int:
+        return len(self.attachment_bytes)
+
+
+@dataclass(frozen=True, slots=True)
 class CommitTurnResult:
     saved: bool
     reason: str | None
     summary: dict[str, Any] | None
     turn_id: str | None
     current_image_ids: tuple[str, ...] = ()
+    current_attachment_ids: tuple[str, ...] = ()
     assistant_text: str | None = None
     answer_sources: dict[str, Any] | None = None
     image_descriptions: dict[str, str] = field(default_factory=dict)
@@ -449,6 +687,22 @@ class StoredConversationImage:
     vlm_description: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class StoredConversationAttachment:
+    attachment_id: str
+    filename: str
+    mime_type: str
+    suffix: str
+    attachment_bytes: bytes
+    content_sha256: str = ""
+    parse_summary: str | None = None
+    parse_catalog: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def document_bytes(self) -> bytes:
+        return self.attachment_bytes
+
+
 def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
@@ -461,7 +715,7 @@ def _json_value(value: Any) -> Any:
 
 def _history_row(row: Any) -> dict[str, Any]:
     result = _row_dict(row)
-    for key in ("answer_sources", "queried_workspaces", "images"):
+    for key in ("answer_sources", "queried_workspaces", "images", "attachments"):
         result[key] = _json_value(result[key])
     return result
 
@@ -469,6 +723,7 @@ def _history_row(row: Any) -> dict[str, Any]:
 def _committed_result(row: Any, *, replayed: bool) -> CommitTurnResult:
     value = _row_dict(row)
     images = _json_value(value.get("images", []))
+    attachments = _json_value(value.get("attachments", []))
     answer_sources = _json_value(value.get("answer_sources", {}))
     summary = {
         key: value[key]
@@ -486,6 +741,7 @@ def _committed_result(row: Any, *, replayed: bool) -> CommitTurnResult:
         summary=summary,
         turn_id=str(value["turn_id"]),
         current_image_ids=tuple(str(image["image_id"]) for image in images),
+        current_attachment_ids=tuple(str(item["attachment_id"]) for item in attachments),
         assistant_text=str(value["assistant_text"]),
         answer_sources=answer_sources,
         image_descriptions=descriptions,
@@ -736,6 +992,180 @@ class PGWebConversationStore:
 
         return await self._run_read(_operation)
 
+    async def get_attachment(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        attachment_id: str,
+        *,
+        ttl_days: int,
+    ) -> StoredConversationAttachment | None:
+        """Load original document bytes only when ownership and TTL match."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> StoredConversationAttachment | None:
+            row = await conn.fetchrow(
+                _GET_ATTACHMENT,
+                principal_id,
+                conversation_id,
+                attachment_id,
+                ttl_days,
+            )
+            if row is None:
+                return None
+            return StoredConversationAttachment(
+                attachment_id=str(row["attachment_id"]),
+                filename=str(row["filename"]),
+                mime_type=str(row["mime_type"]),
+                suffix=str(row["suffix"]),
+                attachment_bytes=bytes(row["attachment_bytes"]),
+                content_sha256=str(row["content_sha256"]),
+            )
+
+        return await self._run_read(_operation)
+
+    async def fetch_documents_by_ids(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        attachment_ids: list[str],
+        *,
+        ttl_days: int,
+    ) -> list[StoredConversationAttachment]:
+        """Return owned, unexpired original document bytes for the given ids.
+
+        Used by the planner-driven history-document path to rematerialize prior
+        attachments the follow-up query refers to without a fresh upload.
+        """
+        if not attachment_ids:
+            return []
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> list[StoredConversationAttachment]:
+            rows = await conn.fetch(
+                _FETCH_DOCUMENTS_BY_IDS,
+                principal_id,
+                conversation_id,
+                attachment_ids,
+                ttl_days,
+            )
+            return [
+                StoredConversationAttachment(
+                    attachment_id=str(row["attachment_id"]),
+                    filename=str(row["filename"]),
+                    mime_type=str(row["mime_type"]),
+                    suffix=str(row["suffix"]),
+                    attachment_bytes=bytes(row["attachment_bytes"]),
+                    content_sha256=str(row["content_sha256"]),
+                )
+                for row in rows
+            ]
+
+        return await self._run_read(_operation)
+
+    async def load_attachment_chunks(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        attachment_id: str,
+        filename: str,
+        *,
+        content_sha256: str,
+        parser_signature: str,
+        chunk_signature: str,
+    ) -> ParsedAttachmentBundle | None:
+        """Return the cached parse for one content+parser+chunk signature, if any.
+
+        Cache rows are content-addressed and may be reused for a new attachment
+        id that shares the same bytes; chunk ids are remapped to the requested
+        attachment so citations never point at a prior attachment.
+        """
+        from dlightrag.core.query_attachments import (
+            AttachmentContextChunk,
+            ParsedAttachmentBundle,
+        )
+
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> ParsedAttachmentBundle | None:
+            rows = await conn.fetch(
+                _LOAD_ATTACHMENT_CHUNKS,
+                principal_id,
+                conversation_id,
+                content_sha256,
+                parser_signature,
+                chunk_signature,
+            )
+            if not rows:
+                return None
+            chunks = [
+                AttachmentContextChunk(
+                    chunk_id=f"att:{attachment_id}:{int(row['chunk_index']):04d}",
+                    attachment_id=attachment_id,
+                    filename=filename,
+                    chunk_index=int(row["chunk_index"]),
+                    content=str(row["content"]),
+                    token_estimate=int(row["token_estimate"]),
+                    page_idx=row["page_idx"],
+                    bbox=_json_value(row["bbox"]) if row["bbox"] is not None else None,
+                    sidecar_type=row["sidecar_type"],
+                    image_bytes=bytes(row["image_bytes"])
+                    if row["image_bytes"] is not None
+                    else None,
+                    image_mime_type=row["image_mime_type"],
+                    metadata=_json_value(row["metadata"]),
+                )
+                for row in rows
+            ]
+            return ParsedAttachmentBundle(chunks=chunks, parser_signature=parser_signature)
+
+        return await self._run_read(_operation)
+
+    async def materialize_attachment_chunks(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        content_sha256: str,
+        parser_signature: str,
+        chunk_signature: str,
+        bundle: ParsedAttachmentBundle,
+    ) -> None:
+        """Replace the cached parse for one content+parser+chunk signature."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> None:
+            async with conn.transaction():
+                await conn.execute(
+                    _DELETE_ATTACHMENT_CHUNKS_FOR_SIGNATURE,
+                    principal_id,
+                    conversation_id,
+                    content_sha256,
+                    parser_signature,
+                    chunk_signature,
+                )
+                for chunk in bundle.chunks:
+                    await conn.execute(
+                        _INSERT_ATTACHMENT_CHUNK,
+                        principal_id,
+                        conversation_id,
+                        content_sha256,
+                        parser_signature,
+                        chunk_signature,
+                        chunk.chunk_id,
+                        chunk.chunk_index,
+                        chunk.content,
+                        chunk.page_idx,
+                        json.dumps(chunk.bbox) if chunk.bbox is not None else None,
+                        chunk.sidecar_type,
+                        chunk.image_bytes,
+                        chunk.image_mime_type,
+                        chunk.token_estimate,
+                        json.dumps(chunk.metadata),
+                    )
+
+        await self._run_write(_operation)
+
     async def find_committed_turn(
         self,
         principal_id: str,
@@ -776,6 +1206,7 @@ class PGWebConversationStore:
         answer_sources: dict[str, Any],
         queried_workspaces: list[str],
         images: list[PendingConversationImage],
+        attachments: list[PendingConversationAttachment],
         max_turns: int,
         ttl_days: int,
     ) -> CommitTurnResult:
@@ -843,6 +1274,23 @@ class PGWebConversationStore:
                         image.content_sha256,
                         image.vlm_description,
                     )
+                for attachment in attachments:
+                    await conn.execute(
+                        _INSERT_ATTACHMENT,
+                        attachment.attachment_id,
+                        principal_id,
+                        conversation_id,
+                        authoritative_turn_id,
+                        attachment.ordinal,
+                        attachment.filename,
+                        attachment.mime_type,
+                        attachment.suffix,
+                        attachment.attachment_bytes,
+                        attachment.byte_size,
+                        attachment.content_sha256,
+                        attachment.parse_summary,
+                        json.dumps(attachment.parse_catalog),
+                    )
 
                 trim_before_or_at = int(turn_row["turn_number"]) - max_turns
                 await conn.execute(
@@ -857,6 +1305,9 @@ class PGWebConversationStore:
                     summary=_row_dict(summary_row),
                     turn_id=authoritative_turn_id,
                     current_image_ids=tuple(image.image_id for image in images),
+                    current_attachment_ids=tuple(
+                        attachment.attachment_id for attachment in attachments
+                    ),
                     assistant_text=assistant_text,
                     answer_sources=answer_sources,
                     image_descriptions={
@@ -912,6 +1363,8 @@ __all__ = [
     "CommitTurnResult",
     "ConversationSnapshot",
     "PGWebConversationStore",
+    "PendingConversationAttachment",
     "PendingConversationImage",
+    "StoredConversationAttachment",
     "StoredConversationImage",
 ]
