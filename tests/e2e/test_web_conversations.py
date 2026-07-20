@@ -98,7 +98,7 @@ def _new_conversation(page: Page) -> tuple[str, str]:
 
 def _add_draft_with_image(page: Page, text: str) -> None:
     page.get_by_role("textbox", name="Message").fill(text)
-    page.locator("#image-input").set_input_files(
+    page.locator("#attachment-input").set_input_files(
         files={
             "name": "draft.png",
             "mimeType": "image/png",
@@ -561,7 +561,7 @@ def test_attachment_only_does_not_enable_send(page: Page) -> None:
 
     send = page.get_by_role("button", name="Send")
     assert send.is_disabled()
-    page.locator("#image-input").set_input_files(
+    page.locator("#attachment-input").set_input_files(
         files={
             "name": "only-image.png",
             "mimeType": "image/png",
