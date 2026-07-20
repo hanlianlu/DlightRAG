@@ -506,6 +506,15 @@ class TestWebIndex:
         assert 'data-answer-image-capability="unknown"' in resp.text
         assert 'data-effective-current-upload-limit="0"' in resp.text
 
+    async def test_chat_template_projects_document_attachment_limits(
+        self, client: AsyncClient
+    ) -> None:
+        resp = await client.get("/web/")
+
+        assert resp.status_code == 200
+        assert 'data-document-current-upload-limit="3"' in resp.text
+        assert 'data-document-max-upload-bytes="104857600"' in resp.text
+
     def test_web_markup_keeps_behavior_in_static_js(self) -> None:
         web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"
         checked = list((web_root / "templates").rglob("*.html")) + [web_root / "deps.py"]

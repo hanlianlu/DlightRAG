@@ -11,6 +11,7 @@ from dlightrag.access_control import AccessAction
 from dlightrag.utils import normalize_workspace
 from dlightrag.utils.images import validate_web_images
 from dlightrag.web.answer_events import stream_answer_events
+from dlightrag.web.attachment_models import MAX_CURRENT_DOCUMENTS, MAX_DOCUMENT_BYTES
 from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (
     enforce_web_access,
@@ -107,6 +108,8 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "query_image_max_upload_bytes": manager.config.query_images.max_upload_bytes,
             "answer_image_capability_status": capability_status,
             "effective_current_upload_limit": effective_current_upload_limit,
+            "query_document_max_upload_bytes": MAX_DOCUMENT_BYTES,
+            "query_document_current_upload_limit": MAX_CURRENT_DOCUMENTS,
         },
     )
 
