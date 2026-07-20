@@ -93,7 +93,8 @@ async def _collect(
     if result is not None:
         service.commit_answer.return_value = result
     service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hello", retrieval_query="hello"
+        current_query="hello",
+        retrieval_query="hello",
     )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
@@ -704,7 +705,9 @@ async def test_documents_thread_into_prepare_commit_and_surface_attachment_ids()
     service = AsyncMock()
     now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
     service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hello", retrieval_query="hello"
+        current_query="hello",
+        retrieval_query="hello",
+        current_attachment_digests={document.attachment_id: "Termination clause digest"},
     )
     service.commit_answer.return_value = CommitTurnResult(
         saved=True,
@@ -753,5 +756,8 @@ async def test_documents_thread_into_prepare_commit_and_surface_attachment_ids()
     assert prepare_kwargs["current_documents"] == [document]
     commit_kwargs = service.commit_answer.await_args.kwargs
     assert commit_kwargs["documents"] == (document,)
+    assert commit_kwargs["document_parse_summaries"] == {
+        document.attachment_id: "Termination clause digest"
+    }
     done = next(event for event in events if "event: done" in event)
     assert "durable-doc" in done

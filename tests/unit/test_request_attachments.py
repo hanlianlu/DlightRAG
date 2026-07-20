@@ -7,7 +7,11 @@ from typing import Any
 import pytest
 from lightrag.utils import TiktokenTokenizer
 
-from dlightrag.core.request import attachments
+from dlightrag.core.request import attachment_digest, attachments
+from dlightrag.core.request.attachment_digest import (
+    ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET,
+    build_attachment_planner_digests,
+)
 from dlightrag.core.request.attachments import (
     ATTACHMENT_TEXT_TOKEN_BUDGET,
     AttachmentContextChunk,
@@ -19,6 +23,7 @@ from dlightrag.core.request.attachments import (
     resolve_attachment_parser_signature,
     select_attachment_context,
 )
+from dlightrag.utils.tokens import estimate_tokens
 
 
 def text_chunk(chunk_id: str, tokens: int = 10) -> AttachmentContextChunk:
@@ -44,6 +49,101 @@ def visual_chunk(chunk_id: str) -> AttachmentContextChunk:
         image_bytes=b"png-bytes",
         image_mime_type="image/png",
     )
+
+
+def planner_bundle(
+    attachment_id: str,
+    contents: list[str],
+    *,
+    sidecar_types: dict[int, str] | None = None,
+) -> ParsedAttachmentBundle:
+    return ParsedAttachmentBundle(
+        chunks=[
+            AttachmentContextChunk(
+                chunk_id=f"{attachment_id}-{index}",
+                attachment_id=attachment_id,
+                filename=f"{attachment_id}.pdf",
+                chunk_index=index,
+                content=content,
+                token_estimate=estimate_tokens(content),
+                sidecar_type=(sidecar_types or {}).get(index),
+            )
+            for index, content in enumerate(contents, start=1)
+        ]
+    )
+
+
+def test_attachment_planner_digest_keeps_short_document_in_full() -> None:
+    bundle = planner_bundle(
+        "short",
+        [
+            "Fractions Challenge Worksheet\nInstructions: simplify every fraction.",
+            "Problem 20: Explain how the numerator and denominator change.",
+        ],
+    )
+
+    digests, trace = build_attachment_planner_digests([("short", bundle)])
+
+    assert "Fractions Challenge Worksheet" in digests["short"]
+    assert "Problem 20" in digests["short"]
+    assert trace["attachment_digest_strategy"] == "full"
+    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
+
+
+def test_attachment_planner_digest_preserves_structure_and_uniform_coverage() -> None:
+    contents = [f"Section {index} " + (f"body-{index} " * 700) for index in range(24)]
+    contents[0] = "START-MARKER Document title and executive introduction. " + contents[0]
+    contents[8] = "[Table Name] Revenue by region\nColumns: Region, Revenue. " + contents[8]
+    contents[12] = "MIDDLE-MARKER Central findings. " + contents[12]
+    contents[-1] = "END-MARKER Final conclusion and recommendations. " + contents[-1]
+    bundle = planner_bundle("long", contents, sidecar_types={9: "table"})
+
+    digests, trace = build_attachment_planner_digests([("long", bundle)])
+    digest = digests["long"]
+
+    assert "START-MARKER" in digest
+    assert "[Table Name] Revenue by region" in digest
+    assert "MIDDLE-MARKER" in digest
+    assert "END-MARKER" in digest
+    assert trace["attachment_digest_strategy"] == "sampled"
+    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
+
+
+def test_attachment_planner_digest_shares_global_budget_across_documents() -> None:
+    bundles = [
+        (
+            f"doc-{index}",
+            planner_bundle(
+                f"doc-{index}",
+                [f"DOC-{index}-SECTION-{part} " + ("detail " * 700) for part in range(16)],
+            ),
+        )
+        for index in range(3)
+    ]
+
+    digests, trace = build_attachment_planner_digests(bundles)
+
+    assert set(digests) == {"doc-0", "doc-1", "doc-2"}
+    assert all(digests.values())
+    budgets = trace["attachment_digest_document_budgets"]
+    assert sum(budgets.values()) == ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
+    assert min(budgets.values()) >= 1_536
+    assert max(budgets.values()) - min(budgets.values()) <= 1
+    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
+
+    _, reversed_trace = build_attachment_planner_digests(list(reversed(bundles)))
+    assert reversed_trace["attachment_digest_document_budgets"] == budgets
+
+
+def test_attachment_planner_token_samples_do_not_cluster_at_the_front() -> None:
+    contents = [f"chunk-{index} " + ("x " * 200) for index in range(24)]
+
+    selected = attachment_digest._uniform_token_indices(contents, list(range(24)), 7)
+
+    assert selected[0] == 0
+    assert selected[-1] == 23
+    assert any(abs(index - 12) <= 1 for index in selected)
+    assert max(right - left for left, right in zip(selected, selected[1:], strict=False)) <= 6
 
 
 def test_attachment_context_chunk_emits_image_data_and_source_metadata() -> None:

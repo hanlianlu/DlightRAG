@@ -44,6 +44,23 @@ def estimate_tokens(text: str) -> int:
     )
 
 
+def truncate_to_estimated_tokens(text: str, token_budget: int) -> str:
+    """Return the longest text prefix within the estimator-based token budget."""
+    if token_budget <= 0:
+        return ""
+    if estimate_tokens(text) <= token_budget:
+        return text.strip()
+    low = 0
+    high = len(text)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if estimate_tokens(text[:midpoint]) <= token_budget:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return text[:low].rstrip()
+
+
 def _content_tokens(content: Any) -> int:
     """Estimate tokens for a single message content (string or list of blocks)."""
     if isinstance(content, str):

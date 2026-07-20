@@ -899,6 +899,42 @@ async def test_commit_answer_maps_sparse_descriptions_by_stable_ordinal(
     assert [image.vlm_description for image in pending] == [None, "Image 2: second"]
 
 
+async def test_commit_answer_persists_document_planner_digest(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.storage.web_conversations import CommitTurnResult
+    from dlightrag.web.attachment_models import validate_web_documents
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    conversation_store.commit_turn.return_value = CommitTurnResult(
+        saved=True, reason=None, summary=None, turn_id="turn"
+    )
+    prepared = PreparedWebConversation(
+        principal_id="principal",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=1,
+        text_history=(),
+    )
+    (document,) = validate_web_documents([("report.docx", "application/octet-stream", b"document")])
+
+    await service_under_test.commit_answer(
+        prepared,
+        submission_id="00000000-0000-4000-8000-000000000099",
+        user_text="Question",
+        assistant_text="Answer",
+        answer_sources={},
+        queried_workspaces=["default"],
+        images=(),
+        image_descriptions={},
+        documents=(document,),
+        document_parse_summaries={document.attachment_id: "Structured planner digest"},
+    )
+
+    pending = conversation_store.commit_turn.await_args.kwargs["attachments"]
+    assert pending[0].parse_summary == "Structured planner digest"
+
+
 async def test_commit_answer_reconciles_lost_commit_acknowledgement(
     service_under_test,
     conversation_store: AsyncMock,
@@ -1087,7 +1123,10 @@ async def test_prepare_answer_turn_merges_current_document_context(
     service_under_test,
     conversation_store: AsyncMock,
 ) -> None:
-    from dlightrag.core.request.attachments import build_text_attachment_chunk
+    from dlightrag.core.request.attachments import (
+        ParsedAttachmentBundle,
+        build_text_attachment_chunk,
+    )
     from dlightrag.core.request.planner import QueryPlan
     from dlightrag.web.attachment_models import validate_web_documents
     from dlightrag.web.conversations import PreparedWebConversation
@@ -1104,26 +1143,28 @@ async def test_prepare_answer_turn_merges_current_document_context(
     manager = AsyncMock()
     manager.answer_image_capability = SimpleNamespace(effective_max_images=0)
     manager.adescribe_query_images.return_value = {}
-    manager.config = SimpleNamespace(parser=SimpleNamespace(rules="md:native-iteP,*:mineru-iteP"))
-    manager.aget_attachment_chunking_lightrag.return_value = object()
     manager.aplan_web_conversation_query.return_value = QueryPlan(
         original_query="what does this say?",
         standalone_query="what does this say?",
         selected_history_attachment_ids=(),
     )
 
-    row = build_text_attachment_chunk(
+    chunk = build_text_attachment_chunk(
         attachment_id=document.attachment_id,
         filename=document.filename,
         chunk_id=f"att:{document.attachment_id}:1",
         chunk_index=1,
         content="termination clause",
-    ).to_context_row()
+    )
+    row = chunk.to_context_row()
 
-    async def _fake_contexts(**_kwargs: object):
-        return [row], {"attachment_parse_errors": []}
+    # Current documents are parsed before planning; fake that seam so the core
+    # digest selector sees the bundle and the same chunk reaches the answer.
+    async def _fake_parse(**_kwargs: object):
+        bundle = ParsedAttachmentBundle(chunks=[chunk])
+        return [chunk], [], [(document.attachment_id, bundle)]
 
-    service_under_test._attachment_contexts = _fake_contexts  # type: ignore[method-assign]
+    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
 
     turn = await service_under_test.prepare_answer_turn(
         manager=manager,
@@ -1138,6 +1179,134 @@ async def test_prepare_answer_turn_merges_current_document_context(
     catalog = manager.aplan_web_conversation_query.await_args.kwargs["current_attachment_catalog"]
     assert catalog[0]["attachment_id"] == document.attachment_id
     assert catalog[0]["filename"] == "notes.md"
-    assert "parse_summary" in catalog[0]
+    # The planner sees the parsed content preview (document-aware planning), not "".
+    assert catalog[0]["parse_summary"] == "termination clause"
     assert turn.attachment_context_chunks == (row,)
     assert turn.attachment_resolution_status == "ok"
+
+
+async def test_prepare_answer_turn_preserves_selected_history_document_order(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.core.request.attachments import build_text_attachment_chunk
+    from dlightrag.core.request.planner import QueryPlan
+    from dlightrag.storage.web_conversations import StoredConversationAttachment
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    conversation_store.list_image_catalog.return_value = []
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+    )
+    selected_ids = ("att-a", "att-b", "att-missing")
+    document_a = StoredConversationAttachment(
+        attachment_id="att-a",
+        filename="a.pdf",
+        mime_type="application/pdf",
+        suffix=".pdf",
+        attachment_bytes=b"a",
+        content_sha256="sha-a",
+    )
+    document_b = StoredConversationAttachment(
+        attachment_id="att-b",
+        filename="b.pdf",
+        mime_type="application/pdf",
+        suffix=".pdf",
+        attachment_bytes=b"b",
+        content_sha256="sha-b",
+    )
+    # PostgreSQL ANY(...) does not preserve the planner's relevance order.
+    conversation_store.fetch_documents_by_ids.return_value = [document_b, document_a]
+
+    manager = AsyncMock()
+    manager.answer_image_capability = SimpleNamespace(effective_max_images=0)
+    manager.adescribe_query_images.return_value = {}
+    manager.aplan_web_conversation_query.return_value = QueryPlan(
+        original_query="compare those reports",
+        standalone_query="compare reports a and b",
+        selected_history_attachment_ids=selected_ids,
+    )
+    parsed_order: list[str] = []
+
+    async def _fake_parse(*, documents, **_kwargs: object):
+        parsed_order.extend(document.attachment_id for document in documents)
+        chunks = [
+            build_text_attachment_chunk(
+                attachment_id=document.attachment_id,
+                filename=document.filename,
+                chunk_id=f"chunk-{document.attachment_id}",
+                chunk_index=index,
+                content=document.filename,
+            )
+            for index, document in enumerate(documents, start=1)
+        ]
+        return chunks, [], []
+
+    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
+
+    turn = await service_under_test.prepare_answer_turn(
+        manager=manager,
+        prepared=prepared,
+        query="compare those reports",
+        current_images=[],
+        current_documents=[],
+        workspaces=["default"],
+    )
+
+    assert parsed_order == ["att-a", "att-b"]
+    assert [row["reference_id"] for row in turn.attachment_context_chunks] == [
+        "att-a",
+        "att-b",
+    ]
+    assert turn.history_attachments_selected == 2
+    assert turn.attachment_resolution_status == "degraded"
+
+
+async def test_prepare_answer_turn_degrades_on_current_document_parse_error(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.core.request.planner import QueryPlan
+    from dlightrag.web.attachment_models import validate_web_documents
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    conversation_store.list_image_catalog.return_value = []
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+    )
+    (document,) = validate_web_documents(
+        [("broken.docx", "application/octet-stream", b"not-a-docx")]
+    )
+
+    manager = AsyncMock()
+    manager.answer_image_capability = SimpleNamespace(effective_max_images=0)
+    manager.adescribe_query_images.return_value = {}
+    manager.aplan_web_conversation_query.return_value = QueryPlan(
+        original_query="what does this say?",
+        standalone_query="what does this say?",
+        selected_history_attachment_ids=(),
+    )
+
+    async def _fake_parse(**_kwargs: object):
+        # Parser failed for the only document: no chunks, one scoped error.
+        return [], [{"attachment_id": document.attachment_id, "error": "ValueError"}], []
+
+    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
+
+    turn = await service_under_test.prepare_answer_turn(
+        manager=manager,
+        prepared=prepared,
+        query="what does this say?",
+        current_images=[],
+        current_documents=[document],
+        workspaces=["default"],
+    )
+
+    assert turn.attachment_context_chunks == ()
+    assert turn.attachment_resolution_status == "degraded"

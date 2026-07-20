@@ -527,11 +527,6 @@ class QueryAttachmentService:
         )
         return bundle, {"attachment_parse_cache_hit": False}
 
-    async def aretrieve(
-        self, *, bundle: ParsedAttachmentBundle
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        return select_attachment_context(bundle, text_token_budget=ATTACHMENT_TEXT_TOKEN_BUDGET)
-
 
 __all__ = [
     "ATTACHMENT_TEXT_TOKEN_BUDGET",

@@ -12,6 +12,13 @@ import asyncpg
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.answer.turn import PreparedAnswerTurn
+from dlightrag.core.request.attachment_digest import build_attachment_planner_digests
+from dlightrag.core.request.attachments import (
+    ATTACHMENT_TEXT_TOKEN_BUDGET,
+    AttachmentContextChunk,
+    ParsedAttachmentBundle,
+    select_attachment_context,
+)
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     CommitTurnResult,
@@ -247,11 +254,36 @@ class WebConversationService:
             )
 
         attachment_catalog = list(prepared.attachment_catalog)
+        # Parse current-turn documents BEFORE planning so the planner sees their
+        # content and can make the standalone query document-aware. Parsing is
+        # content-addressed and cached, so this is the only parse of these
+        # documents; the resulting chunks are reused for the answer context below.
+        (
+            current_chunks,
+            current_parse_errors,
+            current_bundles,
+        ) = await self._parse_attachment_documents(
+            manager=manager,
+            prepared=prepared,
+            workspaces=workspaces,
+            documents=documents,
+        )
+        current_digests, digest_trace = build_attachment_planner_digests(current_bundles)
+        if current_bundles:
+            logger.info(
+                "[AttachmentDigest] documents=%d input_tokens=%d output_tokens=%d "
+                "strategy=%s budgets=%s",
+                digest_trace["attachment_digest_documents"],
+                digest_trace["attachment_digest_input_tokens"],
+                digest_trace["attachment_digest_output_tokens"],
+                digest_trace["attachment_digest_strategy"],
+                digest_trace["attachment_digest_document_budgets"],
+            )
         current_attachment_catalog = [
             {
                 "attachment_id": document.attachment_id,
                 "filename": document.filename,
-                "parse_summary": "",
+                "parse_summary": current_digests.get(document.attachment_id, ""),
             }
             for document in documents
         ]
@@ -291,32 +323,45 @@ class WebConversationService:
         selected_count = len(plan.selected_history_image_ids)
         resolution_status = "degraded" if selected_count > len(history_blocks) else "ok"
 
-        # Resolve query-document attachment contexts: current uploads plus any
-        # planner-selected prior documents rematerialized by id.
+        # Assemble query-document context: current uploads (parsed above, before
+        # planning) plus any planner-selected prior documents rematerialized by
+        # id. Current attachment chunks are ordered first so the answer packer
+        # keeps them ahead of workspace context.
         attachment_rows: list[dict[str, Any]] = []
         attachment_status = "ok"
         history_docs_selected = 0
+        parse_errors = list(current_parse_errors)
+        history_chunks: list[AttachmentContextChunk] = []
         selected_attachment_ids = tuple(plan.selected_history_attachment_ids)
-        if documents or selected_attachment_ids:
-            history_docs: list[Any] = []
-            if selected_attachment_ids:
-                history_docs = await self._store_call(
-                    self._store.fetch_documents_by_ids(
-                        prepared.principal_id,
-                        prepared.conversation_id,
-                        list(selected_attachment_ids),
-                        ttl_days=self._ttl_days,
-                    )
+        if selected_attachment_ids:
+            fetched_history_docs = await self._store_call(
+                self._store.fetch_documents_by_ids(
+                    prepared.principal_id,
+                    prepared.conversation_id,
+                    list(selected_attachment_ids),
+                    ttl_days=self._ttl_days,
                 )
-                history_docs_selected = len(history_docs)
-            attachment_rows, attachment_trace = await self._attachment_contexts(
+            )
+            history_docs_by_id = {
+                document.attachment_id: document for document in fetched_history_docs
+            }
+            history_docs = [
+                history_docs_by_id[attachment_id]
+                for attachment_id in selected_attachment_ids
+                if attachment_id in history_docs_by_id
+            ]
+            history_docs_selected = len(history_docs)
+            history_chunks, history_parse_errors, _ = await self._parse_attachment_documents(
                 manager=manager,
                 prepared=prepared,
                 workspaces=workspaces,
-                documents=[*documents, *history_docs],
+                documents=history_docs,
             )
-            if attachment_trace.get("attachment_parse_errors"):
-                attachment_status = "degraded"
+            parse_errors.extend(history_parse_errors)
+        if current_chunks or history_chunks:
+            attachment_rows = _budget_attachment_context([*current_chunks, *history_chunks])
+        if parse_errors or history_docs_selected < len(selected_attachment_ids):
+            attachment_status = "degraded"
 
         return PreparedAnswerTurn(
             current_query=query,
@@ -329,6 +374,7 @@ class WebConversationService:
             history_image_catalog_count=len(catalog),
             history_image_resolution_status=resolution_status,
             attachment_context_chunks=tuple(attachment_rows),
+            current_attachment_digests=current_digests,
             history_attachment_catalog_count=len(attachment_catalog),
             history_attachments_selected=history_docs_selected,
             attachment_resolution_status=attachment_status,
@@ -344,21 +390,33 @@ class WebConversationService:
             parser_rules=manager.config.parser.rules,
         )
 
-    async def _attachment_contexts(
+    async def _parse_attachment_documents(
         self,
         *,
         manager: RAGServiceManager,
         prepared: PreparedWebConversation,
         workspaces: list[str] | None,
         documents: list[Any],
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """Parse/chunk documents then budget them into plain-dict context rows."""
-        from dlightrag.core.request.attachments import ParsedAttachmentBundle
+    ) -> tuple[
+        list[AttachmentContextChunk],
+        list[dict[str, str]],
+        list[tuple[str, ParsedAttachmentBundle]],
+    ]:
+        """Parse/chunk documents and retain their bundles for planner digests.
 
+        Parsing is content-addressed and cached by the injected store, so a
+        document parsed here (current uploads, before planning) is a cache hit if
+        looked up again. Returns parsed chunks (in document order), any scoped
+        parse errors, and bundles that the caller may feed to the deterministic
+        planner-digest selector without reparsing.
+        """
+        if not documents:
+            return [], [], []
         lightrag = await manager.aget_attachment_chunking_lightrag(workspaces)
         service = self._get_query_attachment_service(manager, lightrag)
-        chunks: list[Any] = []
+        chunks: list[AttachmentContextChunk] = []
         parse_errors: list[dict[str, str]] = []
+        bundles: list[tuple[str, ParsedAttachmentBundle]] = []
         for document in documents:
             bundle, meta = await service.achunks_for_attachment(
                 principal_id=prepared.principal_id,
@@ -376,9 +434,8 @@ class WebConversationService:
                     }
                 )
             chunks.extend(bundle.chunks)
-        rows, trace = await service.aretrieve(bundle=ParsedAttachmentBundle(chunks=chunks))
-        trace["attachment_parse_errors"] = parse_errors
-        return rows, trace
+            bundles.append((document.attachment_id, bundle))
+        return chunks, parse_errors, bundles
 
     async def image(
         self,
@@ -453,6 +510,7 @@ class WebConversationService:
         images: tuple[ValidatedWebImage, ...],
         image_descriptions: dict[str, str],
         documents: tuple[ValidatedWebDocument, ...] = (),
+        document_parse_summaries: dict[str, str] | None = None,
     ) -> CommitTurnResult:
         """Atomically append a completed answer against its captured revision."""
 
@@ -481,6 +539,7 @@ class WebConversationService:
                 suffix=document.suffix,
                 attachment_bytes=document.document_bytes,
                 content_sha256=document.content_sha256,
+                parse_summary=(document_parse_summaries or {}).get(document.attachment_id),
             )
             for document in documents
         ]
@@ -570,6 +629,15 @@ class WebConversationService:
             return await operation
         except POSTGRES_UNAVAILABLE_EXCEPTIONS as exc:
             raise WebConversationUnavailableError from exc
+
+
+def _budget_attachment_context(chunks: list[AttachmentContextChunk]) -> list[dict[str, Any]]:
+    """Reduce parsed attachment chunks to budgeted answer-context rows."""
+    rows, _trace = select_attachment_context(
+        ParsedAttachmentBundle(chunks=chunks),
+        text_token_budget=ATTACHMENT_TEXT_TOKEN_BUDGET,
+    )
+    return rows
 
 
 def _history_image_block(image: StoredConversationImage) -> dict[str, Any]:

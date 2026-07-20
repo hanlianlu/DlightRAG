@@ -662,12 +662,20 @@ extraction for every interface.
 
 ```yaml
 max_conversation_turns: 50
-max_conversation_tokens: 150000
+max_conversation_tokens: 81920
 max_upload_bytes: 104857600
 max_upload_size_mb: 512
 ingest_timeout:
 request_timeout: 300
 ```
+
+`max_conversation_tokens` caps recent text history supplied to the query
+planner. Web planning additionally reserves current-request context: current
+document attachments share an 8192-token, structure-aware digest budget; prior
+image/document catalogs share 4096 tokens; and the complete rendered planner
+input is bounded to 102400 estimated tokens. When the envelope is full, the
+oldest text history and catalog entries yield before current attachments. These
+are internal planner safety budgets rather than additional public settings.
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
 applies to Web uploads. `ingest_timeout` limits how long the SDK convenience

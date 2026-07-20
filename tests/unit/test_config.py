@@ -650,6 +650,12 @@ def test_multimodal_retrieval_defaults() -> None:
     assert cfg.answer.image_max_total_bytes == 24_000_000
     assert cfg.answer.image_max_px == 1536
     assert cfg.answer.image_min_px == 1024
+
+
+def test_conversation_history_token_default_reserves_planner_context() -> None:
+    cfg = _default_test_config()
+
+    assert cfg.max_conversation_tokens == 81_920
     assert cfg.answer.image_quality == 89
     assert cfg.answer.image_min_quality == 79
     assert cfg.web_conversations.max_turns == 100

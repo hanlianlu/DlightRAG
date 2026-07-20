@@ -439,6 +439,7 @@ async def _emit_answer_events(
                     images=validated_images,
                     image_descriptions=image_descriptions,
                     documents=validated_documents,
+                    document_parse_summaries=turn.current_attachment_digests,
                 )
             )
             while True:

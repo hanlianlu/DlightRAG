@@ -36,6 +36,10 @@ class PreparedAnswerTurn:
     # into retrieval chunks before generation. Empty for REST/MCP/SDK turns so
     # the core answer boundary never depends on the web layer.
     attachment_context_chunks: tuple[dict[str, Any], ...] = ()
+    # Current attachment id -> deterministic planner digest. The Web adapter
+    # persists these with the completed turn so future planner turns can resolve
+    # references to prior documents without reparsing them.
+    current_attachment_digests: dict[str, str] = field(default_factory=dict)
     history_attachment_catalog_count: int = 0
     history_attachments_selected: int = 0
     attachment_resolution_status: str = "ok"
