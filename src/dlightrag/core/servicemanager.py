@@ -1632,6 +1632,7 @@ class RAGServiceManager:
                     current_image_descriptions=turn.current_image_descriptions,
                     log_plan=True,
                 )
+                context_top_k = limits.context_top_k
                 if turn.attachment_context_chunks:
                     # Inject request-local Web attachment rows ahead of retrieved
                     # chunks so the single downstream AnswerContextPacker +
@@ -1643,12 +1644,21 @@ class RAGServiceManager:
                         *turn.attachment_context_chunks,
                         *existing,
                     ]
+                    # Attachments are additive to the packer's count budget, not a
+                    # replacement for workspace context. The packer treats
+                    # context_top_k as a pure COUNT cap; because attachment rows are
+                    # prepended, a document yielding >= context_top_k chunks would
+                    # otherwise fill the whole budget and starve workspace grounding.
+                    # Grow the cap by the attachment count so workspace retrieval
+                    # keeps its normal allocation. A falsy cap already means "no cap".
+                    if isinstance(context_top_k, int) and context_top_k > 0:
+                        context_top_k = context_top_k + len(turn.attachment_context_chunks)
                 contexts, stream = await self._agenerate_stream_from_contexts_prepared(
                     plan.standalone_query,
                     retrieval.contexts,
                     query_images=query_images or None,
                     text_history=history,
-                    context_top_k=limits.context_top_k,
+                    context_top_k=context_top_k,
                 )
                 if stream is not None:
                     stream_meta = cast(Any, stream)

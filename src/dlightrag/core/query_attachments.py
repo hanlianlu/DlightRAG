@@ -114,6 +114,13 @@ def select_attachment_context(
     current images. Visual chunks (rows carrying image bytes) therefore always
     pass through regardless of the text budget; only pure-text chunks are
     subject to the ``text_token_budget`` cutoff.
+
+    v1 scope: this is a deterministic in-order reducer (keep all visual chunks;
+    keep text chunks in document order until the token budget is reached). A
+    relevance-driven reducer (embedding/BM25/RRF/rerank or an LLM chunk
+    selector, keyed off the planner's ``attachment_query``/
+    ``attachment_directives``) is an OPTIONAL future enhancement per the
+    design's "Open Implementation Choices" and is out of scope for this slice.
     """
     rows: list[dict[str, Any]] = []
     text_tokens = 0

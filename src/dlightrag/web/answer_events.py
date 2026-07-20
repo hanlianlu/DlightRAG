@@ -165,7 +165,9 @@ def _apply_attachment_source_links(
     """
     projected: list[SourceReferencePayload] = []
     for source in sources:
-        if not source.source_uri.startswith("web-attachment://"):
+        # ``source_uri`` is ``str | None``; guard against a future None so this
+        # never raises AttributeError. Real attachment sources are unchanged.
+        if not (source.source_uri or "").startswith("web-attachment://"):
             projected.append(source)
             continue
         attachment_id = source.source_uri.removeprefix("web-attachment://")

@@ -219,6 +219,88 @@ async def test_prepared_stream_merges_attachment_context_chunks_first(test_cfg) 
     assert chunks[1]["chunk_id"] == "ws-1"
 
 
+async def test_prepared_stream_grows_context_top_k_for_attachments(test_cfg) -> None:
+    """Attachments are additive to the packer count budget, not a replacement.
+
+    A document yielding >= context_top_k chunks must not starve workspace
+    grounding: the effective cap passed downstream grows by the attachment count
+    so workspace chunks keep their normal allocation.
+    """
+    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    plan = QueryPlan(original_query="q", standalone_query="q")
+    workspace_chunks = [{"chunk_id": f"ws-{i}"} for i in range(30)]
+    retrieval = SimpleNamespace(
+        contexts={"chunks": list(workspace_chunks), "entities": [], "relationships": []},
+        trace={},
+    )
+    base_top_k = 30
+    limits = SimpleNamespace(context_top_k=base_top_k, candidate_top_k=5)
+    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
+    manager = RAGServiceManager(config=test_cfg)
+    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        return_value=(plan, prepared, limits, retrieval)
+    )
+    captured: dict[str, Any] = {}
+
+    async def _gen(query: str, contexts: Any, **kwargs: Any):
+        captured["context_top_k"] = kwargs.get("context_top_k")
+        captured["contexts"] = contexts
+        return contexts, None
+
+    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        side_effect=_gen
+    )
+    attachment_chunks = tuple({"chunk_id": f"att-{i}", "content": "clause"} for i in range(32))
+    turn = answer_turn.PreparedAnswerTurn(
+        current_query="q",
+        retrieval_query="q",
+        attachment_context_chunks=attachment_chunks,
+    )
+
+    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+
+    # Effective cap grows by the attachment count so workspace context survives.
+    assert captured["context_top_k"] == base_top_k + len(attachment_chunks)
+    # Workspace chunk ids remain within the grown budget window.
+    packed = captured["contexts"]["chunks"][: captured["context_top_k"]]
+    packed_ids = {chunk["chunk_id"] for chunk in packed}
+    assert {chunk["chunk_id"] for chunk in workspace_chunks} <= packed_ids
+
+
+async def test_prepared_stream_leaves_context_top_k_when_no_cap(test_cfg) -> None:
+    """A falsy context_top_k already means 'no cap'; leave it untouched."""
+    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    plan = QueryPlan(original_query="q", standalone_query="q")
+    retrieval = SimpleNamespace(
+        contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
+        trace={},
+    )
+    limits = SimpleNamespace(context_top_k=0, candidate_top_k=5)
+    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
+    manager = RAGServiceManager(config=test_cfg)
+    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        return_value=(plan, prepared, limits, retrieval)
+    )
+    captured: dict[str, Any] = {}
+
+    async def _gen(query: str, contexts: Any, **kwargs: Any):
+        captured["context_top_k"] = kwargs.get("context_top_k")
+        return contexts, None
+
+    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        side_effect=_gen
+    )
+    turn = answer_turn.PreparedAnswerTurn(
+        current_query="q",
+        retrieval_query="q",
+        attachment_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
+    )
+
+    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+
+    assert captured["context_top_k"] == 0  # unchanged: no cap already includes everything
+
+
 def test_stateless_turn_carries_no_attachment_contexts() -> None:
     """REST/MCP/SDK turns cross the core boundary with empty attachments."""
     answer_turn = importlib.import_module("dlightrag.core.answer_turn")

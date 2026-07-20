@@ -85,6 +85,10 @@ class QueryPlan:
     selected_history_image_ids: tuple[str, ...] = ()
     # Web-only conversation planner fields (empty for stateless REST/MCP/SDK/retrieve).
     selected_history_attachment_ids: tuple[str, ...] = ()
+    # ``attachment_query``/``attachment_directives`` are reserved for a future
+    # relevance-driven attachment reducer. v1 uses deterministic in-order text
+    # reduction (with full visual passthrough) in ``select_attachment_context``
+    # and does not yet consume these fields.
     attachment_query: str | None = None
     attachment_directives: tuple[dict[str, Any], ...] = ()
 
