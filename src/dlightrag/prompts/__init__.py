@@ -25,6 +25,11 @@ from .rag import (
     HIGHLIGHT_SYSTEM_PROMPT,
     get_answer_system_prompt,
 )
+from .web_planner import (
+    WEB_PLANNER_CURRENT_ATTACHMENT_TEMPLATE,
+    WEB_PLANNER_HISTORY_ATTACHMENT_TEMPLATE,
+    WEB_PLANNER_SYSTEM_PROMPT,
+)
 
 __all__ = [
     # identity
@@ -45,6 +50,10 @@ __all__ = [
     "PLANNER_NO_HISTORY_TEMPLATE",
     "PLANNER_WEB_SELECTION_TEMPLATE",
     "PLANNER_CURRENT_IMAGE_TEMPLATE",
+    # web planner
+    "WEB_PLANNER_SYSTEM_PROMPT",
+    "WEB_PLANNER_HISTORY_ATTACHMENT_TEMPLATE",
+    "WEB_PLANNER_CURRENT_ATTACHMENT_TEMPLATE",
     # rag
     "ANSWER_CORE",
     "get_answer_system_prompt",

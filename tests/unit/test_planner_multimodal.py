@@ -1,7 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for multimodal conversation history in QueryPlanner."""
 
-from dlightrag.core.query_planner import _convert_history_to_text
+import pytest
+
+from dlightrag.core.query_planner import QueryPlanner, _convert_history_to_text
 
 
 class TestConvertHistoryToText:
@@ -66,3 +68,49 @@ class TestConvertHistoryToText:
 
     def test_none_history_returns_empty_string(self) -> None:
         assert _convert_history_to_text(None) == ""
+
+
+@pytest.mark.asyncio
+async def test_web_planner_selects_history_documents_and_images() -> None:
+    async def llm_func(**_kwargs):
+        return """
+        {
+          "standalone_query": "compare termination clause against attached report",
+          "bm25_query": "termination clause attached report",
+          "filters": {},
+          "filter_confidence": "low",
+          "filter_evidence": [],
+          "selected_history_image_ids": ["img-1"],
+          "selected_history_attachment_ids": ["att-1"],
+          "attachment_query": "termination clause",
+          "attachment_directives": [{"attachment_id": "att-1", "hint": "termination clause"}]
+        }
+        """
+
+    planner = QueryPlanner(llm_func=llm_func)
+    plan = await planner.plan_web_conversation(
+        "compare with the prior PDF",
+        conversation_history=[{"role": "user", "content": "see prior PDF"}],
+        image_catalog=[
+            {"image_id": "img-1", "turn_number": 1, "ordinal": 1, "vlm_description": "chart"}
+        ],
+        attachment_catalog=[
+            {
+                "attachment_id": "att-1",
+                "turn_number": 1,
+                "ordinal": 1,
+                "filename": "contract.pdf",
+                "parse_summary": "contract",
+            }
+        ],
+        allowed_history_image_count=3,
+        allowed_history_attachment_count=3,
+        current_image_descriptions=[],
+        current_attachment_catalog=[],
+        schema={},
+    )
+
+    assert plan.selected_history_image_ids == ("img-1",)
+    assert plan.selected_history_attachment_ids == ("att-1",)
+    assert plan.attachment_query == "termination clause"
+    assert plan.attachment_directives[0]["attachment_id"] == "att-1"

@@ -28,6 +28,9 @@ from dlightrag.prompts import (
     PLANNER_NO_HISTORY_TEMPLATE,
     PLANNER_SYSTEM_PROMPT,
     PLANNER_WEB_SELECTION_TEMPLATE,
+    WEB_PLANNER_CURRENT_ATTACHMENT_TEMPLATE,
+    WEB_PLANNER_HISTORY_ATTACHMENT_TEMPLATE,
+    WEB_PLANNER_SYSTEM_PROMPT,
 )
 from dlightrag.utils import log_safe
 from dlightrag.utils.tokens import truncate_conversation_history
@@ -80,6 +83,10 @@ class QueryPlan:
     metadata_filter_confidence: str | None = None
     metadata_filter_evidence: list[dict[str, Any]] | None = None
     selected_history_image_ids: tuple[str, ...] = ()
+    # Web-only conversation planner fields (empty for stateless REST/MCP/SDK/retrieve).
+    selected_history_attachment_ids: tuple[str, ...] = ()
+    attachment_query: str | None = None
+    attachment_directives: tuple[dict[str, Any], ...] = ()
 
 
 class QueryPlannerFilterEvidence(BaseModel):
@@ -143,6 +150,35 @@ QUERY_PLAN_WEB_STRUCTURED_OUTPUT = StructuredOutput(
 )
 
 
+class WebAttachmentDirective(BaseModel):
+    """A planner directive pointing retrieval at one attached document."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    attachment_id: str
+    hint: str = ""
+
+
+class WebConversationPlannerStructuredResponse(QueryPlannerStructuredResponse):
+    """Web conversation planner schema: adds scoped document/image selection.
+
+    Used only by ``QueryPlanner.plan_web_conversation`` (the Web ``/web/answer``
+    path). The stateless ``QueryPlanner.plan`` contract is unaffected -- its
+    public schema forbids these extra fields.
+    """
+
+    selected_history_image_ids: list[str] = Field(default_factory=list)
+    selected_history_attachment_ids: list[str] = Field(default_factory=list)
+    attachment_query: str | None = None
+    attachment_directives: list[WebAttachmentDirective] = Field(default_factory=list)
+
+
+QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT = StructuredOutput(
+    name="query_plan",
+    schema=WebConversationPlannerStructuredResponse,
+)
+
+
 # PG data_type -> human-readable short form
 _TYPE_ALIASES: dict[str, str] = {
     "character varying": "text",
@@ -173,6 +209,23 @@ def _build_custom_keys_hint(schema: dict[str, Any] | None) -> str:
 
 def _is_empty_filter(f: MetadataFilter) -> bool:
     return f.is_empty()
+
+
+def _scope_ids(
+    selected: tuple[str, ...],
+    allowed: set[str],
+    limit: int,
+) -> tuple[str, ...]:
+    """Keep only selected ids present in the scoped catalog, deduped + truncated.
+
+    LLM output is not authorization: the planner may only return ids that were
+    supplied in the request-local catalog.
+    """
+    deduped: dict[str, None] = {}
+    for item in selected:
+        if str(item) in allowed:
+            deduped.setdefault(str(item), None)
+    return tuple(list(deduped)[: max(0, limit)])
 
 
 def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int = 3) -> str:
@@ -379,6 +432,202 @@ class QueryPlanner:
         )
         return plan
 
+    async def _call_llm_with_retry(
+        self,
+        query: str,
+        system_prompt: str,
+        *,
+        structured_output: StructuredOutput,
+        start_time: float,
+    ) -> str | None:
+        """Call the planner LLM with adaptive exponential-backoff retry.
+
+        Returns the raw response string, or ``None`` when all attempts fail.
+        """
+        _MAX_RETRIES = 2
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = await self._call_llm(
+                    query, system_prompt, structured_output=structured_output
+                )
+                logger.info(
+                    "[Planner] LLM call: %.1fs (attempt %d)",
+                    time.monotonic() - start_time,
+                    attempt,
+                )
+                return response
+            except Exception:
+                if attempt < _MAX_RETRIES:
+                    delay = 2**attempt  # 1s, 2s
+                    logger.warning(
+                        "QueryPlanner LLM call failed (attempt %d/%d), retrying in %ds",
+                        attempt + 1,
+                        _MAX_RETRIES + 1,
+                        delay,
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        "QueryPlanner LLM call failed after %d attempts (%.1fs)",
+                        _MAX_RETRIES + 1,
+                        time.monotonic() - start_time,
+                        exc_info=True,
+                    )
+                    return None
+        return None
+
+    async def plan_web_conversation(
+        self,
+        query: str,
+        *,
+        conversation_history: list[dict[str, Any]] | None = None,
+        explicit_filter: MetadataFilter | None = None,
+        max_turns: int = 25,
+        max_tokens: int = 65536,
+        schema: dict[str, Any] | None = None,
+        image_catalog: list[dict[str, Any]] | None = None,
+        attachment_catalog: list[dict[str, Any]] | None = None,
+        current_attachment_catalog: list[dict[str, Any]] | None = None,
+        allowed_history_image_count: int = 0,
+        allowed_history_attachment_count: int = 0,
+        current_image_descriptions: list[str] | None = None,
+    ) -> QueryPlan:
+        """Plan one Web conversation turn (Web ``/web/answer`` only).
+
+        Separate contract from the stateless :meth:`plan` used by REST/MCP/SDK/
+        retrieve. Reuses the shared planner helpers (history truncation, schema
+        rendering, structured-output parsing, filter merging) and adds scoped
+        selection of prior document attachments / images plus an
+        ``attachment_query`` for attached-document retrieval.
+        """
+        fallback = QueryPlan(
+            original_query=query,
+            standalone_query=query,
+            attachment_query=query,
+        )
+
+        if self._llm_func is None:
+            return fallback
+
+        history = self._truncate_history(conversation_history, max_turns, max_tokens)
+
+        t0 = time.monotonic()
+        schema = schema if schema is not None else await self._refresh_schema()
+        t1 = time.monotonic()
+        logger.info("[Planner] schema refresh: %.1fs", t1 - t0)
+
+        schema_section = _build_schema_section(schema)
+        custom_keys_hint = _build_custom_keys_hint(schema)
+
+        if history:
+            history_text = _convert_history_to_text(history)
+            history_section = PLANNER_HISTORY_TEMPLATE.format(
+                history_text=history_text, query=query
+            )
+        else:
+            history_section = PLANNER_NO_HISTORY_TEMPLATE.format(query=query)
+
+        system_prompt = WEB_PLANNER_SYSTEM_PROMPT.format(
+            schema_section=schema_section,
+            custom_keys_hint=custom_keys_hint,
+            history_section=history_section,
+        )
+
+        # Prior images: append the catalog + scoped-selection guidance.
+        if image_catalog:
+            image_lines = "\n".join(
+                f"{row['image_id']} | turn {row['turn_number']} | "
+                f"ord {row['ordinal']} | {row['vlm_description']}"
+                for row in image_catalog
+            )
+            system_prompt += PLANNER_WEB_SELECTION_TEMPLATE.format(
+                allowed_count=max(0, allowed_history_image_count),
+                catalog_lines=image_lines,
+            )
+
+        # Prior document attachments: append the catalog + scoped-selection guidance.
+        if attachment_catalog:
+            attachment_lines = "\n".join(
+                f"{row['attachment_id']} | turn {row['turn_number']} | "
+                f"ord {row['ordinal']} | {row['filename']} | {row['parse_summary']}"
+                for row in attachment_catalog
+            )
+            system_prompt += WEB_PLANNER_HISTORY_ATTACHMENT_TEMPLATE.format(
+                allowed_count=max(0, allowed_history_attachment_count),
+                catalog_lines=attachment_lines,
+            )
+
+        # Current-turn attachments are always in scope (no selection required).
+        if current_attachment_catalog:
+            current_lines = "\n".join(
+                f"{row['attachment_id']} | {row['filename']} | {row['parse_summary']}"
+                for row in current_attachment_catalog
+            )
+            system_prompt += WEB_PLANNER_CURRENT_ATTACHMENT_TEMPLATE.format(
+                catalog_lines=current_lines
+            )
+
+        # Current-turn images are always folded into the query (no selection).
+        if current_image_descriptions:
+            system_prompt += PLANNER_CURRENT_IMAGE_TEMPLATE.format(
+                image_lines="\n".join(f"- {desc}" for desc in current_image_descriptions)
+            )
+
+        response = await self._call_llm_with_retry(
+            query,
+            system_prompt,
+            structured_output=QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT,
+            start_time=t1,
+        )
+        if response is None:
+            return fallback
+
+        plan = self._parse_response(
+            response,
+            query,
+            structured_output=QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT,
+        )
+        if plan is None:
+            return fallback
+
+        # LLM output is not authorization: keep only ids present in the scoped
+        # catalogs, deduped and truncated to the allowed count.
+        plan.selected_history_image_ids = _scope_ids(
+            plan.selected_history_image_ids,
+            {str(row["image_id"]) for row in (image_catalog or [])},
+            allowed_history_image_count,
+        )
+        allowed_attachments = {str(row["attachment_id"]) for row in (attachment_catalog or [])}
+        plan.selected_history_attachment_ids = _scope_ids(
+            plan.selected_history_attachment_ids,
+            allowed_attachments,
+            allowed_history_attachment_count,
+        )
+        plan.attachment_directives = tuple(
+            {"attachment_id": str(d["attachment_id"]), "hint": str(d.get("hint", ""))}
+            for d in plan.attachment_directives
+            if str(d.get("attachment_id")) in allowed_attachments
+        )
+        if not plan.attachment_query:
+            plan.attachment_query = plan.standalone_query
+
+        # Merge explicit filter (explicit wins)
+        if explicit_filter is not None and not _is_empty_filter(explicit_filter):
+            plan.metadata_filter = self._merge_filters(explicit_filter, plan.metadata_filter)
+            plan.metadata_filter_source = "explicit"
+            plan.metadata_filter_confidence = "high"
+
+        logger.info(
+            "[Planner] web result: standalone=%r, attachment_query=%r, "
+            "history_images=%d, history_attachments=%d",
+            log_safe(plan.standalone_query, max_length=60),
+            log_safe(plan.attachment_query, max_length=60),
+            len(plan.selected_history_image_ids),
+            len(plan.selected_history_attachment_ids),
+        )
+        return plan
+
     def _parse_response(
         self,
         response: str,
@@ -401,6 +650,15 @@ class QueryPlanner:
         data = parsed.model_dump()
         standalone = data.get("standalone_query", query)
         selected = tuple(str(i) for i in data.get("selected_history_image_ids", []) if i)
+        # Web-only fields: absent (defaulted) for the stateless public schema.
+        selected_attachments = tuple(
+            str(i) for i in data.get("selected_history_attachment_ids", []) if i
+        )
+        attachment_query = data.get("attachment_query") or None
+        raw_directives = data.get("attachment_directives") or []
+        directives = tuple(
+            d for d in raw_directives if isinstance(d, dict) and d.get("attachment_id")
+        )
         raw_filters = data.get("filters", {}) or {}
         filter_confidence = str(data.get("filter_confidence") or "").lower() or None
         filter_evidence = data.get("filter_evidence") or []
@@ -420,6 +678,9 @@ class QueryPlanner:
                 if isinstance(filter_evidence, list)
                 else None,
                 selected_history_image_ids=selected,
+                selected_history_attachment_ids=selected_attachments,
+                attachment_query=attachment_query,
+                attachment_directives=directives,
             )
 
         # Handle date fields specially
@@ -452,6 +713,9 @@ class QueryPlanner:
             metadata_filter_confidence=filter_confidence,
             metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
             selected_history_image_ids=selected,
+            selected_history_attachment_ids=selected_attachments,
+            attachment_query=attachment_query,
+            attachment_directives=directives,
         )
 
     @staticmethod

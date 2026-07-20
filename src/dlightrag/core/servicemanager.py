@@ -1038,6 +1038,62 @@ class RAGServiceManager:
             workspaces=workspaces,
         )
 
+    async def aplan_web_conversation_query(
+        self,
+        query: str,
+        *,
+        text_history: list[dict[str, Any]] | None = None,
+        image_catalog: list[dict[str, Any]] | None = None,
+        attachment_catalog: list[dict[str, Any]] | None = None,
+        current_attachment_catalog: list[dict[str, Any]] | None = None,
+        allowed_history_image_count: int = 0,
+        allowed_history_attachment_count: int = 0,
+        current_image_descriptions: list[str] | None = None,
+        workspaces: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryPlan:
+        """Plan one Web conversation turn using the manager-owned planner.
+
+        Web ``/web/answer`` only. Routes through the separate
+        :meth:`QueryPlanner.plan_web_conversation` contract so scoped history
+        documents/images and an attachment query are planned in the same call.
+        REST/MCP/SDK/retrieve keep using :meth:`aplan_query`.
+        """
+        planner = self._get_query_planner()
+        from dlightrag.observability import trace_observation
+
+        async with trace_observation(
+            "query_planning",
+            as_type="chain",
+            input={"query": query},
+            metadata={
+                "workspaces": list(workspaces or []),
+                "history_turns": len(text_history or []),
+                "history_image_catalog_count": len(image_catalog or []),
+                "history_attachment_catalog_count": len(attachment_catalog or []),
+            },
+        ) as trace:
+            schema = await self._get_schema(workspaces)
+            plan = await planner.plan_web_conversation(
+                query,
+                conversation_history=text_history,
+                image_catalog=image_catalog,
+                attachment_catalog=attachment_catalog,
+                current_attachment_catalog=current_attachment_catalog,
+                allowed_history_image_count=allowed_history_image_count,
+                allowed_history_attachment_count=allowed_history_attachment_count,
+                current_image_descriptions=current_image_descriptions,
+                max_turns=self._config.max_conversation_turns,
+                max_tokens=self._config.max_conversation_tokens,
+                schema=schema,
+            )
+            trace.update(
+                output={
+                    "standalone_query": plan.standalone_query,
+                    "has_metadata_filter": plan.metadata_filter is not None,
+                }
+            )
+            return plan
+
     async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
         """Describe current-turn images (ordinal -> text) for image-aware planning.
 
