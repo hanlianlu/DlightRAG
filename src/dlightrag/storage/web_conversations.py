@@ -179,11 +179,23 @@ WEB_CONVERSATION_MIGRATIONS = (
             # rows), so it does not break pre-commit parsing. Conversation
             # deletion, principal prune, and TTL expiry all delete the
             # web_conversations row, so the cache is reclaimed on every path.
-            "ALTER TABLE web_conversation_attachment_chunks "
-            "ADD CONSTRAINT web_conversation_attachment_chunks_conversation_fkey "
-            "FOREIGN KEY (principal_id, conversation_id) "
-            "REFERENCES web_conversations (principal_id, conversation_id) "
-            "ON DELETE CASCADE",
+            # ADD CONSTRAINT is not idempotent (Postgres has no IF NOT EXISTS
+            # form) and apply_migrations re-runs every statement on each startup,
+            # so guard it with a catalog existence check to stay idempotent.
+            """DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'web_conversation_attachment_chunks_conversation_fkey'
+          AND conrelid = 'web_conversation_attachment_chunks'::regclass
+    ) THEN
+        ALTER TABLE web_conversation_attachment_chunks
+        ADD CONSTRAINT web_conversation_attachment_chunks_conversation_fkey
+        FOREIGN KEY (principal_id, conversation_id)
+        REFERENCES web_conversations (principal_id, conversation_id)
+        ON DELETE CASCADE;
+    END IF;
+END $$""",
         ),
     ),
 )
@@ -429,8 +441,8 @@ SELECT
                 ) ORDER BY a.ordinal
             )
             FROM web_conversation_attachments AS a
-            WHERE a.principal_id = t.principal_id
-              AND a.conversation_id = t.conversation_id
+            WHERE a.principal_id = $1
+              AND a.conversation_id = $2::text::uuid
               AND a.turn_id = t.turn_id
         ),
         '[]'::jsonb
