@@ -815,7 +815,7 @@ async def test_commit_answer_maps_validated_images_and_revision(
     conversation_store: AsyncMock,
 ) -> None:
     from dlightrag.storage.web_conversations import CommitTurnResult
-    from dlightrag.utils.images import ValidatedWebImage
+    from dlightrag.web.attachment_models import ValidatedWebImage
     from dlightrag.web.conversations import PreparedWebConversation
 
     conversation_store.commit_turn.return_value = CommitTurnResult(
@@ -860,7 +860,7 @@ async def test_commit_answer_maps_sparse_descriptions_by_stable_ordinal(
     conversation_store: AsyncMock,
 ) -> None:
     from dlightrag.storage.web_conversations import CommitTurnResult
-    from dlightrag.utils.images import ValidatedWebImage
+    from dlightrag.web.attachment_models import ValidatedWebImage
     from dlightrag.web.conversations import PreparedWebConversation
 
     conversation_store.commit_turn.return_value = CommitTurnResult(

@@ -23,11 +23,10 @@ from dlightrag.storage.web_conversations import (
     StoredConversationImage,
 )
 from dlightrag.utils.images import (
-    ValidatedWebImage,
     image_bytes_to_data_uri,
     thumbnail_bytes,
 )
-from dlightrag.web.attachment_models import ValidatedWebDocument
+from dlightrag.web.attachment_models import ValidatedWebDocument, ValidatedWebImage
 from dlightrag.web.conversation_models import (
     ConversationDocumentReference,
     ConversationHistory,

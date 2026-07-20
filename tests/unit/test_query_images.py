@@ -10,7 +10,8 @@ import pytest
 from PIL import Image
 
 from dlightrag.core.request.images import QueryImageDescriber
-from dlightrag.utils.images import decode_image_base64, validate_web_images
+from dlightrag.utils.images import decode_image_base64
+from dlightrag.web.attachment_models import validate_web_images
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="

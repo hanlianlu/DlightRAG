@@ -13,8 +13,8 @@ from dlightrag.utils.images import (
     bounded_image_data_uri,
     decode_image_base64,
     flatten_image_to_rgb,
-    validate_web_images,
 )
+from dlightrag.web.attachment_models import validate_web_images
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="

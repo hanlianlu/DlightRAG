@@ -8,9 +8,12 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.access_control import AccessAction
 from dlightrag.utils import normalize_workspace
-from dlightrag.utils.images import validate_web_images
 from dlightrag.web.answer_events import stream_answer_events
-from dlightrag.web.attachment_models import MAX_CURRENT_DOCUMENTS, MAX_DOCUMENT_BYTES
+from dlightrag.web.attachment_models import (
+    MAX_CURRENT_DOCUMENTS,
+    MAX_DOCUMENT_BYTES,
+    validate_web_images,
+)
 from dlightrag.web.attachment_requests import parse_web_answer_request
 from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (

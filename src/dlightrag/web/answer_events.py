@@ -22,8 +22,7 @@ from dlightrag.core.scope import RequestScope
 from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils import log_safe
-from dlightrag.utils.images import ValidatedWebImage
-from dlightrag.web.attachment_models import ValidatedWebDocument
+from dlightrag.web.attachment_models import ValidatedWebDocument, ValidatedWebImage
 from dlightrag.web.conversation_models import ConversationSummary
 from dlightrag.web.conversations import (
     PreparedWebConversation,
