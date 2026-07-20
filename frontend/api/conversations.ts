@@ -16,12 +16,24 @@ export interface ConversationImageReference {
   label: string;
 }
 
+export interface ConversationDocumentReference {
+  attachment_id: string;
+  ordinal: number;
+  filename: string;
+  mime_type: string;
+  byte_size: number;
+  url: string;
+  label: string;
+  parse_summary: string | null;
+}
+
 export interface ConversationTurn {
   turn_id: string;
   turn_number: number;
   user_text: string;
   assistant_text: string;
   user_images: ConversationImageReference[];
+  user_documents: ConversationDocumentReference[];
   answer_sources: Record<string, unknown>;
   answer_html: string;
   queried_workspaces: string[];

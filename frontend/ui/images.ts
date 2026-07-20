@@ -1,14 +1,21 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {detectDropItems} from './folder-upload.ts';
-import {uploadFilesToWorkspace} from './files-panel.ts';
 import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
 import type {ConversationImageReference} from '../api/conversations.ts';
-import {getImageAdmissionPolicy, canAddImage, ImageReadAdmissionController} from './image_policy.ts';
+import {getImageAdmissionPolicy, ImageReadAdmissionController} from './image_policy.ts';
 
 const SAFE_DATA_IMAGE_SRC_RE = /^data:image\/(?:avif|bmp|gif|jpeg|jpg|png|webp);base64,[a-z0-9+/=]+$/i;
 const pendingImages: PendingImage[] = [];
+
+// The unified composer strip (images + document chips) owns rendering; when it
+// registers a handler, image mutations delegate to it so both attachment kinds
+// share one `#thumbnail-strip`. Falls back to self-rendering images otherwise.
+let pendingImagesChangedHandler: (() => void) | null = null;
+
+export function setPendingImagesChangedHandler(handler: (() => void) | null): void {
+    pendingImagesChangedHandler = handler;
+}
 
 interface PendingImage {
     file: File;
@@ -38,24 +45,6 @@ function eventElement(event: Event): Element | null {
 
 export function addImage(file: File): void {
     imageAdmission.admit(file);
-}
-
-function applyUploadCapabilityGate(plusBtn: HTMLElement): void {
-    const policy = getImageAdmissionPolicy();
-    const uploadsAllowed =
-        policy !== null &&
-        canAddImage({
-            status: policy.capabilityStatus,
-            limit: policy.effectiveCurrentUploadLimit,
-            current: 0,
-        });
-    if (uploadsAllowed) return;
-    if (plusBtn instanceof HTMLButtonElement) plusBtn.disabled = true;
-    plusBtn.setAttribute('aria-disabled', 'true');
-    plusBtn.title =
-        policy !== null && policy.capabilityStatus !== 'supported'
-            ? 'Image input is unavailable: the answer model does not support images.'
-            : 'Image input is currently unavailable.';
 }
 
 export function getPendingImageData(): string[] {
@@ -172,9 +161,17 @@ function removeImage(index: number): void {
 }
 
 function renderThumbnails(): void {
+    if (pendingImagesChangedHandler) {
+        pendingImagesChangedHandler();
+        return;
+    }
     const strip = document.getElementById('thumbnail-strip');
     if (!strip) return;
     strip.replaceChildren();
+    renderPendingImageThumbnails(strip);
+}
+
+export function renderPendingImageThumbnails(strip: Element): void {
     pendingImages.forEach(function(img, idx) {
         const item = document.createElement('div');
         item.className = chatStyles.thumbnailItem;
@@ -383,63 +380,7 @@ export function closeLightbox(): void {
     }
 }
 
-export function setupImageInputs(): void {
-    const plusBtn = document.getElementById('composer-plus');
-    const imageInput = document.getElementById('image-input') as HTMLInputElement | null;
-    if (plusBtn && imageInput) {
-        applyUploadCapabilityGate(plusBtn);
-        plusBtn.addEventListener('click', function() { imageInput.click(); });
-        imageInput.addEventListener('change', function() {
-            Array.from(imageInput.files || []).forEach(function(f) { addImage(f); });
-            imageInput.value = '';
-        });
-    }
-
-    const dropOverlay = document.getElementById('drop-overlay');
-    let dragCounter = 0;
-    document.addEventListener('dragenter', function(e) {
-        e.preventDefault();
-        if (e.dataTransfer && e.dataTransfer.types.indexOf('Files') >= 0) {
-            dragCounter++;
-            if (dropOverlay) dropOverlay.classList.add('active');
-        }
-    });
-    document.addEventListener('dragleave', function(e) {
-        e.preventDefault();
-        dragCounter--;
-        if (dragCounter <= 0) {
-            dragCounter = 0;
-            if (dropOverlay) dropOverlay.classList.remove('active');
-        }
-    });
-    document.addEventListener('dragover', function(e) { e.preventDefault(); });
-    document.addEventListener('drop', async function(e) {
-        e.preventDefault();
-        dragCounter = 0;
-        if (dropOverlay) dropOverlay.classList.remove('active');
-
-        const items = e.dataTransfer?.items;
-        if (!items || items.length === 0) return;
-
-        const result = await detectDropItems(
-            items,
-            function(imageFile) { addImage(imageFile); }
-        );
-
-        if (result.files.length > 0) {
-            await uploadFilesToWorkspace(result.files, result.folderName);
-        }
-    });
-    document.addEventListener('paste', function(e) {
-        const items = e.clipboardData && e.clipboardData.items;
-        if (!items) return;
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.startsWith('image/')) {
-                const file = items[i].getAsFile();
-                if (file) addImage(file);
-            }
-        }
-    });
+export function setupImageLightbox(): void {
     document.addEventListener('click', function(e) {
         const item = eventElement(e)?.closest('[data-action="open-lightbox"]');
         if (!item) return;

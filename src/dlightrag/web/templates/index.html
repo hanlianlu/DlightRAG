@@ -80,7 +80,7 @@
             <!-- Thumbnail strip (outside, above composer) -->
             <div class="thumbnail-strip" id="thumbnail-strip"></div>
             <form id="query-form" class="composer-form">
-                <button type="button" class="composer-plus" id="composer-plus" aria-label="Attach image">
+                <button type="button" class="composer-plus" id="composer-plus" aria-label="Attach files">
                     <svg class="composer-plus-icon"
                          width="24"
                          height="24"
@@ -103,8 +103,8 @@
         </div>
     </div>
 
-    <!-- Hidden file input for image upload -->
-    <input class="hidden" type="file" id="image-input" accept="image/*" multiple>
+    <!-- Hidden file input for mixed composer attachments (images + documents) -->
+    <input class="hidden" type="file" id="attachment-input" multiple>
     <input class="hidden" type="file" id="folder-input" webkitdirectory directory multiple>
 
     <aside class="panel" id="panel">

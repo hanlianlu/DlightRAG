@@ -10,7 +10,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     const [
         {setupQueryForm},
         {setupHtmxInteractions},
-        {setupImageInputs},
+        {setupImageLightbox},
+        {setupAttachmentInputs},
         {setupMathRendering},
         {setupPanel},
         {setupSourcePanel},
@@ -22,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         import('./chat.ts'),
         import('./htmx.ts'),
         import('./images.ts'),
+        import('./attachments.ts'),
         import('./mathjax.ts'),
         import('./panel.ts'),
         import('./source-panel.ts'),
@@ -37,7 +39,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupFilesPanel();
     setupPanelResize();
     setupHtmxInteractions();
-    setupImageInputs();
+    setupImageLightbox();
+    await setupAttachmentInputs();
     setupQueryForm();
     setupMathRendering();
     setupConversations();

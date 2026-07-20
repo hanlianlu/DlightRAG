@@ -2,7 +2,8 @@
 
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
-import {clearImages, getPendingImageData} from './images.ts';
+import {getPendingImageData} from './images.ts';
+import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
 import {streamSSE} from '../lib/sse.ts';
 import {
     createAnswerRenderer,
@@ -49,6 +50,41 @@ function isLineBreakInput(e: InputEvent): boolean {
     return e.inputType === 'insertLineBreak';
 }
 
+/**
+ * Build the `/web/answer` request body. Keeps the legacy JSON path byte-for-byte
+ * when no documents are attached; switches to multipart/form-data (matching the
+ * server's `parse_web_answer_request` contract) only when documents are present.
+ */
+function buildAnswerRequestBody(input: {
+    query: string;
+    images: string[];
+    workspaces: string[];
+    conversationId: string;
+    submissionId: string;
+    documents: File[];
+}): {body: BodyInit; headers?: Record<string, string>} {
+    if (input.documents.length === 0) {
+        return {
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                query: input.query,
+                images: input.images,
+                workspaces: input.workspaces,
+                conversation_id: input.conversationId,
+                submission_id: input.submissionId,
+            }),
+        };
+    }
+    const form = new FormData();
+    form.append('query', input.query);
+    form.append('images', JSON.stringify(input.images));
+    form.append('workspaces', JSON.stringify(input.workspaces));
+    form.append('conversation_id', input.conversationId);
+    form.append('submission_id', input.submissionId);
+    input.documents.forEach(function(file) { form.append('documents', file, file.name); });
+    return {body: form};
+}
+
 export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
@@ -82,6 +118,7 @@ export async function submitQuery(query: string): Promise<void> {
 
     const turn = createChatTurn(query);
     const imageData = getPendingImageData();
+    const documentFiles = getPendingDocumentFiles();
 
     try {
         armIdleTimeout();
@@ -96,6 +133,9 @@ export async function submitQuery(query: string): Promise<void> {
         const fingerprint = await payloadFingerprint({
             query,
             images: imageData,
+            documents: documentFiles.map(function(file) {
+                return {name: file.name, size: file.size, type: file.type};
+            }),
             workspaces: activeWorkspaces,
         });
         if (conversationStore.activeConversationId !== conversationId) {
@@ -103,19 +143,20 @@ export async function submitQuery(query: string): Promise<void> {
             return;
         }
         const submissionId = pendingSubmissionStore.getOrCreate(conversationId, fingerprint);
-        clearImages();
-        const requestBody = JSON.stringify({
-            query: query,
+        const {body: requestBody, headers: requestHeaders} = buildAnswerRequestBody({
+            query,
             images: imageData,
             workspaces: activeWorkspaces,
-            conversation_id: conversationStore.activeConversationId,
-            submission_id: submissionId,
+            conversationId: conversationStore.activeConversationId,
+            submissionId,
+            documents: documentFiles,
         });
+        clearAttachments();
         for (let attempt = 0; attempt < 2; attempt += 1) {
             try {
                 const response = await fetch('/web/answer', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    ...(requestHeaders ? {headers: requestHeaders} : {}),
                     signal: controller.signal,
                     body: requestBody,
                 });
