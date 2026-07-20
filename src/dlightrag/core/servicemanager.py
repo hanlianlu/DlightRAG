@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
+    from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
     from dlightrag.core.request.images import QueryImageDescriber
     from dlightrag.core.source_download import SourceDownloadTarget
     from dlightrag.storage.file_panel import PGFilePanelStore
@@ -280,6 +281,7 @@ class RAGServiceManager:
         )
         self._query_planner: QueryPlanner | None = None
         self._query_image_describer: QueryImageDescriber | None = None
+        self._composer_evidence_selector: ComposerEvidenceSelector | None = None
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
@@ -932,6 +934,7 @@ class RAGServiceManager:
                 image_quality=answer_cfg.image_quality,
                 image_min_quality=answer_cfg.image_min_quality,
                 context_top_k=answer_cfg.context_top_k,
+                history_token_ceiling=self._config.max_conversation_tokens,
             )
         return self._answer_engine
 
@@ -981,6 +984,41 @@ class RAGServiceManager:
                 min_quality=transport.image_min_quality,
             )
         return self._query_image_describer
+
+    def _get_composer_evidence_selector(self) -> ComposerEvidenceSelector:
+        """Create the Web Composer selector without touching workspace services."""
+        if self._composer_evidence_selector is None:
+            from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
+            from dlightrag.models.llm import (
+                get_embedding_func,
+                get_multimodal_embedder,
+                get_rerank_func,
+            )
+
+            embedder = get_multimodal_embedder(self._config)
+            self._composer_evidence_selector = ComposerEvidenceSelector(
+                embedding_func=get_embedding_func(self._config, embedder=embedder),
+                embedding_owner=embedder,
+                rerank_func=get_rerank_func(
+                    self._config,
+                    supports_vision=self._rerank_supports_vision,
+                ),
+            )
+        return self._composer_evidence_selector
+
+    async def _aselect_web_composer_evidence(
+        self,
+        *,
+        query: str,
+        current_rows: list[dict[str, Any]],
+        history_rows: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Web-only: select Composer evidence in a lane isolated from RAG."""
+        return await self._get_composer_evidence_selector().select(
+            query=query,
+            current_rows=current_rows,
+            history_rows=history_rows,
+        )
 
     async def _get_schema(
         self,
@@ -1633,26 +1671,21 @@ class RAGServiceManager:
                     log_plan=True,
                 )
                 context_top_k = limits.context_top_k
-                if turn.attachment_context_chunks:
-                    # Inject request-local Web attachment rows ahead of retrieved
-                    # chunks so the single downstream AnswerContextPacker +
-                    # AnswerImageBudget owns budgeting for attachment, workspace,
-                    # and current images together. Attachment visual rows carry
-                    # image_data but no pre-budget flag, so no second budget here.
+                if turn.composer_context_chunks:
+                    # Composer evidence is selected in its own lane. Place it
+                    # ahead of, but never rerank, truncate, or otherwise mutate,
+                    # the LightRAG rows already present in retrieval.contexts.
                     existing = retrieval.contexts.setdefault("chunks", [])
                     retrieval.contexts["chunks"] = [
-                        *turn.attachment_context_chunks,
+                        *turn.composer_context_chunks,
                         *existing,
                     ]
-                    # Attachments are additive to the packer's count budget, not a
-                    # replacement for workspace context. The packer treats
-                    # context_top_k as a pure COUNT cap; because attachment rows are
-                    # prepended, a document yielding >= context_top_k chunks would
-                    # otherwise fill the whole budget and starve workspace grounding.
-                    # Grow the cap by the attachment count so workspace retrieval
-                    # keeps its normal allocation. A falsy cap already means "no cap".
+                    retrieval.trace.update(turn.composer_evidence_trace)
+                    # The existing answer context_top_k governs only LightRAG
+                    # chunks. Composer evidence is additive, so grow the count cap
+                    # by exactly its selected size; no RAG row loses its slot.
                     if isinstance(context_top_k, int) and context_top_k > 0:
-                        context_top_k = context_top_k + len(turn.attachment_context_chunks)
+                        context_top_k = context_top_k + len(turn.composer_context_chunks)
                 contexts, stream = await self._agenerate_stream_from_contexts_prepared(
                     plan.standalone_query,
                     retrieval.contexts,
@@ -1731,6 +1764,7 @@ class RAGServiceManager:
             self._answer_engine,
             self._query_planner,
             self._query_image_describer,
+            self._composer_evidence_selector,
         ):
             close = getattr(component, "aclose", None)
             if not callable(close):

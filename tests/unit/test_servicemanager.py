@@ -183,12 +183,17 @@ async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> No
     assert await_args.kwargs["query_images"] == current  # retrieval sees current only, not history
 
 
-async def test_prepared_stream_merges_attachment_context_chunks_first(test_cfg) -> None:
-    """Web attachment rows are injected ahead of retrieved chunks pre-generation."""
+async def test_prepared_stream_merges_composer_evidence_without_changing_rag(test_cfg) -> None:
+    """Composer evidence is additive; LightRAG rows remain byte-for-byte ordered."""
     answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     plan = QueryPlan(original_query="q", standalone_query="q")
+    rag_chunks = [
+        {"chunk_id": "ws-1", "content": "workspace one", "rerank_score": 0.9},
+        {"chunk_id": "ws-2", "content": "workspace two", "rerank_score": 0.8},
+    ]
+    expected_rag = [dict(chunk) for chunk in rag_chunks]
     retrieval = SimpleNamespace(
-        contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
+        contexts={"chunks": rag_chunks, "entities": [], "relationships": []},
         trace={},
     )
     limits = SimpleNamespace(context_top_k=10, candidate_top_k=5)
@@ -209,18 +214,20 @@ async def test_prepared_stream_merges_attachment_context_chunks_first(test_cfg) 
     turn = answer_turn.PreparedAnswerTurn(
         current_query="q",
         retrieval_query="q",
-        attachment_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
+        composer_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
+        composer_evidence_trace={"composer_evidence_strategy": "full"},
     )
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
 
     chunks = captured["contexts"]["chunks"]
-    assert chunks[0]["chunk_id"] == "att-1"  # attachment rows come first
-    assert chunks[1]["chunk_id"] == "ws-1"
+    assert chunks[0]["chunk_id"] == "att-1"
+    assert chunks[1:] == expected_rag
+    assert retrieval.trace["composer_evidence_strategy"] == "full"
 
 
-async def test_prepared_stream_grows_context_top_k_for_attachments(test_cfg) -> None:
-    """Attachments are additive to the packer count budget, not a replacement.
+async def test_prepared_stream_adds_composer_count_without_rebudgeting_rag(test_cfg) -> None:
+    """Composer evidence is additive to the existing LightRAG count budget.
 
     A document yielding >= context_top_k chunks must not starve workspace
     grounding: the effective cap passed downstream grows by the attachment count
@@ -254,7 +261,7 @@ async def test_prepared_stream_grows_context_top_k_for_attachments(test_cfg) -> 
     turn = answer_turn.PreparedAnswerTurn(
         current_query="q",
         retrieval_query="q",
-        attachment_context_chunks=attachment_chunks,
+        composer_context_chunks=attachment_chunks,
     )
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
@@ -293,7 +300,7 @@ async def test_prepared_stream_leaves_context_top_k_when_no_cap(test_cfg) -> Non
     turn = answer_turn.PreparedAnswerTurn(
         current_query="q",
         retrieval_query="q",
-        attachment_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
+        composer_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
     )
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
@@ -301,11 +308,12 @@ async def test_prepared_stream_leaves_context_top_k_when_no_cap(test_cfg) -> Non
     assert captured["context_top_k"] == 0  # unchanged: no cap already includes everything
 
 
-def test_stateless_turn_carries_no_attachment_contexts() -> None:
-    """REST/MCP/SDK turns cross the core boundary with empty attachments."""
+def test_stateless_turn_carries_no_web_composer_context() -> None:
+    """REST/MCP/SDK turns never receive the Web-only Composer lane."""
     answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     turn = answer_turn.PreparedAnswerTurn.stateless("q")
-    assert turn.attachment_context_chunks == ()
+    assert turn.composer_context_chunks == ()
+    assert turn.composer_evidence_trace == {}
     assert turn.attachment_resolution_status == "ok"
 
 
@@ -1999,6 +2007,15 @@ class TestClose:
         svc_b.aclose.assert_awaited_once()
         assert manager._services == {}
         assert not manager._ready
+
+    async def test_close_releases_web_composer_selector(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        selector = AsyncMock()
+        manager._composer_evidence_selector = selector
+
+        await manager.aclose()
+
+        selector.aclose.assert_awaited_once()
 
 
 class TestWorkspaceDiscovery:

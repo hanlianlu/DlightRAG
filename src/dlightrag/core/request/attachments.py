@@ -21,13 +21,11 @@ import logging
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from dlightrag.utils.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
-
-ATTACHMENT_TEXT_TOKEN_BUDGET = 210_000
 
 _ATTACHMENT_WORKSPACE = "__web_attachment__"
 
@@ -102,47 +100,6 @@ class ParsedAttachmentDocument:
     content: str
     blocks_path: str
     parser_signature: str
-
-
-def select_attachment_context(
-    bundle: ParsedAttachmentBundle,
-    *,
-    text_token_budget: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Reduce attachment chunks to the text-token budget only.
-
-    Image budgeting is intentionally NOT done here. Attachment rows keep their
-    ``image_data`` so the single ``AnswerContextPacker`` + ``AnswerImageBudget``
-    can decide which images are actually sent, shared with workspace and
-    current images. Visual chunks (rows carrying image bytes) therefore always
-    pass through regardless of the text budget; only pure-text chunks are
-    subject to the ``text_token_budget`` cutoff.
-
-    v1 scope: this is a deterministic in-order reducer (keep all visual chunks;
-    keep text chunks in document order until the token budget is reached). A
-    relevance-driven reducer (embedding/BM25/RRF/rerank or an LLM chunk
-    selector) is an OPTIONAL future enhancement per the design's "Open
-    Implementation Choices" and is out of scope for this slice.
-    """
-    rows: list[dict[str, Any]] = []
-    text_tokens = 0
-    strategy: Literal["full", "budgeted"] = "full"
-    for chunk in bundle.chunks:
-        if chunk.image_bytes is not None:
-            # Visual chunk: never dropped for text-budget reasons; the packer
-            # owns all image budgeting.
-            rows.append(chunk.to_context_row())
-            continue
-        if text_tokens + chunk.token_estimate > text_token_budget:
-            strategy = "budgeted"
-            continue
-        text_tokens += chunk.token_estimate
-        rows.append(chunk.to_context_row())
-    return rows, {
-        "attachment_context_strategy": strategy,
-        "attachment_context_chunks": len(rows),
-        "attachment_context_tokens": text_tokens,
-    }
 
 
 def build_text_attachment_chunk(
@@ -529,7 +486,6 @@ class QueryAttachmentService:
 
 
 __all__ = [
-    "ATTACHMENT_TEXT_TOKEN_BUDGET",
     "AttachmentContextChunk",
     "ParsedAttachmentBundle",
     "ParsedAttachmentDocument",
@@ -539,5 +495,4 @@ __all__ = [
     "parse_attachment_to_bundle",
     "resolve_attachment_chunk_signature",
     "resolve_attachment_parser_signature",
-    "select_attachment_context",
 ]

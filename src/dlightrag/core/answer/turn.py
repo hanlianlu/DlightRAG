@@ -31,11 +31,11 @@ class PreparedAnswerTurn:
     plan: QueryPlan | None = None
     history_image_catalog_count: int = 0
     history_image_resolution_status: str = "ok"
-    # Request-local Web query-document attachments. Plain-dict context rows the
-    # Web layer resolved (parse -> chunk -> text-token budget); core merges them
-    # into retrieval chunks before generation. Empty for REST/MCP/SDK turns so
-    # the core answer boundary never depends on the web layer.
-    attachment_context_chunks: tuple[dict[str, Any], ...] = ()
+    # Composer-only evidence selected from current and referenced historical
+    # Web attachments. Workspace RAG retrieval never sees or reranks these rows;
+    # core only places them ahead of the untouched RAG rows for answer assembly.
+    composer_context_chunks: tuple[dict[str, Any], ...] = ()
+    composer_evidence_trace: dict[str, Any] = field(default_factory=dict)
     # Current attachment id -> deterministic planner digest. The Web adapter
     # persists these with the completed turn so future planner turns can resolve
     # references to prior documents without reparsing them.

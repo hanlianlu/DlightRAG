@@ -5,6 +5,7 @@ import datetime
 import io
 import json
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -1115,7 +1116,7 @@ async def test_prepare_answer_turn_passes_documents_to_web_planner(
 
     manager.aplan_web_conversation_query.assert_awaited_once()
     manager.aplan_query.assert_not_awaited()
-    assert turn.attachment_context_chunks == ()
+    assert turn.composer_context_chunks == ()
     assert turn.attachment_resolution_status == "ok"
 
 
@@ -1149,6 +1150,11 @@ async def test_prepare_answer_turn_merges_current_document_context(
         selected_history_attachment_ids=(),
     )
 
+    async def _select(**kwargs: Any):
+        return kwargs["current_rows"], {"composer_evidence_strategy": "full"}
+
+    manager._aselect_web_composer_evidence.side_effect = _select
+
     chunk = build_text_attachment_chunk(
         attachment_id=document.attachment_id,
         filename=document.filename,
@@ -1181,7 +1187,13 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert catalog[0]["filename"] == "notes.md"
     # The planner sees the parsed content preview (document-aware planning), not "".
     assert catalog[0]["parse_summary"] == "termination clause"
-    assert turn.attachment_context_chunks == (row,)
+    assert len(turn.composer_context_chunks) == 1
+    selected_row = turn.composer_context_chunks[0]
+    assert selected_row["chunk_id"] == row["chunk_id"]
+    assert selected_row["reference_id"] == f"composer_{document.attachment_id.replace('-', '')}"
+    assert selected_row["full_doc_id"] == document.attachment_id
+    assert selected_row["metadata"]["attachment_scope"] == "current"
+    assert turn.composer_evidence_trace["composer_evidence_strategy"] == "full"
     assert turn.attachment_resolution_status == "ok"
 
 
@@ -1229,6 +1241,11 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         standalone_query="compare reports a and b",
         selected_history_attachment_ids=selected_ids,
     )
+
+    async def _select(**kwargs: Any):
+        return kwargs["history_rows"], {"composer_evidence_strategy": "full"}
+
+    manager._aselect_web_composer_evidence.side_effect = _select
     parsed_order: list[str] = []
 
     async def _fake_parse(*, documents, **_kwargs: object):
@@ -1257,10 +1274,17 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     )
 
     assert parsed_order == ["att-a", "att-b"]
-    assert [row["reference_id"] for row in turn.attachment_context_chunks] == [
+    assert [row["full_doc_id"] for row in turn.composer_context_chunks] == [
         "att-a",
         "att-b",
     ]
+    assert [row["reference_id"] for row in turn.composer_context_chunks] == [
+        "composer_atta",
+        "composer_attb",
+    ]
+    assert all(
+        row["metadata"]["attachment_scope"] == "history" for row in turn.composer_context_chunks
+    )
     assert turn.history_attachments_selected == 2
     assert turn.attachment_resolution_status == "degraded"
 
@@ -1308,5 +1332,5 @@ async def test_prepare_answer_turn_degrades_on_current_document_parse_error(
         workspaces=["default"],
     )
 
-    assert turn.attachment_context_chunks == ()
+    assert turn.composer_context_chunks == ()
     assert turn.attachment_resolution_status == "degraded"

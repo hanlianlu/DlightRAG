@@ -642,6 +642,73 @@ class TestAnswerImageBudget:
         assert prepared.trace["answer_images_total"] == 2
 
 
+class TestAnswerMessageEnvelope:
+    def test_fixed_evidence_overflow_raises_without_trimming_rag(self) -> None:
+        from dlightrag.core.answer.engine import AnswerInputOverflowError
+
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "rag-large",
+                    "reference_id": "rag-doc",
+                    "file_path": "rag.pdf",
+                    "content": "immutable workspace evidence " * 500,
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+        original_content = contexts["chunks"][0]["content"]
+        engine = AnswerEngine(input_token_envelope=200, history_token_ceiling=1_000)
+
+        with pytest.raises(AnswerInputOverflowError, match="Fixed answer evidence"):
+            engine._prepare_model_call("question", contexts, conversation_history=[])
+
+        assert contexts["chunks"][0]["content"] == original_content
+
+    def test_oldest_history_yields_without_mutating_evidence(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "rag-1",
+                    "reference_id": "rag-doc",
+                    "file_path": "rag.pdf",
+                    "content": "workspace evidence " * 20,
+                    "metadata": {
+                        "source_uri": "file:///rag.pdf",
+                        "source_download_locator": "rag.pdf",
+                    },
+                    "_workspace": "default",
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+        original_chunks = [dict(contexts["chunks"][0])]
+        engine = AnswerEngine(
+            input_token_envelope=1_000,
+            history_token_ceiling=1_000,
+        )
+
+        prepared = engine._prepare_model_call(
+            "current question",
+            contexts,
+            conversation_history=[
+                {"role": "user", "content": "OLD-HISTORY " + ("old " * 500)},
+                {"role": "assistant", "content": "old answer " * 100},
+                {"role": "user", "content": "RECENT-HISTORY follow-up"},
+                {"role": "assistant", "content": "recent answer"},
+            ],
+        )
+
+        history_text = "\n".join(str(message["content"]) for message in prepared.messages[1:-1])
+        assert "OLD-HISTORY" not in history_text
+        assert "RECENT-HISTORY" in history_text
+        assert contexts["chunks"] == original_chunks
+        assert prepared.trace["answer_history_messages_dropped"] == 2
+        assert prepared.trace["answer_input_tokens"] <= 1_000
+
+
 # ---------------------------------------------------------------------------
 # TestAnswerEngine -- Internal helpers
 # ---------------------------------------------------------------------------
@@ -868,6 +935,34 @@ class TestBuildExcerptBlocks:
         contexts: RetrievalContexts = {"chunks": []}
         blocks = AnswerEngine._build_excerpt_blocks(contexts)
         assert blocks == []
+
+    def test_excerpt_blocks_keep_composer_and_rag_sections_distinct(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "composer-1",
+                    "reference_id": "attachment-1",
+                    "file_path": "contract.docx",
+                    "content": "user supplied clause",
+                    "metadata": {"source_type": "web_attachment"},
+                },
+                {
+                    "chunk_id": "rag-1",
+                    "reference_id": "workspace-1",
+                    "file_path": "policy.pdf",
+                    "content": "knowledge base policy",
+                    "metadata": {"source_type": "file"},
+                },
+            ]
+        }
+
+        blocks = AnswerEngine._build_excerpt_blocks(contexts)
+        text = "\n".join(block["text"] for block in blocks if block.get("type") == "text")
+
+        assert "## User-attached documents" in text
+        assert "## Knowledge-base evidence" in text
+        assert text.index("User-attached documents") < text.index("contract.docx")
+        assert text.index("Knowledge-base evidence") < text.index("policy.pdf")
 
     def test_skipped_image_has_no_orphan_label(self) -> None:
         contexts: RetrievalContexts = {

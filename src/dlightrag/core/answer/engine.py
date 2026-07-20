@@ -34,12 +34,18 @@ from dlightrag.core.answer.prompt import (
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import get_answer_system_prompt
 from dlightrag.utils.images import image_data_uri
+from dlightrag.utils.tokens import estimate_messages_tokens, truncate_conversation_history
 
 logger = logging.getLogger(__name__)
 
 NO_CONTEXT_DISCLAIMER = (
     "**General Knowledge Notice:** The answer below is NOT grounded in your knowledge base."
 )
+ANSWER_INPUT_TOKEN_ENVELOPE = 102_400
+
+
+class AnswerInputOverflowError(RuntimeError):
+    """Fixed answer evidence exceeds the configured model-input envelope."""
 
 
 @dataclass
@@ -84,6 +90,8 @@ class AnswerEngine:
         image_quality: int = 89,
         image_min_quality: int = 79,
         context_top_k: int | None = 30,
+        input_token_envelope: int = ANSWER_INPUT_TOKEN_ENVELOPE,
+        history_token_ceiling: int = 81_920,
     ) -> None:
         self.model_func = model_func
         self._effective_max_images = effective_max_images
@@ -94,6 +102,8 @@ class AnswerEngine:
         self._image_quality = image_quality
         self._image_min_quality = image_min_quality
         self._context_top_k = context_top_k
+        self._input_token_envelope = max(1, input_token_envelope)
+        self._history_token_ceiling = max(0, history_token_ceiling)
         self._assembler = AnswerPromptAssembler()
 
     # ------------------------------------------------------------------
@@ -258,51 +268,80 @@ class AnswerEngine:
         conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> _PreparedModelCall:
-        system_prompt = get_answer_system_prompt()
-        # One adaptive transport budget, consumed in allocation order:
-        # current query images reserve slots first, then history images, then
-        # RAG context images take the remainder.
-        budget = self._new_image_budget()
-        current_blocks = self._budget_current_images(query_images, budget)
-        history_messages, history_blocks = self._build_history_messages(
-            conversation_history, budget
+        original_history = list(conversation_history or [])
+        bounded_history = truncate_conversation_history(
+            original_history,
+            max_messages=len(original_history),
+            max_tokens=self._history_token_ceiling,
         )
-        prepared = self._prepare_prompt_context(
-            query,
-            contexts,
-            context_top_k=context_top_k,
-            image_budget=budget,
+
+        def build(history: list[dict[str, Any]]) -> _PreparedModelCall:
+            system_prompt = get_answer_system_prompt()
+            # One adaptive transport budget, consumed in allocation order:
+            # current query images reserve slots first, then history images,
+            # then selected Composer/RAG visual chunks take the remainder.
+            budget = self._new_image_budget()
+            current_blocks = self._budget_current_images(query_images, budget)
+            history_messages, history_blocks = self._build_history_messages(history, budget)
+            prepared = self._prepare_prompt_context(
+                query,
+                contexts,
+                context_top_k=context_top_k,
+                image_budget=budget,
+            )
+            assembled = self._assembler.assemble(
+                current_images=current_blocks,
+                history_images=history_blocks,
+                rag_visual_blocks=list(prepared.chunk_image_blocks.values()),
+                effective_max_images=self._effective_max_images,
+            )
+            no_context = not _has_answer_evidence(
+                prepared.contexts,
+                query_images=query_images,
+                conversation_history=history,
+            )
+            if no_context:
+                prepared.trace["answer_no_context"] = True
+            self._apply_image_trace(prepared.trace, assembled, budget)
+            messages = self._compose_user_messages(
+                system_prompt,
+                prepared.user_prompt,
+                prepared.contexts,
+                prepared.indexer,
+                current_blocks=current_blocks,
+                history_messages=history_messages,
+                chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
+            )
+            return _PreparedModelCall(
+                contexts=prepared.contexts,
+                messages=messages,
+                indexer=prepared.indexer,
+                trace=prepared.trace,
+                no_context=no_context,
+            )
+
+        kept_history = list(bounded_history)
+        result = build(kept_history)
+        input_tokens = estimate_messages_tokens(result.messages)
+        while kept_history and input_tokens > self._input_token_envelope:
+            kept_history = kept_history[_oldest_history_turn_width(kept_history) :]
+            result = build(kept_history)
+            input_tokens = estimate_messages_tokens(result.messages)
+        if input_tokens > self._input_token_envelope:
+            raise AnswerInputOverflowError(
+                "Fixed answer evidence exceeds the input envelope: "
+                f"{input_tokens} > {self._input_token_envelope} estimated tokens"
+            )
+        result.trace.update(
+            {
+                "answer_input_token_envelope": self._input_token_envelope,
+                "answer_input_tokens": input_tokens,
+                "answer_history_messages_input": len(original_history),
+                "answer_history_messages_kept": len(kept_history),
+                "answer_history_messages_dropped": len(original_history) - len(kept_history),
+            }
         )
-        assembled = self._assembler.assemble(
-            current_images=current_blocks,
-            history_images=history_blocks,
-            rag_visual_blocks=list(prepared.chunk_image_blocks.values()),
-            effective_max_images=self._effective_max_images,
-        )
-        no_context = not _has_answer_evidence(
-            prepared.contexts,
-            query_images=query_images,
-            conversation_history=conversation_history,
-        )
-        if no_context:
-            prepared.trace["answer_no_context"] = True
-        self._apply_image_trace(prepared.trace, assembled, budget)
-        messages = self._compose_user_messages(
-            system_prompt,
-            prepared.user_prompt,
-            prepared.contexts,
-            prepared.indexer,
-            current_blocks=current_blocks,
-            history_messages=history_messages,
-            chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
-        )
-        return _PreparedModelCall(
-            contexts=prepared.contexts,
-            messages=messages,
-            indexer=prepared.indexer,
-            trace=prepared.trace,
-            no_context=no_context,
-        )
+        return result
 
     def _budget_current_images(
         self,
@@ -512,19 +551,49 @@ class AnswerEngine:
         indexer: CitationIndexer | None = None,
         image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build per-document content blocks with interleaved images.
-
-        Groups chunks by ``reference_id`` (document), then for each
-        document renders a section header followed by its images and
-        text excerpts.  This lets the LLM associate each image with
-        its source document rather than seeing a flat image list.
-
-        Returns a list of OpenAI-format content blocks (text + image_url dicts).
-        """
+        """Build lane-labelled per-document blocks with interleaved images."""
         chunks = contexts.get("chunks", [])
         if not chunks:
             return []
 
+        composer_chunks: list[dict[str, Any]] = []
+        rag_chunks: list[dict[str, Any]] = []
+        for chunk in chunks:
+            source_type = str((chunk.get("metadata") or {}).get("source_type") or "")
+            if source_type == "web_attachment":
+                composer_chunks.append(chunk)
+            else:
+                rag_chunks.append(chunk)
+
+        blocks: list[dict[str, Any]] = []
+        if composer_chunks:
+            blocks.append({"type": "text", "text": "## User-attached documents"})
+            blocks.extend(
+                AnswerEngine._build_excerpt_lane_blocks(
+                    composer_chunks,
+                    indexer=indexer,
+                    image_blocks_by_chunk_id=image_blocks_by_chunk_id,
+                )
+            )
+        if rag_chunks:
+            blocks.append({"type": "text", "text": "## Knowledge-base evidence"})
+            blocks.extend(
+                AnswerEngine._build_excerpt_lane_blocks(
+                    rag_chunks,
+                    indexer=indexer,
+                    image_blocks_by_chunk_id=image_blocks_by_chunk_id,
+                )
+            )
+        return blocks
+
+    @staticmethod
+    def _build_excerpt_lane_blocks(
+        chunks: list[dict[str, Any]],
+        *,
+        indexer: CitationIndexer | None,
+        image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Render one evidence lane without changing chunk order."""
         # Group chunks by reference_id, preserving first-seen order
         doc_groups: dict[str, list[dict[str, Any]]] = {}
         doc_order: list[str] = []
@@ -537,7 +606,6 @@ class AnswerEngine:
                 doc_groups[ref_id].append(chunk)
 
         blocks: list[dict[str, Any]] = []
-        blocks.append({"type": "text", "text": "## Document Excerpts"})
 
         for ref_id in doc_order:
             doc_chunks = doc_groups[ref_id]
@@ -684,6 +752,16 @@ def _has_answer_evidence(
     return False
 
 
+def _oldest_history_turn_width(messages: list[dict[str, Any]]) -> int:
+    """Drop a user/assistant pair together when the history shape permits."""
+    if len(messages) >= 2:
+        first_role = str(messages[0].get("role") or "")
+        second_role = str(messages[1].get("role") or "")
+        if first_role == "user" and second_role == "assistant":
+            return 2
+    return 1
+
+
 # ── Internal keys & metadata formatting ──────────────────────────────────
 # Fields that are internal plumbing — never sent to the LLM context.
 # Everything else in the chunk dict auto-surfaces as structured metadata.
@@ -816,4 +894,4 @@ def _build_image_label(
     return " ".join(label_parts)
 
 
-__all__ = ["AnswerEngine"]
+__all__ = ["AnswerEngine", "AnswerInputOverflowError"]

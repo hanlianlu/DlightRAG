@@ -88,6 +88,48 @@ def test_packer_keeps_fitting_image_blocks_by_chunk_id() -> None:
     assert packed.trace["answer_context_images_sent"] == 1
 
 
+def test_composer_visual_does_not_evict_rag_visual() -> None:
+    composer = {
+        "chunk_id": "composer-visual",
+        "reference_id": "composer_doc",
+        "file_path": "upload.pdf",
+        "content": "Uploaded figure",
+        "image_data": _PNG_B64,
+        "metadata": {"source_type": "web_attachment"},
+    }
+    rag = {
+        "chunk_id": "rag-visual",
+        "reference_id": "rag-doc",
+        "file_path": "workspace.pdf",
+        "content": "Workspace figure",
+        "image_data": _PNG_B64,
+        "metadata": {"source_type": "file"},
+    }
+
+    rag_only = AnswerContextPacker().pack(
+        {"chunks": [rag], "entities": [], "relationships": []},
+        image_budget=_budget(max_images=1),
+        context_top_k=1,
+    )
+    with_composer = AnswerContextPacker().pack(
+        {"chunks": [composer, rag], "entities": [], "relationships": []},
+        image_budget=_budget(max_images=1),
+        context_top_k=2,
+    )
+
+    rag_only_row = rag_only.contexts["chunks"][0]
+    merged_rag_row = next(
+        row for row in with_composer.contexts["chunks"] if row["chunk_id"] == "rag-visual"
+    )
+    assert merged_rag_row == rag_only_row
+    assert "rag-visual" in with_composer.image_blocks_by_chunk_id
+    assert "composer-visual" not in with_composer.image_blocks_by_chunk_id
+    assert [row["chunk_id"] for row in with_composer.contexts["chunks"]] == [
+        "composer-visual",
+        "rag-visual",
+    ]
+
+
 def test_packer_backfills_answer_context_after_skipping_image_only_chunks() -> None:
     contexts: RetrievalContexts = {
         "chunks": [

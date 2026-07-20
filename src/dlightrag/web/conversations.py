@@ -14,10 +14,8 @@ from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.request.attachment_digest import build_attachment_planner_digests
 from dlightrag.core.request.attachments import (
-    ATTACHMENT_TEXT_TOKEN_BUDGET,
     AttachmentContextChunk,
     ParsedAttachmentBundle,
-    select_attachment_context,
 )
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
@@ -323,11 +321,11 @@ class WebConversationService:
         selected_count = len(plan.selected_history_image_ids)
         resolution_status = "degraded" if selected_count > len(history_blocks) else "ok"
 
-        # Assemble query-document context: current uploads (parsed above, before
-        # planning) plus any planner-selected prior documents rematerialized by
-        # id. Current attachment chunks are ordered first so the answer packer
-        # keeps them ahead of workspace context.
-        attachment_rows: list[dict[str, Any]] = []
+        # Resolve the Composer lane independently from workspace RAG. Current
+        # uploads and planner-selected historical attachments retain distinct
+        # scope metadata and are selected against the standalone query only.
+        composer_rows: list[dict[str, Any]] = []
+        composer_trace: dict[str, Any] = {}
         attachment_status = "ok"
         history_docs_selected = 0
         parse_errors = list(current_parse_errors)
@@ -359,7 +357,11 @@ class WebConversationService:
             )
             parse_errors.extend(history_parse_errors)
         if current_chunks or history_chunks:
-            attachment_rows = _budget_attachment_context([*current_chunks, *history_chunks])
+            composer_rows, composer_trace = await manager._aselect_web_composer_evidence(
+                query=plan.standalone_query,
+                current_rows=_composer_context_rows(current_chunks, scope="current"),
+                history_rows=_composer_context_rows(history_chunks, scope="history"),
+            )
         if parse_errors or history_docs_selected < len(selected_attachment_ids):
             attachment_status = "degraded"
 
@@ -373,7 +375,8 @@ class WebConversationService:
             plan=plan,
             history_image_catalog_count=len(catalog),
             history_image_resolution_status=resolution_status,
-            attachment_context_chunks=tuple(attachment_rows),
+            composer_context_chunks=tuple(composer_rows),
+            composer_evidence_trace=composer_trace,
             current_attachment_digests=current_digests,
             history_attachment_catalog_count=len(attachment_catalog),
             history_attachments_selected=history_docs_selected,
@@ -631,12 +634,23 @@ class WebConversationService:
             raise WebConversationUnavailableError from exc
 
 
-def _budget_attachment_context(chunks: list[AttachmentContextChunk]) -> list[dict[str, Any]]:
-    """Reduce parsed attachment chunks to budgeted answer-context rows."""
-    rows, _trace = select_attachment_context(
-        ParsedAttachmentBundle(chunks=chunks),
-        text_token_budget=ATTACHMENT_TEXT_TOKEN_BUDGET,
-    )
+def _composer_context_rows(
+    chunks: list[AttachmentContextChunk],
+    *,
+    scope: str,
+) -> list[dict[str, Any]]:
+    """Project parsed chunks into scoped Composer-only evidence rows."""
+    rows: list[dict[str, Any]] = []
+    for chunk in chunks:
+        row = chunk.to_context_row()
+        row["reference_id"] = f"composer_{chunk.attachment_id.replace('-', '').lower()}"
+        row["metadata"] = {
+            **(row.get("metadata") or {}),
+            "attachment_scope": scope,
+            "chunk_index": chunk.chunk_index,
+            "sidecar_type": chunk.sidecar_type,
+        }
+        rows.append(row)
     return rows
 
 

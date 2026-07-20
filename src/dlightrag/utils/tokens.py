@@ -61,8 +61,8 @@ def truncate_to_estimated_tokens(text: str, token_budget: int) -> str:
     return text[:low].rstrip()
 
 
-def _content_tokens(content: Any) -> int:
-    """Estimate tokens for a single message content (string or list of blocks)."""
+def estimate_content_tokens(content: Any) -> int:
+    """Estimate tokens for one message content string or multimodal block list."""
     if isinstance(content, str):
         return estimate_tokens(content)
     if isinstance(content, list):
@@ -78,6 +78,16 @@ def _content_tokens(content: Any) -> int:
             # Skip unknown types
         return total
     return estimate_tokens(str(content))
+
+
+def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
+    """Estimate a rendered chat request, including per-message framing."""
+    total = 2  # assistant priming / provider framing reserve
+    for message in messages:
+        total += 4
+        total += estimate_tokens(str(message.get("role") or ""))
+        total += estimate_content_tokens(message.get("content", ""))
+    return total
 
 
 def truncate_conversation_history(
@@ -101,7 +111,7 @@ def truncate_conversation_history(
     total = 0
     cutoff = 0
     for i in range(len(history) - 1, -1, -1):
-        total += _content_tokens(history[i].get("content", ""))
+        total += estimate_content_tokens(history[i].get("content", ""))
         if total > max_tokens:
             cutoff = i + 1
             break
