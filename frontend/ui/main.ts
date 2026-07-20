@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupPanelResize();
     setupHtmxInteractions();
     setupImageLightbox();
-    await setupAttachmentInputs();
+    setupAttachmentInputs();
     setupQueryForm();
     setupMathRendering();
     setupConversations();

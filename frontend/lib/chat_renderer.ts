@@ -3,6 +3,7 @@
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
+import {createDocumentChip} from './document_chip.ts';
 import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
 import chatStyles from '../styles/chat.module.css';
 import type {
@@ -130,24 +131,8 @@ function _safeDocumentHref(src: unknown): string {
   return '';
 }
 
-function _formatDocumentSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB'];
-  let value = bytes / 1024;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  const rounded =
-    value >= 10 || Number.isInteger(value) ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded} ${units[unitIndex]}`;
-}
-
-// Render stored document attachments as compact, non-interactive chips (filename
-// + size) that download the original via a same-origin link. Uses the shared
-// composer chip classes and the sanitized createElement/textContent pipeline.
+// Render stored document attachments as compact chips (filename + size) that
+// download the original via a same-origin link, using the shared chip component.
 function renderMessageDocuments(
   container: Element,
   documents?: readonly ConversationDocumentReference[],
@@ -156,32 +141,13 @@ function renderMessageDocuments(
   const strip = document.createElement('div');
   strip.className = chatStyles.messageDocuments;
   documents.forEach(function (reference) {
-    const href = _safeDocumentHref(reference.url);
-    const chip = document.createElement(href ? 'a' : 'div');
-    chip.className = chatStyles.documentChip;
-    chip.dataset.documentAttachment = 'true';
-    if (chip instanceof HTMLAnchorElement) {
-      chip.href = href;
-      chip.setAttribute('target', '_blank');
-      chip.setAttribute('rel', 'noopener noreferrer');
-      chip.setAttribute('aria-label', `Download ${reference.filename}`);
-    }
-
-    const info = document.createElement('div');
-    info.className = chatStyles.documentChipInfo;
-
-    const name = document.createElement('span');
-    name.className = chatStyles.documentChipName;
-    name.textContent = reference.filename;
-    name.title = reference.filename;
-
-    const meta = document.createElement('span');
-    meta.className = chatStyles.documentChipMeta;
-    meta.textContent = _formatDocumentSize(reference.byte_size);
-
-    info.append(name, meta);
-    chip.appendChild(info);
-    strip.appendChild(chip);
+    strip.appendChild(
+      createDocumentChip({
+        filename: reference.filename,
+        byteSize: reference.byte_size,
+        href: _safeDocumentHref(reference.url) || undefined,
+      }),
+    );
   });
   container.appendChild(strip);
 }
