@@ -151,6 +151,41 @@ def _done_from_committed_turn(commit: CommitTurnResult) -> AnswerDoneEvent:
     )
 
 
+def _apply_attachment_source_links(
+    sources: list[SourceReferencePayload], *, conversation_id: str
+) -> list[SourceReferencePayload]:
+    """Project conversation-scoped download URLs onto Web attachment sources.
+
+    Web query attachments carry a ``web-attachment://<attachment_id>``
+    ``source_uri`` and no workspace, so ``project_source_payloads`` leaves their
+    ``download_url`` unset. Rewrite it to the conversation-scoped attachment
+    route and drop chunk image URLs (attachment figures are delivered inline as
+    ``image_data``, not via the workspace image route). Workspace sources are
+    left untouched.
+    """
+    projected: list[SourceReferencePayload] = []
+    for source in sources:
+        if not source.source_uri.startswith("web-attachment://"):
+            projected.append(source)
+            continue
+        attachment_id = source.source_uri.removeprefix("web-attachment://")
+        chunks = [
+            chunk.model_copy(update={"image_url": None, "thumbnail_url": None})
+            for chunk in (source.chunks or [])
+        ]
+        projected.append(
+            source.model_copy(
+                update={
+                    "download_url": (
+                        f"/web/conversations/{conversation_id}/documents/{attachment_id}"
+                    ),
+                    "chunks": chunks,
+                }
+            )
+        )
+    return projected
+
+
 async def _build_answer_done_payload(
     *,
     clean_answer: str,
@@ -159,6 +194,7 @@ async def _build_answer_done_payload(
     manager: RAGServiceManager,
     cfg: Any,
     workspace: str,
+    conversation_id: str,
     downloadable_workspaces: set[str] | None = None,
 ) -> _AnswerPayload:
     """Build the done-event payload from retrieval contexts and LLM output."""
@@ -177,6 +213,9 @@ async def _build_answer_done_payload(
         finalized.sources,
         resolver=resolver,
         downloadable_workspaces=downloadable_workspaces,
+    )
+    source_payloads = _apply_attachment_source_links(
+        source_payloads, conversation_id=conversation_id
     )
     answer_images = cited_images
     answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
@@ -378,6 +417,7 @@ async def _emit_answer_events(
             manager=manager,
             cfg=cfg,
             workspace=effective_workspace,
+            conversation_id=prepared_conversation.conversation_id,
             downloadable_workspaces=downloadable_workspaces,
         )
         answer_sources = {

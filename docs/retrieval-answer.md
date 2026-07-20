@@ -346,3 +346,18 @@ already-thresholded per-workspace lists, and truncates to `chunk_top_k`.
 There is no cross-workspace global rerank. Round-robin is intentional: it keeps
 workspace representation stable without assuming rerank scores from different
 workspace/model calls are globally calibrated.
+
+## Web Query Attachments
+
+Web query document attachments are parsed through the configured LightRAG parser
+routing and passed through the Web-only attachment budget pipeline before answer
+generation. They do not enter workspace retrieval, public `/retrieve`, KG
+storage, or workspace vector storage.
+
+Attachment chunks carry a `web-attachment://<attachment_id>` source URI and a
+`__web_attachment__` sentinel workspace, so they never resolve a workspace image
+route. Attachment figures are delivered inline as `image_data` in the answer
+context, and the Web answer layer projects a conversation-scoped
+`/web/conversations/<conversation_id>/documents/<attachment_id>` download URL
+onto the finalized attachment source.
+

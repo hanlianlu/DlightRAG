@@ -178,6 +178,11 @@ def _chunk_image_urls(
     image_url_prefix: str | None,
     default_workspace: str | None,
 ) -> tuple[str | None, str | None]:
+    if (chunk.get("metadata") or {}).get("source_type") == "web_attachment":
+        # Web query attachments are delivered inline as ``image_data`` in the
+        # answer context; they have no workspace image route, so never build a
+        # (non-existent) ``/images/__web_attachment__/{chunk_id}`` URL.
+        return None, None
     if chunk.get("image_url") or chunk.get("thumbnail_url"):
         return chunk.get("image_url"), chunk.get("thumbnail_url")
     if not image_url_prefix:

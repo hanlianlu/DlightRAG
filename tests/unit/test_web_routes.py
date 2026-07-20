@@ -1582,6 +1582,7 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
         manager=manager,
         cfg=cfg,
         workspace="default",
+        conversation_id="conv-1",
     )
 
     assert len(payload.sources) == 1
@@ -1654,6 +1655,7 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
         manager=manager,
         cfg=cfg,
         workspace="default",
+        conversation_id="conv-1",
     )
 
     assert calls == ["images", "projection"]

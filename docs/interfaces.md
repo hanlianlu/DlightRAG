@@ -15,6 +15,10 @@ configuration fields live in [configuration.md](configuration.md).
 | MCP Server | Agent tools over stdio or streamable HTTP | Durable ingest jobs |
 | Web UI | Browser upload and chat | Durable ingest jobs behind the Files panel |
 
+Web `/web/answer` also supports query-time document attachments. These are
+conversation-scoped Web attachments, not REST/MCP/SDK retrieve inputs and not
+workspace ingestion records.
+
 ### Choosing an interface
 
 Pick by **where the engine runs**, not by language preference:
