@@ -83,14 +83,8 @@ class QueryPlan:
     metadata_filter_confidence: str | None = None
     metadata_filter_evidence: list[dict[str, Any]] | None = None
     selected_history_image_ids: tuple[str, ...] = ()
-    # Web-only conversation planner fields (empty for stateless REST/MCP/SDK/retrieve).
+    # Web-only conversation planner field (empty for stateless REST/MCP/SDK/retrieve).
     selected_history_attachment_ids: tuple[str, ...] = ()
-    # ``attachment_query``/``attachment_directives`` are reserved for a future
-    # relevance-driven attachment reducer. v1 uses deterministic in-order text
-    # reduction (with full visual passthrough) in ``select_attachment_context``
-    # and does not yet consume these fields.
-    attachment_query: str | None = None
-    attachment_directives: tuple[dict[str, Any], ...] = ()
 
 
 class QueryPlannerFilterEvidence(BaseModel):
@@ -154,15 +148,6 @@ QUERY_PLAN_WEB_STRUCTURED_OUTPUT = StructuredOutput(
 )
 
 
-class WebAttachmentDirective(BaseModel):
-    """A planner directive pointing retrieval at one attached document."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    attachment_id: str
-    hint: str = ""
-
-
 class WebConversationPlannerStructuredResponse(QueryPlannerStructuredResponse):
     """Web conversation planner schema: adds scoped document/image selection.
 
@@ -173,8 +158,6 @@ class WebConversationPlannerStructuredResponse(QueryPlannerStructuredResponse):
 
     selected_history_image_ids: list[str] = Field(default_factory=list)
     selected_history_attachment_ids: list[str] = Field(default_factory=list)
-    attachment_query: str | None = None
-    attachment_directives: list[WebAttachmentDirective] = Field(default_factory=list)
 
 
 QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT = StructuredOutput(
@@ -502,13 +485,11 @@ class QueryPlanner:
         Separate contract from the stateless :meth:`plan` used by REST/MCP/SDK/
         retrieve. Reuses the shared planner helpers (history truncation, schema
         rendering, structured-output parsing, filter merging) and adds scoped
-        selection of prior document attachments / images plus an
-        ``attachment_query`` for attached-document retrieval.
+        selection of prior document attachments / images.
         """
         fallback = QueryPlan(
             original_query=query,
             standalone_query=query,
-            attachment_query=query,
         )
 
         if self._llm_func is None:
@@ -608,13 +589,6 @@ class QueryPlanner:
             allowed_attachments,
             allowed_history_attachment_count,
         )
-        plan.attachment_directives = tuple(
-            {"attachment_id": str(d["attachment_id"]), "hint": str(d.get("hint", ""))}
-            for d in plan.attachment_directives
-            if str(d.get("attachment_id")) in allowed_attachments
-        )
-        if not plan.attachment_query:
-            plan.attachment_query = plan.standalone_query
 
         # Merge explicit filter (explicit wins)
         if explicit_filter is not None and not _is_empty_filter(explicit_filter):
@@ -623,10 +597,8 @@ class QueryPlanner:
             plan.metadata_filter_confidence = "high"
 
         logger.info(
-            "[Planner] web result: standalone=%r, attachment_query=%r, "
-            "history_images=%d, history_attachments=%d",
+            "[Planner] web result: standalone=%r, history_images=%d, history_attachments=%d",
             log_safe(plan.standalone_query, max_length=60),
-            log_safe(plan.attachment_query, max_length=60),
             len(plan.selected_history_image_ids),
             len(plan.selected_history_attachment_ids),
         )
@@ -658,11 +630,6 @@ class QueryPlanner:
         selected_attachments = tuple(
             str(i) for i in data.get("selected_history_attachment_ids", []) if i
         )
-        attachment_query = data.get("attachment_query") or None
-        raw_directives = data.get("attachment_directives") or []
-        directives = tuple(
-            d for d in raw_directives if isinstance(d, dict) and d.get("attachment_id")
-        )
         raw_filters = data.get("filters", {}) or {}
         filter_confidence = str(data.get("filter_confidence") or "").lower() or None
         filter_evidence = data.get("filter_evidence") or []
@@ -683,8 +650,6 @@ class QueryPlanner:
                 else None,
                 selected_history_image_ids=selected,
                 selected_history_attachment_ids=selected_attachments,
-                attachment_query=attachment_query,
-                attachment_directives=directives,
             )
 
         # Handle date fields specially
@@ -718,8 +683,6 @@ class QueryPlanner:
             metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
             selected_history_image_ids=selected,
             selected_history_attachment_ids=selected_attachments,
-            attachment_query=attachment_query,
-            attachment_directives=directives,
         )
 
     @staticmethod

@@ -81,9 +81,7 @@ async def test_web_planner_selects_history_documents_and_images() -> None:
           "filter_confidence": "low",
           "filter_evidence": [],
           "selected_history_image_ids": ["img-1"],
-          "selected_history_attachment_ids": ["att-1"],
-          "attachment_query": "termination clause",
-          "attachment_directives": [{"attachment_id": "att-1", "hint": "termination clause"}]
+          "selected_history_attachment_ids": ["att-1"]
         }
         """
 
@@ -112,5 +110,3 @@ async def test_web_planner_selects_history_documents_and_images() -> None:
 
     assert plan.selected_history_image_ids == ("img-1",)
     assert plan.selected_history_attachment_ids == ("att-1",)
-    assert plan.attachment_query == "termination clause"
-    assert plan.attachment_directives[0]["attachment_id"] == "att-1"

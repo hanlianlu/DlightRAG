@@ -1066,7 +1066,6 @@ async def test_prepare_answer_turn_passes_documents_to_web_planner(
         standalone_query="what does this say?",
         selected_history_image_ids=(),
         selected_history_attachment_ids=(),
-        attachment_query="termination clause",
     )
 
     turn = await service_under_test.prepare_answer_turn(
@@ -1111,7 +1110,6 @@ async def test_prepare_answer_turn_merges_current_document_context(
         original_query="what does this say?",
         standalone_query="what does this say?",
         selected_history_attachment_ids=(),
-        attachment_query="termination",
     )
 
     row = build_text_attachment_chunk(
