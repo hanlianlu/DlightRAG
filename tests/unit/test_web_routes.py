@@ -105,7 +105,9 @@ def web_app(mock_manager, test_config: DlightragConfig):
         )
     )
 
-    async def _prepare_answer_turn(*, manager, prepared, query, current_images, workspaces=None):
+    async def _prepare_answer_turn(
+        *, manager, prepared, query, current_images, current_documents=None, workspaces=None
+    ):
         return PreparedAnswerTurn(
             current_query=query,
             retrieval_query=query,
@@ -762,6 +764,7 @@ class TestWebSSEBoundary:
             "html": "<b>x</b>",
             "answer": "x",
             "current_image_ids": [],
+            "current_attachment_ids": [],
             "image_descriptions": {},
             "answer_images": [],
             "answer_blocks": [],

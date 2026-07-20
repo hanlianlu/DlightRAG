@@ -695,3 +695,63 @@ async def test_generator_close_after_saving_heartbeat_finishes_commit(
     release.set()
     await close_task
     assert finished.is_set()
+
+
+async def test_documents_thread_into_prepare_commit_and_surface_attachment_ids() -> None:
+    from dlightrag.web.attachment_models import validate_web_documents
+
+    (document,) = validate_web_documents([("notes.md", "text/markdown", b"# Termination clause")])
+    service = AsyncMock()
+    now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="hello", retrieval_query="hello"
+    )
+    service.commit_answer.return_value = CommitTurnResult(
+        saved=True,
+        reason=None,
+        summary={
+            "conversation_id": "11111111-1111-4111-8111-111111111111",
+            "title": "Hello",
+            "content_revision": 3,
+            "created_at": now,
+            "updated_at": now,
+        },
+        turn_id="turn-id",
+        current_image_ids=(),
+        current_attachment_ids=("durable-doc",),
+    )
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
+    )
+    prepared = PreparedWebConversation(
+        principal_id="a" * 64,
+        conversation_id="11111111-1111-4111-8111-111111111111",
+        content_revision=2,
+        text_history=(),
+    )
+
+    events = [
+        event
+        async for event in stream_answer_events(
+            manager=manager,
+            cfg=SimpleNamespace(
+                citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))
+            ),
+            query="hello",
+            workspaces=["default"],
+            workspace="default",
+            conversation_service=service,
+            prepared_conversation=prepared,
+            validated_images=(),
+            validated_documents=(document,),
+            submission_id="22222222-2222-4222-8222-222222222222",
+        )
+    ]
+
+    prepare_kwargs = service.prepare_answer_turn.await_args.kwargs
+    assert prepare_kwargs["current_documents"] == [document]
+    commit_kwargs = service.commit_answer.await_args.kwargs
+    assert commit_kwargs["documents"] == (document,)
+    done = next(event for event in events if "event: done" in event)
+    assert "durable-doc" in done

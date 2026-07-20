@@ -157,6 +157,7 @@ async def answer_stream(
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
             validated_images=validated_images,
+            validated_documents=body.documents,
             submission_id=str(body.submission_id),
         ),
         media_type="text/event-stream",

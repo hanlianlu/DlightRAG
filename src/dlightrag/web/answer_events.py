@@ -23,6 +23,7 @@ from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils import log_safe
 from dlightrag.utils.images import ValidatedWebImage
+from dlightrag.web.attachment_models import ValidatedWebDocument
 from dlightrag.web.conversation_models import ConversationSummary
 from dlightrag.web.conversations import (
     PreparedWebConversation,
@@ -141,6 +142,7 @@ def _done_from_committed_turn(commit: CommitTurnResult) -> AnswerDoneEvent:
         html=safe_answer_done(answer=answer, sources=sources, answer_images=answer_images),
         answer=answer,
         current_image_ids=list(commit.current_image_ids),
+        current_attachment_ids=list(commit.current_attachment_ids),
         image_descriptions=commit.image_descriptions,
         answer_images=answer_images,
         answer_blocks=answer_blocks_from_markdown(answer, answer_images),
@@ -211,6 +213,7 @@ async def stream_answer_events(
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
     validated_images: tuple[ValidatedWebImage, ...],
+    validated_documents: tuple[ValidatedWebDocument, ...] = (),
     submission_id: str,
 ) -> AsyncGenerator[str]:
     """Yield browser SSE events for one answer request, under a request-root span.
@@ -239,6 +242,7 @@ async def stream_answer_events(
         **identity,
         "history_turns_loaded": len(prepared_conversation.text_history) // 2,
         "current_image_count": len(validated_images),
+        "current_document_count": len(validated_documents),
     }
     async with trace_observation(
         "answer_stream_pipeline",
@@ -268,6 +272,7 @@ async def stream_answer_events(
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
             validated_images=validated_images,
+            validated_documents=validated_documents,
             observation=observation,
             submission_id=submission_id,
         )
@@ -290,6 +295,7 @@ async def _emit_answer_events(
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
     validated_images: tuple[ValidatedWebImage, ...],
+    validated_documents: tuple[ValidatedWebDocument, ...] = (),
     observation: Any = None,
     submission_id: str,
 ) -> AsyncGenerator[str]:
@@ -317,6 +323,7 @@ async def _emit_answer_events(
             prepared=prepared_conversation,
             query=query,
             current_images=[image.model_block for image in validated_images],
+            current_documents=list(validated_documents),
             workspaces=ws_list,
         )
         if observation is not None:
@@ -390,6 +397,7 @@ async def _emit_answer_events(
                     queried_workspaces=ws_list,
                     images=validated_images,
                     image_descriptions=image_descriptions,
+                    documents=validated_documents,
                 )
             )
             while True:
@@ -412,6 +420,9 @@ async def _emit_answer_events(
                 done = payload.done.model_copy(
                     update={
                         "current_image_ids": list(commit.current_image_ids) if commit.saved else [],
+                        "current_attachment_ids": (
+                            list(commit.current_attachment_ids) if commit.saved else []
+                        ),
                         "conversation_saved": commit.saved,
                         "conversation_save_reason": commit.reason,
                         "conversation": summary,
@@ -424,6 +435,7 @@ async def _emit_answer_events(
             done = payload.done.model_copy(
                 update={
                     "current_image_ids": [],
+                    "current_attachment_ids": [],
                     "conversation_saved": False,
                     "conversation_save_reason": "storage_unavailable",
                 }
@@ -434,6 +446,7 @@ async def _emit_answer_events(
             done = payload.done.model_copy(
                 update={
                     "current_image_ids": [],
+                    "current_attachment_ids": [],
                     "conversation_saved": False,
                     "conversation_save_reason": "persistence_failed",
                 }

@@ -25,7 +25,7 @@ from dlightrag.config import (
 )
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.query_images import prepare_query_images
-from dlightrag.core.query_planner import QueryPlanner, QueryPlannerStructuredResponse
+from dlightrag.core.query_planner import QueryPlan, QueryPlanner, QueryPlannerStructuredResponse
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.base import SourceDocument
@@ -181,6 +181,50 @@ async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> No
     await_args = manager._plan_and_retrieve.await_args
     assert await_args is not None
     assert await_args.kwargs["query_images"] == current  # retrieval sees current only, not history
+
+
+async def test_prepared_stream_merges_attachment_context_chunks_first(test_cfg) -> None:
+    """Web attachment rows are injected ahead of retrieved chunks pre-generation."""
+    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    plan = QueryPlan(original_query="q", standalone_query="q")
+    retrieval = SimpleNamespace(
+        contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
+        trace={},
+    )
+    limits = SimpleNamespace(context_top_k=10, candidate_top_k=5)
+    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
+    manager = RAGServiceManager(config=test_cfg)
+    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        return_value=(plan, prepared, limits, retrieval)
+    )
+    captured: dict[str, Any] = {}
+
+    async def _gen(query: str, contexts: Any, **kwargs: Any):
+        captured["contexts"] = contexts
+        return contexts, None
+
+    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        side_effect=_gen
+    )
+    turn = answer_turn.PreparedAnswerTurn(
+        current_query="q",
+        retrieval_query="q",
+        attachment_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
+    )
+
+    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+
+    chunks = captured["contexts"]["chunks"]
+    assert chunks[0]["chunk_id"] == "att-1"  # attachment rows come first
+    assert chunks[1]["chunk_id"] == "ws-1"
+
+
+def test_stateless_turn_carries_no_attachment_contexts() -> None:
+    """REST/MCP/SDK turns cross the core boundary with empty attachments."""
+    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    turn = answer_turn.PreparedAnswerTurn.stateless("q")
+    assert turn.attachment_context_chunks == ()
+    assert turn.attachment_resolution_status == "ok"
 
 
 async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:

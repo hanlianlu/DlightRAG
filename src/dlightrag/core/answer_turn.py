@@ -31,6 +31,14 @@ class PreparedAnswerTurn:
     plan: QueryPlan | None = None
     history_image_catalog_count: int = 0
     history_image_resolution_status: str = "ok"
+    # Request-local Web query-document attachments. Plain-dict context rows the
+    # Web layer resolved (parse -> chunk -> text-token budget); core merges them
+    # into retrieval chunks before generation. Empty for REST/MCP/SDK turns so
+    # the core answer boundary never depends on the web layer.
+    attachment_context_chunks: tuple[dict[str, Any], ...] = ()
+    history_attachment_catalog_count: int = 0
+    history_attachments_selected: int = 0
+    attachment_resolution_status: str = "ok"
 
     @classmethod
     def stateless(

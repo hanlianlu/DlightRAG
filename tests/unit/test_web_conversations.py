@@ -1042,3 +1042,104 @@ def test_pending_conversation_attachment_shape() -> None:
     )
 
     assert item.byte_size == 4
+
+
+async def test_prepare_answer_turn_passes_documents_to_web_planner(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.core.query_planner import QueryPlan
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    conversation_store.list_image_catalog.return_value = []
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+    )
+    manager = AsyncMock()
+    manager.answer_image_capability = SimpleNamespace(effective_max_images=3)
+    manager.adescribe_query_images.return_value = {}
+    manager.aplan_web_conversation_query.return_value = QueryPlan(
+        original_query="what does this say?",
+        standalone_query="what does this say?",
+        selected_history_image_ids=(),
+        selected_history_attachment_ids=(),
+        attachment_query="termination clause",
+    )
+
+    turn = await service_under_test.prepare_answer_turn(
+        manager=manager,
+        prepared=prepared,
+        query="what does this say?",
+        current_images=[],
+        current_documents=[],
+        workspaces=["default"],
+    )
+
+    manager.aplan_web_conversation_query.assert_awaited_once()
+    manager.aplan_query.assert_not_awaited()
+    assert turn.attachment_context_chunks == ()
+    assert turn.attachment_resolution_status == "ok"
+
+
+async def test_prepare_answer_turn_merges_current_document_context(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.core.query_attachments import build_text_attachment_chunk
+    from dlightrag.core.query_planner import QueryPlan
+    from dlightrag.web.attachment_models import validate_web_documents
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    conversation_store.list_image_catalog.return_value = []
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+    )
+    (document,) = validate_web_documents([("notes.md", "text/markdown", b"# Termination\nclause")])
+
+    manager = AsyncMock()
+    manager.answer_image_capability = SimpleNamespace(effective_max_images=0)
+    manager.adescribe_query_images.return_value = {}
+    manager.config = SimpleNamespace(parser=SimpleNamespace(rules="md:native-iteP,*:mineru-iteP"))
+    manager.aget_attachment_chunking_lightrag.return_value = object()
+    manager.aplan_web_conversation_query.return_value = QueryPlan(
+        original_query="what does this say?",
+        standalone_query="what does this say?",
+        selected_history_attachment_ids=(),
+        attachment_query="termination",
+    )
+
+    row = build_text_attachment_chunk(
+        attachment_id=document.attachment_id,
+        filename=document.filename,
+        chunk_id=f"att:{document.attachment_id}:1",
+        chunk_index=1,
+        content="termination clause",
+    ).to_context_row()
+
+    async def _fake_contexts(**_kwargs: object):
+        return [row], {"attachment_parse_errors": []}
+
+    service_under_test._attachment_contexts = _fake_contexts  # type: ignore[method-assign]
+
+    turn = await service_under_test.prepare_answer_turn(
+        manager=manager,
+        prepared=prepared,
+        query="what does this say?",
+        current_images=[],
+        current_documents=[document],
+        workspaces=["default"],
+    )
+
+    manager.aplan_web_conversation_query.assert_awaited_once()
+    catalog = manager.aplan_web_conversation_query.await_args.kwargs["current_attachment_catalog"]
+    assert catalog[0]["attachment_id"] == document.attachment_id
+    assert catalog[0]["filename"] == "notes.md"
+    assert "parse_summary" in catalog[0]
+    assert turn.attachment_context_chunks == (row,)
+    assert turn.attachment_resolution_status == "ok"

@@ -1094,6 +1094,21 @@ class RAGServiceManager:
             )
             return plan
 
+    async def aget_attachment_chunking_lightrag(
+        self, workspaces: list[str] | tuple[str, ...] | None = None
+    ) -> Any:
+        """Return an initialized LightRAG for Web query-attachment parsing/chunking.
+
+        Web ``/web/answer`` only: the Web layer owns the conversation store and
+        its :class:`QueryAttachmentService`, but the parser/chunker must run on a
+        real LightRAG. Reuse the primary selected (or manager-default) workspace
+        service; parsing writes nothing to any workspace store (the query-
+        attachment path neutralises the single workspace-write hook).
+        """
+        workspace = (list(workspaces or []) or [self._config.workspace])[0]
+        svc = await self._get_service(workspace)
+        return svc.lightrag
+
     async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
         """Describe current-turn images (ordinal -> text) for image-aware planning.
 
@@ -1617,6 +1632,17 @@ class RAGServiceManager:
                     current_image_descriptions=turn.current_image_descriptions,
                     log_plan=True,
                 )
+                if turn.attachment_context_chunks:
+                    # Inject request-local Web attachment rows ahead of retrieved
+                    # chunks so the single downstream AnswerContextPacker +
+                    # AnswerImageBudget owns budgeting for attachment, workspace,
+                    # and current images together. Attachment visual rows carry
+                    # image_data but no pre-budget flag, so no second budget here.
+                    existing = retrieval.contexts.setdefault("chunks", [])
+                    retrieval.contexts["chunks"] = [
+                        *turn.attachment_context_chunks,
+                        *existing,
+                    ]
                 contexts, stream = await self._agenerate_stream_from_contexts_prepared(
                     plan.standalone_query,
                     retrieval.contexts,

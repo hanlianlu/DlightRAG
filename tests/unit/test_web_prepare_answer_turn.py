@@ -65,19 +65,25 @@ class _FakeManager:
         self.described_images = list(images)
         return {"1": "Image 1: revenue chart"} if images else {}
 
-    async def aplan_query(
+    async def aplan_web_conversation_query(
         self,
         query: str,
         *,
         text_history: Any = None,
         image_catalog: Any = None,
+        attachment_catalog: Any = None,
+        current_attachment_catalog: Any = None,
         allowed_history_image_count: int = 0,
+        allowed_history_attachment_count: int = 0,
         current_image_descriptions: Any = None,
         workspaces: Any = None,
     ) -> QueryPlan:
         self.plan_kwargs = {
             "image_catalog": image_catalog,
+            "attachment_catalog": attachment_catalog,
+            "current_attachment_catalog": current_attachment_catalog,
             "allowed_history_image_count": allowed_history_image_count,
+            "allowed_history_attachment_count": allowed_history_attachment_count,
             "current_image_descriptions": current_image_descriptions,
             "workspaces": workspaces,
         }

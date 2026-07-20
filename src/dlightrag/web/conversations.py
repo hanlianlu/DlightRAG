@@ -56,6 +56,7 @@ _HISTORY_THUMBNAIL_MAX_BYTES = 128 * 1024
 _HISTORY_THUMBNAIL_QUALITY = 82
 _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
+_MAX_HISTORY_ATTACHMENTS = 3
 
 
 class WebConversationUnavailableError(RuntimeError):
@@ -71,6 +72,9 @@ class PreparedWebConversation:
     content_revision: int
     text_history: tuple[dict[str, Any], ...]
     committed_submission: CommitTurnResult | None = None
+    # Caption-only catalog of prior document attachments for the Web planner to
+    # scope which history documents a follow-up refers to (never bytes).
+    attachment_catalog: tuple[dict[str, Any], ...] = ()
 
 
 class WebConversationService:
@@ -167,6 +171,7 @@ class WebConversationService:
         if snapshot is None:
             return None
         text_history: list[dict[str, Any]] = []
+        attachment_catalog: list[dict[str, Any]] = []
         for turn in snapshot.history:
             text_history.extend(
                 (
@@ -174,6 +179,16 @@ class WebConversationService:
                     {"role": "assistant", "content": str(turn["assistant_text"])},
                 )
             )
+            for attachment in turn.get("attachments") or []:
+                attachment_catalog.append(
+                    {
+                        "attachment_id": str(attachment["attachment_id"]),
+                        "turn_number": turn.get("turn_number"),
+                        "ordinal": attachment.get("ordinal"),
+                        "filename": attachment.get("filename"),
+                        "parse_summary": attachment.get("parse_summary") or "",
+                    }
+                )
         committed_submission = None
         if submission_id is not None:
             try:
@@ -193,6 +208,7 @@ class WebConversationService:
             content_revision=snapshot.content_revision,
             text_history=tuple(text_history),
             committed_submission=committed_submission,
+            attachment_catalog=tuple(attachment_catalog),
         )
 
     async def prepare_answer_turn(
@@ -202,16 +218,20 @@ class WebConversationService:
         prepared: PreparedWebConversation,
         query: str,
         current_images: list[dict[str, Any]],
+        current_documents: list[ValidatedWebDocument] | None = None,
         workspaces: list[str] | None = None,
     ) -> PreparedAnswerTurn:
-        """Plan the turn and materialize any referenced history images.
+        """Plan the turn and materialize referenced history images/documents.
 
-        The web-variant planner rewrites the query and selects scoped history
-        images in one call; the selected ids are re-validated and materialized
-        here (web owns the store), and the finished plan is injected so core
-        skips re-planning. Current images always come first and are never
-        displaced by history selection.
+        The Web-variant planner rewrites the query and selects scoped history
+        images and document attachments in one call; the selected ids are
+        re-validated and materialized here (web owns the store), and the
+        finished plan is injected so core skips re-planning. Current images
+        always come first and are never displaced by history selection.
+        Current-turn documents are parsed/chunked/budgeted into plain-dict
+        context rows that core merges into retrieval before generation.
         """
+        documents = list(current_documents or [])
         capability = manager.answer_image_capability
         effective = capability.effective_max_images if capability is not None else 0
         remaining = max(0, effective - len(current_images))
@@ -227,12 +247,24 @@ class WebConversationService:
                 )
             )
 
+        attachment_catalog = list(prepared.attachment_catalog)
+        current_attachment_catalog = [
+            {
+                "attachment_id": document.attachment_id,
+                "filename": document.filename,
+                "parse_summary": "",
+            }
+            for document in documents
+        ]
         described = await manager.adescribe_query_images(current_images)
-        plan = await manager.aplan_query(
+        plan = await manager.aplan_web_conversation_query(
             query,
             text_history=list(prepared.text_history),
             image_catalog=catalog or None,
+            attachment_catalog=attachment_catalog or None,
+            current_attachment_catalog=current_attachment_catalog or None,
             allowed_history_image_count=remaining,
+            allowed_history_attachment_count=_MAX_HISTORY_ATTACHMENTS,
             current_image_descriptions=list(described.values()) or None,
             workspaces=workspaces,
         )
@@ -259,6 +291,34 @@ class WebConversationService:
         # still continues text-only.
         selected_count = len(plan.selected_history_image_ids)
         resolution_status = "degraded" if selected_count > len(history_blocks) else "ok"
+
+        # Resolve query-document attachment contexts: current uploads plus any
+        # planner-selected prior documents rematerialized by id.
+        attachment_rows: list[dict[str, Any]] = []
+        attachment_status = "ok"
+        history_docs_selected = 0
+        selected_attachment_ids = tuple(plan.selected_history_attachment_ids)
+        if documents or selected_attachment_ids:
+            history_docs: list[Any] = []
+            if selected_attachment_ids:
+                history_docs = await self._store_call(
+                    self._store.fetch_documents_by_ids(
+                        prepared.principal_id,
+                        prepared.conversation_id,
+                        list(selected_attachment_ids),
+                        ttl_days=self._ttl_days,
+                    )
+                )
+                history_docs_selected = len(history_docs)
+            attachment_rows, attachment_trace = await self._attachment_contexts(
+                manager=manager,
+                prepared=prepared,
+                workspaces=workspaces,
+                documents=[*documents, *history_docs],
+            )
+            if attachment_trace.get("attachment_parse_errors"):
+                attachment_status = "degraded"
+
         return PreparedAnswerTurn(
             current_query=query,
             retrieval_query=query,
@@ -269,7 +329,60 @@ class WebConversationService:
             plan=plan,
             history_image_catalog_count=len(catalog),
             history_image_resolution_status=resolution_status,
+            attachment_context_chunks=tuple(attachment_rows),
+            history_attachment_catalog_count=len(attachment_catalog),
+            history_attachments_selected=history_docs_selected,
+            attachment_resolution_status=attachment_status,
         )
+
+    def _get_query_attachment_service(self, manager: RAGServiceManager, lightrag: Any) -> Any:
+        """Construct the Web-only query-attachment service (store injected via DI)."""
+        from dlightrag.core.query_attachments import QueryAttachmentService
+
+        return QueryAttachmentService(
+            lightrag=lightrag,
+            store=self._store,
+            parser_rules=manager.config.parser.rules,
+        )
+
+    async def _attachment_contexts(
+        self,
+        *,
+        manager: RAGServiceManager,
+        prepared: PreparedWebConversation,
+        workspaces: list[str] | None,
+        documents: list[Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Parse/chunk documents then budget them into plain-dict context rows."""
+        from dlightrag.core.query_attachments import ParsedAttachmentBundle
+
+        lightrag = await manager.aget_attachment_chunking_lightrag(workspaces)
+        service = self._get_query_attachment_service(manager, lightrag)
+        chunks: list[Any] = []
+        parse_errors: list[dict[str, str]] = []
+        for document in documents:
+            document_bytes = getattr(document, "document_bytes", None)
+            if document_bytes is None:
+                document_bytes = getattr(document, "attachment_bytes", b"")
+            bundle, meta = await service.achunks_for_attachment(
+                principal_id=prepared.principal_id,
+                conversation_id=prepared.conversation_id,
+                attachment_id=document.attachment_id,
+                filename=document.filename,
+                document_bytes=document_bytes,
+                content_sha256=document.content_sha256,
+            )
+            if meta.get("attachment_parse_error"):
+                parse_errors.append(
+                    {
+                        "attachment_id": document.attachment_id,
+                        "error": str(meta["attachment_parse_error"]),
+                    }
+                )
+            chunks.extend(bundle.chunks)
+        rows, trace = await service.aretrieve(bundle=ParsedAttachmentBundle(chunks=chunks))
+        trace["attachment_parse_errors"] = parse_errors
+        return rows, trace
 
     async def image(
         self,

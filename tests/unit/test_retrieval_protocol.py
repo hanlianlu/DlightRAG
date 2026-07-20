@@ -204,3 +204,19 @@ class TestCanonicalizeReferenceIds:
         out = canonicalize_reference_ids(chunks, federated=True)
         assert out[0]["reference_id"] == out[2]["reference_id"]
         assert out[0]["reference_id"] != out[1]["reference_id"]
+
+
+def test_attachment_context_rows_use_web_attachment_source_type() -> None:
+    from dlightrag.core.query_attachments import build_text_attachment_chunk
+
+    row = build_text_attachment_chunk(
+        attachment_id="att-1",
+        filename="report.pdf",
+        chunk_id="att:att-1:1",
+        chunk_index=1,
+        content="termination clause",
+    ).to_context_row()
+
+    assert row["reference_id"] == "att-1"
+    assert row["full_doc_id"] == "att-1"
+    assert row["metadata"]["source_type"] == "web_attachment"
