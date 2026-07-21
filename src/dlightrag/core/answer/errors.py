@@ -8,14 +8,16 @@ instead of parsing free-form messages.
 
 from __future__ import annotations
 
-from dlightrag.core.answer.prompt import CurrentImagePayloadError
-
 CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
 CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"
 ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
+
+
+class CurrentImagePayloadError(RuntimeError):
+    """Explicit user images cannot fit the configured Composer transport."""
 
 
 class AnswerImageError(ValueError):
@@ -47,5 +49,6 @@ __all__ = [
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "AnswerImageError",
+    "CurrentImagePayloadError",
     "classify_answer_error",
 ]

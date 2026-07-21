@@ -1,11 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for AnswerEngine messages-first interface."""
 
+import base64
 from unittest.mock import AsyncMock
 
 import pytest
 
 from dlightrag.core.answer.engine import NO_CONTEXT_DISCLAIMER, AnswerEngine
+from dlightrag.core.answer.errors import CurrentImagePayloadError
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 _PNG_B64 = (
@@ -547,7 +549,7 @@ class TestAnswerEngineStream:
 
 
 class TestAnswerImageBudget:
-    """Single adaptive current->history->RAG image transport budget.
+    """Image transport allocation across stateless and Web answer paths.
 
     Excerpt grouping/labelling is covered directly by ``TestBuildExcerptBlocks``;
     these tests assert budget allocation through the shipping
@@ -600,6 +602,26 @@ class TestAnswerImageBudget:
         assert sum(1 for block in final_user_content if block.get("type") == "image_url") == 1
         assert prepared.trace["answer_images_current"] == 1
 
+    def test_current_image_count_overflow_is_strict(self) -> None:
+        engine = AnswerEngine(effective_max_images=1)
+
+        with pytest.raises(CurrentImagePayloadError, match="2 current-turn images"):
+            engine._prepare_model_call(
+                "prompt",
+                {"chunks": []},
+                query_images=[_image_block(), _image_block()],
+            )
+
+    def test_current_image_byte_overflow_is_strict(self) -> None:
+        engine = AnswerEngine(effective_max_images=1, image_max_total_bytes=1)
+
+        with pytest.raises(CurrentImagePayloadError, match="current image query_image_1"):
+            engine._prepare_model_call(
+                "prompt",
+                {"chunks": []},
+                query_images=[_image_block()],
+            )
+
     def test_single_budget_allocates_current_then_history_then_rag(self) -> None:
         contexts: RetrievalContexts = {
             "chunks": [
@@ -626,8 +648,9 @@ class TestAnswerImageBudget:
             ],
         )
 
-        # current(1) + history(1) exhaust the shared budget of 2; the RAG image
-        # is dropped from transport even though its chunk text remains.
+        # Stateless paths have no Composer lane: current(1) + history(1)
+        # exhaust the existing shared budget of 2, so the RAG image is dropped
+        # while its chunk text remains.
         total_images = sum(
             1
             for message in prepared.messages
@@ -640,6 +663,97 @@ class TestAnswerImageBudget:
         assert prepared.trace["answer_images_history"] == 1
         assert prepared.trace["answer_images_rag"] == 0
         assert prepared.trace["answer_images_total"] == 2
+        assert "answer_composer_image_budget_used_bytes" not in prepared.trace
+        assert "answer_rag_image_budget_used_bytes" not in prepared.trace
+
+    def test_web_composer_images_share_budget_while_rag_is_independent(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "composer-visual",
+                    "reference_id": "composer_doc",
+                    "content": "Parsed attachment figure",
+                    "image_data": _PNG_B64,
+                    "file_path": "upload.pdf",
+                    "metadata": {"source_type": "web_attachment"},
+                },
+                {
+                    "chunk_id": "rag-visual",
+                    "reference_id": "rag-doc",
+                    "content": "RAG figure",
+                    "image_data": _PNG_B64,
+                    "file_path": "workspace.pdf",
+                    "metadata": {"source_type": "file"},
+                },
+            ]
+        }
+        engine = AnswerEngine(effective_max_images=1, context_top_k=2)
+
+        prepared = engine._prepare_model_call(
+            "prompt",
+            contexts,
+            query_images=[_image_block()],
+            separate_composer_visual_budget=True,
+        )
+
+        by_id = {row["chunk_id"]: row for row in prepared.contexts["chunks"]}
+        assert by_id["composer-visual"]["_answer_image_sent"] is False
+        assert by_id["rag-visual"]["_answer_image_sent"] is True
+        assert prepared.trace["answer_images_current"] == 1
+        assert prepared.trace["answer_images_composer"] == 0
+        assert prepared.trace["answer_images_rag"] == 1
+        assert "answer_composer_image_budget_used_bytes" in prepared.trace
+        assert "answer_rag_image_budget_used_bytes" in prepared.trace
+
+    def test_selected_history_image_byte_overflow_is_best_effort(self) -> None:
+        engine = AnswerEngine(
+            effective_max_images=2,
+            image_max_total_bytes=len(base64.b64decode(_PNG_B64)),
+        )
+
+        prepared = engine._prepare_model_call(
+            "prompt",
+            {"chunks": []},
+            query_images=[_image_block()],
+            history_images=[_image_block()],
+            separate_composer_visual_budget=True,
+        )
+
+        assert prepared.trace["answer_images_current"] == 1
+        assert prepared.trace["answer_images_history"] == 0
+        assert prepared.trace["answer_images_total"] == 1
+
+    def test_selected_history_image_has_history_trace(self) -> None:
+        prepared = AnswerEngine(effective_max_images=2)._prepare_model_call(
+            "prompt",
+            {"chunks": []},
+            query_images=[_image_block()],
+            history_images=[_image_block()],
+            separate_composer_visual_budget=True,
+        )
+
+        assert prepared.trace["answer_images_current"] == 1
+        assert prepared.trace["answer_images_history"] == 1
+        assert prepared.trace["answer_images_total"] == 2
+        final_content = prepared.messages[-1]["content"]
+        image_blocks = [block for block in final_content if block.get("type") == "image_url"]
+        assert len(image_blocks) == 2
+        assert any(
+            block.get("text") == "## Referenced conversation images\n" for block in final_content
+        )
+
+    def test_selected_history_image_is_answer_evidence_without_current_image(self) -> None:
+        prepared = AnswerEngine(effective_max_images=1)._prepare_model_call(
+            "prompt",
+            {"chunks": []},
+            history_images=[_image_block()],
+            separate_composer_visual_budget=True,
+        )
+
+        assert prepared.no_context is False
+        assert "answer_no_context" not in prepared.trace
+        assert prepared.trace["answer_images_current"] == 0
+        assert prepared.trace["answer_images_history"] == 1
 
 
 class TestAnswerMessageEnvelope:

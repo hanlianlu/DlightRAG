@@ -18,8 +18,11 @@ from dlightrag.api.middleware import RequestIdMiddleware, install_request_id_log
 from dlightrag.api.models import ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
-from dlightrag.core.answer.errors import CURRENT_IMAGE_LIMIT_EXCEEDED, AnswerImageError
-from dlightrag.core.answer.prompt import CurrentImagePayloadError
+from dlightrag.core.answer.errors import (
+    CURRENT_IMAGE_LIMIT_EXCEEDED,
+    AnswerImageError,
+    CurrentImagePayloadError,
+)
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 logger = logging.getLogger(__name__)

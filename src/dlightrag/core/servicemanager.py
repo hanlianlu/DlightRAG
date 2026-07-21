@@ -1254,19 +1254,28 @@ class RAGServiceManager:
         contexts: RetrievalContexts,
         *,
         query_images: list[dict[str, Any]] | None = None,
+        history_images: list[dict[str, Any]] | None = None,
         text_history: list[dict[str, Any]] | None,
         context_top_k: int | None = None,
+        separate_composer_visual_budget: bool = False,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Generate from server-prepared contexts and request-local text history."""
         engine = self._get_answer_engine()
         await self._answer_stream_sem.acquire()
         try:
+            generate_kwargs: dict[str, Any] = {
+                "query_images": query_images,
+                "conversation_history": text_history,
+                "context_top_k": context_top_k,
+            }
+            if history_images:
+                generate_kwargs["history_images"] = history_images
+            if separate_composer_visual_budget:
+                generate_kwargs["separate_composer_visual_budget"] = True
             prepared_contexts, stream = await engine.generate_stream(
                 query,
                 contexts,
-                query_images=query_images,
-                conversation_history=text_history,
-                context_top_k=context_top_k,
+                **generate_kwargs,
             )
         except BaseException:
             self._answer_stream_sem.release()
@@ -1503,7 +1512,7 @@ class RAGServiceManager:
 
         # Guard: reject current images when the query-role answer model can't accept them.
         # Lazily re-probe first so a transient startup `unknown` can recover.
-        current_images = list(turn.materialized_query_images)
+        current_images = list(turn.current_query_images)
         if current_images:
             await self._maybe_reprobe_answer_image_capability()
         _check_answer_image_capability(
@@ -1522,7 +1531,7 @@ class RAGServiceManager:
                     metadata={
                         "workspaces": ws_list,
                         "history_turns": len(history or []),
-                        "query_image_count": len(turn.materialized_query_images),
+                        "query_image_count": len(turn.current_query_images),
                         "semantic_highlights": semantic_highlights,
                     },
                 ) as pipeline_trace:
@@ -1645,7 +1654,8 @@ class RAGServiceManager:
             }
         )
         history = list(turn.text_history) or None
-        query_images = list(turn.materialized_query_images)
+        query_images = list(turn.current_query_images)
+        history_images = list(turn.history_query_images)
 
         # Guard: reject current images when the query-role answer model can't accept them.
         # Lazily re-probe first so a transient startup `unknown` can recover.
@@ -1690,8 +1700,10 @@ class RAGServiceManager:
                     plan.standalone_query,
                     retrieval.contexts,
                     query_images=query_images or None,
+                    history_images=history_images or None,
                     text_history=history,
                     context_top_k=context_top_k,
+                    separate_composer_visual_budget=turn.web_composer_visuals,
                 )
                 if stream is not None:
                     stream_meta = cast(Any, stream)

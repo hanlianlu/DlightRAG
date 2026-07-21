@@ -426,8 +426,10 @@ and `query_images.max_upload_bytes`; the defaults are three images and 15 MiB pe
 decoded image, and the browser upload entry is gated by the query-role answer
 model's discovered image capability (unsupported or unknown disables uploads).
 Current-turn images always have priority. Referenced historical images are
-resolved by the planner and share one adaptive `answer.max_images` transport
-budget with current and RAG images.
+resolved by the planner and share the Web Composer transport budget with current
+images and visuals parsed from Composer documents. Workspace RAG visuals use an
+independent budget with the same configured shape; neither lane borrows the
+other's remaining count or bytes.
 
 REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
 accept an optional caller-supplied `history` of prior `role`/`content` turns for

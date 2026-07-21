@@ -8,12 +8,14 @@ LightRAG lane remains independently retrieved and ranked.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import re
 from collections.abc import Awaitable
 from typing import Any, cast
 
+from dlightrag.core.request.composer_lexical import rank_composer_bm25
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import ContextRow
 from dlightrag.utils.tokens import estimate_tokens
@@ -26,7 +28,6 @@ COMPOSER_HISTORY_TARGET_TOKENS = 12_288
 COMPOSER_TOTAL_TOKENS = 45_056
 COMPOSER_CANDIDATE_LIMIT = 72
 
-_TERM_RE = re.compile(r"[a-z0-9_]+|[\u3400-\u9fff]", flags=re.IGNORECASE)
 _STRUCTURE_RE = re.compile(r"(?im)^\s*(?:#{1,6}\s+|\[(?:table|image|equation) name\]|\[table\])")
 _STRUCTURAL_TYPES = frozenset({"table", "drawing", "image", "figure", "equation"})
 
@@ -133,6 +134,9 @@ class ComposerEvidenceSelector:
         )
         if embedding_error:
             trace["composer_evidence_embedding_error"] = embedding_error
+        lexical_error = current_trace.get("lexical_error") or history_trace.get("lexical_error")
+        if lexical_error:
+            trace["composer_evidence_lexical_error"] = lexical_error
         return [*selected_current, *selected_history], trace
 
     async def _select_lane(
@@ -160,7 +164,18 @@ class ComposerEvidenceSelector:
             }
         long_budget = max(0, token_budget - _rows_tokens(short_rows))
 
-        lexical = _lexical_ranking(query, long_rows)
+        lexical_error: str | None = None
+        try:
+            lexical = await asyncio.to_thread(
+                rank_composer_bm25,
+                query,
+                long_rows,
+                limit=self._candidate_limit,
+            )
+        except Exception as exc:
+            lexical = []
+            lexical_error = type(exc).__name__
+            logger.warning("Composer BM25 ranking failed", exc_info=True)
         structural = [dict(row) for row in long_rows if _is_structural(row)]
         coverage = _coverage_ranking(long_rows)
         rankings: list[list[ContextRow]] = [lexical, structural, coverage]
@@ -201,6 +216,8 @@ class ComposerEvidenceSelector:
             trace["rerank_error"] = rerank_error
         if embedding_error:
             trace["embedding_error"] = embedding_error
+        if lexical_error:
+            trace["lexical_error"] = lexical_error
         selected_ids = {str(row.get("chunk_id") or "") for row in [*short_rows, *selected]}
         ordered = [dict(row) for row in rows if str(row.get("chunk_id") or "") in selected_ids]
         return ordered, trace
@@ -272,25 +289,6 @@ def _allocate_lane_budgets(
     remaining -= current_extra
     history += min(max(0, history_demand - history), remaining)
     return current, history
-
-
-def _terms(text: str) -> list[str]:
-    return _TERM_RE.findall(text.casefold())
-
-
-def _lexical_ranking(query: str, rows: list[ContextRow]) -> list[ContextRow]:
-    query_terms = set(_terms(query))
-
-    def score(row: ContextRow) -> tuple[float, int]:
-        terms = _terms(str(row.get("content") or ""))
-        if not terms or not query_terms:
-            return 0.0, 0
-        matches = sum(1 for term in terms if term in query_terms)
-        return matches / (len(terms) ** 0.5), matches
-
-    indexed = list(enumerate(rows))
-    indexed.sort(key=lambda item: (*score(item[1]), -item[0]), reverse=True)
-    return [dict(row) for _, row in indexed]
 
 
 def _is_structural(row: ContextRow) -> bool:

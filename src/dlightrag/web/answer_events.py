@@ -69,19 +69,28 @@ def _capability_metrics(manager: RAGServiceManager, turn: PreparedAnswerTurn) ->
 def _answer_transport_metrics(trace: dict[str, Any]) -> dict[str, Any]:
     """Transport metrics derived from the final assembled answer messages (design §18).
 
-    ``answer_images_total`` is the count of image blocks the assembler placed in
-    the final messages, not the RAG-only budget.
+    Web Composer and RAG lanes have independent count/byte budgets; totals are
+    retained for request-level dashboards.
     """
-    sent = int(trace.get("answer_context_images_sent", 0) or 0)
-    skipped = int(trace.get("answer_context_images_skipped", 0) or 0)
+    composer_sent = int(trace.get("answer_context_composer_images_sent", 0) or 0)
+    composer_skipped = int(trace.get("answer_context_composer_images_skipped", 0) or 0)
+    rag_sent = int(trace.get("answer_context_rag_images_sent", 0) or 0)
+    rag_skipped = int(trace.get("answer_context_rag_images_skipped", 0) or 0)
     return {
         "answer_images_current": int(trace.get("answer_images_current", 0) or 0),
         "answer_images_history": int(trace.get("answer_images_history", 0) or 0),
+        "answer_images_composer": int(trace.get("answer_images_composer", 0) or 0),
         "answer_images_rag": int(trace.get("answer_images_rag", 0) or 0),
         "answer_images_total": int(trace.get("answer_images_total", 0) or 0),
         "answer_image_bytes_total": int(trace.get("answer_image_budget_used_bytes", 0) or 0),
-        "rag_visual_descriptions_included": sent + skipped,
-        "rag_raw_images_skipped": skipped,
+        "answer_composer_image_bytes": int(
+            trace.get("answer_composer_image_budget_used_bytes", 0) or 0
+        ),
+        "answer_rag_image_bytes": int(trace.get("answer_rag_image_budget_used_bytes", 0) or 0),
+        "composer_visual_descriptions_included": composer_sent + composer_skipped,
+        "composer_raw_images_skipped": composer_skipped,
+        "rag_visual_descriptions_included": rag_sent + rag_skipped,
+        "rag_raw_images_skipped": rag_skipped,
     }
 
 

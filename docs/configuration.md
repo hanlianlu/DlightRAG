@@ -514,12 +514,21 @@ vector scoring inside a small metadata candidate set.
 
 ## Image Budgets
 
-Root config exposes a single `answer.max_images` ceiling for the whole answer
-image transport (current + history + RAG). At startup it is clamped to the
-query-role answer model's discovered image capability, and slots are filled
-current images first, then resolved history images, then retrieved RAG visual
-chunks. It must be `>= query_images.max_current_images` so current uploads
-always fit. Compression budgets are advanced model transport limits:
+`answer.max_images` and the answer byte/geometry fields define one transport
+budget shape. REST, SDK, and MCP use one instance for their request-local
+current/history/RAG visuals. Web Composer turns create two independent instances
+with that same shape:
+
+- Composer: current direct images, selected history images, and visuals parsed
+  from current/history Composer documents;
+- RAG: LightRAG visual evidence only.
+
+Each Web lane receives the full configured count and byte ceiling. The two
+instances do not borrow or consume each other's remaining capacity. At startup
+the configured shape is clamped to the query-role model's discovered image
+capability. `answer.max_images` must remain `>= query_images.max_current_images`
+so current direct uploads fit inside the Composer budget. Compression budgets
+are advanced model transport limits:
 
 `chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
 those are omitted, it reuses `llm.default`.

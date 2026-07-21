@@ -3,6 +3,8 @@
 
 from typing import Any
 
+import pytest
+
 from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
 
 
@@ -178,6 +180,38 @@ async def test_composer_embedding_failure_falls_back_to_local_fusion() -> None:
 
     assert any(row["chunk_id"] == "e-2" for row in selected)
     assert trace["composer_evidence_embedding_error"] == "RuntimeError"
+
+
+async def test_composer_bm25_failure_is_reported_in_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_bm25(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("BM25 unavailable")
+
+    monkeypatch.setattr(
+        "dlightrag.core.request.composer_evidence.rank_composer_bm25",
+        _fail_bm25,
+    )
+    selector = ComposerEvidenceSelector(
+        full_pass_tokens=4,
+        current_target_tokens=80,
+        history_target_tokens=0,
+        total_tokens=80,
+        candidate_limit=4,
+    )
+    rows = [
+        _row("b-1", "general introduction " + ("detail " * 20), chunk_index=1),
+        _row("b-2", "termination liability " + ("detail " * 20), chunk_index=2),
+    ]
+
+    selected, trace = await selector.select(
+        query="termination liability",
+        current_rows=rows,
+        history_rows=[],
+    )
+
+    assert selected
+    assert trace["composer_evidence_lexical_error"] == "RuntimeError"
 
 
 async def test_short_document_full_pass_survives_beside_long_document() -> None:

@@ -132,7 +132,6 @@ async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
         current_query="Follow up",
         retrieval_query="Standalone follow up",
         text_history=({"role": "user", "content": "Earlier"},),
-        materialized_query_images=(),
     )
     manager = RAGServiceManager(config=test_cfg)
     manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
@@ -157,8 +156,8 @@ async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> No
     turn = answer_turn.PreparedAnswerTurn(
         current_query="Follow up",
         retrieval_query="Standalone",
-        materialized_query_images=tuple(current + history),
         current_query_images=tuple(current),
+        history_query_images=tuple(history),
     )
     manager = RAGServiceManager(config=test_cfg)
     manager._answer_image_capability = AnswerImageCapability(
@@ -206,6 +205,8 @@ async def test_prepared_stream_merges_composer_evidence_without_changing_rag(tes
 
     async def _gen(query: str, contexts: Any, **kwargs: Any):
         captured["contexts"] = contexts
+        captured["history_images"] = kwargs.get("history_images")
+        captured["separate_composer_visual_budget"] = kwargs.get("separate_composer_visual_budget")
         return contexts, None
 
     manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
@@ -216,6 +217,10 @@ async def test_prepared_stream_merges_composer_evidence_without_changing_rag(tes
         retrieval_query="q",
         composer_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
         composer_evidence_trace={"composer_evidence_strategy": "full"},
+        web_composer_visuals=True,
+        history_query_images=(
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,HIST"}},
+        ),
     )
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
@@ -224,6 +229,8 @@ async def test_prepared_stream_merges_composer_evidence_without_changing_rag(tes
     assert chunks[0]["chunk_id"] == "att-1"
     assert chunks[1:] == expected_rag
     assert retrieval.trace["composer_evidence_strategy"] == "full"
+    assert captured["separate_composer_visual_budget"] is True
+    assert captured["history_images"] == list(turn.history_query_images)
 
 
 async def test_prepared_stream_adds_composer_count_without_rebudgeting_rag(test_cfg) -> None:
@@ -314,6 +321,7 @@ def test_stateless_turn_carries_no_web_composer_context() -> None:
     turn = answer_turn.PreparedAnswerTurn.stateless("q")
     assert turn.composer_context_chunks == ()
     assert turn.composer_evidence_trace == {}
+    assert turn.web_composer_visuals is False
     assert turn.attachment_resolution_status == "ok"
 
 

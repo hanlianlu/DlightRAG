@@ -223,7 +223,7 @@ The answer prompt receives:
   source numbering
 - document/source metadata
 - quality-preserving bounded inline page or image previews when available
-- user-supplied `query_images`, bounded by the independent user-image budget
+- user-supplied `query_images`, bounded by the active request transport budget
 
 ### Answer LLM Input Shape
 
@@ -239,7 +239,9 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
         "content": [
             {"type": "text", "text": "## User-attached images\n"},
             {"type": "image_url", "image_url": {"url": "..."}},
-            {"type": "text", "text": "## Document Excerpts"},
+            {"type": "text", "text": "## User-attached documents"},
+            {"type": "text", "text": "### Document [composer_...]: upload.pdf"},
+            {"type": "text", "text": "## Knowledge-base evidence"},
             {"type": "text", "text": "### Document [1]: report.pdf"},
             {"type": "text", "text": "[1-1] report.pdf, Page 3\nEvidence text..."},
             {"type": "text", "text": "[1-2] \"Doc Title\" Page 4"},
@@ -254,36 +256,40 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
 ]
 ```
 
-The `## User-attached images` blocks are omitted when no current query images
-fit the user-image budget. Server-prepared Web text history, when present, is
-inserted as prior messages before the current user message.
+The `## User-attached images` blocks are omitted when the request has no current
+query images. A current image that cannot fit its budget fails the request;
+selected history images are best-effort. Server-prepared Web text history, when
+present, is inserted as prior messages before the current user message.
 
 The sections are intentional:
 
 - `## User-attached images` are part of the user's question, not retrieved evidence.
-- `## Document Excerpts` contains retrieved text and page/image previews grouped by document.
+- `## User-attached documents` contains Web Composer attachment evidence.
+- `## Knowledge-base evidence` contains LightRAG excerpts and page/image previews.
 - Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
 - Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the answer image budget.
 - `## Knowledge Graph Context` gives entity/relationship facts, with source document tags when available.
 - `## Reference List` maps citation IDs to documents.
 - `## Question` is the actual user task and is placed last.
 
-Answer generation uses one adaptive image transport budget. A single
-`answer.max_images` ceiling -- clamped at startup to the query-role answer
-model's discovered image capability -- governs how many `image_url` blocks reach
-the model. Slots are filled in priority order: current-turn images first, then
-resolved history images, then retrieved RAG visual chunks. Current images have
-no silent fallback; if they cannot all fit, the request fails and names the
-overflow. History and RAG images that miss a slot still contribute their stored
-text descriptions. Budgeted JPEG, PNG, and WebP payloads are preserved as-is.
+REST, SDK, and MCP answer generation retains one adaptive image transport
+budget for current/history/RAG visuals. Web Composer turns use two independent
+budgets with the same configured count/byte/geometry shape: current direct
+images, selected history images, and parsed document visuals share the Composer
+budget; LightRAG visuals use the RAG budget. Neither lane consumes the other's
+remaining count or bytes, and final message assembly only concatenates the
+already-budgeted blocks. Current direct images have no silent fallback; if they
+cannot fit the Composer budget, the request fails and names the overflow.
+Historical, parsed-document, and RAG images that miss their own lane slot still
+contribute stored text descriptions. Budgeted JPEG, PNG, and WebP payloads are preserved as-is.
 When recompression is needed, DlightRAG enforces both a long-edge floor and a
 JPEG quality floor; an image that cannot fit within those limits is skipped
 instead of being degraded into a low-quality preview.
 
 For Web conversations, validated current-turn images always have priority and
-are the only durable chat images sent as pixels; historical images contribute
-their stored text descriptions. Public REST/MCP/Python calls remain
-request-local.
+planner-selected historical images are added best-effort from the Composer
+budget. A historical image that does not fit is omitted while its stored text
+description remains in history. Public REST/MCP/Python calls remain request-local.
 
 `/retrieve` and `/answer` both accept an explicit `chunk_top_k` request to
 override the configured chunk/visual candidate budget; otherwise DlightRAG uses

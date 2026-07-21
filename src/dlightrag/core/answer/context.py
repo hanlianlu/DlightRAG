@@ -31,14 +31,19 @@ class AnswerContextPacker:
         self,
         contexts: RetrievalContexts,
         *,
-        image_budget: AnswerImageBudget,
+        rag_image_budget: AnswerImageBudget,
+        composer_image_budget: AnswerImageBudget,
         context_top_k: int | None = None,
     ) -> PackedAnswerContext:
         chunks = contexts.get("chunks", [])
         target_chunks = context_top_k if context_top_k and context_top_k > 0 else None
         image_blocks: dict[str, dict[str, Any]] = {}
-        skipped_images = 0
-        sent_images = 0
+        image_counts = {
+            "composer_sent": 0,
+            "composer_skipped": 0,
+            "rag_sent": 0,
+            "rag_skipped": 0,
+        }
 
         composer_chunks: list[ContextRow] = []
         rag_chunks: list[ContextRow] = []
@@ -49,8 +54,13 @@ class AnswerContextPacker:
             else:
                 rag_chunks.append(chunk)
 
-        def pack_rows(rows: list[ContextRow], limit: int | None) -> list[ContextRow]:
-            nonlocal sent_images, skipped_images
+        def pack_rows(
+            rows: list[ContextRow],
+            limit: int | None,
+            *,
+            budget: AnswerImageBudget,
+            lane: str,
+        ) -> list[ContextRow]:
             packed: list[ContextRow] = []
             for chunk in rows:
                 if limit is not None and len(packed) >= limit:
@@ -61,14 +71,14 @@ class AnswerContextPacker:
                 image_data = chunk.get("image_data")
                 image_block: dict[str, Any] | None = None
                 if image_data:
-                    image_block = image_budget.add_base64(
+                    image_block = budget.add_base64(
                         str(image_data),
                         label=chunk_id or str(chunk.get("file_path") or "chunk_image"),
                     )
                     if image_block is not None:
-                        sent_images += 1
+                        image_counts[f"{lane}_sent"] += 1
                     else:
-                        skipped_images += 1
+                        image_counts[f"{lane}_skipped"] += 1
 
                 if content or image_block is not None:
                     packed_chunk = dict(chunk)
@@ -81,9 +91,19 @@ class AnswerContextPacker:
             return packed
 
         rag_limit = None if target_chunks is None else max(0, target_chunks - len(composer_chunks))
-        packed_rag = pack_rows(rag_chunks, rag_limit)
+        packed_rag = pack_rows(
+            rag_chunks,
+            rag_limit,
+            budget=rag_image_budget,
+            lane="rag",
+        )
         composer_limit = None if target_chunks is None else max(0, target_chunks - len(packed_rag))
-        packed_composer = pack_rows(composer_chunks, composer_limit)
+        packed_composer = pack_rows(
+            composer_chunks,
+            composer_limit,
+            budget=composer_image_budget,
+            lane="composer",
+        )
         packed_chunks = [*packed_composer, *packed_rag]
 
         included_chunk_ids = {str(c.get("chunk_id")) for c in packed_chunks if c.get("chunk_id")}
@@ -110,8 +130,16 @@ class AnswerContextPacker:
             "answer_context_candidate_chunks": len(chunks),
             "answer_context_target_chunks": target_chunks,
             "answer_context_chunks": len(packed_chunks),
-            "answer_context_images_sent": sent_images,
-            "answer_context_images_skipped": skipped_images,
+            "answer_context_composer_images_sent": image_counts["composer_sent"],
+            "answer_context_composer_images_skipped": image_counts["composer_skipped"],
+            "answer_context_rag_images_sent": image_counts["rag_sent"],
+            "answer_context_rag_images_skipped": image_counts["rag_skipped"],
+            "answer_context_images_sent": (
+                image_counts["composer_sent"] + image_counts["rag_sent"]
+            ),
+            "answer_context_images_skipped": (
+                image_counts["composer_skipped"] + image_counts["rag_skipped"]
+            ),
         }
         return PackedAnswerContext(
             contexts=packed_contexts,

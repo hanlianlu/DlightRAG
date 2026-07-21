@@ -95,7 +95,8 @@ def test_per_interface_current_image_admission() -> None:
             model.model_validate({"query": "four images", "query_images": images})
 
     python_turn = PreparedAnswerTurn.stateless("four images", images)
-    assert len(python_turn.materialized_query_images) == 4
+    assert len(python_turn.current_query_images) == 4
+    assert python_turn.history_query_images == ()
 
 
 def test_public_requests_reject_conversation_fields() -> None:

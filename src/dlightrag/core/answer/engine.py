@@ -25,12 +25,8 @@ from typing import Any, cast
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.answer.context import AnswerContextPacker
+from dlightrag.core.answer.errors import CurrentImagePayloadError
 from dlightrag.core.answer.images import AnswerImageBudget
-from dlightrag.core.answer.prompt import (
-    AnswerPromptAssembler,
-    AssembledImages,
-    CurrentImagePayloadError,
-)
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import get_answer_system_prompt
 from dlightrag.utils.images import image_data_uri
@@ -104,7 +100,6 @@ class AnswerEngine:
         self._context_top_k = context_top_k
         self._input_token_envelope = max(1, input_token_envelope)
         self._history_token_ceiling = max(0, history_token_ceiling)
-        self._assembler = AnswerPromptAssembler()
 
     # ------------------------------------------------------------------
     # Public API
@@ -117,6 +112,8 @@ class AnswerEngine:
         query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
+        separate_composer_visual_budget: bool = False,
+        history_images: list[dict[str, Any]] | None = None,
     ) -> RetrievalResult:
         """Non-streaming answer generation.
 
@@ -139,8 +136,10 @@ class AnswerEngine:
             query,
             contexts,
             query_images=query_images,
+            history_images=history_images,
             conversation_history=conversation_history,
             context_top_k=context_top_k,
+            separate_composer_visual_budget=separate_composer_visual_budget,
         )
 
         logger.info(
@@ -204,6 +203,8 @@ class AnswerEngine:
         query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
+        separate_composer_visual_budget: bool = False,
+        history_images: list[dict[str, Any]] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer generation.
 
@@ -223,8 +224,10 @@ class AnswerEngine:
             query,
             contexts,
             query_images=query_images,
+            history_images=history_images,
             conversation_history=conversation_history,
             context_top_k=context_top_k,
+            separate_composer_visual_budget=separate_composer_visual_budget,
         )
 
         logger.info(
@@ -265,8 +268,10 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         *,
         query_images: list[dict[str, Any]] | None = None,
+        history_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
+        separate_composer_visual_budget: bool = False,
     ) -> _PreparedModelCall:
         original_history = list(conversation_history or [])
         bounded_history = truncate_conversation_history(
@@ -277,38 +282,51 @@ class AnswerEngine:
 
         def build(history: list[dict[str, Any]]) -> _PreparedModelCall:
             system_prompt = get_answer_system_prompt()
-            # One adaptive transport budget, consumed in allocation order:
-            # current query images reserve slots first, then history images,
-            # then selected Composer/RAG visual chunks take the remainder.
-            budget = self._new_image_budget()
-            current_blocks = self._budget_current_images(query_images, budget)
-            history_messages, history_blocks = self._build_history_messages(history, budget)
+            composer_budget = self._new_image_budget()
+            rag_budget = (
+                self._new_image_budget() if separate_composer_visual_budget else composer_budget
+            )
+            # Direct/history Composer images and parsed document visuals share
+            # composer_budget. RAG visual transport has an independent budget in
+            # Web mode and is never allocated from Composer's remainder.
+            current_blocks = self._budget_current_images(query_images, composer_budget)
+            selected_history_blocks = self._budget_history_images(
+                history_images,
+                composer_budget,
+            )
+            history_messages, message_history_blocks = self._build_history_messages(
+                history,
+                composer_budget,
+            )
             prepared = self._prepare_prompt_context(
                 query,
                 contexts,
                 context_top_k=context_top_k,
-                image_budget=budget,
-            )
-            assembled = self._assembler.assemble(
-                current_images=current_blocks,
-                history_images=history_blocks,
-                rag_visual_blocks=list(prepared.chunk_image_blocks.values()),
-                effective_max_images=self._effective_max_images,
+                composer_image_budget=composer_budget,
+                rag_image_budget=rag_budget,
             )
             no_context = not _has_answer_evidence(
                 prepared.contexts,
                 query_images=query_images,
+                history_images=history_images,
                 conversation_history=history,
             )
             if no_context:
                 prepared.trace["answer_no_context"] = True
-            self._apply_image_trace(prepared.trace, assembled, budget)
+            self._apply_image_trace(
+                prepared.trace,
+                current_count=len(current_blocks),
+                history_count=len(selected_history_blocks) + len(message_history_blocks),
+                composer_budget=composer_budget,
+                rag_budget=rag_budget,
+            )
             messages = self._compose_user_messages(
                 system_prompt,
                 prepared.user_prompt,
                 prepared.contexts,
                 prepared.indexer,
                 current_blocks=current_blocks,
+                selected_history_blocks=selected_history_blocks,
                 history_messages=history_messages,
                 chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
             )
@@ -403,6 +421,19 @@ class AnswerEngine:
             history_messages.append({"role": hmsg["role"], "content": budgeted})
         return history_messages, history_blocks
 
+    @staticmethod
+    def _budget_history_images(
+        history_images: list[dict[str, Any]] | None,
+        budget: AnswerImageBudget,
+    ) -> list[dict[str, Any]]:
+        """Add planner-selected history pixels best-effort to the Composer budget."""
+        blocks: list[dict[str, Any]] = []
+        for idx, image in enumerate(history_images or [], start=1):
+            block = budget.add_user_image(image, label=f"selected_history_image_{idx}")
+            if block is not None:
+                blocks.append(block)
+        return blocks
+
     def _compose_user_messages(
         self,
         system_prompt: str,
@@ -411,6 +442,7 @@ class AnswerEngine:
         indexer: CitationIndexer | None,
         *,
         current_blocks: list[dict[str, Any]],
+        selected_history_blocks: list[dict[str, Any]],
         history_messages: list[dict[str, Any]],
         chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
@@ -419,6 +451,9 @@ class AnswerEngine:
         if current_blocks:
             content.append({"type": "text", "text": "## User-attached images\n"})
             content.extend(current_blocks)
+        if selected_history_blocks:
+            content.append({"type": "text", "text": "## Referenced conversation images\n"})
+            content.extend(selected_history_blocks)
         content.extend(
             self._build_excerpt_blocks(
                 contexts,
@@ -438,17 +473,32 @@ class AnswerEngine:
     @staticmethod
     def _apply_image_trace(
         trace: dict[str, Any],
-        assembled: AssembledImages,
-        budget: AnswerImageBudget,
+        *,
+        current_count: int,
+        history_count: int,
+        composer_budget: AnswerImageBudget,
+        rag_budget: AnswerImageBudget,
     ) -> None:
-        trace["answer_images_current"] = assembled.counts["current"]
-        trace["answer_images_history"] = assembled.counts["history"]
-        trace["answer_images_rag"] = assembled.counts["rag"]
-        trace["answer_images_total"] = len(assembled.blocks)
-        trace["answer_image_budget_used_bytes"] = budget.used_bytes
+        composer_context = int(trace.get("answer_context_composer_images_sent", 0))
+        rag_context = int(trace.get("answer_context_rag_images_sent", 0))
+        trace["answer_images_current"] = current_count
+        trace["answer_images_history"] = history_count
+        trace["answer_images_composer"] = composer_context
+        trace["answer_images_rag"] = rag_context
+        trace["answer_images_total"] = (
+            current_count + history_count + composer_context + rag_context
+        )
+        if composer_budget is rag_budget:
+            trace["answer_image_budget_used_bytes"] = composer_budget.used_bytes
+        else:
+            trace["answer_composer_image_budget_used_bytes"] = composer_budget.used_bytes
+            trace["answer_rag_image_budget_used_bytes"] = rag_budget.used_bytes
+            trace["answer_image_budget_used_bytes"] = (
+                composer_budget.used_bytes + rag_budget.used_bytes
+            )
 
     def _new_image_budget(self) -> AnswerImageBudget:
-        """Single adaptive budget shared by current, history, and RAG images."""
+        """Create one fresh transport budget for a single visual lane."""
         return AnswerImageBudget(
             max_images=self._effective_max_images,
             max_total_bytes=self._image_max_total_bytes,
@@ -471,14 +521,18 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         *,
         context_top_k: int | None = None,
-        image_budget: AnswerImageBudget | None = None,
+        composer_image_budget: AnswerImageBudget | None = None,
+        rag_image_budget: AnswerImageBudget | None = None,
     ) -> _PreparedAnswerPrompt:
-        if image_budget is None:
-            image_budget = self._new_image_budget()
+        if composer_image_budget is None:
+            composer_image_budget = self._new_image_budget()
+        if rag_image_budget is None:
+            rag_image_budget = composer_image_budget
         effective_context_top_k = self._context_top_k if context_top_k is None else context_top_k
         packed = AnswerContextPacker().pack(
             contexts,
-            image_budget=image_budget,
+            composer_image_budget=composer_image_budget,
+            rag_image_budget=rag_image_budget,
             context_top_k=effective_context_top_k,
         )
         user_prompt, indexer = self._build_user_prompt(query, packed.contexts)
@@ -735,11 +789,12 @@ def _has_answer_evidence(
     contexts: RetrievalContexts,
     *,
     query_images: list[dict[str, Any]] | None,
+    history_images: list[dict[str, Any]] | None,
     conversation_history: list[dict[str, Any]] | None,
 ) -> bool:
     if any(contexts.get(key) for key in ("chunks", "entities", "relationships")):
         return True
-    if query_images:
+    if query_images or history_images:
         return True
     if not conversation_history:
         return False

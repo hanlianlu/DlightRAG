@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.core.answer.capability import AnswerImageCapability
-from dlightrag.core.answer.prompt import CurrentImagePayloadError
+from dlightrag.core.answer.errors import CurrentImagePayloadError
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.request.planner import QueryPlan
 from dlightrag.storage.web_conversations import CommitTurnResult
@@ -236,11 +236,16 @@ async def test_transport_and_capability_metrics_reach_observation(
     trace = {
         "answer_images_current": 1,
         "answer_images_history": 1,
-        "answer_images_rag": 0,
-        "answer_images_total": 2,
+        "answer_images_composer": 1,
+        "answer_images_rag": 2,
+        "answer_images_total": 5,
         "answer_image_budget_used_bytes": 4096,
-        "answer_context_images_sent": 0,
-        "answer_context_images_skipped": 3,
+        "answer_composer_image_budget_used_bytes": 1536,
+        "answer_rag_image_budget_used_bytes": 2560,
+        "answer_context_composer_images_sent": 1,
+        "answer_context_composer_images_skipped": 2,
+        "answer_context_rag_images_sent": 2,
+        "answer_context_rag_images_skipped": 3,
     }
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
@@ -308,13 +313,18 @@ async def test_transport_and_capability_metrics_reach_observation(
     ]
     assert transport, "transport metrics were not emitted"
     metrics = transport[-1]
-    assert metrics["answer_images_total"] == 2
+    assert metrics["answer_images_total"] == 5
     assert metrics["answer_images_current"] == 1
     assert metrics["answer_images_history"] == 1
-    assert metrics["answer_images_rag"] == 0
+    assert metrics["answer_images_composer"] == 1
+    assert metrics["answer_images_rag"] == 2
     assert metrics["answer_image_bytes_total"] == 4096
+    assert metrics["answer_composer_image_bytes"] == 1536
+    assert metrics["answer_rag_image_bytes"] == 2560
+    assert metrics["composer_raw_images_skipped"] == 2
+    assert metrics["composer_visual_descriptions_included"] == 3
     assert metrics["rag_raw_images_skipped"] == 3
-    assert metrics["rag_visual_descriptions_included"] == 3
+    assert metrics["rag_visual_descriptions_included"] == 5
 
 
 async def test_current_image_payload_error_maps_to_limit_error(

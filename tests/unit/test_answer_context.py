@@ -32,7 +32,11 @@ def test_packer_skips_image_only_chunks_when_image_budget_is_exhausted() -> None
     }
     budget = _budget(max_images=0)
 
-    packed = AnswerContextPacker().pack(contexts, image_budget=budget)
+    packed = AnswerContextPacker().pack(
+        contexts,
+        rag_image_budget=budget,
+        composer_image_budget=budget,
+    )
 
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["text-1"]
     assert packed.image_blocks_by_chunk_id == {}
@@ -56,7 +60,11 @@ def test_packer_keeps_text_when_chunk_image_does_not_fit() -> None:
     }
     budget = _budget(max_images=0)
 
-    packed = AnswerContextPacker().pack(contexts, image_budget=budget)
+    packed = AnswerContextPacker().pack(
+        contexts,
+        rag_image_budget=budget,
+        composer_image_budget=budget,
+    )
 
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["mixed-1"]
     assert packed.image_blocks_by_chunk_id == {}
@@ -81,14 +89,18 @@ def test_packer_keeps_fitting_image_blocks_by_chunk_id() -> None:
     }
     budget = _budget(max_images=1)
 
-    packed = AnswerContextPacker().pack(contexts, image_budget=budget)
+    packed = AnswerContextPacker().pack(
+        contexts,
+        rag_image_budget=budget,
+        composer_image_budget=budget,
+    )
 
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["visual-1"]
     assert packed.image_blocks_by_chunk_id["visual-1"]["type"] == "image_url"
     assert packed.trace["answer_context_images_sent"] == 1
 
 
-def test_composer_visual_does_not_evict_rag_visual() -> None:
+def test_composer_and_rag_visuals_use_independent_budgets() -> None:
     composer = {
         "chunk_id": "composer-visual",
         "reference_id": "composer_doc",
@@ -106,28 +118,57 @@ def test_composer_visual_does_not_evict_rag_visual() -> None:
         "metadata": {"source_type": "file"},
     }
 
-    rag_only = AnswerContextPacker().pack(
-        {"chunks": [rag], "entities": [], "relationships": []},
-        image_budget=_budget(max_images=1),
-        context_top_k=1,
-    )
     with_composer = AnswerContextPacker().pack(
         {"chunks": [composer, rag], "entities": [], "relationships": []},
-        image_budget=_budget(max_images=1),
+        rag_image_budget=_budget(max_images=1),
+        composer_image_budget=_budget(max_images=1),
         context_top_k=2,
     )
 
-    rag_only_row = rag_only.contexts["chunks"][0]
-    merged_rag_row = next(
-        row for row in with_composer.contexts["chunks"] if row["chunk_id"] == "rag-visual"
-    )
-    assert merged_rag_row == rag_only_row
     assert "rag-visual" in with_composer.image_blocks_by_chunk_id
-    assert "composer-visual" not in with_composer.image_blocks_by_chunk_id
+    assert "composer-visual" in with_composer.image_blocks_by_chunk_id
+    assert with_composer.trace["answer_context_rag_images_sent"] == 1
+    assert with_composer.trace["answer_context_composer_images_sent"] == 1
     assert [row["chunk_id"] for row in with_composer.contexts["chunks"]] == [
         "composer-visual",
         "rag-visual",
     ]
+
+
+def test_composer_byte_exhaustion_does_not_consume_rag_bytes() -> None:
+    composer = {
+        "chunk_id": "composer-visual",
+        "reference_id": "composer_doc",
+        "file_path": "upload.pdf",
+        "content": "Uploaded figure",
+        "image_data": _PNG_B64,
+        "metadata": {"source_type": "web_attachment"},
+    }
+    rag = {
+        "chunk_id": "rag-visual",
+        "reference_id": "rag-doc",
+        "file_path": "workspace.pdf",
+        "content": "Workspace figure",
+        "image_data": _PNG_B64,
+        "metadata": {"source_type": "file"},
+    }
+    composer_budget = _budget(max_images=1)
+    composer_budget.max_total_bytes = 1
+    rag_budget = _budget(max_images=1)
+
+    packed = AnswerContextPacker().pack(
+        {"chunks": [composer, rag], "entities": [], "relationships": []},
+        composer_image_budget=composer_budget,
+        rag_image_budget=rag_budget,
+        context_top_k=2,
+    )
+
+    assert "composer-visual" not in packed.image_blocks_by_chunk_id
+    assert "rag-visual" in packed.image_blocks_by_chunk_id
+    assert composer_budget.used_bytes == 0
+    assert rag_budget.used_bytes > 0
+    assert packed.trace["answer_context_composer_images_skipped"] == 1
+    assert packed.trace["answer_context_rag_images_sent"] == 1
 
 
 def test_packer_backfills_answer_context_after_skipping_image_only_chunks() -> None:
@@ -159,7 +200,8 @@ def test_packer_backfills_answer_context_after_skipping_image_only_chunks() -> N
 
     packed = AnswerContextPacker().pack(
         contexts,
-        image_budget=_budget(max_images=0),
+        rag_image_budget=_budget(max_images=0),
+        composer_image_budget=_budget(max_images=0),
         context_top_k=2,
     )
 
@@ -206,7 +248,12 @@ def test_packer_drops_kg_items_without_matching_source_chunks() -> None:
         ],
     }
 
-    packed = AnswerContextPacker().pack(contexts, image_budget=_budget(max_images=0))
+    budget = _budget(max_images=0)
+    packed = AnswerContextPacker().pack(
+        contexts,
+        rag_image_budget=budget,
+        composer_image_budget=budget,
+    )
 
     assert [e["entity_name"] for e in packed.contexts["entities"]] == ["Revenue"]
     assert [r["src_id"] for r in packed.contexts["relationships"]] == ["Revenue"]

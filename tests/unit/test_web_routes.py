@@ -112,7 +112,7 @@ def web_app(mock_manager, test_config: DlightragConfig):
             current_query=query,
             retrieval_query=query,
             text_history=tuple(prepared.text_history),
-            materialized_query_images=tuple(current_images),
+            current_query_images=tuple(current_images),
         )
 
     conversation_service.prepare_answer_turn = AsyncMock(side_effect=_prepare_answer_turn)

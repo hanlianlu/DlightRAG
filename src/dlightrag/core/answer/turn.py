@@ -17,13 +17,10 @@ class PreparedAnswerTurn:
     current_query: str
     retrieval_query: str
     text_history: tuple[dict[str, Any], ...] = ()
-    # Images shown to the answer model: current-turn uploads plus any resolved
-    # history images the planner referenced.
-    materialized_query_images: tuple[dict[str, Any], ...] = ()
-    # Current-turn uploads only -- the retrieval-enhancement subset. History
-    # images' retrieval semantics are owned by the planner (woven into the
-    # standalone query), so they are excluded here to avoid re-describing them.
+    # Current-turn uploads drive retrieval and are strict answer inputs.
     current_query_images: tuple[dict[str, Any], ...] = ()
+    # Planner-selected Web history images are answer-only, best-effort inputs.
+    history_query_images: tuple[dict[str, Any], ...] = ()
     # VLM descriptions of current-turn images (ordinal -> text), computed once in
     # prepare_answer_turn so the planner is image-aware without re-describing them
     # downstream in retrieval.
@@ -36,6 +33,7 @@ class PreparedAnswerTurn:
     # core only places them ahead of the untouched RAG rows for answer assembly.
     composer_context_chunks: tuple[dict[str, Any], ...] = ()
     composer_evidence_trace: dict[str, Any] = field(default_factory=dict)
+    web_composer_visuals: bool = False
     # Current attachment id -> deterministic planner digest. The Web adapter
     # persists these with the completed turn so future planner turns can resolve
     # references to prior documents without reparsing them.
@@ -62,7 +60,6 @@ class PreparedAnswerTurn:
             current_query=query,
             retrieval_query=query,
             text_history=tuple(history or ()),
-            materialized_query_images=images,
             current_query_images=images,
         )
 

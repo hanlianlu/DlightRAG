@@ -120,9 +120,8 @@ async def test_prepare_answer_turn_injects_plan_and_orders_current_first() -> No
         workspaces=["default"],
     )
 
-    urls = [block["image_url"]["url"] for block in turn.materialized_query_images]
-    assert urls[0] == "data:image/png;base64,AAA"  # current image is always first
-    assert len(urls) == 2  # current + one materialized history image
+    assert turn.current_query_images == tuple(current)
+    assert len(turn.history_query_images) == 1
     assert turn.plan is not None
     assert turn.plan.standalone_query.startswith("2023 revenue trend")
     assert manager.plan_kwargs["allowed_history_image_count"] == 5  # 6 effective - 1 current
@@ -152,4 +151,5 @@ async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
     assert manager.plan_kwargs["current_image_descriptions"] is None  # no images -> no descriptions
     assert turn.current_image_descriptions == {}
     assert store.fetched == []  # nothing materialized
-    assert turn.materialized_query_images == ()
+    assert turn.current_query_images == ()
+    assert turn.history_query_images == ()

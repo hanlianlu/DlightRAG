@@ -36,6 +36,13 @@ def test_language_detection_uses_lingua() -> None:
     assert any(dep.startswith("lingua-language-detector") for dep in dependencies)
 
 
+def test_composer_bm25_has_floor_without_upper_bound() -> None:
+    dependencies = _dependencies()
+    bm25_dependencies = [dep for dep in dependencies if dep.startswith("bm25s")]
+
+    assert bm25_dependencies == ["bm25s>=0.3.9"]
+
+
 def test_postgres_init_uses_required_pg18_extensions() -> None:
     init_sql = Path("postgres/init.sql").read_text(encoding="utf-8")
 
