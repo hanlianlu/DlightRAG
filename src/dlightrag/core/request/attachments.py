@@ -785,8 +785,26 @@ class QueryAttachmentService:
         history_rows: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """Rank both Composer lanes from request-scoped cached vectors."""
+
+        def dense_trace(
+            status: str,
+            *,
+            current_chunks: int = 0,
+            history_chunks: int = 0,
+            error: str | None = None,
+        ) -> dict[str, Any]:
+            trace: dict[str, Any] = {
+                "composer_dense_status": status,
+                "composer_dense_current_chunks": current_chunks,
+                "composer_dense_history_chunks": history_chunks,
+                "composer_dense_chunks": current_chunks + history_chunks,
+            }
+            if error is not None:
+                trace["composer_dense_error"] = error
+            return trace
+
         if not current_rows and not history_rows:
-            return [], [], {}
+            return [], [], dense_trace("no_rows")
         if (
             sum(
                 estimate_tokens(str(row.get("content") or ""))
@@ -794,21 +812,21 @@ class QueryAttachmentService:
             )
             <= COMPOSER_FULL_PASS_TOKENS
         ):
-            return [], [], {}
+            return [], [], dense_trace("full_pass_not_needed")
         try:
             query_vector = await self._document_embedder.aembed_query(query)
             if query_vector is None:
-                return [], [], {"composer_evidence_embedding_error": "QueryEmbeddingError"}
+                return [], [], dense_trace("no_query_vector")
             query_array = np.asarray(query_vector, dtype=np.float32)
             if (
                 query_array.ndim != 1
                 or query_array.shape[0] != self._document_embedder.dimension
                 or not bool(np.isfinite(query_array).all())
             ):
-                return [], [], {"composer_evidence_embedding_error": "QueryEmbeddingError"}
+                return [], [], dense_trace("no_query_vector")
             query_norm = np.float32(np.linalg.norm(query_array))
             if not bool(np.isfinite(query_norm)) or float(query_norm) == 0.0:
-                return [], [], {}
+                return [], [], dense_trace("no_query_vector")
             principal_id = self._principal_id
             conversation_id = self._conversation_id
             if principal_id is None or conversation_id is None:
@@ -827,12 +845,22 @@ class QueryAttachmentService:
                 principal_id=principal_id,
                 conversation_id=conversation_id,
             )
-            return current, history, {}
+            if not current and not history:
+                return [], [], dense_trace("no_rows")
+            return (
+                current,
+                history,
+                dense_trace(
+                    "ranked",
+                    current_chunks=len(current),
+                    history_chunks=len(history),
+                ),
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning("Composer dense ranking failed; using local fusion", exc_info=True)
-            return [], [], {"composer_evidence_embedding_error": type(exc).__name__}
+            return [], [], dense_trace("failed", error=type(exc).__name__)
 
     async def _adense_rank_lane(
         self,

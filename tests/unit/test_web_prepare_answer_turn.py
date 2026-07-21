@@ -3,6 +3,7 @@
 
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock
 
 from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.request.planner import QueryPlan
@@ -219,7 +220,16 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
             assert query == "standalone"
             current_dense.extend(reversed(current_rows))
             history_dense.extend(reversed(history_rows))
-            return current_dense, history_dense, {"composer_dense_status": "ok"}
+            return (
+                current_dense,
+                history_dense,
+                {
+                    "composer_dense_status": "ranked",
+                    "composer_dense_current_chunks": len(current_dense),
+                    "composer_dense_history_chunks": len(history_dense),
+                    "composer_dense_chunks": len(current_dense) + len(history_dense),
+                },
+            )
 
     attachment_service = _AttachmentService()
     factory_calls: list[tuple[object, PreparedWebConversation]] = []
@@ -287,4 +297,146 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
     assert factory_calls == [(resources, _prepared())]
     assert events == ["parse-current", "parse-history", "dense", "selector"]
     assert turn.composer_processing_resources is resources
-    assert turn.composer_evidence_trace["composer_dense_status"] == "ok"
+    assert turn.composer_evidence_trace["composer_dense_status"] == "ranked"
+
+
+async def test_prepare_merges_actual_dense_trace_for_current_and_history(
+    test_config: Any,
+) -> None:
+    from dlightrag.core.request.attachments import (
+        AttachmentCacheKey,
+        AttachmentContextChunk,
+        AttachmentVectorPageRow,
+        QueryAttachmentService,
+        build_composer_embedding_signature,
+    )
+
+    store = _FakeStore()
+    history_id = "22222222-2222-2222-2222-222222222222"
+    current_key = AttachmentCacheKey("current-sha", "parser", "chunker", "current")
+    history_key = AttachmentCacheKey("history-sha", "parser", "chunker", "history")
+    embedder = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        asymmetric=True,
+        min_image_pixel=32,
+        aembed_query=AsyncMock(return_value=[1.0, 0.0]),
+    )
+    signature = build_composer_embedding_signature(
+        config=test_config,
+        embedder=cast("Any", embedder),
+        mode="text",
+    )
+
+    async def fetch_documents_by_ids(
+        principal_id: str,
+        conversation_id: str,
+        attachment_ids: list[str],
+        *,
+        ttl_days: int,
+    ) -> list[Any]:
+        assert attachment_ids == [history_id]
+        return [
+            SimpleNamespace(
+                attachment_id=history_id,
+                filename="history.pdf",
+                document_bytes=b"history",
+                content_sha256="history-sha",
+            )
+        ]
+
+    async def aiter_attachment_vectors(
+        principal_id: str,
+        conversation_id: str,
+        references: list[tuple[int, AttachmentCacheKey]],
+        *,
+        ttl_days: int,
+        page_size: int,
+    ):
+        assert principal_id == "alice"
+        assert conversation_id == "c1"
+        yield [
+            AttachmentVectorPageRow(
+                global_order,
+                cache_key,
+                signature,
+                [1.0, 0.0],
+            )
+            for global_order, cache_key in references
+        ]
+
+    store.fetch_documents_by_ids = fetch_documents_by_ids  # type: ignore[attr-defined]
+    store.aiter_attachment_vectors = aiter_attachment_vectors  # type: ignore[attr-defined]
+    manager = _FakeManager(effective=0)
+    resources = SimpleNamespace(
+        lightrag=object(),
+        config=test_config,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        rerank_func=None,
+    )
+    manager.processing_resources = resources
+
+    async def plan_with_history(*args: Any, **kwargs: Any) -> QueryPlan:
+        return QueryPlan(
+            original_query=str(args[0]),
+            standalone_query="standalone",
+            selected_history_attachment_ids=(history_id,),
+        )
+
+    manager.aplan_web_conversation_query = plan_with_history  # type: ignore[method-assign]
+    service = _service(store)
+
+    async def parse_with_real_service(
+        *,
+        attachment_service: object,
+        prepared: PreparedWebConversation,
+        documents: list[Any],
+    ) -> tuple[list[AttachmentContextChunk], list[dict[str, str]], list[Any]]:
+        assert isinstance(attachment_service, QueryAttachmentService)
+        chunks = [
+            AttachmentContextChunk(
+                chunk_id=f"chunk-{document.attachment_id}",
+                attachment_id=document.attachment_id,
+                filename=document.filename,
+                chunk_index=index,
+                content=("current evidence " * 30_000)
+                if document.attachment_id == _ID
+                else "history evidence",
+                cache_key=current_key if document.attachment_id == _ID else history_key,
+            )
+            for index, document in enumerate(documents, start=1)
+        ]
+        return chunks, [], []
+
+    async def select_evidence(**kwargs: Any):
+        assert [row["full_doc_id"] for row in kwargs["current_dense_rankings"]] == [_ID]
+        assert [row["full_doc_id"] for row in kwargs["history_dense_rankings"]] == [history_id]
+        return [*kwargs["current_rows"], *kwargs["history_rows"]], {
+            "composer_evidence_strategy": "retrieved"
+        }
+
+    service._parse_attachment_documents = parse_with_real_service  # type: ignore[method-assign]
+    manager._aselect_web_composer_evidence = select_evidence  # type: ignore[attr-defined]
+    current = SimpleNamespace(
+        attachment_id=_ID,
+        filename="current.pdf",
+        document_bytes=b"current",
+        content_sha256="current-sha",
+    )
+
+    turn = await service.prepare_answer_turn(
+        manager=cast("RAGServiceManager", manager),
+        prepared=_prepared(),
+        query="compare documents",
+        current_images=[],
+        current_documents=[current],  # type: ignore[list-item]
+        workspaces=["default"],
+    )
+
+    assert turn.composer_evidence_trace["composer_dense_status"] == "ranked"
+    assert turn.composer_evidence_trace["composer_dense_current_chunks"] == 1
+    assert turn.composer_evidence_trace["composer_dense_history_chunks"] == 1
+    assert turn.composer_evidence_trace["composer_dense_chunks"] == 2
+    embedder.aembed_query.assert_awaited_once_with("standalone")

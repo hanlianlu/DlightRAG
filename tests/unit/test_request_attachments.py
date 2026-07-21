@@ -338,7 +338,12 @@ async def test_dense_rankings_embed_query_once_without_embedding_documents(
 
     assert [item["chunk_id"] for item in current] == ["citation-1"]
     assert history == []
-    assert trace == {}
+    assert trace == {
+        "composer_dense_status": "ranked",
+        "composer_dense_current_chunks": 1,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 1,
+    }
     embedder.aembed_query.assert_awaited_once_with("semantic query")
     embedder.aembed_documents.assert_not_awaited()
     assert "embedding_signature" not in current[0]
@@ -528,6 +533,62 @@ async def test_dense_rankings_stream_ttl_scoped_pages_of_256(test_config: Any) -
     ]
 
 
+async def test_dense_rankings_trace_counts_admitted_current_and_history_rows(
+    test_config: Any,
+) -> None:
+    keys = [
+        attachments.AttachmentCacheKey("content", "parser", "chunker", f"cache-{index}")
+        for index in range(3)
+    ]
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+
+    class _LaneStore(_SpyStore):
+        async def aiter_attachment_vectors(
+            self,
+            principal_id: str,
+            conversation_id: str,
+            references: list[tuple[int, attachments.AttachmentCacheKey]],
+            *,
+            ttl_days: int,
+            page_size: int,
+        ):
+            yield [
+                attachments.AttachmentVectorPageRow(
+                    global_order,
+                    cache_key,
+                    signature,
+                    [1.0, 0.0],
+                )
+                for global_order, cache_key in references
+            ]
+
+    service = _dense_service(
+        test_config=test_config,
+        store=_LaneStore(None),
+        embedder=embedder,
+    )
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [_dense_row(0, keys[0]), _dense_row(1, keys[1])],
+        [_dense_row(2, keys[2])],
+    )
+
+    assert [row["chunk_id"] for row in current] == ["citation-0", "citation-1"]
+    assert [row["chunk_id"] for row in history] == ["citation-2"]
+    assert trace == {
+        "composer_dense_status": "ranked",
+        "composer_dense_current_chunks": 2,
+        "composer_dense_history_chunks": 1,
+        "composer_dense_chunks": 3,
+    }
+
+
 async def test_dense_rankings_include_float32_half_and_ignore_invalid_vectors(
     test_config: Any,
 ) -> None:
@@ -565,7 +626,12 @@ async def test_dense_rankings_include_float32_half_and_ignore_invalid_vectors(
 
     assert [row["chunk_id"] for row in current] == ["citation-0", "citation-1"]
     assert history == []
-    assert trace == {}
+    assert trace == {
+        "composer_dense_status": "ranked",
+        "composer_dense_current_chunks": 2,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 2,
+    }
 
 
 async def test_dense_rankings_accept_current_fused_provider_text_fallback(
@@ -624,8 +690,58 @@ async def test_dense_rankings_zero_query_disables_store_reads(test_config: Any) 
 
     assert current == []
     assert history == []
-    assert trace == {}
+    assert trace == {
+        "composer_dense_status": "no_query_vector",
+        "composer_dense_current_chunks": 0,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 0,
+    }
     assert store.vector_calls == []
+
+
+async def test_dense_rankings_no_input_rows_skip_query_embedding(test_config: Any) -> None:
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    service = _dense_service(
+        test_config=test_config,
+        store=_SpyStore(None),
+        embedder=embedder,
+    )
+
+    current, history, trace = await service.adense_rankings("query", [], [])
+
+    assert current == []
+    assert history == []
+    assert trace == {
+        "composer_dense_status": "no_rows",
+        "composer_dense_current_chunks": 0,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 0,
+    }
+    embedder.aembed_query.assert_not_awaited()
+
+
+async def test_dense_rankings_no_valid_rows_report_zero_counts(test_config: Any) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    store = _SpyStore(None)
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [_dense_row(0, cache_key)],
+        [],
+    )
+
+    assert current == []
+    assert history == []
+    assert trace == {
+        "composer_dense_status": "no_rows",
+        "composer_dense_current_chunks": 0,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 0,
+    }
+    embedder.aembed_query.assert_awaited_once_with("query")
+    assert len(store.vector_calls) == 1
 
 
 async def test_dense_rankings_skip_query_model_for_short_full_pass(test_config: Any) -> None:
@@ -643,7 +759,12 @@ async def test_dense_rankings_skip_query_model_for_short_full_pass(test_config: 
 
     assert current == []
     assert history == []
-    assert trace == {}
+    assert trace == {
+        "composer_dense_status": "full_pass_not_needed",
+        "composer_dense_current_chunks": 0,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 0,
+    }
     embedder.aembed_query.assert_not_awaited()
     assert store.vector_calls == []
 
@@ -770,7 +891,13 @@ async def test_dense_rankings_failure_returns_error_type_and_empty_lanes(
 
     assert current == []
     assert history == []
-    assert trace["composer_evidence_embedding_error"] == "RuntimeError"
+    assert trace == {
+        "composer_dense_status": "failed",
+        "composer_dense_current_chunks": 0,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 0,
+        "composer_dense_error": "RuntimeError",
+    }
 
 
 def test_parse_owner_shim_persist_is_a_noop_holding_no_store() -> None:

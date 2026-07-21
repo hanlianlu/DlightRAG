@@ -1123,6 +1123,7 @@ async def test_prepare_answer_turn_passes_documents_to_web_planner(
 async def test_prepare_answer_turn_merges_current_document_context(
     service_under_test,
     conversation_store: AsyncMock,
+    test_config: DlightragConfig,
 ) -> None:
     from dlightrag.core.request.attachments import (
         ParsedAttachmentBundle,
@@ -1149,23 +1150,26 @@ async def test_prepare_answer_turn_merges_current_document_context(
         standalone_query="what does this say?",
         selected_history_attachment_ids=(),
     )
+    query_embedder = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        aembed_query=AsyncMock(side_effect=AssertionError("full pass must skip dense query")),
+    )
+    manager.aget_composer_processing_resources.return_value = SimpleNamespace(
+        lightrag=object(),
+        config=test_config,
+        robust_document_embedder=query_embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        rerank_func=None,
+    )
 
     async def _select(**kwargs: Any):
-        assert kwargs["current_dense_rankings"] == kwargs["current_rows"]
+        assert kwargs["current_dense_rankings"] == []
+        assert kwargs["history_dense_rankings"] == []
         return kwargs["current_rows"], {"composer_evidence_strategy": "full"}
 
     manager._aselect_web_composer_evidence.side_effect = _select
-
-    class _AttachmentService:
-        async def adense_rankings(
-            self, _query: str, current_rows: list[Any], history_rows: list[Any]
-        ):
-            return current_rows, history_rows, {}
-
-    attachment_service = _AttachmentService()
-    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
-        lambda _resources, _prepared: attachment_service
-    )
 
     chunk = build_text_attachment_chunk(
         attachment_id=document.attachment_id,
@@ -1220,6 +1224,11 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert selected_row["full_doc_id"] == document.attachment_id
     assert selected_row["metadata"]["attachment_scope"] == "current"
     assert turn.composer_evidence_trace["composer_evidence_strategy"] == "full"
+    assert turn.composer_evidence_trace["composer_dense_status"] == "full_pass_not_needed"
+    assert turn.composer_evidence_trace["composer_dense_current_chunks"] == 0
+    assert turn.composer_evidence_trace["composer_dense_history_chunks"] == 0
+    assert turn.composer_evidence_trace["composer_dense_chunks"] == 0
+    query_embedder.aembed_query.assert_not_awaited()
     processing_trace = turn.composer_evidence_trace["attachment_processing"]
     assert processing_trace[0]["attachment_id"] == document.attachment_id
     assert processing_trace[0]["attachment_analysis_outcome"] == "success"
