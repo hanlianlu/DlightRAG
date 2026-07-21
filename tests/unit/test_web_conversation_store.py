@@ -6,6 +6,11 @@ from typing import Any
 
 import pytest
 
+from dlightrag.core.request.attachments import (
+    AttachmentCacheKey,
+    AttachmentContextChunk,
+    ParsedAttachmentBundle,
+)
 from dlightrag.storage.web_conversations import (
     WEB_CONVERSATION_MIGRATIONS,
     CommitTurnResult,
@@ -89,6 +94,214 @@ def make_store(connection: FakeConnection) -> PGWebConversationStore:
     store = PGWebConversationStore(pool=FakePool(connection))
     store._initialized = True
     return store
+
+
+def _cached_chunk(
+    *,
+    cache_chunk_id: str = "cache-1",
+    parser_signature: str = "parser-v1",
+    chunk_signature: str = "chunker-v1",
+    embedding_signature: str | None = "embed-v1",
+    embedding_vector: list[float] | None = None,
+) -> AttachmentContextChunk:
+    return AttachmentContextChunk(
+        chunk_id="citation-1",
+        attachment_id="attachment-1",
+        filename="report.pdf",
+        chunk_index=1,
+        content="alpha",
+        cache_key=AttachmentCacheKey(
+            content_sha256="content-v1",
+            parser_signature=parser_signature,
+            chunk_signature=chunk_signature,
+            cache_chunk_id=cache_chunk_id,
+        ),
+        embedding_signature=embedding_signature,
+        embedding_vector=embedding_vector,
+    )
+
+
+async def test_attachment_chunk_load_is_ttl_scoped_and_keeps_cache_identity_private() -> None:
+    conn = FakeConnection()
+    conn.fetch_result = [
+        {
+            "chunk_id": "stored-cache-id",
+            "chunk_index": 1,
+            "content": "alpha",
+            "page_idx": None,
+            "bbox": None,
+            "sidecar_type": None,
+            "image_bytes": None,
+            "image_mime_type": None,
+            "token_estimate": 2,
+            "metadata": {},
+            "parser_signature": "parser-v1",
+            "chunk_signature": "chunker-v1",
+        }
+    ]
+    store = make_store(conn)
+
+    bundle = await store.load_attachment_chunks(
+        "p1",
+        "c1",
+        "attachment-new",
+        "report.pdf",
+        content_sha256="content-v1",
+        parser_signature="parser-v1",
+        chunk_signature="chunker-v1",
+        ttl_days=30,
+    )
+
+    assert bundle is not None
+    chunk = bundle.chunks[0]
+    assert chunk.chunk_id == "att:attachment-new:0001"
+    assert chunk.cache_key == AttachmentCacheKey(
+        "content-v1", "parser-v1", "chunker-v1", "stored-cache-id"
+    )
+    assert chunk.embedding_signature is None
+    assert chunk.embedding_vector is None
+    query, args = conn.calls[-1]
+    assert "JOIN web_conversations" in query
+    assert "updated_at >= NOW()" in query
+    assert "embedding_vector" not in query
+    assert args == ("p1", "c1", "content-v1", "parser-v1", "chunker-v1", 30)
+
+
+async def test_materialize_attachment_chunks_persists_vectors_atomically_when_unexpired() -> None:
+    conn = FakeConnection()
+    conn.fetchrow_result = {"unexpired": 1}
+    store = make_store(conn)
+    bundle = ParsedAttachmentBundle(
+        chunks=[_cached_chunk(embedding_vector=[0.25, 0.75])],
+        parser_signature="parser-v1",
+    )
+
+    materialized = await store.materialize_attachment_chunks(
+        "p1",
+        "c1",
+        content_sha256="content-v1",
+        parser_signature="parser-v1",
+        chunk_signature="chunker-v1",
+        bundle=bundle,
+        ttl_days=30,
+    )
+
+    assert materialized is True
+    assert conn.transactions == [{}]
+    guard_query, guard_args = conn.calls[0]
+    assert "FOR UPDATE" in guard_query
+    assert "updated_at >= NOW()" in guard_query
+    assert guard_args == ("p1", "c1", 30)
+    insert_query, insert_args = conn.calls[-1]
+    assert "embedding_signature" in insert_query
+    assert "embedding_vector" in insert_query
+    assert insert_args[-2] == "embed-v1"
+    assert insert_args[-1] == "[0.25, 0.75]"
+
+
+async def test_expired_attachment_chunk_writes_are_noops() -> None:
+    conn = FakeConnection()
+    conn.fetchrow_result = None
+    store = make_store(conn)
+    bundle = ParsedAttachmentBundle(chunks=[_cached_chunk(embedding_vector=[1.0, 0.0])])
+
+    assert (
+        await store.materialize_attachment_chunks(
+            "p1",
+            "c1",
+            content_sha256="content-v1",
+            parser_signature="parser-v1",
+            chunk_signature="chunker-v1",
+            bundle=bundle,
+            ttl_days=30,
+        )
+        is False
+    )
+    assert (
+        await store.aupdate_attachment_chunk_vectors(
+            "p1", "c1", [_cached_chunk(embedding_vector=[1.0, 0.0])], ttl_days=30
+        )
+        is False
+    )
+    assert not any(
+        "DELETE FROM web_conversation_attachment_chunks" in query for query, _ in conn.calls
+    )
+    assert not any("UPDATE web_conversation_attachment_chunks" in query for query, _ in conn.calls)
+
+
+async def test_vector_refresh_uses_the_complete_scoped_cache_key() -> None:
+    conn = _UpdatingConnection()
+    conn.fetchrow_result = {"unexpired": 1}
+    store = make_store(conn)
+    chunk = _cached_chunk(
+        cache_chunk_id="same-id",
+        parser_signature="parser-current",
+        chunk_signature="chunker-current",
+        embedding_vector=[1.0, 2.0],
+    )
+
+    assert await store.aupdate_attachment_chunk_vectors("p1", "c1", [chunk], ttl_days=30) is True
+
+    update_query, update_args = conn.calls[-1]
+    assert "principal_id = $1" in update_query
+    assert "conversation_id = $2::text::uuid" in update_query
+    assert "content_sha256 = $3" in update_query
+    assert "parser_signature = $4" in update_query
+    assert "chunk_signature = $5" in update_query
+    assert "chunk_id = $6" in update_query
+    assert update_args[:6] == (
+        "p1",
+        "c1",
+        "content-v1",
+        "parser-current",
+        "chunker-current",
+        "same-id",
+    )
+
+
+async def test_attachment_vector_iterator_preserves_duplicate_reference_ordinality() -> None:
+    key = AttachmentCacheKey("content-v1", "parser-v1", "chunker-v1", "cache-1")
+    conn = FakeConnection()
+    conn.fetch_result = [
+        {
+            "global_order": 3,
+            "content_sha256": key.content_sha256,
+            "parser_signature": key.parser_signature,
+            "chunk_signature": key.chunk_signature,
+            "cache_chunk_id": key.cache_chunk_id,
+            "embedding_signature": "embed-v1",
+            "embedding_vector": [1.0, 0.0],
+        },
+        {
+            "global_order": 8,
+            "content_sha256": key.content_sha256,
+            "parser_signature": key.parser_signature,
+            "chunk_signature": key.chunk_signature,
+            "cache_chunk_id": key.cache_chunk_id,
+            "embedding_signature": "embed-v1",
+            "embedding_vector": [1.0, 0.0],
+        },
+    ]
+    store = make_store(conn)
+
+    pages = [
+        page
+        async for page in store.aiter_attachment_vectors(
+            "p1",
+            "c1",
+            [(8, key), (3, key)],
+            ttl_days=30,
+            page_size=10,
+        )
+    ]
+
+    assert [[row.global_order for row in page] for page in pages] == [[3, 8]]
+    assert [row.cache_key for row in pages[0]] == [key, key]
+    query, args = conn.calls[-1]
+    assert "WITH ORDINALITY" in query
+    assert "JOIN web_conversations" in query
+    assert "updated_at >= NOW()" in query
+    assert args[2] == [3, 8]
 
 
 async def test_list_image_catalog_returns_caption_fields() -> None:

@@ -11,6 +11,7 @@ Skipped automatically if PostgreSQL is not available.
 """
 
 import hashlib
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -107,6 +108,7 @@ async def _delete_principal(pool: Any, principal_id: str) -> None:
 async def test_web_conversation_attachment_storage_round_trip() -> None:
     """Attachment insert/select/cache/cascade round-trips against live pg18."""
     from dlightrag.core.request.attachments import (
+        AttachmentCacheKey,
         AttachmentContextChunk,
         ParsedAttachmentBundle,
     )
@@ -199,6 +201,8 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
                     token_estimate=7,
                     page_idx=0,
                     metadata={"kind": "text"},
+                    embedding_signature="embed@v1",
+                    embedding_vector=[1.0, 0.0],
                 ),
                 AttachmentContextChunk(
                     chunk_id="src-visual-1",
@@ -212,16 +216,22 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
                     image_bytes=image_bytes,
                     image_mime_type="image/png",
                     metadata={"kind": "visual"},
+                    embedding_signature="embed@v1",
+                    embedding_vector=[0.0, 1.0],
                 ),
             ],
         )
-        await store.materialize_attachment_chunks(
-            principal_id,
-            conversation_id,
-            content_sha256=content_sha256,
-            parser_signature=parser_signature,
-            chunk_signature=chunk_signature,
-            bundle=source_bundle,
+        assert (
+            await store.materialize_attachment_chunks(
+                principal_id,
+                conversation_id,
+                content_sha256=content_sha256,
+                parser_signature=parser_signature,
+                chunk_signature=chunk_signature,
+                bundle=source_bundle,
+                ttl_days=_TTL_DAYS,
+            )
+            is True
         )
 
         # Cache HIT: same content+parser+chunk signature, but a *new*
@@ -235,6 +245,7 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
             content_sha256=content_sha256,
             parser_signature=parser_signature,
             chunk_signature=chunk_signature,
+            ttl_days=_TTL_DAYS,
         )
         assert loaded is not None
         assert loaded.parser_signature == parser_signature
@@ -244,10 +255,41 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
         assert text_chunk.attachment_id == reused_attachment_id
         assert text_chunk.content == "The quarterly results improved."
         assert text_chunk.image_bytes is None
+        assert text_chunk.cache_key == AttachmentCacheKey(
+            content_sha256,
+            parser_signature,
+            chunk_signature,
+            "src-text-0",
+        )
+        assert text_chunk.embedding_signature is None
+        assert text_chunk.embedding_vector is None
         assert visual_chunk.chunk_id == f"att:{reused_attachment_id}:0001"
         assert visual_chunk.image_bytes == image_bytes
         assert visual_chunk.image_mime_type == "image/png"
         assert visual_chunk.sidecar_type == "image"
+
+        # Vector reads use the stable full cache key, decode one bounded page,
+        # and preserve duplicate references in caller global order.
+        assert text_chunk.cache_key is not None
+        duplicate_pages = [
+            page
+            async for page in store.aiter_attachment_vectors(
+                principal_id,
+                conversation_id,
+                [(8, text_chunk.cache_key), (3, text_chunk.cache_key)],
+                ttl_days=_TTL_DAYS,
+                page_size=1,
+            )
+        ]
+        assert [[row.global_order for row in page] for page in duplicate_pages] == [[3], [8]]
+        assert [page[0].embedding_signature for page in duplicate_pages] == [
+            "embed@v1",
+            "embed@v1",
+        ]
+        assert [page[0].embedding_vector for page in duplicate_pages] == [
+            [1.0, 0.0],
+            [1.0, 0.0],
+        ]
 
         # Cache MISS: a different chunk signature returns nothing.
         missed = await store.load_attachment_chunks(
@@ -258,8 +300,101 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
             content_sha256=content_sha256,
             parser_signature=parser_signature,
             chunk_signature="chunker@v2",
+            ttl_days=_TTL_DAYS,
         )
         assert missed is None
+
+        # The same stored cache id can coexist under old signatures; refreshing
+        # the current generation must not alter the stale generation.
+        stale_parser_signature = "legacy@old"
+        stale_chunk_signature = "chunker@old"
+        stale_bundle = ParsedAttachmentBundle(
+            parser_signature=stale_parser_signature,
+            chunks=[
+                replace(
+                    source_bundle.chunks[0],
+                    embedding_signature="embed@old",
+                    embedding_vector=[0.5, 0.5],
+                )
+            ],
+        )
+        assert (
+            await store.materialize_attachment_chunks(
+                principal_id,
+                conversation_id,
+                content_sha256=content_sha256,
+                parser_signature=stale_parser_signature,
+                chunk_signature=stale_chunk_signature,
+                bundle=stale_bundle,
+                ttl_days=_TTL_DAYS,
+            )
+            is True
+        )
+        refreshed = replace(
+            text_chunk,
+            embedding_signature="embed@v2",
+            embedding_vector=[0.25, 0.75],
+        )
+        assert (
+            await store.aupdate_attachment_chunk_vectors(
+                principal_id,
+                conversation_id,
+                [refreshed],
+                ttl_days=_TTL_DAYS,
+            )
+            is True
+        )
+        stale_key = AttachmentCacheKey(
+            content_sha256,
+            stale_parser_signature,
+            stale_chunk_signature,
+            "src-text-0",
+        )
+        generation_pages = [
+            page
+            async for page in store.aiter_attachment_vectors(
+                principal_id,
+                conversation_id,
+                [(0, stale_key), (1, text_chunk.cache_key)],
+                ttl_days=_TTL_DAYS,
+                page_size=2,
+            )
+        ]
+        assert [row.embedding_signature for row in generation_pages[0]] == [
+            "embed@old",
+            "embed@v2",
+        ]
+
+        # Identical key material cannot be read through another principal or
+        # another conversation owned by the same principal.
+        other_conversation = await store.create_conversation(principal_id)
+        other_conversation_id = str(other_conversation["conversation_id"])
+        assert (
+            await store.load_attachment_chunks(
+                other_principal_id,
+                conversation_id,
+                attachment_id,
+                filename,
+                content_sha256=content_sha256,
+                parser_signature=parser_signature,
+                chunk_signature=chunk_signature,
+                ttl_days=_TTL_DAYS,
+            )
+            is None
+        )
+        assert (
+            await store.load_attachment_chunks(
+                principal_id,
+                other_conversation_id,
+                attachment_id,
+                filename,
+                content_sha256=content_sha256,
+                parser_signature=parser_signature,
+                chunk_signature=chunk_signature,
+                ttl_days=_TTL_DAYS,
+            )
+            is None
+        )
 
         # 5) Principal-scoped document reads.
         fetched = await store.fetch_documents_by_ids(
@@ -285,7 +420,7 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
         # 6) Cascade cleanup: deleting the conversation must reclaim BOTH the
         #    attachment rows and the parse-cache rows (migration 0004 FK).
         assert await _count_attachment_rows(pool, principal_id) == 1
-        assert await _count_chunk_rows(pool, principal_id) == 2
+        assert await _count_chunk_rows(pool, principal_id) == 3
 
         deleted = await store.delete_conversation(principal_id, conversation_id, ttl_days=_TTL_DAYS)
         assert deleted is True
@@ -296,4 +431,191 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
         # 7) Final cleanup: remove any residue for our unique test principals.
         await _delete_principal(pool, principal_id)
         await _delete_principal(pool, other_principal_id)
+        await pool.close()
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_expired_attachment_vector_reads_and_writes_miss_before_prune() -> None:
+    from dlightrag.core.request.attachments import (
+        AttachmentCacheKey,
+        AttachmentContextChunk,
+        ParsedAttachmentBundle,
+    )
+    from dlightrag.storage.web_conversations import PGWebConversationStore
+
+    principal_id = f"itest-expired-vector-{uuid4()}"
+    pool = await _open_pool()
+    try:
+        store = PGWebConversationStore(pool=pool)
+        await store.initialize()
+        await _delete_principal(pool, principal_id)
+        conversation = await store.create_conversation(principal_id)
+        conversation_id = str(conversation["conversation_id"])
+        cache_key = AttachmentCacheKey("content-expired", "parser-v1", "chunker-v1", "cache-1")
+        chunk = AttachmentContextChunk(
+            chunk_id=cache_key.cache_chunk_id,
+            attachment_id="attachment-1",
+            filename="expired.pdf",
+            chunk_index=1,
+            content="cached before expiry",
+            cache_key=cache_key,
+            embedding_signature="embed-v1",
+            embedding_vector=[1.0, 0.0],
+        )
+        bundle = ParsedAttachmentBundle(chunks=[chunk], parser_signature=cache_key.parser_signature)
+        assert (
+            await store.materialize_attachment_chunks(
+                principal_id,
+                conversation_id,
+                content_sha256=cache_key.content_sha256,
+                parser_signature=cache_key.parser_signature,
+                chunk_signature=cache_key.chunk_signature,
+                bundle=bundle,
+                ttl_days=_TTL_DAYS,
+            )
+            is True
+        )
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE web_conversations SET updated_at = NOW() - INTERVAL '31 days' "
+                "WHERE principal_id = $1 AND conversation_id = $2::text::uuid",
+                principal_id,
+                conversation_id,
+            )
+
+        assert (
+            await store.load_attachment_chunks(
+                principal_id,
+                conversation_id,
+                "attachment-new",
+                "expired.pdf",
+                content_sha256=cache_key.content_sha256,
+                parser_signature=cache_key.parser_signature,
+                chunk_signature=cache_key.chunk_signature,
+                ttl_days=_TTL_DAYS,
+            )
+            is None
+        )
+        assert [
+            page
+            async for page in store.aiter_attachment_vectors(
+                principal_id,
+                conversation_id,
+                [(0, cache_key)],
+                ttl_days=_TTL_DAYS,
+                page_size=1,
+            )
+        ] == [[]]
+        assert (
+            await store.materialize_attachment_chunks(
+                principal_id,
+                conversation_id,
+                content_sha256=cache_key.content_sha256,
+                parser_signature=cache_key.parser_signature,
+                chunk_signature=cache_key.chunk_signature,
+                bundle=bundle,
+                ttl_days=_TTL_DAYS,
+            )
+            is False
+        )
+        assert (
+            await store.aupdate_attachment_chunk_vectors(
+                principal_id,
+                conversation_id,
+                [replace(chunk, embedding_vector=[0.0, 1.0])],
+                ttl_days=_TTL_DAYS,
+            )
+            is False
+        )
+        assert await _count_chunk_rows(pool, principal_id) == 1
+
+        assert await store.prune_expired(ttl_days=_TTL_DAYS) >= 1
+        assert await _count_chunk_rows(pool, principal_id) == 0
+    finally:
+        await _delete_principal(pool, principal_id)
+        await pool.close()
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
+    from dlightrag.core.request.attachments import AttachmentContextChunk, ParsedAttachmentBundle
+    from dlightrag.storage.web_conversations import PGWebConversationStore
+
+    principal_id = f"itest-trim-vector-{uuid4()}"
+    pool = await _open_pool()
+    try:
+        store = PGWebConversationStore(pool=pool)
+        await store.initialize()
+        await _delete_principal(pool, principal_id)
+        conversation = await store.create_conversation(principal_id)
+        conversation_id = str(conversation["conversation_id"])
+        bundle = ParsedAttachmentBundle(
+            chunks=[
+                AttachmentContextChunk(
+                    chunk_id="cache-1",
+                    attachment_id="attachment-1",
+                    filename="trim.pdf",
+                    chunk_index=1,
+                    content="conversation-level cache",
+                    embedding_signature="embed-v1",
+                    embedding_vector=[1.0, 0.0],
+                )
+            ],
+            parser_signature="parser-v1",
+        )
+        assert (
+            await store.materialize_attachment_chunks(
+                principal_id,
+                conversation_id,
+                content_sha256="content-trim",
+                parser_signature="parser-v1",
+                chunk_signature="chunker-v1",
+                bundle=bundle,
+                ttl_days=_TTL_DAYS,
+            )
+            is True
+        )
+
+        for revision in range(2):
+            result = await store.commit_turn(
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                submission_id=str(uuid4()),
+                expected_revision=revision,
+                user_text=f"Question {revision}",
+                assistant_text=f"Answer {revision}",
+                answer_sources={},
+                queried_workspaces=[],
+                images=[],
+                attachments=[],
+                max_turns=1,
+                ttl_days=_TTL_DAYS,
+            )
+            assert result.saved is True
+
+        async with pool.acquire() as conn:
+            turn_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM web_conversation_turns "
+                "WHERE principal_id = $1 AND conversation_id = $2::text::uuid",
+                principal_id,
+                conversation_id,
+            )
+        assert int(turn_count) == 1
+        assert (
+            await store.load_attachment_chunks(
+                principal_id,
+                conversation_id,
+                "attachment-remapped",
+                "trim.pdf",
+                content_sha256="content-trim",
+                parser_signature="parser-v1",
+                chunk_signature="chunker-v1",
+                ttl_days=_TTL_DAYS,
+            )
+            is not None
+        )
+        assert await _count_chunk_rows(pool, principal_id) == 1
+    finally:
+        await _delete_principal(pool, principal_id)
         await pool.close()

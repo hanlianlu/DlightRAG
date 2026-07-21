@@ -4,6 +4,7 @@
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from lightrag.utils import TiktokenTokenizer
 
@@ -158,6 +159,86 @@ def test_attachment_context_chunk_emits_image_data_and_source_metadata() -> None
     assert "_answer_image_sent" not in row
 
 
+def test_attachment_context_chunk_keeps_full_cache_identity_private() -> None:
+    cache_key = attachments.AttachmentCacheKey(
+        content_sha256="content-v1",
+        parser_signature="parser-v1",
+        chunk_signature="chunker-v1",
+        cache_chunk_id="cache-chunk-1",
+    )
+    chunk = AttachmentContextChunk(
+        chunk_id="citation-chunk-1",
+        attachment_id="att-1",
+        filename="report.pdf",
+        chunk_index=1,
+        content="alpha",
+        cache_key=cache_key,
+        embedding_signature="embed-v1",
+        embedding_vector=[1.0, 0.0],
+    )
+
+    row = chunk.to_context_row()
+
+    assert row["chunk_id"] == "citation-chunk-1"
+    assert row["_cache_key"] == cache_key
+    assert "embedding_signature" not in row
+    assert "embedding_vector" not in row
+    assert "_cache_key" not in row["metadata"]
+
+
+def test_validate_attachment_vector_returns_matching_float32_vector() -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache-1")
+    row = attachments.AttachmentVectorPageRow(
+        global_order=7,
+        cache_key=cache_key,
+        embedding_signature="embed-v1",
+        embedding_vector=[3, 4],
+    )
+
+    vector = attachments.validate_attachment_vector(
+        row,
+        expected_signature="embed-v1",
+        expected_dimension=2,
+    )
+
+    assert vector is not None
+    assert vector.dtype == np.float32
+    np.testing.assert_array_equal(vector, np.asarray([3, 4], dtype=np.float32))
+
+
+@pytest.mark.parametrize(
+    ("signature", "vector", "expected_dimension"),
+    [
+        ("stale", [1.0, 2.0], 2),
+        ("embed-v1", [1.0], 2),
+        ("embed-v1", [float("nan"), 1.0], 2),
+        ("embed-v1", [float("inf"), 1.0], 2),
+        ("embed-v1", [0.0, 0.0], 2),
+        ("embed-v1", ["not-a-number", 1.0], 2),
+    ],
+)
+def test_validate_attachment_vector_treats_invalid_rows_as_misses(
+    signature: str,
+    vector: list[object],
+    expected_dimension: int,
+) -> None:
+    row = attachments.AttachmentVectorPageRow(
+        global_order=0,
+        cache_key=attachments.AttachmentCacheKey("content", "parser", "chunker", "cache-1"),
+        embedding_signature=signature,
+        embedding_vector=vector,
+    )
+
+    assert (
+        attachments.validate_attachment_vector(
+            row,
+            expected_signature="embed-v1",
+            expected_dimension=expected_dimension,
+        )
+        is None
+    )
+
+
 class _FakeLightRAG:
     """A minimal object exposing only the read-only parse/chunk knobs.
 
@@ -191,6 +272,7 @@ class _SpyStore:
         content_sha256: str,
         parser_signature: str,
         chunk_signature: str,
+        ttl_days: int,
     ) -> ParsedAttachmentBundle | None:
         self.load_calls.append(
             {
@@ -200,6 +282,7 @@ class _SpyStore:
                 "content_sha256": content_sha256,
                 "parser_signature": parser_signature,
                 "chunk_signature": chunk_signature,
+                "ttl_days": ttl_days,
             }
         )
         return self._cached
@@ -213,8 +296,10 @@ class _SpyStore:
         parser_signature: str,
         chunk_signature: str,
         bundle: ParsedAttachmentBundle,
-    ) -> None:
+        ttl_days: int,
+    ) -> bool:
         self.materialized.append(bundle)
+        return True
 
 
 def test_parse_owner_shim_persist_is_a_noop_holding_no_store() -> None:
@@ -296,7 +381,9 @@ async def test_service_returns_cache_hit_without_parsing(monkeypatch: Any) -> No
 
     monkeypatch.setattr(attachments, "parse_attachment_to_bundle", _boom)
 
-    service = QueryAttachmentService(lightrag=_FakeLightRAG(), store=store, parser_rules="")
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(), store=store, parser_rules="", ttl_days=30
+    )
     bundle, trace = await service.achunks_for_attachment(
         principal_id="p1",
         conversation_id="c1",
@@ -320,7 +407,9 @@ async def test_service_cache_miss_parses_and_materializes(monkeypatch: Any) -> N
 
     monkeypatch.setattr(attachments, "parse_attachment_to_bundle", _fake_parse)
 
-    service = QueryAttachmentService(lightrag=_FakeLightRAG(), store=store, parser_rules="")
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(), store=store, parser_rules="", ttl_days=30
+    )
     bundle, trace = await service.achunks_for_attachment(
         principal_id="p1",
         conversation_id="c1",
@@ -343,7 +432,9 @@ async def test_service_parse_failure_is_attachment_scoped(monkeypatch: Any) -> N
 
     monkeypatch.setattr(attachments, "parse_attachment_to_bundle", _fail)
 
-    service = QueryAttachmentService(lightrag=_FakeLightRAG(), store=store, parser_rules="")
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(), store=store, parser_rules="", ttl_days=30
+    )
     bundle, trace = await service.achunks_for_attachment(
         principal_id="p1",
         conversation_id="c1",

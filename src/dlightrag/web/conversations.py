@@ -392,6 +392,7 @@ class WebConversationService:
             lightrag=lightrag,
             store=self._store,
             parser_rules=manager.config.parser.rules,
+            ttl_days=self._ttl_days,
         )
 
     async def _parse_attachment_documents(

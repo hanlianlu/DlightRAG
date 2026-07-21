@@ -23,11 +23,57 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+from numpy.typing import NDArray
+
 from dlightrag.utils.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
 
 _ATTACHMENT_WORKSPACE = "__web_attachment__"
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentCacheKey:
+    """Stable conversation-cache identity, distinct from citation identity."""
+
+    content_sha256: str
+    parser_signature: str
+    chunk_signature: str
+    cache_chunk_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentVectorPageRow:
+    """One TTL-scoped cached vector row before core validation."""
+
+    global_order: int
+    cache_key: AttachmentCacheKey
+    embedding_signature: str | None
+    embedding_vector: list[object] | None
+
+
+def validate_attachment_vector(
+    row: AttachmentVectorPageRow,
+    *,
+    expected_signature: str,
+    expected_dimension: int,
+) -> NDArray[np.float32] | None:
+    """Return a valid float32 document vector, or treat the row as a cache miss."""
+    if row.embedding_signature != expected_signature or expected_dimension <= 0:
+        return None
+    try:
+        vector = np.asarray(row.embedding_vector, dtype=np.float32)
+    except TypeError, ValueError, OverflowError:
+        return None
+    if vector.ndim != 1 or vector.shape[0] != expected_dimension:
+        return None
+    if not bool(np.isfinite(vector).all()):
+        return None
+    norm = np.linalg.norm(vector)
+    if not bool(np.isfinite(norm)) or float(norm) == 0.0:
+        return None
+    return vector
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +97,9 @@ class AttachmentContextChunk:
     image_bytes: bytes | None = None
     image_mime_type: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    cache_key: AttachmentCacheKey | None = None
+    embedding_signature: str | None = None
+    embedding_vector: list[float] | None = None
 
     def to_context_row(self) -> dict[str, Any]:
         """Project into the shared answer-context row shape.
@@ -82,6 +131,8 @@ class AttachmentContextChunk:
         if self.image_bytes is not None:
             row["image_data"] = base64.b64encode(self.image_bytes).decode("ascii")
             row["image_mime_type"] = self.image_mime_type or "image/png"
+        if self.cache_key is not None:
+            row["_cache_key"] = self.cache_key
         return row
 
 
@@ -418,10 +469,11 @@ class QueryAttachmentService:
     imports the storage module at top level.
     """
 
-    def __init__(self, *, lightrag: Any, store: Any, parser_rules: str) -> None:
+    def __init__(self, *, lightrag: Any, store: Any, parser_rules: str, ttl_days: int) -> None:
         self._lightrag = lightrag
         self._store = store
         self._parser_rules = parser_rules
+        self._ttl_days = ttl_days
 
     async def achunks_for_attachment(
         self,
@@ -446,6 +498,7 @@ class QueryAttachmentService:
             content_sha256=content_sha256,
             parser_signature=parser_signature,
             chunk_signature=chunk_signature,
+            ttl_days=self._ttl_days,
         )
         if cached is not None:
             return cached, {"attachment_parse_cache_hit": True}
@@ -481,12 +534,15 @@ class QueryAttachmentService:
             parser_signature=parser_signature,
             chunk_signature=chunk_signature,
             bundle=bundle,
+            ttl_days=self._ttl_days,
         )
         return bundle, {"attachment_parse_cache_hit": False}
 
 
 __all__ = [
+    "AttachmentCacheKey",
     "AttachmentContextChunk",
+    "AttachmentVectorPageRow",
     "ParsedAttachmentBundle",
     "ParsedAttachmentDocument",
     "QueryAttachmentService",
@@ -495,4 +551,5 @@ __all__ = [
     "parse_attachment_to_bundle",
     "resolve_attachment_chunk_signature",
     "resolve_attachment_parser_signature",
+    "validate_attachment_vector",
 ]

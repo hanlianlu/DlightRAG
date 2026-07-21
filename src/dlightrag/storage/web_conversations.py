@@ -1,16 +1,25 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL persistence for principal-scoped Web conversations."""
 
+from __future__ import annotations
+
 import datetime
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from dlightrag.storage.migrations import Migration, apply_migrations
 
 if TYPE_CHECKING:
-    from dlightrag.core.request.attachments import ParsedAttachmentBundle
+    from dlightrag.core.request.attachments import (
+        AttachmentCacheKey,
+        AttachmentContextChunk,
+        AttachmentVectorPageRow,
+        ParsedAttachmentBundle,
+    )
 
 _CREATE_CONVERSATIONS = """
 CREATE TABLE IF NOT EXISTS web_conversations (
@@ -618,12 +627,25 @@ SELECT
     c.parser_signature,
     c.chunk_signature
 FROM web_conversation_attachment_chunks AS c
+JOIN web_conversations AS w
+    ON w.principal_id = c.principal_id
+ AND w.conversation_id = c.conversation_id
 WHERE c.principal_id = $1
   AND c.conversation_id = $2::text::uuid
   AND c.content_sha256 = $3
   AND c.parser_signature = $4
   AND c.chunk_signature = $5
+    AND w.updated_at >= NOW() - ($6 * INTERVAL '1 day')
 ORDER BY c.chunk_index ASC
+"""
+
+_LOCK_UNEXPIRED_CONVERSATION_FOR_CACHE_WRITE = """
+SELECT 1 AS unexpired
+FROM web_conversations
+WHERE principal_id = $1
+    AND conversation_id = $2::text::uuid
+    AND updated_at >= NOW() - ($3 * INTERVAL '1 day')
+FOR UPDATE
 """
 
 _DELETE_ATTACHMENT_CHUNKS_FOR_SIGNATURE = """
@@ -639,9 +661,72 @@ _INSERT_ATTACHMENT_CHUNK = """
 INSERT INTO web_conversation_attachment_chunks (
     principal_id, conversation_id, content_sha256, parser_signature, chunk_signature,
     chunk_id, chunk_index, content, page_idx, bbox, sidecar_type,
-    image_bytes, image_mime_type, token_estimate, metadata
+    image_bytes, image_mime_type, token_estimate, metadata,
+    embedding_signature, embedding_vector
 )
-VALUES ($1, $2::text::uuid, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15::jsonb)
+VALUES (
+    $1, $2::text::uuid, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12,
+    $13, $14, $15::jsonb, $16, $17::jsonb
+)
+"""
+
+_UPDATE_ATTACHMENT_CHUNK_VECTOR = """
+UPDATE web_conversation_attachment_chunks
+SET embedding_signature = $7,
+    embedding_vector = $8::jsonb
+WHERE principal_id = $1
+  AND conversation_id = $2::text::uuid
+  AND content_sha256 = $3
+  AND parser_signature = $4
+  AND chunk_signature = $5
+  AND chunk_id = $6
+"""
+
+_LOAD_ATTACHMENT_VECTOR_PAGE = """
+WITH requested AS (
+    SELECT
+        input.global_order,
+        input.content_sha256,
+        input.parser_signature,
+        input.chunk_signature,
+        input.cache_chunk_id,
+        input.ordinality
+    FROM unnest(
+        $3::bigint[],
+        $4::text[],
+        $5::text[],
+        $6::text[],
+        $7::text[]
+    ) WITH ORDINALITY AS input(
+        global_order,
+        content_sha256,
+        parser_signature,
+        chunk_signature,
+        cache_chunk_id,
+        ordinality
+    )
+)
+SELECT
+    requested.global_order,
+    requested.content_sha256,
+    requested.parser_signature,
+    requested.chunk_signature,
+    requested.cache_chunk_id,
+    chunks.embedding_signature,
+    chunks.embedding_vector
+FROM requested
+JOIN web_conversation_attachment_chunks AS chunks
+  ON chunks.principal_id = $1
+ AND chunks.conversation_id = $2::text::uuid
+ AND chunks.content_sha256 = requested.content_sha256
+ AND chunks.parser_signature = requested.parser_signature
+ AND chunks.chunk_signature = requested.chunk_signature
+ AND chunks.chunk_id = requested.cache_chunk_id
+JOIN web_conversations AS conversations
+  ON conversations.principal_id = chunks.principal_id
+ AND conversations.conversation_id = chunks.conversation_id
+WHERE conversations.updated_at >= NOW() - ($8 * INTERVAL '1 day')
+ORDER BY requested.global_order ASC, requested.ordinality ASC
 """
 
 _FETCH_DOCUMENTS_BY_IDS = """
@@ -1109,6 +1194,7 @@ class PGWebConversationStore:
         content_sha256: str,
         parser_signature: str,
         chunk_signature: str,
+        ttl_days: int,
     ) -> ParsedAttachmentBundle | None:
         """Return the cached parse for one content+parser+chunk signature, if any.
 
@@ -1117,6 +1203,7 @@ class PGWebConversationStore:
         attachment so citations never point at a prior attachment.
         """
         from dlightrag.core.request.attachments import (
+            AttachmentCacheKey,
             AttachmentContextChunk,
             ParsedAttachmentBundle,
         )
@@ -1131,6 +1218,7 @@ class PGWebConversationStore:
                 content_sha256,
                 parser_signature,
                 chunk_signature,
+                ttl_days,
             )
             if not rows:
                 return None
@@ -1150,6 +1238,12 @@ class PGWebConversationStore:
                     else None,
                     image_mime_type=row["image_mime_type"],
                     metadata=_json_value(row["metadata"]),
+                    cache_key=AttachmentCacheKey(
+                        content_sha256=content_sha256,
+                        parser_signature=str(row["parser_signature"]),
+                        chunk_signature=str(row["chunk_signature"]),
+                        cache_chunk_id=str(row["chunk_id"]),
+                    ),
                 )
                 for row in rows
             ]
@@ -1166,12 +1260,21 @@ class PGWebConversationStore:
         parser_signature: str,
         chunk_signature: str,
         bundle: ParsedAttachmentBundle,
-    ) -> None:
+        ttl_days: int,
+    ) -> bool:
         """Replace the cached parse for one content+parser+chunk signature."""
         await self._ensure_initialized()
 
-        async def _operation(conn: Any) -> None:
+        async def _operation(conn: Any) -> bool:
             async with conn.transaction():
+                unexpired = await conn.fetchrow(
+                    _LOCK_UNEXPIRED_CONVERSATION_FOR_CACHE_WRITE,
+                    principal_id,
+                    conversation_id,
+                    ttl_days,
+                )
+                if unexpired is None:
+                    return False
                 await conn.execute(
                     _DELETE_ATTACHMENT_CHUNKS_FOR_SIGNATURE,
                     principal_id,
@@ -1181,6 +1284,11 @@ class PGWebConversationStore:
                     chunk_signature,
                 )
                 for chunk in bundle.chunks:
+                    cache_chunk_id = (
+                        chunk.cache_key.cache_chunk_id
+                        if chunk.cache_key is not None
+                        else chunk.chunk_id
+                    )
                     await conn.execute(
                         _INSERT_ATTACHMENT_CHUNK,
                         principal_id,
@@ -1188,7 +1296,7 @@ class PGWebConversationStore:
                         content_sha256,
                         parser_signature,
                         chunk_signature,
-                        chunk.chunk_id,
+                        cache_chunk_id,
                         chunk.chunk_index,
                         chunk.content,
                         chunk.page_idx,
@@ -1198,9 +1306,133 @@ class PGWebConversationStore:
                         chunk.image_mime_type,
                         chunk.token_estimate,
                         json.dumps(chunk.metadata),
+                        chunk.embedding_signature,
+                        json.dumps(chunk.embedding_vector)
+                        if chunk.embedding_vector is not None
+                        else None,
                     )
+                return True
 
-        await self._run_write(_operation)
+        return await self._run_write(_operation)
+
+    async def aupdate_attachment_chunk_vectors(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        chunks: list[AttachmentContextChunk],
+        *,
+        ttl_days: int,
+    ) -> bool:
+        """Refresh vectors only for exact unexpired conversation-cache rows."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                unexpired = await conn.fetchrow(
+                    _LOCK_UNEXPIRED_CONVERSATION_FOR_CACHE_WRITE,
+                    principal_id,
+                    conversation_id,
+                    ttl_days,
+                )
+                if unexpired is None:
+                    return False
+                updated = False
+                for chunk in chunks:
+                    key = chunk.cache_key
+                    if (
+                        key is None
+                        or chunk.embedding_signature is None
+                        or chunk.embedding_vector is None
+                    ):
+                        continue
+                    status = await conn.execute(
+                        _UPDATE_ATTACHMENT_CHUNK_VECTOR,
+                        principal_id,
+                        conversation_id,
+                        key.content_sha256,
+                        key.parser_signature,
+                        key.chunk_signature,
+                        key.cache_chunk_id,
+                        chunk.embedding_signature,
+                        json.dumps(chunk.embedding_vector),
+                    )
+                    updated = status.rsplit(" ", 1)[-1] == "1" or updated
+                return updated
+
+        return await self._run_write(_operation)
+
+    async def aiter_attachment_vectors(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        references: list[tuple[int, AttachmentCacheKey]],
+        *,
+        ttl_days: int,
+        page_size: int,
+    ) -> AsyncIterator[list[AttachmentVectorPageRow]]:
+        """Yield selected vectors in deterministic caller order, one decoded page at a time."""
+        from dlightrag.core.request.attachments import (
+            AttachmentCacheKey,
+            AttachmentVectorPageRow,
+        )
+
+        if page_size <= 0:
+            raise ValueError("page_size must be positive")
+        await self._ensure_initialized()
+        ordered = [
+            reference
+            for _, reference in sorted(
+                enumerate(references),
+                key=lambda item: (item[1][0], item[0]),
+            )
+        ]
+
+        async def _operation(
+            conn: Any,
+            *,
+            page_global_orders: list[int],
+            page_keys: list[AttachmentCacheKey],
+        ) -> list[AttachmentVectorPageRow]:
+            rows = await conn.fetch(
+                _LOAD_ATTACHMENT_VECTOR_PAGE,
+                principal_id,
+                conversation_id,
+                page_global_orders,
+                [key.content_sha256 for key in page_keys],
+                [key.parser_signature for key in page_keys],
+                [key.chunk_signature for key in page_keys],
+                [key.cache_chunk_id for key in page_keys],
+                ttl_days,
+            )
+            result: list[AttachmentVectorPageRow] = []
+            for row in rows:
+                decoded = _json_value(row["embedding_vector"])
+                vector = decoded if isinstance(decoded, list) else None
+                result.append(
+                    AttachmentVectorPageRow(
+                        global_order=int(row["global_order"]),
+                        cache_key=AttachmentCacheKey(
+                            content_sha256=str(row["content_sha256"]),
+                            parser_signature=str(row["parser_signature"]),
+                            chunk_signature=str(row["chunk_signature"]),
+                            cache_chunk_id=str(row["cache_chunk_id"]),
+                        ),
+                        embedding_signature=str(row["embedding_signature"])
+                        if row["embedding_signature"] is not None
+                        else None,
+                        embedding_vector=vector,
+                    )
+                )
+            return result
+
+        for offset in range(0, len(ordered), page_size):
+            page_references = ordered[offset : offset + page_size]
+            operation = partial(
+                _operation,
+                page_global_orders=[global_order for global_order, _ in page_references],
+                page_keys=[key for _, key in page_references],
+            )
+            yield await self._run_read(operation)
 
     async def find_committed_turn(
         self,
