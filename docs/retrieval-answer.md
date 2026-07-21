@@ -388,24 +388,50 @@ cascade all attachment-derived rows. Max-turn trimming removes old turn records
 but preserves the conversation-level parse/vector cache. Cache identity never
 crosses a conversation or principal boundary.
 
-For each current/history lane independently, long-document retrieval is:
+After parse/chunk work or a cache load, each current or planner-selected history
+attachment is routed exactly once by its total estimated chunk tokens:
 
 ```text
-BM25(content) + exact dense(cached vectors) + structure + coverage
-  -> shared RRF(k=60)
-  -> top 30 candidates
-  -> shared rerank_with_fallback()
-  -> per-document guarantees and token packing
+attachment
+  |-- <= 24,576 tokens -> full
+  |     all chunks enter the Answer Composer context directly
+  |     no document embedding or vector read
+  |     no dense, BM25, structure/coverage, RRF, or rerank work
+  `-- > 24,576 tokens -> retrieval
+        eagerly embed and cache text or fused document vectors
+        current + selected history retrieval attachments share:
+          one global exact-dense ordering
+          one BM25 + structure + coverage + dense RRF(k=60)
+          one top-30 candidate set total
+          one rerank_with_fallback() call
+        pack each attachment independently to <= 24,576 tokens
+        no attachment borrows another attachment's unused allowance
 ```
 
-Dense ranking embeds the standalone query once with query semantics, streams
-selected document vectors in bounded blocks, converts each block to `float32`,
-computes exact cosine similarity, and admits scores `>= np.float32(0.5)`. It is
-an exact `O(ND)` scan with deterministic source-order tie breaking. Missing,
-stale, invalid, or zero-norm vectors disable only the affected dense evidence;
-BM25, structure, and first/middle/last coverage continue. Rerank failure keeps
-the fused RRF order through the same shared fallback executor used by workspace
-RAG.
+The 24,576-token threshold and allowance are fixed for each attachment. There
+are no separate current, history, or combined Composer token targets. All
+retrieval-mode rows across current and selected history attachments compete in
+that single top-30 pool. Dense ranking embeds the standalone query once with
+query semantics, streams their cached document vectors in bounded blocks,
+converts each block to `float32`, computes exact cosine similarity, and admits
+scores `>= np.float32(0.5)`. It is an exact `O(ND)` scan with deterministic
+global source-order tie breaking. Missing, stale, invalid, or zero-norm vectors
+disable only the affected dense evidence; BM25, structure, and
+first/middle/last coverage continue. Rerank failure keeps the fused RRF order
+through the same shared fallback executor used by workspace RAG.
+
+Final Composer context keeps current attachment evidence before selected
+history attachment evidence. Each attachment is packed independently, but the
+complete Answer envelope also contains system and user instructions,
+conversation history, images, workspace RAG evidence, KG context, and
+references. The per-attachment allowance is not a guarantee that this complete
+envelope fits the answer model; final assembly may raise an overflow error
+rather than silently trim evidence.
+
+There is no Composer-to-ingest or Composer-to-workspace promotion bridge:
+Composer attachments and their cache rows never move into ingest or workspace
+storage. Principal, conversation, ownership, and TTL boundaries continue to
+apply throughout the Composer lifecycle.
 
 Attachment chunks carry a `web-attachment://<attachment_id>` source URI and a
 `__web_attachment__` sentinel workspace, so they never resolve a workspace image
