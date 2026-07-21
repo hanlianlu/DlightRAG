@@ -283,6 +283,8 @@ class RAGServiceManager:
         self._query_planner: QueryPlanner | None = None
         self._query_image_describer: QueryImageDescriber | None = None
         self._composer_model_bundle: ComposerModelBundle | None = None
+        self._query_image_describer_lock = asyncio.Lock()
+        self._composer_model_bundle_lock = asyncio.Lock()
         self._composer_evidence_selector: ComposerEvidenceSelector | None = None
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
@@ -967,34 +969,37 @@ class RAGServiceManager:
             )
         return self._query_planner
 
-    def _get_query_image_describer(self) -> QueryImageDescriber:
+    async def _aget_query_image_describer(self) -> QueryImageDescriber:
         """Lazy-create the VLM query-image describer."""
-        if self._query_image_describer is None:
-            from dlightrag.core.request.images import QueryImageDescriber
+        async with self._query_image_describer_lock:
+            if self._query_image_describer is None:
+                from dlightrag.core.request.images import QueryImageDescriber
 
-            cfg = self._config.query_images
-            transport = self._config.answer
-            self._query_image_describer = QueryImageDescriber(
-                vlm_func=self._get_composer_model_bundle().vlm_func,
-                max_images=cfg.max_current_images,
-                max_total_bytes=transport.image_max_total_bytes,
-                max_bytes_per_image=transport.image_max_bytes,
-                max_px=transport.image_max_px,
-                min_px=transport.image_min_px,
-                quality=transport.image_quality,
-                min_quality=transport.image_min_quality,
-            )
+                cfg = self._config.query_images
+                transport = self._config.answer
+                model_bundle = await self._aget_composer_model_bundle()
+                self._query_image_describer = QueryImageDescriber(
+                    vlm_func=model_bundle.vlm_func,
+                    max_images=cfg.max_current_images,
+                    max_total_bytes=transport.image_max_total_bytes,
+                    max_bytes_per_image=transport.image_max_bytes,
+                    max_px=transport.image_max_px,
+                    min_px=transport.image_min_px,
+                    quality=transport.image_quality,
+                    min_quality=transport.image_min_quality,
+                )
         return self._query_image_describer
 
-    def _get_composer_model_bundle(self) -> ComposerModelBundle:
+    async def _aget_composer_model_bundle(self) -> ComposerModelBundle:
         """Return the sole manager-owned Composer role bundle."""
-        if self._composer_model_bundle is None:
-            from dlightrag.models.composer import ComposerModelBundle
+        async with self._composer_model_bundle_lock:
+            if self._composer_model_bundle is None:
+                from dlightrag.models.composer import ComposerModelBundle
 
-            self._composer_model_bundle = ComposerModelBundle.create(
-                self._config,
-                bind=self._sem_bound,
-            )
+                self._composer_model_bundle = await ComposerModelBundle.acreate(
+                    self._config,
+                    bind=self._sem_bound,
+                )
         return self._composer_model_bundle
 
     def _get_composer_evidence_selector(self) -> ComposerEvidenceSelector:
@@ -1170,7 +1175,7 @@ class RAGServiceManager:
             return {}
         prepared = await prepare_query_images(
             query_images=images,
-            describer=self._get_query_image_describer(),
+            describer=await self._aget_query_image_describer(),
         )
         return prepared.descriptions_by_ordinal
 
@@ -1233,7 +1238,7 @@ class RAGServiceManager:
         """
         prepared = await prepare_query_images(
             query_images=list(query_images or []),
-            describer=self._get_query_image_describer(),
+            describer=await self._aget_query_image_describer(),
         )
         plan = await self._aplan_query_prepared(
             query,
@@ -1784,8 +1789,11 @@ class RAGServiceManager:
 
         await self._ingest_jobs.close()
 
-        composer_model_bundle = self._composer_model_bundle
-        self._composer_model_bundle = None
+        async with self._query_image_describer_lock:
+            self._query_image_describer = None
+            async with self._composer_model_bundle_lock:
+                composer_model_bundle = self._composer_model_bundle
+                self._composer_model_bundle = None
 
         for component in (
             self._answer_engine,

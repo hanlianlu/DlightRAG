@@ -11,7 +11,11 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from dlightrag.core.ingestion.uploads import safe_upload_basename
-from dlightrag.utils.images import split_data_uri, verify_web_image_bytes
+from dlightrag.utils.images import (
+    MODEL_IMAGE_MAX_PIXELS,
+    split_data_uri,
+    verify_web_image_bytes,
+)
 
 MAX_CURRENT_DOCUMENTS = 3
 MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
@@ -166,7 +170,11 @@ def _strict_base64_decoded_size(payload: str) -> int | None:
 
 
 def validate_web_images(
-    values: list[str], *, max_images: int, max_bytes: int
+    values: list[str],
+    *,
+    max_images: int,
+    max_bytes: int,
+    max_pixels: int = MODEL_IMAGE_MAX_PIXELS,
 ) -> tuple[ValidatedWebImage, ...]:
     """Strictly validate browser image uploads and return their canonical form."""
     if len(values) > max_images:
@@ -186,7 +194,7 @@ def validate_web_images(
         if len(raw) > max_bytes:
             raise ValueError(f"current image {ordinal} exceeds the {max_bytes}-byte limit")
         try:
-            mime_type = verify_web_image_bytes(raw)
+            mime_type = verify_web_image_bytes(raw, max_pixels=max_pixels)
         except ValueError as exc:
             raise ValueError(f"current image {ordinal} {exc}") from exc
         encoded = base64.b64encode(raw).decode("ascii")

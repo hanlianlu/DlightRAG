@@ -573,10 +573,15 @@ answer:
   image_max_bytes: 3000000
   image_max_total_bytes: 24000000
   image_max_px: 1536
+  image_max_pixels: 40000000
   image_min_px: 1024
   image_quality: 89
   image_min_quality: 79
 ```
+
+`answer.image_max_pixels` rejects compressed images whose declared decoded
+dimensions exceed the limit before RGB conversion. The Web upload validator and
+cache-neutral Composer analysis transport use the same ceiling.
 
 ## Query Images And Visual Assets
 

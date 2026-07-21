@@ -258,6 +258,7 @@ class TestAnswerConfig:
     def test_defaults_keep_prompt_context_controls(self):
         cfg = AnswerConfig()
         assert cfg.context_top_k == 30
+        assert cfg.image_max_pixels == 40_000_000
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
 
@@ -270,6 +271,7 @@ class TestAnswerConfig:
         [
             {"max_images": -1},
             {"image_max_total_bytes": 0},
+            {"image_max_pixels": 0},
             {"image_min_px": 0},
             {"image_min_quality": 96},
         ],
@@ -649,6 +651,7 @@ def test_multimodal_retrieval_defaults() -> None:
     assert cfg.answer.image_max_bytes == 3_000_000
     assert cfg.answer.image_max_total_bytes == 24_000_000
     assert cfg.answer.image_max_px == 1536
+    assert cfg.answer.image_max_pixels == 40_000_000
     assert cfg.answer.image_min_px == 1024
 
 

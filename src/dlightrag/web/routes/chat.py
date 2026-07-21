@@ -140,6 +140,7 @@ async def answer_stream(
             body.images,
             max_images=cfg.query_images.max_current_images,
             max_bytes=cfg.query_images.max_upload_bytes,
+            max_pixels=cfg.answer.image_max_pixels,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

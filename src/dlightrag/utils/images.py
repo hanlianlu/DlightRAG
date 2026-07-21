@@ -43,9 +43,14 @@ EMBED_IMAGE_MAX_BYTES = 14 * 1024 * 1024
 EMBED_IMAGE_QUALITY = 90
 EMBED_IMAGE_MIN_QUALITY = 70
 EMBED_IMAGE_MIN_PX = 256
+MODEL_IMAGE_MAX_PIXELS = 40_000_000
 
 
-def verify_web_image_bytes(raw: bytes) -> str:
+class _ImagePixelLimitError(ValueError):
+    pass
+
+
+def verify_web_image_bytes(raw: bytes, *, max_pixels: int = MODEL_IMAGE_MAX_PIXELS) -> str:
     """Return the MIME type of verified image bytes.
 
     Image decoding/verification lives here (utils); Web admission policy (counts,
@@ -55,9 +60,14 @@ def verify_web_image_bytes(raw: bytes) -> str:
     """
     try:
         with Image.open(io.BytesIO(raw)) as image:
+            width, height = image.size
+            if width <= 0 or height <= 0 or width * height > max(1, int(max_pixels)):
+                raise _ImagePixelLimitError(f"exceeds the {max_pixels}-pixel limit")
             image.verify()
         with Image.open(io.BytesIO(raw)) as image:
             image_format = image.format
+    except _ImagePixelLimitError as exc:
+        raise ValueError(str(exc)) from None
     except Exception as exc:
         raise ValueError("is not a valid image") from exc
     mime_type = _PILLOW_TO_MIME.get(image_format or "")
@@ -149,6 +159,7 @@ def bounded_image_data_uri(
     min_px: int,
     quality: int,
     min_quality: int,
+    max_pixels: int = MODEL_IMAGE_MAX_PIXELS,
 ) -> tuple[str, int] | None:
     """Return a model image data URI bounded for answer-model payloads.
 
@@ -164,6 +175,7 @@ def bounded_image_data_uri(
 
     max_bytes = max(1, int(max_bytes))
     max_px = max(1, int(max_px))
+    max_pixels = max(1, int(max_pixels))
     quality = min(95, max(1, int(quality)))
     min_px = min(max_px, max(1, int(min_px)))
     min_quality = min(quality, max(1, int(min_quality)))
@@ -172,6 +184,9 @@ def bounded_image_data_uri(
         with Image.open(io.BytesIO(raw)) as original:
             original_format = original.format or ""
             original_mime = _PILLOW_TO_MIME.get(original_format)
+            width, height = original.size
+            if width <= 0 or height <= 0 or width * height > max_pixels:
+                return None
             if (
                 original_format in _PASSTHROUGH_FORMATS
                 and original_mime

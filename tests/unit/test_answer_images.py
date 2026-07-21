@@ -66,6 +66,18 @@ def test_web_image_uses_detected_mime_not_declared_mime() -> None:
     assert image.data_uri.startswith("data:image/png;base64,")
 
 
+def test_web_image_rejects_excessive_total_pixels() -> None:
+    raw = _png_bytes((32, 32))
+
+    with pytest.raises(ValueError, match="pixel limit"):
+        validate_web_images(
+            [base64.b64encode(raw).decode()],
+            max_images=1,
+            max_bytes=len(raw),
+            max_pixels=100,
+        )
+
+
 def test_answer_image_budget_bounds_base64_images() -> None:
     budget = AnswerImageBudget(
         max_images=1,
@@ -178,6 +190,40 @@ def test_bounded_image_data_uri_preserves_small_budgeted_png() -> None:
     uri, byte_count = bounded
     assert uri == data_uri
     assert byte_count == len(raw)
+
+
+def test_bounded_image_rejects_pixel_bomb_before_rgb_conversion(monkeypatch) -> None:
+    converted = False
+
+    class HeaderOnlyImage:
+        format = "PNG"
+        size = (100_000, 100_000)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def convert(self, _mode):
+            nonlocal converted
+            converted = True
+            raise AssertionError("pixel-bomb image was converted")
+
+    monkeypatch.setattr(Image, "open", lambda *_args, **_kwargs: HeaderOnlyImage())
+
+    bounded = bounded_image_data_uri(
+        _PNG_B64,
+        max_bytes=10_000,
+        max_px=1536,
+        max_pixels=40_000_000,
+        min_px=1024,
+        quality=88,
+        min_quality=72,
+    )
+
+    assert bounded is None
+    assert converted is False
 
 
 def test_bounded_embedding_image_keeps_small_image_lossless() -> None:

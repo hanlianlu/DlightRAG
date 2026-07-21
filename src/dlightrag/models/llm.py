@@ -10,12 +10,14 @@ import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import Any, Literal, cast
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlparse
 
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.composer import (
     ComposerAnalysisSettings,
+    ComposerImagePayloadError,
     ComposerImageTransportSettings,
+    normalized_endpoint_fingerprint,
 )
 from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
 from dlightrag.models.providers import get_provider
@@ -220,17 +222,10 @@ def get_vlm_model_func(config: DlightragConfig) -> Callable:
 
 
 def _sanitized_model_identity(cfg: ModelConfig) -> dict[str, str | None]:
-    base_url: str | None = None
-    if cfg.base_url:
-        parsed = urlsplit(cfg.base_url)
-        hostname = parsed.hostname or ""
-        if parsed.port is not None:
-            hostname = f"{hostname}:{parsed.port}"
-        base_url = urlunsplit((parsed.scheme.lower(), hostname.lower(), parsed.path, "", ""))
     return {
         "provider": cfg.provider,
         "model": cfg.model,
-        "base_url": base_url,
+        "endpoint_fingerprint": normalized_endpoint_fingerprint(cfg.base_url),
     }
 
 
@@ -251,6 +246,7 @@ def _composer_image_blocks(
             value,
             max_bytes=min(settings.image_max_bytes, remaining_bytes),
             max_px=settings.image_max_px,
+            max_pixels=settings.image_max_pixels,
             min_px=settings.image_min_px,
             quality=settings.image_quality,
             min_quality=settings.image_min_quality,
@@ -310,7 +306,9 @@ def create_composer_analysis_adapter(
             "api_version",
         ):
             kwargs.pop(control, None)
-        kwargs.clear()
+        if kwargs:
+            unknown = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unexpected Composer analysis control(s): {unknown}")
 
         if messages is not None:
             if prompt is not None or system_prompt or history_messages or image_inputs:
@@ -332,6 +330,10 @@ def create_composer_analysis_adapter(
                 if image_inputs
                 else []
             )
+            if image_inputs and not image_blocks:
+                raise ComposerImagePayloadError(
+                    "Composer image payload admission rejected all supplied images"
+                )
             user_content: str | list[dict[str, Any]] = prompt
             if image_blocks:
                 user_content = [*image_blocks, {"type": "text", "text": prompt}]

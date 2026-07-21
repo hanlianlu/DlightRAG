@@ -2036,21 +2036,22 @@ class TestClose:
             extract_func=AsyncMock(),
             aclose=AsyncMock(),
         )
-        create = MagicMock(return_value=bundle)
-        monkeypatch.setattr(ComposerModelBundle, "create", create)
+        create = AsyncMock(return_value=bundle)
+        monkeypatch.setattr(ComposerModelBundle, "acreate", create)
         manager = RAGServiceManager(config=test_cfg)
 
-        assert manager._get_composer_model_bundle() is bundle
-        assert manager._get_composer_model_bundle() is bundle
-        describer = manager._get_query_image_describer()
+        assert await manager._aget_composer_model_bundle() is bundle
+        assert await manager._aget_composer_model_bundle() is bundle
+        describer = await manager._aget_query_image_describer()
 
         assert describer._vlm_func is vlm
-        create.assert_called_once()
+        create.assert_awaited_once()
 
         await manager.aclose()
         await manager.aclose()
 
         bundle.aclose.assert_awaited_once()
+        assert manager._query_image_describer is None
 
     async def test_composer_borrowers_do_not_duplicate_role_providers(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
@@ -2068,8 +2069,8 @@ class TestClose:
         monkeypatch.setattr(llm, "get_provider", get_provider)
         manager = RAGServiceManager(config=test_cfg)
 
-        bundle = manager._get_composer_model_bundle()
-        describer = manager._get_query_image_describer()
+        bundle = await manager._aget_composer_model_bundle()
+        describer = await manager._aget_query_image_describer()
         proxy = create_composer_analysis_proxy(
             lightrag=SimpleNamespace(tokenizer=object()),
             model_bundle=bundle,
@@ -2086,6 +2087,36 @@ class TestClose:
 
         for provider in providers:
             provider.aclose.assert_awaited_once()
+
+    async def test_composer_bundle_lazy_creation_is_single_flight(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.models.composer import ComposerModelBundle
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        bundle = SimpleNamespace(aclose=AsyncMock())
+
+        async def create(*args: Any, **kwargs: Any) -> SimpleNamespace:
+            started.set()
+            await release.wait()
+            return bundle
+
+        create_mock = AsyncMock(side_effect=create)
+        monkeypatch.setattr(ComposerModelBundle, "acreate", create_mock)
+        manager = RAGServiceManager(config=test_cfg)
+
+        first = asyncio.create_task(manager._aget_composer_model_bundle())
+        await started.wait()
+        second = asyncio.create_task(manager._aget_composer_model_bundle())
+        await asyncio.sleep(0)
+        release.set()
+
+        assert await first is bundle
+        assert await second is bundle
+        create_mock.assert_awaited_once()
+
+        await manager.aclose()
 
 
 class TestWorkspaceDiscovery:

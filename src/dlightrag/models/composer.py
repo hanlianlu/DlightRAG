@@ -1,15 +1,45 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Manager-owned Composer analysis model resources."""
 
+import asyncio
+import hashlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig
 
 logger = logging.getLogger(__name__)
+
+
+class ComposerImagePayloadError(RuntimeError):
+    """Composer analysis could not admit any supplied image payload."""
+
+
+def normalized_endpoint_fingerprint(value: Any) -> str | None:
+    """Hash a canonical endpoint without persisting recoverable routing data."""
+    if not value:
+        return None
+    raw = str(value)
+    try:
+        parsed = urlsplit(raw)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").rstrip(".").lower()
+        port = parsed.port
+        if port == {"http": 80, "https": 443}.get(scheme):
+            port = None
+        authority = f"[{hostname}]" if ":" in hostname else hostname
+        if port is not None:
+            authority = f"{authority}:{port}"
+        path = parsed.path or "/"
+        query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)), doseq=True)
+        canonical = urlunsplit((scheme, authority, path, query, ""))
+    except ValueError:
+        canonical = raw
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +50,7 @@ class ComposerImageTransportSettings:
     image_max_bytes: int
     image_max_total_bytes: int
     image_max_px: int
+    image_max_pixels: int
     image_min_px: int
     image_quality: int
     image_min_quality: int
@@ -32,6 +63,7 @@ class ComposerImageTransportSettings:
             image_max_bytes=int(answer.image_max_bytes),
             image_max_total_bytes=int(answer.image_max_total_bytes),
             image_max_px=int(answer.image_max_px),
+            image_max_pixels=int(answer.image_max_pixels),
             image_min_px=int(answer.image_min_px),
             image_quality=int(answer.image_quality),
             image_min_quality=int(answer.image_min_quality),
@@ -43,6 +75,7 @@ class ComposerImageTransportSettings:
             "image_max_bytes": self.image_max_bytes,
             "image_max_total_bytes": self.image_max_total_bytes,
             "image_max_px": self.image_max_px,
+            "image_max_pixels": self.image_max_pixels,
             "image_min_px": self.image_min_px,
             "image_quality": self.image_quality,
             "image_min_quality": self.image_min_quality,
@@ -127,9 +160,18 @@ class ComposerModelBundle:
     extract_identity: dict[str, Any]
     _closers: tuple[Callable[[], Awaitable[None]], ...] = field(repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
+    _pending_closers: list[Callable[[], Awaitable[None]]] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
+    _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._pending_closers = list(self._closers)
 
     @classmethod
-    def create(
+    async def acreate(
         cls,
         config: DlightragConfig,
         *,
@@ -138,32 +180,80 @@ class ComposerModelBundle:
         """Create both role adapters once and bind them to manager concurrency."""
         from dlightrag.models.llm import create_composer_analysis_adapter
 
-        vlm_func, vlm_identity, close_vlm = create_composer_analysis_adapter(config, role="vlm")
-        extract_func, extract_identity, close_extract = create_composer_analysis_adapter(
-            config, role="extract"
-        )
+        closers: list[Callable[[], Awaitable[None]]] = []
+        try:
+            vlm_func, vlm_identity, close_vlm = create_composer_analysis_adapter(config, role="vlm")
+            closers.append(close_vlm)
+            await asyncio.sleep(0)
+            bound_vlm = bind(vlm_func)
+
+            extract_func, extract_identity, close_extract = create_composer_analysis_adapter(
+                config, role="extract"
+            )
+            closers.append(close_extract)
+            await asyncio.sleep(0)
+            bound_extract = bind(extract_func)
+        except BaseException:
+            _clear_pending_cancellation()
+            await _rollback_composer_closers(closers)
+            raise
+
         return cls(
-            vlm_func=bind(vlm_func),
-            extract_func=bind(extract_func),
+            vlm_func=bound_vlm,
+            extract_func=bound_extract,
             vlm_identity=vlm_identity,
             extract_identity=extract_identity,
-            _closers=(close_vlm, close_extract),
+            _closers=tuple(closers),
         )
 
     async def aclose(self) -> None:
-        """Close each captured provider exactly once."""
-        if self._closed:
-            return
-        self._closed = True
-        for close in self._closers:
-            try:
-                await close()
-            except Exception:
-                logger.warning("Failed to close Composer model provider", exc_info=True)
+        """Close all providers, retaining unfinished closers for a later retry."""
+        async with self._close_lock:
+            if self._closed:
+                return
+            cancellation: asyncio.CancelledError | None = None
+            pending: list[Callable[[], Awaitable[None]]] = []
+            for close in self._pending_closers:
+                try:
+                    await close()
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                    pending.append(close)
+                    _clear_pending_cancellation()
+                except Exception:
+                    pending.append(close)
+                    logger.warning("Failed to close Composer model provider", exc_info=True)
+            self._pending_closers = pending
+            self._closed = not pending
+            if cancellation is not None:
+                raise cancellation
+
+
+def _clear_pending_cancellation() -> None:
+    task = asyncio.current_task()
+    if task is None:
+        return
+    while task.cancelling():
+        task.uncancel()
+
+
+async def _rollback_composer_closers(
+    closers: list[Callable[[], Awaitable[None]]],
+) -> None:
+    for close in closers:
+        try:
+            await close()
+        except asyncio.CancelledError:
+            _clear_pending_cancellation()
+            logger.warning("Composer model rollback was cancelled", exc_info=True)
+        except Exception:
+            logger.warning("Failed to roll back Composer model provider", exc_info=True)
 
 
 __all__ = [
     "ComposerAnalysisSettings",
+    "ComposerImagePayloadError",
     "ComposerImageTransportSettings",
     "ComposerModelBundle",
+    "normalized_endpoint_fingerprint",
 ]

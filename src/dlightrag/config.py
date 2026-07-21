@@ -485,6 +485,11 @@ class AnswerConfig(BaseModel):
         ge=1,
         description="Maximum image long edge sent to the answer LLM.",
     )
+    image_max_pixels: int = Field(
+        default=40_000_000,
+        ge=1,
+        description="Maximum decoded source pixels accepted for answer and Web images.",
+    )
     image_min_px: int = Field(
         default=1024,
         ge=1,

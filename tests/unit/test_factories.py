@@ -1,5 +1,6 @@
 """Tests for model factory functions."""
 
+import asyncio
 import base64
 import io
 from typing import Any
@@ -16,6 +17,7 @@ from dlightrag.config import (
     LLMConfig,
     LLMRolesConfig,
     ModelConfig,
+    QueryImagesConfig,
     RerankConfig,
 )
 from dlightrag.models.structured import StructuredOutput
@@ -688,10 +690,14 @@ class TestComposerAnalysisAdapter:
         )
 
         assert result == '{"answer": "ok"}'
+        from dlightrag.models.composer import normalized_endpoint_fingerprint
+
         assert identity == {
             "provider": "openai",
             "model": "vision-model",
-            "base_url": "https://example.test/v1",
+            "endpoint_fingerprint": normalized_endpoint_fingerprint(
+                "https://user:pass@example.test/v1?token=secret#fragment"
+            ),
         }
         content = seen["messages"][-1]["content"]
         assert content[-1] == {"type": "text", "text": "Describe the drawing"}
@@ -708,7 +714,7 @@ class TestComposerAnalysisAdapter:
         ],
     )
     @pytest.mark.asyncio
-    async def test_ignores_unknown_lightrag_controls_without_provider_leakage(
+    async def test_rejects_unknown_lightrag_controls_without_calling_provider(
         self,
         monkeypatch: pytest.MonkeyPatch,
         control: str,
@@ -721,13 +727,13 @@ class TestComposerAnalysisAdapter:
         )
         adapter, _identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")
 
-        result = await adapter(
-            "Describe the drawing",
-            **{control: value},
-        )
+        with pytest.raises(TypeError, match=control):
+            await adapter(
+                "Describe the drawing",
+                **{control: value},
+            )
 
-        assert result == '{"answer": "ok"}'
-        assert seen["model_kwargs"] == {}
+        assert seen == {}
 
     @pytest.mark.asyncio
     async def test_bounds_images_and_preserves_stream_semantics(
@@ -821,6 +827,52 @@ class TestComposerAnalysisAdapter:
         assert bounded_kwargs["min_px"] == 128
         assert seen["messages"][-1]["content"][0]["type"] == "image_url"
 
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            AnswerConfig(max_images=0),
+            AnswerConfig(
+                max_images=1,
+                image_max_bytes=1,
+                image_max_total_bytes=1,
+                image_max_px=16,
+                image_min_px=1,
+            ),
+        ],
+        ids=["no-image-slots", "compression-rejected"],
+    )
+    @pytest.mark.asyncio
+    async def test_rejected_composer_images_never_fall_back_to_text_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        answer: AnswerConfig,
+    ) -> None:
+        llm, seen = _capture_provider(monkeypatch)
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(model="vision-model", api_key="sk-test")),
+            embedding=_embedding_config(),
+            answer=answer,
+            query_images=QueryImagesConfig(max_current_images=answer.max_images),
+        )
+        adapter, _identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")
+
+        with pytest.raises(RuntimeError, match="Composer image payload") as exc_info:
+            await adapter(
+                "Describe the drawing",
+                image_inputs=[
+                    {
+                        "base64": (
+                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+                            "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                        ),
+                        "mime_type": "image/png",
+                    }
+                ],
+            )
+
+        assert type(exc_info.value).__name__ == "ComposerImagePayloadError"
+        assert seen == {}
+
     @pytest.mark.asyncio
     async def test_composer_bundle_owns_and_closes_each_role_once(
         self, monkeypatch: pytest.MonkeyPatch
@@ -843,7 +895,7 @@ class TestComposerAnalysisAdapter:
         monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
         cfg = DlightragConfig(embedding=_embedding_config())
 
-        bundle = ComposerModelBundle.create(cfg, bind=lambda func: func)
+        bundle = await ComposerModelBundle.acreate(cfg, bind=lambda func: func)
 
         assert bundle.vlm_func is vlm
         assert bundle.extract_func is extract
@@ -856,3 +908,144 @@ class TestComposerAnalysisAdapter:
 
         close_vlm.assert_awaited_once()
         close_extract.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_composer_bundle_rolls_back_vlm_when_extract_creation_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.models import llm
+        from dlightrag.models.composer import ComposerModelBundle
+
+        close_vlm = AsyncMock()
+
+        def create_adapter(config: DlightragConfig, *, role: str):
+            if role == "extract":
+                raise RuntimeError("extract construction failed")
+            return AsyncMock(), {"provider": "openai", "model": "vision"}, close_vlm
+
+        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
+        cfg = DlightragConfig(embedding=_embedding_config())
+
+        with pytest.raises(RuntimeError, match="extract construction failed"):
+            await ComposerModelBundle.acreate(cfg, bind=lambda func: func)
+
+        close_vlm.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_composer_bundle_rolls_back_both_roles_when_extract_binding_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.models import llm
+        from dlightrag.models.composer import ComposerModelBundle
+
+        vlm = AsyncMock()
+        extract = AsyncMock()
+        close_vlm = AsyncMock()
+        close_extract = AsyncMock()
+
+        def create_adapter(config: DlightragConfig, *, role: str):
+            if role == "vlm":
+                return vlm, {}, close_vlm
+            return extract, {}, close_extract
+
+        def bind(func: Any) -> Any:
+            if func is extract:
+                raise RuntimeError("extract binding failed")
+            return func
+
+        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
+        cfg = DlightragConfig(embedding=_embedding_config())
+
+        with pytest.raises(RuntimeError, match="extract binding failed"):
+            await ComposerModelBundle.acreate(cfg, bind=bind)
+
+        close_vlm.assert_awaited_once()
+        close_extract.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_composer_bundle_construction_cancellation_rolls_back_vlm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.models import llm
+        from dlightrag.models.composer import ComposerModelBundle
+
+        close_vlm = AsyncMock()
+        task = asyncio.current_task()
+        assert task is not None
+
+        def create_adapter(config: DlightragConfig, *, role: str):
+            assert role == "vlm"
+            task.cancel("construction cancelled")
+            return AsyncMock(), {}, close_vlm
+
+        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
+        cfg = DlightragConfig(embedding=_embedding_config())
+
+        with pytest.raises(asyncio.CancelledError, match="construction cancelled"):
+            await ComposerModelBundle.acreate(cfg, bind=lambda func: func)
+
+        close_vlm.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_composer_bundle_close_continues_after_cancellation_and_retries(
+        self,
+    ) -> None:
+        from dlightrag.models.composer import ComposerModelBundle
+
+        calls: list[str] = []
+        first_attempt = True
+
+        async def close_vlm() -> None:
+            nonlocal first_attempt
+            calls.append("vlm")
+            if first_attempt:
+                first_attempt = False
+                raise asyncio.CancelledError("shutdown")
+
+        async def close_extract() -> None:
+            calls.append("extract")
+
+        bundle = ComposerModelBundle(
+            vlm_func=AsyncMock(),
+            extract_func=AsyncMock(),
+            vlm_identity={},
+            extract_identity={},
+            _closers=(close_vlm, close_extract),
+        )
+
+        with pytest.raises(asyncio.CancelledError, match="shutdown"):
+            await bundle.aclose()
+
+        assert calls == ["vlm", "extract"]
+        assert bundle._closed is False
+
+        await bundle.aclose()
+        await bundle.aclose()
+
+        assert calls == ["vlm", "extract", "vlm"]
+        assert bundle._closed is True
+
+    @pytest.mark.asyncio
+    async def test_composer_bundle_close_retries_exception_without_double_closing(
+        self,
+    ) -> None:
+        from dlightrag.models.composer import ComposerModelBundle
+
+        close_vlm = AsyncMock(side_effect=[RuntimeError("temporary"), None])
+        close_extract = AsyncMock()
+        bundle = ComposerModelBundle(
+            vlm_func=AsyncMock(),
+            extract_func=AsyncMock(),
+            vlm_identity={},
+            extract_identity={},
+            _closers=(close_vlm, close_extract),
+        )
+
+        await bundle.aclose()
+        assert bundle._closed is False
+        await bundle.aclose()
+        await bundle.aclose()
+
+        assert close_vlm.await_count == 2
+        close_extract.assert_awaited_once()
+        assert bundle._closed is True

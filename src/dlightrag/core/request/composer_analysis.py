@@ -10,10 +10,9 @@ from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig, ModelConfig
-from dlightrag.models.composer import ComposerAnalysisSettings
+from dlightrag.models.composer import ComposerAnalysisSettings, normalized_endpoint_fingerprint
 from dlightrag.models.llm_roles import model_for_role
 
 COMPOSER_ANALYSIS_CONTRACT_VERSION = "1"
@@ -101,22 +100,15 @@ class ComposerLightRAGProxy:
             return bool(pipeline_status.get("cancellation_requested", False))
 
 
-def _sanitized_url(value: Any) -> str | None:
-    if not value:
-        return None
-    parsed = urlsplit(str(value))
-    hostname = parsed.hostname or ""
-    if parsed.port is not None:
-        hostname = f"{hostname}:{parsed.port}"
-    return urlunsplit((parsed.scheme.lower(), hostname.lower(), parsed.path, "", ""))
-
-
 def _safe_role_identity(identity: Any) -> dict[str, str | None]:
     value = identity if isinstance(identity, dict) else {}
+    endpoint_fingerprint = value.get("endpoint_fingerprint")
+    if not isinstance(endpoint_fingerprint, str):
+        endpoint_fingerprint = normalized_endpoint_fingerprint(value.get("base_url"))
     return {
         "provider": str(value.get("provider") or ""),
         "model": str(value.get("model") or ""),
-        "base_url": _sanitized_url(value.get("base_url")),
+        "endpoint_fingerprint": endpoint_fingerprint,
     }
 
 
@@ -291,10 +283,13 @@ def _normalize_failed_sidecars(blocks_path: str, process_options: str) -> None:
             }
             changed = True
         if changed:
-            sidecar_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            try:
+                sidecar_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError:
+                logger.warning("Could not write normalized Composer sidecar %s", sidecar_path)
 
 
 async def _request_cancellation(

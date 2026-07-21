@@ -2,6 +2,7 @@
 """Tests for isolated Composer multimodal sidecar analysis."""
 
 import asyncio
+import base64
 import json
 import os
 from pathlib import Path
@@ -267,6 +268,59 @@ async def test_real_unbound_lightrag_analyzer_produces_success(
     extract.assert_awaited_once()
 
 
+async def test_real_unbound_analyzer_degrades_when_composer_rejects_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.models import llm
+
+    monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "1")
+    image_path = tmp_path / "drawing.png"
+    image_path.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+            "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+    )
+    blocks_path = _blocks(
+        tmp_path,
+        kind="drawing",
+        item={"path": str(image_path)},
+    )
+    provider_calls: list[dict[str, Any]] = []
+
+    class _Provider:
+        supports_native_json_schema = False
+
+        async def complete(self, **kwargs: Any) -> str:
+            provider_calls.append(kwargs)
+            return "{}"
+
+    monkeypatch.setattr(llm, "get_provider", lambda *args, **kwargs: _Provider())
+    config = _config().model_copy(
+        update={
+            "answer": _config().answer.model_copy(update={"max_images": 0}),
+            "query_images": _config().query_images.model_copy(update={"max_current_images": 0}),
+        }
+    )
+    vlm, _identity, _close = llm.create_composer_analysis_adapter(config, role="vlm")
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(vlm=vlm),
+        config=config,
+        doc_id="doc-rejected-image",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.DEGRADED
+    assert result.cacheable is False
+    assert result.mm_chunk_count == 0
+    assert provider_calls == []
+
+
 @pytest.mark.parametrize("mark_processed", [False, True])
 async def test_success_requires_multimodal_processed_and_terminal_items(
     tmp_path: Path,
@@ -351,6 +405,45 @@ async def test_failure_items_are_demoted_to_skipped_before_renderer(
     assert result.outcome is ComposerAnalysisOutcome.DEGRADED
     assert result.mm_chunk_count == 0
     assert result.cacheable is False
+
+
+async def test_sidecar_normalization_write_error_stays_degraded_and_noncacheable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocks_path = _blocks(
+        tmp_path,
+        kind="drawing",
+        item={"llm_analyze_result": {"status": "failure", "message": "bad model"}},
+    )
+
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        parsed_data["multimodal_processed"] = True
+        return parsed_data
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+    original_write_text = Path.write_text
+
+    def write_text(path: Path, *args: Any, **kwargs: Any) -> int:
+        if path == _sidecar(blocks_path, "drawing"):
+            raise OSError("disk full")
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+        doc_id="doc-write-error",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.DEGRADED
+    assert result.cacheable is False
+    assert result.mm_chunk_count == 0
 
 
 async def test_cancellation_sets_private_flag_waits_cleanup_and_reraises(
@@ -474,6 +567,7 @@ async def test_repeated_cancellation_waits_for_child_cleanup_and_reraises_first_
         ("image_max_bytes", 2_000_000),
         ("image_max_total_bytes", 20_000_000),
         ("image_max_px", 1400),
+        ("image_max_pixels", 30_000_000),
         ("image_min_px", 900),
         ("image_quality", 88),
         ("image_min_quality", 78),
@@ -757,6 +851,7 @@ def test_analysis_signature_uses_canonical_immutable_image_transport_settings() 
         "image_max_bytes": config.answer.image_max_bytes,
         "image_max_total_bytes": config.answer.image_max_total_bytes,
         "image_max_px": config.answer.image_max_px,
+        "image_max_pixels": config.answer.image_max_pixels,
         "image_min_px": config.answer.image_min_px,
         "image_quality": config.answer.image_quality,
         "image_min_quality": config.answer.image_min_quality,
@@ -806,6 +901,74 @@ def test_analysis_signature_is_complete_deterministic_and_secret_free(
     assert payload["roles"]["vlm"]["temperature"] == 0.1
     assert payload["roles"]["vlm"]["model_options"] == {"top_p": 0.9}
     assert payload["roles"]["extract"]["model_options"] == {"reasoning_effort": "none"}
-    assert payload["roles"]["vlm"]["base_url"] == "https://vision.example/v1"
+    assert payload["roles"]["vlm"]["endpoint_fingerprint"]
+    assert "base_url" not in payload["roles"]["vlm"]
     assert "secret" not in first.lower()
     assert "sk-" not in first.lower()
+
+
+def test_analysis_signature_never_persists_raw_endpoint_tokens() -> None:
+    bundle = _bundle()
+    bundle.vlm_identity["base_url"] = (
+        "https://route-user:route-password@vision.example/private/path-token"
+        "?api_key=query-token&region=west"
+    )
+
+    signature = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=bundle,
+        config=_config(),
+        process_options="iteP",
+    )
+
+    for token in ("route-user", "route-password", "path-token", "query-token", "region"):
+        assert token not in signature
+    assert "base_url" not in json.loads(signature)["roles"]["vlm"]
+
+
+def test_analysis_signature_distinguishes_endpoint_query_routing() -> None:
+    first_bundle = _bundle()
+    second_bundle = _bundle()
+    first_bundle.vlm_identity["base_url"] = "https://vision.example/v1?deployment=blue"
+    second_bundle.vlm_identity["base_url"] = "https://vision.example/v1?deployment=green"
+
+    first = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=first_bundle,
+        config=_config(),
+        process_options="iteP",
+    )
+    second = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=second_bundle,
+        config=_config(),
+        process_options="iteP",
+    )
+
+    assert first != second
+
+
+def test_analysis_signature_stabilizes_equivalent_canonical_endpoints() -> None:
+    first_bundle = _bundle()
+    second_bundle = _bundle()
+    first_bundle.vlm_identity["base_url"] = (
+        "HTTPS://first:secret@VISION.EXAMPLE:443/v1?region=west&deployment=blue"
+    )
+    second_bundle.vlm_identity["base_url"] = (
+        "https://second:hidden@vision.example/v1?deployment=blue&region=west"
+    )
+
+    first = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=first_bundle,
+        config=_config(),
+        process_options="iteP",
+    )
+    second = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=second_bundle,
+        config=_config(),
+        process_options="iteP",
+    )
+
+    assert first == second
