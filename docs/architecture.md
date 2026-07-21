@@ -97,9 +97,12 @@ created for Composer vectors.
 
 Manual conversation deletion and inactivity-TTL pruning cascade through parsed
 chunks, VLM-derived content, image bytes, and vectors. Max-turn trimming removes
-old turns only and preserves the conversation-level attachment cache. Identical
-bytes may be reused within one conversation under matching signatures, but are
-never reused across conversations or principals.
+old turns and, through foreign-key cascades, their turn-owned raw query-image
+rows and raw attachment-upload rows. The conversation-level derived chunk and
+vector cache, including materialized sidecar images, persists until conversation
+TTL pruning or deletion. Identical bytes may be reused within one conversation
+under matching signatures, but are never reused across conversations or
+principals.
 
 ## Retrieval And Answer Flow
 

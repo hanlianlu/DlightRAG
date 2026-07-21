@@ -81,6 +81,24 @@ def test_public_docs_describe_slice_a_conversation_boundaries() -> None:
         assert stale not in public_docs
 
 
+def test_architecture_docs_describe_composer_trim_lifecycle() -> None:
+    architecture = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
+    composer = architecture.split("## Web Composer Attachment Flow", 1)[1].split(
+        "## Retrieval And Answer Flow", 1
+    )[0]
+
+    for required in (
+        "foreign-key cascades",
+        "turn-owned raw query-image",
+        "raw attachment-upload rows",
+        "conversation-level derived chunk and",
+        "persists until conversation",
+        "TTL pruning or deletion",
+    ):
+        assert required in composer
+    assert "Max-turn trimming removes\nold turns only" not in composer
+
+
 def test_per_interface_current_image_admission() -> None:
     images = [
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,image-{index}"}}

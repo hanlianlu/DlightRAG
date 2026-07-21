@@ -17,8 +17,12 @@ Requires a running PostgreSQL instance (localhost:5432, dlightrag/dlightrag).
 Skipped automatically if PostgreSQL is not available.
 """
 
+import ast
+import base64
 import hashlib
+import inspect
 import json
+import textwrap
 from dataclasses import replace
 from typing import Any, Never, cast
 from uuid import uuid4
@@ -40,6 +44,9 @@ _PG_CONN_KWARGS = dict(
 
 _TTL_DAYS = 30
 _MAX_TURNS = 100
+_DRAWING_IMAGE_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
 
 
 async def _pg_available() -> bool:
@@ -114,8 +121,12 @@ async def _delete_principal(pool: Any, principal_id: str) -> None:
 
 _WORKSPACE_STORAGE_HANDLES = (
     "full_docs",
+    "full_entities",
+    "full_relations",
     "doc_status",
     "text_chunks",
+    "entity_chunks",
+    "relation_chunks",
     "chunks_vdb",
     "entities_vdb",
     "relationships_vdb",
@@ -123,6 +134,33 @@ _WORKSPACE_STORAGE_HANDLES = (
     "llm_response_cache",
     "bm25",
 )
+
+
+def _installed_lightrag_storage_attributes() -> frozenset[str]:
+    from lightrag import LightRAG
+
+    storage_types = {
+        "BaseGraphStorage",
+        "BaseKVStorage",
+        "BaseVectorStorage",
+        "DocStatusStorage",
+    }
+    tree = ast.parse(textwrap.dedent(inspect.getsource(LightRAG.__post_init__)))
+    return frozenset(
+        node.target.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Attribute)
+        and isinstance(node.target.value, ast.Name)
+        and node.target.value.id == "self"
+        and ast.unparse(node.annotation) in storage_types
+    )
+
+
+async def test_workspace_storage_sentinels_match_installed_lightrag_contract() -> None:
+    assert frozenset(_WORKSPACE_STORAGE_HANDLES) - {"bm25"} == (
+        _installed_lightrag_storage_attributes()
+    )
 
 
 class _WorkspaceStorageSentinel:
@@ -176,6 +214,9 @@ class _StorageGuardedLightRAG:
 
 
 class _DeterministicComposerParser:
+    def __init__(self, *, include_drawing: bool) -> None:
+        self._include_drawing = include_drawing
+
     async def parse(self, ctx: Any) -> Any:
         from lightrag.parser.base import ParseResult
 
@@ -215,6 +256,23 @@ class _DeterministicComposerParser:
             ),
             encoding="utf-8",
         )
+        if self._include_drawing:
+            image_path = blocks_path.with_name("composer-contract-drawing.png")
+            image_path.write_bytes(_DRAWING_IMAGE_BYTES)
+            blocks_path.with_name("composer-contract.drawings.json").write_text(
+                json.dumps(
+                    {
+                        "drawings": {
+                            "drawing-1": {
+                                "path": image_path.name,
+                                "page_idx": 0,
+                                "bbox": [0, 0, 1, 1],
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
         await ctx.rag._persist_parsed_full_docs(
             ctx.doc_id,
             {"sidecar_location": str(blocks_path)},
@@ -231,14 +289,27 @@ class _DeterministicComposerParser:
 
 
 class _DeterministicComposerModels:
-    vlm_identity = {"provider": "test", "model": "unused-vlm"}
+    vlm_identity = {"provider": "test", "model": "deterministic-vlm"}
     extract_identity = {"provider": "test", "model": "deterministic-extract"}
 
-    def __init__(self) -> None:
+    def __init__(self, *, include_drawing: bool) -> None:
+        self._include_drawing = include_drawing
+        self.vlm_calls = 0
         self.extract_calls = 0
 
-    async def vlm_func(self, *_args: Any, **_kwargs: Any) -> str:
-        raise AssertionError("the table-only fixture must not call VLM")
+    async def vlm_func(self, *_args: Any, **kwargs: Any) -> str:
+        assert self._include_drawing
+        self.vlm_calls += 1
+        assert kwargs["stream"] is False
+        assert kwargs["response_format"] == {"type": "json_object"}
+        assert len(kwargs["image_inputs"]) == 1
+        return json.dumps(
+            {
+                "name": "Quarterly revenue chart",
+                "type": "Chart",
+                "description": "A chart showing Q4 revenue of 42.",
+            }
+        )
 
     async def extract_func(self, *_args: Any, **_kwargs: Any) -> str:
         self.extract_calls += 1
@@ -253,16 +324,22 @@ class _DeterministicComposerModels:
 class _DeterministicEmbeddingProvider:
     asymmetric = False
 
-    def __init__(self) -> None:
+    def __init__(self, *, include_drawing: bool) -> None:
+        self._include_drawing = include_drawing
         self.document_batches: list[list[str]] = []
+        self.fused_batches: list[list[str]] = []
 
     async def embed_texts(self, texts: list[str], *, context: str) -> list[list[float]]:
         assert context == "document"
         self.document_batches.append(list(texts))
         return [[1.0, 0.5, 0.25] for _text in texts]
 
-    async def embed_index_fused(self, _items: Any) -> list[list[float]]:
-        raise AssertionError("the table-only fixture must use text embeddings")
+    async def embed_index_fused(self, items: Any) -> list[list[float]]:
+        assert self._include_drawing
+        batch = list(items)
+        self.fused_batches.append([text for text, _image in batch])
+        assert all(image.size == (1, 1) for _text, image in batch)
+        return [[0.25, 0.5, 1.0] for _item in batch]
 
 
 @pytest.mark.usefixtures("pg_check")
@@ -875,7 +952,11 @@ async def test_expired_attachment_vector_reads_and_writes_miss_before_prune() ->
 @pytest.mark.usefixtures("pg_check")
 async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
     from dlightrag.core.request.attachments import AttachmentContextChunk, ParsedAttachmentBundle
-    from dlightrag.storage.web_conversations import PGWebConversationStore
+    from dlightrag.storage.web_conversations import (
+        PendingConversationAttachment,
+        PendingConversationImage,
+        PGWebConversationStore,
+    )
 
     principal_id = f"itest-trim-vector-{uuid4()}"
     pool = await _open_pool()
@@ -912,7 +993,9 @@ async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
             is True
         )
 
+        raw_attachment_bytes = b"turn-owned raw attachment"
         for revision in range(2):
+            first_turn = revision == 0
             result = await store.commit_turn(
                 principal_id=principal_id,
                 conversation_id=conversation_id,
@@ -922,8 +1005,35 @@ async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
                 assistant_text=f"Answer {revision}",
                 answer_sources={},
                 queried_workspaces=[],
-                images=[],
-                attachments=[],
+                images=(
+                    [
+                        PendingConversationImage(
+                            image_id=str(uuid4()),
+                            ordinal=0,
+                            mime_type="image/png",
+                            image_bytes=_DRAWING_IMAGE_BYTES,
+                            content_sha256=hashlib.sha256(_DRAWING_IMAGE_BYTES).hexdigest(),
+                            vlm_description="A turn-owned query image",
+                        )
+                    ]
+                    if first_turn
+                    else []
+                ),
+                attachments=(
+                    [
+                        PendingConversationAttachment(
+                            attachment_id=str(uuid4()),
+                            ordinal=0,
+                            filename="raw-turn.txt",
+                            mime_type="text/plain",
+                            suffix=".txt",
+                            attachment_bytes=raw_attachment_bytes,
+                            content_sha256=hashlib.sha256(raw_attachment_bytes).hexdigest(),
+                        )
+                    ]
+                    if first_turn
+                    else []
+                ),
                 max_turns=1,
                 ttl_days=_TTL_DAYS,
             )
@@ -936,7 +1046,21 @@ async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
                 principal_id,
                 conversation_id,
             )
+            raw_image_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM web_conversation_images "
+                "WHERE principal_id = $1 AND conversation_id = $2::text::uuid",
+                principal_id,
+                conversation_id,
+            )
+            raw_attachment_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM web_conversation_attachments "
+                "WHERE principal_id = $1 AND conversation_id = $2::text::uuid",
+                principal_id,
+                conversation_id,
+            )
         assert int(turn_count) == 1
+        assert int(raw_image_count) == 0
+        assert int(raw_attachment_count) == 0
         assert (
             await store.load_attachment_chunks(
                 principal_id,
@@ -957,9 +1081,15 @@ async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
 
 
 @pytest.mark.usefixtures("pg_check")
+@pytest.mark.parametrize(
+    "include_drawing",
+    [False, True],
+    ids=["text-table", "drawing"],
+)
 async def test_composer_cache_miss_materializes_only_web_rows(
     monkeypatch: pytest.MonkeyPatch,
     test_config: Any,
+    include_drawing: bool,
 ) -> None:
     from lightrag import LightRAG
 
@@ -972,11 +1102,11 @@ async def test_composer_cache_miss_materializes_only_web_rows(
     content_sha256 = hashlib.sha256(document_bytes).hexdigest()
     storage_accesses: list[str] = []
     lightrag = _StorageGuardedLightRAG(storage_accesses)
-    models = _DeterministicComposerModels()
-    embedding_provider = _DeterministicEmbeddingProvider()
+    models = _DeterministicComposerModels(include_drawing=include_drawing)
+    embedding_provider = _DeterministicEmbeddingProvider(include_drawing=include_drawing)
     embedder = RobustDocumentEmbedder(
         embedder=cast(Any, embedding_provider),
-        image_enabled=False,
+        image_enabled=include_drawing,
         dimension=3,
         min_image_pixel=1,
         batch_size=8,
@@ -990,8 +1120,9 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         }
     )
 
-    parser = _DeterministicComposerParser()
+    parser = _DeterministicComposerParser(include_drawing=include_drawing)
     monkeypatch.setattr("lightrag.parser.registry.get_parser", lambda _engine: parser)
+    monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "1")
     real_analyze_multimodal = LightRAG.analyze_multimodal
     analysis_proxies: list[Any] = []
 
@@ -1020,7 +1151,7 @@ async def test_composer_cache_miss_materializes_only_web_rows(
             parser_rules="",
             ttl_days=_TTL_DAYS,
             robust_document_embedder=embedder,
-            direct_image_embedding_enabled=False,
+            direct_image_embedding_enabled=include_drawing,
             model_bundle=models,
             config=config,
             principal_id=principal_id,
@@ -1031,14 +1162,15 @@ async def test_composer_cache_miss_materializes_only_web_rows(
             principal_id=principal_id,
             conversation_id=conversation_id,
             attachment_id=str(uuid4()),
-            filename="report.[-tP].txt",
+            filename=("report.[-itP].txt" if include_drawing else "report.[-tP].txt"),
             document_bytes=document_bytes,
             content_sha256=content_sha256,
         )
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT content, sidecar_type, embedding_signature, embedding_vector "
+                "SELECT content, sidecar_type, image_bytes, image_mime_type, "
+                "embedding_signature, embedding_vector "
                 "FROM web_conversation_attachment_chunks "
                 "WHERE principal_id = $1 AND conversation_id = $2::text::uuid "
                 "ORDER BY chunk_index",
@@ -1048,20 +1180,35 @@ async def test_composer_cache_miss_materializes_only_web_rows(
 
         assert trace["attachment_parse_cache_hit"] is False
         assert trace["attachment_analysis_outcome"] == "success"
-        assert trace["attachment_mm_chunk_count"] == 1
+        assert trace["attachment_mm_chunk_count"] == 1 + int(include_drawing)
         assert trace["attachment_cache_write_status"] == "written"
         assert trace["attachment_cache_materialized"] is True
-        assert trace["attachment_embedding_text"] == len(bundle.chunks)
+        assert trace["attachment_embedding_fused"] == int(include_drawing)
+        assert trace["attachment_embedding_text"] == len(bundle.chunks) - int(include_drawing)
         assert len(rows) == len(bundle.chunks) >= 2
         assert any(row["sidecar_type"] == "table" for row in rows)
         assert all(row["embedding_signature"] for row in rows)
         assert all(len(json.loads(row["embedding_vector"])) == 3 for row in rows)
         assert analysis_proxies
         assert models.extract_calls == 1
+        assert models.vlm_calls == int(include_drawing)
         assert lightrag.mm_renderer_calls == 1
-        assert sum(len(batch) for batch in embedding_provider.document_batches) == len(
-            bundle.chunks
+        assert sum(len(batch) for batch in embedding_provider.document_batches) == (
+            len(bundle.chunks) - int(include_drawing)
         )
+        if include_drawing:
+            drawing_rows = [row for row in rows if row["sidecar_type"] == "drawing"]
+            assert len(drawing_rows) == 1
+            drawing = drawing_rows[0]
+            assert drawing["image_bytes"] == _DRAWING_IMAGE_BYTES
+            assert drawing["image_mime_type"] == "image/png"
+            assert "A chart showing Q4 revenue of 42." in drawing["content"]
+            assert json.loads(drawing["embedding_signature"])["mode"] == "fused"
+            assert json.loads(drawing["embedding_vector"]) == [0.25, 0.5, 1.0]
+            assert len(embedding_provider.fused_batches) == 1
+            assert embedding_provider.fused_batches[0] == [drawing["content"]]
+        else:
+            assert embedding_provider.fused_batches == []
         assert storage_accesses == []
     finally:
         await _delete_principal(pool, principal_id)
