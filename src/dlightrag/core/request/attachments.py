@@ -51,6 +51,14 @@ logger = logging.getLogger(__name__)
 
 _ATTACHMENT_WORKSPACE = "__web_attachment__"
 _COMPOSER_EMBEDDING_CONTRACT_VERSION = 2
+_COMPOSER_ANALYSIS_OUTCOME_METADATA_KEY = "_composer_analysis_outcome"
+_COMPOSER_MM_RENDERED_METADATA_KEY = "_composer_mm_rendered"
+_COMPOSER_PRIVATE_METADATA_KEYS = frozenset(
+    {
+        _COMPOSER_ANALYSIS_OUTCOME_METADATA_KEY,
+        _COMPOSER_MM_RENDERED_METADATA_KEY,
+    }
+)
 COMPOSER_DENSE_SCORE_THRESHOLD = 0.5
 COMPOSER_DENSE_BLOCK_SIZE = 256
 COMPOSER_DENSE_PAGE_SIZE = 256
@@ -222,7 +230,11 @@ class AttachmentContextChunk:
         """
         source_uri = f"web-attachment://{self.attachment_id}"
         metadata = {
-            **self.metadata,
+            **{
+                key: value
+                for key, value in self.metadata.items()
+                if key not in _COMPOSER_PRIVATE_METADATA_KEYS
+            },
             "source_type": "web_attachment",
             "source_uri": source_uri,
             "source_download_locator": source_uri,
@@ -683,6 +695,7 @@ async def build_attachment_bundle_from_parse_result(
         }
         for offset, chunk in enumerate(multimodal_chunks, start=1)
     ]
+    mm_order_indices = {int(chunk["chunk_order_index"]) for chunk in mm_chunks}
 
     chunk_dict = build_chunks_dict_from_chunking_result(
         list(chunking_result) + list(mm_chunks),
@@ -692,7 +705,13 @@ async def build_attachment_bundle_from_parse_result(
 
     chunks: list[AttachmentContextChunk] = []
     for index, (chunk_id, payload) in enumerate(chunk_dict.items(), start=1):
-        metadata = dict(payload.get("metadata") or {})
+        metadata = {
+            key: value
+            for key, value in dict(payload.get("metadata") or {}).items()
+            if key not in _COMPOSER_PRIVATE_METADATA_KEYS
+        }
+        if int(payload.get("chunk_order_index", -1)) in mm_order_indices:
+            metadata[_COMPOSER_MM_RENDERED_METADATA_KEY] = True
         raw_sidecar = payload.get("sidecar")
         sidecar = raw_sidecar if isinstance(raw_sidecar, dict) else None
         image_bytes, image_mime = _materialize_sidecar_image(parsed.blocks_path, sidecar)
@@ -836,7 +855,7 @@ class QueryAttachmentService:
             conversation_id = self._conversation_id
             if principal_id is None or conversation_id is None:
                 raise RuntimeError("dense ranking requires a bound conversation scope")
-            current = await self._adense_rank_lane(
+            current, current_error = await self._adense_rank_lane(
                 current_long_rows,
                 query_array,
                 query_norm,
@@ -844,7 +863,7 @@ class QueryAttachmentService:
                 conversation_id=conversation_id,
                 request_vectors=request_vectors,
             )
-            history = await self._adense_rank_lane(
+            history, history_error = await self._adense_rank_lane(
                 history_long_rows,
                 query_array,
                 query_norm,
@@ -852,6 +871,19 @@ class QueryAttachmentService:
                 conversation_id=conversation_id,
                 request_vectors=request_vectors,
             )
+            read_error = current_error or history_error
+            if read_error is not None:
+                status = "ranked_degraded" if current or history else "failed"
+                return (
+                    current,
+                    history,
+                    dense_trace(
+                        status,
+                        current_chunks=len(current),
+                        history_chunks=len(history),
+                        error=read_error,
+                    ),
+                )
             if not current and not history:
                 return [], [], dense_trace("no_rows")
             return (
@@ -878,9 +910,9 @@ class QueryAttachmentService:
         principal_id: str,
         conversation_id: str,
         request_vectors: Mapping[AttachmentCacheKey, AttachmentRequestVector] | None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], str | None]:
         if not rows:
-            return []
+            return [], None
         references: list[tuple[int, AttachmentCacheKey]] = []
         expected_by_order: dict[int, tuple[AttachmentCacheKey, frozenset[str]]] = {}
         for global_order, row in enumerate(rows):
@@ -951,58 +983,10 @@ class QueryAttachmentService:
                 if score >= np.float32(COMPOSER_DENSE_SCORE_THRESHOLD):
                     scored.append((score, global_order))
 
-        async for page in self._store.aiter_attachment_vectors(
-            principal_id,
-            conversation_id,
-            references,
-            ttl_days=self._ttl_days,
-            page_size=COMPOSER_DENSE_PAGE_SIZE,
-        ):
-            for start in range(0, len(page), COMPOSER_DENSE_BLOCK_SIZE):
-                candidates: list[tuple[int, NDArray[np.float32]]] = []
-                for vector_row in page[start : start + COMPOSER_DENSE_BLOCK_SIZE]:
-                    if vector_row.global_order in processed_orders:
-                        continue
-                    expected = expected_by_order.get(vector_row.global_order)
-                    if expected is None:
-                        continue
-                    local = local_by_order.get(vector_row.global_order)
-                    vector: NDArray[np.float32] | None = None
-                    if local is not None and local.embedding_signature in expected[1]:
-                        vector = validate_attachment_vector(
-                            AttachmentVectorPageRow(
-                                vector_row.global_order,
-                                local.cache_key,
-                                local.embedding_signature,
-                                local.embedding_vector,
-                            ),
-                            expected_signature=local.embedding_signature,
-                            expected_dimension=self._document_embedder.dimension,
-                        )
-                    if vector is None:
-                        signature = vector_row.embedding_signature
-                        if vector_row.cache_key != expected[0] or signature not in expected[1]:
-                            continue
-                        vector = validate_attachment_vector(
-                            vector_row,
-                            expected_signature=signature,
-                            expected_dimension=self._document_embedder.dimension,
-                        )
-                    if vector is None:
-                        continue
-                    processed_orders.add(vector_row.global_order)
-                    candidates.append((vector_row.global_order, vector))
-                score_candidates(candidates)
-            del page
-
-        remaining_local_orders = [
-            global_order
-            for global_order in sorted(local_by_order)
-            if global_order not in processed_orders
-        ]
-        for start in range(0, len(remaining_local_orders), COMPOSER_DENSE_BLOCK_SIZE):
-            candidates = []
-            for global_order in remaining_local_orders[start : start + COMPOSER_DENSE_BLOCK_SIZE]:
+        local_orders = sorted(local_by_order)
+        for start in range(0, len(local_orders), COMPOSER_DENSE_BLOCK_SIZE):
+            local_candidates: list[tuple[int, NDArray[np.float32]]] = []
+            for global_order in local_orders[start : start + COMPOSER_DENSE_BLOCK_SIZE]:
                 expected = expected_by_order[global_order]
                 local = local_by_order[global_order]
                 if local.embedding_signature not in expected[1]:
@@ -1018,8 +1002,56 @@ class QueryAttachmentService:
                     expected_dimension=self._document_embedder.dimension,
                 )
                 if vector is not None:
-                    candidates.append((global_order, vector))
-            score_candidates(candidates)
+                    processed_orders.add(global_order)
+                    local_candidates.append((global_order, vector))
+            score_candidates(local_candidates)
+
+        pg_references = [
+            (global_order, cache_key)
+            for global_order, cache_key in references
+            if global_order not in processed_orders
+        ]
+        read_error: str | None = None
+        try:
+            if pg_references:
+                async for page in self._store.aiter_attachment_vectors(
+                    principal_id,
+                    conversation_id,
+                    pg_references,
+                    ttl_days=self._ttl_days,
+                    page_size=COMPOSER_DENSE_PAGE_SIZE,
+                ):
+                    for start in range(0, len(page), COMPOSER_DENSE_BLOCK_SIZE):
+                        candidates: list[tuple[int, NDArray[np.float32]]] = []
+                        for vector_row in page[start : start + COMPOSER_DENSE_BLOCK_SIZE]:
+                            if vector_row.global_order in processed_orders:
+                                continue
+                            expected = expected_by_order.get(vector_row.global_order)
+                            if expected is None:
+                                continue
+                            signature = vector_row.embedding_signature
+                            if vector_row.cache_key != expected[0] or signature not in expected[1]:
+                                continue
+                            vector = validate_attachment_vector(
+                                vector_row,
+                                expected_signature=signature,
+                                expected_dimension=self._document_embedder.dimension,
+                            )
+                            if vector is None:
+                                continue
+                            processed_orders.add(vector_row.global_order)
+                            candidates.append((vector_row.global_order, vector))
+                        score_candidates(candidates)
+                    del page
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            read_error = type(exc).__name__
+            logger.warning(
+                "Composer vector cache read failed; retaining ranked request-local vectors",
+                exc_info=True,
+            )
+
         scored.sort(key=lambda item: (-float(item[0]), item[1]))
         ranked: list[dict[str, Any]] = []
         for _score, global_order in scored:
@@ -1027,7 +1059,7 @@ class QueryAttachmentService:
             row.pop("embedding_signature", None)
             row.pop("embedding_vector", None)
             ranked.append(row)
-        return ranked
+        return ranked, read_error
 
     def _with_cache_keys(
         self,
@@ -1239,20 +1271,21 @@ class QueryAttachmentService:
         resolution: _AttachmentResolution,
         trace: AttachmentProcessingTrace,
     ) -> ParsedAttachmentBundle:
-        from lightrag.parser.routing import parse_process_options
-
         trace.parse_cache_hit = True
         chunks = list(cached.chunks)
-        options = parse_process_options(resolution.process_options)
-        trace.mm_chunk_count = sum(chunk.sidecar_type is not None for chunk in chunks)
-        trace.analysis_outcome = (
-            ComposerAnalysisOutcome.SUCCESS.value
-            if trace.mm_chunk_count > 0
-            or (
-                self._config.parser_sidecars.vlm.enabled
-                and (options.images or options.tables or options.equations)
-            )
-            else ComposerAnalysisOutcome.INTENTIONALLY_DISABLED.value
+        persisted_outcomes = {
+            outcome
+            for chunk in chunks
+            if (outcome := chunk.metadata.get(_COMPOSER_ANALYSIS_OUTCOME_METADATA_KEY))
+            in {
+                ComposerAnalysisOutcome.SUCCESS.value,
+                ComposerAnalysisOutcome.INTENTIONALLY_DISABLED.value,
+            }
+        }
+        if len(persisted_outcomes) == 1:
+            trace.analysis_outcome = persisted_outcomes.pop()
+        trace.mm_chunk_count = sum(
+            chunk.metadata.get(_COMPOSER_MM_RENDERED_METADATA_KEY) is True for chunk in chunks
         )
         references = [
             (index, chunk.cache_key)
@@ -1456,6 +1489,20 @@ class QueryAttachmentService:
             )
             return ParsedAttachmentBundle(chunks=[])
 
+        if analysis.cacheable:
+            bundle = replace(
+                bundle,
+                chunks=[
+                    replace(
+                        chunk,
+                        metadata={
+                            **chunk.metadata,
+                            _COMPOSER_ANALYSIS_OUTCOME_METADATA_KEY: analysis.outcome.value,
+                        },
+                    )
+                    for chunk in bundle.chunks
+                ],
+            )
         bundle = self._with_cache_keys(
             bundle,
             content_sha256=content_sha256,

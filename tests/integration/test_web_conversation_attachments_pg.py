@@ -1183,7 +1183,7 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT content, sidecar_type, image_bytes, image_mime_type, "
-                "embedding_signature, embedding_vector "
+                "metadata, embedding_signature, embedding_vector "
                 "FROM web_conversation_attachment_chunks "
                 "WHERE principal_id = $1 AND conversation_id = $2::text::uuid "
                 "ORDER BY chunk_index",
@@ -1202,6 +1202,14 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         assert any(row["sidecar_type"] == "table" for row in rows)
         assert all(row["embedding_signature"] for row in rows)
         assert all(len(json.loads(row["embedding_vector"])) == 3 for row in rows)
+        metadata_rows = [json.loads(row["metadata"]) for row in rows]
+        assert all(
+            metadata["_composer_analysis_outcome"] == "success" for metadata in metadata_rows
+        )
+        assert (
+            sum(metadata.get("_composer_mm_rendered") is True for metadata in metadata_rows)
+            == trace["attachment_mm_chunk_count"]
+        )
         assert analysis_proxies
         assert renderer_proxies == analysis_proxies
         assert models.extract_calls == 1

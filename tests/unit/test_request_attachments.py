@@ -400,6 +400,8 @@ async def test_bundle_uses_pre_rendered_mm_chunks_without_bound_renderer(tmp_pat
         "ordinary parser text",
         "analyzed chart",
     ]
+    assert "_composer_mm_rendered" not in bundle.chunks[0].metadata
+    assert bundle.chunks[1].metadata["_composer_mm_rendered"] is True
     assert bundle.chunks[1].sidecar_type == "drawing"
 
 
@@ -618,6 +620,127 @@ async def test_dense_rankings_prefer_valid_request_local_vector_over_stale_or_mi
     assert trace["composer_dense_status"] == "ranked"
     assert "embedding_signature" not in current[0]
     assert "embedding_vector" not in current[0]
+
+
+async def test_dense_rankings_keep_valid_local_rows_when_pg_read_fails(
+    test_config: Any,
+) -> None:
+    local_key = attachments.AttachmentCacheKey("local", "parser", "chunker", "local-cache")
+    pg_key = attachments.AttachmentCacheKey("pg", "parser", "chunker", "pg-cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+
+    class _FailingStore(_SpyStore):
+        async def aiter_attachment_vectors(self, *args: Any, **kwargs: Any):
+            self.vector_calls.append({"references": args[2]})
+            raise RuntimeError("postgres unavailable")
+            yield  # pragma: no cover - async generator shape
+
+    store = _FailingStore(None)
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [_dense_row(0, local_key), _dense_row(1, pg_key)],
+        [],
+        request_vectors={
+            local_key: attachments.AttachmentRequestVector(
+                local_key,
+                signature,
+                [1.0, float(np.sqrt(np.float32(3.0)))],
+            )
+        },
+    )
+
+    assert [row["chunk_id"] for row in current] == ["citation-0"]
+    assert history == []
+    assert trace == {
+        "composer_dense_status": "ranked_degraded",
+        "composer_dense_current_chunks": 1,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 1,
+        "composer_dense_error": "RuntimeError",
+    }
+    assert store.vector_calls == [{"references": [(1, pg_key)]}]
+
+
+async def test_dense_rankings_pg_failure_keeps_only_valid_local_candidates(
+    test_config: Any,
+) -> None:
+    keys = [
+        attachments.AttachmentCacheKey("content", "parser", "chunker", f"cache-{index}")
+        for index in range(3)
+    ]
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+
+    class _FailingStore(_SpyStore):
+        async def aiter_attachment_vectors(self, *args: Any, **kwargs: Any):
+            raise RuntimeError("postgres unavailable")
+            yield  # pragma: no cover - async generator shape
+
+    service = _dense_service(
+        test_config=test_config,
+        store=_FailingStore(None),
+        embedder=embedder,
+    )
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [_dense_row(index, key) for index, key in enumerate(keys)],
+        [],
+        request_vectors={
+            keys[0]: attachments.AttachmentRequestVector(keys[0], signature, [1.0, 0.0]),
+            keys[1]: attachments.AttachmentRequestVector(keys[1], signature, [0.49, 0.872]),
+        },
+    )
+
+    assert [row["chunk_id"] for row in current] == ["citation-0"]
+    assert history == []
+    assert trace["composer_dense_status"] == "ranked_degraded"
+    assert trace["composer_dense_error"] == "RuntimeError"
+
+
+async def test_dense_rankings_pg_failure_without_local_candidates_reports_failed(
+    test_config: Any,
+) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+
+    class _FailingStore(_SpyStore):
+        async def aiter_attachment_vectors(self, *args: Any, **kwargs: Any):
+            raise RuntimeError("postgres unavailable")
+            yield  # pragma: no cover - async generator shape
+
+    service = _dense_service(
+        test_config=test_config,
+        store=_FailingStore(None),
+        embedder=embedder,
+    )
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [_dense_row(0, cache_key)],
+        [],
+    )
+
+    assert current == []
+    assert history == []
+    assert trace == {
+        "composer_dense_status": "failed",
+        "composer_dense_current_chunks": 0,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 0,
+        "composer_dense_error": "RuntimeError",
+    }
 
 
 async def test_dense_rankings_trace_counts_admitted_current_and_history_rows(
@@ -1284,6 +1407,104 @@ async def test_cache_hit_skips_parse_analysis_and_document_embedding(
     assert store.updated == []
 
 
+@pytest.mark.parametrize(
+    ("outcome", "rendered", "sidecar_type", "expected_count"),
+    [
+        ("success", True, "drawing", 1),
+        ("intentionally_disabled", False, "drawing", 0),
+    ],
+)
+async def test_cache_hit_trace_uses_persisted_analysis_and_rendered_markers(
+    monkeypatch: Any,
+    test_config: Any,
+    outcome: str,
+    rendered: bool,
+    sidecar_type: str,
+    expected_count: int,
+) -> None:
+    monkeypatch.setenv(
+        "VLM_PROCESS_ENABLE",
+        "true" if outcome == "success" else "false",
+    )
+    cache_key = attachments.AttachmentCacheKey(
+        "content-v1",
+        "legacy:",
+        "chunker-v1",
+        "cache-1",
+    )
+    metadata: dict[str, Any] = {"_composer_analysis_outcome": outcome}
+    if rendered:
+        metadata["_composer_mm_rendered"] = True
+    cached_chunk = AttachmentContextChunk(
+        chunk_id="att:att-1:0001",
+        attachment_id="att-1",
+        filename="report.txt",
+        chunk_index=1,
+        content="cached text",
+        sidecar_type=sidecar_type,
+        metadata=metadata,
+        cache_key=cache_key,
+    )
+    embedder: Any = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        aembed_documents=AsyncMock(side_effect=AssertionError("embedding must not run")),
+    )
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    store = _SpyStore(
+        ParsedAttachmentBundle(chunks=[cached_chunk], parser_signature="legacy:"),
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(
+                0,
+                cache_key,
+                signature,
+                [1.0, 0.0],
+            )
+        ],
+    )
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config.model_copy(
+            update={
+                "parser_sidecars": test_config.parser_sidecars.model_copy(
+                    update={
+                        "vlm": test_config.parser_sidecars.vlm.model_copy(
+                            update={"enabled": outcome != "success"}
+                        )
+                    }
+                )
+            }
+        ),
+    )
+
+    bundle, trace = await service.achunks_for_attachment(
+        principal_id="p1",
+        conversation_id="c1",
+        attachment_id="att-1",
+        filename="report.txt",
+        document_bytes=b"ignored",
+        content_sha256="content-v1",
+    )
+
+    analysis_signature = json.loads(store.load_calls[0]["chunk_signature"])["analysis_signature"]
+    assert json.loads(analysis_signature)["enabled"] is (outcome == "success")
+    assert trace["attachment_analysis_outcome"] == outcome
+    assert trace["attachment_mm_chunk_count"] == expected_count
+    public_metadata = bundle.chunks[0].to_context_row()["metadata"]
+    assert "_composer_analysis_outcome" not in public_metadata
+    assert "_composer_mm_rendered" not in public_metadata
+
+
 async def test_cache_hit_embedding_signature_failure_is_attachment_scoped(
     monkeypatch: Any,
     test_config: Any,
@@ -1591,9 +1812,10 @@ async def test_mm_chunk_trace_counts_rendered_list_not_ordinary_sidecar_provenan
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
+    store = _SpyStore(cached=None)
     service = QueryAttachmentService(
         lightrag=_FakeLightRAG(),
-        store=_SpyStore(cached=None),
+        store=store,
         parser_rules="",
         ttl_days=30,
         robust_document_embedder=embedder,
@@ -1612,6 +1834,9 @@ async def test_mm_chunk_trace_counts_rendered_list_not_ordinary_sidecar_provenan
     )
 
     assert trace["attachment_mm_chunk_count"] == 0
+    assert store.materialized[0].chunks[0].metadata == {
+        "_composer_analysis_outcome": "intentionally_disabled"
+    }
 
 
 async def test_analysis_degraded_returns_request_local_text_but_does_not_cache(

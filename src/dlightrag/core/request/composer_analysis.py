@@ -16,7 +16,7 @@ from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.composer import ComposerAnalysisSettings, normalized_endpoint_fingerprint
 from dlightrag.models.llm_roles import model_for_role
 
-COMPOSER_ANALYSIS_CONTRACT_VERSION = "2"
+COMPOSER_ANALYSIS_CONTRACT_VERSION = "3"
 logger = logging.getLogger(__name__)
 
 
