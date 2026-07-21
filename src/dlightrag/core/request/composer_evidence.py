@@ -26,7 +26,7 @@ COMPOSER_FULL_PASS_TOKENS = 24_576
 COMPOSER_CURRENT_TARGET_TOKENS = 32_768
 COMPOSER_HISTORY_TARGET_TOKENS = 12_288
 COMPOSER_TOTAL_TOKENS = 45_056
-COMPOSER_CANDIDATE_LIMIT = 72
+COMPOSER_CANDIDATE_LIMIT = 30
 
 _STRUCTURE_RE = re.compile(r"(?im)^\s*(?:#{1,6}\s+|\[(?:table|image|equation) name\]|\[table\])")
 _STRUCTURAL_TYPES = frozenset({"table", "drawing", "image", "figure", "equation"})

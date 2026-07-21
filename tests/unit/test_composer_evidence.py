@@ -249,6 +249,36 @@ async def test_short_document_full_pass_survives_beside_long_document() -> None:
     assert trace["composer_evidence_strategy"] == "retrieved"
 
 
+async def test_default_candidate_limit_matches_rag_chunk_breadth() -> None:
+    rerank_candidate_counts: list[int] = []
+
+    async def _rerank(*, query: str, chunks: list[dict[str, Any]], top_k: int):
+        assert query == "target"
+        assert top_k == len(chunks)
+        rerank_candidate_counts.append(len(chunks))
+        return chunks
+
+    selector = ComposerEvidenceSelector(
+        rerank_func=_rerank,
+        full_pass_tokens=1,
+        current_target_tokens=100_000,
+        history_target_tokens=0,
+        total_tokens=100_000,
+    )
+    rows = [
+        _row(
+            f"candidate-{index}",
+            f"target section {index} " + ("detail " * 20),
+            chunk_index=index,
+        )
+        for index in range(40)
+    ]
+
+    await selector.select(query="target", current_rows=rows, history_rows=[])
+
+    assert rerank_candidate_counts == [30]
+
+
 async def test_dense_ranking_embeds_all_long_document_rows_before_candidate_limit() -> None:
     embedded_documents: list[str] = []
 
