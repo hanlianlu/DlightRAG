@@ -403,7 +403,7 @@ async def test_prepare_merges_actual_dense_trace_for_current_and_history(
                 chunk_index=index,
                 content=("current evidence " * 30_000)
                 if document.attachment_id == _ID
-                else "history evidence",
+                else ("history evidence " * 30_000),
                 cache_key=current_key if document.attachment_id == _ID else history_key,
             )
             for index, document in enumerate(documents, start=1)

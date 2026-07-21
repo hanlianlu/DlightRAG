@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Composer-only attachment evidence selection."""
 
+import logging
 from typing import Any
 
 import pytest
@@ -133,9 +134,13 @@ async def test_long_composer_documents_use_only_local_candidates_and_rerank() ->
     assert trace["composer_evidence_reranked"] is True
 
 
-async def test_composer_rerank_failure_falls_back_to_local_fusion() -> None:
+async def test_composer_rerank_failure_falls_back_with_one_shared_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    failure = RuntimeError("reranker unavailable")
+
     async def _fail_rerank(**_kwargs: Any) -> Any:
-        raise RuntimeError("reranker unavailable")
+        raise failure
 
     selector = ComposerEvidenceSelector(
         full_pass_tokens=4,
@@ -150,19 +155,25 @@ async def test_composer_rerank_failure_falls_back_to_local_fusion() -> None:
         _row("c-3", "unrelated appendix", chunk_index=3),
     ]
 
-    selected, trace = await selector.select(
-        query="indemnity obligation",
-        current_rows=current,
-        history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
-        rerank_func=_fail_rerank,
-    )
+    with caplog.at_level(logging.WARNING):
+        selected, trace = await selector.select(
+            query="indemnity obligation",
+            current_rows=current,
+            history_rows=[],
+            current_dense_rankings=[],
+            history_dense_rankings=[],
+            rerank_func=_fail_rerank,
+        )
 
     assert any(row["chunk_id"] == "c-2" for row in selected)
     assert trace["composer_evidence_strategy"] == "retrieved"
     assert trace["composer_evidence_reranked"] is False
     assert trace["composer_evidence_rerank_error"] == "RuntimeError"
+    records = [record for record in caplog.records if "rerank" in record.getMessage().casefold()]
+    assert len(records) == 1
+    assert records[0].name == "dlightrag.core.retrieval.rerank"
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[1] is failure
 
 
 async def test_composer_without_dense_rows_falls_back_to_local_fusion() -> None:

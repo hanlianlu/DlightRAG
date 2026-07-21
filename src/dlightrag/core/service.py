@@ -1926,10 +1926,6 @@ class RAGService:
             return
         if outcome.error_type:
             result.trace["rerank_error"] = outcome.error_type
-            logger.warning(
-                "Rerank failed; returning top fused chunks: error_type=%s",
-                outcome.error_type,
-            )
             return
         top_score = outcome.chunks[0].get("rerank_score") if outcome.chunks else None
         logger.info(

@@ -2,10 +2,13 @@
 """Shared reranker execution with deterministic RRF fallback."""
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.core.retrieval.protocols import ContextRow
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +37,7 @@ async def rerank_with_fallback(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        logger.warning("Rerank failed; returning fused chunks", exc_info=True)
         return RerankOutcome(list(chunks[:limit]), False, type(exc).__name__)
 
 

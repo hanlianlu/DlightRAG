@@ -133,14 +133,10 @@ class ComposerEvidenceSelector:
         if not rows or token_budget <= 0:
             return [], {"candidate_count": 0, "reranked": False}
 
-        groups = _group_by_document(rows)
-        short_ids = {
-            reference_id
-            for reference_id, group in groups.items()
-            if _rows_tokens(group) <= self._full_pass_tokens
-        }
-        short_rows = [dict(row) for row in rows if str(row.get("reference_id") or "") in short_ids]
-        long_rows = [row for row in rows if str(row.get("reference_id") or "") not in short_ids]
+        short_rows, long_rows = partition_composer_rows_by_document_size(
+            rows,
+            full_pass_tokens=self._full_pass_tokens,
+        )
         if not long_rows:
             return short_rows, {
                 "candidate_count": len(short_rows),
@@ -173,11 +169,6 @@ class ComposerEvidenceSelector:
             top_k=len(candidates),
             rerank_func=rerank_func,
         )
-        if outcome.error_type:
-            logger.warning(
-                "Composer rerank failed; using local fusion: %s",
-                outcome.error_type,
-            )
 
         selected = _pack_with_document_guarantees(
             outcome.chunks,
@@ -216,6 +207,23 @@ def _row_tokens(row: ContextRow) -> int:
 
 def _rows_tokens(rows: list[ContextRow]) -> int:
     return sum(_row_tokens(row) for row in rows)
+
+
+def partition_composer_rows_by_document_size(
+    rows: list[ContextRow],
+    *,
+    full_pass_tokens: int = COMPOSER_FULL_PASS_TOKENS,
+) -> tuple[list[ContextRow], list[ContextRow]]:
+    """Partition rows by each reference document's full-pass threshold."""
+    groups = _group_by_document(rows)
+    short_ids = {
+        reference_id
+        for reference_id, group in groups.items()
+        if _rows_tokens(group) <= max(0, full_pass_tokens)
+    }
+    short_rows = [dict(row) for row in rows if str(row.get("reference_id") or "") in short_ids]
+    long_rows = [row for row in rows if str(row.get("reference_id") or "") not in short_ids]
+    return short_rows, long_rows
 
 
 def _allocate_lane_budgets(
@@ -335,4 +343,5 @@ __all__ = [
     "COMPOSER_HISTORY_TARGET_TOKENS",
     "COMPOSER_TOTAL_TOKENS",
     "ComposerEvidenceSelector",
+    "partition_composer_rows_by_document_size",
 ]

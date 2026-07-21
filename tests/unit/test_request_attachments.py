@@ -459,7 +459,7 @@ def _dense_row(
 ) -> dict[str, Any]:
     return {
         "chunk_id": f"citation-{index}",
-        "reference_id": f"attachment-{index}",
+        "reference_id": "attachment",
         "content": ("evidence " * 30_000) if index == 0 else f"evidence {index}",
         "_cache_key": cache_key,
         "metadata": {},
@@ -576,7 +576,7 @@ async def test_dense_rankings_trace_counts_admitted_current_and_history_rows(
     current, history, trace = await service.adense_rankings(
         "query",
         [_dense_row(0, keys[0]), _dense_row(1, keys[1])],
-        [_dense_row(2, keys[2])],
+        [{**_dense_row(2, keys[2]), "content": "history evidence " * 30_000}],
     )
 
     assert [row["chunk_id"] for row in current] == ["citation-0", "citation-1"]
@@ -769,6 +769,91 @@ async def test_dense_rankings_skip_query_model_for_short_full_pass(test_config: 
     assert store.vector_calls == []
 
 
+async def test_dense_rankings_skip_query_model_when_each_document_is_short(
+    test_config: Any,
+) -> None:
+    keys = [
+        attachments.AttachmentCacheKey("content", "parser", "chunker", f"cache-{index}")
+        for index in range(2)
+    ]
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    embedder.aembed_query.side_effect = AssertionError("short documents must skip embedding")
+    store = _SpyStore(None)
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+    content = "individually short evidence " * 3_000
+    rows = [
+        {
+            **_dense_row(index, key),
+            "reference_id": f"attachment-{index}",
+            "content": content,
+        }
+        for index, key in enumerate(keys)
+    ]
+    token_counts = [estimate_tokens(row["content"]) for row in rows]
+    assert all(count <= 24_576 for count in token_counts)
+    assert sum(token_counts) > 24_576
+
+    current, history, trace = await service.adense_rankings("query", rows, [])
+
+    assert current == []
+    assert history == []
+    assert trace == {
+        "composer_dense_status": "full_pass_not_needed",
+        "composer_dense_current_chunks": 0,
+        "composer_dense_history_chunks": 0,
+        "composer_dense_chunks": 0,
+    }
+    embedder.aembed_query.assert_not_awaited()
+    assert store.vector_calls == []
+
+
+async def test_dense_rankings_mixed_documents_embed_once_and_scan_only_long_rows(
+    test_config: Any,
+) -> None:
+    short_key = attachments.AttachmentCacheKey("short", "parser", "chunker", "short-cache")
+    long_key = attachments.AttachmentCacheKey("long", "parser", "chunker", "long-cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    store = _SpyStore(
+        None,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(
+                global_order=0,
+                cache_key=long_key,
+                embedding_signature=signature,
+                embedding_vector=[1.0, 0.0],
+            )
+        ],
+    )
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+    short_row = {
+        **_dense_row(1, short_key),
+        "reference_id": "short-document",
+        "content": "short evidence",
+    }
+    long_row = {
+        **_dense_row(2, long_key),
+        "reference_id": "long-document",
+        "content": "long evidence " * 30_000,
+    }
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [short_row, long_row],
+        [],
+    )
+
+    assert [row["chunk_id"] for row in current] == ["citation-2"]
+    assert history == []
+    assert trace["composer_dense_status"] == "ranked"
+    embedder.aembed_query.assert_awaited_once_with("query")
+    assert store.vector_calls[0]["references"] == [(0, long_key)]
+
+
 async def test_dense_rankings_propagate_query_cancellation(test_config: Any) -> None:
     cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
     embedder = _dense_embedder(query_vector=[1.0, 0.0])
@@ -810,10 +895,13 @@ async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate
         embedder=embedder,
         mode="text",
     )
-    vectors = np.asarray(
+    source_vectors = np.asarray(
         [[1.0, float(index % 11) / 10.0] for index in range(row_count)],
         dtype=np.float32,
     )
+    vectors_by_key = {
+        cache_key: vector for cache_key, vector in zip(keys, source_vectors, strict=True)
+    }
 
     class _PagedStore(_SpyStore):
         async def aiter_attachment_vectors(
@@ -840,7 +928,7 @@ async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate
                         global_order,
                         cache_key,
                         signature,
-                        vectors[global_order],
+                        vectors_by_key[cache_key].tolist(),
                     )
                     for global_order, cache_key in references[start : start + page_size]
                 ]
@@ -848,7 +936,10 @@ async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate
     store = _PagedStore(None)
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
     rows = [_dense_row(index, key) for index, key in enumerate(keys)]
-    expected_scores = vectors[:, 0] / np.linalg.norm(vectors, axis=1)
+    row_vectors = np.asarray([vectors_by_key[key] for key in keys], dtype=np.float32)
+    expected_scores = row_vectors[:, 0] / np.linalg.norm(row_vectors, axis=1)
+    assert np.array_equal(row_vectors[255], row_vectors[256])
+    assert expected_scores[255] == expected_scores[256]
     expected_indices = sorted(
         (index for index, score in enumerate(expected_scores) if score >= np.float32(0.5)),
         key=lambda index: (-float(expected_scores[index]), index),
@@ -864,10 +955,11 @@ async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate
         for index, row in enumerate(current)
         if row["chunk_id"] in {"citation-255", "citation-256"}
     ]
-    assert len(duplicate_positions) == 2
-    assert next(
-        index for index, row in enumerate(current) if row["chunk_id"] == "citation-255"
-    ) < next(index for index, row in enumerate(current) if row["chunk_id"] == "citation-256")
+    assert [current[index]["chunk_id"] for index in duplicate_positions] == [
+        "citation-255",
+        "citation-256",
+    ]
+    assert duplicate_positions[1] == duplicate_positions[0] + 1
     assert store.vector_calls[0]["page_size"] == 256
 
 

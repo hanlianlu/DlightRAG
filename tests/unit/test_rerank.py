@@ -71,20 +71,31 @@ async def test_rerank_with_fallback_truncates_rrf_when_provider_absent() -> None
     assert outcome.error_type is None
 
 
-async def test_rerank_with_fallback_returns_rrf_top_k_and_error_type_on_failure() -> None:
-    async def _fail(**_kwargs: Any) -> Any:
-        raise RuntimeError("provider unavailable")
+async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    failure = RuntimeError("provider unavailable")
 
-    outcome = await rerank_with_fallback(
-        query="query",
-        chunks=_chunks(),
-        top_k=2,
-        rerank_func=_fail,
-    )
+    async def _fail(**_kwargs: Any) -> Any:
+        raise failure
+
+    with caplog.at_level(logging.WARNING, logger="dlightrag.core.retrieval.rerank"):
+        outcome = await rerank_with_fallback(
+            query="query",
+            chunks=_chunks(),
+            top_k=2,
+            rerank_func=_fail,
+        )
 
     assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["a", "b"]
     assert outcome.reranked is False
     assert outcome.error_type == "RuntimeError"
+    records = [
+        record for record in caplog.records if record.name == "dlightrag.core.retrieval.rerank"
+    ]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[1] is failure
 
 
 async def test_rerank_with_fallback_propagates_cancellation() -> None:

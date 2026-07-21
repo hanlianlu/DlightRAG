@@ -234,6 +234,46 @@ async def test_prepared_stream_merges_composer_evidence_without_changing_rag(tes
     assert captured["history_images"] == list(turn.history_query_images)
 
 
+async def test_prepared_stream_merges_composer_failure_trace_without_chunks(test_cfg) -> None:
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
+    plan = QueryPlan(original_query="q", standalone_query="q")
+    retrieval = SimpleNamespace(
+        contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
+        trace={"workspace": "default"},
+    )
+    limits = SimpleNamespace(context_top_k=10, candidate_top_k=5)
+    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
+    manager = RAGServiceManager(config=test_cfg)
+    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        return_value=(plan, prepared, limits, retrieval)
+    )
+    stream = SimpleNamespace(trace={"answer_generation": "streamed"})
+    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        return_value=(retrieval.contexts, stream)
+    )
+    composer_trace = {
+        "composer_evidence_strategy": "empty",
+        "composer_dense_status": "failed",
+        "composer_dense_error": "RuntimeError",
+    }
+    turn = answer_turn.PreparedAnswerTurn(
+        current_query="q",
+        retrieval_query="q",
+        composer_context_chunks=(),
+        composer_evidence_trace=composer_trace,
+    )
+
+    _, returned_stream = await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+
+    assert retrieval.trace == {"workspace": "default", **composer_trace}
+    assert returned_stream is stream
+    assert stream.trace == {
+        "workspace": "default",
+        **composer_trace,
+        "answer_generation": "streamed",
+    }
+
+
 async def test_prepared_stream_adds_composer_count_without_rebudgeting_rag(test_cfg) -> None:
     """Composer evidence is additive to the existing LightRAG count budget.
 

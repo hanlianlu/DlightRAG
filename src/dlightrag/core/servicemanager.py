@@ -1704,6 +1704,7 @@ class RAGServiceManager:
                     log_plan=True,
                 )
                 context_top_k = limits.context_top_k
+                retrieval.trace.update(turn.composer_evidence_trace)
                 if turn.composer_context_chunks:
                     # Composer evidence is selected in its own lane. Place it
                     # ahead of, but never rerank, truncate, or otherwise mutate,
@@ -1713,7 +1714,6 @@ class RAGServiceManager:
                         *turn.composer_context_chunks,
                         *existing,
                     ]
-                    retrieval.trace.update(turn.composer_evidence_trace)
                     # The existing answer context_top_k governs only LightRAG
                     # chunks. Composer evidence is additive, so grow the count cap
                     # by exactly its selected size; no RAG row loses its slot.

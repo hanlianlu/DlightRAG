@@ -41,7 +41,7 @@ from dlightrag.core.request.composer_analysis import (
     aanalyze_composer_sidecars,
     build_composer_analysis_signature,
 )
-from dlightrag.core.request.composer_evidence import COMPOSER_FULL_PASS_TOKENS
+from dlightrag.core.request.composer_evidence import partition_composer_rows_by_document_size
 from dlightrag.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
@@ -805,13 +805,9 @@ class QueryAttachmentService:
 
         if not current_rows and not history_rows:
             return [], [], dense_trace("no_rows")
-        if (
-            sum(
-                estimate_tokens(str(row.get("content") or ""))
-                for row in [*current_rows, *history_rows]
-            )
-            <= COMPOSER_FULL_PASS_TOKENS
-        ):
+        _, current_long_rows = partition_composer_rows_by_document_size(current_rows)
+        _, history_long_rows = partition_composer_rows_by_document_size(history_rows)
+        if not current_long_rows and not history_long_rows:
             return [], [], dense_trace("full_pass_not_needed")
         try:
             query_vector = await self._document_embedder.aembed_query(query)
@@ -832,14 +828,14 @@ class QueryAttachmentService:
             if principal_id is None or conversation_id is None:
                 raise RuntimeError("dense ranking requires a bound conversation scope")
             current = await self._adense_rank_lane(
-                current_rows,
+                current_long_rows,
                 query_array,
                 query_norm,
                 principal_id=principal_id,
                 conversation_id=conversation_id,
             )
             history = await self._adense_rank_lane(
-                history_rows,
+                history_long_rows,
                 query_array,
                 query_norm,
                 principal_id=principal_id,
