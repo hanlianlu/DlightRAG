@@ -63,7 +63,7 @@ COMPOSER_DENSE_SCORE_THRESHOLD = 0.5
 COMPOSER_DENSE_BLOCK_SIZE = 256
 COMPOSER_DENSE_PAGE_SIZE = 256
 
-AttachmentEvidenceMode = Literal["full", "retrieval"]
+_AttachmentEvidenceMode = Literal["full", "retrieval"]
 
 
 class DocumentEmbedderProtocol(Protocol):
@@ -269,7 +269,7 @@ class ParsedAttachmentBundle:
     chunks: list[AttachmentContextChunk]
     parser_signature: str = ""
     trace: dict[str, Any] = field(default_factory=dict)
-    evidence_mode: AttachmentEvidenceMode = "full"
+    evidence_mode: _AttachmentEvidenceMode = "full"
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,7 +432,7 @@ def build_text_attachment_chunk(
 
 def _resolve_attachment_evidence_mode(
     chunks: Sequence[AttachmentContextChunk],
-) -> AttachmentEvidenceMode:
+) -> _AttachmentEvidenceMode:
     token_estimate = sum(estimate_tokens(chunk.content) for chunk in chunks)
     return "full" if token_estimate <= COMPOSER_ATTACHMENT_TOKEN_BUDGET else "retrieval"
 
@@ -1654,7 +1654,6 @@ class QueryAttachmentService:
 __all__ = [
     "AttachmentCacheKey",
     "AttachmentContextChunk",
-    "AttachmentEvidenceMode",
     "AttachmentRequestVector",
     "AttachmentVectorPageRow",
     "ParsedAttachmentBundle",
