@@ -219,7 +219,14 @@ class RobustDocumentEmbedder:
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
-            task.add_done_callback(_close_image_task_result)
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            _close_image_task_result(task)
             raise
         except Exception:  # noqa: BLE001
             logger.warning(

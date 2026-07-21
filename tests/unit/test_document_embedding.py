@@ -3,6 +3,7 @@
 
 import asyncio
 import io
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -11,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from PIL import Image
 
+import dlightrag.core.document_embedding as document_embedding
 from dlightrag.core.document_embedding import (
     DocumentEmbeddingInput,
     DocumentEmbeddingTrace,
@@ -330,6 +332,47 @@ async def test_embedding_cancellation_reraises_and_closes_open_images() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
+    assert len(opened) == 1
+    with pytest.raises(ValueError, match="closed image"):
+        opened[0].getpixel((0, 0))
+
+
+async def test_image_open_cancellation_waits_for_worker_and_closes_returned_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    opened: list[Image.Image] = []
+
+    def blocking_open_image(
+        _item: DocumentEmbeddingInput,
+        *,
+        min_image_pixel: int,
+    ) -> Image.Image:
+        assert min_image_pixel == 2
+        image = Image.new("RGB", (8, 8), "white")
+        opened.append(image)
+        worker_started.set()
+        assert release_worker.wait(timeout=5)
+        return image
+
+    monkeypatch.setattr(document_embedding, "_open_valid_image", blocking_open_image)
+    task = asyncio.create_task(
+        _executor(_embedder()).aembed_documents(
+            [DocumentEmbeddingInput(key="a", text="first", image_bytes=_png_bytes())]
+        )
+    )
+    assert await asyncio.to_thread(worker_started.wait, 1)
+
+    try:
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release_worker.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert len(opened) == 1
     with pytest.raises(ValueError, match="closed image"):
         opened[0].getpixel((0, 0))
