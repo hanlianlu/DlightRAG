@@ -122,21 +122,33 @@ async def test_fused_batch_failure_falls_back_to_text_once() -> None:
         DocumentEmbeddingVector(key="a", vector=[1.0, 0.0, 0.0], mode="text"),
         DocumentEmbeddingVector(key="b", vector=[0.0, 1.0, 0.0], mode="text"),
     ]
-    assert trace == DocumentEmbeddingTrace(fused=0, text=2, fused_to_text_fallback=2, failed=0)
+    assert trace == DocumentEmbeddingTrace(
+        fused=0,
+        text=2,
+        fused_to_text_fallback=2,
+        failed=0,
+        error_type="RuntimeError",
+    )
     embedder.embed_texts.assert_awaited_once_with(["first", "second"], context="document")
 
 
 async def test_failed_text_fallback_records_fallback_and_failure() -> None:
     embedder = _embedder()
     embedder.embed_index_fused.side_effect = RuntimeError("fused unavailable")
-    embedder.embed_texts.side_effect = RuntimeError("text unavailable")
+    embedder.embed_texts.side_effect = ValueError("text unavailable")
 
     vectors, trace = await _executor(embedder).aembed_documents(
         [DocumentEmbeddingInput(key="a", text="first", image_bytes=_png_bytes())]
     )
 
     assert vectors == []
-    assert trace == DocumentEmbeddingTrace(fused=0, text=0, fused_to_text_fallback=1, failed=1)
+    assert trace == DocumentEmbeddingTrace(
+        fused=0,
+        text=0,
+        fused_to_text_fallback=1,
+        failed=1,
+        error_type="RuntimeError",
+    )
 
 
 async def test_unreadable_or_small_image_falls_back_to_text() -> None:
@@ -196,7 +208,13 @@ async def test_text_embedding_failure_omits_only_failed_batch() -> None:
     vectors, trace = await executor.aembed_documents(items)
 
     assert vectors == [DocumentEmbeddingVector(key="c", vector=[0.0, 0.0, 1.0], mode="text")]
-    assert trace == DocumentEmbeddingTrace(fused=0, text=1, fused_to_text_fallback=0, failed=2)
+    assert trace == DocumentEmbeddingTrace(
+        fused=0,
+        text=1,
+        fused_to_text_fallback=0,
+        failed=2,
+        error_type="RuntimeError",
+    )
     assert embedder.embed_texts.await_count == 2
 
 

@@ -796,6 +796,7 @@ class QueryAttachmentService:
                     "attachment_embedding_text": 0,
                     "attachment_embedding_fallback": 0,
                     "attachment_embedding_failed": 0,
+                    "attachment_embedding_error": None,
                 }
             refreshed, embedding_trace = await self._aembed_chunk_indices(
                 replace(cached, chunks=chunks),
@@ -834,6 +835,7 @@ class QueryAttachmentService:
                 "attachment_embedding_text": embedding_trace.text,
                 "attachment_embedding_fallback": embedding_trace.fused_to_text_fallback,
                 "attachment_embedding_failed": embedding_trace.failed,
+                "attachment_embedding_error": embedding_trace.error_type,
             }
         try:
             async with parse_attachment_document(
@@ -920,6 +922,7 @@ class QueryAttachmentService:
             "attachment_embedding_text": embedding_trace.text,
             "attachment_embedding_fallback": embedding_trace.fused_to_text_fallback,
             "attachment_embedding_failed": embedding_trace.failed,
+            "attachment_embedding_error": embedding_trace.error_type,
         }
 
 

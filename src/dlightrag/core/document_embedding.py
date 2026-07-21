@@ -56,6 +56,7 @@ class DocumentEmbeddingTrace:
     text: int
     fused_to_text_fallback: int
     failed: int
+    error_type: str | None = None
 
 
 class RobustDocumentEmbedder:
@@ -125,6 +126,7 @@ class RobustDocumentEmbedder:
         text_count = 0
         fallback_count = 0
         failed_count = 0
+        error_type: str | None = None
 
         for start in range(0, len(items), self._batch_size):
             batch = list(enumerate(items[start : start + self._batch_size], start=start))
@@ -147,7 +149,8 @@ class RobustDocumentEmbedder:
                         fused_items.append((index, item, image))
 
                 if text_items:
-                    text_vectors = await self._aembed_text_batch(text_items)
+                    text_vectors, text_error_type = await self._aembed_text_batch(text_items)
+                    error_type = error_type or text_error_type
                     if text_vectors is None:
                         failed_count += len(text_items)
                     else:
@@ -160,7 +163,8 @@ class RobustDocumentEmbedder:
                         fused_vectors = await self._aembed_fused_batch(fused_items)
                     except asyncio.CancelledError:
                         raise
-                    except Exception:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001
+                        error_type = error_type or type(exc).__name__
                         logger.warning(
                             "Fused document embedding failed; falling back to text for %d item(s)",
                             len(fused_items),
@@ -170,7 +174,10 @@ class RobustDocumentEmbedder:
                         opened_images.clear()
                         fallback_items = [(index, item) for index, item, _image in fused_items]
                         fallback_count += len(fallback_items)
-                        fallback_vectors = await self._aembed_text_batch(fallback_items)
+                        fallback_vectors, fallback_error_type = await self._aembed_text_batch(
+                            fallback_items
+                        )
+                        error_type = error_type or fallback_error_type
                         if fallback_vectors is None:
                             failed_count += len(fallback_items)
                         else:
@@ -194,6 +201,7 @@ class RobustDocumentEmbedder:
             text=text_count,
             fused_to_text_fallback=fallback_count,
             failed=failed_count,
+            error_type=error_type,
         )
 
     async def aembed_query(self, query: str) -> list[float] | None:
@@ -211,23 +219,23 @@ class RobustDocumentEmbedder:
     async def _aembed_text_batch(
         self,
         items: list[tuple[int, DocumentEmbeddingInput]],
-    ) -> list[list[float]] | None:
+    ) -> tuple[list[list[float]] | None, str | None]:
         try:
             async with self._semaphore:
                 vectors = await self._embedder.embed_texts(
                     [item.text for _index, item in items],
                     context="document",
                 )
-            return self._validate_vectors(vectors, expected_count=len(items))
+            return self._validate_vectors(vectors, expected_count=len(items)), None
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Text document embedding failed; omitting %d item(s)",
                 len(items),
                 exc_info=True,
             )
-            return None
+            return None, type(exc).__name__
 
     async def _aembed_fused_batch(
         self,

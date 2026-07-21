@@ -624,7 +624,13 @@ async def test_cache_miss_runs_parse_analysis_chunk_embedding_then_one_materiali
         events.append("embed")
         return (
             [DocumentEmbeddingVector("cache-1", [1.0, 0.0], "text")],
-            DocumentEmbeddingTrace(fused=0, text=1, fused_to_text_fallback=0, failed=0),
+            DocumentEmbeddingTrace(
+                fused=0,
+                text=1,
+                fused_to_text_fallback=1,
+                failed=0,
+                error_type="RuntimeError",
+            ),
         )
 
     embedder: Any = SimpleNamespace(
@@ -663,6 +669,7 @@ async def test_cache_miss_runs_parse_analysis_chunk_embedding_then_one_materiali
     assert trace["attachment_analysis_outcome"] == "success"
     assert trace["attachment_mm_chunk_count"] == 1
     assert trace["attachment_embedding_text"] == 1
+    assert trace["attachment_embedding_error"] == "RuntimeError"
 
 
 async def _assert_analysis_outcome_controls_text_cache_materialization(
@@ -819,7 +826,7 @@ async def test_embedding_model_change_reuses_parse_analysis_and_refreshes_vector
         aembed_documents=AsyncMock(
             return_value=(
                 [DocumentEmbeddingVector("cache-1", [0.0, 1.0], "text")],
-                DocumentEmbeddingTrace(0, 1, 0, 0),
+                DocumentEmbeddingTrace(0, 1, 0, 0, error_type="ValueError"),
             )
         ),
     )
@@ -860,6 +867,108 @@ async def test_embedding_model_change_reuses_parse_analysis_and_refreshes_vector
     assert trace["attachment_parse_cache_hit"] is True
     assert trace["attachment_vector_cache_hits"] == 0
     assert trace["attachment_vector_cache_misses"] == 1
+    assert trace["attachment_embedding_error"] == "ValueError"
+
+
+async def test_mixed_vector_cache_reuses_text_row_and_retries_only_visual_as_fused(
+    test_config: Any,
+) -> None:
+    from dlightrag.core.document_embedding import (
+        DocumentEmbeddingTrace,
+        DocumentEmbeddingVector,
+    )
+
+    text_key = attachments.AttachmentCacheKey(
+        "content-v1",
+        "legacy:",
+        "chunker-v1",
+        "cache-text",
+    )
+    visual_key = attachments.AttachmentCacheKey(
+        "content-v1",
+        "legacy:",
+        "chunker-v1",
+        "cache-visual",
+    )
+    cached = ParsedAttachmentBundle(
+        chunks=[
+            replace(text_chunk("text-1"), cache_key=text_key),
+            replace(visual_chunk("visual-1"), cache_key=visual_key),
+        ],
+        parser_signature="legacy:",
+    )
+    embedder: Any = SimpleNamespace(
+        dimension=2,
+        image_enabled=True,
+        aembed_documents=AsyncMock(
+            return_value=(
+                [DocumentEmbeddingVector("cache-visual", [0.0, 1.0], "fused")],
+                DocumentEmbeddingTrace(1, 0, 0, 0),
+            )
+        ),
+    )
+    text_signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    fused_signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="fused",
+    )
+    store = _SpyStore(
+        cached,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(
+                global_order=0,
+                cache_key=text_key,
+                embedding_signature=text_signature,
+                embedding_vector=[1.0, 0.0],
+            ),
+            attachments.AttachmentVectorPageRow(
+                global_order=1,
+                cache_key=visual_key,
+                embedding_signature=text_signature,
+                embedding_vector=[1.0, 0.0],
+            ),
+        ],
+    )
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=True,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+    )
+
+    bundle, trace = await service.achunks_for_attachment(
+        principal_id="p1",
+        conversation_id="c1",
+        attachment_id="att-1",
+        filename="report.txt",
+        document_bytes=b"ignored",
+        content_sha256="content-v1",
+    )
+
+    embedder.aembed_documents.assert_awaited_once()
+    (embed_inputs,) = embedder.aembed_documents.await_args.args
+    assert [item.key for item in embed_inputs] == ["cache-visual"]
+    assert embed_inputs[0].image_bytes == b"png-bytes"
+    assert len(store.updated) == 1
+    assert [chunk.cache_key for chunk in store.updated[0]] == [visual_key]
+    assert bundle.chunks[0].embedding_signature == text_signature
+    assert bundle.chunks[0].embedding_vector == [1.0, 0.0]
+    assert bundle.chunks[1].embedding_signature == fused_signature
+    assert bundle.chunks[1].embedding_vector == [0.0, 1.0]
+    assert json.loads(bundle.chunks[0].embedding_signature or "{}")["mode"] == "text"
+    assert json.loads(bundle.chunks[1].embedding_signature or "{}")["mode"] == "fused"
+    assert trace["attachment_vector_cache_hits"] == 1
+    assert trace["attachment_vector_cache_misses"] == 1
+    assert trace["attachment_embedding_fused"] == 1
 
 
 async def test_visual_chunk_uses_fused_vector_when_capability_active(
