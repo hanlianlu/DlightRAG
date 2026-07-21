@@ -1161,9 +1161,9 @@ async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path) -> None:
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
-async def test_sidecar_partial_failure_still_embeds_surviving_images(tmp_path: Path) -> None:
-    # Per-image fault isolation at open time: one unreadable image is skipped
-    # while its healthy sibling in the same batch still gets a fused vector.
+async def test_sidecar_unreadable_image_falls_back_to_text(tmp_path: Path) -> None:
+    # The shared executor uses text for an unreadable image while its healthy
+    # sibling in the same batch still gets a fused vector.
     import json
 
     artifact_dir = tmp_path / "sample.parsed"
@@ -1193,8 +1193,11 @@ async def test_sidecar_partial_failure_still_embeds_surviving_images(tmp_path: P
     )
     deps["document_embedder"].dimension = 2
     deps["document_embedder"].aembed_documents.return_value = (
-        [DocumentEmbeddingVector(good_chunk, [0.5, 0.6], "fused")],
-        DocumentEmbeddingTrace(fused=1, text=1, fused_to_text_fallback=0, failed=1),
+        [
+            DocumentEmbeddingVector(good_chunk, [0.5, 0.6], "fused"),
+            DocumentEmbeddingVector(bad_chunk, [0.7, 0.8], "text"),
+        ],
+        DocumentEmbeddingTrace(fused=1, text=1, fused_to_text_fallback=0, failed=0),
     )
 
     await engine._overwrite_sidecar_image_vectors(
@@ -1205,7 +1208,10 @@ async def test_sidecar_partial_failure_still_embeds_surviving_images(tmp_path: P
 
     deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
     stored = deps["stores"].overwrite_chunk_vectors.await_args.args[0]
-    assert stored == {good_chunk: [0.5, 0.6]}
+    assert stored == {
+        good_chunk: [0.5, 0.6],
+        bad_chunk: [0.7, 0.8],
+    }
 
 
 def test_sidecar_dir_from_location_handles_file_scheme() -> None:
