@@ -363,12 +363,22 @@ is neutralized by the parse-owner shim. This path cannot write workspace
 `full_docs`, `doc_status`, chunks, vectors, BM25, LLM cache, or KG rows and never
 enters public `/retrieve`.
 
-The selected workspace service lends Composer its provider clients, shared
-`RobustDocumentEmbedder`, resolved image capability, and reranker. Result storage
-is not shared. Visual chunks use fused image+text document vectors when image
-capability is active; invalid images, unavailable capability, or fused provider
-failure use text-only document vectors. Enriched chunks, image bytes, embedding
-signatures, and JSONB vectors are stored only in the existing
+`RAGServiceManager` lazily owns and closes one cache-neutral
+`ComposerModelBundle` for VLM and EXTRACT. `QueryImageDescriber` and Composer
+analysis share its VLM callable under the manager's direct-LLM concurrency
+bound. Separately, the first normalized requested workspace deterministically
+selects one `RAGService`; that service owns and provides its initialized
+LightRAG parser/multimodal renderer, shared `RobustDocumentEmbedder` plus
+resolved image capability, and reranker. Composer borrows those service
+resources without closing them. Parser/MM work remains request-local,
+embedding uses the shared embedder's own semaphore, and reranking invokes the
+service-owned callable; Composer creates no duplicate concurrency pool.
+
+Provider sharing never shares results. Visual chunks use fused image+text
+document vectors when image capability is active; invalid images, unavailable
+capability, or fused provider failure use text-only document vectors. Enriched
+chunks, image bytes, embedding signatures, and JSONB vectors remain owned only
+by the principal-scoped Web PostgreSQL store in the existing
 `web_conversation_attachment_chunks` table. There is no pgvector dimension
 contract and no HNSW, IVFFLAT, or other ANN index.
 

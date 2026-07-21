@@ -6,20 +6,21 @@ a live PostgreSQL 18 instance (asyncpg): migration application, the attachment
 insert, the history JSONB aggregation, the content-addressed parse cache, the
 principal-scoped document reads, and the ON DELETE CASCADE lifecycle.
 
-Workspace non-write is proved at the narrower ownership boundaries: the strict
-analysis proxy rejects every LightRAG cache/KV/vector/KG handle, and the parser
-owner shim exposes only a no-op persistence hook. Global workspace row counts
-are intentionally absent here because they would race with unrelated ingest in
-a shared integration database; this suite verifies the only permitted result
-store, the scoped ``web_conversation_*`` tables.
+Workspace non-write is proved without brittle global row counts. A complete
+``QueryAttachmentService`` cache miss runs through the parse-owner shim, strict
+analysis proxy, real LightRAG chunk/MM rendering, robust embedding, and Web
+materialization while write-failing workspace handles record any access. The
+only permitted result store is the principal/conversation-scoped
+``web_conversation_*`` tables.
 
 Requires a running PostgreSQL instance (localhost:5432, dlightrag/dlightrag).
 Skipped automatically if PostgreSQL is not available.
 """
 
 import hashlib
+import json
 from dataclasses import replace
-from typing import Any
+from typing import Any, Never, cast
 from uuid import uuid4
 
 import pytest
@@ -109,6 +110,159 @@ async def _delete_principal(pool: Any, principal_id: str) -> None:
             "DELETE FROM web_conversation_attachment_chunks WHERE principal_id = $1",
             principal_id,
         )
+
+
+_WORKSPACE_STORAGE_HANDLES = (
+    "full_docs",
+    "doc_status",
+    "text_chunks",
+    "chunks_vdb",
+    "entities_vdb",
+    "relationships_vdb",
+    "chunk_entity_relation_graph",
+    "llm_response_cache",
+    "bm25",
+)
+
+
+class _WorkspaceStorageSentinel:
+    def __init__(self, name: str, accesses: list[str]) -> None:
+        self._name = name
+        self._accesses = accesses
+
+    def _fail(self, operation: str) -> Never:
+        access = f"{self._name}.{operation}"
+        self._accesses.append(access)
+        raise AssertionError(f"Composer touched workspace storage: {access}")
+
+    def __getattr__(self, name: str) -> Any:
+        self._fail(name)
+
+    def __bool__(self) -> bool:
+        self._fail("__bool__")
+
+
+class _StorageGuardedLightRAG:
+    """Only the initialized parser/MM-renderer attributes Composer may borrow."""
+
+    def __getattribute__(self, name: str) -> Any:
+        value = object.__getattribute__(self, name)
+        if name in _WORKSPACE_STORAGE_HANDLES:
+            cast(_WorkspaceStorageSentinel, value)._fail("__getattribute__")
+        return value
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        attributes = object.__getattribute__(self, "__dict__")
+        if name in _WORKSPACE_STORAGE_HANDLES and name in attributes:
+            cast(_WorkspaceStorageSentinel, attributes[name])._fail("__setattr__")
+        object.__setattr__(self, name, value)
+
+    def __init__(self, storage_accesses: list[str]) -> None:
+        from lightrag.utils import TiktokenTokenizer
+
+        self.tokenizer = TiktokenTokenizer()
+        self.addon_params: dict[str, Any] = {}
+        self.chunk_token_size = 1200
+        self.embedding_func = None
+        self.mm_renderer_calls = 0
+        for name in _WORKSPACE_STORAGE_HANDLES:
+            setattr(self, name, _WorkspaceStorageSentinel(name, storage_accesses))
+
+    def _build_mm_chunks_from_sidecars(self, **kwargs: Any) -> list[dict[str, Any]]:
+        from lightrag import LightRAG
+
+        self.mm_renderer_calls += 1
+        return LightRAG._build_mm_chunks_from_sidecars(cast(Any, self), **kwargs)
+
+
+class _DeterministicComposerParser:
+    async def parse(self, ctx: Any) -> Any:
+        from lightrag.parser.base import ParseResult
+
+        source_path = ctx.source_path("legacy")
+        assert source_path.read_bytes() == b"Composer integration source"
+        blocks_path = source_path.with_name("composer-contract.blocks.jsonl")
+        content = "The report records quarterly revenue and operating margin."
+        blocks_path.write_text(
+            "\n".join(
+                (
+                    json.dumps({"type": "meta", "schema_version": 1}),
+                    json.dumps(
+                        {
+                            "type": "content",
+                            "blockid": "block-1",
+                            "content": content,
+                        }
+                    ),
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        blocks_path.with_name("composer-contract.tables.json").write_text(
+            json.dumps(
+                {
+                    "tables": {
+                        "table-1": {
+                            "content": (
+                                "<table><tr><th>Quarter</th><th>Revenue</th></tr>"
+                                "<tr><td>Q4</td><td>42</td></tr></table>"
+                            ),
+                            "format": "html",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        await ctx.rag._persist_parsed_full_docs(
+            ctx.doc_id,
+            {"sidecar_location": str(blocks_path)},
+        )
+        assert not any(hasattr(ctx.rag, name) for name in _WORKSPACE_STORAGE_HANDLES)
+        return ParseResult(
+            doc_id=ctx.doc_id,
+            file_path=ctx.file_path,
+            parse_format="composer-contract",
+            content=content,
+            blocks_path=str(blocks_path),
+            parse_engine="legacy",
+        )
+
+
+class _DeterministicComposerModels:
+    vlm_identity = {"provider": "test", "model": "unused-vlm"}
+    extract_identity = {"provider": "test", "model": "deterministic-extract"}
+
+    def __init__(self) -> None:
+        self.extract_calls = 0
+
+    async def vlm_func(self, *_args: Any, **_kwargs: Any) -> str:
+        raise AssertionError("the table-only fixture must not call VLM")
+
+    async def extract_func(self, *_args: Any, **_kwargs: Any) -> str:
+        self.extract_calls += 1
+        return json.dumps(
+            {
+                "name": "Quarterly revenue",
+                "description": "A table showing Q4 revenue of 42.",
+            }
+        )
+
+
+class _DeterministicEmbeddingProvider:
+    asymmetric = False
+
+    def __init__(self) -> None:
+        self.document_batches: list[list[str]] = []
+
+    async def embed_texts(self, texts: list[str], *, context: str) -> list[list[float]]:
+        assert context == "document"
+        self.document_batches.append(list(texts))
+        return [[1.0, 0.5, 0.25] for _text in texts]
+
+    async def embed_index_fused(self, _items: Any) -> list[list[float]]:
+        raise AssertionError("the table-only fixture must use text embeddings")
 
 
 @pytest.mark.usefixtures("pg_check")
@@ -797,6 +951,118 @@ async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
             is not None
         )
         assert await _count_chunk_rows(pool, principal_id) == 1
+    finally:
+        await _delete_principal(pool, principal_id)
+        await pool.close()
+
+
+@pytest.mark.usefixtures("pg_check")
+async def test_composer_cache_miss_materializes_only_web_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    test_config: Any,
+) -> None:
+    from lightrag import LightRAG
+
+    from dlightrag.core.document_embedding import RobustDocumentEmbedder
+    from dlightrag.core.request.attachments import QueryAttachmentService
+    from dlightrag.storage.web_conversations import PGWebConversationStore
+
+    principal_id = f"itest-composer-isolation-{uuid4()}"
+    document_bytes = b"Composer integration source"
+    content_sha256 = hashlib.sha256(document_bytes).hexdigest()
+    storage_accesses: list[str] = []
+    lightrag = _StorageGuardedLightRAG(storage_accesses)
+    models = _DeterministicComposerModels()
+    embedding_provider = _DeterministicEmbeddingProvider()
+    embedder = RobustDocumentEmbedder(
+        embedder=cast(Any, embedding_provider),
+        image_enabled=False,
+        dimension=3,
+        min_image_pixel=1,
+        batch_size=8,
+        max_concurrency=1,
+    )
+    config = test_config.model_copy(
+        update={
+            "parser_sidecars": test_config.parser_sidecars.model_copy(
+                update={"vlm": test_config.parser_sidecars.vlm.model_copy(update={"enabled": True})}
+            )
+        }
+    )
+
+    parser = _DeterministicComposerParser()
+    monkeypatch.setattr("lightrag.parser.registry.get_parser", lambda _engine: parser)
+    real_analyze_multimodal = LightRAG.analyze_multimodal
+    analysis_proxies: list[Any] = []
+
+    async def _assert_proxy_then_analyze(proxy: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        analysis_proxies.append(proxy)
+        assert proxy.llm_response_cache is None
+        assert proxy._build_global_config()["llm_response_cache"] is None
+        for name in _WORKSPACE_STORAGE_HANDLES:
+            if name == "llm_response_cache":
+                continue
+            assert not hasattr(proxy, name)
+        return await real_analyze_multimodal(proxy, *args, **kwargs)
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", _assert_proxy_then_analyze)
+
+    pool = await _open_pool()
+    try:
+        store = PGWebConversationStore(pool=pool)
+        await store.initialize()
+        await _delete_principal(pool, principal_id)
+        conversation = await store.create_conversation(principal_id)
+        conversation_id = str(conversation["conversation_id"])
+        service = QueryAttachmentService(
+            lightrag=lightrag,
+            store=store,
+            parser_rules="",
+            ttl_days=_TTL_DAYS,
+            robust_document_embedder=embedder,
+            direct_image_embedding_enabled=False,
+            model_bundle=models,
+            config=config,
+            principal_id=principal_id,
+            conversation_id=conversation_id,
+        )
+
+        bundle, trace = await service.achunks_for_attachment(
+            principal_id=principal_id,
+            conversation_id=conversation_id,
+            attachment_id=str(uuid4()),
+            filename="report.[-tP].txt",
+            document_bytes=document_bytes,
+            content_sha256=content_sha256,
+        )
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT content, sidecar_type, embedding_signature, embedding_vector "
+                "FROM web_conversation_attachment_chunks "
+                "WHERE principal_id = $1 AND conversation_id = $2::text::uuid "
+                "ORDER BY chunk_index",
+                principal_id,
+                conversation_id,
+            )
+
+        assert trace["attachment_parse_cache_hit"] is False
+        assert trace["attachment_analysis_outcome"] == "success"
+        assert trace["attachment_mm_chunk_count"] == 1
+        assert trace["attachment_cache_write_status"] == "written"
+        assert trace["attachment_cache_materialized"] is True
+        assert trace["attachment_embedding_text"] == len(bundle.chunks)
+        assert len(rows) == len(bundle.chunks) >= 2
+        assert any(row["sidecar_type"] == "table" for row in rows)
+        assert all(row["embedding_signature"] for row in rows)
+        assert all(len(json.loads(row["embedding_vector"])) == 3 for row in rows)
+        assert analysis_proxies
+        assert models.extract_calls == 1
+        assert lightrag.mm_renderer_calls == 1
+        assert sum(len(batch) for batch in embedding_provider.document_batches) == len(
+            bundle.chunks
+        )
+        assert storage_accesses == []
     finally:
         await _delete_principal(pool, principal_id)
         await pool.close()

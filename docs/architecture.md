@@ -76,13 +76,24 @@ temporary Web document
   -> exact Composer-local retrieval and answer packing
 ```
 
-The selected `RAGService` remains the sole owner of provider clients, the
-embedding executor, and the reranker. Composer borrows those resources; it does
-not create or close duplicate clients. Results are isolated by
-`principal_id + conversation_id` in the existing `web_conversation_*` tables.
-No Composer path writes LightRAG `full_docs`, `doc_status`, chunk/vector, BM25,
-LLM-cache, or KG rows, and no HNSW or other ANN index is created for Composer
-vectors.
+`RAGServiceManager` lazily owns and closes one cache-neutral
+`ComposerModelBundle` containing the VLM and EXTRACT providers. Its VLM callable
+is shared by `QueryImageDescriber` and Composer sidecar analysis, and both roles
+run under the manager's direct-LLM concurrency bound. Independently, the first
+normalized requested workspace deterministically selects one `RAGService`; that
+service owns and provides its initialized LightRAG parser/multimodal renderer,
+shared `RobustDocumentEmbedder` with resolved image capability, and reranker.
+Composer borrows those service resources without creating or closing them.
+Parser/MM work stays in the request's temporary-file scope, document embedding
+uses the shared embedder's own semaphore, and reranking invokes the existing
+service-owned callable; Composer adds no second resource pool.
+
+The lifecycle split does not merge result ownership. Composer output is
+isolated by `principal_id + conversation_id` in the Web PostgreSQL
+`web_conversation_*` tables; sharing model or processing providers never shares
+results. No Composer path writes LightRAG `full_docs`, `doc_status`,
+chunk/vector, BM25, LLM-cache, or KG rows, and no HNSW or other ANN index is
+created for Composer vectors.
 
 Manual conversation deletion and inactivity-TTL pruning cascade through parsed
 chunks, VLM-derived content, image bytes, and vectors. Max-turn trimming removes

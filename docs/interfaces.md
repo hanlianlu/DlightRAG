@@ -442,12 +442,24 @@ images and visuals parsed from Composer documents. Workspace RAG visuals use an
 independent budget with the same configured shape; neither lane borrows the
 other's remaining count or bytes.
 
-Provider clients and the robust fused/text document embedding executor are
-borrowed from the selected workspace service, but result storage remains Web
-only. The Composer store uses its existing JSONB vector columns and no HNSW/ANN
-index. Private cache identity and vector fields, including `_cache_key`,
-`cache_chunk_id`, `embedding_signature`, and `embedding_vector`, never appear in
-public contexts or source payloads.
+`RAGServiceManager` owns and closes one cache-neutral `ComposerModelBundle` for
+VLM and EXTRACT. It shares the bundle's VLM callable with
+`QueryImageDescriber` and attachment analysis under the manager's direct-LLM
+concurrency bound. Separately, the first normalized requested workspace
+deterministically selects one `RAGService`, which owns and provides its
+initialized LightRAG parser/multimodal renderer, shared
+`RobustDocumentEmbedder` plus resolved image capability, and reranker. A Web
+turn borrows and never closes those resources. Parser/MM work remains
+request-local, embedding uses the shared embedder's own semaphore, and
+reranking invokes the service-owned callable; no per-turn resource pool is
+created.
+
+This provider-sharing lifecycle does not share results: result storage remains
+owned only by the principal-scoped Web PostgreSQL store. The Composer store uses
+its existing JSONB vector columns and no HNSW/ANN index. Private cache identity
+and vector fields, including `_cache_key`, `cache_chunk_id`,
+`embedding_signature`, and `embedding_vector`, never appear in public contexts
+or source payloads.
 
 REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
 accept an optional caller-supplied `history` of prior `role`/`content` turns for
