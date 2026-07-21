@@ -17,7 +17,11 @@ configuration fields live in [configuration.md](configuration.md).
 
 Web `/web/answer` also supports query-time document attachments. These are
 conversation-scoped Web attachments, not REST/MCP/SDK retrieve inputs and not
-workspace ingestion records.
+workspace ingestion records. On a cache miss, DlightRAG uses the real configured
+LightRAG parser, cache-neutral VLM/EXTRACT analysis, and the LightRAG multimodal
+renderer in temporary storage. Final chunks and JSONB vectors live only in the
+owning `web_conversation_attachment_chunks` rows; they do not enter workspace
+documents, BM25, vectors, KG, or LLM cache.
 
 ### Choosing an interface
 
@@ -425,11 +429,25 @@ retention. Current Web images are admitted using `query_images.max_current_image
 and `query_images.max_upload_bytes`; the defaults are three images and 15 MiB per
 decoded image, and the browser upload entry is gated by the query-role answer
 model's discovered image capability (unsupported or unknown disables uploads).
+All attachment-derived cache rows are owned by authenticated principal plus
+conversation. The same bytes and signatures may be reused inside that one
+conversation only; there is no cross-conversation or cross-principal reuse.
+Manual delete and TTL pruning cascade attachment bytes, enriched chunks, image
+bytes, and vectors, while max-turn trimming preserves the conversation-level
+cache.
+
 Current-turn images always have priority. Referenced historical images are
 resolved by the planner and share the Web Composer transport budget with current
 images and visuals parsed from Composer documents. Workspace RAG visuals use an
 independent budget with the same configured shape; neither lane borrows the
 other's remaining count or bytes.
+
+Provider clients and the robust fused/text document embedding executor are
+borrowed from the selected workspace service, but result storage remains Web
+only. The Composer store uses its existing JSONB vector columns and no HNSW/ANN
+index. Private cache identity and vector fields, including `_cache_key`,
+`cache_chunk_id`, `embedding_signature`, and `embedding_vector`, never appear in
+public contexts or source payloads.
 
 REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
 accept an optional caller-supplied `history` of prior `role`/`content` turns for

@@ -614,6 +614,25 @@ assets, or jobs. Current-turn images always have priority; historical images
 that miss a transport slot contribute their stored text descriptions. These
 retention and upload controls do not change that behavior.
 
+Web Composer documents use the configured parser routing and
+`parser_sidecars.vlm.enabled` switch. On a cache miss they run the real parser,
+cache-neutral LightRAG VLM/EXTRACT analysis, and LightRAG multimodal renderer in
+temporary storage. The first normalized requested workspace supplies borrowed
+provider clients, the shared `RobustDocumentEmbedder`, and the shared reranker.
+Fused image+text document embedding is used only when that service's resolved
+image capability is active; otherwise, or after a fused provider failure, the
+document vector falls back to text-only embedding.
+
+These processing resources are shared, but results are not. Enriched chunks and
+JSONB vectors live only in `web_conversation_attachment_chunks`, scoped by
+principal and conversation. Manual delete and TTL pruning cascade those rows;
+`max_turns` trimming preserves them until the conversation itself is deleted or
+expires. There is no cross-conversation reuse, workspace RAG write, HNSW/ANN
+index, or Composer vector configuration. Composer dense ranking is exact
+blockwise `float32` cosine with a fixed internal inclusion threshold of `>= 0.5`.
+The Composer current/history visual budget described above remains independent
+from the workspace RAG visual budget.
+
 ## REST API
 
 REST binds to loopback by default for local development:

@@ -355,10 +355,47 @@ workspace/model calls are globally calibrated.
 
 ## Web Query Attachments
 
-Web query document attachments are parsed through the configured LightRAG parser
-routing and passed through the Web-only attachment budget pipeline before answer
-generation. They do not enter workspace retrieval, public `/retrieve`, KG
-storage, or workspace vector storage.
+Web query document attachments use the configured real LightRAG parser in a
+`TemporaryDirectory`. A strict storage-free proxy then invokes LightRAG's real
+VLM/EXTRACT multimodal analyzer with `llm_response_cache=None`, followed by the
+real LightRAG text chunkers and multimodal sidecar renderer. Parser persistence
+is neutralized by the parse-owner shim. This path cannot write workspace
+`full_docs`, `doc_status`, chunks, vectors, BM25, LLM cache, or KG rows and never
+enters public `/retrieve`.
+
+The selected workspace service lends Composer its provider clients, shared
+`RobustDocumentEmbedder`, resolved image capability, and reranker. Result storage
+is not shared. Visual chunks use fused image+text document vectors when image
+capability is active; invalid images, unavailable capability, or fused provider
+failure use text-only document vectors. Enriched chunks, image bytes, embedding
+signatures, and JSONB vectors are stored only in the existing
+`web_conversation_attachment_chunks` table. There is no pgvector dimension
+contract and no HNSW, IVFFLAT, or other ANN index.
+
+Every read and write is scoped by authenticated principal plus conversation and
+requires an unexpired owning conversation. Manual delete and TTL pruning
+cascade all attachment-derived rows. Max-turn trimming removes old turn records
+but preserves the conversation-level parse/vector cache. Cache identity never
+crosses a conversation or principal boundary.
+
+For each current/history lane independently, long-document retrieval is:
+
+```text
+BM25(content) + exact dense(cached vectors) + structure + coverage
+  -> shared RRF(k=60)
+  -> top 30 candidates
+  -> shared rerank_with_fallback()
+  -> per-document guarantees and token packing
+```
+
+Dense ranking embeds the standalone query once with query semantics, streams
+selected document vectors in bounded blocks, converts each block to `float32`,
+computes exact cosine similarity, and admits scores `>= np.float32(0.5)`. It is
+an exact `O(ND)` scan with deterministic source-order tie breaking. Missing,
+stale, invalid, or zero-norm vectors disable only the affected dense evidence;
+BM25, structure, and first/middle/last coverage continue. Rerank failure keeps
+the fused RRF order through the same shared fallback executor used by workspace
+RAG.
 
 Attachment chunks carry a `web-attachment://<attachment_id>` source URI and a
 `__web_attachment__` sentinel workspace, so they never resolve a workspace image
@@ -366,4 +403,9 @@ route. Attachment figures are delivered inline as `image_data` in the answer
 context, and the Web answer layer projects a conversation-scoped
 `/web/conversations/<conversation_id>/documents/<attachment_id>` download URL
 onto the finalized attachment source.
+
+Current direct images, selected history images, and visuals from current/history
+Composer documents share one Composer visual budget. Workspace RAG visuals use
+a separate budget with the same configured shape; the two budgets never borrow
+count or bytes from each other.
 

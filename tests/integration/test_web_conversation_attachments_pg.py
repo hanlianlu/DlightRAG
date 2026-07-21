@@ -6,6 +6,13 @@ a live PostgreSQL 18 instance (asyncpg): migration application, the attachment
 insert, the history JSONB aggregation, the content-addressed parse cache, the
 principal-scoped document reads, and the ON DELETE CASCADE lifecycle.
 
+Workspace non-write is proved at the narrower ownership boundaries: the strict
+analysis proxy rejects every LightRAG cache/KV/vector/KG handle, and the parser
+owner shim exposes only a no-op persistence hook. Global workspace row counts
+are intentionally absent here because they would race with unrelated ingest in
+a shared integration database; this suite verifies the only permitted result
+store, the scoped ``web_conversation_*`` tables.
+
 Requires a running PostgreSQL instance (localhost:5432, dlightrag/dlightrag).
 Skipped automatically if PostgreSQL is not available.
 """

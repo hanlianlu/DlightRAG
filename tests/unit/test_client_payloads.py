@@ -157,6 +157,48 @@ def test_public_context_projection_strips_internal_source_metadata() -> None:
     assert projected["chunks"][0]["file_path"] == "report.pdf"
 
 
+def test_retrieval_payload_hides_composer_cache_and_vector_fields() -> None:
+    from dlightrag.core.client_payloads import retrieval_payload
+
+    private_fields = {
+        "_cache_key",
+        "cache_chunk_id",
+        "embedding_signature",
+        "embedding_vector",
+    }
+    result = RetrievalResult(
+        contexts={
+            "chunks": [
+                {
+                    "chunk_id": "composer-att-1",
+                    "reference_id": "composer_ref_1",
+                    "full_doc_id": "att-1",
+                    "file_path": "report.pdf",
+                    "content": "Composer evidence",
+                    "_workspace": "__web_attachment__",
+                    "_cache_key": object(),
+                    "cache_chunk_id": "private-cache-id",
+                    "embedding_signature": "private-signature",
+                    "embedding_vector": [0.25, 0.75],
+                    "metadata": {
+                        "source_type": "web_attachment",
+                        "source_uri": "web-attachment://att-1",
+                        "source_download_locator": "web-attachment://att-1",
+                    },
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+    )
+
+    payload = retrieval_payload(result, image_url_prefix=None)
+
+    assert private_fields.isdisjoint(payload["contexts"]["chunks"][0])
+    assert private_fields.isdisjoint(payload["sources"][0])
+    assert private_fields.isdisjoint(payload["sources"][0]["chunks"][0])
+
+
 def test_project_contexts_for_client_strips_inline_images_and_adds_image_urls() -> None:
     from dlightrag.core.client_payloads import project_contexts_for_client
 

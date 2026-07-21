@@ -58,6 +58,38 @@ visual chunk with a fused vector that interleaves the VLM description and the
 image. With a text-only embedding model, this alignment is skipped and
 LightRAG's semantic visual chunk remains the multimodal ingestion path.
 
+## Web Composer Attachment Flow
+
+Web Composer documents borrow processing capability from the first normalized
+requested workspace, but they never become workspace documents:
+
+```text
+temporary Web document
+  -> real LightRAG parser in a TemporaryDirectory
+  -> cache-neutral LightRAG VLM/EXTRACT analysis over a strict proxy
+  -> real LightRAG text chunkers and multimodal sidecar renderer
+  -> shared RobustDocumentEmbedder
+       fused image+text when the selected service has working image capability
+       text-only when capability is absent or fused embedding fails
+  -> web_conversation_attachment_chunks
+       enriched content, image bytes, signatures, JSONB vectors
+  -> exact Composer-local retrieval and answer packing
+```
+
+The selected `RAGService` remains the sole owner of provider clients, the
+embedding executor, and the reranker. Composer borrows those resources; it does
+not create or close duplicate clients. Results are isolated by
+`principal_id + conversation_id` in the existing `web_conversation_*` tables.
+No Composer path writes LightRAG `full_docs`, `doc_status`, chunk/vector, BM25,
+LLM-cache, or KG rows, and no HNSW or other ANN index is created for Composer
+vectors.
+
+Manual conversation deletion and inactivity-TTL pruning cascade through parsed
+chunks, VLM-derived content, image bytes, and vectors. Max-turn trimming removes
+old turns only and preserves the conversation-level attachment cache. Identical
+bytes may be reused within one conversation under matching signatures, but are
+never reused across conversations or principals.
+
 ## Retrieval And Answer Flow
 
 ```text
