@@ -2025,6 +2025,144 @@ class TestClose:
 
         selector.aclose.assert_awaited_once()
 
+    async def test_close_retains_composer_bundle_until_failed_closer_retries(
+        self,
+        test_cfg,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.models.composer import ComposerModelBundle
+
+        events: list[str] = []
+        vlm_attempts = 0
+
+        async def close_vlm() -> None:
+            nonlocal vlm_attempts
+            vlm_attempts += 1
+            events.append("bundle-vlm")
+            if vlm_attempts == 1:
+                raise RuntimeError("temporary close failure")
+
+        async def close_extract() -> None:
+            events.append("bundle-extract")
+
+        bundle = ComposerModelBundle(
+            vlm_func=AsyncMock(),
+            extract_func=AsyncMock(),
+            vlm_identity={},
+            extract_identity={},
+            _closers=(close_vlm, close_extract),
+        )
+        selector = AsyncMock()
+        selector.aclose.side_effect = lambda: events.append("selector")
+        service = AsyncMock()
+        service.aclose.side_effect = lambda: events.append("service")
+        pool_close = AsyncMock(side_effect=lambda: events.append("pool"))
+        shutdown_tracing = MagicMock(side_effect=lambda: events.append("tracing"))
+        monkeypatch.setattr("dlightrag.storage.pool.pg_pool.close", pool_close)
+        monkeypatch.setattr("dlightrag.observability.shutdown_tracing", shutdown_tracing)
+        manager = RAGServiceManager(config=test_cfg)
+        manager._composer_model_bundle = bundle
+        manager._composer_evidence_selector = selector
+        manager._services = {"default": service}
+
+        await manager.aclose()
+
+        assert events == [
+            "bundle-vlm",
+            "bundle-extract",
+            "selector",
+            "service",
+            "pool",
+            "tracing",
+        ]
+        assert manager._composer_model_bundle is bundle
+        assert bundle.is_closed is False
+
+        await manager.aclose()
+        await manager.aclose()
+
+        assert vlm_attempts == 2
+        assert bundle.is_closed is True
+        assert manager._composer_model_bundle is None
+
+    async def test_close_defers_bundle_cancellation_until_manager_cleanup_finishes(
+        self,
+        test_cfg,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.models.composer import ComposerModelBundle
+
+        events: list[str] = []
+        cancellation_seen_by_closer: list[asyncio.CancelledError] = []
+        close_started = asyncio.Event()
+        block_close = asyncio.Event()
+        vlm_attempts = 0
+
+        async def close_vlm() -> None:
+            nonlocal vlm_attempts
+            vlm_attempts += 1
+            if vlm_attempts > 1:
+                events.append("bundle-vlm-retry")
+                return
+            events.append("bundle-vlm-started")
+            close_started.set()
+            try:
+                await block_close.wait()
+            except asyncio.CancelledError as exc:
+                cancellation_seen_by_closer.append(exc)
+                events.append("bundle-vlm-cancelled")
+                raise
+
+        async def close_extract() -> None:
+            events.append("bundle-extract")
+
+        bundle = ComposerModelBundle(
+            vlm_func=AsyncMock(),
+            extract_func=AsyncMock(),
+            vlm_identity={},
+            extract_identity={},
+            _closers=(close_vlm, close_extract),
+        )
+        selector = AsyncMock()
+        selector.aclose.side_effect = lambda: events.append("selector")
+        service = AsyncMock()
+        service.aclose.side_effect = lambda: events.append("service")
+        pool_close = AsyncMock(side_effect=lambda: events.append("pool"))
+        shutdown_tracing = MagicMock(side_effect=lambda: events.append("tracing"))
+        monkeypatch.setattr("dlightrag.storage.pool.pg_pool.close", pool_close)
+        monkeypatch.setattr("dlightrag.observability.shutdown_tracing", shutdown_tracing)
+        manager = RAGServiceManager(config=test_cfg)
+        manager._composer_model_bundle = bundle
+        manager._composer_evidence_selector = selector
+        manager._services = {"default": service}
+
+        close_task = asyncio.create_task(manager.aclose())
+        await close_started.wait()
+        close_task.cancel("manager shutdown")
+        with pytest.raises(asyncio.CancelledError, match="manager shutdown") as exc_info:
+            await close_task
+        events.append("cancellation-observed")
+
+        assert cancellation_seen_by_closer == [exc_info.value]
+        assert events == [
+            "bundle-vlm-started",
+            "bundle-vlm-cancelled",
+            "bundle-extract",
+            "selector",
+            "service",
+            "pool",
+            "tracing",
+            "cancellation-observed",
+        ]
+        assert manager._composer_model_bundle is bundle
+        assert bundle.is_closed is False
+
+        await manager.aclose()
+
+        assert vlm_attempts == 2
+        assert bundle.is_closed is True
+        assert manager._composer_model_bundle is None
+
     async def test_composer_bundle_is_lazy_shared_and_manager_owned(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2035,6 +2173,7 @@ class TestClose:
             vlm_func=vlm,
             extract_func=AsyncMock(),
             aclose=AsyncMock(),
+            is_closed=True,
         )
         create = AsyncMock(return_value=bundle)
         monkeypatch.setattr(ComposerModelBundle, "acreate", create)
@@ -2095,7 +2234,7 @@ class TestClose:
 
         started = asyncio.Event()
         release = asyncio.Event()
-        bundle = SimpleNamespace(aclose=AsyncMock())
+        bundle = SimpleNamespace(aclose=AsyncMock(), is_closed=True)
 
         async def create(*args: Any, **kwargs: Any) -> SimpleNamespace:
             started.set()

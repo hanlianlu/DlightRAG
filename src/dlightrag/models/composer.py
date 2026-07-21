@@ -170,6 +170,11 @@ class ComposerModelBundle:
     def __post_init__(self) -> None:
         self._pending_closers = list(self._closers)
 
+    @property
+    def is_closed(self) -> bool:
+        """Return whether every owned provider has closed successfully."""
+        return self._closed
+
     @classmethod
     async def acreate(
         cls,

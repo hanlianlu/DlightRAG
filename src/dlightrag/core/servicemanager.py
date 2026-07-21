@@ -59,6 +59,17 @@ logger = logging.getLogger(__name__)
 _MAX_RETRY_INTERVAL: float = 300.0
 
 
+def _defer_cancellation(
+    first: asyncio.CancelledError | None,
+    current: asyncio.CancelledError,
+) -> asyncio.CancelledError:
+    task = asyncio.current_task()
+    if task is not None:
+        while task.cancelling():
+            task.uncancel()
+    return first if first is not None else current
+
+
 @dataclass(frozen=True)
 class _AnswerLimits:
     candidate_top_k: int
@@ -1787,13 +1798,13 @@ class RAGServiceManager:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
 
+        cancellation: asyncio.CancelledError | None = None
         await self._ingest_jobs.close()
 
         async with self._query_image_describer_lock:
             self._query_image_describer = None
             async with self._composer_model_bundle_lock:
                 composer_model_bundle = self._composer_model_bundle
-                self._composer_model_bundle = None
 
         for component in (
             self._answer_engine,
@@ -1808,12 +1819,21 @@ class RAGServiceManager:
                 result = close()
                 if inspect.isawaitable(result):
                     await cast(Awaitable[Any], result)
+            except asyncio.CancelledError as exc:
+                cancellation = _defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Failed to close manager component", exc_info=True)
+
+        if composer_model_bundle is not None and composer_model_bundle.is_closed:
+            async with self._composer_model_bundle_lock:
+                if self._composer_model_bundle is composer_model_bundle:
+                    self._composer_model_bundle = None
 
         for ws, svc in self._services.items():
             try:
                 await svc.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = _defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
         self._services.clear()
@@ -1821,8 +1841,13 @@ class RAGServiceManager:
 
         from dlightrag.storage.pool import pg_pool
 
-        await pg_pool.close()
+        try:
+            await pg_pool.close()
+        except asyncio.CancelledError as exc:
+            cancellation = _defer_cancellation(cancellation, exc)
         shutdown_tracing()
+        if cancellation is not None:
+            raise cancellation
 
     # --- Health ---
 
