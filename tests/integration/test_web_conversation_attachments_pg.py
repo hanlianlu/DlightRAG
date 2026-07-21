@@ -435,6 +435,180 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
 
 
 @pytest.mark.usefixtures("pg_check")
+async def test_attachment_vectors_require_exact_principal_and_conversation_scope() -> None:
+    from dlightrag.core.request.attachments import (
+        AttachmentCacheKey,
+        AttachmentContextChunk,
+        ParsedAttachmentBundle,
+    )
+    from dlightrag.storage.web_conversations import PGWebConversationStore
+
+    owner_principal_id = f"itest-vector-owner-{uuid4()}"
+    foreign_principal_id = f"itest-vector-foreign-{uuid4()}"
+    cache_key = AttachmentCacheKey(
+        "shared-content",
+        "shared-parser",
+        "shared-chunker",
+        "shared-cache-chunk",
+    )
+    owner_chunk = AttachmentContextChunk(
+        chunk_id="owner-public-chunk",
+        attachment_id="owner-attachment",
+        filename="owner.pdf",
+        chunk_index=0,
+        content="owner scoped vector",
+        cache_key=cache_key,
+        embedding_signature="owner-embedding",
+        embedding_vector=[1.0, 0.0],
+    )
+    foreign_chunk = replace(
+        owner_chunk,
+        chunk_id="foreign-public-chunk",
+        attachment_id="foreign-attachment",
+        filename="foreign.pdf",
+        content="foreign scoped vector",
+        embedding_signature="foreign-embedding",
+        embedding_vector=[0.0, 1.0],
+    )
+
+    pool = await _open_pool()
+    try:
+        store = PGWebConversationStore(pool=pool)
+        await store.initialize()
+        await _delete_principal(pool, owner_principal_id)
+        await _delete_principal(pool, foreign_principal_id)
+
+        owner_conversation = await store.create_conversation(owner_principal_id)
+        owner_conversation_id = str(owner_conversation["conversation_id"])
+        wrong_conversation = await store.create_conversation(owner_principal_id)
+        wrong_conversation_id = str(wrong_conversation["conversation_id"])
+        foreign_conversation = await store.create_conversation(foreign_principal_id)
+        foreign_conversation_id = str(foreign_conversation["conversation_id"])
+
+        for principal_id, conversation_id, chunk in (
+            (owner_principal_id, owner_conversation_id, owner_chunk),
+            (foreign_principal_id, foreign_conversation_id, foreign_chunk),
+        ):
+            assert (
+                await store.materialize_attachment_chunks(
+                    principal_id,
+                    conversation_id,
+                    content_sha256=cache_key.content_sha256,
+                    parser_signature=cache_key.parser_signature,
+                    chunk_signature=cache_key.chunk_signature,
+                    bundle=ParsedAttachmentBundle(
+                        chunks=[chunk],
+                        parser_signature=cache_key.parser_signature,
+                    ),
+                    ttl_days=_TTL_DAYS,
+                )
+                is True
+            )
+
+        async with pool.acquire() as conn:
+            scoped_rows = await conn.fetch(
+                "SELECT principal_id, conversation_id::text AS conversation_id, "
+                "content_sha256, parser_signature, chunk_signature, chunk_id "
+                "FROM web_conversation_attachment_chunks "
+                "WHERE content_sha256 = $1 AND parser_signature = $2 "
+                "AND chunk_signature = $3 AND chunk_id = $4 "
+                "AND principal_id = ANY($5::text[]) "
+                "ORDER BY principal_id",
+                cache_key.content_sha256,
+                cache_key.parser_signature,
+                cache_key.chunk_signature,
+                cache_key.cache_chunk_id,
+                [owner_principal_id, foreign_principal_id],
+            )
+        assert {(str(row["principal_id"]), str(row["conversation_id"])) for row in scoped_rows} == {
+            (owner_principal_id, owner_conversation_id),
+            (foreign_principal_id, foreign_conversation_id),
+        }
+        assert {
+            (
+                str(row["content_sha256"]),
+                str(row["parser_signature"]),
+                str(row["chunk_signature"]),
+                str(row["chunk_id"]),
+            )
+            for row in scoped_rows
+        } == {
+            (
+                cache_key.content_sha256,
+                cache_key.parser_signature,
+                cache_key.chunk_signature,
+                cache_key.cache_chunk_id,
+            )
+        }
+
+        foreign_principal_pages = [
+            page
+            async for page in store.aiter_attachment_vectors(
+                foreign_principal_id,
+                owner_conversation_id,
+                [(0, cache_key)],
+                ttl_days=_TTL_DAYS,
+                page_size=1,
+            )
+        ]
+        wrong_conversation_pages = [
+            page
+            async for page in store.aiter_attachment_vectors(
+                owner_principal_id,
+                wrong_conversation_id,
+                [(0, cache_key)],
+                ttl_days=_TTL_DAYS,
+                page_size=1,
+            )
+        ]
+        assert foreign_principal_pages == [[]]
+        assert wrong_conversation_pages == [[]]
+
+        attempted_overwrite = replace(
+            owner_chunk,
+            embedding_signature="attacker-embedding",
+            embedding_vector=[0.5, 0.5],
+        )
+        assert (
+            await store.aupdate_attachment_chunk_vectors(
+                foreign_principal_id,
+                owner_conversation_id,
+                [attempted_overwrite],
+                ttl_days=_TTL_DAYS,
+            )
+            is False
+        )
+        assert (
+            await store.aupdate_attachment_chunk_vectors(
+                owner_principal_id,
+                wrong_conversation_id,
+                [attempted_overwrite],
+                ttl_days=_TTL_DAYS,
+            )
+            is False
+        )
+
+        owner_pages = [
+            page
+            async for page in store.aiter_attachment_vectors(
+                owner_principal_id,
+                owner_conversation_id,
+                [(0, cache_key)],
+                ttl_days=_TTL_DAYS,
+                page_size=1,
+            )
+        ]
+        assert len(owner_pages) == 1
+        assert len(owner_pages[0]) == 1
+        assert owner_pages[0][0].embedding_signature == "owner-embedding"
+        assert owner_pages[0][0].embedding_vector == [1.0, 0.0]
+    finally:
+        await _delete_principal(pool, owner_principal_id)
+        await _delete_principal(pool, foreign_principal_id)
+        await pool.close()
+
+
+@pytest.mark.usefixtures("pg_check")
 async def test_expired_attachment_vector_reads_and_writes_miss_before_prune() -> None:
     from dlightrag.core.request.attachments import (
         AttachmentCacheKey,
