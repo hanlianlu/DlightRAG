@@ -14,6 +14,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig, ModelConfig
+from dlightrag.models.composer import ComposerImageTransportSettings
 from dlightrag.models.llm_roles import model_for_role
 
 COMPOSER_ANALYSIS_CONTRACT_VERSION = "1"
@@ -191,11 +192,15 @@ def build_composer_analysis_signature(
     """Return the deterministic, non-secret Composer analysis cache signature."""
     sidecars = config.parser_sidecars.vlm
     tokenizer_type = type(lightrag.tokenizer)
+    tokenizer_model = getattr(lightrag.tokenizer, "model_name", None)
+    image_transport = ComposerImageTransportSettings.from_config(config)
     payload = {
         "contract_version": COMPOSER_ANALYSIS_CONTRACT_VERSION,
         "lightrag_version": _lightrag_version(),
         "process_options": process_options,
         "tokenizer": f"{tokenizer_type.__module__}.{tokenizer_type.__qualname__}",
+        "tokenizer_model": str(tokenizer_model) if tokenizer_model is not None else None,
+        "image_transport": image_transport.fingerprint_payload(),
         "language": config.extraction.language,
         "enabled": sidecars.enabled,
         "sidecar_limits": {
@@ -310,6 +315,26 @@ async def _request_cancellation(
         pipeline_status["cancellation_requested"] = True
 
 
+def _clear_pending_cancellation() -> None:
+    task = asyncio.current_task()
+    if task is None:
+        return
+    while task.cancelling():
+        task.uncancel()
+
+
+async def _cancel_and_wait_for_analyzer(
+    analyzer_task: asyncio.Task[dict[str, Any]],
+    pipeline_status: dict[str, Any],
+    pipeline_status_lock: asyncio.Lock,
+) -> None:
+    await _request_cancellation(pipeline_status, pipeline_status_lock)
+    try:
+        await analyzer_task
+    except Exception, asyncio.CancelledError:
+        logger.debug("Composer analyzer child stopped during cancellation", exc_info=True)
+
+
 async def aanalyze_composer_sidecars(
     *,
     lightrag: Any,
@@ -362,13 +387,22 @@ async def aanalyze_composer_sidecars(
     analyzed = parsed_data
     try:
         analyzed = await asyncio.shield(analyzer_task)
-    except asyncio.CancelledError:
-        await _request_cancellation(pipeline_status, pipeline_status_lock)
-        try:
-            await asyncio.shield(analyzer_task)
-        except Exception, asyncio.CancelledError:
-            logger.debug("Composer analyzer child stopped during cancellation", exc_info=True)
-        raise
+    except asyncio.CancelledError as first_cancellation:
+        _clear_pending_cancellation()
+        cleanup_task = asyncio.create_task(
+            _cancel_and_wait_for_analyzer(
+                analyzer_task,
+                pipeline_status,
+                pipeline_status_lock,
+            )
+        )
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                _clear_pending_cancellation()
+        await cleanup_task
+        raise first_cancellation
     except Exception as exc:
         error_type = type(exc).__name__
 

@@ -29,6 +29,9 @@ from dlightrag.core.request.composer_analysis import (
 
 
 class _Tokenizer:
+    def __init__(self, model_name: str = "test-tokenizer") -> None:
+        self.model_name = model_name
+
     def encode(self, value: str) -> list[str]:
         return value.split()
 
@@ -381,6 +384,153 @@ async def test_cancellation_sets_private_flag_waits_cleanup_and_reraises(
     assert cleaned.is_set()
 
 
+async def test_repeated_cancellation_waits_for_child_cleanup_and_reraises_first_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    allow_cleanup = asyncio.Event()
+    cleaned = asyncio.Event()
+    captured_status: dict[str, Any] = {}
+
+    async def analyze(
+        proxy: Any,
+        doc_id: str,
+        file_path: str,
+        parsed_data: dict,
+        *,
+        pipeline_status: dict[str, Any],
+        pipeline_status_lock: asyncio.Lock,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured_status["live"] = pipeline_status
+        started.set()
+        try:
+            while not await proxy._cancellation_requested(pipeline_status, pipeline_status_lock):
+                await asyncio.sleep(0)
+            cancellation_seen.set()
+            await allow_cleanup.wait()
+            return parsed_data
+        finally:
+            cleaned.set()
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+    blocks_path = _blocks(tmp_path)
+    task = asyncio.create_task(
+        aanalyze_composer_sidecars(
+            lightrag=_lightrag(),
+            model_bundle=_bundle(),
+            config=_config(),
+            doc_id="doc-1",
+            file_path="report.pdf",
+            parsed_data={"blocks_path": str(blocks_path)},
+            process_options="iP",
+        )
+    )
+    await started.wait()
+
+    task.cancel("first cancellation")
+    await cancellation_seen.wait()
+    assert captured_status["live"]["cancellation_requested"] is True
+
+    for message in ("second cancellation", "third cancellation"):
+        task.cancel(message)
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not cleaned.is_set()
+
+    allow_cleanup.set()
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+
+    assert exc_info.value.args == ("first cancellation",)
+    assert cleaned.is_set()
+
+
+@pytest.mark.parametrize(
+    ("setting", "replacement"),
+    [
+        ("max_images", 7),
+        ("image_max_bytes", 2_000_000),
+        ("image_max_total_bytes", 20_000_000),
+        ("image_max_px", 1400),
+        ("image_min_px", 900),
+        ("image_quality", 88),
+        ("image_min_quality", 78),
+    ],
+)
+def test_analysis_signature_changes_with_each_image_transport_setting(
+    setting: str,
+    replacement: int,
+) -> None:
+    config = _config()
+    changed = config.model_copy(
+        update={"answer": config.answer.model_copy(update={setting: replacement})}
+    )
+
+    baseline = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=config,
+        process_options="iteP",
+    )
+    updated = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=changed,
+        process_options="iteP",
+    )
+
+    assert updated != baseline
+
+
+def test_analysis_signature_changes_with_tokenizer_model() -> None:
+    config = _config()
+    bundle = _bundle()
+
+    first = build_composer_analysis_signature(
+        lightrag=SimpleNamespace(tokenizer=_Tokenizer("tokenizer-model-a")),
+        model_bundle=bundle,
+        config=config,
+        process_options="iteP",
+    )
+    second = build_composer_analysis_signature(
+        lightrag=SimpleNamespace(tokenizer=_Tokenizer("tokenizer-model-b")),
+        model_bundle=bundle,
+        config=config,
+        process_options="iteP",
+    )
+
+    assert second != first
+
+
+def test_analysis_signature_uses_canonical_immutable_image_transport_settings() -> None:
+    from dlightrag.models.composer import ComposerImageTransportSettings
+
+    config = _config()
+    settings = ComposerImageTransportSettings.from_config(config)
+    expected = {
+        "max_images": config.answer.max_images,
+        "image_max_bytes": config.answer.image_max_bytes,
+        "image_max_total_bytes": config.answer.image_max_total_bytes,
+        "image_max_px": config.answer.image_max_px,
+        "image_min_px": config.answer.image_min_px,
+        "image_quality": config.answer.image_quality,
+        "image_min_quality": config.answer.image_min_quality,
+    }
+
+    assert settings.fingerprint_payload() == expected
+    assert vars(ComposerImageTransportSettings)["__dataclass_params__"].frozen is True
+
+    signature = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=config,
+        process_options="iteP",
+    )
+    assert json.loads(signature)["image_transport"] == expected
+
+
 def test_analysis_signature_is_complete_deterministic_and_secret_free(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -407,6 +557,7 @@ def test_analysis_signature_is_complete_deterministic_and_secret_free(
     assert payload["lightrag_version"]
     assert payload["process_options"] == "iteP"
     assert payload["tokenizer"].endswith("._Tokenizer")
+    assert payload["tokenizer_model"] == "test-tokenizer"
     assert payload["language"] == config.extraction.language
     assert payload["max_extract_input_tokens"] == 12345
     assert payload["roles"]["vlm"]["temperature"] == 0.1

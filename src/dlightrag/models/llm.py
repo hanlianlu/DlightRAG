@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig, ModelConfig
+from dlightrag.models.composer import ComposerImageTransportSettings
 from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
 from dlightrag.models.providers import get_provider
 from dlightrag.models.structured import StructuredOutput
@@ -233,23 +234,23 @@ def _sanitized_model_identity(cfg: ModelConfig) -> dict[str, str | None]:
 def _composer_image_blocks(
     image_inputs: list[dict[str, Any]] | None,
     *,
-    config: DlightragConfig,
+    settings: ComposerImageTransportSettings,
 ) -> list[dict[str, Any]]:
     from dlightrag.utils.images import bounded_image_data_uri
 
     blocks: list[dict[str, Any]] = []
-    remaining_bytes = max(1, int(config.answer.image_max_total_bytes))
-    for image in list(image_inputs or [])[: max(0, int(config.answer.max_images))]:
+    remaining_bytes = settings.image_max_total_bytes
+    for image in list(image_inputs or [])[: settings.max_images]:
         payload = str(image.get("base64") or "")
         mime_type = str(image.get("mime_type") or "image/png")
         value = payload if payload.startswith("data:") else f"data:{mime_type};base64,{payload}"
         bounded = bounded_image_data_uri(
             value,
-            max_bytes=min(int(config.answer.image_max_bytes), remaining_bytes),
-            max_px=config.answer.image_max_px,
-            min_px=config.answer.image_min_px,
-            quality=config.answer.image_quality,
-            min_quality=config.answer.image_min_quality,
+            max_bytes=min(settings.image_max_bytes, remaining_bytes),
+            max_px=settings.image_max_px,
+            min_px=settings.image_min_px,
+            quality=settings.image_quality,
+            min_quality=settings.image_min_quality,
         )
         if bounded is None:
             continue
@@ -280,6 +281,7 @@ def create_composer_analysis_adapter(
         default_api_key=config.llm.default.api_key,
         owner_closers=owner_closers,
     )
+    image_transport = ComposerImageTransportSettings.from_config(config)
 
     async def adapter(
         prompt: str | None = None,
@@ -306,6 +308,7 @@ def create_composer_analysis_adapter(
             "api_version",
         ):
             kwargs.pop(control, None)
+        kwargs.clear()
 
         if messages is not None:
             if prompt is not None or system_prompt or history_messages or image_inputs:
@@ -319,7 +322,7 @@ def create_composer_analysis_adapter(
                 prepared_messages.append({"role": "system", "content": system_prompt})
             if history_messages:
                 prepared_messages.extend(history_messages)
-            image_blocks = _composer_image_blocks(image_inputs, config=config)
+            image_blocks = _composer_image_blocks(image_inputs, settings=image_transport)
             user_content: str | list[dict[str, Any]] = prompt
             if image_blocks:
                 user_content = [*image_blocks, {"type": "text", "text": prompt}]
@@ -328,7 +331,6 @@ def create_composer_analysis_adapter(
             messages=prepared_messages,
             response_format=response_format,
             stream=stream,
-            **kwargs,
         )
 
     async def close() -> None:

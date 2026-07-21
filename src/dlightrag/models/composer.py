@@ -11,6 +11,43 @@ from dlightrag.config import DlightragConfig
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class ComposerImageTransportSettings:
+    """Canonical image transport settings used by Composer analysis."""
+
+    max_images: int
+    image_max_bytes: int
+    image_max_total_bytes: int
+    image_max_px: int
+    image_min_px: int
+    image_quality: int
+    image_min_quality: int
+
+    @classmethod
+    def from_config(cls, config: DlightragConfig) -> ComposerImageTransportSettings:
+        answer = config.answer
+        return cls(
+            max_images=int(answer.max_images),
+            image_max_bytes=int(answer.image_max_bytes),
+            image_max_total_bytes=int(answer.image_max_total_bytes),
+            image_max_px=int(answer.image_max_px),
+            image_min_px=int(answer.image_min_px),
+            image_quality=int(answer.image_quality),
+            image_min_quality=int(answer.image_min_quality),
+        )
+
+    def fingerprint_payload(self) -> dict[str, int]:
+        return {
+            "max_images": self.max_images,
+            "image_max_bytes": self.image_max_bytes,
+            "image_max_total_bytes": self.image_max_total_bytes,
+            "image_max_px": self.image_max_px,
+            "image_min_px": self.image_min_px,
+            "image_quality": self.image_quality,
+            "image_min_quality": self.image_min_quality,
+        }
+
+
 @dataclass(slots=True)
 class ComposerModelBundle:
     """Own the cache-neutral VLM and EXTRACT callables used by Composer."""
@@ -56,4 +93,4 @@ class ComposerModelBundle:
                 logger.warning("Failed to close Composer model provider", exc_info=True)
 
 
-__all__ = ["ComposerModelBundle"]
+__all__ = ["ComposerImageTransportSettings", "ComposerModelBundle"]

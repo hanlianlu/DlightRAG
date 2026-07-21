@@ -700,6 +700,35 @@ class TestComposerAnalysisAdapter:
         assert seen["response_format"] is response_format
         assert seen["model_kwargs"] == {}
 
+    @pytest.mark.parametrize(
+        ("control", "value"),
+        [
+            ("entity_extraction", True),
+            ("future_cache_metadata", {"cache_scope": "workspace"}),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_ignores_unknown_lightrag_controls_without_provider_leakage(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        control: str,
+        value: object,
+    ) -> None:
+        llm, seen = _capture_provider(monkeypatch)
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(model="vision-model", api_key="sk-test")),
+            embedding=_embedding_config(),
+        )
+        adapter, _identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")
+
+        result = await adapter(
+            "Describe the drawing",
+            **{control: value},
+        )
+
+        assert result == '{"answer": "ok"}'
+        assert seen["model_kwargs"] == {}
+
     @pytest.mark.asyncio
     async def test_bounds_images_and_preserves_stream_semantics(
         self, monkeypatch: pytest.MonkeyPatch
