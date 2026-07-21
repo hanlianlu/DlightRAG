@@ -41,6 +41,7 @@ from dlightrag.core.request.composer_analysis import (
     aanalyze_composer_sidecars,
     build_composer_analysis_signature,
 )
+from dlightrag.core.request.composer_evidence import COMPOSER_FULL_PASS_TOKENS
 from dlightrag.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
@@ -50,6 +51,9 @@ logger = logging.getLogger(__name__)
 
 _ATTACHMENT_WORKSPACE = "__web_attachment__"
 _COMPOSER_EMBEDDING_CONTRACT_VERSION = 2
+COMPOSER_DENSE_SCORE_THRESHOLD = 0.5
+COMPOSER_DENSE_BLOCK_SIZE = 256
+COMPOSER_DENSE_PAGE_SIZE = 256
 
 
 class DocumentEmbedderProtocol(Protocol):
@@ -71,6 +75,8 @@ class DocumentEmbedderProtocol(Protocol):
         self,
         items: list[DocumentEmbeddingInput],
     ) -> tuple[list[DocumentEmbeddingVector], DocumentEmbeddingTrace]: ...
+
+    async def aembed_query(self, query: str) -> list[float] | None: ...
 
 
 class _TemporaryDirectoryProtocol(Protocol):
@@ -758,6 +764,8 @@ class QueryAttachmentService:
         direct_image_embedding_enabled: bool,
         model_bundle: Any,
         config: DlightragConfig,
+        principal_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> None:
         self._lightrag = lightrag
         self._store = store
@@ -767,6 +775,160 @@ class QueryAttachmentService:
         self._direct_image_embedding_enabled = direct_image_embedding_enabled
         self._model_bundle = model_bundle
         self._config = config
+        self._principal_id = principal_id
+        self._conversation_id = conversation_id
+
+    async def adense_rankings(
+        self,
+        query: str,
+        current_rows: list[dict[str, Any]],
+        history_rows: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        """Rank both Composer lanes from request-scoped cached vectors."""
+        if not current_rows and not history_rows:
+            return [], [], {}
+        if (
+            sum(
+                estimate_tokens(str(row.get("content") or ""))
+                for row in [*current_rows, *history_rows]
+            )
+            <= COMPOSER_FULL_PASS_TOKENS
+        ):
+            return [], [], {}
+        try:
+            query_vector = await self._document_embedder.aembed_query(query)
+            if query_vector is None:
+                return [], [], {"composer_evidence_embedding_error": "QueryEmbeddingError"}
+            query_array = np.asarray(query_vector, dtype=np.float32)
+            if (
+                query_array.ndim != 1
+                or query_array.shape[0] != self._document_embedder.dimension
+                or not bool(np.isfinite(query_array).all())
+            ):
+                return [], [], {"composer_evidence_embedding_error": "QueryEmbeddingError"}
+            query_norm = np.float32(np.linalg.norm(query_array))
+            if not bool(np.isfinite(query_norm)) or float(query_norm) == 0.0:
+                return [], [], {}
+            principal_id = self._principal_id
+            conversation_id = self._conversation_id
+            if principal_id is None or conversation_id is None:
+                raise RuntimeError("dense ranking requires a bound conversation scope")
+            current = await self._adense_rank_lane(
+                current_rows,
+                query_array,
+                query_norm,
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+            )
+            history = await self._adense_rank_lane(
+                history_rows,
+                query_array,
+                query_norm,
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+            )
+            return current, history, {}
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Composer dense ranking failed; using local fusion", exc_info=True)
+            return [], [], {"composer_evidence_embedding_error": type(exc).__name__}
+
+    async def _adense_rank_lane(
+        self,
+        rows: list[dict[str, Any]],
+        query_vector: NDArray[np.float32],
+        query_norm: np.float32,
+        *,
+        principal_id: str,
+        conversation_id: str,
+    ) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        references: list[tuple[int, AttachmentCacheKey]] = []
+        expected_by_order: dict[int, tuple[AttachmentCacheKey, frozenset[str]]] = {}
+        for global_order, row in enumerate(rows):
+            cache_key = row.get("_cache_key")
+            if not isinstance(cache_key, AttachmentCacheKey):
+                continue
+            prefers_fused = (
+                row.get("image_data") is not None
+                and self._direct_image_embedding_enabled
+                and self._document_embedder.image_enabled
+            )
+            signatures = {
+                build_composer_embedding_signature(
+                    config=self._config,
+                    embedder=self._document_embedder,
+                    mode="fused" if prefers_fused else "text",
+                )
+            }
+            if prefers_fused:
+                signatures.update(
+                    build_composer_embedding_signature(
+                        config=self._config,
+                        embedder=self._document_embedder,
+                        mode="text",
+                        fallback_reason=fallback_reason,
+                    )
+                    for fallback_reason in ("image_rejected", "fused_provider_failed")
+                )
+            references.append((global_order, cache_key))
+            expected_by_order[global_order] = (cache_key, frozenset(signatures))
+
+        scored: list[tuple[np.float32, int]] = []
+        async for page in self._store.aiter_attachment_vectors(
+            principal_id,
+            conversation_id,
+            references,
+            ttl_days=self._ttl_days,
+            page_size=COMPOSER_DENSE_PAGE_SIZE,
+        ):
+            for start in range(0, len(page), COMPOSER_DENSE_BLOCK_SIZE):
+                vectors: list[NDArray[np.float32]] = []
+                global_orders: list[int] = []
+                for vector_row in page[start : start + COMPOSER_DENSE_BLOCK_SIZE]:
+                    expected = expected_by_order.get(vector_row.global_order)
+                    signature = vector_row.embedding_signature
+                    if (
+                        expected is None
+                        or vector_row.cache_key != expected[0]
+                        or signature is None
+                        or signature not in expected[1]
+                    ):
+                        continue
+                    vector = validate_attachment_vector(
+                        vector_row,
+                        expected_signature=signature,
+                        expected_dimension=self._document_embedder.dimension,
+                    )
+                    if vector is None:
+                        continue
+                    vectors.append(vector)
+                    global_orders.append(vector_row.global_order)
+                if not vectors:
+                    continue
+                matrix = np.stack(vectors).astype(np.float32, copy=False)
+                norms = np.linalg.norm(matrix, axis=1).astype(np.float32, copy=False)
+                denominator = norms * query_norm
+                scores = np.divide(
+                    matrix @ query_vector,
+                    denominator,
+                    out=np.zeros(len(vectors), dtype=np.float32),
+                    where=denominator != 0,
+                )
+                for score, global_order in zip(scores, global_orders, strict=True):
+                    if score >= np.float32(COMPOSER_DENSE_SCORE_THRESHOLD):
+                        scored.append((score, global_order))
+            del page
+        scored.sort(key=lambda item: (-float(item[0]), item[1]))
+        ranked: list[dict[str, Any]] = []
+        for _score, global_order in scored:
+            row = dict(rows[global_order])
+            row.pop("embedding_signature", None)
+            row.pop("embedding_vector", None)
+            ranked.append(row)
+        return ranked
 
     def _with_cache_keys(
         self,

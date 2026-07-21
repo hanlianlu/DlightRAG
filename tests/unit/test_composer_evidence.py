@@ -37,12 +37,9 @@ def _row(
 
 async def test_short_composer_documents_pass_through_without_retrieval() -> None:
     async def _must_not_run(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("short documents must not call embedding or rerank")
+        raise AssertionError("short documents must not call rerank")
 
-    selector = ComposerEvidenceSelector(
-        embedding_func=_must_not_run,
-        rerank_func=_must_not_run,
-    )
+    selector = ComposerEvidenceSelector()
     current = [
         _row("c1", "Fractions Challenge Worksheet"),
         _row("c2", "Twenty fraction problems and an answer key", chunk_index=2),
@@ -52,6 +49,9 @@ async def test_short_composer_documents_pass_through_without_retrieval() -> None
         query="这说的啥",
         current_rows=current,
         history_rows=[],
+        current_dense_rankings=current,
+        history_dense_rankings=[],
+        rerank_func=_must_not_run,
     )
 
     assert selected == current
@@ -63,7 +63,14 @@ async def test_short_composer_documents_pass_through_without_retrieval() -> None
 async def test_empty_composer_lane_is_a_noop() -> None:
     selector = ComposerEvidenceSelector()
 
-    selected, trace = await selector.select(query="q", current_rows=[], history_rows=[])
+    selected, trace = await selector.select(
+        query="q",
+        current_rows=[],
+        history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=None,
+    )
 
     assert selected == []
     assert trace["composer_evidence_strategy"] == "empty"
@@ -82,7 +89,6 @@ async def test_long_composer_documents_use_only_local_candidates_and_rerank() ->
         )
 
     selector = ComposerEvidenceSelector(
-        rerank_func=_rerank,
         full_pass_tokens=8,
         current_target_tokens=80,
         history_target_tokens=40,
@@ -113,6 +119,9 @@ async def test_long_composer_documents_use_only_local_candidates_and_rerank() ->
         query="termination liability",
         current_rows=current,
         history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=_rerank,
     )
 
     selected_ids = {str(row["chunk_id"]) for row in selected}
@@ -129,7 +138,6 @@ async def test_composer_rerank_failure_falls_back_to_local_fusion() -> None:
         raise RuntimeError("reranker unavailable")
 
     selector = ComposerEvidenceSelector(
-        rerank_func=_fail_rerank,
         full_pass_tokens=4,
         current_target_tokens=30,
         history_target_tokens=0,
@@ -146,6 +154,9 @@ async def test_composer_rerank_failure_falls_back_to_local_fusion() -> None:
         query="indemnity obligation",
         current_rows=current,
         history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=_fail_rerank,
     )
 
     assert any(row["chunk_id"] == "c-2" for row in selected)
@@ -154,12 +165,8 @@ async def test_composer_rerank_failure_falls_back_to_local_fusion() -> None:
     assert trace["composer_evidence_rerank_error"] == "RuntimeError"
 
 
-async def test_composer_embedding_failure_falls_back_to_local_fusion() -> None:
-    async def _fail_embedding(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("embedding unavailable")
-
+async def test_composer_without_dense_rows_falls_back_to_local_fusion() -> None:
     selector = ComposerEvidenceSelector(
-        embedding_func=_fail_embedding,
         full_pass_tokens=4,
         current_target_tokens=80,
         history_target_tokens=0,
@@ -176,10 +183,13 @@ async def test_composer_embedding_failure_falls_back_to_local_fusion() -> None:
         query="termination liability",
         current_rows=rows,
         history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=None,
     )
 
     assert any(row["chunk_id"] == "e-2" for row in selected)
-    assert trace["composer_evidence_embedding_error"] == "RuntimeError"
+    assert "composer_evidence_embedding_error" not in trace
 
 
 async def test_composer_bm25_failure_is_reported_in_trace(
@@ -208,6 +218,9 @@ async def test_composer_bm25_failure_is_reported_in_trace(
         query="termination liability",
         current_rows=rows,
         history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=None,
     )
 
     assert selected
@@ -241,6 +254,9 @@ async def test_short_document_full_pass_survives_beside_long_document() -> None:
         query="section 6",
         current_rows=[*short, *long],
         history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=None,
     )
 
     selected_ids = {str(row["chunk_id"]) for row in selected}
@@ -259,7 +275,6 @@ async def test_default_candidate_limit_matches_rag_chunk_breadth() -> None:
         return chunks
 
     selector = ComposerEvidenceSelector(
-        rerank_func=_rerank,
         full_pass_tokens=1,
         current_target_tokens=100_000,
         history_target_tokens=0,
@@ -274,22 +289,29 @@ async def test_default_candidate_limit_matches_rag_chunk_breadth() -> None:
         for index in range(40)
     ]
 
-    await selector.select(query="target", current_rows=rows, history_rows=[])
+    await selector.select(
+        query="target",
+        current_rows=rows,
+        history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=_rerank,
+    )
 
     assert rerank_candidate_counts == [30]
 
 
-async def test_dense_ranking_embeds_all_long_document_rows_before_candidate_limit() -> None:
-    embedded_documents: list[str] = []
+async def test_precomputed_dense_ranking_is_added_to_local_rrf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fused_rankings: list[list[dict[str, Any]]] = []
 
-    async def _embed(texts: list[str], *, context: str):
-        if context == "query":
-            return [[1.0, 0.0]]
-        embedded_documents.extend(texts)
-        return [[1.0, 0.0] if "semantic target" in text else [0.0, 1.0] for text in texts]
+    def _capture(rankings: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        fused_rankings.extend(rankings)
+        return [*rankings[-1], *rankings[0], *rankings[1], *rankings[2]]
 
+    monkeypatch.setattr("dlightrag.core.request.composer_evidence.rrf_fuse", _capture)
     selector = ComposerEvidenceSelector(
-        embedding_func=_embed,
         full_pass_tokens=4,
         current_target_tokens=80,
         history_target_tokens=0,
@@ -302,35 +324,74 @@ async def test_dense_ranking_embeds_all_long_document_rows_before_candidate_limi
             ("semantic target " if index == 9 else "ordinary text ") + ("detail " * 20),
             chunk_index=index,
         )
-        for index in range(10)
+        for index in range(11)
     ]
+    dense = [rows[7]]
 
     selected, _ = await selector.select(
         query="conceptually related",
         current_rows=rows,
         history_rows=[],
+        current_dense_rankings=dense,
+        history_dense_rankings=[],
+        rerank_func=None,
     )
 
-    assert len(embedded_documents) == len(rows)
-    assert any(row["chunk_id"] == "chunk-9" for row in selected)
+    assert fused_rankings[3] == dense
+    assert any(row["chunk_id"] == "chunk-7" for row in selected)
 
 
-async def test_selector_closes_independent_embedding_and_rerank_resources() -> None:
-    class _Closeable:
-        def __init__(self) -> None:
-            self.closed = 0
+async def test_current_and_history_lanes_each_rerank_top_30() -> None:
+    rerank_counts: list[int] = []
 
-        async def aclose(self) -> None:
-            self.closed += 1
+    async def _rerank(*, query: str, chunks: list[dict[str, Any]], top_k: int):
+        assert query == "target"
+        rerank_counts.append(top_k)
+        return chunks
 
-    embedding_owner = _Closeable()
-    rerank = _Closeable()
     selector = ComposerEvidenceSelector(
-        embedding_owner=embedding_owner,
-        rerank_func=rerank,
+        full_pass_tokens=1,
+        current_target_tokens=100_000,
+        history_target_tokens=100_000,
+        total_tokens=200_000,
+    )
+    current = [
+        _row(
+            f"current-{index}",
+            f"target current {index} " + ("detail " * 20),
+            chunk_index=index,
+        )
+        for index in range(40)
+    ]
+    history = [
+        _row(
+            f"history-{index}",
+            f"target history {index} " + ("detail " * 20),
+            attachment_id="history-doc",
+            scope="history",
+            chunk_index=index,
+        )
+        for index in range(40)
+    ]
+
+    await selector.select(
+        query="target",
+        current_rows=current,
+        history_rows=history,
+        current_dense_rankings=list(reversed(current)),
+        history_dense_rankings=list(reversed(history)),
+        rerank_func=_rerank,
     )
 
-    await selector.aclose()
+    assert rerank_counts == [30, 30]
 
-    assert embedding_owner.closed == 1
-    assert rerank.closed == 1
+
+def test_selector_has_no_client_ownership_or_legacy_embedding_signature() -> None:
+    selector = ComposerEvidenceSelector()
+
+    assert not hasattr(selector, "aclose")
+    assert not hasattr(selector, "_embedding_func")
+    assert not hasattr(selector, "_rerank_func")
+    selector_factory: Any = ComposerEvidenceSelector
+    with pytest.raises(TypeError):
+        selector_factory(embedding_func=object())

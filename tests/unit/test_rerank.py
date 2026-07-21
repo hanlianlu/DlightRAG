@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for multimodal reranker strategies."""
+"""Tests for shared rerank fallback and multimodal provider strategies."""
 
 import asyncio
 import logging
@@ -11,6 +11,7 @@ import pytest
 
 import dlightrag.models.rerank as rerank_module
 from dlightrag.config import RerankConfig
+from dlightrag.core.retrieval.rerank import rerank_with_fallback
 from dlightrag.models.providers.rerank_base import resolve_rerank_input_modality
 from dlightrag.models.providers.rerank_providers import (
     AliyunRerankProvider,
@@ -29,6 +30,75 @@ from dlightrag.models.rerank import (
     build_rerank_func,
 )
 from dlightrag.utils.image_budget import ImagePayloadBudget
+
+
+def _chunks() -> list[dict[str, Any]]:
+    return [
+        {"chunk_id": "a", "content": "first"},
+        {"chunk_id": "b", "content": "second"},
+        {"chunk_id": "c", "content": "third"},
+    ]
+
+
+async def test_rerank_with_fallback_caps_successful_provider_result() -> None:
+    async def _rerank(*, query: str, chunks: list[dict[str, Any]], top_k: int):
+        assert query == "query"
+        assert top_k == 2
+        return list(reversed(chunks))
+
+    outcome = await rerank_with_fallback(
+        query="query",
+        chunks=_chunks(),
+        top_k=2,
+        rerank_func=_rerank,
+    )
+
+    assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["c", "b"]
+    assert outcome.reranked is True
+    assert outcome.error_type is None
+
+
+async def test_rerank_with_fallback_truncates_rrf_when_provider_absent() -> None:
+    outcome = await rerank_with_fallback(
+        query="query",
+        chunks=_chunks(),
+        top_k=2,
+        rerank_func=None,
+    )
+
+    assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["a", "b"]
+    assert outcome.reranked is False
+    assert outcome.error_type is None
+
+
+async def test_rerank_with_fallback_returns_rrf_top_k_and_error_type_on_failure() -> None:
+    async def _fail(**_kwargs: Any) -> Any:
+        raise RuntimeError("provider unavailable")
+
+    outcome = await rerank_with_fallback(
+        query="query",
+        chunks=_chunks(),
+        top_k=2,
+        rerank_func=_fail,
+    )
+
+    assert [chunk["chunk_id"] for chunk in outcome.chunks] == ["a", "b"]
+    assert outcome.reranked is False
+    assert outcome.error_type == "RuntimeError"
+
+
+async def test_rerank_with_fallback_propagates_cancellation() -> None:
+    async def _cancel(**_kwargs: Any) -> Any:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await rerank_with_fallback(
+            query="query",
+            chunks=_chunks(),
+            top_k=2,
+            rerank_func=_cancel,
+        )
+
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="

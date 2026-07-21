@@ -161,6 +161,8 @@ async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
 
 
 async def test_prepare_resolves_processing_resources_once_and_reuses_identity() -> None:
+    from dlightrag.core.request.attachments import build_text_attachment_chunk
+
     store = _FakeStore()
     history_id = "22222222-2222-2222-2222-222222222222"
 
@@ -183,8 +185,10 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
 
     store.fetch_documents_by_ids = fetch_documents_by_ids  # type: ignore[attr-defined]
     manager = _FakeManager(effective=0)
-    resources = object()
+    rerank_func = object()
+    resources = SimpleNamespace(rerank_func=rerank_func)
     resolutions: list[Any] = []
+    events: list[str] = []
 
     async def resolve_processing_resources(workspaces: Any = None) -> object:
         resolutions.append(workspaces)
@@ -201,18 +205,68 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
 
     manager.aplan_web_conversation_query = plan_with_history  # type: ignore[method-assign]
     service = _service(store)
-    seen_resources: list[object] = []
+    current_dense: list[dict[str, Any]] = []
+    history_dense: list[dict[str, Any]] = []
 
-    async def parse_documents(
+    class _AttachmentService:
+        async def adense_rankings(
+            self,
+            query: str,
+            current_rows: list[dict[str, Any]],
+            history_rows: list[dict[str, Any]],
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+            events.append("dense")
+            assert query == "standalone"
+            current_dense.extend(reversed(current_rows))
+            history_dense.extend(reversed(history_rows))
+            return current_dense, history_dense, {"composer_dense_status": "ok"}
+
+    attachment_service = _AttachmentService()
+    factory_calls: list[tuple[object, PreparedWebConversation]] = []
+
+    def attachment_service_factory(
+        value: object,
+        prepared: PreparedWebConversation,
+    ) -> _AttachmentService:
+        factory_calls.append((value, prepared))
+        return attachment_service
+
+    service._get_query_attachment_service = attachment_service_factory  # type: ignore[method-assign]
+
+    async def parse_with_shared_service(
         *,
-        resources: object,
+        attachment_service: object,
         prepared: PreparedWebConversation,
         documents: list[Any],
     ) -> tuple[list[Any], list[dict[str, str]], list[Any]]:
-        seen_resources.append(resources)
-        return [], [], []
+        assert attachment_service is expected_attachment_service
+        scope = "current" if documents[0].attachment_id == _ID else "history"
+        events.append(f"parse-{scope}")
+        chunks = [
+            build_text_attachment_chunk(
+                attachment_id=document.attachment_id,
+                filename=document.filename,
+                chunk_id=f"chunk-{document.attachment_id}",
+                chunk_index=index,
+                content=document.filename,
+            )
+            for index, document in enumerate(documents, start=1)
+        ]
+        return chunks, [], []
 
-    service._parse_attachment_documents = parse_documents  # type: ignore[method-assign]
+    expected_attachment_service = attachment_service
+
+    async def select_evidence(**kwargs: Any):
+        events.append("selector")
+        assert kwargs["current_dense_rankings"] is current_dense
+        assert kwargs["history_dense_rankings"] is history_dense
+        assert kwargs["rerank_func"] is rerank_func
+        return [*kwargs["current_rows"], *kwargs["history_rows"]], {
+            "composer_evidence_strategy": "retrieved"
+        }
+
+    manager._aselect_web_composer_evidence = select_evidence  # type: ignore[attr-defined]
+    service._parse_attachment_documents = parse_with_shared_service  # type: ignore[method-assign]
     current = SimpleNamespace(
         attachment_id=_ID,
         filename="current.pdf",
@@ -230,6 +284,7 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
     )
 
     assert resolutions == [[" Research Notes ", "ignored"]]
-    assert seen_resources == [resources, resources]
-    assert all(item is resources for item in seen_resources)
+    assert factory_calls == [(resources, _prepared())]
+    assert events == ["parse-current", "parse-history", "dense", "selector"]
     assert turn.composer_processing_resources is resources
+    assert turn.composer_evidence_trace["composer_dense_status"] == "ok"

@@ -238,6 +238,9 @@ class WebConversationService:
         """
         documents = list(current_documents or [])
         resources = await manager.aget_composer_processing_resources(workspaces)
+        attachment_service = (
+            self._get_query_attachment_service(resources, prepared) if documents else None
+        )
         capability = manager.answer_image_capability
         effective = capability.effective_max_images if capability is not None else 0
         remaining = max(0, effective - len(current_images))
@@ -263,7 +266,7 @@ class WebConversationService:
             current_parse_errors,
             current_bundles,
         ) = await self._parse_attachment_documents(
-            resources=resources,
+            attachment_service=attachment_service,
             prepared=prepared,
             documents=documents,
         )
@@ -351,22 +354,37 @@ class WebConversationService:
                 if attachment_id in history_docs_by_id
             ]
             history_docs_selected = len(history_docs)
+            if history_docs and attachment_service is None:
+                attachment_service = self._get_query_attachment_service(resources, prepared)
             (
                 history_chunks,
                 history_parse_errors,
                 history_bundles,
             ) = await self._parse_attachment_documents(
-                resources=resources,
+                attachment_service=attachment_service,
                 prepared=prepared,
                 documents=history_docs,
             )
             parse_errors.extend(history_parse_errors)
         if current_chunks or history_chunks:
+            if attachment_service is None:
+                raise RuntimeError("attachment service missing for parsed Composer chunks")
+            current_rows = _composer_context_rows(current_chunks, scope="current")
+            history_rows = _composer_context_rows(history_chunks, scope="history")
+            current_dense, history_dense, dense_trace = await attachment_service.adense_rankings(
+                plan.standalone_query,
+                current_rows,
+                history_rows,
+            )
             composer_rows, composer_trace = await manager._aselect_web_composer_evidence(
                 query=plan.standalone_query,
-                current_rows=_composer_context_rows(current_chunks, scope="current"),
-                history_rows=_composer_context_rows(history_chunks, scope="history"),
+                current_rows=current_rows,
+                history_rows=history_rows,
+                current_dense_rankings=current_dense,
+                history_dense_rankings=history_dense,
+                rerank_func=resources.rerank_func,
             )
+            composer_trace = {**dense_trace, **composer_trace}
         if parse_errors or history_docs_selected < len(selected_attachment_ids):
             attachment_status = "degraded"
         attachment_processing = [
@@ -400,7 +418,11 @@ class WebConversationService:
             attachment_resolution_status=attachment_status,
         )
 
-    def _get_query_attachment_service(self, resources: ComposerProcessingResources) -> Any:
+    def _get_query_attachment_service(
+        self,
+        resources: ComposerProcessingResources,
+        prepared: PreparedWebConversation,
+    ) -> Any:
         """Construct the Web-only query-attachment service (store injected via DI)."""
         from dlightrag.core.request.attachments import QueryAttachmentService
 
@@ -413,12 +435,14 @@ class WebConversationService:
             direct_image_embedding_enabled=resources.direct_image_embedding_enabled,
             model_bundle=resources.model_bundle,
             config=resources.config,
+            principal_id=prepared.principal_id,
+            conversation_id=prepared.conversation_id,
         )
 
     async def _parse_attachment_documents(
         self,
         *,
-        resources: ComposerProcessingResources,
+        attachment_service: Any | None,
         prepared: PreparedWebConversation,
         documents: list[Any],
     ) -> tuple[
@@ -436,12 +460,13 @@ class WebConversationService:
         """
         if not documents:
             return [], [], []
-        service = self._get_query_attachment_service(resources)
+        if attachment_service is None:
+            raise RuntimeError("attachment service is required for document parsing")
         chunks: list[AttachmentContextChunk] = []
         parse_errors: list[dict[str, str]] = []
         bundles: list[tuple[str, ParsedAttachmentBundle]] = []
         for document in documents:
-            bundle, meta = await service.achunks_for_attachment(
+            bundle, meta = await attachment_service.achunks_for_attachment(
                 principal_id=prepared.principal_id,
                 conversation_id=prepared.conversation_id,
                 attachment_id=document.attachment_id,

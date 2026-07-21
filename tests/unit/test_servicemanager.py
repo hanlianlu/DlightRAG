@@ -584,6 +584,26 @@ class TestGetService:
         with pytest.raises(dataclasses.FrozenInstanceError):
             resources.lightrag = object()  # pyright: ignore[reportAttributeAccessIssue]
 
+    def test_composer_evidence_selector_is_stateless_and_uses_no_model_factory(
+        self,
+        test_cfg: DlightragConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def _must_not_create(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("selector must borrow per-turn resources")
+
+        monkeypatch.setattr("dlightrag.models.llm.get_embedding_func", _must_not_create)
+        monkeypatch.setattr("dlightrag.models.llm.get_multimodal_embedder", _must_not_create)
+        monkeypatch.setattr("dlightrag.models.llm.get_rerank_func", _must_not_create)
+        manager = RAGServiceManager(config=test_cfg)
+
+        selector = manager._get_composer_evidence_selector()
+
+        assert selector is manager._get_composer_evidence_selector()
+        assert not hasattr(selector, "aclose")
+        assert not hasattr(selector, "_embedding_func")
+        assert not hasattr(selector, "_rerank_func")
+
 
 class TestWorkspaceCreation:
     """Test workspace creation registers discoverable workspace metadata."""
@@ -2060,15 +2080,6 @@ class TestClose:
         assert manager._services == {}
         assert not manager._ready
 
-    async def test_close_releases_web_composer_selector(self, test_cfg) -> None:
-        manager = RAGServiceManager(config=test_cfg)
-        selector = AsyncMock()
-        manager._composer_evidence_selector = selector
-
-        await manager.aclose()
-
-        selector.aclose.assert_awaited_once()
-
     async def test_close_retains_composer_bundle_until_failed_closer_retries(
         self,
         test_cfg,
@@ -2096,8 +2107,6 @@ class TestClose:
             extract_identity={},
             _closers=(close_vlm, close_extract),
         )
-        selector = AsyncMock()
-        selector.aclose.side_effect = lambda: events.append("selector")
         service = AsyncMock()
         service.aclose.side_effect = lambda: events.append("service")
         pool_close = AsyncMock(side_effect=lambda: events.append("pool"))
@@ -2106,7 +2115,6 @@ class TestClose:
         monkeypatch.setattr("dlightrag.observability.shutdown_tracing", shutdown_tracing)
         manager = RAGServiceManager(config=test_cfg)
         manager._composer_model_bundle = bundle
-        manager._composer_evidence_selector = selector
         manager._services = {"default": service}
 
         await manager.aclose()
@@ -2114,7 +2122,6 @@ class TestClose:
         assert events == [
             "bundle-vlm",
             "bundle-extract",
-            "selector",
             "service",
             "pool",
             "tracing",
@@ -2167,8 +2174,6 @@ class TestClose:
             extract_identity={},
             _closers=(close_vlm, close_extract),
         )
-        selector = AsyncMock()
-        selector.aclose.side_effect = lambda: events.append("selector")
         service = AsyncMock()
         service.aclose.side_effect = lambda: events.append("service")
         pool_close = AsyncMock(side_effect=lambda: events.append("pool"))
@@ -2177,7 +2182,6 @@ class TestClose:
         monkeypatch.setattr("dlightrag.observability.shutdown_tracing", shutdown_tracing)
         manager = RAGServiceManager(config=test_cfg)
         manager._composer_model_bundle = bundle
-        manager._composer_evidence_selector = selector
         manager._services = {"default": service}
 
         close_task = asyncio.create_task(manager.aclose())
@@ -2192,7 +2196,6 @@ class TestClose:
             "bundle-vlm-started",
             "bundle-vlm-cancelled",
             "bundle-extract",
-            "selector",
             "service",
             "pool",
             "tracing",

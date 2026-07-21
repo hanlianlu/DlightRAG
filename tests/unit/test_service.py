@@ -341,6 +341,46 @@ class TestRAGServiceRetrieve:
         assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["c0", "c1", "c2"]
         assert result.trace["reranked_chunk_count"] == 3
 
+    async def test_aretrieve_rerank_failure_keeps_hydrated_rrf_top_k(
+        self, test_config, monkeypatch: pytest.MonkeyPatch
+    ):
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service, orchestrator = self._make_retrieval_service(test_config)
+        orchestrator.aretrieve.return_value = RetrievalResult(
+            contexts={
+                "chunks": [{"chunk_id": f"c{i}", "content": f"c{i}"} for i in range(5)],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+
+        async def hydrate(_stores, chunks, *, include_image_data=True):
+            for chunk in chunks:
+                chunk["page_idx"] = 7
+
+        async def fail_rerank(query: str, chunks: list[dict], top_k: int) -> list[dict]:
+            assert query == "test query"
+            assert top_k == 3
+            assert all(chunk["page_idx"] == 7 for chunk in chunks)
+            raise RuntimeError("provider unavailable")
+
+        service._rerank_func = fail_rerank
+        monkeypatch.setattr(
+            "dlightrag.core.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            hydrate,
+        )
+
+        result = await service.aretrieve("test query", chunk_top_k=3)
+
+        assert [chunk["chunk_id"] for chunk in result.contexts["chunks"]] == [
+            "c0",
+            "c1",
+            "c2",
+        ]
+        assert result.trace["reranked_chunk_count"] == 3
+        assert result.trace["rerank_error"] == "RuntimeError"
+
     async def test_aretrieve_skips_chunks_hydrated_by_backend(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):

@@ -1017,21 +1017,8 @@ class RAGServiceManager:
         """Create the Web Composer selector without touching workspace services."""
         if self._composer_evidence_selector is None:
             from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
-            from dlightrag.models.llm import (
-                get_embedding_func,
-                get_multimodal_embedder,
-                get_rerank_func,
-            )
 
-            embedder = get_multimodal_embedder(self._config)
-            self._composer_evidence_selector = ComposerEvidenceSelector(
-                embedding_func=get_embedding_func(self._config, embedder=embedder),
-                embedding_owner=embedder,
-                rerank_func=get_rerank_func(
-                    self._config,
-                    supports_vision=self._rerank_supports_vision,
-                ),
-            )
+            self._composer_evidence_selector = ComposerEvidenceSelector()
         return self._composer_evidence_selector
 
     async def _aselect_web_composer_evidence(
@@ -1040,12 +1027,18 @@ class RAGServiceManager:
         query: str,
         current_rows: list[dict[str, Any]],
         history_rows: list[dict[str, Any]],
+        current_dense_rankings: list[dict[str, Any]],
+        history_dense_rankings: list[dict[str, Any]],
+        rerank_func: Any | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Web-only: select Composer evidence in a lane isolated from RAG."""
         return await self._get_composer_evidence_selector().select(
             query=query,
             current_rows=current_rows,
             history_rows=history_rows,
+            current_dense_rankings=current_dense_rankings,
+            history_dense_rankings=history_dense_rankings,
+            rerank_func=rerank_func,
         )
 
     async def _get_schema(
@@ -1812,7 +1805,6 @@ class RAGServiceManager:
             self._answer_engine,
             self._query_planner,
             composer_model_bundle,
-            self._composer_evidence_selector,
         ):
             close = getattr(component, "aclose", None)
             if not callable(close):

@@ -275,6 +275,76 @@ def test_embedding_signature_uses_resolved_embedder_contract(test_config: Any) -
     assert payload["image_normalization"] == {"min_image_pixel": 32}
 
 
+async def test_dense_rankings_embed_query_once_without_embedding_documents(
+    test_config: Any,
+) -> None:
+    cache_key = attachments.AttachmentCacheKey(
+        "content-v1",
+        "parser-v1",
+        "chunker-v1",
+        "cache-1",
+    )
+    embedder: Any = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        asymmetric=True,
+        min_image_pixel=32,
+        aembed_query=AsyncMock(return_value=[1.0, 0.0]),
+        aembed_documents=AsyncMock(side_effect=AssertionError("documents must stay cached")),
+    )
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    store = _SpyStore(
+        None,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(
+                global_order=0,
+                cache_key=cache_key,
+                embedding_signature=signature,
+                embedding_vector=[1.0, 0.0],
+            )
+        ],
+    )
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+        principal_id="p1",
+        conversation_id="c1",
+    )
+    row = {
+        "chunk_id": "citation-1",
+        "reference_id": "att-1",
+        "content": "cached evidence " * 30_000,
+        "_cache_key": cache_key,
+        "embedding_signature": signature,
+        "embedding_vector": [1.0, 0.0],
+        "metadata": {},
+    }
+
+    current, history, trace = await service.adense_rankings(
+        "semantic query",
+        [row],
+        [],
+    )
+
+    assert [item["chunk_id"] for item in current] == ["citation-1"]
+    assert history == []
+    assert trace == {}
+    embedder.aembed_query.assert_awaited_once_with("semantic query")
+    embedder.aembed_documents.assert_not_awaited()
+    assert "embedding_signature" not in current[0]
+    assert "embedding_vector" not in current[0]
+
+
 class _FakeLightRAG:
     """A minimal object exposing only the read-only parse/chunk knobs.
 
@@ -304,6 +374,7 @@ class _SpyStore:
         self.load_calls: list[dict[str, Any]] = []
         self.materialized: list[ParsedAttachmentBundle] = []
         self.updated: list[list[AttachmentContextChunk]] = []
+        self.vector_calls: list[dict[str, Any]] = []
 
     async def load_attachment_chunks(
         self,
@@ -353,6 +424,15 @@ class _SpyStore:
         ttl_days: int,
         page_size: int,
     ):
+        self.vector_calls.append(
+            {
+                "principal_id": principal_id,
+                "conversation_id": conversation_id,
+                "references": references,
+                "ttl_days": ttl_days,
+                "page_size": page_size,
+            }
+        )
         if self._vector_rows:
             yield self._vector_rows
 
@@ -366,6 +446,331 @@ class _SpyStore:
     ) -> bool:
         self.updated.append(chunks)
         return True
+
+
+def _dense_row(
+    index: int,
+    cache_key: attachments.AttachmentCacheKey,
+) -> dict[str, Any]:
+    return {
+        "chunk_id": f"citation-{index}",
+        "reference_id": f"attachment-{index}",
+        "content": ("evidence " * 30_000) if index == 0 else f"evidence {index}",
+        "_cache_key": cache_key,
+        "metadata": {},
+    }
+
+
+def _dense_embedder(*, query_vector: list[float], dimension: int = 2) -> Any:
+    return SimpleNamespace(
+        dimension=dimension,
+        image_enabled=False,
+        asymmetric=True,
+        min_image_pixel=32,
+        aembed_query=AsyncMock(return_value=query_vector),
+        aembed_documents=AsyncMock(side_effect=AssertionError("documents must stay cached")),
+    )
+
+
+def _dense_service(
+    *,
+    test_config: Any,
+    store: Any,
+    embedder: Any,
+    principal_id: str = "principal-1",
+    conversation_id: str = "conversation-1",
+) -> QueryAttachmentService:
+    return QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+        principal_id=principal_id,
+        conversation_id=conversation_id,
+    )
+
+
+async def test_dense_rankings_stream_ttl_scoped_pages_of_256(test_config: Any) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    store = _SpyStore(
+        None,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(
+                0,
+                cache_key,
+                signature,
+                [1.0, 0.0],
+            )
+        ],
+    )
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+
+    await service.adense_rankings("query", [_dense_row(0, cache_key)], [])
+
+    assert store.vector_calls == [
+        {
+            "principal_id": "principal-1",
+            "conversation_id": "conversation-1",
+            "references": [(0, cache_key)],
+            "ttl_days": 30,
+            "page_size": 256,
+        }
+    ]
+
+
+async def test_dense_rankings_include_float32_half_and_ignore_invalid_vectors(
+    test_config: Any,
+) -> None:
+    keys = [
+        attachments.AttachmentCacheKey("content", "parser", "chunker", f"cache-{index}")
+        for index in range(7)
+    ]
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    store = _SpyStore(
+        None,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(0, keys[0], signature, [1.0, 0.0]),
+            attachments.AttachmentVectorPageRow(
+                1,
+                keys[1],
+                signature,
+                [1.0, float(np.sqrt(np.float32(3.0)))],
+            ),
+            attachments.AttachmentVectorPageRow(2, keys[2], signature, [0.49, 0.872]),
+            attachments.AttachmentVectorPageRow(3, keys[3], signature, [0.0, 0.0]),
+            attachments.AttachmentVectorPageRow(4, keys[4], signature, [float("nan"), 0.0]),
+            attachments.AttachmentVectorPageRow(5, keys[5], signature, [1.0]),
+            attachments.AttachmentVectorPageRow(6, keys[6], "stale", [1.0, 0.0]),
+        ],
+    )
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+    rows = [_dense_row(index, key) for index, key in enumerate(keys)]
+
+    current, history, trace = await service.adense_rankings("query", rows, [])
+
+    assert [row["chunk_id"] for row in current] == ["citation-0", "citation-1"]
+    assert history == []
+    assert trace == {}
+
+
+async def test_dense_rankings_accept_current_fused_provider_text_fallback(
+    test_config: Any,
+) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    embedder.image_enabled = True
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+        fallback_reason="fused_provider_failed",
+    )
+    store = _SpyStore(
+        None,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(
+                0,
+                cache_key,
+                signature,
+                [1.0, 0.0],
+            )
+        ],
+    )
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=True,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+        principal_id="principal-1",
+        conversation_id="conversation-1",
+    )
+    row = {**_dense_row(0, cache_key), "image_data": "aW1hZ2U="}
+
+    current, _, _ = await service.adense_rankings("query", [row], [])
+
+    assert [item["chunk_id"] for item in current] == ["citation-0"]
+
+
+async def test_dense_rankings_zero_query_disables_store_reads(test_config: Any) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[0.0, 0.0])
+    store = _SpyStore(None)
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [_dense_row(0, cache_key)],
+        [],
+    )
+
+    assert current == []
+    assert history == []
+    assert trace == {}
+    assert store.vector_calls == []
+
+
+async def test_dense_rankings_skip_query_model_for_short_full_pass(test_config: Any) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    embedder.aembed_query.side_effect = AssertionError("full pass must skip query embedding")
+    store = _SpyStore(None)
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [{**_dense_row(0, cache_key), "content": "short evidence"}],
+        [],
+    )
+
+    assert current == []
+    assert history == []
+    assert trace == {}
+    embedder.aembed_query.assert_not_awaited()
+    assert store.vector_calls == []
+
+
+async def test_dense_rankings_propagate_query_cancellation(test_config: Any) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    embedder.aembed_query.side_effect = asyncio.CancelledError
+    service = _dense_service(
+        test_config=test_config,
+        store=_SpyStore(None),
+        embedder=embedder,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.adense_rankings("query", [_dense_row(0, cache_key)], [])
+
+
+async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate_ties(
+    test_config: Any,
+) -> None:
+    row_count = 513
+    duplicate_key = attachments.AttachmentCacheKey(
+        "duplicate-content",
+        "parser",
+        "chunker",
+        "duplicate-cache",
+    )
+    keys = [
+        duplicate_key
+        if index in {255, 256}
+        else attachments.AttachmentCacheKey(
+            f"content-{index}",
+            "parser",
+            "chunker",
+            f"cache-{index}",
+        )
+        for index in range(row_count)
+    ]
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    vectors = np.asarray(
+        [[1.0, float(index % 11) / 10.0] for index in range(row_count)],
+        dtype=np.float32,
+    )
+
+    class _PagedStore(_SpyStore):
+        async def aiter_attachment_vectors(
+            self,
+            principal_id: str,
+            conversation_id: str,
+            references: list[tuple[int, attachments.AttachmentCacheKey]],
+            *,
+            ttl_days: int,
+            page_size: int,
+        ):
+            self.vector_calls.append(
+                {
+                    "principal_id": principal_id,
+                    "conversation_id": conversation_id,
+                    "references": references,
+                    "ttl_days": ttl_days,
+                    "page_size": page_size,
+                }
+            )
+            for start in range(0, len(references), page_size):
+                yield [
+                    attachments.AttachmentVectorPageRow(
+                        global_order,
+                        cache_key,
+                        signature,
+                        vectors[global_order],
+                    )
+                    for global_order, cache_key in references[start : start + page_size]
+                ]
+
+    store = _PagedStore(None)
+    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+    rows = [_dense_row(index, key) for index, key in enumerate(keys)]
+    expected_scores = vectors[:, 0] / np.linalg.norm(vectors, axis=1)
+    expected_indices = sorted(
+        (index for index, score in enumerate(expected_scores) if score >= np.float32(0.5)),
+        key=lambda index: (-float(expected_scores[index]), index),
+    )
+
+    current, _, _ = await service.adense_rankings("query", rows, [])
+
+    assert [row["chunk_id"] for row in current] == [
+        f"citation-{index}" for index in expected_indices
+    ]
+    duplicate_positions = [
+        index
+        for index, row in enumerate(current)
+        if row["chunk_id"] in {"citation-255", "citation-256"}
+    ]
+    assert len(duplicate_positions) == 2
+    assert next(
+        index for index, row in enumerate(current) if row["chunk_id"] == "citation-255"
+    ) < next(index for index, row in enumerate(current) if row["chunk_id"] == "citation-256")
+    assert store.vector_calls[0]["page_size"] == 256
+
+
+async def test_dense_rankings_failure_returns_error_type_and_empty_lanes(
+    test_config: Any,
+) -> None:
+    cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
+    embedder = _dense_embedder(query_vector=[1.0, 0.0])
+    embedder.aembed_query.side_effect = RuntimeError("provider unavailable")
+    service = _dense_service(
+        test_config=test_config,
+        store=_SpyStore(None),
+        embedder=embedder,
+    )
+
+    current, history, trace = await service.adense_rankings(
+        "query",
+        [_dense_row(0, cache_key)],
+        [_dense_row(1, cache_key)],
+    )
+
+    assert current == []
+    assert history == []
+    assert trace["composer_evidence_embedding_error"] == "RuntimeError"
 
 
 def test_parse_owner_shim_persist_is_a_noop_holding_no_store() -> None:

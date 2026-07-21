@@ -1905,13 +1905,17 @@ class RAGService:
             return
 
         limit = chunk_top_k or top_k or len(chunks)
+        from dlightrag.core.retrieval.rerank import rerank_with_fallback
+
+        outcome = await rerank_with_fallback(
+            query=query,
+            chunks=chunks,
+            top_k=limit,
+            rerank_func=self._rerank_func,
+        )
+        result.contexts["chunks"] = outcome.chunks
+        result.trace["reranked_chunk_count"] = len(outcome.chunks)
         if self._rerank_func is None:
-            # No reranker configured: still honor the requested budget by keeping
-            # the top-``limit`` fused chunks (already RRF-sorted) rather than
-            # leaking the full semantic∪BM25 union into downstream token budgets.
-            if len(chunks) > limit:
-                result.contexts["chunks"] = chunks[:limit]
-            result.trace["reranked_chunk_count"] = len(result.contexts["chunks"])
             logger.info(
                 "[Rerank] skipped: strategy=%s enabled=%s chunks=%d limit=%d reason=no_function",
                 self.config.rerank.strategy,
@@ -1920,34 +1924,23 @@ class RAGService:
                 limit,
             )
             return
-
-        try:
-            result.contexts["chunks"] = await self._rerank_func(
-                query=query,
-                chunks=chunks,
-                top_k=limit,
+        if outcome.error_type:
+            result.trace["rerank_error"] = outcome.error_type
+            logger.warning(
+                "Rerank failed; returning top fused chunks: error_type=%s",
+                outcome.error_type,
             )
-            result.trace["reranked_chunk_count"] = len(result.contexts["chunks"])
-            top_score = None
-            if result.contexts["chunks"]:
-                top_score = result.contexts["chunks"][0].get("rerank_score")
-            logger.info(
-                "[Rerank] strategy=%s model=%s input_chunks=%d limit=%d output_chunks=%d top_score=%s",
-                self.config.rerank.strategy,
-                self.config.rerank.model,
-                len(chunks),
-                limit,
-                result.trace["reranked_chunk_count"],
-                top_score,
-            )
-        except Exception:
-            # Rerank failed: fall back to the top-``limit`` fused chunks (RRF
-            # order) so a transient reranker error still honors the budget
-            # instead of leaking the full union downstream.
-            logger.warning("Rerank failed; returning top fused chunks", exc_info=True)
-            if len(chunks) > limit:
-                result.contexts["chunks"] = chunks[:limit]
-            result.trace["reranked_chunk_count"] = len(result.contexts["chunks"])
+            return
+        top_score = outcome.chunks[0].get("rerank_score") if outcome.chunks else None
+        logger.info(
+            "[Rerank] strategy=%s model=%s input_chunks=%d limit=%d output_chunks=%d top_score=%s",
+            self.config.rerank.strategy,
+            self.config.rerank.model,
+            len(chunks),
+            limit,
+            result.trace["reranked_chunk_count"],
+            top_score,
+        )
 
     async def aget_visual_asset(self, chunk_id: str, *, size: str = "full") -> Any | None:
         """Resolve a chunk image asset for API/Web image routes."""

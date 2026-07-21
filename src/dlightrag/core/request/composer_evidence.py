@@ -9,15 +9,14 @@ LightRAG lane remains independently retrieved and ranked.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import re
-from collections.abc import Awaitable
-from typing import Any, cast
+from typing import Any
 
 from dlightrag.core.request.composer_lexical import rank_composer_bm25
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import ContextRow
+from dlightrag.core.retrieval.rerank import rerank_with_fallback
 from dlightrag.utils.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
@@ -38,36 +37,17 @@ class ComposerEvidenceSelector:
     def __init__(
         self,
         *,
-        embedding_func: Any | None = None,
-        embedding_owner: Any | None = None,
-        rerank_func: Any | None = None,
         full_pass_tokens: int = COMPOSER_FULL_PASS_TOKENS,
         current_target_tokens: int = COMPOSER_CURRENT_TARGET_TOKENS,
         history_target_tokens: int = COMPOSER_HISTORY_TARGET_TOKENS,
         total_tokens: int = COMPOSER_TOTAL_TOKENS,
         candidate_limit: int = COMPOSER_CANDIDATE_LIMIT,
     ) -> None:
-        self._embedding_func = embedding_func
-        self._embedding_owner = embedding_owner
-        self._rerank_func = rerank_func
         self._full_pass_tokens = max(0, full_pass_tokens)
         self._current_target_tokens = max(0, current_target_tokens)
         self._history_target_tokens = max(0, history_target_tokens)
         self._total_tokens = max(0, total_tokens)
         self._candidate_limit = max(1, candidate_limit)
-
-    async def aclose(self) -> None:
-        """Close only model clients created for the Web Composer lane."""
-        seen: set[int] = set()
-        for resource in (self._embedding_owner, self._rerank_func):
-            if resource is None or id(resource) in seen:
-                continue
-            seen.add(id(resource))
-            close = getattr(resource, "aclose", None)
-            if callable(close):
-                result = close()
-                if inspect.isawaitable(result):
-                    await cast(Awaitable[Any], result)
 
     async def select(
         self,
@@ -75,6 +55,9 @@ class ComposerEvidenceSelector:
         query: str,
         current_rows: list[ContextRow],
         history_rows: list[ContextRow],
+        current_dense_rankings: list[ContextRow],
+        history_dense_rankings: list[ContextRow],
+        rerank_func: Any | None,
     ) -> tuple[list[ContextRow], dict[str, Any]]:
         if not current_rows and not history_rows:
             return [], self._trace("empty", [], [])
@@ -105,11 +88,15 @@ class ComposerEvidenceSelector:
             query=query,
             rows=current_rows,
             token_budget=current_budget,
+            dense_rankings=current_dense_rankings,
+            rerank_func=rerank_func,
         )
         selected_history, history_trace = await self._select_lane(
             query=query,
             rows=history_rows,
             token_budget=history_budget,
+            dense_rankings=history_dense_rankings,
+            rerank_func=rerank_func,
         )
         trace = self._trace(
             "retrieved",
@@ -129,11 +116,6 @@ class ComposerEvidenceSelector:
         rerank_error = current_trace.get("rerank_error") or history_trace.get("rerank_error")
         if rerank_error:
             trace["composer_evidence_rerank_error"] = rerank_error
-        embedding_error = current_trace.get("embedding_error") or history_trace.get(
-            "embedding_error"
-        )
-        if embedding_error:
-            trace["composer_evidence_embedding_error"] = embedding_error
         lexical_error = current_trace.get("lexical_error") or history_trace.get("lexical_error")
         if lexical_error:
             trace["composer_evidence_lexical_error"] = lexical_error
@@ -145,6 +127,8 @@ class ComposerEvidenceSelector:
         query: str,
         rows: list[ContextRow],
         token_budget: int,
+        dense_rankings: list[ContextRow],
+        rerank_func: Any | None,
     ) -> tuple[list[ContextRow], dict[str, Any]]:
         if not rows or token_budget <= 0:
             return [], {"candidate_count": 0, "reranked": False}
@@ -178,78 +162,39 @@ class ComposerEvidenceSelector:
             logger.warning("Composer BM25 ranking failed", exc_info=True)
         structural = [dict(row) for row in long_rows if _is_structural(row)]
         coverage = _coverage_ranking(long_rows)
-        rankings: list[list[ContextRow]] = [lexical, structural, coverage]
-        embedding_error: str | None = None
-        if self._embedding_func is not None and long_rows:
-            try:
-                rankings.append(await self._dense_ranking(query, long_rows))
-            except Exception as exc:
-                embedding_error = type(exc).__name__
-                logger.warning("Composer embedding ranking failed", exc_info=True)
+        long_ids = {str(row.get("chunk_id") or "") for row in long_rows}
+        dense = [dict(row) for row in dense_rankings if str(row.get("chunk_id") or "") in long_ids]
+        rankings: list[list[ContextRow]] = [lexical, structural, coverage, dense]
 
         candidates = rrf_fuse(rankings)[: self._candidate_limit]
-        ranked = candidates
-        reranked = False
-        rerank_error: str | None = None
-        if self._rerank_func is not None and candidates:
-            try:
-                ranked = await self._rerank_func(
-                    query=query,
-                    chunks=candidates,
-                    top_k=len(candidates),
-                )
-                reranked = True
-            except Exception as exc:
-                rerank_error = type(exc).__name__
-                logger.warning("Composer rerank failed; using local fusion", exc_info=True)
+        outcome = await rerank_with_fallback(
+            query=query,
+            chunks=candidates,
+            top_k=len(candidates),
+            rerank_func=rerank_func,
+        )
+        if outcome.error_type:
+            logger.warning(
+                "Composer rerank failed; using local fusion: %s",
+                outcome.error_type,
+            )
 
         selected = _pack_with_document_guarantees(
-            ranked,
+            outcome.chunks,
             original_rows=long_rows,
             token_budget=long_budget,
         )
         trace: dict[str, Any] = {
             "candidate_count": len(candidates),
-            "reranked": reranked,
+            "reranked": outcome.reranked,
         }
-        if rerank_error:
-            trace["rerank_error"] = rerank_error
-        if embedding_error:
-            trace["embedding_error"] = embedding_error
+        if outcome.error_type:
+            trace["rerank_error"] = outcome.error_type
         if lexical_error:
             trace["lexical_error"] = lexical_error
         selected_ids = {str(row.get("chunk_id") or "") for row in [*short_rows, *selected]}
         ordered = [dict(row) for row in rows if str(row.get("chunk_id") or "") in selected_ids]
         return ordered, trace
-
-    async def _dense_ranking(
-        self,
-        query: str,
-        rows: list[ContextRow],
-    ) -> list[ContextRow]:
-        import numpy as np
-
-        embedding_func = self._embedding_func
-        if embedding_func is None:
-            return []
-        query_vector = await embedding_func([query], context="query")
-        document_vectors = await embedding_func(
-            [str(row.get("content") or "") for row in rows],
-            context="document",
-        )
-        query_array = np.asarray(query_vector, dtype=float)[0]
-        document_array = np.asarray(document_vectors, dtype=float)
-        query_norm = float(np.linalg.norm(query_array))
-        document_norms = np.linalg.norm(document_array, axis=1)
-        denominator = document_norms * query_norm
-        scores = np.divide(
-            document_array @ query_array,
-            denominator,
-            out=np.zeros_like(document_norms, dtype=float),
-            where=denominator != 0,
-        )
-        ranked_indices = np.argsort(-scores, kind="stable")
-        return [dict(rows[int(index)]) for index in ranked_indices]
 
     @staticmethod
     def _trace(

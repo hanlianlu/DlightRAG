@@ -1151,9 +1151,21 @@ async def test_prepare_answer_turn_merges_current_document_context(
     )
 
     async def _select(**kwargs: Any):
+        assert kwargs["current_dense_rankings"] == kwargs["current_rows"]
         return kwargs["current_rows"], {"composer_evidence_strategy": "full"}
 
     manager._aselect_web_composer_evidence.side_effect = _select
+
+    class _AttachmentService:
+        async def adense_rankings(
+            self, _query: str, current_rows: list[Any], history_rows: list[Any]
+        ):
+            return current_rows, history_rows, {}
+
+    attachment_service = _AttachmentService()
+    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
+        lambda _resources, _prepared: attachment_service
+    )
 
     chunk = build_text_attachment_chunk(
         attachment_id=document.attachment_id,
@@ -1224,7 +1236,6 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
     )
     from dlightrag.web.conversations import PreparedWebConversation
 
-    resources = object()
     prepared = PreparedWebConversation(
         principal_id="local",
         conversation_id="00000000-0000-0000-0000-000000000001",
@@ -1245,7 +1256,6 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
             content_sha256="sha-b",
         ),
     ]
-    seen_resources: list[object] = []
 
     class _AttachmentService:
         async def achunks_for_attachment(self, **kwargs: Any):
@@ -1270,19 +1280,14 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
                 "attachment_embedding_failed": 0,
             }
 
-    def _factory(value: object) -> _AttachmentService:
-        seen_resources.append(value)
-        return _AttachmentService()
-
-    service_under_test._get_query_attachment_service = _factory  # type: ignore[method-assign]
+    attachment_service = _AttachmentService()
 
     chunks, errors, bundles = await service_under_test._parse_attachment_documents(
-        resources=resources,
+        attachment_service=attachment_service,
         prepared=prepared,
         documents=documents,
     )
 
-    assert seen_resources == [resources]
     assert errors == []
     assert [chunk.attachment_id for chunk in chunks] == ["att-a", "att-b"]
     assert [attachment_id for attachment_id, _bundle in bundles] == ["att-a", "att-b"]
@@ -1341,10 +1346,10 @@ async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
                 "attachment_analysis_outcome": "intentionally_disabled",
             }
 
-    service_under_test._get_query_attachment_service = lambda _resources: _AttachmentService()
+    attachment_service = _AttachmentService()
 
     chunks, errors, bundles = await service_under_test._parse_attachment_documents(
-        resources=object(),
+        attachment_service=attachment_service,
         prepared=prepared,
         documents=documents,
     )
@@ -1404,9 +1409,21 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     )
 
     async def _select(**kwargs: Any):
+        assert kwargs["history_dense_rankings"] == kwargs["history_rows"]
         return kwargs["history_rows"], {"composer_evidence_strategy": "full"}
 
     manager._aselect_web_composer_evidence.side_effect = _select
+
+    class _AttachmentService:
+        async def adense_rankings(
+            self, _query: str, current_rows: list[Any], history_rows: list[Any]
+        ):
+            return current_rows, history_rows, {}
+
+    attachment_service = _AttachmentService()
+    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
+        lambda _resources, _prepared: attachment_service
+    )
     parsed_order: list[str] = []
 
     async def _fake_parse(*, documents, **_kwargs: object):
