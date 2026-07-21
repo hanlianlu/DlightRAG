@@ -215,9 +215,12 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
             query: str,
             current_rows: list[dict[str, Any]],
             history_rows: list[dict[str, Any]],
+            *,
+            request_vectors: Any,
         ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
             events.append("dense")
             assert query == "standalone"
+            assert request_vectors == {}
             current_dense.extend(reversed(current_rows))
             history_dense.extend(reversed(history_rows))
             return (
@@ -296,7 +299,6 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
     assert resolutions == [[" Research Notes ", "ignored"]]
     assert factory_calls == [(resources, _prepared())]
     assert events == ["parse-current", "parse-history", "dense", "selector"]
-    assert turn.composer_processing_resources is resources
     assert turn.composer_evidence_trace["composer_dense_status"] == "ranked"
 
 

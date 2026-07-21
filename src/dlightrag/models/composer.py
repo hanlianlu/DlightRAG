@@ -5,10 +5,11 @@ import asyncio
 import hashlib
 import logging
 import os
+import posixpath
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig
 
@@ -27,18 +28,23 @@ def normalized_endpoint_fingerprint(value: Any) -> str | None:
     try:
         parsed = urlsplit(raw)
         scheme = parsed.scheme.lower()
+        if scheme not in {"http", "https"}:
+            return None
         hostname = (parsed.hostname or "").rstrip(".").lower()
+        if not hostname:
+            return None
         port = parsed.port
         if port == {"http": 80, "https": 443}.get(scheme):
             port = None
         authority = f"[{hostname}]" if ":" in hostname else hostname
         if port is not None:
             authority = f"{authority}:{port}"
-        path = parsed.path or "/"
-        query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)), doseq=True)
-        canonical = urlunsplit((scheme, authority, path, query, ""))
+        path = posixpath.normpath(parsed.path or "/")
+        if not path.startswith("/"):
+            path = f"/{path}"
+        canonical = urlunsplit((scheme, authority, path, "", ""))
     except ValueError:
-        canonical = raw
+        return None
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -114,7 +120,11 @@ class ComposerAnalysisSettings:
             int,
         )
         return cls(
-            enabled=bool(config.parser_sidecars.vlm.enabled),
+            enabled=get_env_value(
+                "VLM_PROCESS_ENABLE",
+                bool(config.parser_sidecars.vlm.enabled),
+                bool,
+            ),
             vlm_max_image_bytes=max(
                 256 * 1024,
                 int(os.getenv("VLM_MAX_IMAGE_BYTES", str(5 * 1024 * 1024))),

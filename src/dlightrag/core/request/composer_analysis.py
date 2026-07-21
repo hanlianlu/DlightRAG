@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+import math
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
@@ -15,20 +16,60 @@ from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.composer import ComposerAnalysisSettings, normalized_endpoint_fingerprint
 from dlightrag.models.llm_roles import model_for_role
 
-COMPOSER_ANALYSIS_CONTRACT_VERSION = "1"
+COMPOSER_ANALYSIS_CONTRACT_VERSION = "2"
 logger = logging.getLogger(__name__)
-_MODEL_OPTION_ALLOWLIST = frozenset(
-    {
-        "enable_thinking",
-        "max_tokens",
-        "reasoning",
-        "reasoning_effort",
-        "seed",
-        "thinking",
-        "top_k",
-        "top_p",
+
+
+def _is_bool(value: Any) -> bool:
+    return type(value) is bool
+
+
+def _is_int(value: Any) -> bool:
+    return type(value) is int
+
+
+def _is_finite_number(value: Any) -> bool:
+    return type(value) in {int, float} and math.isfinite(value)
+
+
+def _is_reasoning_effort(value: Any) -> bool:
+    return isinstance(value, str) and value in {
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
     }
-)
+
+
+def _is_thinking_type(value: Any) -> bool:
+    return isinstance(value, str) and value in {"adaptive", "auto", "disabled", "enabled"}
+
+
+_MODEL_OPTION_SCALAR_VALIDATORS: dict[str, Callable[[Any], bool]] = {
+    "enable_thinking": _is_bool,
+    "max_tokens": _is_int,
+    "reasoning_effort": _is_reasoning_effort,
+    "seed": _is_int,
+    "top_k": _is_int,
+    "top_p": _is_finite_number,
+}
+_MODEL_OPTION_NESTED_VALIDATORS: dict[str, dict[str, Callable[[Any], bool]]] = {
+    "reasoning": {
+        "effort": _is_reasoning_effort,
+        "enabled": _is_bool,
+        "exclude": _is_bool,
+        "max_tokens": _is_int,
+    },
+    "thinking": {
+        "budget_tokens": _is_int,
+        "enabled": _is_bool,
+        "include_thoughts": _is_bool,
+        "thinking_budget": _is_int,
+        "type": _is_thinking_type,
+    },
+}
 
 
 class ComposerAnalysisOutcome(StrEnum):
@@ -43,6 +84,7 @@ class ComposerAnalysisResult:
     outcome: ComposerAnalysisOutcome
     mm_chunk_count: int
     error_type: str | None = None
+    mm_chunks: tuple[dict[str, Any], ...] = ()
 
     @property
     def cacheable(self) -> bool:
@@ -149,11 +191,30 @@ def _role_signature(identity: Any, cfg: ModelConfig) -> dict[str, Any]:
     return {
         **_safe_role_identity(identity),
         "temperature": cfg.temperature,
-        "model_options": {
-            key: cfg.model_kwargs[key]
-            for key in sorted(_MODEL_OPTION_ALLOWLIST & cfg.model_kwargs.keys())
-        },
+        "model_options": _safe_model_options(cfg.model_kwargs),
     }
+
+
+def _safe_model_options(options: Any) -> dict[str, Any]:
+    if not isinstance(options, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key, validator in _MODEL_OPTION_SCALAR_VALIDATORS.items():
+        value = options.get(key)
+        if validator(value):
+            safe[key] = value
+    for key, validators in _MODEL_OPTION_NESTED_VALIDATORS.items():
+        value = options.get(key)
+        if not isinstance(value, dict):
+            continue
+        nested = {
+            nested_key: value[nested_key]
+            for nested_key, validator in validators.items()
+            if nested_key in value and validator(value[nested_key])
+        }
+        if nested:
+            safe[key] = nested
+    return {key: safe[key] for key in sorted(safe)}
 
 
 def _lightrag_version() -> str:
@@ -335,7 +396,8 @@ async def aanalyze_composer_sidecars(
     from lightrag.parser.routing import parse_process_options
 
     opts = parse_process_options(process_options)
-    if not config.parser_sidecars.vlm.enabled or not (opts.images or opts.tables or opts.equations):
+    analysis_settings = ComposerAnalysisSettings.resolve(config)
+    if not analysis_settings.enabled or not (opts.images or opts.tables or opts.equations):
         return ComposerAnalysisResult(
             outcome=ComposerAnalysisOutcome.INTENTIONALLY_DISABLED,
             mm_chunk_count=0,
@@ -410,29 +472,31 @@ async def aanalyze_composer_sidecars(
     if outcome is ComposerAnalysisOutcome.DEGRADED:
         _normalize_failed_sidecars(blocks_path, process_options)
 
-    mm_chunk_count = 0
+    mm_chunks: tuple[dict[str, Any], ...] = ()
     if blocks_path:
         try:
             renderer = cast(
                 Callable[..., list[dict[str, Any]]], LightRAG._build_mm_chunks_from_sidecars
             )
-            mm_chunks = renderer(
-                proxy,
-                doc_id=doc_id,
-                file_path=file_path,
-                blocks_path=blocks_path,
-                base_order_index=0,
-                process_options=process_options,
+            mm_chunks = tuple(
+                renderer(
+                    proxy,
+                    doc_id=doc_id,
+                    file_path=file_path,
+                    blocks_path=blocks_path,
+                    base_order_index=0,
+                    process_options=process_options,
+                )
             )
-            mm_chunk_count = len(mm_chunks)
         except Exception as exc:
             outcome = ComposerAnalysisOutcome.DEGRADED
             error_type = error_type or type(exc).__name__
 
     return ComposerAnalysisResult(
         outcome=outcome,
-        mm_chunk_count=mm_chunk_count,
+        mm_chunk_count=len(mm_chunks),
         error_type=error_type,
+        mm_chunks=mm_chunks,
     )
 
 

@@ -1236,6 +1236,38 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert turn.attachment_resolution_status == "ok"
 
 
+def test_composer_request_vectors_are_private_and_keyed_by_full_cache_identity() -> None:
+    from dlightrag.core.request.attachments import (
+        AttachmentCacheKey,
+        AttachmentContextChunk,
+    )
+    from dlightrag.web.conversations import (
+        _composer_context_rows,
+        _composer_request_vectors,
+    )
+
+    cache_key = AttachmentCacheKey("content", "parser", "chunker", "cache")
+    chunk = AttachmentContextChunk(
+        chunk_id="chunk-1",
+        attachment_id="att-1",
+        filename="report.pdf",
+        chunk_index=1,
+        content="evidence",
+        cache_key=cache_key,
+        embedding_signature="signature",
+        embedding_vector=[1.0, 0.0],
+    )
+
+    request_vectors = _composer_request_vectors([chunk])
+    rows = _composer_context_rows([chunk], scope="current")
+
+    assert request_vectors[cache_key].cache_key == cache_key
+    assert request_vectors[cache_key].embedding_signature == "signature"
+    assert request_vectors[cache_key].embedding_vector == [1.0, 0.0]
+    assert "embedding_signature" not in rows[0]
+    assert "embedding_vector" not in rows[0]
+
+
 async def test_parse_attachment_documents_preserves_resource_identity_order_and_trace(
     service_under_test,
 ) -> None:
@@ -1425,8 +1457,14 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
 
     class _AttachmentService:
         async def adense_rankings(
-            self, _query: str, current_rows: list[Any], history_rows: list[Any]
+            self,
+            _query: str,
+            current_rows: list[Any],
+            history_rows: list[Any],
+            *,
+            request_vectors: Any,
         ):
+            assert request_vectors == {}
             return current_rows, history_rows, {}
 
     attachment_service = _AttachmentService()

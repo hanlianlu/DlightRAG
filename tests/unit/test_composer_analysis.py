@@ -36,6 +36,7 @@ from dlightrag.core.request.composer_analysis import (
 from dlightrag.models.composer import ComposerAnalysisSettings
 
 _ANALYSIS_ENV_KEYS = (
+    "VLM_PROCESS_ENABLE",
     "VLM_MAX_IMAGE_BYTES",
     "VLM_MIN_IMAGE_PIXEL",
     "SURROUNDING_LEADING_MAX_TOKENS",
@@ -183,6 +184,7 @@ def test_proxy_rejects_workspace_storage_attributes(attribute: str) -> None:
 async def test_disabled_preflight_never_calls_lightrag_analyzer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("VLM_PROCESS_ENABLE", raising=False)
     analyze = AsyncMock()
     monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
     blocks_path = _blocks(tmp_path)
@@ -265,7 +267,43 @@ async def test_real_unbound_lightrag_analyzer_produces_success(
     assert result.outcome is ComposerAnalysisOutcome.SUCCESS
     assert result.cacheable is True
     assert result.mm_chunk_count == 1
+    assert len(result.mm_chunks) == result.mm_chunk_count
+    assert result.mm_chunks[0]["content"] == (
+        "[Table Name]Revenue table\n\nA table showing revenue of 42."
+    )
     extract.assert_awaited_once()
+
+
+async def test_renderer_storage_access_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        parsed_data["multimodal_processed"] = True
+        return parsed_data
+
+    def render(proxy: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        _ = proxy.full_docs
+        return [{"content": "must not render"}]
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+    monkeypatch.setattr(LightRAG, "_build_mm_chunks_from_sidecars", render)
+    blocks_path = _blocks(tmp_path)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+        doc_id="doc-storage-receiver",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.DEGRADED
+    assert result.error_type == "AttributeError"
+    assert result.mm_chunk_count == 0
+    assert result.mm_chunks == ()
 
 
 async def test_real_unbound_analyzer_degrades_when_composer_rejects_image(
@@ -405,6 +443,63 @@ async def test_failure_items_are_demoted_to_skipped_before_renderer(
     assert result.outcome is ComposerAnalysisOutcome.DEGRADED
     assert result.mm_chunk_count == 0
     assert result.cacheable is False
+
+
+async def test_degraded_analysis_preserves_successful_sibling_renderer_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocks_path = _blocks(tmp_path)
+    sidecar_path = _sidecar(blocks_path, "drawing")
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "drawings": {
+                    "successful-chart": {
+                        "llm_analyze_result": {
+                            "status": "success",
+                            "name": "Revenue trend",
+                            "type": "chart",
+                            "description": "Revenue rises over the reported period.",
+                        }
+                    },
+                    "failed-chart": {
+                        "llm_analyze_result": {
+                            "status": "failure",
+                            "message": "provider unavailable",
+                        }
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        parsed_data["multimodal_processed"] = True
+        return parsed_data
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+        doc_id="doc-partial",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert result.outcome is ComposerAnalysisOutcome.DEGRADED
+    assert result.error_type == "SidecarAnalysisFailure"
+    assert result.cacheable is False
+    assert result.mm_chunk_count == 1
+    assert len(result.mm_chunks) == result.mm_chunk_count
+    assert "Revenue trend" in result.mm_chunks[0]["content"]
+    assert "failed-chart" not in str(result.mm_chunks)
+    assert payload["drawings"]["failed-chart"]["llm_analyze_result"]["status"] == "skipped"
 
 
 async def test_sidecar_normalization_write_error_stays_degraded_and_noncacheable(
@@ -684,6 +779,88 @@ def test_effective_analysis_settings_use_lightrag_defaults_when_env_is_unset(
 
 
 @pytest.mark.parametrize(
+    ("configured", "env_value", "expected"),
+    [
+        (False, "true", True),
+        (True, "false", False),
+        (False, "ON", True),
+        (True, "not-a-bool", False),
+    ],
+)
+def test_vlm_process_env_overrides_typed_config_with_upstream_bool_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: bool,
+    env_value: str,
+    expected: bool,
+) -> None:
+    from lightrag.utils import get_env_value
+
+    monkeypatch.setenv("VLM_PROCESS_ENABLE", env_value)
+    config = _config(enabled=configured)
+    settings = ComposerAnalysisSettings.resolve(config)
+    signature = json.loads(
+        build_composer_analysis_signature(
+            lightrag=_lightrag(),
+            model_bundle=_bundle(),
+            config=config,
+            process_options="iP",
+        )
+    )
+    proxy = create_composer_analysis_proxy(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=config,
+    )
+
+    assert settings.enabled is expected
+    assert settings.enabled is get_env_value("VLM_PROCESS_ENABLE", configured, bool)
+    assert signature["enabled"] is expected
+    assert proxy._build_global_config()["vlm_process_enable"] is expected
+
+
+async def test_effective_vlm_enablement_controls_runtime_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocks_path = _blocks(tmp_path)
+
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        parsed_data["multimodal_processed"] = True
+        return parsed_data
+
+    analyze_mock = AsyncMock(side_effect=analyze)
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze_mock)
+    monkeypatch.setenv("VLM_PROCESS_ENABLE", "false")
+
+    disabled = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(enabled=True),
+        doc_id="doc-disabled-by-env",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    assert disabled.outcome is ComposerAnalysisOutcome.INTENTIONALLY_DISABLED
+    analyze_mock.assert_not_awaited()
+
+    monkeypatch.setenv("VLM_PROCESS_ENABLE", "true")
+    enabled = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(enabled=False),
+        doc_id="doc-enabled-by-env",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    assert enabled.outcome is ComposerAnalysisOutcome.SUCCESS
+    analyze_mock.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
     ("env_name", "env_value", "attribute", "payload_path", "expected"),
     [
         (
@@ -926,11 +1103,39 @@ def test_analysis_signature_never_persists_raw_endpoint_tokens() -> None:
     assert "base_url" not in json.loads(signature)["roles"]["vlm"]
 
 
-def test_analysis_signature_distinguishes_endpoint_query_routing() -> None:
+def test_analysis_signature_ignores_endpoint_query_routing_and_userinfo() -> None:
     first_bundle = _bundle()
     second_bundle = _bundle()
-    first_bundle.vlm_identity["base_url"] = "https://vision.example/v1?deployment=blue"
-    second_bundle.vlm_identity["base_url"] = "https://vision.example/v1?deployment=green"
+    first_bundle.vlm_identity["base_url"] = (
+        "https://first-user:first-token@vision.example/v1?deployment=blue#first"
+    )
+    second_bundle.vlm_identity["base_url"] = (
+        "https://second-user:second-token@vision.example/v1?deployment=green#second"
+    )
+
+    first = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=first_bundle,
+        config=_config(),
+        process_options="iteP",
+    )
+    second = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=second_bundle,
+        config=_config(),
+        process_options="iteP",
+    )
+
+    assert first == second
+    for token in ("first-user", "first-token", "second-user", "second-token", "deployment"):
+        assert token not in first
+
+
+def test_analysis_signature_distinguishes_nonsecret_endpoint_paths() -> None:
+    first_bundle = _bundle()
+    second_bundle = _bundle()
+    first_bundle.vlm_identity["base_url"] = "https://vision.example/v1"
+    second_bundle.vlm_identity["base_url"] = "https://vision.example/v2"
 
     first = build_composer_analysis_signature(
         lightrag=_lightrag(),
@@ -972,3 +1177,83 @@ def test_analysis_signature_stabilizes_equivalent_canonical_endpoints() -> None:
     )
 
     assert first == second
+
+
+def test_analysis_signature_sanitizes_nested_model_options_and_tracks_safe_changes() -> None:
+    config = _config()
+    vlm = config.llm.roles.vlm
+    assert vlm is not None
+    options = {
+        "reasoning": {
+            "enabled": False,
+            "effort": "high",
+            "max_tokens": 2048,
+            "api_token": "nested-query-secret",
+            "metadata": {"authorization": "nested-container-secret"},
+        },
+        "thinking": {
+            "type": "disabled",
+            "budget_tokens": 1024,
+            "include_thoughts": False,
+            "unknown_token": "nested-thinking-secret",
+            "budget": [1024],
+        },
+        "top_p": [0.9],
+        "seed": True,
+        "api_token": "top-level-secret",
+    }
+    configured = config.model_copy(
+        update={
+            "llm": config.llm.model_copy(
+                update={
+                    "roles": config.llm.roles.model_copy(
+                        update={"vlm": vlm.model_copy(update={"model_kwargs": options})}
+                    )
+                }
+            )
+        }
+    )
+
+    first = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=configured,
+        process_options="iteP",
+    )
+    payload = json.loads(first)
+    assert payload["roles"]["vlm"]["model_options"] == {
+        "reasoning": {"effort": "high", "enabled": False, "max_tokens": 2048},
+        "thinking": {
+            "budget_tokens": 1024,
+            "include_thoughts": False,
+            "type": "disabled",
+        },
+    }
+    for token in (
+        "nested-query-secret",
+        "nested-container-secret",
+        "nested-thinking-secret",
+        "top-level-secret",
+        "api_token",
+        "unknown_token",
+        "authorization",
+    ):
+        assert token not in first
+
+    changed_options = {**options, "reasoning": {**options["reasoning"], "enabled": True}}
+    changed_vlm = vlm.model_copy(update={"model_kwargs": changed_options})
+    changed = configured.model_copy(
+        update={
+            "llm": configured.llm.model_copy(
+                update={"roles": configured.llm.roles.model_copy(update={"vlm": changed_vlm})}
+            )
+        }
+    )
+    second = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=changed,
+        process_options="iteP",
+    )
+
+    assert second != first

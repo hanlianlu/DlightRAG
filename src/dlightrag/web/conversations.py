@@ -14,7 +14,9 @@ from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.request.attachment_digest import build_attachment_planner_digests
 from dlightrag.core.request.attachments import (
+    AttachmentCacheKey,
     AttachmentContextChunk,
+    AttachmentRequestVector,
     ParsedAttachmentBundle,
 )
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
@@ -371,10 +373,12 @@ class WebConversationService:
                 raise RuntimeError("attachment service missing for parsed Composer chunks")
             current_rows = _composer_context_rows(current_chunks, scope="current")
             history_rows = _composer_context_rows(history_chunks, scope="history")
+            request_vectors = _composer_request_vectors([*current_chunks, *history_chunks])
             current_dense, history_dense, dense_trace = await attachment_service.adense_rankings(
                 plan.standalone_query,
                 current_rows,
                 history_rows,
+                request_vectors=request_vectors,
             )
             composer_rows, composer_trace = await manager._aselect_web_composer_evidence(
                 query=plan.standalone_query,
@@ -410,7 +414,6 @@ class WebConversationService:
             history_image_resolution_status=resolution_status,
             composer_context_chunks=tuple(composer_rows),
             composer_evidence_trace=composer_trace,
-            composer_processing_resources=resources,
             web_composer_visuals=True,
             current_attachment_digests=current_digests,
             history_attachment_catalog_count=len(attachment_catalog),
@@ -698,6 +701,23 @@ def _composer_context_rows(
         }
         rows.append(row)
     return rows
+
+
+def _composer_request_vectors(
+    chunks: list[AttachmentContextChunk],
+) -> dict[AttachmentCacheKey, AttachmentRequestVector]:
+    """Extract private in-request vectors without adding them to context rows."""
+    return {
+        chunk.cache_key: AttachmentRequestVector(
+            cache_key=chunk.cache_key,
+            embedding_signature=chunk.embedding_signature,
+            embedding_vector=chunk.embedding_vector,
+        )
+        for chunk in chunks
+        if chunk.cache_key is not None
+        and chunk.embedding_signature is not None
+        and chunk.embedding_vector is not None
+    }
 
 
 def _history_image_block(image: StoredConversationImage) -> dict[str, Any]:

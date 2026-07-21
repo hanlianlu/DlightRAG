@@ -1124,7 +1124,9 @@ async def test_composer_cache_miss_materializes_only_web_rows(
     monkeypatch.setattr("lightrag.parser.registry.get_parser", lambda _engine: parser)
     monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "1")
     real_analyze_multimodal = LightRAG.analyze_multimodal
+    real_mm_renderer = LightRAG._build_mm_chunks_from_sidecars
     analysis_proxies: list[Any] = []
+    renderer_proxies: list[Any] = []
 
     async def _assert_proxy_then_analyze(proxy: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
         analysis_proxies.append(proxy)
@@ -1137,6 +1139,17 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         return await real_analyze_multimodal(proxy, *args, **kwargs)
 
     monkeypatch.setattr(LightRAG, "analyze_multimodal", _assert_proxy_then_analyze)
+
+    def _assert_proxy_then_render(proxy: Any, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        renderer_proxies.append(proxy)
+        assert proxy.llm_response_cache is None
+        for name in _WORKSPACE_STORAGE_HANDLES:
+            if name == "llm_response_cache":
+                continue
+            assert not hasattr(proxy, name)
+        return real_mm_renderer(proxy, *args, **kwargs)
+
+    monkeypatch.setattr(LightRAG, "_build_mm_chunks_from_sidecars", _assert_proxy_then_render)
 
     pool = await _open_pool()
     try:
@@ -1190,9 +1203,10 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         assert all(row["embedding_signature"] for row in rows)
         assert all(len(json.loads(row["embedding_vector"])) == 3 for row in rows)
         assert analysis_proxies
+        assert renderer_proxies == analysis_proxies
         assert models.extract_calls == 1
         assert models.vlm_calls == int(include_drawing)
-        assert lightrag.mm_renderer_calls == 1
+        assert lightrag.mm_renderer_calls == 0
         assert sum(len(batch) for batch in embedding_provider.document_batches) == (
             len(bundle.chunks) - int(include_drawing)
         )

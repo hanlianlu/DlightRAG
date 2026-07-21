@@ -20,7 +20,7 @@ import base64
 import json
 import logging
 import tempfile
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -127,6 +127,15 @@ class AttachmentVectorPageRow:
     cache_key: AttachmentCacheKey
     embedding_signature: str | None
     embedding_vector: Sequence[object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentRequestVector:
+    """One private request-local vector keyed by its complete cache identity."""
+
+    cache_key: AttachmentCacheKey
+    embedding_signature: str
+    embedding_vector: Sequence[object]
 
 
 def validate_attachment_vector(
@@ -602,7 +611,7 @@ async def build_attachment_bundle_from_parse_result(
     filename: str,
     parsed: ParsedAttachmentDocument,
     process_options: str,
-    include_multimodal: bool = True,
+    multimodal_chunks: Sequence[dict[str, Any]] = (),
 ) -> ParsedAttachmentBundle:
     """Chunk parser output with the SAME LightRAG chunkers durable ingest uses."""
     from lightrag.chunker import (
@@ -667,15 +676,13 @@ async def build_attachment_bundle_from_parse_result(
         (int(item.get("chunk_order_index", -1)) for item in chunking_result),
         default=-1,
     )
-    mm_chunks: list[dict[str, Any]] = []
-    if parsed.blocks_path and include_multimodal:
-        mm_chunks = lightrag._build_mm_chunks_from_sidecars(
-            doc_id=doc_id,
-            file_path=filename,
-            blocks_path=parsed.blocks_path,
-            base_order_index=max_order + 1,
-            process_options=process_options,
-        )
+    mm_chunks = [
+        {
+            **chunk,
+            "chunk_order_index": max_order + offset,
+        }
+        for offset, chunk in enumerate(multimodal_chunks, start=1)
+    ]
 
     chunk_dict = build_chunks_dict_from_chunking_result(
         list(chunking_result) + list(mm_chunks),
@@ -783,6 +790,8 @@ class QueryAttachmentService:
         query: str,
         current_rows: list[dict[str, Any]],
         history_rows: list[dict[str, Any]],
+        *,
+        request_vectors: Mapping[AttachmentCacheKey, AttachmentRequestVector] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """Rank both Composer lanes from request-scoped cached vectors."""
 
@@ -833,6 +842,7 @@ class QueryAttachmentService:
                 query_norm,
                 principal_id=principal_id,
                 conversation_id=conversation_id,
+                request_vectors=request_vectors,
             )
             history = await self._adense_rank_lane(
                 history_long_rows,
@@ -840,6 +850,7 @@ class QueryAttachmentService:
                 query_norm,
                 principal_id=principal_id,
                 conversation_id=conversation_id,
+                request_vectors=request_vectors,
             )
             if not current and not history:
                 return [], [], dense_trace("no_rows")
@@ -866,6 +877,7 @@ class QueryAttachmentService:
         *,
         principal_id: str,
         conversation_id: str,
+        request_vectors: Mapping[AttachmentCacheKey, AttachmentRequestVector] | None,
     ) -> list[dict[str, Any]]:
         if not rows:
             return []
@@ -897,10 +909,48 @@ class QueryAttachmentService:
                     )
                     for fallback_reason in ("image_rejected", "fused_provider_failed")
                 )
+                signatures.add(
+                    build_composer_embedding_signature(
+                        config=self._config,
+                        embedder=self._document_embedder,
+                        mode="text",
+                        fallback_reason="analysis_degraded",
+                    )
+                )
             references.append((global_order, cache_key))
             expected_by_order[global_order] = (cache_key, frozenset(signatures))
 
         scored: list[tuple[np.float32, int]] = []
+        processed_orders: set[int] = set()
+        local_by_order = {
+            global_order: request_vector
+            for global_order, (cache_key, _signatures) in expected_by_order.items()
+            if request_vectors is not None
+            and (request_vector := request_vectors.get(cache_key)) is not None
+            and request_vector.cache_key == cache_key
+        }
+
+        def score_candidates(
+            candidates: Sequence[tuple[int, NDArray[np.float32]]],
+        ) -> None:
+            if not candidates:
+                return
+            matrix = np.stack([vector for _global_order, vector in candidates]).astype(
+                np.float32,
+                copy=False,
+            )
+            norms = np.linalg.norm(matrix, axis=1).astype(np.float32, copy=False)
+            denominator = norms * query_norm
+            scores = np.divide(
+                matrix @ query_vector,
+                denominator,
+                out=np.zeros(len(candidates), dtype=np.float32),
+                where=denominator != 0,
+            )
+            for score, (global_order, _vector) in zip(scores, candidates, strict=True):
+                if score >= np.float32(COMPOSER_DENSE_SCORE_THRESHOLD):
+                    scored.append((score, global_order))
+
         async for page in self._store.aiter_attachment_vectors(
             principal_id,
             conversation_id,
@@ -909,42 +959,67 @@ class QueryAttachmentService:
             page_size=COMPOSER_DENSE_PAGE_SIZE,
         ):
             for start in range(0, len(page), COMPOSER_DENSE_BLOCK_SIZE):
-                vectors: list[NDArray[np.float32]] = []
-                global_orders: list[int] = []
+                candidates: list[tuple[int, NDArray[np.float32]]] = []
                 for vector_row in page[start : start + COMPOSER_DENSE_BLOCK_SIZE]:
-                    expected = expected_by_order.get(vector_row.global_order)
-                    signature = vector_row.embedding_signature
-                    if (
-                        expected is None
-                        or vector_row.cache_key != expected[0]
-                        or signature is None
-                        or signature not in expected[1]
-                    ):
+                    if vector_row.global_order in processed_orders:
                         continue
-                    vector = validate_attachment_vector(
-                        vector_row,
-                        expected_signature=signature,
-                        expected_dimension=self._document_embedder.dimension,
-                    )
+                    expected = expected_by_order.get(vector_row.global_order)
+                    if expected is None:
+                        continue
+                    local = local_by_order.get(vector_row.global_order)
+                    vector: NDArray[np.float32] | None = None
+                    if local is not None and local.embedding_signature in expected[1]:
+                        vector = validate_attachment_vector(
+                            AttachmentVectorPageRow(
+                                vector_row.global_order,
+                                local.cache_key,
+                                local.embedding_signature,
+                                local.embedding_vector,
+                            ),
+                            expected_signature=local.embedding_signature,
+                            expected_dimension=self._document_embedder.dimension,
+                        )
+                    if vector is None:
+                        signature = vector_row.embedding_signature
+                        if vector_row.cache_key != expected[0] or signature not in expected[1]:
+                            continue
+                        vector = validate_attachment_vector(
+                            vector_row,
+                            expected_signature=signature,
+                            expected_dimension=self._document_embedder.dimension,
+                        )
                     if vector is None:
                         continue
-                    vectors.append(vector)
-                    global_orders.append(vector_row.global_order)
-                if not vectors:
-                    continue
-                matrix = np.stack(vectors).astype(np.float32, copy=False)
-                norms = np.linalg.norm(matrix, axis=1).astype(np.float32, copy=False)
-                denominator = norms * query_norm
-                scores = np.divide(
-                    matrix @ query_vector,
-                    denominator,
-                    out=np.zeros(len(vectors), dtype=np.float32),
-                    where=denominator != 0,
-                )
-                for score, global_order in zip(scores, global_orders, strict=True):
-                    if score >= np.float32(COMPOSER_DENSE_SCORE_THRESHOLD):
-                        scored.append((score, global_order))
+                    processed_orders.add(vector_row.global_order)
+                    candidates.append((vector_row.global_order, vector))
+                score_candidates(candidates)
             del page
+
+        remaining_local_orders = [
+            global_order
+            for global_order in sorted(local_by_order)
+            if global_order not in processed_orders
+        ]
+        for start in range(0, len(remaining_local_orders), COMPOSER_DENSE_BLOCK_SIZE):
+            candidates = []
+            for global_order in remaining_local_orders[start : start + COMPOSER_DENSE_BLOCK_SIZE]:
+                expected = expected_by_order[global_order]
+                local = local_by_order[global_order]
+                if local.embedding_signature not in expected[1]:
+                    continue
+                vector = validate_attachment_vector(
+                    AttachmentVectorPageRow(
+                        global_order,
+                        local.cache_key,
+                        local.embedding_signature,
+                        local.embedding_vector,
+                    ),
+                    expected_signature=local.embedding_signature,
+                    expected_dimension=self._document_embedder.dimension,
+                )
+                if vector is not None:
+                    candidates.append((global_order, vector))
+            score_candidates(candidates)
         scored.sort(key=lambda item: (-float(item[0]), item[1]))
         ranked: list[dict[str, Any]] = []
         for _score, global_order in scored:
@@ -1034,7 +1109,16 @@ class QueryAttachmentService:
                     config=self._config,
                     embedder=self._document_embedder,
                     mode=vector.mode,
-                    fallback_reason=vector.fallback_reason,
+                    fallback_reason=(
+                        vector.fallback_reason
+                        or (
+                            "analysis_degraded"
+                            if not allow_images
+                            and chunk.image_bytes is not None
+                            and vector.mode == "text"
+                            else None
+                        )
+                    ),
                 ),
                 embedding_vector=vector.vector,
             )
@@ -1336,7 +1420,6 @@ class QueryAttachmentService:
                     )
                 trace.analysis_outcome = analysis.outcome.value
                 trace.analysis_error = trace.analysis_error or analysis.error_type
-                trace.mm_chunk_count = analysis.mm_chunk_count
                 try:
                     bundle = await build_attachment_bundle_from_parse_result(
                         lightrag=self._lightrag,
@@ -1344,8 +1427,9 @@ class QueryAttachmentService:
                         filename=filename,
                         parsed=parsed,
                         process_options=process_options,
-                        include_multimodal=(analysis.outcome is ComposerAnalysisOutcome.SUCCESS),
+                        multimodal_chunks=analysis.mm_chunks,
                     )
+                    trace.mm_chunk_count = analysis.mm_chunk_count
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -1474,6 +1558,7 @@ class QueryAttachmentService:
 __all__ = [
     "AttachmentCacheKey",
     "AttachmentContextChunk",
+    "AttachmentRequestVector",
     "AttachmentVectorPageRow",
     "ParsedAttachmentBundle",
     "ParsedAttachmentDocument",

@@ -22,7 +22,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DocumentEmbeddingMode = Literal["fused", "text"]
-DocumentEmbeddingFallbackReason = Literal["image_rejected", "fused_provider_failed"]
+DocumentEmbeddingFallbackReason = Literal[
+    "analysis_degraded",
+    "image_rejected",
+    "fused_provider_failed",
+]
 
 # Let a near-complete decode return its PIL resource without materially delaying cancellation.
 _IMAGE_OPEN_CLEANUP_TIMEOUT_SECONDS = 0.1
