@@ -162,7 +162,10 @@ async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
 
 
 async def test_prepare_resolves_processing_resources_once_and_reuses_identity() -> None:
-    from dlightrag.core.request.attachments import build_text_attachment_chunk
+    from dlightrag.core.request.attachments import (
+        ParsedAttachmentBundle,
+        build_text_attachment_chunk,
+    )
 
     store = _FakeStore()
     history_id = "22222222-2222-2222-2222-222222222222"
@@ -221,6 +224,8 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
             events.append("dense")
             assert query == "standalone"
             assert request_vectors == {}
+            assert current_rows == []
+            assert [row["full_doc_id"] for row in history_rows] == [history_id]
             current_dense.extend(reversed(current_rows))
             history_dense.extend(reversed(history_rows))
             return (
@@ -265,14 +270,25 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
             )
             for index, document in enumerate(documents, start=1)
         ]
-        return chunks, [], []
+        evidence_mode = "full" if scope == "current" else "retrieval"
+        bundles = [
+            (
+                document.attachment_id,
+                ParsedAttachmentBundle(chunks=[chunk], evidence_mode=evidence_mode),
+            )
+            for document, chunk in zip(documents, chunks, strict=True)
+        ]
+        return chunks, [], bundles
 
     expected_attachment_service = attachment_service
 
     async def select_evidence(**kwargs: Any):
         events.append("selector")
+        assert [row["full_doc_id"] for row in kwargs["current_rows"]] == [_ID]
+        assert [row["full_doc_id"] for row in kwargs["history_rows"]] == [history_id]
         assert kwargs["current_dense_rankings"] is current_dense
         assert kwargs["history_dense_rankings"] is history_dense
+        assert kwargs["retrieval_attachment_ids"] == {history_id}
         assert kwargs["rerank_func"] is rerank_func
         return [*kwargs["current_rows"], *kwargs["history_rows"]], {
             "composer_evidence_strategy": "retrieved"
@@ -299,6 +315,7 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
     assert resolutions == [[" Research Notes ", "ignored"]]
     assert factory_calls == [(resources, _prepared())]
     assert events == ["parse-current", "parse-history", "dense", "selector"]
+    assert [row["full_doc_id"] for row in turn.composer_context_chunks] == [_ID, history_id]
     assert turn.composer_evidence_trace["composer_dense_status"] == "ranked"
 
 
@@ -309,6 +326,7 @@ async def test_prepare_merges_actual_dense_trace_for_current_and_history(
         AttachmentCacheKey,
         AttachmentContextChunk,
         AttachmentVectorPageRow,
+        ParsedAttachmentBundle,
         QueryAttachmentService,
         build_composer_embedding_signature,
     )
@@ -410,11 +428,19 @@ async def test_prepare_merges_actual_dense_trace_for_current_and_history(
             )
             for index, document in enumerate(documents, start=1)
         ]
-        return chunks, [], []
+        bundles = [
+            (
+                document.attachment_id,
+                ParsedAttachmentBundle(chunks=[chunk], evidence_mode="retrieval"),
+            )
+            for document, chunk in zip(documents, chunks, strict=True)
+        ]
+        return chunks, [], bundles
 
     async def select_evidence(**kwargs: Any):
         assert [row["full_doc_id"] for row in kwargs["current_dense_rankings"]] == [_ID]
         assert [row["full_doc_id"] for row in kwargs["history_dense_rankings"]] == [history_id]
+        assert kwargs["retrieval_attachment_ids"] == {_ID, history_id}
         return [*kwargs["current_rows"], *kwargs["history_rows"]], {
             "composer_evidence_strategy": "retrieved"
         }

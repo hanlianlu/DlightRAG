@@ -10,7 +10,6 @@ import pytest
 from dlightrag.core.request.composer_evidence import (
     COMPOSER_ATTACHMENT_TOKEN_BUDGET,
     ComposerEvidenceSelector,
-    partition_composer_rows_by_attachment_budget,
 )
 from dlightrag.utils.tokens import estimate_tokens
 
@@ -58,6 +57,7 @@ async def test_full_pass_attachments_do_not_share_one_allowance() -> None:
         history_rows=[],
         current_dense_rankings=current,
         history_dense_rankings=[],
+        retrieval_attachment_ids=set(),
         rerank_func=_must_not_run,
     )
 
@@ -78,6 +78,7 @@ async def test_empty_composer_lane_is_a_noop() -> None:
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids=set(),
         rerank_func=None,
     )
 
@@ -100,6 +101,7 @@ async def test_attachment_at_exact_boundary_passes_without_retrieval() -> None:
         history_rows=[],
         current_dense_rankings=boundary,
         history_dense_rankings=[],
+        retrieval_attachment_ids=set(),
         rerank_func=_must_not_run,
     )
 
@@ -126,6 +128,7 @@ async def test_attachment_one_token_over_boundary_uses_retrieval_without_overpac
         history_rows=[],
         current_dense_rankings=oversized,
         history_dense_rankings=[],
+        retrieval_attachment_ids={"current-doc"},
         rerank_func=_rerank,
     )
 
@@ -177,6 +180,7 @@ async def test_long_composer_documents_use_only_local_candidates_and_rerank() ->
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids={"doc-a", "doc-b"},
         rerank_func=_rerank,
     )
 
@@ -214,6 +218,7 @@ async def test_oversized_attachments_pack_with_independent_allowances() -> None:
         history_rows=[],
         current_dense_rankings=current,
         history_dense_rankings=[],
+        retrieval_attachment_ids={"doc-a", "doc-b"},
         rerank_func=_rerank,
     )
 
@@ -249,6 +254,7 @@ async def test_packing_uses_a_later_representative_when_the_first_does_not_fit(
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
 
@@ -289,6 +295,7 @@ async def test_packing_prefers_highest_ranked_fitting_row_before_representative(
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
 
@@ -321,6 +328,7 @@ async def test_composer_rerank_failure_falls_back_with_one_shared_traceback(
             history_rows=[],
             current_dense_rankings=[],
             history_dense_rankings=[],
+            retrieval_attachment_ids={"current-doc"},
             rerank_func=_fail_rerank,
         )
 
@@ -352,6 +360,7 @@ async def test_composer_without_dense_rows_falls_back_to_local_fusion() -> None:
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
 
@@ -384,6 +393,7 @@ async def test_composer_bm25_failure_is_reported_in_trace(
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
 
@@ -417,12 +427,53 @@ async def test_short_document_full_pass_survives_beside_long_document() -> None:
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids={"long"},
         rerank_func=None,
     )
 
     selected_ids = {str(row["chunk_id"]) for row in selected}
     assert {"short-1", "short-2", "short-3"} <= selected_ids
     assert any(chunk_id.startswith("long-") for chunk_id in selected_ids)
+    assert trace["composer_evidence_strategy"] == "retrieved"
+
+
+async def test_selector_uses_resolved_ids_instead_of_reclassifying_by_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    full = _row("full-large", "F" * 20, attachment_id="full-doc")
+    retrieval = _row("retrieval-small", "R", attachment_id="retrieval-doc")
+    fused_inputs: list[list[list[dict[str, Any]]]] = []
+    rerank_inputs: list[list[str]] = []
+
+    def _fuse(rankings: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        fused_inputs.append(rankings)
+        return [retrieval]
+
+    async def _rerank(*, query: str, chunks: list[dict[str, Any]], top_k: int):
+        assert query == "evidence"
+        assert top_k == 1
+        rerank_inputs.append([str(chunk["chunk_id"]) for chunk in chunks])
+        return chunks
+
+    monkeypatch.setattr("dlightrag.core.request.composer_evidence.rrf_fuse", _fuse)
+    selector = ComposerEvidenceSelector(attachment_token_budget=4)
+
+    selected, trace = await selector.select(
+        query="evidence",
+        current_rows=[full, retrieval],
+        history_rows=[],
+        current_dense_rankings=[full, retrieval],
+        history_dense_rankings=[],
+        retrieval_attachment_ids={"retrieval-doc"},
+        rerank_func=_rerank,
+    )
+
+    assert [row["chunk_id"] for row in selected] == ["full-large", "retrieval-small"]
+    assert len(fused_inputs) == 1
+    assert all(
+        row["full_doc_id"] == "retrieval-doc" for ranking in fused_inputs[0] for row in ranking
+    )
+    assert rerank_inputs == [["retrieval-small"]]
     assert trace["composer_evidence_strategy"] == "retrieved"
 
 
@@ -453,6 +504,7 @@ async def test_default_candidate_limit_matches_rag_chunk_breadth() -> None:
         history_rows=[],
         current_dense_rankings=[],
         history_dense_rankings=[],
+        retrieval_attachment_ids={"current-doc"},
         rerank_func=_rerank,
     )
 
@@ -509,6 +561,7 @@ async def test_unified_rrf_merges_dense_rankings_for_oversized_chunks_only(
         history_rows=[history_full, *history_oversized],
         current_dense_rankings=current_dense,
         history_dense_rankings=history_dense,
+        retrieval_attachment_ids={"current-oversized", "history-oversized"},
         rerank_func=None,
     )
 
@@ -558,6 +611,7 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
         history_rows=history,
         current_dense_rankings=list(reversed(current)),
         history_dense_rankings=list(reversed(history)),
+        retrieval_attachment_ids={"current-doc", "history-doc"},
         rerank_func=_rerank,
     )
 
@@ -578,23 +632,13 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
     assert trace["composer_evidence_reranked"] is True
 
 
-def test_partition_helper_uses_the_exported_attachment_allowance() -> None:
+def test_partition_helpers_do_not_exist_or_export() -> None:
     assert COMPOSER_ATTACHMENT_TOKEN_BUDGET == 24_576
-    boundary = _row("boundary", "A" * 16, attachment_id="boundary")
-    oversized = _row("oversized", "B" * 17, attachment_id="oversized")
-
-    full_pass, retrieval = partition_composer_rows_by_attachment_budget(
-        [boundary, oversized],
-        attachment_token_budget=4,
-    )
-
-    assert full_pass == [boundary]
-    assert retrieval == [oversized]
-
-
-def test_partition_migration_alias_is_not_publicly_exported() -> None:
     composer_evidence = importlib.import_module("dlightrag.core.request.composer_evidence")
 
+    assert not hasattr(composer_evidence, "partition_composer_rows_by_attachment_budget")
+    assert not hasattr(composer_evidence, "partition_composer_rows_by_document_size")
+    assert "partition_composer_rows_by_attachment_budget" not in composer_evidence.__all__
     assert "partition_composer_rows_by_document_size" not in composer_evidence.__all__
 
 

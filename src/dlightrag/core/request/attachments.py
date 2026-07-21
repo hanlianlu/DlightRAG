@@ -41,7 +41,7 @@ from dlightrag.core.request.composer_analysis import (
     aanalyze_composer_sidecars,
     build_composer_analysis_signature,
 )
-from dlightrag.core.request.composer_evidence import partition_composer_rows_by_document_size
+from dlightrag.core.request.composer_evidence import COMPOSER_ATTACHMENT_TOKEN_BUDGET
 from dlightrag.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
@@ -62,6 +62,8 @@ _COMPOSER_PRIVATE_METADATA_KEYS = frozenset(
 COMPOSER_DENSE_SCORE_THRESHOLD = 0.5
 COMPOSER_DENSE_BLOCK_SIZE = 256
 COMPOSER_DENSE_PAGE_SIZE = 256
+
+AttachmentEvidenceMode = Literal["full", "retrieval"]
 
 
 class DocumentEmbedderProtocol(Protocol):
@@ -267,6 +269,7 @@ class ParsedAttachmentBundle:
     chunks: list[AttachmentContextChunk]
     parser_signature: str = ""
     trace: dict[str, Any] = field(default_factory=dict)
+    evidence_mode: AttachmentEvidenceMode = "full"
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +427,23 @@ def build_text_attachment_chunk(
         page_idx=page_idx,
         bbox=bbox,
         metadata=dict(metadata or {}),
+    )
+
+
+def _resolve_attachment_evidence_mode(
+    chunks: Sequence[AttachmentContextChunk],
+) -> AttachmentEvidenceMode:
+    token_estimate = sum(estimate_tokens(chunk.content) for chunk in chunks)
+    return "full" if token_estimate <= COMPOSER_ATTACHMENT_TOKEN_BUDGET else "retrieval"
+
+
+def _without_attachment_vectors(bundle: ParsedAttachmentBundle) -> ParsedAttachmentBundle:
+    return replace(
+        bundle,
+        chunks=[
+            replace(chunk, embedding_signature=None, embedding_vector=None)
+            for chunk in bundle.chunks
+        ],
     )
 
 
@@ -833,10 +853,6 @@ class QueryAttachmentService:
 
         if not current_rows and not history_rows:
             return [], [], dense_trace("no_rows")
-        _, current_long_rows = partition_composer_rows_by_document_size(current_rows)
-        _, history_long_rows = partition_composer_rows_by_document_size(history_rows)
-        if not current_long_rows and not history_long_rows:
-            return [], [], dense_trace("full_pass_not_needed")
         try:
             query_vector = await self._document_embedder.aembed_query(query)
             if query_vector is None:
@@ -856,7 +872,7 @@ class QueryAttachmentService:
             if principal_id is None or conversation_id is None:
                 raise RuntimeError("dense ranking requires a bound conversation scope")
             current, current_error = await self._adense_rank_lane(
-                current_long_rows,
+                current_rows,
                 query_array,
                 query_norm,
                 principal_id=principal_id,
@@ -864,7 +880,7 @@ class QueryAttachmentService:
                 request_vectors=request_vectors,
             )
             history, history_error = await self._adense_rank_lane(
-                history_long_rows,
+                history_rows,
                 query_array,
                 query_norm,
                 principal_id=principal_id,
@@ -1262,20 +1278,15 @@ class QueryAttachmentService:
             expected.append(frozenset(signatures))
         return expected
 
-    async def _arefresh_cached_bundle(
-        self,
+    @staticmethod
+    def _restore_cached_trace(
         cached: ParsedAttachmentBundle,
-        *,
-        principal_id: str,
-        conversation_id: str,
-        resolution: _AttachmentResolution,
         trace: AttachmentProcessingTrace,
-    ) -> ParsedAttachmentBundle:
+    ) -> None:
         trace.parse_cache_hit = True
-        chunks = list(cached.chunks)
         persisted_outcomes = {
             outcome
-            for chunk in chunks
+            for chunk in cached.chunks
             if (outcome := chunk.metadata.get(_COMPOSER_ANALYSIS_OUTCOME_METADATA_KEY))
             in {
                 ComposerAnalysisOutcome.SUCCESS.value,
@@ -1285,8 +1296,20 @@ class QueryAttachmentService:
         if len(persisted_outcomes) == 1:
             trace.analysis_outcome = persisted_outcomes.pop()
         trace.mm_chunk_count = sum(
-            chunk.metadata.get(_COMPOSER_MM_RENDERED_METADATA_KEY) is True for chunk in chunks
+            chunk.metadata.get(_COMPOSER_MM_RENDERED_METADATA_KEY) is True
+            for chunk in cached.chunks
         )
+
+    async def _arefresh_cached_bundle(
+        self,
+        cached: ParsedAttachmentBundle,
+        *,
+        principal_id: str,
+        conversation_id: str,
+        resolution: _AttachmentResolution,
+        trace: AttachmentProcessingTrace,
+    ) -> ParsedAttachmentBundle:
+        chunks = list(cached.chunks)
         references = [
             (index, chunk.cache_key)
             for index, chunk in enumerate(chunks)
@@ -1401,7 +1424,7 @@ class QueryAttachmentService:
             trace.vector_update_status = "written" if updated else "skipped"
         return refreshed
 
-    async def _aparse_enrich_materialize(
+    async def _aparse_enrich_bundle(
         self,
         *,
         principal_id: str,
@@ -1412,7 +1435,7 @@ class QueryAttachmentService:
         content_sha256: str,
         resolution: _AttachmentResolution,
         trace: AttachmentProcessingTrace,
-    ) -> ParsedAttachmentBundle:
+    ) -> tuple[ParsedAttachmentBundle, bool, bool]:
         analysis = ComposerAnalysisResult(
             ComposerAnalysisOutcome.DEGRADED,
             0,
@@ -1474,7 +1497,7 @@ class QueryAttachmentService:
                         filename,
                         exc_info=True,
                     )
-                    return ParsedAttachmentBundle(chunks=[])
+                    return ParsedAttachmentBundle(chunks=[]), False, False
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1487,7 +1510,7 @@ class QueryAttachmentService:
                 attachment_id,
                 exc_info=True,
             )
-            return ParsedAttachmentBundle(chunks=[])
+            return ParsedAttachmentBundle(chunks=[]), False, False
 
         if analysis.cacheable:
             bundle = replace(
@@ -1509,11 +1532,24 @@ class QueryAttachmentService:
             parser_signature=actual_parser_signature,
             chunk_signature=resolution.chunk_signature,
         )
+        return (
+            bundle,
+            analysis.cacheable,
+            analysis.outcome is not ComposerAnalysisOutcome.DEGRADED,
+        )
+
+    async def _aembed_fresh_bundle(
+        self,
+        bundle: ParsedAttachmentBundle,
+        *,
+        allow_images: bool,
+        trace: AttachmentProcessingTrace,
+    ) -> ParsedAttachmentBundle:
         trace.vector_cache_misses = len(bundle.chunks)
         try:
             bundle, embedding_trace = await self._aembed_bundle(
                 bundle,
-                allow_images=analysis.outcome is not ComposerAnalysisOutcome.DEGRADED,
+                allow_images=allow_images,
             )
         except asyncio.CancelledError:
             raise
@@ -1526,10 +1562,22 @@ class QueryAttachmentService:
             )
         else:
             trace.record_embedding(embedding_trace)
+        return bundle
 
-        if not analysis.cacheable:
+    async def _amaterialize_fresh_bundle(
+        self,
+        bundle: ParsedAttachmentBundle,
+        *,
+        principal_id: str,
+        conversation_id: str,
+        content_sha256: str,
+        resolution: _AttachmentResolution,
+        cacheable: bool,
+        trace: AttachmentProcessingTrace,
+    ) -> None:
+        if not cacheable:
             trace.cache_write_status = "skipped"
-            return bundle
+            return
         try:
             materialized = await self._store.materialize_attachment_chunks(
                 principal_id,
@@ -1554,7 +1602,6 @@ class QueryAttachmentService:
         else:
             trace.cache_materialized = materialized
             trace.cache_write_status = "written" if materialized else "skipped"
-        return bundle
 
     async def achunks_for_attachment(
         self,
@@ -1570,7 +1617,7 @@ class QueryAttachmentService:
         trace = AttachmentProcessingTrace()
         resolution = self._resolve_attachment(filename, trace)
         if resolution is None:
-            return ParsedAttachmentBundle(chunks=[]), trace.as_dict()
+            return ParsedAttachmentBundle(chunks=[], evidence_mode="full"), trace.as_dict()
         cached = await self._aload_cached_bundle(
             principal_id=principal_id,
             conversation_id=conversation_id,
@@ -1581,15 +1628,12 @@ class QueryAttachmentService:
             trace=trace,
         )
         if cached is not None:
-            bundle = await self._arefresh_cached_bundle(
-                cached,
-                principal_id=principal_id,
-                conversation_id=conversation_id,
-                resolution=resolution,
-                trace=trace,
-            )
+            self._restore_cached_trace(cached, trace)
+            bundle = cached
+            cacheable = False
+            allow_images = True
         else:
-            bundle = await self._aparse_enrich_materialize(
+            bundle, cacheable, allow_images = await self._aparse_enrich_bundle(
                 principal_id=principal_id,
                 conversation_id=conversation_id,
                 attachment_id=attachment_id,
@@ -1599,12 +1643,44 @@ class QueryAttachmentService:
                 resolution=resolution,
                 trace=trace,
             )
+
+        evidence_mode = _resolve_attachment_evidence_mode(bundle.chunks)
+        bundle = replace(bundle, evidence_mode=evidence_mode)
+        if evidence_mode == "retrieval":
+            if cached is not None:
+                bundle = await self._arefresh_cached_bundle(
+                    bundle,
+                    principal_id=principal_id,
+                    conversation_id=conversation_id,
+                    resolution=resolution,
+                    trace=trace,
+                )
+            else:
+                bundle = await self._aembed_fresh_bundle(
+                    bundle,
+                    allow_images=allow_images,
+                    trace=trace,
+                )
+        else:
+            bundle = _without_attachment_vectors(bundle)
+
+        if cached is None:
+            await self._amaterialize_fresh_bundle(
+                bundle,
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                content_sha256=content_sha256,
+                resolution=resolution,
+                cacheable=cacheable,
+                trace=trace,
+            )
         return bundle, trace.as_dict()
 
 
 __all__ = [
     "AttachmentCacheKey",
     "AttachmentContextChunk",
+    "AttachmentEvidenceMode",
     "AttachmentRequestVector",
     "AttachmentVectorPageRow",
     "ParsedAttachmentBundle",

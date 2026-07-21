@@ -371,13 +371,33 @@ class WebConversationService:
         if current_chunks or history_chunks:
             if attachment_service is None:
                 raise RuntimeError("attachment service missing for parsed Composer chunks")
+            retrieval_attachment_ids = {
+                attachment_id
+                for attachment_id, bundle in [*current_bundles, *history_bundles]
+                if bundle.evidence_mode == "retrieval"
+            }
             current_rows = _composer_context_rows(current_chunks, scope="current")
             history_rows = _composer_context_rows(history_chunks, scope="history")
-            request_vectors = _composer_request_vectors([*current_chunks, *history_chunks])
+            retrieval_current_rows = [
+                row
+                for row in current_rows
+                if str(row.get("full_doc_id") or "") in retrieval_attachment_ids
+            ]
+            retrieval_history_rows = [
+                row
+                for row in history_rows
+                if str(row.get("full_doc_id") or "") in retrieval_attachment_ids
+            ]
+            retrieval_chunks = [
+                chunk
+                for chunk in [*current_chunks, *history_chunks]
+                if chunk.attachment_id in retrieval_attachment_ids
+            ]
+            request_vectors = _composer_request_vectors(retrieval_chunks)
             current_dense, history_dense, dense_trace = await attachment_service.adense_rankings(
                 plan.standalone_query,
-                current_rows,
-                history_rows,
+                retrieval_current_rows,
+                retrieval_history_rows,
                 request_vectors=request_vectors,
             )
             composer_rows, composer_trace = await manager._aselect_web_composer_evidence(
@@ -386,6 +406,7 @@ class WebConversationService:
                 history_rows=history_rows,
                 current_dense_rankings=current_dense,
                 history_dense_rankings=history_dense,
+                retrieval_attachment_ids=retrieval_attachment_ids,
                 rerank_func=resources.rerank_func,
             )
             composer_trace = {**dense_trace, **composer_trace}

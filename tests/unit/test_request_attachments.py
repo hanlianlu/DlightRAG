@@ -59,6 +59,25 @@ def visual_chunk(chunk_id: str) -> AttachmentContextChunk:
     )
 
 
+_RETRIEVAL_CONTENT = "retrieval evidence " * 30_000
+
+
+def retrieval_text_chunk(chunk_id: str) -> AttachmentContextChunk:
+    return replace(
+        text_chunk(chunk_id),
+        content=_RETRIEVAL_CONTENT,
+        token_estimate=estimate_tokens(_RETRIEVAL_CONTENT),
+    )
+
+
+def retrieval_visual_chunk(chunk_id: str) -> AttachmentContextChunk:
+    return replace(
+        visual_chunk(chunk_id),
+        content=_RETRIEVAL_CONTENT,
+        token_estimate=estimate_tokens(_RETRIEVAL_CONTENT),
+    )
+
+
 def _png_bytes(*, size: tuple[int, int]) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", size, "white").save(buffer, format="PNG")
@@ -954,70 +973,38 @@ async def test_dense_rankings_no_valid_rows_report_zero_counts(test_config: Any)
     assert len(store.vector_calls) == 1
 
 
-async def test_dense_rankings_skip_query_model_for_short_full_pass(test_config: Any) -> None:
+async def test_dense_rankings_rank_small_rows_passed_by_retrieval_router(test_config: Any) -> None:
     cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
     embedder = _dense_embedder(query_vector=[1.0, 0.0])
-    embedder.aembed_query.side_effect = AssertionError("full pass must skip query embedding")
     store = _SpyStore(None)
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
+    signature = attachments.build_composer_embedding_signature(
+        config=test_config,
+        embedder=embedder,
+        mode="text",
+    )
+    row = {**_dense_row(0, cache_key), "content": "small evidence"}
 
     current, history, trace = await service.adense_rankings(
         "query",
-        [{**_dense_row(0, cache_key), "content": "short evidence"}],
+        [row],
         [],
+        request_vectors={
+            cache_key: attachments.AttachmentRequestVector(
+                cache_key,
+                signature,
+                [1.0, 0.0],
+            )
+        },
     )
 
-    assert current == []
+    assert [ranked["chunk_id"] for ranked in current] == [row["chunk_id"]]
     assert history == []
-    assert trace == {
-        "composer_dense_status": "full_pass_not_needed",
-        "composer_dense_current_chunks": 0,
-        "composer_dense_history_chunks": 0,
-        "composer_dense_chunks": 0,
-    }
-    embedder.aembed_query.assert_not_awaited()
-    assert store.vector_calls == []
+    assert trace["composer_dense_status"] == "ranked"
+    embedder.aembed_query.assert_awaited_once_with("query")
 
 
-async def test_dense_rankings_skip_query_model_when_each_document_is_short(
-    test_config: Any,
-) -> None:
-    keys = [
-        attachments.AttachmentCacheKey("content", "parser", "chunker", f"cache-{index}")
-        for index in range(2)
-    ]
-    embedder = _dense_embedder(query_vector=[1.0, 0.0])
-    embedder.aembed_query.side_effect = AssertionError("short documents must skip embedding")
-    store = _SpyStore(None)
-    service = _dense_service(test_config=test_config, store=store, embedder=embedder)
-    content = "individually short evidence " * 3_000
-    rows = [
-        {
-            **_dense_row(index, key),
-            "reference_id": f"attachment-{index}",
-            "content": content,
-        }
-        for index, key in enumerate(keys)
-    ]
-    token_counts = [estimate_tokens(row["content"]) for row in rows]
-    assert all(count <= 24_576 for count in token_counts)
-    assert sum(token_counts) > 24_576
-
-    current, history, trace = await service.adense_rankings("query", rows, [])
-
-    assert current == []
-    assert history == []
-    assert trace == {
-        "composer_dense_status": "full_pass_not_needed",
-        "composer_dense_current_chunks": 0,
-        "composer_dense_history_chunks": 0,
-        "composer_dense_chunks": 0,
-    }
-    embedder.aembed_query.assert_not_awaited()
-    assert store.vector_calls == []
-
-
-async def test_dense_rankings_mixed_documents_embed_once_and_scan_only_long_rows(
+async def test_dense_rankings_scan_all_rows_passed_by_retrieval_router(
     test_config: Any,
 ) -> None:
     short_key = attachments.AttachmentCacheKey("short", "parser", "chunker", "short-cache")
@@ -1033,10 +1020,16 @@ async def test_dense_rankings_mixed_documents_embed_once_and_scan_only_long_rows
         vector_rows=[
             attachments.AttachmentVectorPageRow(
                 global_order=0,
+                cache_key=short_key,
+                embedding_signature=signature,
+                embedding_vector=[1.0, 0.0],
+            ),
+            attachments.AttachmentVectorPageRow(
+                global_order=1,
                 cache_key=long_key,
                 embedding_signature=signature,
                 embedding_vector=[1.0, 0.0],
-            )
+            ),
         ],
     )
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
@@ -1057,11 +1050,11 @@ async def test_dense_rankings_mixed_documents_embed_once_and_scan_only_long_rows
         [],
     )
 
-    assert [row["chunk_id"] for row in current] == ["citation-2"]
+    assert [row["chunk_id"] for row in current] == ["citation-1", "citation-2"]
     assert history == []
     assert trace["composer_dense_status"] == "ranked"
     embedder.aembed_query.assert_awaited_once_with("query")
-    assert store.vector_calls[0]["references"] == [(0, long_key)]
+    assert store.vector_calls[0]["references"] == [(0, short_key), (1, long_key)]
 
 
 async def test_dense_rankings_propagate_query_cancellation(test_config: Any) -> None:
@@ -1325,8 +1318,12 @@ async def test_service_returns_cache_hit_without_parsing(
 
     assert trace["attachment_parse_cache_hit"] is True
     assert [chunk.content for chunk in bundle.chunks] == ["alpha"]
-    assert bundle.chunks[0].embedding_signature == embedding_signature
+    assert bundle.evidence_mode == "full"
+    assert bundle.chunks[0].embedding_signature is None
     assert bundle.chunks[0].embedding_vector is None
+    assert store.vector_calls == []
+    assert trace["attachment_vector_cache_hits"] == 0
+    assert trace["attachment_vector_cache_misses"] == 0
     assert store.materialized == []
 
 
@@ -1398,11 +1395,13 @@ async def test_cache_hit_skips_parse_analysis_and_document_embedding(
     )
 
     embedder.aembed_documents.assert_not_awaited()
-    assert bundle.chunks[0].embedding_signature == expected_signature
+    assert bundle.evidence_mode == "full"
+    assert bundle.chunks[0].embedding_signature is None
     assert bundle.chunks[0].embedding_vector is None
     assert trace["attachment_parse_cache_hit"] is True
-    assert trace["attachment_vector_cache_hits"] == 1
+    assert trace["attachment_vector_cache_hits"] == 0
     assert trace["attachment_vector_cache_misses"] == 0
+    assert store.vector_calls == []
     assert store.materialized == []
     assert store.updated == []
 
@@ -1516,7 +1515,7 @@ async def test_cache_hit_embedding_signature_failure_is_attachment_scoped(
         "cache-1",
     )
     cached = ParsedAttachmentBundle(
-        chunks=[replace(text_chunk("text-1"), cache_key=cache_key)],
+        chunks=[replace(retrieval_text_chunk("text-1"), cache_key=cache_key)],
         parser_signature="legacy:",
     )
     embedder: Any = SimpleNamespace(
@@ -1549,13 +1548,348 @@ async def test_cache_hit_embedding_signature_failure_is_attachment_scoped(
         content_sha256="content-v1",
     )
 
-    assert [chunk.content for chunk in bundle.chunks] == ["alpha"]
+    assert [chunk.content for chunk in bundle.chunks] == [_RETRIEVAL_CONTENT]
     assert trace["attachment_parse_cache_hit"] is True
     assert trace["attachment_embedding_error"] == "RuntimeError"
     assert trace["attachment_vector_cache_hits"] == 0
     assert trace["attachment_vector_cache_misses"] == 1
     assert trace["attachment_vector_update_status"] == "skipped"
     embedder.aembed_documents.assert_not_awaited()
+
+
+async def test_fresh_small_bundle_routes_once_without_document_embedding(
+    monkeypatch: Any,
+    test_config: Any,
+) -> None:
+    from dlightrag.core.request.composer_analysis import (
+        ComposerAnalysisOutcome,
+        ComposerAnalysisResult,
+    )
+
+    @asynccontextmanager
+    async def _parse_scope(**_kwargs: Any):
+        yield (
+            attachments.ParsedAttachmentDocument("small text", "/tmp/live", "legacy:"),
+            "P",
+            "legacy:",
+        )
+
+    async def _disabled(**_kwargs: Any) -> ComposerAnalysisResult:
+        return ComposerAnalysisResult(ComposerAnalysisOutcome.INTENTIONALLY_DISABLED, 0)
+
+    async def _render(**_kwargs: Any) -> ParsedAttachmentBundle:
+        return ParsedAttachmentBundle(
+            chunks=[text_chunk("small-1")],
+            parser_signature="legacy:",
+        )
+
+    policy_calls = 0
+
+    def _route_once(_chunks: Any) -> str:
+        nonlocal policy_calls
+        policy_calls += 1
+        return "full"
+
+    embedder: Any = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        aembed_documents=AsyncMock(side_effect=AssertionError("full mode must not embed")),
+    )
+    store = _SpyStore(cached=None)
+    monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
+    monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
+    monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
+    monkeypatch.setattr(
+        attachments,
+        "_resolve_attachment_evidence_mode",
+        _route_once,
+        raising=False,
+    )
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+    )
+
+    bundle, trace = await service.achunks_for_attachment(
+        principal_id="p1",
+        conversation_id="c1",
+        attachment_id="att-1",
+        filename="report.txt",
+        document_bytes=b"body",
+        content_sha256="content-v1",
+    )
+
+    assert policy_calls == 1
+    embedder.aembed_documents.assert_not_awaited()
+    assert bundle.evidence_mode == "full"
+    assert bundle.chunks[0].embedding_signature is None
+    assert bundle.chunks[0].embedding_vector is None
+    assert trace["attachment_vector_cache_hits"] == 0
+    assert trace["attachment_vector_cache_misses"] == 0
+    assert store.materialized == [bundle]
+
+
+async def test_cached_small_bundle_routes_once_without_reading_stale_vectors(
+    monkeypatch: Any,
+    test_config: Any,
+) -> None:
+    cache_key = attachments.AttachmentCacheKey(
+        "content-v1",
+        "legacy:",
+        "chunker-v1",
+        "small-1",
+    )
+    cached = ParsedAttachmentBundle(
+        chunks=[
+            replace(
+                text_chunk("small-1"),
+                cache_key=cache_key,
+                embedding_signature="stale-signature",
+                embedding_vector=[1.0, 0.0],
+            )
+        ],
+        parser_signature="legacy:",
+    )
+    store = _SpyStore(
+        cached,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(
+                0,
+                cache_key,
+                "stale-signature",
+                [1.0, 0.0],
+            )
+        ],
+    )
+    embedder: Any = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        aembed_documents=AsyncMock(side_effect=AssertionError("full mode must not embed")),
+    )
+    original_policy = attachments._resolve_attachment_evidence_mode
+    policy_calls = 0
+
+    def _route_once(chunks: Any) -> str:
+        nonlocal policy_calls
+        policy_calls += 1
+        return original_policy(chunks)
+
+    monkeypatch.setattr(attachments, "_resolve_attachment_evidence_mode", _route_once)
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+    )
+
+    bundle, trace = await service.achunks_for_attachment(
+        principal_id="p1",
+        conversation_id="c1",
+        attachment_id="att-1",
+        filename="report.txt",
+        document_bytes=b"ignored",
+        content_sha256="content-v1",
+    )
+
+    assert policy_calls == 1
+    assert bundle.evidence_mode == "full"
+    assert bundle.chunks[0].embedding_signature is None
+    assert bundle.chunks[0].embedding_vector is None
+    assert store.vector_calls == []
+    embedder.aembed_documents.assert_not_awaited()
+    assert trace["attachment_vector_cache_hits"] == 0
+    assert trace["attachment_vector_cache_misses"] == 0
+
+
+async def test_fresh_oversized_bundle_routes_once_and_embeds_before_materialize(
+    monkeypatch: Any,
+    test_config: Any,
+) -> None:
+    from dlightrag.core.document_embedding import (
+        DocumentEmbeddingTrace,
+        DocumentEmbeddingVector,
+    )
+    from dlightrag.core.request.composer_analysis import (
+        ComposerAnalysisOutcome,
+        ComposerAnalysisResult,
+    )
+
+    events: list[str] = []
+    oversized_content = "retrieval evidence " * 30_000
+
+    @asynccontextmanager
+    async def _parse_scope(**_kwargs: Any):
+        yield (
+            attachments.ParsedAttachmentDocument("large text", "/tmp/live", "legacy:"),
+            "P",
+            "legacy:",
+        )
+
+    async def _disabled(**_kwargs: Any) -> ComposerAnalysisResult:
+        return ComposerAnalysisResult(ComposerAnalysisOutcome.INTENTIONALLY_DISABLED, 0)
+
+    async def _render(**_kwargs: Any) -> ParsedAttachmentBundle:
+        events.append("render")
+        return ParsedAttachmentBundle(
+            chunks=[
+                replace(
+                    text_chunk("large-1"),
+                    content=oversized_content,
+                    token_estimate=estimate_tokens(oversized_content),
+                )
+            ],
+            parser_signature="legacy:",
+        )
+
+    original_policy = attachments._resolve_attachment_evidence_mode
+    policy_calls = 0
+
+    def _route_once(chunks: Any) -> str:
+        nonlocal policy_calls
+        policy_calls += 1
+        events.append("route")
+        return original_policy(chunks)
+
+    async def _embed(_items: Any):
+        events.append("embed")
+        return (
+            [DocumentEmbeddingVector("large-1", [1.0, 0.0], "text")],
+            DocumentEmbeddingTrace(0, 1, 0, 0),
+        )
+
+    class _OrderedStore(_SpyStore):
+        async def materialize_attachment_chunks(self, *args: Any, **kwargs: Any) -> bool:
+            events.append("materialize")
+            return await super().materialize_attachment_chunks(*args, **kwargs)
+
+    store = _OrderedStore(cached=None)
+    embedder: Any = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        aembed_documents=AsyncMock(side_effect=_embed),
+    )
+    monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
+    monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
+    monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
+    monkeypatch.setattr(attachments, "_resolve_attachment_evidence_mode", _route_once)
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+    )
+
+    bundle, _trace = await service.achunks_for_attachment(
+        principal_id="p1",
+        conversation_id="c1",
+        attachment_id="att-1",
+        filename="report.txt",
+        document_bytes=b"body",
+        content_sha256="content-v1",
+    )
+
+    assert policy_calls == 1
+    assert events == ["render", "route", "embed", "materialize"]
+    assert bundle.evidence_mode == "retrieval"
+    assert bundle.chunks[0].embedding_vector == [1.0, 0.0]
+
+
+async def test_cached_oversized_bundle_routes_once_and_refreshes_stale_vectors(
+    monkeypatch: Any,
+    test_config: Any,
+) -> None:
+    from dlightrag.core.document_embedding import (
+        DocumentEmbeddingTrace,
+        DocumentEmbeddingVector,
+    )
+
+    oversized_content = "cached retrieval evidence " * 30_000
+    cache_key = attachments.AttachmentCacheKey(
+        "content-v1",
+        "legacy:",
+        "chunker-v1",
+        "large-1",
+    )
+    cached = ParsedAttachmentBundle(
+        chunks=[
+            AttachmentContextChunk(
+                chunk_id="large-1",
+                attachment_id="att-1",
+                filename="report.txt",
+                chunk_index=1,
+                content=oversized_content,
+                token_estimate=estimate_tokens(oversized_content),
+                cache_key=cache_key,
+            )
+        ],
+        parser_signature="legacy:",
+    )
+    store = _SpyStore(
+        cached,
+        vector_rows=[
+            attachments.AttachmentVectorPageRow(0, cache_key, "stale-signature", [1.0, 0.0])
+        ],
+    )
+    embedder: Any = SimpleNamespace(
+        dimension=2,
+        image_enabled=False,
+        aembed_documents=AsyncMock(
+            return_value=(
+                [DocumentEmbeddingVector("large-1", [0.0, 1.0], "text")],
+                DocumentEmbeddingTrace(0, 1, 0, 0),
+            )
+        ),
+    )
+    original_policy = attachments._resolve_attachment_evidence_mode
+    policy_calls = 0
+
+    def _route_once(chunks: Any) -> str:
+        nonlocal policy_calls
+        policy_calls += 1
+        return original_policy(chunks)
+
+    monkeypatch.setattr(attachments, "_resolve_attachment_evidence_mode", _route_once)
+    service = QueryAttachmentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="",
+        ttl_days=30,
+        robust_document_embedder=embedder,
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=test_config,
+    )
+
+    bundle, trace = await service.achunks_for_attachment(
+        principal_id="p1",
+        conversation_id="c1",
+        attachment_id="att-1",
+        filename="report.txt",
+        document_bytes=b"ignored",
+        content_sha256="content-v1",
+    )
+
+    assert policy_calls == 1
+    assert bundle.evidence_mode == "retrieval"
+    assert len(store.vector_calls) == 1
+    embedder.aembed_documents.assert_awaited_once()
+    assert bundle.chunks[0].embedding_vector == [0.0, 1.0]
+    assert trace["attachment_vector_cache_hits"] == 0
+    assert trace["attachment_vector_cache_misses"] == 1
 
 
 async def test_cache_miss_runs_parse_analysis_chunk_embedding_then_one_materialize(
@@ -1613,8 +1947,8 @@ async def test_cache_miss_runs_parse_analysis_chunk_embedding_then_one_materiali
                     attachment_id="att-1",
                     filename="report.pdf",
                     chunk_index=1,
-                    content="analyzed chart",
-                    token_estimate=3,
+                    content=_RETRIEVAL_CONTENT,
+                    token_estimate=estimate_tokens(_RETRIEVAL_CONTENT),
                     sidecar_type="drawing",
                 )
             ],
@@ -1707,7 +2041,7 @@ async def _assert_analysis_outcome_controls_text_cache_materialization(
 
     async def _render(*, multimodal_chunks: Any, **_kwargs: Any) -> ParsedAttachmentBundle:
         assert multimodal_chunks == ()
-        chunk = text_chunk("text-1")
+        chunk = retrieval_text_chunk("text-1")
         if outcome == "degraded":
             chunk = replace(chunk, image_bytes=b"parser-sidecar-image")
         return ParsedAttachmentBundle(chunks=[chunk], parser_signature="legacy:")
@@ -1749,7 +2083,7 @@ async def _assert_analysis_outcome_controls_text_cache_materialization(
         content_sha256="content-v1",
     )
 
-    assert bundle.chunks[0].content == "alpha"
+    assert bundle.chunks[0].content == _RETRIEVAL_CONTENT
     assert bundle.chunks[0].embedding_signature is not None
     assert len(store.materialized) == expected_materializations
     assert trace["attachment_analysis_outcome"] == outcome
@@ -2019,7 +2353,8 @@ async def test_embedding_model_change_reuses_parse_analysis_and_refreshes_vector
                 attachment_id="att-1",
                 filename="report.txt",
                 chunk_index=1,
-                content="cached analyzed text",
+                content=_RETRIEVAL_CONTENT,
+                token_estimate=estimate_tokens(_RETRIEVAL_CONTENT),
                 cache_key=cache_key,
             )
         ],
@@ -2100,7 +2435,7 @@ async def test_embedding_model_change_reuses_parse_analysis_and_refreshes_vector
     )
 
     embedder.aembed_documents.assert_awaited_once()
-    assert bundle.chunks[0].content == "cached analyzed text"
+    assert bundle.chunks[0].content == _RETRIEVAL_CONTENT
     assert bundle.chunks[0].embedding_vector == [0.0, 1.0]
     assert len(store.updated) == 1
     assert store.updated[0] == bundle.chunks
@@ -2268,7 +2603,10 @@ async def test_embedding_exception_is_stage_specific_and_keeps_chunks_for_retry(
         return ComposerAnalysisResult(ComposerAnalysisOutcome.INTENTIONALLY_DISABLED, 0)
 
     async def _render(**_kwargs: Any) -> ParsedAttachmentBundle:
-        return ParsedAttachmentBundle(chunks=[text_chunk("text-1")], parser_signature="legacy:")
+        return ParsedAttachmentBundle(
+            chunks=[retrieval_text_chunk("text-1")],
+            parser_signature="legacy:",
+        )
 
     embedder: Any = SimpleNamespace(
         dimension=2,
@@ -2299,7 +2637,7 @@ async def test_embedding_exception_is_stage_specific_and_keeps_chunks_for_retry(
         content_sha256="content-v1",
     )
 
-    assert [chunk.content for chunk in bundle.chunks] == ["alpha"]
+    assert [chunk.content for chunk in bundle.chunks] == [_RETRIEVAL_CONTENT]
     assert bundle.chunks[0].embedding_signature is None
     assert trace["attachment_parse_error"] is None
     assert trace["attachment_embedding_error"] == "TimeoutError"
@@ -2329,8 +2667,8 @@ async def test_mixed_vector_cache_reuses_text_row_and_retries_only_visual_as_fus
     )
     cached = ParsedAttachmentBundle(
         chunks=[
-            replace(text_chunk("text-1"), cache_key=text_key),
-            replace(visual_chunk("visual-1"), cache_key=visual_key),
+            replace(retrieval_text_chunk("text-1"), cache_key=text_key),
+            replace(retrieval_visual_chunk("visual-1"), cache_key=visual_key),
         ],
         parser_signature="legacy:",
     )
@@ -2438,7 +2776,7 @@ async def test_vector_cache_validation_releases_each_page_and_refreshes_only_mis
     ]
     cached = ParsedAttachmentBundle(
         chunks=[
-            replace(text_chunk(f"text-{index}"), cache_key=cache_key)
+            replace(retrieval_text_chunk(f"text-{index}"), cache_key=cache_key)
             for index, cache_key in enumerate(cache_keys)
         ],
         parser_signature="legacy:",
@@ -2559,7 +2897,8 @@ async def test_visual_chunk_uses_fused_vector_when_capability_active(
                     attachment_id="att-1",
                     filename="report.pdf",
                     chunk_index=1,
-                    content="analyzed chart",
+                    content=_RETRIEVAL_CONTENT,
+                    token_estimate=estimate_tokens(_RETRIEVAL_CONTENT),
                     sidecar_type="drawing",
                     image_bytes=b"sidecar-image",
                     image_mime_type="image/png",
@@ -2646,7 +2985,8 @@ async def test_fused_failure_caches_text_fallback_but_remains_fused_retryable(
                     attachment_id="att-1",
                     filename="report.pdf",
                     chunk_index=1,
-                    content="analyzed chart",
+                    content=_RETRIEVAL_CONTENT,
+                    token_estimate=estimate_tokens(_RETRIEVAL_CONTENT),
                     sidecar_type="drawing",
                     image_bytes=b"sidecar-image",
                     image_mime_type="image/png",
@@ -2789,7 +3129,8 @@ async def test_deterministic_image_rejection_reuses_cached_text_without_reopenin
                     attachment_id="att-1",
                     filename="report.pdf",
                     chunk_index=1,
-                    content="analyzed chart",
+                    content=_RETRIEVAL_CONTENT,
+                    token_estimate=estimate_tokens(_RETRIEVAL_CONTENT),
                     sidecar_type="drawing",
                     image_bytes=image_bytes,
                     image_mime_type="image/png",
@@ -3047,7 +3388,10 @@ async def test_embedding_cancellation_reraises_cancelled_error_and_writes_no_par
         return ComposerAnalysisResult(ComposerAnalysisOutcome.INTENTIONALLY_DISABLED, 0)
 
     async def _render(**_kwargs: Any) -> ParsedAttachmentBundle:
-        return ParsedAttachmentBundle(chunks=[text_chunk("text-1")], parser_signature="legacy:")
+        return ParsedAttachmentBundle(
+            chunks=[retrieval_text_chunk("text-1")],
+            parser_signature="legacy:",
+        )
 
     embedder: Any = SimpleNamespace(
         dimension=2,
@@ -3230,7 +3574,10 @@ async def test_identical_bytes_in_another_conversation_do_not_hit_cache(
         return ComposerAnalysisResult(ComposerAnalysisOutcome.INTENTIONALLY_DISABLED, 0)
 
     async def _render(**_kwargs: Any) -> ParsedAttachmentBundle:
-        return ParsedAttachmentBundle(chunks=[text_chunk("text-1")], parser_signature="legacy:")
+        return ParsedAttachmentBundle(
+            chunks=[retrieval_text_chunk("text-1")],
+            parser_signature="legacy:",
+        )
 
     embedder: Any = SimpleNamespace(
         dimension=2,
@@ -3298,7 +3645,10 @@ async def test_expired_conversation_never_materializes_derived_results(
         return ComposerAnalysisResult(ComposerAnalysisOutcome.INTENTIONALLY_DISABLED, 0)
 
     async def _render(**_kwargs: Any) -> ParsedAttachmentBundle:
-        return ParsedAttachmentBundle(chunks=[text_chunk("text-1")], parser_signature="legacy:")
+        return ParsedAttachmentBundle(
+            chunks=[retrieval_text_chunk("text-1")],
+            parser_signature="legacy:",
+        )
 
     embedder: Any = SimpleNamespace(
         dimension=2,
@@ -3370,7 +3720,10 @@ async def test_cache_io_failures_keep_request_local_enriched_bundle(
         return ComposerAnalysisResult(ComposerAnalysisOutcome.INTENTIONALLY_DISABLED, 0)
 
     async def _render(**_kwargs: Any) -> ParsedAttachmentBundle:
-        return ParsedAttachmentBundle(chunks=[text_chunk("text-1")], parser_signature="legacy:")
+        return ParsedAttachmentBundle(
+            chunks=[retrieval_text_chunk("text-1")],
+            parser_signature="legacy:",
+        )
 
     embedder: Any = SimpleNamespace(
         dimension=2,

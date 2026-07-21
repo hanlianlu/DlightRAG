@@ -1224,7 +1224,7 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert selected_row["full_doc_id"] == document.attachment_id
     assert selected_row["metadata"]["attachment_scope"] == "current"
     assert turn.composer_evidence_trace["composer_evidence_strategy"] == "full"
-    assert turn.composer_evidence_trace["composer_dense_status"] == "full_pass_not_needed"
+    assert turn.composer_evidence_trace["composer_dense_status"] == "no_rows"
     assert turn.composer_evidence_trace["composer_dense_current_chunks"] == 0
     assert turn.composer_evidence_trace["composer_dense_history_chunks"] == 0
     assert turn.composer_evidence_trace["composer_dense_chunks"] == 0
@@ -1408,7 +1408,10 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     service_under_test,
     conversation_store: AsyncMock,
 ) -> None:
-    from dlightrag.core.request.attachments import build_text_attachment_chunk
+    from dlightrag.core.request.attachments import (
+        ParsedAttachmentBundle,
+        build_text_attachment_chunk,
+    )
     from dlightrag.core.request.planner import QueryPlan
     from dlightrag.storage.web_conversations import StoredConversationAttachment
     from dlightrag.web.conversations import PreparedWebConversation
@@ -1450,7 +1453,8 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     )
 
     async def _select(**kwargs: Any):
-        assert kwargs["history_dense_rankings"] == kwargs["history_rows"]
+        assert kwargs["history_dense_rankings"] == []
+        assert kwargs["retrieval_attachment_ids"] == set()
         return kwargs["history_rows"], {"composer_evidence_strategy": "full"}
 
     manager._aselect_web_composer_evidence.side_effect = _select
@@ -1465,7 +1469,9 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
             request_vectors: Any,
         ):
             assert request_vectors == {}
-            return current_rows, history_rows, {}
+            assert current_rows == []
+            assert history_rows == []
+            return [], [], {}
 
     attachment_service = _AttachmentService()
     service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
@@ -1485,7 +1491,11 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
             )
             for index, document in enumerate(documents, start=1)
         ]
-        return chunks, [], []
+        bundles = [
+            (document.attachment_id, ParsedAttachmentBundle(chunks=[chunk], evidence_mode="full"))
+            for document, chunk in zip(documents, chunks, strict=True)
+        ]
+        return chunks, [], bundles
 
     service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
 

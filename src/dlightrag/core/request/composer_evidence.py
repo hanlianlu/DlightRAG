@@ -48,15 +48,19 @@ class ComposerEvidenceSelector:
         history_rows: list[ContextRow],
         current_dense_rankings: list[ContextRow],
         history_dense_rankings: list[ContextRow],
+        retrieval_attachment_ids: set[str],
         rerank_func: Any | None,
     ) -> tuple[list[ContextRow], dict[str, Any]]:
         if not current_rows and not history_rows:
             return [], self._trace("empty", [], [])
 
-        full_pass_rows, retrieval_rows = partition_composer_rows_by_attachment_budget(
-            [*current_rows, *history_rows],
-            attachment_token_budget=self._attachment_token_budget,
-        )
+        all_rows = [*current_rows, *history_rows]
+        retrieval_rows = [
+            row for row in all_rows if _row_attachment_id(row) in retrieval_attachment_ids
+        ]
+        full_pass_rows = [
+            dict(row) for row in all_rows if _row_attachment_id(row) not in retrieval_attachment_ids
+        ]
         if not retrieval_rows:
             full_pass_ids = {str(row.get("chunk_id") or "") for row in full_pass_rows}
             selected_current = [
@@ -85,11 +89,10 @@ class ComposerEvidenceSelector:
             logger.warning("Composer BM25 ranking failed", exc_info=True)
         structural = [dict(row) for row in retrieval_rows if _is_structural(row)]
         coverage = _coverage_ranking(retrieval_rows)
-        retrieval_ids = {str(row.get("chunk_id") or "") for row in retrieval_rows}
         dense = [
             dict(row)
             for row in [*current_dense_rankings, *history_dense_rankings]
-            if str(row.get("chunk_id") or "") in retrieval_ids
+            if _row_attachment_id(row) in retrieval_attachment_ids
         ]
         candidates = rrf_fuse([lexical, structural, coverage, dense])[: self._candidate_limit]
         outcome = await rerank_with_fallback(
@@ -154,25 +157,8 @@ def _rows_tokens(rows: list[ContextRow]) -> int:
     return sum(_row_tokens(row) for row in rows)
 
 
-def partition_composer_rows_by_attachment_budget(
-    rows: list[ContextRow],
-    *,
-    attachment_token_budget: int = COMPOSER_ATTACHMENT_TOKEN_BUDGET,
-) -> tuple[list[ContextRow], list[ContextRow]]:
-    """Partition rows by each reference document's attachment allowance."""
-    groups = _group_by_document(rows)
-    short_ids = {
-        reference_id
-        for reference_id, group in groups.items()
-        if _rows_tokens(group) <= max(0, attachment_token_budget)
-    }
-    short_rows = [dict(row) for row in rows if str(row.get("reference_id") or "") in short_ids]
-    long_rows = [row for row in rows if str(row.get("reference_id") or "") not in short_ids]
-    return short_rows, long_rows
-
-
-# TEMPORARY: internal migration bridge for attachments.py; REMOVE IN TASK 2.
-partition_composer_rows_by_document_size = partition_composer_rows_by_attachment_budget
+def _row_attachment_id(row: ContextRow) -> str:
+    return str(row.get("full_doc_id") or row.get("reference_id") or "")
 
 
 def _is_structural(row: ContextRow) -> bool:
@@ -269,5 +255,4 @@ def _pack_with_document_guarantees(
 __all__ = [
     "COMPOSER_ATTACHMENT_TOKEN_BUDGET",
     "ComposerEvidenceSelector",
-    "partition_composer_rows_by_attachment_budget",
 ]

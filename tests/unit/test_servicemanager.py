@@ -644,6 +644,42 @@ class TestGetService:
         assert not hasattr(selector, "_embedding_func")
         assert not hasattr(selector, "_rerank_func")
 
+    async def test_composer_evidence_selector_receives_resolved_attachment_ids(
+        self,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        selector = SimpleNamespace(select=AsyncMock(return_value=([{"chunk_id": "c1"}], {})))
+        manager._composer_evidence_selector = selector  # type: ignore[assignment]
+        current_rows = [{"chunk_id": "c1", "full_doc_id": "full"}]
+        history_rows = [{"chunk_id": "h1", "full_doc_id": "retrieval"}]
+        current_dense: list[dict[str, Any]] = []
+        history_dense = [history_rows[0]]
+        retrieval_attachment_ids = {"retrieval"}
+        rerank_func = object()
+
+        selected, trace = await manager._aselect_web_composer_evidence(
+            query="query",
+            current_rows=current_rows,
+            history_rows=history_rows,
+            current_dense_rankings=current_dense,
+            history_dense_rankings=history_dense,
+            retrieval_attachment_ids=retrieval_attachment_ids,
+            rerank_func=rerank_func,
+        )
+
+        assert selected == [{"chunk_id": "c1"}]
+        assert trace == {}
+        selector.select.assert_awaited_once_with(
+            query="query",
+            current_rows=current_rows,
+            history_rows=history_rows,
+            current_dense_rankings=current_dense,
+            history_dense_rankings=history_dense,
+            retrieval_attachment_ids=retrieval_attachment_ids,
+            rerank_func=rerank_func,
+        )
+
 
 class TestWorkspaceCreation:
     """Test workspace creation registers discoverable workspace metadata."""
