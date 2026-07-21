@@ -2025,6 +2025,68 @@ class TestClose:
 
         selector.aclose.assert_awaited_once()
 
+    async def test_composer_bundle_is_lazy_shared_and_manager_owned(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.models.composer import ComposerModelBundle
+
+        vlm = AsyncMock()
+        bundle = SimpleNamespace(
+            vlm_func=vlm,
+            extract_func=AsyncMock(),
+            aclose=AsyncMock(),
+        )
+        create = MagicMock(return_value=bundle)
+        monkeypatch.setattr(ComposerModelBundle, "create", create)
+        manager = RAGServiceManager(config=test_cfg)
+
+        assert manager._get_composer_model_bundle() is bundle
+        assert manager._get_composer_model_bundle() is bundle
+        describer = manager._get_query_image_describer()
+
+        assert describer._vlm_func is vlm
+        create.assert_called_once()
+
+        await manager.aclose()
+        await manager.aclose()
+
+        bundle.aclose.assert_awaited_once()
+
+    async def test_composer_borrowers_do_not_duplicate_role_providers(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.core.request.composer_analysis import create_composer_analysis_proxy
+        from dlightrag.models import llm
+
+        providers: list[SimpleNamespace] = []
+
+        def get_provider(*args: Any, **kwargs: Any) -> SimpleNamespace:
+            provider = SimpleNamespace(aclose=AsyncMock())
+            providers.append(provider)
+            return provider
+
+        monkeypatch.setattr(llm, "get_provider", get_provider)
+        manager = RAGServiceManager(config=test_cfg)
+
+        bundle = manager._get_composer_model_bundle()
+        describer = manager._get_query_image_describer()
+        proxy = create_composer_analysis_proxy(
+            lightrag=SimpleNamespace(tokenizer=object()),
+            model_bundle=bundle,
+            config=test_cfg,
+        )
+
+        assert len(providers) == 2
+        assert describer._vlm_func is bundle.vlm_func
+        assert proxy.role_llm_funcs["vlm"] is bundle.vlm_func
+        assert proxy.role_llm_funcs["extract"] is bundle.extract_func
+
+        await manager.aclose()
+        await manager.aclose()
+
+        for provider in providers:
+            provider.aclose.assert_awaited_once()
+
 
 class TestWorkspaceDiscovery:
     """Test list_workspaces with PostgreSQL-backed metadata."""

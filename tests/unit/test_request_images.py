@@ -74,6 +74,12 @@ async def test_query_image_describer_without_vlm_returns_empty() -> None:
     vlm.assert_not_called()
 
 
+def test_query_image_describer_does_not_own_or_close_vlm() -> None:
+    describer = _describer(AsyncMock(), max_images=1)
+
+    assert not hasattr(describer, "aclose")
+
+
 async def test_query_image_describer_describes_images_concurrently() -> None:
     active = 0
     peak = 0

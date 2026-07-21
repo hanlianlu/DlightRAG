@@ -1,12 +1,16 @@
 """Tests for model factory functions."""
 
+import base64
+import io
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
 from dlightrag.config import (
+    AnswerConfig,
     DlightragConfig,
     EmbeddingConfig,
     LLMConfig,
@@ -607,3 +611,183 @@ class TestAdaptForLightrag:
             {"role": "user", "content": "Tell me"},
         ]
         assert result == "Hello world"
+
+
+class TestComposerAnalysisAdapter:
+    @pytest.mark.asyncio
+    async def test_shared_vlm_adapter_preserves_messages_first_calls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        llm, seen = _capture_provider(monkeypatch)
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(model="vision-model", api_key="sk-test")),
+            embedding=_embedding_config(),
+        )
+        adapter, _identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}},
+                    {"type": "text", "text": "Describe this image"},
+                ],
+            }
+        ]
+
+        result = await adapter(messages=messages)
+
+        assert result == '{"answer": "ok"}'
+        assert seen["messages"] is messages
+        assert seen["model_kwargs"] == {}
+
+    @pytest.mark.asyncio
+    async def test_consumes_lightrag_controls_and_converts_image_inputs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        llm, seen = _capture_provider(monkeypatch)
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(
+                    provider="openai",
+                    model="default-model",
+                    api_key="sk-secret",
+                ),
+                roles=LLMRolesConfig(
+                    vlm=ModelConfig(
+                        provider="openai",
+                        model="vision-model",
+                        api_key="sk-role-secret",
+                        base_url="https://user:pass@example.test/v1?token=secret#fragment",
+                    )
+                ),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        adapter, identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")
+        response_format = {"type": "json_object"}
+        result = await adapter(
+            "Describe the drawing",
+            hashing_kv=object(),
+            _priority=7,
+            token_tracker=object(),
+            keyword_extraction=True,
+            pipeline_status={"cancellation_requested": False},
+            pipeline_status_lock=object(),
+            image_inputs=[
+                {
+                    "base64": (
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+                        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                    ),
+                    "mime_type": "image/png",
+                }
+            ],
+            response_format=response_format,
+            stream=False,
+        )
+
+        assert result == '{"answer": "ok"}'
+        assert identity == {
+            "provider": "openai",
+            "model": "vision-model",
+            "base_url": "https://example.test/v1",
+        }
+        content = seen["messages"][-1]["content"]
+        assert content[-1] == {"type": "text", "text": "Describe the drawing"}
+        assert content[0]["type"] == "image_url"
+        assert content[0]["image_url"]["url"].startswith("data:image/")
+        assert seen["response_format"] is response_format
+        assert seen["model_kwargs"] == {}
+
+    @pytest.mark.asyncio
+    async def test_bounds_images_and_preserves_stream_semantics(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.models import llm
+
+        seen: dict[str, Any] = {}
+        stream_result = object()
+
+        class StreamingProvider(CapturingProvider):
+            def stream(self, **kwargs: Any) -> object:
+                self.seen.update(kwargs)
+                return stream_result
+
+        monkeypatch.setattr(
+            llm,
+            "get_provider",
+            lambda *args, **kwargs: StreamingProvider(seen),
+        )
+        source = Image.effect_noise((256, 192), 180).convert("RGB")
+        buffer = io.BytesIO()
+        source.save(buffer, format="PNG")
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(model="vision", api_key="sk-test")),
+            embedding=_embedding_config(),
+            answer=AnswerConfig(
+                image_max_bytes=5_000,
+                image_max_total_bytes=5_000,
+                image_max_px=96,
+                image_min_px=32,
+            ),
+        )
+        adapter, _identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")
+        response_format = {"type": "json_object"}
+
+        result = await adapter(
+            "Describe",
+            image_inputs=[
+                {
+                    "base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
+                    "mime_type": "image/png",
+                }
+            ],
+            response_format=response_format,
+            stream=True,
+        )
+
+        assert result is stream_result
+        assert seen["response_format"] is response_format
+        assert seen["model_kwargs"] == {}
+        uri = seen["messages"][-1]["content"][0]["image_url"]["url"]
+        raw = base64.b64decode(uri.split(",", 1)[1])
+        assert len(raw) <= 5_000
+        with Image.open(io.BytesIO(raw)) as bounded:
+            assert max(bounded.size) <= 96
+
+    @pytest.mark.asyncio
+    async def test_composer_bundle_owns_and_closes_each_role_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.models import llm
+        from dlightrag.models.composer import ComposerModelBundle
+
+        vlm = AsyncMock()
+        extract = AsyncMock()
+        close_vlm = AsyncMock()
+        close_extract = AsyncMock()
+        created_roles: list[str] = []
+
+        def create_adapter(config: DlightragConfig, *, role: str):
+            created_roles.append(role)
+            if role == "vlm":
+                return vlm, {"provider": "openai", "model": "vision"}, close_vlm
+            return extract, {"provider": "openai", "model": "extract"}, close_extract
+
+        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
+        cfg = DlightragConfig(embedding=_embedding_config())
+
+        bundle = ComposerModelBundle.create(cfg, bind=lambda func: func)
+
+        assert bundle.vlm_func is vlm
+        assert bundle.extract_func is extract
+        assert bundle.vlm_identity == {"provider": "openai", "model": "vision"}
+        assert bundle.extract_identity == {"provider": "openai", "model": "extract"}
+        assert created_roles == ["vlm", "extract"]
+
+        await bundle.aclose()
+        await bundle.aclose()
+
+        close_vlm.assert_awaited_once()
+        close_extract.assert_awaited_once()

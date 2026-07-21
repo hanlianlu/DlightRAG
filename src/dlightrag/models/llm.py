@@ -5,11 +5,12 @@ Uses the provider registry (openai, anthropic, gemini) to build callables.
 Provides _adapt_for_lightrag() to bridge to LightRAG's (prompt, system_prompt) signature.
 """
 
+import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Literal, cast
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
@@ -73,7 +74,11 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
 
 
 def _make_completion_func(
-    cfg: ModelConfig, default_api_key: str | None = None, *, root: bool = False
+    cfg: ModelConfig,
+    default_api_key: str | None = None,
+    *,
+    root: bool = False,
+    owner_closers: list[Callable[[], Awaitable[Any]]] | None = None,
 ) -> partial:
     """Build a messages-first completion callable from config.
 
@@ -90,6 +95,15 @@ def _make_completion_func(
         timeout=cfg.timeout,
         max_retries=cfg.max_retries,
     )
+    provider_close = getattr(provider, "aclose", None)
+    if owner_closers is not None and callable(provider_close):
+
+        async def close_provider() -> None:
+            result = provider_close()
+            if inspect.isawaitable(result):
+                await cast(Awaitable[Any], result)
+
+        owner_closers.append(close_provider)
 
     async def completion_wrapper(messages: list[dict[str, Any]], **kw: Any) -> Any:
         usage_holder = kw.pop("usage_holder", None)
@@ -199,6 +213,129 @@ def get_vlm_model_func(config: DlightragConfig) -> Callable:
     """
     cfg = model_for_role(config, "vlm")
     return _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
+
+
+def _sanitized_model_identity(cfg: ModelConfig) -> dict[str, str | None]:
+    base_url: str | None = None
+    if cfg.base_url:
+        parsed = urlsplit(cfg.base_url)
+        hostname = parsed.hostname or ""
+        if parsed.port is not None:
+            hostname = f"{hostname}:{parsed.port}"
+        base_url = urlunsplit((parsed.scheme.lower(), hostname.lower(), parsed.path, "", ""))
+    return {
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "base_url": base_url,
+    }
+
+
+def _composer_image_blocks(
+    image_inputs: list[dict[str, Any]] | None,
+    *,
+    config: DlightragConfig,
+) -> list[dict[str, Any]]:
+    from dlightrag.utils.images import bounded_image_data_uri
+
+    blocks: list[dict[str, Any]] = []
+    remaining_bytes = max(1, int(config.answer.image_max_total_bytes))
+    for image in list(image_inputs or [])[: max(0, int(config.answer.max_images))]:
+        payload = str(image.get("base64") or "")
+        mime_type = str(image.get("mime_type") or "image/png")
+        value = payload if payload.startswith("data:") else f"data:{mime_type};base64,{payload}"
+        bounded = bounded_image_data_uri(
+            value,
+            max_bytes=min(int(config.answer.image_max_bytes), remaining_bytes),
+            max_px=config.answer.image_max_px,
+            min_px=config.answer.image_min_px,
+            quality=config.answer.image_quality,
+            min_quality=config.answer.image_min_quality,
+        )
+        if bounded is None:
+            continue
+        uri, byte_count = bounded
+        if byte_count > remaining_bytes:
+            continue
+        blocks.append({"type": "image_url", "image_url": {"url": uri}})
+        remaining_bytes -= byte_count
+        if remaining_bytes <= 0:
+            break
+    return blocks
+
+
+def create_composer_analysis_adapter(
+    config: DlightragConfig,
+    *,
+    role: Literal["vlm", "extract"],
+) -> tuple[
+    Callable[..., Awaitable[Any]],
+    dict[str, str | None],
+    Callable[[], Awaitable[None]],
+]:
+    """Build a cache-neutral LightRAG analysis callable for one Composer role."""
+    cfg = model_for_role(config, role)
+    owner_closers: list[Callable[[], Awaitable[Any]]] = []
+    completion = _make_completion_func(
+        cfg,
+        default_api_key=config.llm.default.api_key,
+        owner_closers=owner_closers,
+    )
+
+    async def adapter(
+        prompt: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
+        history_messages: list[dict[str, Any]] | None = None,
+        image_inputs: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        for control in (
+            "_priority",
+            "hashing_kv",
+            "token_tracker",
+            "keyword_extraction",
+            "enable_cot",
+            "pipeline_status",
+            "pipeline_status_lock",
+            "cancellation_requested",
+            "use_azure",
+            "azure_deployment",
+            "api_version",
+        ):
+            kwargs.pop(control, None)
+
+        if messages is not None:
+            if prompt is not None or system_prompt or history_messages or image_inputs:
+                raise ValueError("messages-first and prompt-first inputs cannot be combined")
+            prepared_messages = messages
+        else:
+            if prompt is None:
+                raise TypeError("prompt or messages is required")
+            prepared_messages: list[dict[str, Any]] = []
+            if system_prompt:
+                prepared_messages.append({"role": "system", "content": system_prompt})
+            if history_messages:
+                prepared_messages.extend(history_messages)
+            image_blocks = _composer_image_blocks(image_inputs, config=config)
+            user_content: str | list[dict[str, Any]] = prompt
+            if image_blocks:
+                user_content = [*image_blocks, {"type": "text", "text": prompt}]
+            prepared_messages.append({"role": "user", "content": user_content})
+        return await completion(
+            messages=prepared_messages,
+            response_format=response_format,
+            stream=stream,
+            **kwargs,
+        )
+
+    async def close() -> None:
+        for closer in owner_closers:
+            await closer()
+
+    return adapter, _sanitized_model_identity(cfg), close
 
 
 def _lightrag_adapted(
@@ -348,6 +485,7 @@ def get_rerank_func(
 
 __all__ = [
     "build_role_llm_configs",
+    "create_composer_analysis_adapter",
     "get_chat_rerank_scoring_config",
     "get_default_model_func",
     "get_default_model_func_for_lightrag",

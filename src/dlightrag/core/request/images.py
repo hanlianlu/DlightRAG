@@ -45,12 +45,6 @@ class QueryImageDescriber:
         self._quality = max(1, int(quality))
         self._min_quality = max(1, int(min_quality))
 
-    async def aclose(self) -> None:
-        """Release VLM worker resources owned by this describer."""
-        from dlightrag.utils.concurrency import shutdown_async_callable
-
-        await shutdown_async_callable(self._vlm_func)
-
     async def describe(
         self,
         images: list[dict[str, Any]] | None,

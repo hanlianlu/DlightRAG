@@ -34,6 +34,20 @@ def test_lightrag_exposes_multimodal_sidecar_builder_contract() -> None:
         assert name in params
 
 
+def test_lightrag_exposes_multimodal_analyzer_contract() -> None:
+    method = LightRAG.analyze_multimodal
+    params = inspect.signature(method).parameters
+    assert inspect.iscoroutinefunction(method)
+    assert {
+        "doc_id",
+        "file_path",
+        "parsed_data",
+        "process_options",
+        "pipeline_status",
+        "pipeline_status_lock",
+    } <= set(params)
+
+
 def test_shim_satisfies_owner_contract() -> None:
     shim = _ParseOwnerShim()
     assert shim._resolve_source_file_for_parser("/tmp/x.pdf") == "/tmp/x.pdf"

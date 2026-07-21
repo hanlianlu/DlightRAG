@@ -1,0 +1,417 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Tests for isolated Composer multimodal sidecar analysis."""
+
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+from lightrag import LightRAG
+
+from dlightrag.config import (
+    DlightragConfig,
+    EmbeddingConfig,
+    LLMConfig,
+    LLMRolesConfig,
+    ModelConfig,
+    ParserSidecarsConfig,
+    VLMSidecarConfig,
+)
+from dlightrag.core.request.composer_analysis import (
+    ComposerAnalysisOutcome,
+    aanalyze_composer_sidecars,
+    build_composer_analysis_signature,
+    create_composer_analysis_proxy,
+)
+
+
+class _Tokenizer:
+    def encode(self, value: str) -> list[str]:
+        return value.split()
+
+
+def _config(*, enabled: bool = True) -> DlightragConfig:
+    return DlightragConfig(
+        llm=LLMConfig(
+            default=ModelConfig(
+                provider="openai",
+                model="default-model",
+                api_key="sk-default-secret",
+            ),
+            roles=LLMRolesConfig(
+                vlm=ModelConfig(
+                    provider="openai",
+                    model="vision-model",
+                    api_key="sk-vlm-secret",
+                    base_url="https://user:pass@vision.example/v1?token=secret",
+                    temperature=0.1,
+                    model_kwargs={"top_p": 0.9, "api_token": "must-not-leak"},
+                ),
+                extract=ModelConfig(
+                    provider="openai",
+                    model="extract-model",
+                    api_key="sk-extract-secret",
+                    base_url="https://extract.example/v1#private",
+                    temperature=0.2,
+                    model_kwargs={"reasoning_effort": "none", "secret": "hidden"},
+                ),
+            ),
+        ),
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-embed-secret",
+            startup_probe=False,
+        ),
+        parser_sidecars=ParserSidecarsConfig(vlm=VLMSidecarConfig(enabled=enabled)),
+    )
+
+
+def _bundle(
+    *,
+    vlm: Any | None = None,
+    extract: Any | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        vlm_func=vlm or AsyncMock(return_value="{}"),
+        extract_func=extract or AsyncMock(return_value="{}"),
+        vlm_identity={
+            "provider": "openai",
+            "model": "vision-model",
+            "base_url": "https://vision.example/v1",
+        },
+        extract_identity={
+            "provider": "openai",
+            "model": "extract-model",
+            "base_url": "https://extract.example/v1",
+        },
+    )
+
+
+def _lightrag() -> SimpleNamespace:
+    return SimpleNamespace(tokenizer=_Tokenizer())
+
+
+def _blocks(tmp_path: Path, *, kind: str | None = None, item: dict[str, Any] | None = None) -> Path:
+    blocks_path = tmp_path / "document.blocks.jsonl"
+    blocks_path.write_text('{"type":"meta"}\n', encoding="utf-8")
+    if kind is not None:
+        root = {"drawing": "drawings", "table": "tables", "equation": "equations"}[kind]
+        suffix = {"drawing": "drawings", "table": "tables", "equation": "equations"}[kind]
+        sidecar = blocks_path.with_name(f"document.{suffix}.json")
+        sidecar.write_text(
+            json.dumps({root: {f"{kind}-1": item or {}}}),
+            encoding="utf-8",
+        )
+    return blocks_path
+
+
+def _sidecar(blocks_path: Path, kind: str) -> Path:
+    suffix = {"drawing": "drawings", "table": "tables", "equation": "equations"}[kind]
+    return blocks_path.with_name(f"document.{suffix}.json")
+
+
+def test_proxy_has_direct_and_global_llm_cache_none() -> None:
+    bundle = _bundle()
+    proxy = create_composer_analysis_proxy(
+        lightrag=_lightrag(),
+        model_bundle=bundle,
+        config=_config(),
+    )
+
+    assert proxy.llm_response_cache is None
+    global_config = proxy._build_global_config()
+    assert global_config["llm_response_cache"] is None
+    assert global_config["enable_llm_cache_for_entity_extract"] is False
+    assert global_config["role_llm_funcs"] == {
+        "vlm": bundle.vlm_func,
+        "extract": bundle.extract_func,
+    }
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    [
+        "full_docs",
+        "doc_status",
+        "text_chunks",
+        "entities_vdb",
+        "relationships_vdb",
+        "chunks_vdb",
+        "chunk_entity_relation_graph",
+        "pipeline_status",
+    ],
+)
+def test_proxy_rejects_workspace_storage_attributes(attribute: str) -> None:
+    proxy = create_composer_analysis_proxy(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+    )
+
+    with pytest.raises(AttributeError):
+        getattr(proxy, attribute)
+
+
+async def test_disabled_preflight_never_calls_lightrag_analyzer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    analyze = AsyncMock()
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+    blocks_path = _blocks(tmp_path)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(enabled=False),
+        doc_id="doc-1",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iteP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.INTENTIONALLY_DISABLED
+    assert result.cacheable is True
+    assert result.mm_chunk_count == 0
+    analyze.assert_not_awaited()
+
+
+async def test_explicit_process_options_are_always_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        parsed_data["multimodal_processed"] = True
+        return parsed_data
+
+    analyze_mock = AsyncMock(side_effect=analyze)
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze_mock)
+    blocks_path = _blocks(tmp_path)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+        doc_id="doc-1",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iteP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.SUCCESS
+    await_args = analyze_mock.await_args
+    assert await_args is not None
+    assert await_args.kwargs["process_options"] == "iteP"
+    assert await_args.kwargs["pipeline_status"] is not None
+    assert await_args.kwargs["pipeline_status_lock"] is not None
+
+
+async def test_real_unbound_lightrag_analyzer_produces_success(
+    tmp_path: Path,
+) -> None:
+    blocks_path = _blocks(
+        tmp_path,
+        kind="table",
+        item={
+            "content": "<table><tr><td>Revenue</td><td>42</td></tr></table>",
+            "format": "html",
+        },
+    )
+    extract = AsyncMock(
+        return_value=json.dumps(
+            {
+                "name": "Revenue table",
+                "description": "A table showing revenue of 42.",
+            }
+        )
+    )
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(extract=extract),
+        config=_config(),
+        doc_id="doc-real",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="tP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.SUCCESS
+    assert result.cacheable is True
+    assert result.mm_chunk_count == 1
+    extract.assert_awaited_once()
+
+
+@pytest.mark.parametrize("mark_processed", [False, True])
+async def test_success_requires_multimodal_processed_and_terminal_items(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mark_processed: bool,
+) -> None:
+    blocks_path = _blocks(tmp_path, kind="drawing", item={})
+
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        if mark_processed:
+            parsed_data["multimodal_processed"] = True
+        return parsed_data
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+        doc_id="doc-1",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.DEGRADED
+    assert result.cacheable is False
+
+
+async def test_soft_swallowed_upstream_error_becomes_degraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        return parsed_data
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+    blocks_path = _blocks(tmp_path)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+        doc_id="doc-1",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    assert result.outcome is ComposerAnalysisOutcome.DEGRADED
+    assert result.error_type == "MissingSuccessPostcondition"
+
+
+@pytest.mark.parametrize("failed_status", ["failure", "cancelled"])
+async def test_failure_items_are_demoted_to_skipped_before_renderer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_status: str
+) -> None:
+    blocks_path = _blocks(
+        tmp_path,
+        kind="drawing",
+        item={"llm_analyze_result": {"status": failed_status, "message": "bad model"}},
+    )
+
+    async def analyze(proxy: Any, doc_id: str, file_path: str, parsed_data: dict, **kwargs: Any):
+        parsed_data["multimodal_processed"] = True
+        return parsed_data
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+
+    result = await aanalyze_composer_sidecars(
+        lightrag=_lightrag(),
+        model_bundle=_bundle(),
+        config=_config(),
+        doc_id="doc-1",
+        file_path="report.pdf",
+        parsed_data={"blocks_path": str(blocks_path)},
+        process_options="iP",
+    )
+
+    payload = json.loads(_sidecar(blocks_path, "drawing").read_text(encoding="utf-8"))
+    analysis = payload["drawings"]["drawing-1"]["llm_analyze_result"]
+    assert analysis["status"] == "skipped"
+    assert result.outcome is ComposerAnalysisOutcome.DEGRADED
+    assert result.mm_chunk_count == 0
+    assert result.cacheable is False
+
+
+async def test_cancellation_sets_private_flag_waits_cleanup_and_reraises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+    cleaned = asyncio.Event()
+    captured_status: dict[str, Any] = {}
+
+    async def analyze(
+        proxy: Any,
+        doc_id: str,
+        file_path: str,
+        parsed_data: dict,
+        *,
+        pipeline_status: dict[str, Any],
+        pipeline_status_lock: asyncio.Lock,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured_status.update(pipeline_status)
+        captured_status["live"] = pipeline_status
+        started.set()
+        try:
+            while not await proxy._cancellation_requested(pipeline_status, pipeline_status_lock):
+                await asyncio.sleep(0)
+            parsed_data["multimodal_processed"] = True
+            return parsed_data
+        finally:
+            cleaned.set()
+
+    monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze)
+    blocks_path = _blocks(tmp_path)
+    task = asyncio.create_task(
+        aanalyze_composer_sidecars(
+            lightrag=_lightrag(),
+            model_bundle=_bundle(),
+            config=_config(),
+            doc_id="doc-1",
+            file_path="report.pdf",
+            parsed_data={"blocks_path": str(blocks_path)},
+            process_options="iP",
+        )
+    )
+    await started.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert captured_status["live"]["cancellation_requested"] is True
+    assert cleaned.is_set()
+
+
+def test_analysis_signature_is_complete_deterministic_and_secret_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_EXTRACT_INPUT_TOKENS", "12345")
+    config = _config()
+    bundle = _bundle()
+
+    first = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=bundle,
+        config=config,
+        process_options="iteP",
+    )
+    second = build_composer_analysis_signature(
+        lightrag=_lightrag(),
+        model_bundle=bundle,
+        config=config,
+        process_options="iteP",
+    )
+
+    assert first == second
+    payload = json.loads(first)
+    assert payload["contract_version"]
+    assert payload["lightrag_version"]
+    assert payload["process_options"] == "iteP"
+    assert payload["tokenizer"].endswith("._Tokenizer")
+    assert payload["language"] == config.extraction.language
+    assert payload["max_extract_input_tokens"] == 12345
+    assert payload["roles"]["vlm"]["temperature"] == 0.1
+    assert payload["roles"]["vlm"]["model_options"] == {"top_p": 0.9}
+    assert payload["roles"]["extract"]["model_options"] == {"reasoning_effort": "none"}
+    assert payload["roles"]["vlm"]["base_url"] == "https://vision.example/v1"
+    assert "secret" not in first.lower()
+    assert "sk-" not in first.lower()

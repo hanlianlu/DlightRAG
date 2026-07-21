@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
     from dlightrag.core.request.images import QueryImageDescriber
     from dlightrag.core.source_download import SourceDownloadTarget
+    from dlightrag.models.composer import ComposerModelBundle
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
@@ -281,6 +282,7 @@ class RAGServiceManager:
         )
         self._query_planner: QueryPlanner | None = None
         self._query_image_describer: QueryImageDescriber | None = None
+        self._composer_model_bundle: ComposerModelBundle | None = None
         self._composer_evidence_selector: ComposerEvidenceSelector | None = None
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
@@ -969,12 +971,11 @@ class RAGServiceManager:
         """Lazy-create the VLM query-image describer."""
         if self._query_image_describer is None:
             from dlightrag.core.request.images import QueryImageDescriber
-            from dlightrag.models.llm import get_vlm_model_func
 
             cfg = self._config.query_images
             transport = self._config.answer
             self._query_image_describer = QueryImageDescriber(
-                vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
+                vlm_func=self._get_composer_model_bundle().vlm_func,
                 max_images=cfg.max_current_images,
                 max_total_bytes=transport.image_max_total_bytes,
                 max_bytes_per_image=transport.image_max_bytes,
@@ -984,6 +985,17 @@ class RAGServiceManager:
                 min_quality=transport.image_min_quality,
             )
         return self._query_image_describer
+
+    def _get_composer_model_bundle(self) -> ComposerModelBundle:
+        """Return the sole manager-owned Composer role bundle."""
+        if self._composer_model_bundle is None:
+            from dlightrag.models.composer import ComposerModelBundle
+
+            self._composer_model_bundle = ComposerModelBundle.create(
+                self._config,
+                bind=self._sem_bound,
+            )
+        return self._composer_model_bundle
 
     def _get_composer_evidence_selector(self) -> ComposerEvidenceSelector:
         """Create the Web Composer selector without touching workspace services."""
@@ -1772,10 +1784,13 @@ class RAGServiceManager:
 
         await self._ingest_jobs.close()
 
+        composer_model_bundle = self._composer_model_bundle
+        self._composer_model_bundle = None
+
         for component in (
             self._answer_engine,
             self._query_planner,
-            self._query_image_describer,
+            composer_model_bundle,
             self._composer_evidence_selector,
         ):
             close = getattr(component, "aclose", None)
