@@ -256,6 +256,46 @@ async def test_packing_uses_a_later_representative_when_the_first_does_not_fit(
     assert sum(estimate_tokens(str(row["content"])) for row in selected) <= 8
 
 
+async def test_packing_prefers_highest_ranked_fitting_row_before_representative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ranked_rows = [
+        _row("rank-1-oversized", "A" * 36, chunk_index=0),
+        _row("rank-2-fitting", "B" * 20, chunk_index=1),
+        _row(
+            "rank-3-structural",
+            "C" * 16,
+            chunk_index=3,
+            sidecar_type="table",
+        ),
+    ]
+    rows = [
+        ranked_rows[0],
+        ranked_rows[1],
+        _row("coverage-oversized", "D" * 36, chunk_index=2),
+        ranked_rows[2],
+        _row("ending-oversized", "E" * 36, chunk_index=4),
+    ]
+
+    monkeypatch.setattr(
+        "dlightrag.core.request.composer_evidence.rrf_fuse",
+        lambda _rankings: ranked_rows,
+    )
+    selector = ComposerEvidenceSelector(attachment_token_budget=8, candidate_limit=3)
+
+    selected, _ = await selector.select(
+        query="evidence",
+        current_rows=rows,
+        history_rows=[],
+        current_dense_rankings=[],
+        history_dense_rankings=[],
+        rerank_func=None,
+    )
+
+    assert [row["chunk_id"] for row in selected] == ["rank-2-fitting"]
+    assert sum(estimate_tokens(str(row["content"])) for row in selected) <= 8
+
+
 async def test_composer_rerank_failure_falls_back_with_one_shared_traceback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -512,7 +552,7 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
         for index in range(40)
     ]
 
-    selected, _ = await selector.select(
+    selected, trace = await selector.select(
         query="target",
         current_rows=current,
         history_rows=history,
@@ -527,6 +567,15 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
     assert selected_ids == [chunk_id for chunk_id in input_ids if chunk_id in set(selected_ids)]
     assert any(chunk_id.startswith("current-") for chunk_id in selected_ids)
     assert any(chunk_id.startswith("history-") for chunk_id in selected_ids)
+    selected_current = [row for row in selected if row["reference_id"] == "current-doc"]
+    selected_history = [row for row in selected if row["reference_id"] == "history-doc"]
+    assert trace["composer_evidence_current_chunks"] == len(selected_current)
+    assert trace["composer_evidence_history_chunks"] == len(selected_history)
+    assert trace["composer_evidence_tokens"] == sum(
+        estimate_tokens(str(row["content"])) for row in selected
+    )
+    assert trace["composer_evidence_candidates"] == rerank_counts[0]
+    assert trace["composer_evidence_reranked"] is True
 
 
 def test_partition_helper_uses_the_exported_attachment_allowance() -> None:
@@ -543,13 +592,10 @@ def test_partition_helper_uses_the_exported_attachment_allowance() -> None:
     assert retrieval == [oversized]
 
 
-def test_attachments_import_remains_compatible_with_partition_rename() -> None:
-    attachments = importlib.import_module("dlightrag.core.request.attachments")
+def test_partition_migration_alias_is_not_publicly_exported() -> None:
+    composer_evidence = importlib.import_module("dlightrag.core.request.composer_evidence")
 
-    assert (
-        attachments.partition_composer_rows_by_document_size
-        is partition_composer_rows_by_attachment_budget
-    )
+    assert "partition_composer_rows_by_document_size" not in composer_evidence.__all__
 
 
 @pytest.mark.parametrize(

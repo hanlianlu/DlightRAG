@@ -171,7 +171,7 @@ def partition_composer_rows_by_attachment_budget(
     return short_rows, long_rows
 
 
-# Preserve the unchanged dense-precompute caller while the public API uses the new name.
+# TEMPORARY: internal migration bridge for attachments.py; REMOVE IN TASK 2.
 partition_composer_rows_by_document_size = partition_composer_rows_by_attachment_budget
 
 
@@ -245,8 +245,9 @@ def _pack_with_document_guarantees(
     # permits, a separate structure/coverage representative.
     coverage_ids = {str(row.get("chunk_id") or "") for row in _coverage_ranking(original_rows)}
     for reference_id in doc_order:
-        doc_ranked = ranked_by_doc.get(reference_id) or original_by_doc[reference_id]
-        add(doc_ranked[0])
+        doc_ranked = ranked_by_doc.get(reference_id, [])
+        if not any(add(row) for row in doc_ranked):
+            next((row for row in original_by_doc[reference_id] if add(row)), None)
         for row in [*doc_ranked, *original_by_doc[reference_id]]:
             chunk_id = str(row.get("chunk_id") or "")
             if chunk_id not in selected_ids and (chunk_id in coverage_ids or _is_structural(row)):
