@@ -164,9 +164,11 @@ def bounded_image_data_uri(
     """Return a model image data URI bounded for answer-model payloads.
 
     ``value`` can be raw base64 or a base64 data URI. Non-image or undecodable
-    payloads return ``None``. Already-budgeted JPEG/PNG/WebP images are passed
-    through unchanged. Images that cannot fit without dropping below the quality
-    or long-edge floor are skipped instead of being over-compressed.
+    payloads return ``None``. Source images whose decoded dimensions exceed
+    ``max_pixels`` are rejected before RGB conversion. Already-budgeted
+    JPEG/PNG/WebP images are passed through unchanged. Images that cannot fit
+    without dropping below the quality or long-edge floor are skipped instead
+    of being over-compressed.
     """
     try:
         raw, _ = decode_image_base64(value)

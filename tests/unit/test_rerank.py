@@ -352,6 +352,7 @@ class TestChatLlmRerank:
                 raw_image,
                 {
                     "max_bytes": 456,
+                    "max_pixels": 40_000_000,
                     "max_px": 1024,
                     "min_px": 768,
                     "quality": 86,
@@ -625,6 +626,7 @@ def _budget_factory():
         ImagePayloadBudget,
         max_total_bytes=8_000_000,
         max_bytes_per_image=1_500_000,
+        max_pixels=40_000_000,
         max_px=1280,
         min_px=768,
         quality=86,
@@ -666,6 +668,7 @@ class TestRunHttpRerank:
                 ImagePayloadBudget,
                 max_total_bytes=789,
                 max_bytes_per_image=456,
+                max_pixels=40_000_000,
                 max_px=1024,
                 min_px=768,
                 quality=86,

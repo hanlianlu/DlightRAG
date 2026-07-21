@@ -1068,7 +1068,7 @@ def test_analysis_signature_is_complete_deterministic_and_secret_free(
 
     assert first == second
     payload = json.loads(first)
-    assert payload["contract_version"]
+    assert payload["contract_version"] == "3"
     assert payload["lightrag_version"]
     assert payload["process_options"] == "iteP"
     assert payload["tokenizer"].endswith("._Tokenizer")

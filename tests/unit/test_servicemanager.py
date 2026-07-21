@@ -1379,6 +1379,36 @@ class TestAnswerViaEngine:
             engine2 = manager._get_answer_engine()
             assert engine2 is engine
 
+    def test_get_answer_engine_threads_pixel_limit_to_composer_and_rag_budgets(
+        self,
+        test_cfg,
+        monkeypatch,
+    ) -> None:
+        test_cfg.answer.image_max_pixels = 123
+        manager = RAGServiceManager(config=test_cfg)
+
+        with patch("dlightrag.models.llm.get_query_model_func", return_value=MagicMock()):
+            engine = manager._get_answer_engine()
+
+        budgets = []
+        new_image_budget = engine._new_image_budget
+
+        def capture_image_budget():
+            budget = new_image_budget()
+            budgets.append(budget)
+            return budget
+
+        monkeypatch.setattr(engine, "_new_image_budget", capture_image_budget)
+
+        engine._prepare_model_call(
+            "query",
+            {"chunks": [], "entities": [], "relationships": []},
+            separate_composer_visual_budget=True,
+        )
+
+        assert len(budgets) == 2
+        assert [budget.max_pixels for budget in budgets] == [123, 123]
+
     def test_get_query_planner_uses_planner_model_func(self, test_cfg) -> None:
         """QueryPlanner uses the text planning factory, not the answer/query role."""
         manager = RAGServiceManager(config=test_cfg)

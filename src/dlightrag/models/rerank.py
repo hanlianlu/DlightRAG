@@ -33,6 +33,7 @@ from dlightrag.models.providers.rerank_base import (
 from dlightrag.models.providers.rerank_providers import RERANK_PROVIDERS
 from dlightrag.prompts import LISTWISE_RERANK_PROMPT
 from dlightrag.utils.image_budget import ImagePayloadBudget
+from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 
 if TYPE_CHECKING:
     from dlightrag.config import RerankConfig
@@ -189,6 +190,7 @@ async def _chat_llm_rerank(
             image_budget = ImagePayloadBudget(
                 max_total_bytes=image_max_total_bytes,
                 max_bytes_per_image=image_max_bytes,
+                max_pixels=MODEL_IMAGE_MAX_PIXELS,
                 max_px=image_max_px,
                 min_px=image_min_px,
                 quality=image_quality,
@@ -405,6 +407,7 @@ def build_rerank_func(
         ImagePayloadBudget,
         max_total_bytes=rc.image_max_total_bytes,
         max_bytes_per_image=rc.image_max_bytes,
+        max_pixels=MODEL_IMAGE_MAX_PIXELS,
         max_px=rc.image_max_px,
         min_px=rc.image_min_px,
         quality=rc.image_quality,

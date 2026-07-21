@@ -15,6 +15,7 @@ class ImagePayloadBudget:
 
     max_total_bytes: int
     max_bytes_per_image: int
+    max_pixels: int
     max_px: int
     min_px: int
     quality: int
@@ -35,6 +36,7 @@ class ImagePayloadBudget:
         bounded = bounded_image_data_uri(
             value,
             max_bytes=max_bytes,
+            max_pixels=self.max_pixels,
             max_px=self.max_px,
             min_px=self.min_px,
             quality=self.quality,

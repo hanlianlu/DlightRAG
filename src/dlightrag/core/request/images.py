@@ -31,6 +31,7 @@ class QueryImageDescriber:
         max_images: int = 3,
         max_total_bytes: int,
         max_bytes_per_image: int,
+        max_pixels: int,
         max_px: int,
         min_px: int,
         quality: int,
@@ -40,6 +41,7 @@ class QueryImageDescriber:
         self._max_images = max(0, int(max_images))
         self._max_total_bytes = max(1, int(max_total_bytes))
         self._max_bytes_per_image = max(1, int(max_bytes_per_image))
+        self._max_pixels = max(1, int(max_pixels))
         self._max_px = max(1, int(max_px))
         self._min_px = max(1, int(min_px))
         self._quality = max(1, int(quality))
@@ -63,6 +65,7 @@ class QueryImageDescriber:
                 max_images=1,
                 max_total_bytes=self._max_total_bytes,
                 max_bytes_per_image=self._max_bytes_per_image,
+                max_pixels=self._max_pixels,
                 max_px=self._max_px,
                 min_px=self._min_px,
                 quality=self._quality,

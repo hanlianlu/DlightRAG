@@ -83,6 +83,7 @@ def test_answer_image_budget_bounds_base64_images() -> None:
         max_images=1,
         max_total_bytes=10_000,
         max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
         max_px=64,
         min_px=32,
         quality=85,
@@ -103,6 +104,7 @@ def test_answer_image_budget_passes_user_url_without_bytes_count() -> None:
         max_images=2,
         max_total_bytes=1,
         max_bytes_per_image=1,
+        max_pixels=40_000_000,
         max_px=64,
         min_px=32,
         quality=85,
@@ -123,6 +125,7 @@ def test_answer_image_budget_bounds_dict_data_uri_blocks() -> None:
         max_images=2,
         max_total_bytes=10_000,
         max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
         max_px=1536,
         min_px=1024,
         quality=88,
@@ -147,6 +150,7 @@ def test_answer_image_budget_rejects_invalid_base64() -> None:
         max_images=2,
         max_total_bytes=10_000,
         max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
         max_px=64,
         min_px=32,
         quality=85,
@@ -155,6 +159,44 @@ def test_answer_image_budget_rejects_invalid_base64() -> None:
 
     assert budget.add_base64("not image data", label="bad") is None
     assert budget.count == 0
+
+
+def test_answer_image_budget_rejects_image_over_pixel_limit_without_consuming_budget() -> None:
+    raw = _png_bytes((11, 10))
+    data_uri = f"data:image/png;base64,{base64.b64encode(raw).decode('ascii')}"
+    budget = AnswerImageBudget(
+        max_images=2,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=100,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+
+    assert budget.add_base64(data_uri, label="over-pixel-limit") is None
+    assert budget.count == 0
+    assert budget.used_bytes == 0
+
+
+def test_answer_image_budget_accepts_image_at_pixel_limit() -> None:
+    raw = _png_bytes((10, 10))
+    data_uri = f"data:image/png;base64,{base64.b64encode(raw).decode('ascii')}"
+    budget = AnswerImageBudget(
+        max_images=1,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=100,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+
+    assert budget.add_base64(data_uri, label="at-pixel-limit") is not None
+    assert budget.count == 1
+    assert budget.used_bytes == len(raw)
 
 
 def test_bounded_image_data_uri_skips_instead_of_degrading_below_quality_floor() -> None:

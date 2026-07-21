@@ -28,6 +28,7 @@ def _describer(vlm, *, max_images: int, max_bytes: int = 10_000, max_px: int = 6
         max_images=max_images,
         max_total_bytes=max_bytes,
         max_bytes_per_image=max_bytes,
+        max_pixels=40_000_000,
         max_px=max_px,
         min_px=max_px,
         quality=89,

@@ -264,6 +264,7 @@ def _budget(*, max_images: int) -> AnswerImageBudget:
         max_images=max_images,
         max_total_bytes=10_000,
         max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
         max_px=64,
         min_px=32,
         quality=85,

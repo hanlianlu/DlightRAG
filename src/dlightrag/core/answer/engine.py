@@ -77,6 +77,7 @@ class AnswerEngine:
     def __init__(
         self,
         *,
+        image_max_pixels: int,
         model_func: Callable[..., Any] | None = None,
         effective_max_images: int = 0,
         image_max_bytes: int = 3_000_000,
@@ -93,6 +94,7 @@ class AnswerEngine:
         self._effective_max_images = effective_max_images
         self._image_max_bytes = image_max_bytes
         self._image_max_total_bytes = image_max_total_bytes
+        self._image_max_pixels = image_max_pixels
         self._image_max_px = image_max_px
         self._image_min_px = image_min_px
         self._image_quality = image_quality
@@ -503,6 +505,7 @@ class AnswerEngine:
             max_images=self._effective_max_images,
             max_total_bytes=self._image_max_total_bytes,
             max_bytes_per_image=self._image_max_bytes,
+            max_pixels=self._image_max_pixels,
             max_px=self._image_max_px,
             min_px=self._image_min_px,
             quality=self._image_quality,

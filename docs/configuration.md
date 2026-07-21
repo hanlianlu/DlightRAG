@@ -579,9 +579,10 @@ answer:
   image_min_quality: 79
 ```
 
-`answer.image_max_pixels` rejects compressed images whose declared decoded
-dimensions exceed the limit before RGB conversion. The Web upload validator and
-cache-neutral Composer analysis transport use the same ceiling.
+`answer.image_max_pixels` rejects source images whose decoded dimensions exceed
+the limit before RGB conversion or resizing. The Web upload validator,
+cache-neutral Composer analysis transport, query-image description, and final
+answer transport use the same ceiling.
 
 ## Query Images And Visual Assets
 

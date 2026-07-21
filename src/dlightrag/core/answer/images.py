@@ -96,6 +96,7 @@ class AnswerImageBudget:
     max_images: int
     max_total_bytes: int
     max_bytes_per_image: int
+    max_pixels: int
     max_px: int
     min_px: int
     quality: int
@@ -117,6 +118,7 @@ class AnswerImageBudget:
             max_images=self.max_images,
             max_total_bytes=self.max_total_bytes,
             max_bytes_per_image=self.max_bytes_per_image,
+            max_pixels=self.max_pixels,
             max_px=self.max_px,
             min_px=self.min_px,
             quality=self.quality,

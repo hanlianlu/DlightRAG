@@ -9,6 +9,7 @@ import pytest
 from dlightrag.core.answer.engine import NO_CONTEXT_DISCLAIMER, AnswerEngine
 from dlightrag.core.answer.errors import CurrentImagePayloadError
 from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -134,7 +135,7 @@ class TestAnswerEngineGenerate:
         """generate() validates inline citations and returns cited references."""
         raw = "AI is artificial intelligence [1-1].\n\n### References\n- [1] AI Overview"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         contexts = _text_contexts()
         result = await engine.generate("What is AI?", contexts)
@@ -152,7 +153,7 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_preserves_citation_reference_ids(self) -> None:
         model_func = AsyncMock(return_value="The other document applies here [2-1].")
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         result = await engine.generate("Which document applies?", _multi_doc_contexts())
 
@@ -163,7 +164,7 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_no_model_func(self) -> None:
         """generate() returns None answer when model_func is None."""
-        engine = AnswerEngine(model_func=None)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=None)
         contexts: RetrievalContexts = {"chunks": []}
         result = await engine.generate("test", contexts)
         assert result.answer is None
@@ -172,7 +173,7 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_empty_context_disclaims_general_knowledge(self) -> None:
         model_func = AsyncMock(return_value="The capital of France is Paris.")
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
         contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
 
         result = await engine.generate("what is the capital of France?", contexts)
@@ -184,7 +185,11 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_empty_chunks_with_query_image_still_calls_model(self) -> None:
         model_func = AsyncMock(return_value="The image shows a chart.")
-        engine = AnswerEngine(model_func=model_func, effective_max_images=3)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            model_func=model_func,
+            effective_max_images=3,
+        )
         contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
 
         await engine.generate("describe this image", contexts, query_images=[_image_block()])
@@ -196,7 +201,11 @@ class TestAnswerEngineGenerate:
         """generate() includes images in messages content array."""
         raw = "ok\n\n### References\n- [1] chart.pdf"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func, effective_max_images=6)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            model_func=model_func,
+            effective_max_images=6,
+        )
 
         contexts = _image_contexts()
         await engine.generate("describe", contexts)
@@ -210,7 +219,11 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_returns_structured_answer_images_for_sdk(self) -> None:
         model_func = AsyncMock(return_value="The chart shows growth [1-1].")
-        engine = AnswerEngine(model_func=model_func, effective_max_images=6)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            model_func=model_func,
+            effective_max_images=6,
+        )
 
         result = await engine.generate("describe", _image_contexts())
 
@@ -234,7 +247,11 @@ class TestAnswerEngineGenerate:
     async def test_current_image_and_rag_share_single_budget(self) -> None:
         raw = "ok"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func, effective_max_images=2)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            model_func=model_func,
+            effective_max_images=2,
+        )
         contexts: RetrievalContexts = {
             "chunks": [
                 {
@@ -271,7 +288,7 @@ class TestAnswerEngineGenerate:
         """generate() must NOT pass response_format (unified freetext prompt)."""
         raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         await engine.generate("query", _text_contexts())
 
@@ -283,7 +300,11 @@ class TestAnswerEngineGenerate:
         """generate() returns the contexts actually sent to the answer model."""
         raw = "answer\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func, effective_max_images=0)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            model_func=model_func,
+            effective_max_images=0,
+        )
         contexts: RetrievalContexts = {
             "chunks": [
                 {
@@ -326,7 +347,7 @@ class TestAnswerEngineGenerate:
             raising=False,
         )
         model_func = AsyncMock(return_value="answer")
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         await engine.generate("query", _image_contexts())
 
@@ -337,7 +358,11 @@ class TestAnswerEngineGenerate:
         """generate() limits final prompt chunks while retrieval can over-fetch."""
         raw = "The first item matters [1-1]."
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func, context_top_k=1)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            model_func=model_func,
+            context_top_k=1,
+        )
         contexts: RetrievalContexts = {
             "chunks": [
                 {
@@ -377,7 +402,7 @@ class TestAnswerEngineGenerate:
         """generate() ignores generated References tails and trusts inline markers."""
         raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         result = await engine.generate("query", _text_contexts())
 
@@ -405,7 +430,7 @@ class TestAnswerEngineStream:
                 yield token
 
         model_func = AsyncMock(return_value=mock_tokens())
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         contexts = _text_contexts()
         ctx, token_iter = await engine.generate_stream("test", contexts)
@@ -417,7 +442,7 @@ class TestAnswerEngineStream:
     @pytest.mark.asyncio
     async def test_generate_stream_no_model_func(self) -> None:
         """generate_stream() returns None when no model_func."""
-        engine = AnswerEngine(model_func=None)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=None)
         contexts: RetrievalContexts = {"chunks": []}
         ctx, token_iter = await engine.generate_stream("test", contexts)
         assert token_iter is None
@@ -429,7 +454,7 @@ class TestAnswerEngineStream:
             yield "I am DlightRAG."
 
         model_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
         contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
 
         ctx, token_iter = await engine.generate_stream("who are u", contexts)
@@ -451,7 +476,7 @@ class TestAnswerEngineStream:
                 yield token
 
         model_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         contexts = _text_contexts()
         result_contexts, token_iter = await engine.generate_stream("query", contexts)
@@ -470,7 +495,7 @@ class TestAnswerEngineStream:
             yield "text"
 
         model_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         await engine.generate_stream("query", _text_contexts())
 
@@ -486,7 +511,7 @@ class TestAnswerEngineStream:
             yield "token"
 
         model_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         await engine.generate_stream("query", _text_contexts())
 
@@ -505,7 +530,7 @@ class TestAnswerEngineStream:
             yield "text"
 
         model_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         _, token_iter = await engine.generate_stream("query", _text_contexts())
 
@@ -536,7 +561,7 @@ class TestAnswerEngineStream:
             raising=False,
         )
         model_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
 
         await engine.generate_stream("query", _image_contexts())
 
@@ -558,7 +583,10 @@ class TestAnswerImageBudget:
 
     def test_history_image_blocks_are_budgeted(self) -> None:
         contexts: RetrievalContexts = {"chunks": []}
-        engine = AnswerEngine(effective_max_images=3)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=3,
+        )
 
         prepared = engine._prepare_model_call(
             "prompt",
@@ -579,7 +607,10 @@ class TestAnswerImageBudget:
 
     def test_current_query_images_reserve_before_history(self) -> None:
         contexts: RetrievalContexts = {"chunks": []}
-        engine = AnswerEngine(effective_max_images=1)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=1,
+        )
 
         prepared = engine._prepare_model_call(
             "prompt",
@@ -603,7 +634,10 @@ class TestAnswerImageBudget:
         assert prepared.trace["answer_images_current"] == 1
 
     def test_current_image_count_overflow_is_strict(self) -> None:
-        engine = AnswerEngine(effective_max_images=1)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=1,
+        )
 
         with pytest.raises(CurrentImagePayloadError, match="2 current-turn images"):
             engine._prepare_model_call(
@@ -613,7 +647,11 @@ class TestAnswerImageBudget:
             )
 
     def test_current_image_byte_overflow_is_strict(self) -> None:
-        engine = AnswerEngine(effective_max_images=1, image_max_total_bytes=1)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=1,
+            image_max_total_bytes=1,
+        )
 
         with pytest.raises(CurrentImagePayloadError, match="current image query_image_1"):
             engine._prepare_model_call(
@@ -634,7 +672,10 @@ class TestAnswerImageBudget:
                 }
             ]
         }
-        engine = AnswerEngine(effective_max_images=2)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=2,
+        )
 
         prepared = engine._prepare_model_call(
             "prompt",
@@ -687,7 +728,11 @@ class TestAnswerImageBudget:
                 },
             ]
         }
-        engine = AnswerEngine(effective_max_images=1, context_top_k=2)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=1,
+            context_top_k=2,
+        )
 
         prepared = engine._prepare_model_call(
             "prompt",
@@ -707,6 +752,7 @@ class TestAnswerImageBudget:
 
     def test_selected_history_image_byte_overflow_is_best_effort(self) -> None:
         engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
             effective_max_images=2,
             image_max_total_bytes=len(base64.b64decode(_PNG_B64)),
         )
@@ -724,7 +770,10 @@ class TestAnswerImageBudget:
         assert prepared.trace["answer_images_total"] == 1
 
     def test_selected_history_image_has_history_trace(self) -> None:
-        prepared = AnswerEngine(effective_max_images=2)._prepare_model_call(
+        prepared = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=2,
+        )._prepare_model_call(
             "prompt",
             {"chunks": []},
             query_images=[_image_block()],
@@ -743,7 +792,10 @@ class TestAnswerImageBudget:
         )
 
     def test_selected_history_image_is_answer_evidence_without_current_image(self) -> None:
-        prepared = AnswerEngine(effective_max_images=1)._prepare_model_call(
+        prepared = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=1,
+        )._prepare_model_call(
             "prompt",
             {"chunks": []},
             history_images=[_image_block()],
@@ -773,7 +825,11 @@ class TestAnswerMessageEnvelope:
             "relationships": [],
         }
         original_content = contexts["chunks"][0]["content"]
-        engine = AnswerEngine(input_token_envelope=200, history_token_ceiling=1_000)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            input_token_envelope=200,
+            history_token_ceiling=1_000,
+        )
 
         with pytest.raises(AnswerInputOverflowError, match="Fixed answer evidence"):
             engine._prepare_model_call("question", contexts, conversation_history=[])
@@ -800,6 +856,7 @@ class TestAnswerMessageEnvelope:
         }
         original_chunks = [dict(contexts["chunks"][0])]
         engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
             input_token_envelope=1_000,
             history_token_ceiling=1_000,
         )
@@ -926,7 +983,7 @@ class TestAnswerEngineHelpers:
         assert "(from [1])" in rel_line
 
     def test_build_user_prompt_contains_all_parts(self) -> None:
-        engine = AnswerEngine()
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
         contexts = _text_contexts()
         prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
@@ -1090,7 +1147,10 @@ class TestBuildExcerptBlocks:
                 }
             ]
         }
-        engine = AnswerEngine(effective_max_images=0)
+        engine = AnswerEngine(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            effective_max_images=0,
+        )
 
         prepared = engine._prepare_model_call("prompt", contexts)
 
@@ -1111,7 +1171,7 @@ class TestBuildUserPrompt:
 
     def test_prompt_excludes_excerpts_section(self) -> None:
         """Excerpts are rendered as content blocks, not in the text prompt."""
-        engine = AnswerEngine()
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
         contexts = _text_contexts()
         prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
@@ -1124,7 +1184,7 @@ class TestBuildUserPrompt:
         assert "What is revenue?" in prompt
 
     def test_prompt_contains_reference_list(self) -> None:
-        engine = AnswerEngine()
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
         contexts = _text_contexts()
         prompt, _indexer = engine._build_user_prompt("query", contexts)
         assert "report.pdf" in prompt
