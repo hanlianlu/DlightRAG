@@ -58,9 +58,22 @@ if TYPE_CHECKING:
     from dlightrag.core.retrieval.protocols import RetrievalBackend
     from dlightrag.core.retrieval.retriever import UnifiedRetriever
     from dlightrag.core.visual_assets import VisualAssetResolver
+    from dlightrag.models.composer import ComposerModelBundle
     from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ComposerProcessingResources:
+    """Non-owning resources borrowed for one prepared Web Composer turn."""
+
+    lightrag: Any
+    robust_document_embedder: RobustDocumentEmbedder
+    direct_image_embedding_enabled: bool
+    rerank_func: Any
+    model_bundle: ComposerModelBundle
+    config: DlightragConfig
 
 
 def _ingest_documents(value: Any | None) -> list[IngestDocument] | None:
@@ -300,6 +313,23 @@ class RAGService:
     def lightrag(self) -> Any:
         """Return the underlying LightRAG instance for the unified runtime."""
         return self._lightrag
+
+    @property
+    def robust_document_embedder(self) -> RobustDocumentEmbedder:
+        """Return the initialized document embedder without transferring ownership."""
+        if self._document_embedder is None:
+            raise RuntimeError("RAGService document embedder is not initialized")
+        return self._document_embedder
+
+    @property
+    def direct_image_embedding_enabled(self) -> bool:
+        """Return the probed image-embedding capability for this service."""
+        return self._direct_image_embedding_enabled
+
+    @property
+    def rerank_func(self) -> Any:
+        """Return the service-owned reranker callable, if configured."""
+        return self._rerank_func
 
     @staticmethod
     def _build_vector_db_kwargs(config: DlightragConfig) -> dict[str, Any]:
@@ -2514,4 +2544,4 @@ def _remove_remote_parser_sources(items: list[PreparedIngestFile]) -> None:
                 logger.debug("Failed to remove remote parser source: %s", candidate, exc_info=True)
 
 
-__all__ = ["RAGService"]
+__all__ = ["ComposerProcessingResources", "RAGService"]

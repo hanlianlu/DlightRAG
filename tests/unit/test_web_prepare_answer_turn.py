@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit tests for WebConversationService.prepare_answer_turn (merge wiring)."""
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag.core.answer.capability import AnswerImageCapability
@@ -60,6 +61,10 @@ class _FakeManager:
         )
         self.plan_kwargs: dict[str, Any] = {}
         self.described_images: list[dict[str, Any]] = []
+        self.processing_resources = object()
+
+    async def aget_composer_processing_resources(self, workspaces: Any = None) -> object:
+        return self.processing_resources
 
     async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
         self.described_images = list(images)
@@ -153,3 +158,78 @@ async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
     assert store.fetched == []  # nothing materialized
     assert turn.current_query_images == ()
     assert turn.history_query_images == ()
+
+
+async def test_prepare_resolves_processing_resources_once_and_reuses_identity() -> None:
+    store = _FakeStore()
+    history_id = "22222222-2222-2222-2222-222222222222"
+
+    async def fetch_documents_by_ids(
+        principal_id: str,
+        conversation_id: str,
+        attachment_ids: list[str],
+        *,
+        ttl_days: int,
+    ) -> list[Any]:
+        assert attachment_ids == [history_id]
+        return [
+            SimpleNamespace(
+                attachment_id=history_id,
+                filename="history.pdf",
+                document_bytes=b"history",
+                content_sha256="history-sha",
+            )
+        ]
+
+    store.fetch_documents_by_ids = fetch_documents_by_ids  # type: ignore[attr-defined]
+    manager = _FakeManager(effective=0)
+    resources = object()
+    resolutions: list[Any] = []
+
+    async def resolve_processing_resources(workspaces: Any = None) -> object:
+        resolutions.append(workspaces)
+        return resources
+
+    manager.aget_composer_processing_resources = resolve_processing_resources  # type: ignore[attr-defined]
+
+    async def plan_with_history(*args: Any, **kwargs: Any) -> QueryPlan:
+        return QueryPlan(
+            original_query=str(args[0]),
+            standalone_query="standalone",
+            selected_history_attachment_ids=(history_id,),
+        )
+
+    manager.aplan_web_conversation_query = plan_with_history  # type: ignore[method-assign]
+    service = _service(store)
+    seen_resources: list[object] = []
+
+    async def parse_documents(
+        *,
+        resources: object,
+        prepared: PreparedWebConversation,
+        documents: list[Any],
+    ) -> tuple[list[Any], list[dict[str, str]], list[Any]]:
+        seen_resources.append(resources)
+        return [], [], []
+
+    service._parse_attachment_documents = parse_documents  # type: ignore[method-assign]
+    current = SimpleNamespace(
+        attachment_id=_ID,
+        filename="current.pdf",
+        document_bytes=b"current",
+        content_sha256="current-sha",
+    )
+
+    turn = await service.prepare_answer_turn(
+        manager=cast("RAGServiceManager", manager),
+        prepared=_prepared(),
+        query="compare documents",
+        current_images=[],
+        current_documents=[current],  # type: ignore[list-item]
+        workspaces=[" Research Notes ", "ignored"],
+    )
+
+    assert resolutions == [[" Research Notes ", "ignored"]]
+    assert seen_resources == [resources, resources]
+    assert all(item is resources for item in seen_resources)
+    assert turn.composer_processing_resources is resources

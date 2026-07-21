@@ -1167,7 +1167,21 @@ async def test_prepare_answer_turn_merges_current_document_context(
     # Current documents are parsed before planning; fake that seam so the core
     # digest selector sees the bundle and the same chunk reaches the answer.
     async def _fake_parse(**_kwargs: object):
-        bundle = ParsedAttachmentBundle(chunks=[chunk])
+        bundle = ParsedAttachmentBundle(
+            chunks=[chunk],
+            trace={
+                "attachment_parse_cache_hit": False,
+                "attachment_analysis_outcome": "success",
+                "attachment_analysis_error": None,
+                "attachment_mm_chunk_count": 0,
+                "attachment_vector_cache_hits": 0,
+                "attachment_vector_cache_misses": 1,
+                "attachment_embedding_fused": 0,
+                "attachment_embedding_text": 1,
+                "attachment_embedding_fallback": 0,
+                "attachment_embedding_failed": 0,
+            },
+        )
         return [chunk], [], [(document.attachment_id, bundle)]
 
     service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
@@ -1194,7 +1208,86 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert selected_row["full_doc_id"] == document.attachment_id
     assert selected_row["metadata"]["attachment_scope"] == "current"
     assert turn.composer_evidence_trace["composer_evidence_strategy"] == "full"
+    processing_trace = turn.composer_evidence_trace["attachment_processing"]
+    assert processing_trace[0]["attachment_id"] == document.attachment_id
+    assert processing_trace[0]["attachment_analysis_outcome"] == "success"
+    assert processing_trace[0]["attachment_embedding_text"] == 1
     assert turn.attachment_resolution_status == "ok"
+
+
+async def test_parse_attachment_documents_preserves_resource_identity_order_and_trace(
+    service_under_test,
+) -> None:
+    from dlightrag.core.request.attachments import (
+        AttachmentContextChunk,
+        ParsedAttachmentBundle,
+    )
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    resources = object()
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+    )
+    documents = [
+        SimpleNamespace(
+            attachment_id="att-a",
+            filename="a.pdf",
+            document_bytes=b"a",
+            content_sha256="sha-a",
+        ),
+        SimpleNamespace(
+            attachment_id="att-b",
+            filename="b.pdf",
+            document_bytes=b"b",
+            content_sha256="sha-b",
+        ),
+    ]
+    seen_resources: list[object] = []
+
+    class _AttachmentService:
+        async def achunks_for_attachment(self, **kwargs: Any):
+            attachment_id = kwargs["attachment_id"]
+            chunk = AttachmentContextChunk(
+                chunk_id=f"chunk-{attachment_id}",
+                attachment_id=attachment_id,
+                filename=kwargs["filename"],
+                chunk_index=1,
+                content=attachment_id,
+            )
+            return ParsedAttachmentBundle(chunks=[chunk]), {
+                "attachment_parse_cache_hit": attachment_id == "att-a",
+                "attachment_analysis_outcome": "success",
+                "attachment_analysis_error": None,
+                "attachment_mm_chunk_count": 1,
+                "attachment_vector_cache_hits": 1,
+                "attachment_vector_cache_misses": 0,
+                "attachment_embedding_fused": 1,
+                "attachment_embedding_text": 0,
+                "attachment_embedding_fallback": 0,
+                "attachment_embedding_failed": 0,
+            }
+
+    def _factory(value: object) -> _AttachmentService:
+        seen_resources.append(value)
+        return _AttachmentService()
+
+    service_under_test._get_query_attachment_service = _factory  # type: ignore[method-assign]
+
+    chunks, errors, bundles = await service_under_test._parse_attachment_documents(
+        resources=resources,
+        prepared=prepared,
+        documents=documents,
+    )
+
+    assert seen_resources == [resources]
+    assert errors == []
+    assert [chunk.attachment_id for chunk in chunks] == ["att-a", "att-b"]
+    assert [attachment_id for attachment_id, _bundle in bundles] == ["att-a", "att-b"]
+    assert bundles[0][1].trace["attachment_parse_cache_hit"] is True
+    assert bundles[1][1].trace["attachment_embedding_fused"] == 1
 
 
 async def test_prepare_answer_turn_preserves_selected_history_document_order(

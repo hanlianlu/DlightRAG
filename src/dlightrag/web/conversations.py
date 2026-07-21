@@ -4,7 +4,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import asyncpg
@@ -43,6 +43,7 @@ from dlightrag.web.principal import principal_id_from_user
 from dlightrag.web.safe_html import safe_answer_done
 
 if TYPE_CHECKING:
+    from dlightrag.core.service import ComposerProcessingResources
     from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,7 @@ class WebConversationService:
         context rows that core merges into retrieval before generation.
         """
         documents = list(current_documents or [])
+        resources = await manager.aget_composer_processing_resources(workspaces)
         capability = manager.answer_image_capability
         effective = capability.effective_max_images if capability is not None else 0
         remaining = max(0, effective - len(current_images))
@@ -261,9 +263,8 @@ class WebConversationService:
             current_parse_errors,
             current_bundles,
         ) = await self._parse_attachment_documents(
-            manager=manager,
+            resources=resources,
             prepared=prepared,
-            workspaces=workspaces,
             documents=documents,
         )
         current_digests, digest_trace = build_attachment_planner_digests(current_bundles)
@@ -330,6 +331,7 @@ class WebConversationService:
         history_docs_selected = 0
         parse_errors = list(current_parse_errors)
         history_chunks: list[AttachmentContextChunk] = []
+        history_bundles: list[tuple[str, ParsedAttachmentBundle]] = []
         selected_attachment_ids = tuple(plan.selected_history_attachment_ids)
         if selected_attachment_ids:
             fetched_history_docs = await self._store_call(
@@ -349,10 +351,13 @@ class WebConversationService:
                 if attachment_id in history_docs_by_id
             ]
             history_docs_selected = len(history_docs)
-            history_chunks, history_parse_errors, _ = await self._parse_attachment_documents(
-                manager=manager,
+            (
+                history_chunks,
+                history_parse_errors,
+                history_bundles,
+            ) = await self._parse_attachment_documents(
+                resources=resources,
                 prepared=prepared,
-                workspaces=workspaces,
                 documents=history_docs,
             )
             parse_errors.extend(history_parse_errors)
@@ -364,6 +369,16 @@ class WebConversationService:
             )
         if parse_errors or history_docs_selected < len(selected_attachment_ids):
             attachment_status = "degraded"
+        attachment_processing = [
+            {"attachment_id": attachment_id, **bundle.trace}
+            for attachment_id, bundle in [*current_bundles, *history_bundles]
+            if bundle.trace
+        ]
+        if attachment_processing:
+            composer_trace = {
+                **composer_trace,
+                "attachment_processing": attachment_processing,
+            }
 
         return PreparedAnswerTurn(
             current_query=query,
@@ -377,6 +392,7 @@ class WebConversationService:
             history_image_resolution_status=resolution_status,
             composer_context_chunks=tuple(composer_rows),
             composer_evidence_trace=composer_trace,
+            composer_processing_resources=resources,
             web_composer_visuals=True,
             current_attachment_digests=current_digests,
             history_attachment_catalog_count=len(attachment_catalog),
@@ -384,23 +400,26 @@ class WebConversationService:
             attachment_resolution_status=attachment_status,
         )
 
-    def _get_query_attachment_service(self, manager: RAGServiceManager, lightrag: Any) -> Any:
+    def _get_query_attachment_service(self, resources: ComposerProcessingResources) -> Any:
         """Construct the Web-only query-attachment service (store injected via DI)."""
         from dlightrag.core.request.attachments import QueryAttachmentService
 
         return QueryAttachmentService(
-            lightrag=lightrag,
+            lightrag=resources.lightrag,
             store=self._store,
-            parser_rules=manager.config.parser.rules,
+            parser_rules=resources.config.parser.rules,
             ttl_days=self._ttl_days,
+            robust_document_embedder=resources.robust_document_embedder,
+            direct_image_embedding_enabled=resources.direct_image_embedding_enabled,
+            model_bundle=resources.model_bundle,
+            config=resources.config,
         )
 
     async def _parse_attachment_documents(
         self,
         *,
-        manager: RAGServiceManager,
+        resources: ComposerProcessingResources,
         prepared: PreparedWebConversation,
-        workspaces: list[str] | None,
         documents: list[Any],
     ) -> tuple[
         list[AttachmentContextChunk],
@@ -417,8 +436,7 @@ class WebConversationService:
         """
         if not documents:
             return [], [], []
-        lightrag = await manager.aget_attachment_chunking_lightrag(workspaces)
-        service = self._get_query_attachment_service(manager, lightrag)
+        service = self._get_query_attachment_service(resources)
         chunks: list[AttachmentContextChunk] = []
         parse_errors: list[dict[str, str]] = []
         bundles: list[tuple[str, ParsedAttachmentBundle]] = []
@@ -431,6 +449,7 @@ class WebConversationService:
                 document_bytes=document.document_bytes,
                 content_sha256=document.content_sha256,
             )
+            bundle = replace(bundle, trace=dict(meta))
             if meta.get("attachment_parse_error"):
                 parse_errors.append(
                     {

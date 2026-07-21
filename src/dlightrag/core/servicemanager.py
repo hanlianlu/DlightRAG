@@ -50,7 +50,7 @@ from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.scope import RequestScope
-from dlightrag.core.service import RAGService
+from dlightrag.core.service import ComposerProcessingResources, RAGService
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.utils import log_safe, normalize_workspace
 
@@ -1160,20 +1160,22 @@ class RAGServiceManager:
             )
             return plan
 
-    async def aget_attachment_chunking_lightrag(
+    async def aget_composer_processing_resources(
         self, workspaces: list[str] | tuple[str, ...] | None = None
-    ) -> Any:
-        """Return an initialized LightRAG for Web query-attachment parsing/chunking.
-
-        Web ``/web/answer`` only: the Web layer owns the conversation store and
-        its :class:`QueryAttachmentService`, but the parser/chunker must run on a
-        real LightRAG. Reuse the primary selected (or manager-default) workspace
-        service; parsing writes nothing to any workspace store (the query-
-        attachment path neutralises the single workspace-write hook).
-        """
-        workspace = (list(workspaces or []) or [self._config.workspace])[0]
-        svc = await self._get_service(workspace)
-        return svc.lightrag
+    ) -> ComposerProcessingResources:
+        """Borrow one selected workspace service's resources for a Web turn."""
+        normalized = _normalize_workspaces(workspaces)
+        workspace = normalized[0] if normalized else normalize_workspace(self._config.workspace)
+        service = await self._get_service(workspace)
+        model_bundle = await self._aget_composer_model_bundle()
+        return ComposerProcessingResources(
+            lightrag=service.lightrag,
+            robust_document_embedder=service.robust_document_embedder,
+            direct_image_embedding_enabled=service.direct_image_embedding_enabled,
+            rerank_func=service.rerank_func,
+            model_bundle=model_bundle,
+            config=self._config,
+        )
 
     async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
         """Describe current-turn images (ordinal -> text) for image-aware planning.

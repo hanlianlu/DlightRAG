@@ -2,6 +2,7 @@
 """Tests for RAGServiceManager: workspace pool, routing, health tracking."""
 
 import asyncio
+import dataclasses
 import importlib
 import inspect
 from annotationlib import Format
@@ -539,6 +540,49 @@ class TestGetService:
         )
         assert mock_create.await_count == 1
         assert all(r is mock_service for r in results)
+
+    @pytest.mark.parametrize(
+        ("workspaces", "expected_workspace"),
+        [
+            ([" Research Notes ", "ignored"], "research_notes"),
+            (None, "default"),
+        ],
+    )
+    async def test_composer_processing_resources_borrow_selected_service_once(
+        self,
+        test_cfg: DlightragConfig,
+        workspaces: list[str] | None,
+        expected_workspace: str,
+    ) -> None:
+        config = test_cfg.model_copy(update={"workspace": "default"})
+        manager = RAGServiceManager(config=config)
+        lightrag = object()
+        document_embedder = object()
+        rerank_func = object()
+        model_bundle = object()
+        service = SimpleNamespace(
+            lightrag=lightrag,
+            robust_document_embedder=document_embedder,
+            direct_image_embedding_enabled=True,
+            rerank_func=rerank_func,
+        )
+        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+        manager._aget_composer_model_bundle = AsyncMock(  # type: ignore[method-assign]
+            return_value=model_bundle
+        )
+
+        resources = await manager.aget_composer_processing_resources(workspaces)
+
+        manager._get_service.assert_awaited_once_with(expected_workspace)
+        manager._aget_composer_model_bundle.assert_awaited_once_with()
+        assert resources.lightrag is lightrag
+        assert resources.robust_document_embedder is document_embedder
+        assert resources.direct_image_embedding_enabled is True
+        assert resources.rerank_func is rerank_func
+        assert resources.model_bundle is model_bundle
+        assert resources.config is config
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            resources.lightrag = object()  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class TestWorkspaceCreation:

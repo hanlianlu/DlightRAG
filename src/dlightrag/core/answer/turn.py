@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dlightrag.core.request.planner import QueryPlan
+    from dlightrag.core.service import ComposerProcessingResources
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,7 @@ class PreparedAnswerTurn:
     # core only places them ahead of the untouched RAG rows for answer assembly.
     composer_context_chunks: tuple[dict[str, Any], ...] = ()
     composer_evidence_trace: dict[str, Any] = field(default_factory=dict)
+    composer_processing_resources: ComposerProcessingResources | None = None
     web_composer_visuals: bool = False
     # Current attachment id -> deterministic planner digest. The Web adapter
     # persists these with the completed turn so future planner turns can resolve

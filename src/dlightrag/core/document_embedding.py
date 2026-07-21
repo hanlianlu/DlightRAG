@@ -105,6 +105,16 @@ class RobustDocumentEmbedder:
         """Return the configured output vector dimension."""
         return self._dimension
 
+    @property
+    def asymmetric(self) -> bool:
+        """Return the provider's resolved asymmetric embedding mode."""
+        return bool(self._embedder.asymmetric)
+
+    @property
+    def min_image_pixel(self) -> int:
+        """Return the effective minimum image side admitted for fused embedding."""
+        return self._min_image_pixel
+
     async def aembed_documents(
         self,
         items: list[DocumentEmbeddingInput],

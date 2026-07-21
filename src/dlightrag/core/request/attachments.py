@@ -19,18 +19,55 @@ import base64
 import json
 import logging
 import tempfile
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 
+from dlightrag.core.document_embedding import (
+    DocumentEmbeddingInput,
+    DocumentEmbeddingTrace,
+    DocumentEmbeddingVector,
+)
+from dlightrag.core.request.composer_analysis import (
+    ComposerAnalysisOutcome,
+    aanalyze_composer_sidecars,
+    build_composer_analysis_signature,
+)
 from dlightrag.utils.tokens import estimate_tokens
+
+if TYPE_CHECKING:
+    from dlightrag.config import DlightragConfig
 
 logger = logging.getLogger(__name__)
 
 _ATTACHMENT_WORKSPACE = "__web_attachment__"
+_COMPOSER_EMBEDDING_CONTRACT_VERSION = 1
+
+
+class DocumentEmbedderProtocol(Protocol):
+    """Borrowed robust document embedder surface used by Composer."""
+
+    @property
+    def image_enabled(self) -> bool: ...
+
+    @property
+    def dimension(self) -> int: ...
+
+    @property
+    def asymmetric(self) -> bool: ...
+
+    @property
+    def min_image_pixel(self) -> int: ...
+
+    async def aembed_documents(
+        self,
+        items: list[DocumentEmbeddingInput],
+    ) -> tuple[list[DocumentEmbeddingVector], DocumentEmbeddingTrace]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +87,7 @@ class AttachmentVectorPageRow:
     global_order: int
     cache_key: AttachmentCacheKey
     embedding_signature: str | None
-    embedding_vector: list[object] | None
+    embedding_vector: Sequence[object] | None
 
 
 def validate_attachment_vector(
@@ -142,6 +179,7 @@ class ParsedAttachmentBundle:
 
     chunks: list[AttachmentContextChunk]
     parser_signature: str = ""
+    trace: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,7 +262,13 @@ def resolve_attachment_parser_signature(filename: str, parser_rules: str) -> str
     return f"{engine}:{directives.process_options}"
 
 
-def resolve_attachment_chunk_signature(lightrag: Any, filename: str, parser_rules: str) -> str:
+def resolve_attachment_chunk_signature(
+    lightrag: Any,
+    filename: str,
+    parser_rules: str,
+    *,
+    analysis_signature: str = "",
+) -> str:
     """Stable identity of the chunking configuration for ``filename``."""
     from lightrag.parser.routing import (
         resolve_chunk_options,
@@ -244,26 +288,50 @@ def resolve_attachment_chunk_signature(lightrag: Any, filename: str, parser_rule
             "process_options": directives.process_options,
             "chunk_opts": chunk_opts,
             "tokenizer": tokenizer_name,
+            "analysis_signature": analysis_signature,
         },
         sort_keys=True,
         default=str,
     )
 
 
-async def parse_attachment_to_bundle(
+def build_composer_embedding_signature(
     *,
-    lightrag: Any,
+    config: DlightragConfig,
+    embedder: DocumentEmbedderProtocol,
+    mode: Literal["fused", "text"],
+) -> str:
+    """Return a deterministic non-secret signature for one effective vector mode."""
+    from dlightrag.models.composer import normalized_endpoint_fingerprint
+
+    payload = {
+        "contract_version": _COMPOSER_EMBEDDING_CONTRACT_VERSION,
+        "provider": config.embedding.provider,
+        "model": config.embedding.model,
+        "endpoint": normalized_endpoint_fingerprint(config.embedding.base_url),
+        "dimension": embedder.dimension,
+        "asymmetric": getattr(embedder, "asymmetric", config.embedding.asymmetric),
+        "mode": mode,
+        "image_normalization": {
+            "min_image_pixel": getattr(
+                embedder,
+                "min_image_pixel",
+                config.parser_sidecars.vlm.min_image_pixel,
+            ),
+        },
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+@asynccontextmanager
+async def parse_attachment_document(
+    *,
     attachment_id: str,
     filename: str,
     document_bytes: bytes,
     parser_rules: str,
-) -> ParsedAttachmentBundle:
-    """Parse one attachment via the real parser stack, writing no workspace row.
-
-    The bundle (including any visual chunk image bytes) is fully built before
-    the temporary directory exits, so no returned object points at deleted
-    scratch files.
-    """
+) -> AsyncIterator[tuple[ParsedAttachmentDocument, str, str]]:
+    """Yield parser output while its temporary source and sidecars remain alive."""
     from lightrag.parser.base import ParseContext
     from lightrag.parser.registry import get_parser
     from lightrag.parser.routing import (
@@ -302,13 +370,30 @@ async def parse_attachment_to_bundle(
             blocks_path=result.blocks_path,
             parser_signature=parser_signature,
         )
-        # Build text + visual chunks (and read sidecar images) before cleanup.
+        yield parsed, directives.process_options, parser_signature
+
+
+async def parse_attachment_to_bundle(
+    *,
+    lightrag: Any,
+    attachment_id: str,
+    filename: str,
+    document_bytes: bytes,
+    parser_rules: str,
+) -> ParsedAttachmentBundle:
+    """Parse and chunk one attachment while all parser sidecars remain alive."""
+    async with parse_attachment_document(
+        attachment_id=attachment_id,
+        filename=filename,
+        document_bytes=document_bytes,
+        parser_rules=parser_rules,
+    ) as (parsed, process_options, _parser_signature):
         return await build_attachment_bundle_from_parse_result(
             lightrag=lightrag,
             attachment_id=attachment_id,
             filename=filename,
             parsed=parsed,
-            process_options=directives.process_options,
+            process_options=process_options,
         )
 
 
@@ -319,6 +404,7 @@ async def build_attachment_bundle_from_parse_result(
     filename: str,
     parsed: ParsedAttachmentDocument,
     process_options: str,
+    include_multimodal: bool = True,
 ) -> ParsedAttachmentBundle:
     """Chunk parser output with the SAME LightRAG chunkers durable ingest uses."""
     from lightrag.chunker import (
@@ -384,7 +470,7 @@ async def build_attachment_bundle_from_parse_result(
         default=-1,
     )
     mm_chunks: list[dict[str, Any]] = []
-    if parsed.blocks_path:
+    if parsed.blocks_path and include_multimodal:
         mm_chunks = lightrag._build_mm_chunks_from_sidecars(
             doc_id=doc_id,
             file_path=filename,
@@ -469,11 +555,111 @@ class QueryAttachmentService:
     imports the storage module at top level.
     """
 
-    def __init__(self, *, lightrag: Any, store: Any, parser_rules: str, ttl_days: int) -> None:
+    def __init__(
+        self,
+        *,
+        lightrag: Any,
+        store: Any,
+        parser_rules: str,
+        ttl_days: int,
+        robust_document_embedder: DocumentEmbedderProtocol,
+        direct_image_embedding_enabled: bool,
+        model_bundle: Any,
+        config: DlightragConfig,
+    ) -> None:
         self._lightrag = lightrag
         self._store = store
         self._parser_rules = parser_rules
         self._ttl_days = ttl_days
+        self._document_embedder = robust_document_embedder
+        self._direct_image_embedding_enabled = direct_image_embedding_enabled
+        self._model_bundle = model_bundle
+        self._config = config
+
+    def _with_cache_keys(
+        self,
+        bundle: ParsedAttachmentBundle,
+        *,
+        content_sha256: str,
+        parser_signature: str,
+        chunk_signature: str,
+    ) -> ParsedAttachmentBundle:
+        return replace(
+            bundle,
+            chunks=[
+                replace(
+                    chunk,
+                    cache_key=AttachmentCacheKey(
+                        content_sha256,
+                        parser_signature,
+                        chunk_signature,
+                        chunk.cache_key.cache_chunk_id
+                        if chunk.cache_key is not None
+                        else chunk.chunk_id,
+                    ),
+                )
+                for chunk in bundle.chunks
+            ],
+            parser_signature=parser_signature,
+        )
+
+    async def _aembed_bundle(
+        self,
+        bundle: ParsedAttachmentBundle,
+        *,
+        allow_images: bool = True,
+    ) -> tuple[ParsedAttachmentBundle, DocumentEmbeddingTrace]:
+        return await self._aembed_chunk_indices(
+            bundle,
+            list(range(len(bundle.chunks))),
+            allow_images=allow_images,
+        )
+
+    async def _aembed_chunk_indices(
+        self,
+        bundle: ParsedAttachmentBundle,
+        indices: list[int],
+        *,
+        allow_images: bool = True,
+    ) -> tuple[ParsedAttachmentBundle, DocumentEmbeddingTrace]:
+        if not indices:
+            return bundle, DocumentEmbeddingTrace(0, 0, 0, 0)
+        inputs = [
+            DocumentEmbeddingInput(
+                key=(
+                    chunk.cache_key.cache_chunk_id
+                    if chunk.cache_key is not None
+                    else chunk.chunk_id
+                ),
+                text=chunk.content,
+                image_bytes=(
+                    chunk.image_bytes
+                    if allow_images
+                    and self._direct_image_embedding_enabled
+                    and self._document_embedder.image_enabled
+                    else None
+                ),
+            )
+            for chunk in (bundle.chunks[index] for index in indices)
+        ]
+        vectors, trace = await self._document_embedder.aembed_documents(inputs)
+        vectors_by_key = {vector.key: vector for vector in vectors}
+        chunks = list(bundle.chunks)
+        for index, item in zip(indices, inputs, strict=True):
+            chunk = chunks[index]
+            vector = vectors_by_key.get(item.key)
+            if vector is None:
+                continue
+            chunks[index] = replace(
+                chunk,
+                embedding_signature=build_composer_embedding_signature(
+                    config=self._config,
+                    embedder=self._document_embedder,
+                    mode=vector.mode,
+                ),
+                embedding_vector=vector.vector,
+            )
+        return replace(bundle, chunks=chunks), trace
 
     async def achunks_for_attachment(
         self,
@@ -486,30 +672,206 @@ class QueryAttachmentService:
         content_sha256: str,
     ) -> tuple[ParsedAttachmentBundle, dict[str, Any]]:
         """Return cached chunks or parse-and-cache them; failures stay scoped."""
+        from lightrag.parser.routing import parse_process_options, resolve_parser_directives
+
+        directives = resolve_parser_directives(
+            Path(filename),
+            parser_rules=self._parser_rules,
+            require_external_endpoint=False,
+        )
         parser_signature = resolve_attachment_parser_signature(filename, self._parser_rules)
+        analysis_signature = build_composer_analysis_signature(
+            lightrag=self._lightrag,
+            model_bundle=self._model_bundle,
+            config=self._config,
+            process_options=directives.process_options,
+        )
         chunk_signature = resolve_attachment_chunk_signature(
-            self._lightrag, filename, self._parser_rules
-        )
-        cached = await self._store.load_attachment_chunks(
-            principal_id,
-            conversation_id,
-            attachment_id,
+            self._lightrag,
             filename,
-            content_sha256=content_sha256,
-            parser_signature=parser_signature,
-            chunk_signature=chunk_signature,
-            ttl_days=self._ttl_days,
+            self._parser_rules,
+            analysis_signature=analysis_signature,
         )
-        if cached is not None:
-            return cached, {"attachment_parse_cache_hit": True}
+        cache_error: str | None = None
         try:
-            bundle = await parse_attachment_to_bundle(
-                lightrag=self._lightrag,
+            cached = await self._store.load_attachment_chunks(
+                principal_id,
+                conversation_id,
+                attachment_id,
+                filename,
+                content_sha256=content_sha256,
+                parser_signature=parser_signature,
+                chunk_signature=chunk_signature,
+                ttl_days=self._ttl_days,
+            )
+        except Exception as exc:
+            cache_error = type(exc).__name__
+            cached = None
+            logger.warning(
+                "Attachment cache lookup failed; reparsing request-locally", exc_info=True
+            )
+        if cached is not None:
+            chunks = list(cached.chunks)
+            process_options = parse_process_options(directives.process_options)
+            cached_mm_chunk_count = sum(chunk.sidecar_type is not None for chunk in chunks)
+            cached_analysis_outcome = (
+                ComposerAnalysisOutcome.SUCCESS.value
+                if cached_mm_chunk_count > 0
+                or (
+                    self._config.parser_sidecars.vlm.enabled
+                    and (
+                        process_options.images
+                        or process_options.tables
+                        or process_options.equations
+                    )
+                )
+                else ComposerAnalysisOutcome.INTENTIONALLY_DISABLED.value
+            )
+            references = [
+                (index, chunk.cache_key)
+                for index, chunk in enumerate(chunks)
+                if chunk.cache_key is not None
+            ]
+            rows_by_order: dict[int, AttachmentVectorPageRow] = {}
+            try:
+                async for page in self._store.aiter_attachment_vectors(
+                    principal_id,
+                    conversation_id,
+                    references,
+                    ttl_days=self._ttl_days,
+                    page_size=1000,
+                ):
+                    rows_by_order.update((row.global_order, row) for row in page)
+            except Exception as exc:
+                cache_error = type(exc).__name__
+                logger.warning(
+                    "Attachment vector cache read failed; refreshing request-locally",
+                    exc_info=True,
+                )
+            vector_hits = 0
+            missing_indices: list[int] = []
+            for index, chunk in enumerate(chunks):
+                preferred_mode: Literal["fused", "text"] = (
+                    "fused"
+                    if chunk.image_bytes is not None
+                    and self._direct_image_embedding_enabled
+                    and self._document_embedder.image_enabled
+                    else "text"
+                )
+                expected_signature = build_composer_embedding_signature(
+                    config=self._config,
+                    embedder=self._document_embedder,
+                    mode=preferred_mode,
+                )
+                row = rows_by_order.get(index)
+                vector = (
+                    validate_attachment_vector(
+                        row,
+                        expected_signature=expected_signature,
+                        expected_dimension=self._document_embedder.dimension,
+                    )
+                    if row is not None
+                    else None
+                )
+                if vector is not None:
+                    chunks[index] = replace(
+                        chunk,
+                        embedding_signature=expected_signature,
+                        embedding_vector=vector.tolist(),
+                    )
+                    vector_hits += 1
+                else:
+                    missing_indices.append(index)
+            if vector_hits == len(chunks):
+                return replace(cached, chunks=chunks), {
+                    "attachment_parse_cache_hit": True,
+                    "attachment_analysis_outcome": cached_analysis_outcome,
+                    "attachment_analysis_error": None,
+                    "attachment_mm_chunk_count": cached_mm_chunk_count,
+                    "attachment_vector_cache_hits": vector_hits,
+                    "attachment_vector_cache_misses": 0,
+                    "attachment_cache_materialized": False,
+                    "attachment_cache_error": cache_error,
+                    "attachment_embedding_fused": 0,
+                    "attachment_embedding_text": 0,
+                    "attachment_embedding_fallback": 0,
+                    "attachment_embedding_failed": 0,
+                }
+            refreshed, embedding_trace = await self._aembed_chunk_indices(
+                replace(cached, chunks=chunks),
+                missing_indices,
+            )
+            updated_chunks = [
+                refreshed.chunks[index]
+                for index in missing_indices
+                if refreshed.chunks[index].embedding_signature is not None
+                and refreshed.chunks[index].embedding_vector is not None
+            ]
+            if updated_chunks:
+                try:
+                    await self._store.aupdate_attachment_chunk_vectors(
+                        principal_id,
+                        conversation_id,
+                        updated_chunks,
+                        ttl_days=self._ttl_days,
+                    )
+                except Exception as exc:
+                    cache_error = type(exc).__name__
+                    logger.warning(
+                        "Attachment vector cache update failed; keeping request-local vectors",
+                        exc_info=True,
+                    )
+            return refreshed, {
+                "attachment_parse_cache_hit": True,
+                "attachment_analysis_outcome": cached_analysis_outcome,
+                "attachment_analysis_error": None,
+                "attachment_mm_chunk_count": cached_mm_chunk_count,
+                "attachment_vector_cache_hits": vector_hits,
+                "attachment_vector_cache_misses": len(missing_indices),
+                "attachment_cache_materialized": False,
+                "attachment_cache_error": cache_error,
+                "attachment_embedding_fused": embedding_trace.fused,
+                "attachment_embedding_text": embedding_trace.text,
+                "attachment_embedding_fallback": embedding_trace.fused_to_text_fallback,
+                "attachment_embedding_failed": embedding_trace.failed,
+            }
+        try:
+            async with parse_attachment_document(
                 attachment_id=attachment_id,
                 filename=filename,
                 document_bytes=document_bytes,
                 parser_rules=self._parser_rules,
-            )
+            ) as (parsed, process_options, actual_parser_signature):
+                analysis = await aanalyze_composer_sidecars(
+                    lightrag=self._lightrag,
+                    model_bundle=self._model_bundle,
+                    config=self._config,
+                    doc_id=f"att-{attachment_id}",
+                    file_path=filename,
+                    parsed_data={
+                        "content": parsed.content,
+                        "blocks_path": parsed.blocks_path,
+                    },
+                    process_options=process_options,
+                )
+                bundle = await build_attachment_bundle_from_parse_result(
+                    lightrag=self._lightrag,
+                    attachment_id=attachment_id,
+                    filename=filename,
+                    parsed=parsed,
+                    process_options=process_options,
+                    include_multimodal=(analysis.outcome is ComposerAnalysisOutcome.SUCCESS),
+                )
+                bundle = self._with_cache_keys(
+                    bundle,
+                    content_sha256=content_sha256,
+                    parser_signature=actual_parser_signature,
+                    chunk_signature=chunk_signature,
+                )
+                bundle, embedding_trace = await self._aembed_bundle(
+                    bundle,
+                    allow_images=analysis.outcome is not ComposerAnalysisOutcome.DEGRADED,
+                )
         except Exception as exc:
             # Parser failures are attachment-scoped: the rest of the turn
             # continues with an attachment warning instead of a hard fail. Log
@@ -527,16 +889,38 @@ class QueryAttachmentService:
                 "attachment_parse_error": type(exc).__name__,
                 "attachment_parse_cache_hit": False,
             }
-        await self._store.materialize_attachment_chunks(
-            principal_id,
-            conversation_id,
-            content_sha256=content_sha256,
-            parser_signature=parser_signature,
-            chunk_signature=chunk_signature,
-            bundle=bundle,
-            ttl_days=self._ttl_days,
-        )
-        return bundle, {"attachment_parse_cache_hit": False}
+        cache_materialized = False
+        if analysis.cacheable:
+            try:
+                cache_materialized = await self._store.materialize_attachment_chunks(
+                    principal_id,
+                    conversation_id,
+                    content_sha256=content_sha256,
+                    parser_signature=parser_signature,
+                    chunk_signature=chunk_signature,
+                    bundle=bundle,
+                    ttl_days=self._ttl_days,
+                )
+            except Exception as exc:
+                cache_error = type(exc).__name__
+                logger.warning(
+                    "Attachment cache materialization failed; keeping request-local bundle",
+                    exc_info=True,
+                )
+        return bundle, {
+            "attachment_parse_cache_hit": False,
+            "attachment_analysis_outcome": analysis.outcome.value,
+            "attachment_analysis_error": analysis.error_type,
+            "attachment_mm_chunk_count": analysis.mm_chunk_count,
+            "attachment_cache_materialized": cache_materialized,
+            "attachment_cache_error": cache_error,
+            "attachment_vector_cache_hits": 0,
+            "attachment_vector_cache_misses": len(bundle.chunks),
+            "attachment_embedding_fused": embedding_trace.fused,
+            "attachment_embedding_text": embedding_trace.text,
+            "attachment_embedding_fallback": embedding_trace.fused_to_text_fallback,
+            "attachment_embedding_failed": embedding_trace.failed,
+        }
 
 
 __all__ = [
@@ -546,9 +930,11 @@ __all__ = [
     "ParsedAttachmentBundle",
     "ParsedAttachmentDocument",
     "QueryAttachmentService",
+    "build_composer_embedding_signature",
     "build_attachment_bundle_from_parse_result",
     "build_text_attachment_chunk",
     "parse_attachment_to_bundle",
+    "parse_attachment_document",
     "resolve_attachment_chunk_signature",
     "resolve_attachment_parser_signature",
     "validate_attachment_vector",
