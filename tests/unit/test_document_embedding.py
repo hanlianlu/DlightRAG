@@ -119,8 +119,18 @@ async def test_fused_batch_failure_falls_back_to_text_once() -> None:
     vectors, trace = await executor.aembed_documents(items)
 
     assert vectors == [
-        DocumentEmbeddingVector(key="a", vector=[1.0, 0.0, 0.0], mode="text"),
-        DocumentEmbeddingVector(key="b", vector=[0.0, 1.0, 0.0], mode="text"),
+        DocumentEmbeddingVector(
+            key="a",
+            vector=[1.0, 0.0, 0.0],
+            mode="text",
+            fallback_reason="fused_provider_failed",
+        ),
+        DocumentEmbeddingVector(
+            key="b",
+            vector=[0.0, 1.0, 0.0],
+            mode="text",
+            fallback_reason="fused_provider_failed",
+        ),
     ]
     assert trace == DocumentEmbeddingTrace(
         fused=0,
@@ -166,6 +176,10 @@ async def test_unreadable_or_small_image_falls_back_to_text() -> None:
     vectors, trace = await executor.aembed_documents(items)
 
     assert [vector.mode for vector in vectors] == ["text", "text"]
+    assert [vector.fallback_reason for vector in vectors] == [
+        "image_rejected",
+        "image_rejected",
+    ]
     assert trace == DocumentEmbeddingTrace(fused=0, text=2, fused_to_text_fallback=0, failed=0)
     embedder.embed_index_fused.assert_not_awaited()
     embedder.embed_texts.assert_awaited_once_with(["unreadable", "too small"], context="document")

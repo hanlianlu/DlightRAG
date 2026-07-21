@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DocumentEmbeddingMode = Literal["fused", "text"]
+DocumentEmbeddingFallbackReason = Literal["image_rejected", "fused_provider_failed"]
 
 # Let a near-complete decode return its PIL resource without materially delaying cancellation.
 _IMAGE_OPEN_CLEANUP_TIMEOUT_SECONDS = 0.1
@@ -46,6 +47,7 @@ class DocumentEmbeddingVector:
     key: str
     vector: list[float]
     mode: DocumentEmbeddingMode
+    fallback_reason: DocumentEmbeddingFallbackReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +133,9 @@ class RobustDocumentEmbedder:
         for start in range(0, len(items), self._batch_size):
             batch = list(enumerate(items[start : start + self._batch_size], start=start))
             fused_items: list[tuple[int, DocumentEmbeddingInput, Image.Image]] = []
-            text_items: list[tuple[int, DocumentEmbeddingInput]] = []
+            text_items: list[
+                tuple[int, DocumentEmbeddingInput, DocumentEmbeddingFallbackReason | None]
+            ] = []
             opened_images: list[Image.Image] = []
             try:
                 opened = await bounded_map(
@@ -144,18 +148,33 @@ class RobustDocumentEmbedder:
                     index, item = batch[position]
                     image = None if isinstance(result, Exception) else result[2]
                     if image is None:
-                        text_items.append((index, item))
+                        fallback_reason: DocumentEmbeddingFallbackReason | None = (
+                            "image_rejected"
+                            if self._image_enabled
+                            and (item.image_bytes is not None or item.image_path is not None)
+                            else None
+                        )
+                        text_items.append((index, item, fallback_reason))
                     else:
                         fused_items.append((index, item, image))
 
                 if text_items:
-                    text_vectors, text_error_type = await self._aembed_text_batch(text_items)
+                    text_vectors, text_error_type = await self._aembed_text_batch(
+                        [(index, item) for index, item, _reason in text_items]
+                    )
                     error_type = error_type or text_error_type
                     if text_vectors is None:
                         failed_count += len(text_items)
                     else:
-                        for (index, item), vector in zip(text_items, text_vectors, strict=True):
-                            resolved[index] = DocumentEmbeddingVector(item.key, vector, "text")
+                        for (index, item, reason), vector in zip(
+                            text_items, text_vectors, strict=True
+                        ):
+                            resolved[index] = DocumentEmbeddingVector(
+                                item.key,
+                                vector,
+                                "text",
+                                fallback_reason=reason,
+                            )
                         text_count += len(text_items)
 
                 if fused_items:
@@ -184,7 +203,12 @@ class RobustDocumentEmbedder:
                             for (index, item), vector in zip(
                                 fallback_items, fallback_vectors, strict=True
                             ):
-                                resolved[index] = DocumentEmbeddingVector(item.key, vector, "text")
+                                resolved[index] = DocumentEmbeddingVector(
+                                    item.key,
+                                    vector,
+                                    "text",
+                                    fallback_reason="fused_provider_failed",
+                                )
                             text_count += len(fallback_items)
                     else:
                         for (index, item, _image), vector in zip(
@@ -384,6 +408,7 @@ def _close_image_task_result(task: asyncio.Task[Image.Image | None | BaseExcepti
 
 
 __all__ = [
+    "DocumentEmbeddingFallbackReason",
     "DocumentEmbeddingInput",
     "DocumentEmbeddingTrace",
     "DocumentEmbeddingVector",

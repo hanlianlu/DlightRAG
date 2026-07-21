@@ -1290,6 +1290,74 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
     assert bundles[1][1].trace["attachment_embedding_fused"] == 1
 
 
+async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
+    service_under_test,
+) -> None:
+    from dlightrag.core.request.attachments import (
+        AttachmentContextChunk,
+        ParsedAttachmentBundle,
+    )
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+    )
+    documents = [
+        SimpleNamespace(
+            attachment_id="att-invalid",
+            filename="report.[unknown].txt",
+            document_bytes=b"bad hint",
+            content_sha256="sha-invalid",
+        ),
+        SimpleNamespace(
+            attachment_id="att-valid",
+            filename="notes.txt",
+            document_bytes=b"valid",
+            content_sha256="sha-valid",
+        ),
+    ]
+
+    class _AttachmentService:
+        async def achunks_for_attachment(self, **kwargs: Any):
+            attachment_id = kwargs["attachment_id"]
+            if attachment_id == "att-invalid":
+                return ParsedAttachmentBundle(chunks=[]), {
+                    "attachment_parse_error": "ValueError",
+                    "attachment_analysis_outcome": "degraded",
+                    "attachment_parse_cache_hit": False,
+                }
+            chunk = AttachmentContextChunk(
+                chunk_id="chunk-valid",
+                attachment_id=attachment_id,
+                filename=kwargs["filename"],
+                chunk_index=1,
+                content="valid",
+            )
+            return ParsedAttachmentBundle(chunks=[chunk]), {
+                "attachment_parse_cache_hit": False,
+                "attachment_analysis_outcome": "intentionally_disabled",
+            }
+
+    service_under_test._get_query_attachment_service = lambda _resources: _AttachmentService()
+
+    chunks, errors, bundles = await service_under_test._parse_attachment_documents(
+        resources=object(),
+        prepared=prepared,
+        documents=documents,
+    )
+
+    assert [chunk.attachment_id for chunk in chunks] == ["att-valid"]
+    assert errors == [{"attachment_id": "att-invalid", "error": "ValueError"}]
+    assert [attachment_id for attachment_id, _bundle in bundles] == [
+        "att-invalid",
+        "att-valid",
+    ]
+    assert bundles[0][1].trace["attachment_analysis_outcome"] == "degraded"
+
+
 async def test_prepare_answer_turn_preserves_selected_history_document_order(
     service_under_test,
     conversation_store: AsyncMock,
