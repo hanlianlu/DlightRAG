@@ -46,8 +46,7 @@ class ComposerEvidenceSelector:
         query: str,
         current_rows: list[ContextRow],
         history_rows: list[ContextRow],
-        current_dense_rankings: list[ContextRow],
-        history_dense_rankings: list[ContextRow],
+        dense_rankings: list[ContextRow],
         retrieval_attachment_ids: set[str],
         rerank_func: Any | None,
     ) -> tuple[list[ContextRow], dict[str, Any]]:
@@ -91,7 +90,7 @@ class ComposerEvidenceSelector:
         coverage = _coverage_ranking(retrieval_rows)
         dense = [
             dict(row)
-            for row in [*current_dense_rankings, *history_dense_rankings]
+            for row in dense_rankings
             if _row_attachment_id(row) in retrieval_attachment_ids
         ]
         candidates = rrf_fuse([lexical, structural, coverage, dense])[: self._candidate_limit]

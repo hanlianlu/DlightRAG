@@ -378,14 +378,9 @@ class WebConversationService:
             }
             current_rows = _composer_context_rows(current_chunks, scope="current")
             history_rows = _composer_context_rows(history_chunks, scope="history")
-            retrieval_current_rows = [
+            retrieval_rows = [
                 row
-                for row in current_rows
-                if str(row.get("full_doc_id") or "") in retrieval_attachment_ids
-            ]
-            retrieval_history_rows = [
-                row
-                for row in history_rows
+                for row in [*current_rows, *history_rows]
                 if str(row.get("full_doc_id") or "") in retrieval_attachment_ids
             ]
             retrieval_chunks = [
@@ -394,18 +389,16 @@ class WebConversationService:
                 if chunk.attachment_id in retrieval_attachment_ids
             ]
             request_vectors = _composer_request_vectors(retrieval_chunks)
-            current_dense, history_dense, dense_trace = await attachment_service.adense_rankings(
+            dense_rankings, dense_trace = await attachment_service.adense_rankings(
                 plan.standalone_query,
-                retrieval_current_rows,
-                retrieval_history_rows,
+                retrieval_rows,
                 request_vectors=request_vectors,
             )
             composer_rows, composer_trace = await manager._aselect_web_composer_evidence(
                 query=plan.standalone_query,
                 current_rows=current_rows,
                 history_rows=history_rows,
-                current_dense_rankings=current_dense,
-                history_dense_rankings=history_dense,
+                dense_rankings=dense_rankings,
                 retrieval_attachment_ids=retrieval_attachment_ids,
                 rerank_func=resources.rerank_func,
             )

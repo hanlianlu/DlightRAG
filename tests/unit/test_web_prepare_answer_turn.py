@@ -209,33 +209,28 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
 
     manager.aplan_web_conversation_query = plan_with_history  # type: ignore[method-assign]
     service = _service(store)
-    current_dense: list[dict[str, Any]] = []
-    history_dense: list[dict[str, Any]] = []
+    dense_rankings: list[dict[str, Any]] = []
+    dense_calls: list[list[dict[str, Any]]] = []
 
     class _AttachmentService:
         async def adense_rankings(
             self,
             query: str,
-            current_rows: list[dict[str, Any]],
-            history_rows: list[dict[str, Any]],
+            rows: list[dict[str, Any]],
             *,
             request_vectors: Any,
-        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             events.append("dense")
             assert query == "standalone"
             assert request_vectors == {}
-            assert current_rows == []
-            assert [row["full_doc_id"] for row in history_rows] == [history_id]
-            current_dense.extend(reversed(current_rows))
-            history_dense.extend(reversed(history_rows))
+            assert [row["full_doc_id"] for row in rows] == [_ID, history_id]
+            dense_calls.append(rows)
+            dense_rankings.extend(reversed(rows))
             return (
-                current_dense,
-                history_dense,
+                dense_rankings,
                 {
                     "composer_dense_status": "ranked",
-                    "composer_dense_current_chunks": len(current_dense),
-                    "composer_dense_history_chunks": len(history_dense),
-                    "composer_dense_chunks": len(current_dense) + len(history_dense),
+                    "composer_dense_chunks": len(dense_rankings),
                 },
             )
 
@@ -270,11 +265,10 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
             )
             for index, document in enumerate(documents, start=1)
         ]
-        evidence_mode = "full" if scope == "current" else "retrieval"
         bundles = [
             (
                 document.attachment_id,
-                ParsedAttachmentBundle(chunks=[chunk], evidence_mode=evidence_mode),
+                ParsedAttachmentBundle(chunks=[chunk], evidence_mode="retrieval"),
             )
             for document, chunk in zip(documents, chunks, strict=True)
         ]
@@ -286,9 +280,8 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
         events.append("selector")
         assert [row["full_doc_id"] for row in kwargs["current_rows"]] == [_ID]
         assert [row["full_doc_id"] for row in kwargs["history_rows"]] == [history_id]
-        assert kwargs["current_dense_rankings"] is current_dense
-        assert kwargs["history_dense_rankings"] is history_dense
-        assert kwargs["retrieval_attachment_ids"] == {history_id}
+        assert kwargs["dense_rankings"] is dense_rankings
+        assert kwargs["retrieval_attachment_ids"] == {_ID, history_id}
         assert kwargs["rerank_func"] is rerank_func
         return [*kwargs["current_rows"], *kwargs["history_rows"]], {
             "composer_evidence_strategy": "retrieved"
@@ -315,11 +308,12 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
     assert resolutions == [[" Research Notes ", "ignored"]]
     assert factory_calls == [(resources, _prepared())]
     assert events == ["parse-current", "parse-history", "dense", "selector"]
+    assert len(dense_calls) == 1
     assert [row["full_doc_id"] for row in turn.composer_context_chunks] == [_ID, history_id]
     assert turn.composer_evidence_trace["composer_dense_status"] == "ranked"
 
 
-async def test_prepare_merges_actual_dense_trace_for_current_and_history(
+async def test_prepare_merges_actual_global_dense_trace(
     test_config: Any,
 ) -> None:
     from dlightrag.core.request.attachments import (
@@ -438,8 +432,7 @@ async def test_prepare_merges_actual_dense_trace_for_current_and_history(
         return chunks, [], bundles
 
     async def select_evidence(**kwargs: Any):
-        assert [row["full_doc_id"] for row in kwargs["current_dense_rankings"]] == [_ID]
-        assert [row["full_doc_id"] for row in kwargs["history_dense_rankings"]] == [history_id]
+        assert [row["full_doc_id"] for row in kwargs["dense_rankings"]] == [_ID, history_id]
         assert kwargs["retrieval_attachment_ids"] == {_ID, history_id}
         return [*kwargs["current_rows"], *kwargs["history_rows"]], {
             "composer_evidence_strategy": "retrieved"
@@ -464,7 +457,5 @@ async def test_prepare_merges_actual_dense_trace_for_current_and_history(
     )
 
     assert turn.composer_evidence_trace["composer_dense_status"] == "ranked"
-    assert turn.composer_evidence_trace["composer_dense_current_chunks"] == 1
-    assert turn.composer_evidence_trace["composer_dense_history_chunks"] == 1
     assert turn.composer_evidence_trace["composer_dense_chunks"] == 2
     embedder.aembed_query.assert_awaited_once_with("standalone")

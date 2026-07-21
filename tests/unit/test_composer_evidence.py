@@ -55,8 +55,7 @@ async def test_full_pass_attachments_do_not_share_one_allowance() -> None:
         query="这说的啥",
         current_rows=current,
         history_rows=[],
-        current_dense_rankings=current,
-        history_dense_rankings=[],
+        dense_rankings=current,
         retrieval_attachment_ids=set(),
         rerank_func=_must_not_run,
     )
@@ -76,8 +75,7 @@ async def test_empty_composer_lane_is_a_noop() -> None:
         query="q",
         current_rows=[],
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids=set(),
         rerank_func=None,
     )
@@ -99,8 +97,7 @@ async def test_attachment_at_exact_boundary_passes_without_retrieval() -> None:
         query="boundary",
         current_rows=boundary,
         history_rows=[],
-        current_dense_rankings=boundary,
-        history_dense_rankings=[],
+        dense_rankings=boundary,
         retrieval_attachment_ids=set(),
         rerank_func=_must_not_run,
     )
@@ -126,8 +123,7 @@ async def test_attachment_one_token_over_boundary_uses_retrieval_without_overpac
         query="boundary",
         current_rows=oversized,
         history_rows=[],
-        current_dense_rankings=oversized,
-        history_dense_rankings=[],
+        dense_rankings=oversized,
         retrieval_attachment_ids={"current-doc"},
         rerank_func=_rerank,
     )
@@ -178,8 +174,7 @@ async def test_long_composer_documents_use_only_local_candidates_and_rerank() ->
         query="termination liability",
         current_rows=current,
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids={"doc-a", "doc-b"},
         rerank_func=_rerank,
     )
@@ -216,8 +211,7 @@ async def test_oversized_attachments_pack_with_independent_allowances() -> None:
         query="evidence",
         current_rows=current,
         history_rows=[],
-        current_dense_rankings=current,
-        history_dense_rankings=[],
+        dense_rankings=current,
         retrieval_attachment_ids={"doc-a", "doc-b"},
         rerank_func=_rerank,
     )
@@ -252,8 +246,7 @@ async def test_packing_uses_a_later_representative_when_the_first_does_not_fit(
         query="evidence",
         current_rows=rows,
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
@@ -293,8 +286,7 @@ async def test_packing_prefers_highest_ranked_fitting_row_before_representative(
         query="evidence",
         current_rows=rows,
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
@@ -326,8 +318,7 @@ async def test_composer_rerank_failure_falls_back_with_one_shared_traceback(
             query="indemnity obligation",
             current_rows=current,
             history_rows=[],
-            current_dense_rankings=[],
-            history_dense_rankings=[],
+            dense_rankings=[],
             retrieval_attachment_ids={"current-doc"},
             rerank_func=_fail_rerank,
         )
@@ -358,8 +349,7 @@ async def test_composer_without_dense_rows_falls_back_to_local_fusion() -> None:
         query="termination liability",
         current_rows=rows,
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
@@ -391,8 +381,7 @@ async def test_composer_bm25_failure_is_reported_in_trace(
         query="termination liability",
         current_rows=rows,
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids={"current-doc"},
         rerank_func=None,
     )
@@ -425,8 +414,7 @@ async def test_short_document_full_pass_survives_beside_long_document() -> None:
         query="section 6",
         current_rows=[*short, *long],
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids={"long"},
         rerank_func=None,
     )
@@ -462,8 +450,7 @@ async def test_selector_uses_resolved_ids_instead_of_reclassifying_by_tokens(
         query="evidence",
         current_rows=[full, retrieval],
         history_rows=[],
-        current_dense_rankings=[full, retrieval],
-        history_dense_rankings=[],
+        dense_rankings=[full, retrieval],
         retrieval_attachment_ids={"retrieval-doc"},
         rerank_func=_rerank,
     )
@@ -502,8 +489,7 @@ async def test_default_candidate_limit_matches_rag_chunk_breadth() -> None:
         query="target",
         current_rows=rows,
         history_rows=[],
-        current_dense_rankings=[],
-        history_dense_rankings=[],
+        dense_rankings=[],
         retrieval_attachment_ids={"current-doc"},
         rerank_func=_rerank,
     )
@@ -518,7 +504,7 @@ async def test_unified_rrf_merges_dense_rankings_for_oversized_chunks_only(
 
     def _capture(rankings: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
         fused_calls.append(rankings)
-        return [*rankings[-1], *rankings[0], *rankings[1], *rankings[2]]
+        return list(rankings[-1])
 
     monkeypatch.setattr("dlightrag.core.request.composer_evidence.rrf_fuse", _capture)
     selector = ComposerEvidenceSelector(
@@ -552,27 +538,26 @@ async def test_unified_rrf_merges_dense_rankings_for_oversized_chunks_only(
         scope="history",
     )
     foreign = _row("foreign", "outside selection")
-    current_dense = [current_full, current_oversized[2], foreign]
-    history_dense = [history_full, history_oversized[2]]
+    dense = [history_full, history_oversized[2], foreign, current_full, current_oversized[2]]
 
     selected, _ = await selector.select(
         query="conceptually related",
         current_rows=[current_full, *current_oversized],
         history_rows=[history_full, *history_oversized],
-        current_dense_rankings=current_dense,
-        history_dense_rankings=history_dense,
+        dense_rankings=dense,
         retrieval_attachment_ids={"current-oversized", "history-oversized"},
         rerank_func=None,
     )
 
     assert len(fused_calls) == 1
-    assert fused_calls[0][3] == [current_oversized[2], history_oversized[2]]
-    assert {row["chunk_id"] for row in selected} >= {
-        "current-full",
-        "current-2",
-        "history-full",
-        "history-2",
-    }
+    assert fused_calls[0][3] == [history_oversized[2], current_oversized[2]]
+    selected_ids = [str(row["chunk_id"]) for row in selected]
+    source_ids = [
+        str(row["chunk_id"])
+        for row in [current_full, *current_oversized, history_full, *history_oversized]
+    ]
+    assert selected_ids == [chunk_id for chunk_id in source_ids if chunk_id in set(selected_ids)]
+    assert {"current-2", "history-2"} <= set(selected_ids)
 
 
 async def test_current_and_history_share_one_top_30_rerank_call() -> None:
@@ -609,8 +594,7 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
         query="target",
         current_rows=current,
         history_rows=history,
-        current_dense_rankings=list(reversed(current)),
-        history_dense_rankings=list(reversed(history)),
+        dense_rankings=[*reversed(current), *reversed(history)],
         retrieval_attachment_ids={"current-doc", "history-doc"},
         rerank_func=_rerank,
     )

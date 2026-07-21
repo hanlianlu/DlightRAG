@@ -297,11 +297,17 @@ def test_embedding_signature_uses_resolved_embedder_contract(test_config: Any) -
 async def test_dense_rankings_embed_query_once_without_embedding_documents(
     test_config: Any,
 ) -> None:
-    cache_key = attachments.AttachmentCacheKey(
+    current_key = attachments.AttachmentCacheKey(
         "content-v1",
         "parser-v1",
         "chunker-v1",
-        "cache-1",
+        "current",
+    )
+    history_key = attachments.AttachmentCacheKey(
+        "content-v1",
+        "parser-v1",
+        "chunker-v1",
+        "history",
     )
     embedder: Any = SimpleNamespace(
         dimension=2,
@@ -321,10 +327,16 @@ async def test_dense_rankings_embed_query_once_without_embedding_documents(
         vector_rows=[
             attachments.AttachmentVectorPageRow(
                 global_order=0,
-                cache_key=cache_key,
+                cache_key=current_key,
+                embedding_signature=signature,
+                embedding_vector=[0.6, 0.8],
+            ),
+            attachments.AttachmentVectorPageRow(
+                global_order=1,
+                cache_key=history_key,
                 embedding_signature=signature,
                 embedding_vector=[1.0, 0.0],
-            )
+            ),
         ],
     )
     service = QueryAttachmentService(
@@ -339,34 +351,48 @@ async def test_dense_rankings_embed_query_once_without_embedding_documents(
         principal_id="p1",
         conversation_id="c1",
     )
-    row = {
-        "chunk_id": "citation-1",
-        "reference_id": "att-1",
-        "content": "cached evidence " * 30_000,
-        "_cache_key": cache_key,
+    current_row = {
+        "chunk_id": "current",
+        "reference_id": "current-att",
+        "content": "lower cosine current evidence",
+        "_cache_key": current_key,
+        "embedding_signature": signature,
+        "embedding_vector": [0.6, 0.8],
+        "metadata": {},
+    }
+    history_row = {
+        "chunk_id": "history",
+        "reference_id": "history-att",
+        "content": "higher cosine history evidence",
+        "_cache_key": history_key,
         "embedding_signature": signature,
         "embedding_vector": [1.0, 0.0],
         "metadata": {},
     }
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "semantic query",
-        [row],
-        [],
+        [current_row, history_row],
     )
 
-    assert [item["chunk_id"] for item in current] == ["citation-1"]
-    assert history == []
+    assert [item["chunk_id"] for item in ranked] == ["history", "current"]
     assert trace == {
         "composer_dense_status": "ranked",
-        "composer_dense_current_chunks": 1,
-        "composer_dense_history_chunks": 0,
-        "composer_dense_chunks": 1,
+        "composer_dense_chunks": 2,
     }
     embedder.aembed_query.assert_awaited_once_with("semantic query")
     embedder.aembed_documents.assert_not_awaited()
-    assert "embedding_signature" not in current[0]
-    assert "embedding_vector" not in current[0]
+    assert store.vector_calls == [
+        {
+            "principal_id": "p1",
+            "conversation_id": "c1",
+            "references": [(0, current_key), (1, history_key)],
+            "ttl_days": 30,
+            "page_size": 256,
+        }
+    ]
+    assert all("embedding_signature" not in row for row in ranked)
+    assert all("embedding_vector" not in row for row in ranked)
 
 
 class _FakeLightRAG:
@@ -577,7 +603,7 @@ async def test_dense_rankings_stream_ttl_scoped_pages_of_256(test_config: Any) -
     )
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
 
-    await service.adense_rankings("query", [_dense_row(0, cache_key)], [])
+    await service.adense_rankings("query", [_dense_row(0, cache_key)])
 
     assert store.vector_calls == [
         {
@@ -621,10 +647,9 @@ async def test_dense_rankings_prefer_valid_request_local_vector_over_stale_or_mi
     )
     row = _dense_row(0, cache_key)
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [row],
-        [],
         request_vectors={
             cache_key: attachments.AttachmentRequestVector(
                 cache_key=cache_key,
@@ -634,11 +659,10 @@ async def test_dense_rankings_prefer_valid_request_local_vector_over_stale_or_mi
         },
     )
 
-    assert [item["chunk_id"] for item in current] == ["citation-0"]
-    assert history == []
+    assert [item["chunk_id"] for item in ranked] == ["citation-0"]
     assert trace["composer_dense_status"] == "ranked"
-    assert "embedding_signature" not in current[0]
-    assert "embedding_vector" not in current[0]
+    assert "embedding_signature" not in ranked[0]
+    assert "embedding_vector" not in ranked[0]
 
 
 async def test_dense_rankings_keep_valid_local_rows_when_pg_read_fails(
@@ -662,10 +686,9 @@ async def test_dense_rankings_keep_valid_local_rows_when_pg_read_fails(
     store = _FailingStore(None)
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [_dense_row(0, local_key), _dense_row(1, pg_key)],
-        [],
         request_vectors={
             local_key: attachments.AttachmentRequestVector(
                 local_key,
@@ -675,12 +698,9 @@ async def test_dense_rankings_keep_valid_local_rows_when_pg_read_fails(
         },
     )
 
-    assert [row["chunk_id"] for row in current] == ["citation-0"]
-    assert history == []
+    assert [row["chunk_id"] for row in ranked] == ["citation-0"]
     assert trace == {
         "composer_dense_status": "ranked_degraded",
-        "composer_dense_current_chunks": 1,
-        "composer_dense_history_chunks": 0,
         "composer_dense_chunks": 1,
         "composer_dense_error": "RuntimeError",
     }
@@ -712,18 +732,16 @@ async def test_dense_rankings_pg_failure_keeps_only_valid_local_candidates(
         embedder=embedder,
     )
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [_dense_row(index, key) for index, key in enumerate(keys)],
-        [],
         request_vectors={
             keys[0]: attachments.AttachmentRequestVector(keys[0], signature, [1.0, 0.0]),
             keys[1]: attachments.AttachmentRequestVector(keys[1], signature, [0.49, 0.872]),
         },
     )
 
-    assert [row["chunk_id"] for row in current] == ["citation-0"]
-    assert history == []
+    assert [row["chunk_id"] for row in ranked] == ["citation-0"]
     assert trace["composer_dense_status"] == "ranked_degraded"
     assert trace["composer_dense_error"] == "RuntimeError"
 
@@ -745,24 +763,20 @@ async def test_dense_rankings_pg_failure_without_local_candidates_reports_failed
         embedder=embedder,
     )
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [_dense_row(0, cache_key)],
-        [],
     )
 
-    assert current == []
-    assert history == []
+    assert ranked == []
     assert trace == {
         "composer_dense_status": "failed",
-        "composer_dense_current_chunks": 0,
-        "composer_dense_history_chunks": 0,
         "composer_dense_chunks": 0,
         "composer_dense_error": "RuntimeError",
     }
 
 
-async def test_dense_rankings_trace_counts_admitted_current_and_history_rows(
+async def test_dense_rankings_trace_counts_all_admitted_rows(
     test_config: Any,
 ) -> None:
     keys = [
@@ -802,18 +816,18 @@ async def test_dense_rankings_trace_counts_admitted_current_and_history_rows(
         embedder=embedder,
     )
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
-        [_dense_row(0, keys[0]), _dense_row(1, keys[1])],
-        [{**_dense_row(2, keys[2]), "content": "history evidence " * 30_000}],
+        [
+            _dense_row(0, keys[0]),
+            _dense_row(1, keys[1]),
+            {**_dense_row(2, keys[2]), "content": "history evidence " * 30_000},
+        ],
     )
 
-    assert [row["chunk_id"] for row in current] == ["citation-0", "citation-1"]
-    assert [row["chunk_id"] for row in history] == ["citation-2"]
+    assert [row["chunk_id"] for row in ranked] == ["citation-0", "citation-1", "citation-2"]
     assert trace == {
         "composer_dense_status": "ranked",
-        "composer_dense_current_chunks": 2,
-        "composer_dense_history_chunks": 1,
         "composer_dense_chunks": 3,
     }
 
@@ -851,14 +865,11 @@ async def test_dense_rankings_include_float32_half_and_ignore_invalid_vectors(
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
     rows = [_dense_row(index, key) for index, key in enumerate(keys)]
 
-    current, history, trace = await service.adense_rankings("query", rows, [])
+    ranked, trace = await service.adense_rankings("query", rows)
 
-    assert [row["chunk_id"] for row in current] == ["citation-0", "citation-1"]
-    assert history == []
+    assert [row["chunk_id"] for row in ranked] == ["citation-0", "citation-1"]
     assert trace == {
         "composer_dense_status": "ranked",
-        "composer_dense_current_chunks": 2,
-        "composer_dense_history_chunks": 0,
         "composer_dense_chunks": 2,
     }
 
@@ -900,9 +911,9 @@ async def test_dense_rankings_accept_current_fused_provider_text_fallback(
     )
     row = {**_dense_row(0, cache_key), "image_data": "aW1hZ2U="}
 
-    current, _, _ = await service.adense_rankings("query", [row], [])
+    ranked, _ = await service.adense_rankings("query", [row])
 
-    assert [item["chunk_id"] for item in current] == ["citation-0"]
+    assert [item["chunk_id"] for item in ranked] == ["citation-0"]
 
 
 async def test_dense_rankings_zero_query_disables_store_reads(test_config: Any) -> None:
@@ -911,18 +922,14 @@ async def test_dense_rankings_zero_query_disables_store_reads(test_config: Any) 
     store = _SpyStore(None)
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [_dense_row(0, cache_key)],
-        [],
     )
 
-    assert current == []
-    assert history == []
+    assert ranked == []
     assert trace == {
         "composer_dense_status": "no_query_vector",
-        "composer_dense_current_chunks": 0,
-        "composer_dense_history_chunks": 0,
         "composer_dense_chunks": 0,
     }
     assert store.vector_calls == []
@@ -936,14 +943,11 @@ async def test_dense_rankings_no_input_rows_skip_query_embedding(test_config: An
         embedder=embedder,
     )
 
-    current, history, trace = await service.adense_rankings("query", [], [])
+    ranked, trace = await service.adense_rankings("query", [])
 
-    assert current == []
-    assert history == []
+    assert ranked == []
     assert trace == {
         "composer_dense_status": "no_rows",
-        "composer_dense_current_chunks": 0,
-        "composer_dense_history_chunks": 0,
         "composer_dense_chunks": 0,
     }
     embedder.aembed_query.assert_not_awaited()
@@ -955,18 +959,14 @@ async def test_dense_rankings_no_valid_rows_report_zero_counts(test_config: Any)
     store = _SpyStore(None)
     service = _dense_service(test_config=test_config, store=store, embedder=embedder)
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [_dense_row(0, cache_key)],
-        [],
     )
 
-    assert current == []
-    assert history == []
+    assert ranked == []
     assert trace == {
         "composer_dense_status": "no_rows",
-        "composer_dense_current_chunks": 0,
-        "composer_dense_history_chunks": 0,
         "composer_dense_chunks": 0,
     }
     embedder.aembed_query.assert_awaited_once_with("query")
@@ -985,10 +985,9 @@ async def test_dense_rankings_rank_small_rows_passed_by_retrieval_router(test_co
     )
     row = {**_dense_row(0, cache_key), "content": "small evidence"}
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [row],
-        [],
         request_vectors={
             cache_key: attachments.AttachmentRequestVector(
                 cache_key,
@@ -998,8 +997,7 @@ async def test_dense_rankings_rank_small_rows_passed_by_retrieval_router(test_co
         },
     )
 
-    assert [ranked["chunk_id"] for ranked in current] == [row["chunk_id"]]
-    assert history == []
+    assert [item["chunk_id"] for item in ranked] == [row["chunk_id"]]
     assert trace["composer_dense_status"] == "ranked"
     embedder.aembed_query.assert_awaited_once_with("query")
 
@@ -1044,14 +1042,12 @@ async def test_dense_rankings_scan_all_rows_passed_by_retrieval_router(
         "content": "long evidence " * 30_000,
     }
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
         [short_row, long_row],
-        [],
     )
 
-    assert [row["chunk_id"] for row in current] == ["citation-1", "citation-2"]
-    assert history == []
+    assert [row["chunk_id"] for row in ranked] == ["citation-1", "citation-2"]
     assert trace["composer_dense_status"] == "ranked"
     embedder.aembed_query.assert_awaited_once_with("query")
     assert store.vector_calls[0]["references"] == [(0, short_key), (1, long_key)]
@@ -1068,7 +1064,7 @@ async def test_dense_rankings_propagate_query_cancellation(test_config: Any) -> 
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await service.adense_rankings("query", [_dense_row(0, cache_key)], [])
+        await service.adense_rankings("query", [_dense_row(0, cache_key)])
 
 
 async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate_ties(
@@ -1148,17 +1144,17 @@ async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate
         key=lambda index: (-float(expected_scores[index]), index),
     )
 
-    current, _, _ = await service.adense_rankings("query", rows, [])
+    ranked, _ = await service.adense_rankings("query", rows)
 
-    assert [row["chunk_id"] for row in current] == [
+    assert [row["chunk_id"] for row in ranked] == [
         f"citation-{index}" for index in expected_indices
     ]
     duplicate_positions = [
         index
-        for index, row in enumerate(current)
+        for index, row in enumerate(ranked)
         if row["chunk_id"] in {"citation-255", "citation-256"}
     ]
-    assert [current[index]["chunk_id"] for index in duplicate_positions] == [
+    assert [ranked[index]["chunk_id"] for index in duplicate_positions] == [
         "citation-255",
         "citation-256",
     ]
@@ -1166,7 +1162,7 @@ async def test_dense_rankings_match_one_shot_across_pages_and_preserve_duplicate
     assert store.vector_calls[0]["page_size"] == 256
 
 
-async def test_dense_rankings_failure_returns_error_type_and_empty_lanes(
+async def test_dense_rankings_failure_returns_error_type_and_empty_rankings(
     test_config: Any,
 ) -> None:
     cache_key = attachments.AttachmentCacheKey("content", "parser", "chunker", "cache")
@@ -1178,18 +1174,14 @@ async def test_dense_rankings_failure_returns_error_type_and_empty_lanes(
         embedder=embedder,
     )
 
-    current, history, trace = await service.adense_rankings(
+    ranked, trace = await service.adense_rankings(
         "query",
-        [_dense_row(0, cache_key)],
-        [_dense_row(1, cache_key)],
+        [_dense_row(0, cache_key), _dense_row(1, cache_key)],
     )
 
-    assert current == []
-    assert history == []
+    assert ranked == []
     assert trace == {
         "composer_dense_status": "failed",
-        "composer_dense_current_chunks": 0,
-        "composer_dense_history_chunks": 0,
         "composer_dense_chunks": 0,
         "composer_dense_error": "RuntimeError",
     }
@@ -2303,10 +2295,9 @@ async def test_partial_degradation_keeps_successful_visual_text_embeds_and_ranks
     assert successful.embedding_signature is not None
     assert successful.embedding_vector is not None
     row = successful.to_context_row()
-    current, history, _dense_trace = await service.adense_rankings(
+    ranked, _dense_trace = await service.adense_rankings(
         "query",
         [row],
-        [],
         request_vectors={
             successful.cache_key: attachments.AttachmentRequestVector(
                 successful.cache_key,
@@ -2315,10 +2306,9 @@ async def test_partial_degradation_keeps_successful_visual_text_embeds_and_ranks
             )
         },
     )
-    assert [item["chunk_id"] for item in current] == ["successful-visual"]
-    assert current[0]["reference_id"] == "att-1"
-    assert current[0]["image_data"]
-    assert history == []
+    assert [item["chunk_id"] for item in ranked] == ["successful-visual"]
+    assert ranked[0]["reference_id"] == "att-1"
+    assert ranked[0]["image_data"]
 
 
 @pytest.mark.parametrize(
@@ -2451,10 +2441,9 @@ async def test_embedding_model_change_reuses_parse_analysis_and_refreshes_vector
         assert chunk.cache_key is not None
         assert chunk.embedding_signature is not None
         assert chunk.embedding_vector is not None
-        current, history, dense_trace = await service.adense_rankings(
+        ranked, dense_trace = await service.adense_rankings(
             "query",
             [{**chunk.to_context_row(), "content": "refreshed evidence " * 30_000}],
-            [],
             request_vectors={
                 chunk.cache_key: attachments.AttachmentRequestVector(
                     chunk.cache_key,
@@ -2463,11 +2452,10 @@ async def test_embedding_model_change_reuses_parse_analysis_and_refreshes_vector
                 )
             },
         )
-        assert [row["chunk_id"] for row in current] == [chunk.chunk_id]
-        assert history == []
+        assert [row["chunk_id"] for row in ranked] == [chunk.chunk_id]
         assert dense_trace["composer_dense_status"] == "ranked"
-        assert "embedding_signature" not in current[0]
-        assert "embedding_vector" not in current[0]
+        assert "embedding_signature" not in ranked[0]
+        assert "embedding_vector" not in ranked[0]
 
 
 async def test_analysis_exception_is_stage_specific_and_keeps_rendered_text(
@@ -3777,10 +3765,9 @@ async def test_cache_io_failures_keep_request_local_enriched_bundle(
         **chunk.to_context_row(),
         "content": "request-local evidence " * 30_000,
     }
-    current, history, dense_trace = await service.adense_rankings(
+    ranked, dense_trace = await service.adense_rankings(
         "query",
         [row],
-        [],
         request_vectors={
             chunk.cache_key: attachments.AttachmentRequestVector(
                 cache_key=chunk.cache_key,
@@ -3789,11 +3776,10 @@ async def test_cache_io_failures_keep_request_local_enriched_bundle(
             )
         },
     )
-    assert [item["chunk_id"] for item in current] == [chunk.chunk_id]
-    assert history == []
+    assert [item["chunk_id"] for item in ranked] == [chunk.chunk_id]
     assert dense_trace["composer_dense_status"] == "ranked"
-    assert "embedding_signature" not in current[0]
-    assert "embedding_vector" not in current[0]
+    assert "embedding_signature" not in ranked[0]
+    assert "embedding_vector" not in ranked[0]
 
 
 async def test_service_cache_miss_parses_and_materializes(

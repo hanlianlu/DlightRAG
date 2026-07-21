@@ -1029,8 +1029,7 @@ class RAGServiceManager:
         query: str,
         current_rows: list[dict[str, Any]],
         history_rows: list[dict[str, Any]],
-        current_dense_rankings: list[dict[str, Any]],
-        history_dense_rankings: list[dict[str, Any]],
+        dense_rankings: list[dict[str, Any]],
         retrieval_attachment_ids: set[str],
         rerank_func: Any | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1039,8 +1038,7 @@ class RAGServiceManager:
             query=query,
             current_rows=current_rows,
             history_rows=history_rows,
-            current_dense_rankings=current_dense_rankings,
-            history_dense_rankings=history_dense_rankings,
+            dense_rankings=dense_rankings,
             retrieval_attachment_ids=retrieval_attachment_ids,
             rerank_func=rerank_func,
         )

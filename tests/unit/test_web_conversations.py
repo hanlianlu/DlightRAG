@@ -1165,8 +1165,7 @@ async def test_prepare_answer_turn_merges_current_document_context(
     )
 
     async def _select(**kwargs: Any):
-        assert kwargs["current_dense_rankings"] == []
-        assert kwargs["history_dense_rankings"] == []
+        assert kwargs["dense_rankings"] == []
         return kwargs["current_rows"], {"composer_evidence_strategy": "full"}
 
     manager._aselect_web_composer_evidence.side_effect = _select
@@ -1225,8 +1224,6 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert selected_row["metadata"]["attachment_scope"] == "current"
     assert turn.composer_evidence_trace["composer_evidence_strategy"] == "full"
     assert turn.composer_evidence_trace["composer_dense_status"] == "no_rows"
-    assert turn.composer_evidence_trace["composer_dense_current_chunks"] == 0
-    assert turn.composer_evidence_trace["composer_dense_history_chunks"] == 0
     assert turn.composer_evidence_trace["composer_dense_chunks"] == 0
     query_embedder.aembed_query.assert_not_awaited()
     processing_trace = turn.composer_evidence_trace["attachment_processing"]
@@ -1453,7 +1450,7 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     )
 
     async def _select(**kwargs: Any):
-        assert kwargs["history_dense_rankings"] == []
+        assert kwargs["dense_rankings"] == []
         assert kwargs["retrieval_attachment_ids"] == set()
         return kwargs["history_rows"], {"composer_evidence_strategy": "full"}
 
@@ -1463,15 +1460,13 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         async def adense_rankings(
             self,
             _query: str,
-            current_rows: list[Any],
-            history_rows: list[Any],
+            rows: list[Any],
             *,
             request_vectors: Any,
         ):
             assert request_vectors == {}
-            assert current_rows == []
-            assert history_rows == []
-            return [], [], {}
+            assert rows == []
+            return [], {}
 
     attachment_service = _AttachmentService()
     service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]

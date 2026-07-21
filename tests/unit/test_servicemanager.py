@@ -653,8 +653,7 @@ class TestGetService:
         manager._composer_evidence_selector = selector  # type: ignore[assignment]
         current_rows = [{"chunk_id": "c1", "full_doc_id": "full"}]
         history_rows = [{"chunk_id": "h1", "full_doc_id": "retrieval"}]
-        current_dense: list[dict[str, Any]] = []
-        history_dense = [history_rows[0]]
+        dense_rankings = [history_rows[0]]
         retrieval_attachment_ids = {"retrieval"}
         rerank_func = object()
 
@@ -662,8 +661,7 @@ class TestGetService:
             query="query",
             current_rows=current_rows,
             history_rows=history_rows,
-            current_dense_rankings=current_dense,
-            history_dense_rankings=history_dense,
+            dense_rankings=dense_rankings,
             retrieval_attachment_ids=retrieval_attachment_ids,
             rerank_func=rerank_func,
         )
@@ -674,8 +672,7 @@ class TestGetService:
             query="query",
             current_rows=current_rows,
             history_rows=history_rows,
-            current_dense_rankings=current_dense,
-            history_dense_rankings=history_dense,
+            dense_rankings=dense_rankings,
             retrieval_attachment_ids=retrieval_attachment_ids,
             rerank_func=rerank_func,
         )

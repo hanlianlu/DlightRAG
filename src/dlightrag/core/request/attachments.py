@@ -827,97 +827,71 @@ class QueryAttachmentService:
     async def adense_rankings(
         self,
         query: str,
-        current_rows: list[dict[str, Any]],
-        history_rows: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
         *,
         request_vectors: Mapping[AttachmentCacheKey, AttachmentRequestVector] | None = None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-        """Rank both Composer lanes from request-scoped cached vectors."""
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Rank Composer retrieval rows globally from request-scoped cached vectors."""
 
         def dense_trace(
             status: str,
             *,
-            current_chunks: int = 0,
-            history_chunks: int = 0,
+            chunks: int = 0,
             error: str | None = None,
         ) -> dict[str, Any]:
             trace: dict[str, Any] = {
                 "composer_dense_status": status,
-                "composer_dense_current_chunks": current_chunks,
-                "composer_dense_history_chunks": history_chunks,
-                "composer_dense_chunks": current_chunks + history_chunks,
+                "composer_dense_chunks": chunks,
             }
             if error is not None:
                 trace["composer_dense_error"] = error
             return trace
 
-        if not current_rows and not history_rows:
-            return [], [], dense_trace("no_rows")
+        if not rows:
+            return [], dense_trace("no_rows")
         try:
             query_vector = await self._document_embedder.aembed_query(query)
             if query_vector is None:
-                return [], [], dense_trace("no_query_vector")
+                return [], dense_trace("no_query_vector")
             query_array = np.asarray(query_vector, dtype=np.float32)
             if (
                 query_array.ndim != 1
                 or query_array.shape[0] != self._document_embedder.dimension
                 or not bool(np.isfinite(query_array).all())
             ):
-                return [], [], dense_trace("no_query_vector")
+                return [], dense_trace("no_query_vector")
             query_norm = np.float32(np.linalg.norm(query_array))
             if not bool(np.isfinite(query_norm)) or float(query_norm) == 0.0:
-                return [], [], dense_trace("no_query_vector")
+                return [], dense_trace("no_query_vector")
             principal_id = self._principal_id
             conversation_id = self._conversation_id
             if principal_id is None or conversation_id is None:
                 raise RuntimeError("dense ranking requires a bound conversation scope")
-            current, current_error = await self._adense_rank_lane(
-                current_rows,
+            ranked, read_error = await self._adense_rank_rows(
+                rows,
                 query_array,
                 query_norm,
                 principal_id=principal_id,
                 conversation_id=conversation_id,
                 request_vectors=request_vectors,
             )
-            history, history_error = await self._adense_rank_lane(
-                history_rows,
-                query_array,
-                query_norm,
-                principal_id=principal_id,
-                conversation_id=conversation_id,
-                request_vectors=request_vectors,
-            )
-            read_error = current_error or history_error
             if read_error is not None:
-                status = "ranked_degraded" if current or history else "failed"
-                return (
-                    current,
-                    history,
-                    dense_trace(
-                        status,
-                        current_chunks=len(current),
-                        history_chunks=len(history),
-                        error=read_error,
-                    ),
+                status = "ranked_degraded" if ranked else "failed"
+                return ranked, dense_trace(
+                    status,
+                    chunks=len(ranked),
+                    error=read_error,
                 )
-            if not current and not history:
-                return [], [], dense_trace("no_rows")
-            return (
-                current,
-                history,
-                dense_trace(
-                    "ranked",
-                    current_chunks=len(current),
-                    history_chunks=len(history),
-                ),
-            )
+            if not ranked:
+                return [], dense_trace("no_rows")
+            return ranked, dense_trace("ranked", chunks=len(ranked))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning("Composer dense ranking failed; using local fusion", exc_info=True)
-            return [], [], dense_trace("failed", error=type(exc).__name__)
+            return [], dense_trace("failed", error=type(exc).__name__)
 
-    async def _adense_rank_lane(
+    async def _adense_rank_rows(
         self,
         rows: list[dict[str, Any]],
         query_vector: NDArray[np.float32],
