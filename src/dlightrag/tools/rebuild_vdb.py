@@ -234,16 +234,19 @@ async def restore_sidecar_image_vectors(
 ) -> dict[str, int]:
     """Restore DlightRAG direct image vectors after a chunks VDB rebuild."""
     processed = await lightrag.doc_status.get_docs_by_status(DocStatus.PROCESSED)
+    document_embedder = RAGService._build_document_embedder(
+        config,
+        multimodal_embedder,
+        image_enabled=True,
+    )
     engine = UnifiedIngestionEngine(
         lightrag=lightrag,
         stores=stores,
         metadata_index=None,
-        multimodal_embedder=multimodal_embedder,
+        document_embedder=document_embedder,
         workspace=config.workspace,
         parser_rules=config.parser.rules,
         chunk_options={},
-        direct_image_embedding_enabled=True,
-        min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
     )
 
     stats = {"processed_docs": 0, "skipped_docs": 0}

@@ -8,9 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from lightrag.constants import DEFAULT_COSINE_THRESHOLD
+from lightrag.constants import DEFAULT_COSINE_THRESHOLD, DEFAULT_MM_IMAGE_MIN_PIXEL
 
 from dlightrag.config import DlightragConfig
+from dlightrag.core.document_embedding import RobustDocumentEmbedder
 from dlightrag.core.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
 from dlightrag.core.service import RAGService, RemoteIngestWindowProgress
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
@@ -159,6 +160,19 @@ class TestRAGServiceClose:
 
         # Should not raise
         await service.aclose()
+
+    async def test_close_only_closes_underlying_multimodal_embedder(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._multimodal_embedder = AsyncMock()
+        service._document_embedder = MagicMock(spec=RobustDocumentEmbedder)
+
+        await service.aclose()
+
+        service._multimodal_embedder.aclose.assert_awaited_once()
+        assert service._document_embedder.mock_calls == []
 
     async def test_close_shuts_down_lightrag_role_worker_pools(
         self, test_config: DlightragConfig
@@ -678,6 +692,42 @@ class TestDirectImageEmbeddingCapability:
 
         assert enabled is True
         embedder.probe_image_embedding.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("configured_minimum", "expected_minimum"),
+        [(None, DEFAULT_MM_IMAGE_MIN_PIXEL), (64, 64)],
+    )
+    def test_document_embedder_factory_uses_shared_runtime_limits(
+        self,
+        test_config: DlightragConfig,
+        configured_minimum: int | None,
+        expected_minimum: int,
+    ) -> None:
+        test_config.embedding.dim = 7
+        test_config.embedding_func_max_async = 5
+        test_config.parser_sidecars.vlm.min_image_pixel = configured_minimum
+        embedder = MagicMock()
+        expected = MagicMock()
+
+        with patch(
+            "dlightrag.core.document_embedding.RobustDocumentEmbedder",
+            return_value=expected,
+        ) as constructor:
+            result = RAGService._build_document_embedder(
+                test_config,
+                embedder,
+                image_enabled=True,
+            )
+
+        assert result is expected
+        constructor.assert_called_once_with(
+            embedder=embedder,
+            image_enabled=True,
+            dimension=7,
+            min_image_pixel=expected_minimum,
+            batch_size=8,
+            max_concurrency=5,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2197,11 +2247,14 @@ class TestRAGServiceLightRAGMainPath:
         service._initialized = True
         service._lightrag = lightrag
         service._metadata_index = metadata_index
+        document_embedder = AsyncMock()
+        document_embedder.image_enabled = False
+        document_embedder.dimension = test_config.embedding.dim
         service._ingestion_engine = UnifiedIngestionEngine(
             lightrag=lightrag,
             stores=stores,
             metadata_index=metadata_index,
-            multimodal_embedder=AsyncMock(),
+            document_embedder=document_embedder,
             workspace=test_config.workspace,
             parser_rules=test_config.parser.rules,
             chunk_options=test_config.parser.chunk_options,

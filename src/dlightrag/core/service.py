@@ -19,7 +19,11 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from lightrag.constants import DEFAULT_COSINE_THRESHOLD, PARSED_DIR_NAME
+from lightrag.constants import (
+    DEFAULT_COSINE_THRESHOLD,
+    DEFAULT_MM_IMAGE_MIN_PIXEL,
+    PARSED_DIR_NAME,
+)
 
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.client_contracts import IngestDocument, SourceType
@@ -46,6 +50,7 @@ from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
+    from dlightrag.core.document_embedding import RobustDocumentEmbedder
     from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
     from dlightrag.core.lightrag_stores import LightRAGStores
     from dlightrag.core.retrieval.bm25 import PostgresBM25
@@ -282,6 +287,7 @@ class RAGService:
         self._bm25: PostgresBM25 | None = None
         self._retrieval_orchestrator: UnifiedRetriever | None = None
         self._multimodal_embedder: MultimodalEmbedder | None = None
+        self._document_embedder: RobustDocumentEmbedder | None = None
         self._rerank_func: Any = None
         self._direct_image_embedding_enabled = False
         self._visual_asset_resolver: VisualAssetResolver | None = None
@@ -348,6 +354,26 @@ class RAGService:
             return False
         logger.info("Image embedding probe passed — direct-visual leg enabled")
         return True
+
+    @staticmethod
+    def _build_document_embedder(
+        config: DlightragConfig,
+        embedder: MultimodalEmbedder,
+        *,
+        image_enabled: bool,
+    ) -> RobustDocumentEmbedder:
+        from dlightrag.core.document_embedding import RobustDocumentEmbedder
+
+        return RobustDocumentEmbedder(
+            embedder=embedder,
+            image_enabled=image_enabled,
+            dimension=config.embedding.dim,
+            min_image_pixel=(
+                config.parser_sidecars.vlm.min_image_pixel or DEFAULT_MM_IMAGE_MIN_PIXEL
+            ),
+            batch_size=8,
+            max_concurrency=config.embedding_func_max_async,
+        )
 
     @staticmethod
     def _build_addon_params(config: DlightragConfig) -> dict[str, Any]:
@@ -559,6 +585,12 @@ class RAGService:
             startup_probe=config.embedding.startup_probe,
             require_image_support=config.embedding.input_modality == "multimodal",
         )
+        document_embedder = self._build_document_embedder(
+            config,
+            multimodal_embedder,
+            image_enabled=self._direct_image_embedding_enabled,
+        )
+        self._document_embedder = document_embedder
 
         # Vision probe lives in RAGServiceManager._probe_vision_support()
         # — it runs once at server startup, not per workspace.
@@ -658,15 +690,13 @@ class RAGService:
             lightrag=lightrag,
             stores=self._lightrag_stores,
             metadata_index=self._metadata_index,
-            multimodal_embedder=multimodal_embedder,
-            direct_image_embedding_enabled=self._direct_image_embedding_enabled,
+            document_embedder=document_embedder,
             workspace=config.workspace,
             parser_rules=config.parser.rules,
             chunk_options=config.parser.chunk_options,
             metadata_registry=self._metadata_registry,
             allow_ad_hoc_metadata=config.metadata.allow_ad_hoc_json,
             default_metadata_policy=config.metadata.default_ingest_policy,
-            min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
             bm25_language_classifier=bm25_language_classifier,
         )
 

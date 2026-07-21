@@ -12,10 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from lightrag.constants import (
-    DEFAULT_MM_IMAGE_MIN_PIXEL,
-    FULL_DOCS_FORMAT_PENDING_PARSE,
-)
+from lightrag.constants import FULL_DOCS_FORMAT_PENDING_PARSE
 from lightrag.parser.routing import (
     chunk_strategy_key,
     encode_parse_engine,
@@ -25,6 +22,7 @@ from lightrag.parser.routing import (
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 
+from dlightrag.core.document_embedding import DocumentEmbeddingInput, RobustDocumentEmbedder
 from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.core.ingestion.paths import lightrag_archived_source_path
 from dlightrag.core.retrieval.metadata_fields import (
@@ -35,8 +33,6 @@ from dlightrag.core.retrieval.metadata_fields import (
 )
 from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 from dlightrag.sourcing.source_contract import local_source_uri, safe_source_filename
-from dlightrag.utils import log_safe
-from dlightrag.utils.concurrency import bounded_map
 
 logger = logging.getLogger(__name__)
 
@@ -74,17 +70,6 @@ class _PendingDocumentIngest:
     chunk_options: dict[str, Any] | None
 
 
-def _image_dims(path: Path) -> tuple[int, int] | None:
-    """Return (width, height) for an image, or None if unreadable."""
-    from PIL import Image
-
-    try:
-        with Image.open(path) as img:
-            return img.size
-    except Exception:
-        return None
-
-
 class UnifiedIngestionEngine:
     """One ingestion path over LightRAG parser/routing."""
 
@@ -94,35 +79,25 @@ class UnifiedIngestionEngine:
         lightrag: Any,
         stores: Any,
         metadata_index: Any,
-        multimodal_embedder: Any,
+        document_embedder: RobustDocumentEmbedder,
         workspace: str,
         parser_rules: str,
         chunk_options: dict[str, Any] | None,
-        direct_image_embedding_enabled: bool = True,
         metadata_registry: MetadataFieldRegistry | None = None,
         allow_ad_hoc_metadata: bool = True,
         default_metadata_policy: MetadataIngestPolicy = "validate",
-        min_image_pixel: int | None = None,
-        fused_embed_batch_size: int = 8,
         bm25_language_classifier: Any | None = None,
     ) -> None:
         self._lightrag = lightrag
         self._stores = stores
         self._metadata_index = metadata_index
-        self._multimodal_embedder = multimodal_embedder
-        self._direct_image_embedding_enabled = direct_image_embedding_enabled
+        self._document_embedder = document_embedder
         self._workspace = workspace
         self._parser_rules = parser_rules
         self._chunk_options = chunk_options or {}
         self._metadata_registry = metadata_registry or MetadataFieldRegistry.from_config({})
         self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
         self._default_metadata_policy: MetadataIngestPolicy = default_metadata_policy
-        # None defers to LightRAG's native minimum so DlightRAG's own sidecar
-        # embedding gate matches the upstream drawing-analysis gate.
-        self._min_image_pixel = (
-            min_image_pixel if min_image_pixel is not None else DEFAULT_MM_IMAGE_MIN_PIXEL
-        )
-        self._fused_embed_batch_size = fused_embed_batch_size
         self._bm25_language_classifier = bm25_language_classifier
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
@@ -539,7 +514,7 @@ class UnifiedIngestionEngine:
         sidecar_location: str | None,
         chunk_ids: set[str],
     ) -> None:
-        if not self._direct_image_embedding_enabled:
+        if not self._document_embedder.image_enabled:
             return
         # A unified multimodal embedder (image support probed at startup) fuses the
         # VLM description with the image into one vector, keeping the visual chunk
@@ -557,84 +532,37 @@ class UnifiedIngestionEngine:
             return
 
         descriptions = await self._fetch_chunk_descriptions([a.chunk_id for a in assets])
-
-        # Fused embedding batches many (description, image) pairs into one provider
-        # request; chunk the assets to respect the provider's per-request limits.
-        batch_size = max(1, self._fused_embed_batch_size)
-        vectors: dict[str, list[float]] = {}
-        for start in range(0, len(assets), batch_size):
-            vectors.update(
-                await self._embed_sidecar_batch(assets[start : start + batch_size], descriptions)
+        inputs = [
+            DocumentEmbeddingInput(
+                key=asset.chunk_id,
+                text=descriptions.get(asset.chunk_id, ""),
+                image_path=asset.image_path,
             )
-
+            for asset in assets
+        ]
+        try:
+            embedded, trace = await self._document_embedder.aembed_documents(inputs)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Sidecar document embedding failed; preserving existing LightRAG vectors",
+                exc_info=True,
+            )
+            return
+        logger.debug(
+            "Sidecar document embedding outcomes: fused=%d text=%d fallback=%d failed=%d",
+            trace.fused,
+            trace.text,
+            trace.fused_to_text_fallback,
+            trace.failed,
+        )
+        vectors = {item.key: item.vector for item in embedded}
         if vectors:
             await self._stores.overwrite_chunk_vectors(
                 vectors,
-                embedding_dim=getattr(
-                    self._multimodal_embedder, "dim", len(next(iter(vectors.values())))
-                ),
+                embedding_dim=self._document_embedder.dimension,
             )
-
-    async def _embed_sidecar_batch(
-        self, assets: list[Any], descriptions: dict[str, str]
-    ) -> dict[str, list[float]]:
-        """Open, validate, and fused-embed one batch of sidecar images.
-
-        Images are opened concurrently with per-image fault isolation (a bad
-        asset is skipped, not fatal); the survivors are embedded in a single
-        provider request. A whole-batch embedding failure is also non-fatal.
-        """
-
-        async def _open(asset: Any) -> tuple[str, str, Any] | None:
-            try:
-                dims = await asyncio.to_thread(_image_dims, asset.image_path)
-                if dims is not None and (
-                    dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel
-                ):
-                    logger.debug(
-                        "Skipping sidecar image %s (%dx%d < %dpx min)",
-                        asset.image_path,
-                        dims[0],
-                        dims[1],
-                        self._min_image_pixel,
-                    )
-                    return None
-                image = await asyncio.to_thread(_open_rgb_image, asset.image_path)
-            except Exception:
-                # An unreadable/oversized image (e.g. a decompression bomb the
-                # PIL guard rejects) must not fail the batch -- skip its vector.
-                logger.warning(
-                    "Skipping sidecar image that could not be read: %s",
-                    log_safe(str(asset.image_path)),
-                    exc_info=True,
-                )
-                return None
-            return asset.chunk_id, descriptions.get(asset.chunk_id, ""), image
-
-        opened = await bounded_map(
-            assets, _open, max_concurrent=len(assets), task_name="sidecar-image-open"
-        )
-        ready = [item for item in opened if isinstance(item, tuple)]
-        if not ready:
-            return {}
-        images = [image for _cid, _desc, image in ready]
-        try:
-            embedded = await self._multimodal_embedder.embed_index_fused(
-                [(desc, image) for _cid, desc, image in ready]
-            )
-        except Exception:
-            # A whole-batch embedding failure (provider/transport) must not fail
-            # the document -- skip these visual vectors, keep the parsed text.
-            logger.warning(
-                "Fused embedding of a sidecar image batch failed; skipping %d image(s)",
-                len(ready),
-                exc_info=True,
-            )
-            return {}
-        finally:
-            for image in images:
-                image.close()
-        return {cid: vector for (cid, _desc, _img), vector in zip(ready, embedded, strict=True)}
 
     async def _fetch_chunk_descriptions(self, chunk_ids: list[str]) -> dict[str, str]:
         """Return {chunk_id: VLM description} to fuse into visual-chunk vectors."""
@@ -667,16 +595,6 @@ class UnifiedIngestionEngine:
             "lightrag.content_hash": doc_status.get("content_hash") or full_doc.get("content_hash"),
             "lightrag.sidecar_location": full_doc.get("sidecar_location"),
         }
-
-
-def _open_rgb_image(path: Path) -> Any:
-    from PIL import Image
-
-    from dlightrag.utils.images import flatten_image_to_rgb
-
-    with Image.open(path) as image:
-        image.load()
-        return flatten_image_to_rgb(image)
 
 
 def _file_sha256(path: Path) -> str:

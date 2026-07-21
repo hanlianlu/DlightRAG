@@ -11,6 +11,11 @@ from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
 
+from dlightrag.core.document_embedding import (
+    DocumentEmbeddingInput,
+    DocumentEmbeddingTrace,
+    DocumentEmbeddingVector,
+)
 from dlightrag.core.ingestion.engine import (
     PreparedIngestFile,
     UnifiedIngestionEngine,
@@ -39,13 +44,18 @@ def _make_engine(**overrides):
         "chunk_options": {"paragraph_semantic": {"chunk_token_size": 2000}},
         "sidecar_location": "file:///tmp/sample.parsed/",
     }
-    multimodal_embedder = AsyncMock()
-    multimodal_embedder.batch_size = 4
+    document_embedder = AsyncMock()
+    document_embedder.image_enabled = True
+    document_embedder.dimension = 3
+    document_embedder.aembed_documents.return_value = (
+        [],
+        DocumentEmbeddingTrace(fused=0, text=0, fused_to_text_fallback=0, failed=0),
+    )
     defaults = {
         "lightrag": lightrag,
         "stores": stores,
         "metadata_index": AsyncMock(),
-        "multimodal_embedder": multimodal_embedder,
+        "document_embedder": document_embedder,
         "workspace": "default",
         "parser_rules": "docx:native-iteP,*:mineru-iteP",
         "chunk_options": {},
@@ -666,8 +676,7 @@ async def test_image_file_ingest_delegates_to_lightrag_parser(
 
     source = tmp_path / "image.png"
     Image.new("RGB", (1, 1), "white").save(source)
-    embedder = AsyncMock()
-    engine, deps = _make_engine(multimodal_embedder=embedder)
+    engine, deps = _make_engine()
 
     result = await engine.aingest_file(source)
 
@@ -810,10 +819,14 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
         """,
         encoding="utf-8",
     )
-    embedder = AsyncMock()
-    embedder.batch_size = 4
-    embedder.embed_index_fused.return_value = [[0.1, 0.2, 0.3]]
-    engine, deps = _make_engine(multimodal_embedder=embedder)
+    document_embedder = AsyncMock()
+    document_embedder.image_enabled = True
+    document_embedder.dimension = 3
+    document_embedder.aembed_documents.return_value = (
+        [DocumentEmbeddingVector(mm_chunk_id, [0.1, 0.2, 0.3], "fused")],
+        DocumentEmbeddingTrace(fused=1, text=0, fused_to_text_fallback=0, failed=0),
+    )
+    engine, deps = _make_engine(document_embedder=document_embedder)
     deps["stores"].fetch_chunk_contents.return_value = [
         {"id": mm_chunk_id, "content": "public/private sector mapping chart"}
     ]
@@ -839,6 +852,15 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
     deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
     vectors = deps["stores"].overwrite_chunk_vectors.await_args.args[0]
     assert vectors == {mm_chunk_id: [0.1, 0.2, 0.3]}
+    document_embedder.aembed_documents.assert_awaited_once_with(
+        [
+            DocumentEmbeddingInput(
+                key=mm_chunk_id,
+                text="public/private sector mapping chart",
+                image_path=image_path,
+            )
+        ]
+    )
 
 
 async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding_disabled(
@@ -870,11 +892,11 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
         """,
         encoding="utf-8",
     )
-    embedder = AsyncMock()
-    embedder.embed_index_fused.return_value = [[0.1, 0.2, 0.3]]
+    document_embedder = AsyncMock()
+    document_embedder.image_enabled = False
+    document_embedder.dimension = 3
     engine, deps = _make_engine(
-        multimodal_embedder=embedder,
-        direct_image_embedding_enabled=False,
+        document_embedder=document_embedder,
     )
     deps["stores"].get_doc_status.side_effect = [
         None,
@@ -895,7 +917,7 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
     result = await engine.aingest_file(source, replace=False)
 
     assert result["chunks"] == ["chunk-a", mm_chunk_id]
-    embedder.embed_index_fused.assert_not_awaited()
+    document_embedder.aembed_documents.assert_not_awaited()
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
@@ -1050,10 +1072,8 @@ async def test_reingest_proceeds_when_not_processed(tmp_path: Path) -> None:
     deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
 
 
-async def test_sidecar_image_prework_runs_off_event_loop(tmp_path: Path, monkeypatch) -> None:
+async def test_sidecar_image_vectors_delegate_document_inputs(tmp_path: Path) -> None:
     import json
-
-    import dlightrag.core.ingestion.engine as engine_module
 
     artifact_dir = tmp_path / "sample.parsed"
     artifact_dir.mkdir()
@@ -1078,14 +1098,11 @@ async def test_sidecar_image_prework_runs_off_event_loop(tmp_path: Path, monkeyp
     deps["stores"].fetch_chunk_contents = AsyncMock(
         return_value=[{"id": "doc-1-mm-drawing-000", "content": "chart"}]
     )
-    deps["multimodal_embedder"].embed_index_fused = AsyncMock(return_value=[[0.1, 0.2]])
-    calls = []
-
-    async def fake_to_thread(func, *args, **kwargs):
-        calls.append(func.__name__)
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(engine_module.asyncio, "to_thread", fake_to_thread)
+    deps["document_embedder"].dimension = 2
+    deps["document_embedder"].aembed_documents.return_value = (
+        [DocumentEmbeddingVector("doc-1-mm-drawing-000", [0.1, 0.2], "fused")],
+        DocumentEmbeddingTrace(fused=1, text=0, fused_to_text_fallback=0, failed=0),
+    )
 
     await engine._overwrite_sidecar_image_vectors(
         doc_id="doc-1",
@@ -1093,15 +1110,20 @@ async def test_sidecar_image_prework_runs_off_event_loop(tmp_path: Path, monkeyp
         chunk_ids={"doc-1-mm-drawing-000"},
     )
 
-    assert "_image_dims" in calls
-    assert "_open_rgb_image" in calls
+    deps["document_embedder"].aembed_documents.assert_awaited_once_with(
+        [
+            DocumentEmbeddingInput(
+                key="doc-1-mm-drawing-000",
+                text="chart",
+                image_path=image_path,
+            )
+        ]
+    )
     deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
 
 
-async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path, monkeypatch) -> None:
+async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path) -> None:
     import json
-
-    import dlightrag.core.ingestion.engine as engine_module
 
     artifact_dir = tmp_path / "sample.parsed"
     artifact_dir.mkdir()
@@ -1125,14 +1147,9 @@ async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path, monkeypa
     deps["stores"].fetch_chunk_contents = AsyncMock(
         return_value=[{"id": "doc-1-mm-drawing-000", "content": "chart"}]
     )
-    deps["multimodal_embedder"].embed_index_fused = AsyncMock(
+    deps["document_embedder"].aembed_documents = AsyncMock(
         side_effect=RuntimeError("provider rejected oversized image")
     )
-
-    async def fake_to_thread(func, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(engine_module.asyncio, "to_thread", fake_to_thread)
 
     # A single unembeddable image must not raise or fail the whole document.
     await engine._overwrite_sidecar_image_vectors(
@@ -1174,7 +1191,11 @@ async def test_sidecar_partial_failure_still_embeds_surviving_images(tmp_path: P
             {"id": bad_chunk, "content": "boom"},
         ]
     )
-    deps["multimodal_embedder"].embed_index_fused = AsyncMock(return_value=[[0.5, 0.6]])
+    deps["document_embedder"].dimension = 2
+    deps["document_embedder"].aembed_documents.return_value = (
+        [DocumentEmbeddingVector(good_chunk, [0.5, 0.6], "fused")],
+        DocumentEmbeddingTrace(fused=1, text=1, fused_to_text_fallback=0, failed=1),
+    )
 
     await engine._overwrite_sidecar_image_vectors(
         doc_id="doc-1",

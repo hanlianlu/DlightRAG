@@ -3,7 +3,7 @@
 
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -100,9 +100,13 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
         {"sidecar_location": "file:///tmp/doc-2.parsed"},
     ]
     embedder = object()
+    document_embedder = MagicMock()
+    build_document_embedder = MagicMock(return_value=document_embedder)
+    monkeypatch.setattr(module.RAGService, "_build_document_embedder", build_document_embedder)
     calls: list[dict[str, object]] = []
 
     async def fake_overwrite(self, **kwargs) -> None:
+        assert self._document_embedder is document_embedder
         calls.append(kwargs)
 
     monkeypatch.setattr(
@@ -119,6 +123,7 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
     )
 
     assert stats == {"processed_docs": 1, "skipped_docs": 1}
+    build_document_embedder.assert_called_once_with(config, embedder, image_enabled=True)
     assert calls == [
         {
             "doc_id": "doc-1",
