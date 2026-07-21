@@ -4,7 +4,6 @@
 import asyncio
 import json
 import logging
-import os
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
@@ -14,7 +13,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig, ModelConfig
-from dlightrag.models.composer import ComposerImageTransportSettings
+from dlightrag.models.composer import ComposerAnalysisSettings
 from dlightrag.models.llm_roles import model_for_role
 
 COMPOSER_ANALYSIS_CONTRACT_VERSION = "1"
@@ -128,6 +127,7 @@ def create_composer_analysis_proxy(
     config: DlightragConfig,
 ) -> ComposerLightRAGProxy:
     """Create a storage-free proxy over borrowed Composer role callables."""
+    analysis_settings = ComposerAnalysisSettings.resolve(config)
     role_llm_funcs = {
         "vlm": model_bundle.vlm_func,
         "extract": model_bundle.extract_func,
@@ -140,7 +140,7 @@ def create_composer_analysis_proxy(
     global_config = {
         "addon_params": {"language": language},
         "_resolved_summary_language": language,
-        "vlm_process_enable": bool(config.parser_sidecars.vlm.enabled),
+        "vlm_process_enable": analysis_settings.enabled,
         "llm_response_cache": None,
         "enable_llm_cache_for_entity_extract": False,
         "role_llm_funcs": role_llm_funcs,
@@ -173,15 +173,6 @@ def _lightrag_version() -> str:
         return str(getattr(lightrag, "__version__", "unknown"))
 
 
-def _max_extract_input_tokens() -> int:
-    from lightrag.constants import DEFAULT_MAX_EXTRACT_INPUT_TOKENS
-
-    try:
-        return int(os.getenv("MAX_EXTRACT_INPUT_TOKENS", str(DEFAULT_MAX_EXTRACT_INPUT_TOKENS)))
-    except ValueError:
-        return DEFAULT_MAX_EXTRACT_INPUT_TOKENS
-
-
 def build_composer_analysis_signature(
     *,
     lightrag: Any,
@@ -190,26 +181,25 @@ def build_composer_analysis_signature(
     process_options: str,
 ) -> str:
     """Return the deterministic, non-secret Composer analysis cache signature."""
-    sidecars = config.parser_sidecars.vlm
+    analysis_settings = ComposerAnalysisSettings.resolve(config)
     tokenizer_type = type(lightrag.tokenizer)
     tokenizer_model = getattr(lightrag.tokenizer, "model_name", None)
-    image_transport = ComposerImageTransportSettings.from_config(config)
     payload = {
         "contract_version": COMPOSER_ANALYSIS_CONTRACT_VERSION,
         "lightrag_version": _lightrag_version(),
         "process_options": process_options,
         "tokenizer": f"{tokenizer_type.__module__}.{tokenizer_type.__qualname__}",
         "tokenizer_model": str(tokenizer_model) if tokenizer_model is not None else None,
-        "image_transport": image_transport.fingerprint_payload(),
+        "image_transport": analysis_settings.answer_image_transport.fingerprint_payload(),
         "language": config.extraction.language,
-        "enabled": sidecars.enabled,
+        "enabled": analysis_settings.enabled,
         "sidecar_limits": {
-            "max_image_bytes": sidecars.max_image_bytes,
-            "min_image_pixel": sidecars.min_image_pixel,
-            "surrounding_leading_max_tokens": sidecars.surrounding_leading_max_tokens,
-            "surrounding_trailing_max_tokens": sidecars.surrounding_trailing_max_tokens,
+            "max_image_bytes": analysis_settings.vlm_max_image_bytes,
+            "min_image_pixel": analysis_settings.vlm_min_image_pixel,
+            "surrounding_leading_max_tokens": (analysis_settings.surrounding_leading_max_tokens),
+            "surrounding_trailing_max_tokens": (analysis_settings.surrounding_trailing_max_tokens),
         },
-        "max_extract_input_tokens": _max_extract_input_tokens(),
+        "max_extract_input_tokens": analysis_settings.max_extract_input_tokens,
         "roles": {
             "vlm": _role_signature(
                 model_bundle.vlm_identity,

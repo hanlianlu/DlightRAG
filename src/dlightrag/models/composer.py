@@ -2,8 +2,9 @@
 """Manager-owned Composer analysis model resources."""
 
 import logging
+import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from dlightrag.config import DlightragConfig
@@ -46,6 +47,74 @@ class ComposerImageTransportSettings:
             "image_quality": self.image_quality,
             "image_min_quality": self.image_min_quality,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ComposerAnalysisSettings:
+    """Effective LightRAG analysis limits plus Composer image transport."""
+
+    enabled: bool
+    vlm_max_image_bytes: int
+    vlm_min_image_pixel: int
+    surrounding_leading_max_tokens: int
+    surrounding_trailing_max_tokens: int
+    max_extract_input_tokens: int
+    answer_image_transport: ComposerImageTransportSettings
+
+    @classmethod
+    def resolve(cls, config: DlightragConfig) -> ComposerAnalysisSettings:
+        """Resolve limits with the same env defaults and clamps as LightRAG."""
+        from lightrag import multimodal_context
+        from lightrag.constants import (
+            DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            DEFAULT_MM_IMAGE_MIN_PIXEL,
+        )
+        from lightrag.utils import get_env_value
+
+        leading_tokens, trailing_tokens = multimodal_context._resolve_surrounding_budget(  # pyright: ignore[reportPrivateUsage]
+            None,
+            None,
+        )
+        max_extract_input_tokens = get_env_value(
+            "MAX_EXTRACT_INPUT_TOKENS",
+            DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
+            int,
+        )
+        return cls(
+            enabled=bool(config.parser_sidecars.vlm.enabled),
+            vlm_max_image_bytes=max(
+                256 * 1024,
+                int(os.getenv("VLM_MAX_IMAGE_BYTES", str(5 * 1024 * 1024))),
+            ),
+            vlm_min_image_pixel=max(
+                1,
+                int(
+                    os.getenv(
+                        "VLM_MIN_IMAGE_PIXEL",
+                        str(DEFAULT_MM_IMAGE_MIN_PIXEL),
+                    )
+                ),
+            ),
+            surrounding_leading_max_tokens=leading_tokens,
+            surrounding_trailing_max_tokens=trailing_tokens,
+            max_extract_input_tokens=max_extract_input_tokens,
+            answer_image_transport=ComposerImageTransportSettings.from_config(config),
+        )
+
+    @property
+    def vlm_image_transport(self) -> ComposerImageTransportSettings:
+        """Apply upstream VLM gates to the existing answer-image transport."""
+        return replace(
+            self.answer_image_transport,
+            image_max_bytes=min(
+                self.answer_image_transport.image_max_bytes,
+                self.vlm_max_image_bytes,
+            ),
+            image_min_px=max(
+                self.answer_image_transport.image_min_px,
+                self.vlm_min_image_pixel,
+            ),
+        )
 
 
 @dataclass(slots=True)
@@ -93,4 +162,8 @@ class ComposerModelBundle:
                 logger.warning("Failed to close Composer model provider", exc_info=True)
 
 
-__all__ = ["ComposerImageTransportSettings", "ComposerModelBundle"]
+__all__ = [
+    "ComposerAnalysisSettings",
+    "ComposerImageTransportSettings",
+    "ComposerModelBundle",
+]

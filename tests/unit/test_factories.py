@@ -786,6 +786,42 @@ class TestComposerAnalysisAdapter:
             assert max(bounded.size) <= 96
 
     @pytest.mark.asyncio
+    async def test_uses_effective_lightrag_vlm_limits_for_image_transport(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.utils import images
+
+        llm, seen = _capture_provider(monkeypatch)
+        bounded_kwargs: dict[str, Any] = {}
+
+        def bounded_image_data_uri(value: str, **kwargs: Any) -> tuple[str, int]:
+            bounded_kwargs.update(kwargs)
+            return value, 100
+
+        monkeypatch.setattr(images, "bounded_image_data_uri", bounded_image_data_uri)
+        monkeypatch.setenv("VLM_MAX_IMAGE_BYTES", "300000")
+        monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "128")
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(model="vision", api_key="sk-test")),
+            embedding=_embedding_config(),
+            answer=AnswerConfig(
+                image_max_bytes=1_000_000,
+                image_max_total_bytes=2_000_000,
+                image_min_px=32,
+            ),
+        )
+        adapter, _identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")
+
+        await adapter(
+            "Describe",
+            image_inputs=[{"base64": "aGVsbG8=", "mime_type": "image/png"}],
+        )
+
+        assert bounded_kwargs["max_bytes"] == 300_000
+        assert bounded_kwargs["min_px"] == 128
+        assert seen["messages"][-1]["content"][0]["type"] == "image_url"
+
+    @pytest.mark.asyncio
     async def test_composer_bundle_owns_and_closes_each_role_once(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

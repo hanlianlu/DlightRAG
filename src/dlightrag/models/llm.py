@@ -13,7 +13,10 @@ from typing import Any, Literal, cast
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig, ModelConfig
-from dlightrag.models.composer import ComposerImageTransportSettings
+from dlightrag.models.composer import (
+    ComposerAnalysisSettings,
+    ComposerImageTransportSettings,
+)
 from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
 from dlightrag.models.providers import get_provider
 from dlightrag.models.structured import StructuredOutput
@@ -281,7 +284,6 @@ def create_composer_analysis_adapter(
         default_api_key=config.llm.default.api_key,
         owner_closers=owner_closers,
     )
-    image_transport = ComposerImageTransportSettings.from_config(config)
 
     async def adapter(
         prompt: str | None = None,
@@ -322,7 +324,14 @@ def create_composer_analysis_adapter(
                 prepared_messages.append({"role": "system", "content": system_prompt})
             if history_messages:
                 prepared_messages.extend(history_messages)
-            image_blocks = _composer_image_blocks(image_inputs, settings=image_transport)
+            image_blocks = (
+                _composer_image_blocks(
+                    image_inputs,
+                    settings=ComposerAnalysisSettings.resolve(config).vlm_image_transport,
+                )
+                if image_inputs
+                else []
+            )
             user_content: str | list[dict[str, Any]] = prompt
             if image_blocks:
                 user_content = [*image_blocks, {"type": "text", "text": prompt}]
