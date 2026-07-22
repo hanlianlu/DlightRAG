@@ -1263,9 +1263,16 @@ async def test_composer_cache_miss_materializes_only_web_rows(
             assert trace["attachment_embedding_text"] == len(bundle.chunks) - int(include_drawing)
             assert all(row["embedding_signature"] for row in rows)
             assert all(len(json.loads(row["embedding_vector"])) == 3 for row in rows)
-            assert sum(len(batch) for batch in embedding_provider.document_batches) == (
-                len(bundle.chunks) - int(include_drawing)
-            )
+            non_drawing_rows = [row for row in rows if row["sidecar_type"] != "drawing"]
+            assert [json.loads(row["embedding_signature"])["mode"] for row in non_drawing_rows] == [
+                "text"
+            ] * len(non_drawing_rows)
+            assert [json.loads(row["embedding_vector"]) for row in non_drawing_rows] == [
+                [1.0, 0.5, 0.25]
+            ] * len(non_drawing_rows)
+            assert [
+                content for batch in embedding_provider.document_batches for content in batch
+            ] == [row["content"] for row in non_drawing_rows]
         if include_drawing:
             drawing_rows = [row for row in rows if row["sidecar_type"] == "drawing"]
             assert len(drawing_rows) == 1
