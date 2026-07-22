@@ -110,10 +110,34 @@ def test_highlight_phrases_defaults():
 
 
 class TestHighlightExtractor:
+    @pytest.mark.asyncio
+    async def test_single_item_response_shape_is_rejected(self):
+        async def legacy_llm(*, messages, **kwargs) -> str:
+            return '{"phrases": ["actual text"], "confidence": 0.8}'
+
+        extractor = HighlightExtractor(llm_func=legacy_llm, cache_size=10)
+        [(_, result)] = await extractor.extract_highlight_batch(
+            [("c1", "This has actual text in it.", "The actual text matters.")]
+        )
+
+        assert result.phrases == []
+
+    @pytest.mark.asyncio
+    async def test_bare_list_response_shape_is_rejected(self):
+        async def legacy_llm(*, messages, **kwargs) -> str:
+            return '[{"id": "0", "phrases": ["actual text"], "confidence": 0.8}]'
+
+        extractor = HighlightExtractor(llm_func=legacy_llm, cache_size=10)
+        [(_, result)] = await extractor.extract_highlight_batch(
+            [("c1", "This has actual text in it.", "The actual text matters.")]
+        )
+
+        assert result.phrases == []
+
     @pytest.fixture()
     def mock_llm(self):
         async def llm_func(*, messages, **kwargs) -> str:
-            return '{"phrases": ["market growth"], "confidence": 0.9}'
+            return '{"items": [{"id": "0", "phrases": ["market growth"], "confidence": 0.9}]}'
 
         return llm_func
 
@@ -188,7 +212,10 @@ class TestHighlightExtractor:
     @pytest.mark.asyncio
     async def test_invalid_phrases_filtered(self):
         async def bad_llm(*, messages, **kwargs) -> str:
-            return '{"phrases": ["hallucinated phrase", "actual text"], "confidence": 0.8}'
+            return (
+                '{"items": [{"id": "0", "phrases": '
+                '["hallucinated phrase", "actual text"], "confidence": 0.8}]}'
+            )
 
         ext = HighlightExtractor(llm_func=bad_llm, cache_size=10)
         [(_, result)] = await ext.extract_highlight_batch(

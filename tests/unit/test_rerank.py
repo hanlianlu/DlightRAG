@@ -2,6 +2,7 @@
 """Tests for shared rerank fallback and multimodal provider strategies."""
 
 import asyncio
+import json
 import logging
 from functools import partial
 from typing import Any, cast
@@ -116,26 +117,31 @@ _PNG_B64 = (
 )
 
 
+def _rerank_user_payloads(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        json.loads(block["text"]) for block in messages[1]["content"] if block.get("type") == "text"
+    ]
+
+
 class TestParseListwiseScores:
     def test_json_array(self):
         assert _parse_listwise_scores("[0.9, 0.5, 0.3]", 3) == [0.9, 0.5, 0.3]
 
-    def test_regex_fallback(self):
+    def test_non_json_response_returns_zeros(self):
         text = "Scores: 0.95 for first, 0.40 for second"
         result = _parse_listwise_scores(text, 2)
-        assert result == [0.95, 0.40]
+        assert result == [0.0, 0.0]
 
-    def test_clamp_above_one(self):
-        assert _parse_listwise_scores("[1.5, 0.5]", 2) == [1.0, 0.5]
-
-    def test_clamp_below_zero(self):
-        assert _parse_listwise_scores("[-0.3, 0.5]", 2) == [0.0, 0.5]
+    @pytest.mark.parametrize("text", ("[1.5, 0.5]", "[-0.3, 0.5]"))
+    def test_out_of_domain_score_invalidates_batch(self, text):
+        assert _parse_listwise_scores(text, 2) == [0.0, 0.0]
 
     def test_unparseable_returns_zeros(self):
         assert _parse_listwise_scores("no numbers here", 3) == [0.0, 0.0, 0.0]
 
-    def test_truncates_to_expected(self):
-        assert _parse_listwise_scores("[0.9, 0.8, 0.7, 0.6]", 2) == [0.9, 0.8]
+    @pytest.mark.parametrize("text", ("[0.9]", "[0.9, 0.8, 0.7]"))
+    def test_wrong_score_count_returns_zeros(self, text):
+        assert _parse_listwise_scores(text, 2) == [0.0, 0.0]
 
 
 class TestBuildScoredChunks:
@@ -264,11 +270,11 @@ class TestChatLlmRerank:
         assert result[0]["content"] == "doc1"
         assert result[1]["rerank_score"] == pytest.approx(0.5)
 
-    async def test_listwise_prompt_comes_from_central_guidance(self, monkeypatch):
+    async def test_listwise_prompt_separates_rules_from_json_data(self, monkeypatch):
         import dlightrag.models.rerank as rerank_module
 
-        prompt_template = "Central listwise prompt: {n} items for {query}"
-        monkeypatch.setattr(rerank_module, "LISTWISE_RERANK_PROMPT", prompt_template)
+        prompt_template = "Central listwise prompt for {n} items"
+        monkeypatch.setattr(rerank_module, "LISTWISE_RERANK_SYSTEM_PROMPT", prompt_template)
         received_messages = []
 
         async def mock_scoring(messages, **kwargs):
@@ -283,9 +289,14 @@ class TestChatLlmRerank:
             score_threshold=0.3,
         )
 
-        assert received_messages[0][0]["content"][0]["text"] == (
-            "Central listwise prompt: 1 items for market query"
-        )
+        messages = received_messages[0]
+        assert messages[0] == {"role": "system", "content": "Central listwise prompt for 1 items"}
+        content = messages[1]["content"]
+        assert json.loads(content[0]["text"]) == {"query": "market query"}
+        assert json.loads(content[1]["text"]) == {
+            "candidate": 1,
+            "text": "candidate text",
+        }
 
     async def test_multimodal_chunks(self):
         """Chunks with image_data should include images in scoring messages."""
@@ -305,7 +316,7 @@ class TestChatLlmRerank:
 
         # Should have sent one scoring call with multimodal content
         assert len(received_messages) == 1
-        content = received_messages[0][0]["content"]
+        content = received_messages[0][1]["content"]
         # Check that image_url type is present for the chunk with image_data
         has_image = any(c.get("type") == "image_url" for c in content)
         assert has_image
@@ -397,9 +408,12 @@ class TestChatLlmRerank:
             image_min_quality=76,
         )
 
-        content = received_messages[0][0]["content"]
+        content = received_messages[0][1]["content"]
         assert not any(c.get("type") == "image_url" for c in content)
-        assert any(c.get("text") == "text fallback" for c in content)
+        assert any(
+            payload.get("text") == "text fallback"
+            for payload in _rerank_user_payloads(received_messages[0])
+        )
 
     async def test_fallback_on_error(self):
         mock_scoring = AsyncMock(side_effect=RuntimeError("API down"))
@@ -440,10 +454,7 @@ class TestChatLlmRerank:
         async def mock_scoring(messages, **kwargs):
             nonlocal call_count
             call_count += 1
-            content_text = "".join(
-                c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
-            )
-            n = content_text.count("\nCandidate ")
+            n = sum("candidate" in payload for payload in _rerank_user_payloads(messages))
             return "[" + ", ".join(["0.7"] * n) + "]"
 
         chunks = [{"content": c} for c in ["a", "b", "c", "d", "e"]]
@@ -463,10 +474,7 @@ class TestChatLlmRerank:
         caplog.set_level(logging.INFO, logger="dlightrag.models.rerank")
 
         async def mock_scoring(messages, **kwargs):
-            content_text = "".join(
-                c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
-            )
-            n = content_text.count("\nCandidate ")
+            n = sum("candidate" in payload for payload in _rerank_user_payloads(messages))
             return "[" + ", ".join(["0.7"] * n) + "]"
 
         chunks = [{"content": f"doc{i}"} for i in range(46)]
@@ -552,11 +560,13 @@ class TestChatLlmRerank:
             multimodal=False,
         )
 
-        content = received_messages[0][0]["content"]
+        content = received_messages[0][1]["content"]
         # No image_url blocks at all
         assert not any(c.get("type") == "image_url" for c in content)
         # Full VLM text (not truncated to 500) — text-only fallback uses full content
-        assert long_vlm_text in [c.get("text", "") for c in content]
+        assert long_vlm_text in [
+            payload.get("text", "") for payload in _rerank_user_payloads(received_messages[0])
+        ]
 
     async def test_multimodal_true_keeps_image_and_full_text(self):
         """Default multimodal=True fuses the image with the FULL VLM description."""
@@ -575,13 +585,18 @@ class TestChatLlmRerank:
             scoring_func=mock_scoring,
             score_threshold=0.3,
         )
-        content = received_messages[0][0]["content"]
-        marker_idx = next(i for i, c in enumerate(content) if c.get("text") == "\nCandidate 1:")
+        content = received_messages[0][1]["content"]
+        candidate_idx = next(
+            i
+            for i, block in enumerate(content)
+            if block.get("type") == "text" and json.loads(block["text"]).get("candidate") == 1
+        )
         image_idx = next(i for i, c in enumerate(content) if c.get("type") == "image_url")
-        text_idx = next(i for i, c in enumerate(content) if c.get("text") == long_vlm_text)
-        assert marker_idx < image_idx < text_idx
+        assert candidate_idx < image_idx
         # Full description is fused with the image -- no arbitrary truncation.
-        assert long_vlm_text in [c.get("text", "") for c in content]
+        assert long_vlm_text in [
+            payload.get("text", "") for payload in _rerank_user_payloads(received_messages[0])
+        ]
 
     async def test_multimodal_false_concurrent_batches(self):
         """Text-only fallback works correctly with batched concurrent scoring."""
@@ -590,10 +605,7 @@ class TestChatLlmRerank:
         async def mock_scoring(messages, **kwargs):
             nonlocal call_count
             call_count += 1
-            content_parts = [
-                c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
-            ]
-            n = sum(1 for t in content_parts if t.startswith("\nCandidate "))
+            n = sum("candidate" in payload for payload in _rerank_user_payloads(messages))
             return "[" + ", ".join(["0.7"] * n) + "]"
 
         chunks = [{"content": f"doc{i}", "image_data": _PNG_B64} for i in range(5)]

@@ -187,17 +187,6 @@ class HighlightExtractor:
                         )
                         for item in batch.items
                     }
-                elif isinstance(parsed, dict) and "phrases" in parsed and len(pending) == 1:
-                    parsed_items = {"0": HighlightPhrases(**parsed)}
-                elif isinstance(parsed, list):
-                    batch = HighlightBatchResponse(items=parsed)
-                    parsed_items = {
-                        item.id: HighlightPhrases(
-                            phrases=item.phrases,
-                            confidence=item.confidence,
-                        )
-                        for item in batch.items
-                    }
             except Exception:
                 logger.debug("Highlight batch extraction failed", exc_info=True)
 

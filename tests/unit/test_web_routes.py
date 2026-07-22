@@ -612,7 +612,7 @@ class TestWebAnswer:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         async def keyword_llm(*, messages, **kwargs):
-            return '{"phrases": ["Evidence"], "confidence": 1.0}'
+            return '{"items": [{"id": "0", "phrases": ["Evidence"], "confidence": 1.0}]}'
 
         keyword_called = False
         highlights_called = False

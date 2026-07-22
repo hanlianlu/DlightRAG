@@ -308,6 +308,153 @@ class TestOpenAICompatibleProvider:
         assert "stream_options" not in calls[1]
         assert holder == {}  # the fallback stream carries no usage
 
+    @pytest.mark.parametrize(
+        ("message", "body"),
+        (
+            ("invalid parameter: stream_options", None),
+            ("stream_options is not permitted", None),
+            (
+                "Request validation failed",
+                {
+                    "detail": [
+                        {
+                            "loc": ["body", "stream_options"],
+                            "msg": "extra inputs are not permitted",
+                        }
+                    ]
+                },
+            ),
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_stream_falls_back_for_explicit_stream_options_rejections(
+        self,
+        message: str,
+        body: dict[str, Any] | None,
+    ):
+        import httpx
+        from openai import BadRequestError
+
+        p = get_provider("openai", api_key="test-key")
+        calls: list[dict[str, Any]] = []
+
+        async def _fake_stream():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="hi", model_extra=None))],
+                usage=None,
+            )
+
+        async def _create(**kwargs: Any):
+            calls.append(kwargs)
+            if "stream_options" in kwargs:
+                raise BadRequestError(
+                    message,
+                    response=httpx.Response(
+                        400,
+                        request=httpx.Request("POST", "https://t/v1"),
+                    ),
+                    body=body,
+                )
+            return _fake_stream()
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = _create
+            chunks = [
+                chunk
+                async for chunk in cast(Any, p).stream(
+                    [{"role": "user", "content": "hi"}],
+                    "gpt",
+                )
+            ]
+
+        assert chunks == ["hi"]
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_stream_falls_back_for_422_stream_options_validation(self):
+        import httpx
+        from openai import UnprocessableEntityError
+
+        p = get_provider("openai", api_key="test-key")
+        calls: list[dict[str, Any]] = []
+
+        async def _fake_stream():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="hi", model_extra=None))],
+                usage=None,
+            )
+
+        async def _create(**kwargs: Any):
+            calls.append(kwargs)
+            if "stream_options" in kwargs:
+                raise UnprocessableEntityError(
+                    "Request validation failed",
+                    response=httpx.Response(
+                        422,
+                        request=httpx.Request("POST", "https://t/v1"),
+                    ),
+                    body={
+                        "detail": [
+                            {
+                                "loc": ["body", "stream_options"],
+                                "msg": "extra inputs are not permitted",
+                            }
+                        ]
+                    },
+                )
+            return _fake_stream()
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = _create
+            chunks = [
+                chunk
+                async for chunk in cast(Any, p).stream(
+                    [{"role": "user", "content": "hi"}],
+                    "gpt",
+                )
+            ]
+
+        assert chunks == ["hi"]
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_stream_does_not_retry_provider_content_inspection_error(self):
+        import httpx
+        from openai import BadRequestError
+
+        p = get_provider("openai", api_key="test-key")
+        calls: list[dict[str, Any]] = []
+        error_body = {
+            "error": {
+                "message": "Provider returned error",
+                "code": 400,
+                "metadata": {
+                    "raw": (
+                        'data: {"error":{"code":"data_inspection_failed",'
+                        '"message":"Input text data may contain inappropriate content."}}'
+                    ),
+                    "provider_name": "Alibaba",
+                },
+            }
+        }
+
+        async def _create(**kwargs: Any):
+            calls.append(kwargs)
+            raise BadRequestError(
+                "Provider returned error",
+                response=httpx.Response(400, request=httpx.Request("POST", "https://t/v1")),
+                body=error_body,
+            )
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = _create
+            stream = cast(Any, p).stream([{"role": "user", "content": "hi"}], "qwen")
+            with pytest.raises(BadRequestError, match="Provider returned error"):
+                _ = [chunk async for chunk in stream]
+
+        assert len(calls) == 1
+        assert "stream_options" in calls[0]
+
     @pytest.mark.asyncio
     async def test_stream_does_not_retry_on_non_badrequest_error(self):
         p = get_provider("openai", api_key="test-key")

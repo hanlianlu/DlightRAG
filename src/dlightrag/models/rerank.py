@@ -16,7 +16,7 @@ native reranker cannot see as one list.
 import asyncio
 import json
 import logging
-import re
+import math
 from collections.abc import Callable
 from contextlib import suppress
 from functools import partial
@@ -31,7 +31,7 @@ from dlightrag.models.providers.rerank_base import (
     resolve_rerank_input_modality,
 )
 from dlightrag.models.providers.rerank_providers import RERANK_PROVIDERS
-from dlightrag.prompts import LISTWISE_RERANK_PROMPT
+from dlightrag.prompts import LISTWISE_RERANK_SYSTEM_PROMPT
 from dlightrag.utils.image_budget import ImagePayloadBudget
 from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 
@@ -47,10 +47,6 @@ _DEFAULT_IMAGE_MAX_PX = 1280
 _DEFAULT_IMAGE_MIN_PX = 768
 _DEFAULT_IMAGE_QUALITY = 86
 _DEFAULT_IMAGE_MIN_QUALITY = 76
-
-
-def _clamp(value: float) -> float:
-    return max(0.0, min(1.0, value))
 
 
 def _build_scored_chunks(
@@ -139,15 +135,20 @@ def _prepare_documents(
 def _parse_listwise_scores(text: str, expected: int) -> list[float]:
     """Parse a JSON array of scores from a model response."""
     text = text.strip()
-    # Try JSON array
     with suppress(json.JSONDecodeError, ValueError, TypeError):
         data = json.loads(text)
-        if isinstance(data, list):
-            return [_clamp(float(s)) for s in data[:expected]]
-    # Fallback: extract all floats from text
-    matches = re.findall(r"\d+\.\d+", text)
-    if matches:
-        return [_clamp(float(m)) for m in matches[:expected]]
+        if (
+            isinstance(data, list)
+            and len(data) == expected
+            and all(
+                isinstance(score, int | float)
+                and not isinstance(score, bool)
+                and math.isfinite(float(score))
+                and 0.0 <= float(score) <= 1.0
+                for score in data
+            )
+        ):
+            return [float(score) for score in data]
     logger.warning("Could not parse listwise scores from: %s", text[:200])
     return [0.0] * expected
 
@@ -180,13 +181,18 @@ async def _chat_llm_rerank(
         batch_start: int,
         batch: list[dict[str, Any]],
     ) -> list[tuple[dict[str, Any], float]]:
-        prompt = LISTWISE_RERANK_PROMPT.format(query=query, n=len(batch))
+        system_prompt = LISTWISE_RERANK_SYSTEM_PROMPT.format(n=len(batch))
 
         def _build_content() -> list[dict[str, Any]]:
             # PIL decode/resize/JPEG re-encode is CPU-bound; build the payload
             # (including image bounding) off the event loop. The budget is local
             # to this batch, so running it in a worker thread is safe.
-            content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            content: list[dict[str, Any]] = [
+                {
+                    "type": "text",
+                    "text": json.dumps({"query": query}, ensure_ascii=False, separators=(",", ":")),
+                }
+            ]
             image_budget = ImagePayloadBudget(
                 max_total_bytes=image_max_total_bytes,
                 max_bytes_per_image=image_max_bytes,
@@ -197,7 +203,19 @@ async def _chat_llm_rerank(
                 min_quality=image_min_quality,
             )
             for i, chunk in enumerate(batch):
-                content.append({"type": "text", "text": f"\nCandidate {i + 1}:"})
+                content.append(
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "candidate": i + 1,
+                                "text": str(chunk.get("content") or ""),
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }
+                )
                 if multimodal:
                     img = chunk.get("image_data")
                     if img:
@@ -208,12 +226,13 @@ async def _chat_llm_rerank(
                         if bounded is not None:
                             uri, _ = bounded
                             content.append({"type": "image_url", "image_url": {"url": uri}})
-                if chunk.get("content"):
-                    content.append({"type": "text", "text": chunk["content"]})
             return content
 
         content = await asyncio.to_thread(_build_content)
-        messages = [{"role": "user", "content": content}]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": content},
+        ]
         try:
             resp = await scoring_func(messages=messages)
             scores = _parse_listwise_scores(resp, len(batch))
@@ -230,7 +249,7 @@ async def _chat_llm_rerank(
             )
             raise
 
-        return list(zip(batch, scores, strict=False))
+        return list(zip(batch, scores, strict=True))
 
     from dlightrag.utils.concurrency import bounded_gather
 

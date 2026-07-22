@@ -108,7 +108,10 @@ def _service(store: _FakeStore) -> WebConversationService:
 
 def _prepared() -> PreparedWebConversation:
     return PreparedWebConversation(
-        principal_id="alice", conversation_id="c1", content_revision=0, text_history=()
+        principal_id="alice",
+        conversation_id="c1",
+        content_revision=0,
+        text_history=(),
     )
 
 

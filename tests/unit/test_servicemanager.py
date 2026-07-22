@@ -5,6 +5,7 @@ import asyncio
 import dataclasses
 import importlib
 import inspect
+import json
 from annotationlib import Format
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -373,6 +374,7 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
     planner.plan.return_value = SimpleNamespace(
         standalone_query="standalone",
         metadata_filter=None,
+        planner_outcome="planned",
     )
     manager._query_planner = planner
     manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -994,7 +996,7 @@ class TestAnswerViaEngine:
                 "input": {"query": "raw query"},
                 "metadata": {
                     "workspaces": ["ws_a"],
-                    "history_turns": 0,
+                    "history_messages": 0,
                     "history_image_catalog_count": 0,
                 },
                 "updates": [
@@ -1002,11 +1004,59 @@ class TestAnswerViaEngine:
                         "output": {
                             "standalone_query": "rewritten query",
                             "has_metadata_filter": False,
+                            "planner_outcome": "planned",
                         }
                     }
                 ],
             }
         ]
+
+    async def test_web_planner_trace_records_attachments_and_outcome(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def llm_func(**_kwargs) -> str:
+            return "not valid structured output"
+
+        trace_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            "dlightrag.observability.trace_observation",
+            _record_trace_calls(trace_calls),
+        )
+        manager = RAGServiceManager(config=test_cfg)
+        manager._query_planner = QueryPlanner(llm_func=llm_func)
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
+
+        plan = await manager.aplan_web_conversation_query(
+            "what is this?",
+            text_history=[
+                {"role": "user", "content": "Earlier question"},
+                {"role": "assistant", "content": "Earlier answer"},
+            ],
+            attachment_catalog=[
+                {
+                    "attachment_id": "prior-doc",
+                    "turn_number": 1,
+                    "ordinal": 0,
+                    "filename": "prior.pdf",
+                    "parse_summary": "Prior report",
+                }
+            ],
+            current_attachment_catalog=[
+                {
+                    "attachment_id": "current-doc",
+                    "filename": "current.pdf",
+                    "parse_summary": "Current report",
+                }
+            ],
+            workspaces=["ws_a"],
+        )
+
+        assert plan.planner_outcome == "fallback_invalid_response"
+        trace = trace_calls[0]
+        assert trace["metadata"]["history_messages"] == 2
+        assert trace["metadata"]["history_attachment_catalog_count"] == 1
+        assert trace["metadata"]["current_attachment_count"] == 1
+        assert trace["updates"][-1]["output"]["planner_outcome"] == ("fallback_invalid_response")
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_calls_retrieve_then_engine(
@@ -1208,7 +1258,7 @@ class TestAnswerViaEngine:
         mock_create.return_value = mock_svc
 
         async def llm_func(*, messages, **kwargs) -> str:
-            return '{"phrases": ["market growth"], "confidence": 1.0}'
+            return '{"items": [{"id": "0", "phrases": ["market growth"], "confidence": 1.0}]}'
 
         monkeypatch.setattr("dlightrag.models.llm.get_keyword_model_func", lambda _cfg: llm_func)
         trace_calls: list[dict[str, Any]] = []
@@ -2493,12 +2543,12 @@ class TestPlannerSchemaScope:
         await manager.aplan_query("q", workspaces=["reports"])
         await manager.aplan_query("q", workspaces=["legal"])
 
-        first_prompt = llm.await_args_list[0].kwargs["messages"][0]["content"]
-        second_prompt = llm.await_args_list[1].kwargs["messages"][0]["content"]
-        assert "department" in first_prompt
-        assert "jurisdiction" not in first_prompt
-        assert "jurisdiction" in second_prompt
-        assert "department" not in second_prompt
+        first_payload = json.loads(llm.await_args_list[0].kwargs["messages"][1]["content"])
+        second_payload = json.loads(llm.await_args_list[1].kwargs["messages"][1]["content"])
+        assert "department" in first_payload["metadata_schema"]
+        assert "jurisdiction" not in first_payload["metadata_schema"]
+        assert "jurisdiction" in second_payload["metadata_schema"]
+        assert "department" not in second_payload["metadata_schema"]
 
     async def test_aplan_query_threads_image_catalog_to_web_variant(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
@@ -2531,6 +2581,8 @@ class TestPlannerSchemaScope:
             allowed_history_image_count=2,
         )
 
-        prompt = llm.await_args_list[0].kwargs["messages"][0]["content"]
-        assert "2023 revenue chart" in prompt  # catalog folded into the web-variant prompt
+        messages = llm.await_args_list[0].kwargs["messages"]
+        assert "2023 revenue chart" not in messages[0]["content"]
+        payload = json.loads(messages[1]["content"])
+        assert payload["prior_images"][0]["vlm_description"] == "2023 revenue chart"
         assert plan.selected_history_image_ids == ("11111111-1111-1111-1111-111111111111",)

@@ -19,7 +19,7 @@ from PIL import Image
 
 from dlightrag.core.request import attachment_digest, attachments
 from dlightrag.core.request.attachment_digest import (
-    ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET,
+    ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS,
     build_attachment_planner_digests,
 )
 from dlightrag.core.request.attachments import (
@@ -158,7 +158,7 @@ def test_attachment_planner_digest_keeps_short_document_in_full() -> None:
     assert "Fractions Challenge Worksheet" in digests["short"]
     assert "Problem 20" in digests["short"]
     assert trace["attachment_digest_strategy"] == "full"
-    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
+    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS
 
 
 def test_attachment_planner_digest_preserves_structure_and_uniform_coverage() -> None:
@@ -177,10 +177,10 @@ def test_attachment_planner_digest_preserves_structure_and_uniform_coverage() ->
     assert "MIDDLE-MARKER" in digest
     assert "END-MARKER" in digest
     assert trace["attachment_digest_strategy"] == "sampled"
-    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
+    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS
 
 
-def test_attachment_planner_digest_shares_global_budget_across_documents() -> None:
+def test_attachment_planner_digest_caps_each_document_independently() -> None:
     bundles = [
         (
             f"doc-{index}",
@@ -197,13 +197,12 @@ def test_attachment_planner_digest_shares_global_budget_across_documents() -> No
     assert set(digests) == {"doc-0", "doc-1", "doc-2"}
     assert all(digests.values())
     budgets = trace["attachment_digest_document_budgets"]
-    assert sum(budgets.values()) == ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
-    assert min(budgets.values()) >= 1_536
-    assert max(budgets.values()) - min(budgets.values()) <= 1
-    assert trace["attachment_digest_output_tokens"] <= ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
-
-    _, reversed_trace = build_attachment_planner_digests(list(reversed(bundles)))
-    assert reversed_trace["attachment_digest_document_budgets"] == budgets
+    assert set(budgets.values()) == {ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS}
+    assert all(
+        estimate_tokens(digest) <= ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS
+        for digest in digests.values()
+    )
+    assert trace["attachment_digest_output_tokens"] > ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS
 
 
 def test_attachment_planner_token_samples_do_not_cluster_at_the_front() -> None:

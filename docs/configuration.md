@@ -726,12 +726,15 @@ request_timeout: 300
 ```
 
 `max_conversation_tokens` caps recent text history supplied to the query
-planner. Web planning additionally reserves current-request context: current
-Composer documents share an 8192-token, structure-aware digest budget; prior
-image/document catalogs share 4096 tokens; and the complete rendered planner
-input is bounded to 102400 estimated tokens. When the envelope is full, the
-oldest text history and catalog entries yield before current Composer documents. These
-are internal planner safety budgets rather than additional public settings.
+planner. The complete Planner request is bounded to 102400 estimated tokens.
+Current query text, current Composer documents, and current image descriptions
+are fixed inputs. Optional metadata schema, old conversation messages, and prior
+image/document catalog entries yield when the envelope is full. The schema is
+omitted first; history and catalog entries then alternate eviction, oldest first
+within each source. Each current Composer document uses a structure-aware digest
+capped at 8192 tokens; each prior document summary and image description is
+capped at 1024 and 512 tokens respectively. These are internal semantic limits
+rather than additional public settings.
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
 applies to Web uploads. `ingest_timeout` limits how long the SDK convenience

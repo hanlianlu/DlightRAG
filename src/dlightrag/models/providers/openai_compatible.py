@@ -5,7 +5,7 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from openai import AsyncOpenAI, BadRequestError
+from openai import APIStatusError, AsyncOpenAI
 
 from dlightrag.models.providers.base import (
     CompletionOutput,
@@ -16,6 +16,40 @@ from dlightrag.models.providers.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+_UNSUPPORTED_PARAMETER_MARKERS = (
+    "invalid parameter",
+    "not permitted",
+    "not supported",
+    "unsupported",
+    "unrecognized",
+    "unknown",
+    "unexpected",
+)
+
+
+def _rejects_stream_options(exc: APIStatusError) -> bool:
+    body = exc.body if isinstance(exc.body, dict) else {}
+    raw_error = body.get("error")
+    error: dict[str, Any] = raw_error if isinstance(raw_error, dict) else {}
+    parameter = exc.param or body.get("param") or error.get("param")
+    if str(parameter or "").casefold() == "stream_options":
+        return True
+    details = body.get("detail")
+    if isinstance(details, list):
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            location = detail.get("loc")
+            if isinstance(location, list) and any(
+                str(part).casefold() == "stream_options" for part in location
+            ):
+                return True
+    messages = (exc.message, body.get("message"), error.get("message"))
+    text = " ".join(str(message) for message in messages if message).casefold()
+    return "stream_options" in text and any(
+        marker in text for marker in _UNSUPPORTED_PARAMETER_MARKERS
+    )
 
 
 def _cost_to_dict(usage: Any) -> dict[str, float] | None:
@@ -107,8 +141,10 @@ class OpenAICompatibleProvider(CompletionProvider):
             return await client.chat.completions.create(
                 **call_kwargs, stream_options={"include_usage": True}
             )
-        except BadRequestError:
-            # Endpoint rejected stream_options (400) — stream again without it.
+        except APIStatusError as exc:
+            if exc.status_code not in {400, 422} or not _rejects_stream_options(exc):
+                raise
+            # Endpoint rejected stream_options — stream again without usage metadata.
             logger.debug("stream_options unsupported; streaming without usage", exc_info=True)
             return await client.chat.completions.create(**call_kwargs)
 

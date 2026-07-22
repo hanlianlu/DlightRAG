@@ -5,16 +5,14 @@ from __future__ import annotations
 
 import html
 import json
-import math
 import re
 from typing import Any
 
 from dlightrag.core.request.attachments import ParsedAttachmentBundle
 from dlightrag.utils.tokens import estimate_tokens, truncate_to_estimated_tokens
 
-ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET = 8_192
+ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS = 8_192
 
-_DOCUMENT_FLOOR = 1_536
 _ANCHOR_MAX_TOKENS = 1_536
 _ANCHOR_RATIO = 0.35
 _SAMPLE_TARGET_TOKENS = 384
@@ -38,7 +36,7 @@ _STRUCTURAL_SIDECAR_TYPES = frozenset({"table", "drawing", "image", "figure", "e
 def build_attachment_planner_digests(
     documents: list[tuple[str, ParsedAttachmentBundle]],
     *,
-    token_budget: int = ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET,
+    max_tokens_per_document: int = ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     """Build structure-aware document digests for the Web query planner.
 
@@ -46,8 +44,8 @@ def build_attachment_planner_digests(
     native/MinerU parser and iTeP chunker; it never reparses source files. Short
     documents pass through in full. Longer documents reserve space for existing
     structural signals and sample the remaining chunks across the whole
-    document. Multiple documents share one global budget with a per-document
-    floor and square-root weighting so one large file cannot starve the rest.
+    document. Each document has the same semantic maximum; the Planner's total
+    input envelope arbitrates aggregate request size.
     """
     cleaned: list[tuple[str, ParsedAttachmentBundle, list[str], int]] = []
     for attachment_id, bundle in documents:
@@ -56,10 +54,11 @@ def build_attachment_planner_digests(
         input_tokens = estimate_tokens("\n\n".join(chunks))
         cleaned.append((attachment_id, bundle, chunks, input_tokens))
 
-    budgets = _allocate_document_digest_budgets(
-        [(attachment_id, input_tokens) for attachment_id, _, _, input_tokens in cleaned],
-        token_budget=max(0, token_budget),
-    )
+    document_limit = max(0, max_tokens_per_document)
+    budgets = {
+        attachment_id: min(input_tokens, document_limit)
+        for attachment_id, _, _, input_tokens in cleaned
+    }
     digests: dict[str, str] = {}
     output_tokens = 0
     anchor_tokens = 0
@@ -82,7 +81,7 @@ def build_attachment_planner_digests(
     return digests, {
         "attachment_digest_strategy": "sampled" if sampled else "full",
         "attachment_digest_documents": len(cleaned),
-        "attachment_digest_budget_tokens": max(0, token_budget),
+        "attachment_digest_max_tokens_per_document": document_limit,
         "attachment_digest_document_budgets": budgets,
         "attachment_digest_input_tokens": input_tokens,
         "attachment_digest_output_tokens": output_tokens,
@@ -90,74 +89,6 @@ def build_attachment_planner_digests(
         "attachment_digest_sample_tokens": sample_tokens,
         "attachment_digest_truncated": output_tokens < input_tokens,
     }
-
-
-def _allocate_document_digest_budgets(
-    demands: list[tuple[str, int]], *, token_budget: int
-) -> dict[str, int]:
-    """Allocate one global digest budget with floors and sqrt weighting."""
-    demand_by_id = {attachment_id: max(0, demand) for attachment_id, demand in demands}
-    allocations = dict.fromkeys(demand_by_id, 0)
-    budget = max(0, token_budget)
-    floors = {
-        attachment_id: min(demand, _DOCUMENT_FLOOR)
-        for attachment_id, demand in demand_by_id.items()
-    }
-    if sum(floors.values()) <= budget:
-        allocations.update(floors)
-        budget -= sum(floors.values())
-    else:
-        _distribute_digest_budget(allocations, floors, token_budget=budget)
-        return allocations
-
-    _distribute_digest_budget(allocations, demand_by_id, token_budget=budget)
-    return allocations
-
-
-def _distribute_digest_budget(
-    allocations: dict[str, int],
-    caps: dict[str, int],
-    *,
-    token_budget: int,
-) -> None:
-    """Distribute a token pool simultaneously using sqrt-weighted water filling."""
-    remaining = max(0, token_budget)
-    while remaining:
-        active = [
-            attachment_id for attachment_id, cap in caps.items() if allocations[attachment_id] < cap
-        ]
-        if not active:
-            break
-        weights = {
-            attachment_id: math.sqrt(caps[attachment_id] - allocations[attachment_id])
-            for attachment_id in active
-        }
-        weight_total = sum(weights.values())
-        round_budget = remaining
-        grants: dict[str, int] = {}
-        remainders: list[tuple[float, str]] = []
-        for attachment_id in active:
-            ideal = round_budget * weights[attachment_id] / weight_total
-            capacity = caps[attachment_id] - allocations[attachment_id]
-            grants[attachment_id] = min(int(ideal), capacity)
-            remainders.append((ideal - int(ideal), attachment_id))
-
-        leftover = min(round_budget - sum(grants.values()), remaining)
-        for _, attachment_id in sorted(remainders, key=lambda item: (-item[0], item[1])):
-            if leftover <= 0:
-                break
-            capacity = caps[attachment_id] - allocations[attachment_id] - grants[attachment_id]
-            if capacity <= 0:
-                continue
-            grants[attachment_id] += 1
-            leftover -= 1
-
-        progressed = sum(grants.values())
-        if progressed == 0:
-            break
-        for attachment_id, grant in grants.items():
-            allocations[attachment_id] += grant
-        remaining -= progressed
 
 
 def _build_document_planner_digest(
@@ -386,6 +317,6 @@ def _fit_digest_segments(segments: list[str], *, token_budget: int) -> str:
 
 
 __all__ = [
-    "ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET",
+    "ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS",
     "build_attachment_planner_digests",
 ]

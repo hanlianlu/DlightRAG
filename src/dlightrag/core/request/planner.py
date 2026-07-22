@@ -10,6 +10,7 @@ Consumers:
 """
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -20,17 +21,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from dlightrag.core.request.attachment_digest import ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
-    PLANNER_CURRENT_IMAGE_TEMPLATE,
-    PLANNER_HISTORY_TEMPLATE,
-    PLANNER_NO_HISTORY_TEMPLATE,
+    PLANNER_IMAGE_CONTEXT_GUIDANCE,
     PLANNER_SYSTEM_PROMPT,
-    PLANNER_WEB_SELECTION_TEMPLATE,
-    WEB_PLANNER_CURRENT_ATTACHMENT_TEMPLATE,
-    WEB_PLANNER_HISTORY_ATTACHMENT_TEMPLATE,
     WEB_PLANNER_SYSTEM_PROMPT,
 )
 from dlightrag.utils import log_safe
@@ -42,14 +37,9 @@ from dlightrag.utils.tokens import (
 
 logger = logging.getLogger(__name__)
 
-_WEB_PLANNER_INPUT_TOKEN_ENVELOPE = 102_400
-_WEB_PLANNER_QUERY_TOKEN_BUDGET = 8_192
-_WEB_PLANNER_SCHEMA_TOKEN_BUDGET = 8_192
-_WEB_PLANNER_CURRENT_IMAGE_DESCRIPTION_TOKEN_BUDGET = 4_096
-_WEB_PLANNER_HISTORY_CATALOG_TOKEN_BUDGET = 4_096
+_PLANNER_INPUT_TOKEN_ENVELOPE = 102_400
 _WEB_PLANNER_HISTORY_ATTACHMENT_SUMMARY_MAX_TOKENS = 1_024
 _WEB_PLANNER_HISTORY_IMAGE_DESCRIPTION_MAX_TOKENS = 512
-_WEB_PLANNER_ESTIMATION_MARGIN = 64
 
 
 def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
@@ -85,6 +75,21 @@ def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
     return "\n".join(lines)
 
 
+PlannerOutcome = Literal[
+    "planned",
+    "fallback_no_model",
+    "fallback_provider_error",
+    "fallback_invalid_response",
+    "fallback_input_overflow",
+]
+PlannerFallbackOutcome = Literal[
+    "fallback_no_model",
+    "fallback_provider_error",
+    "fallback_invalid_response",
+    "fallback_input_overflow",
+]
+
+
 @dataclass
 class QueryPlan:
     """Output of QueryPlanner -- full query understanding in one shot."""
@@ -99,6 +104,15 @@ class QueryPlan:
     selected_history_image_ids: tuple[str, ...] = ()
     # Web-only conversation planner field (empty for stateless REST/MCP/SDK/retrieve).
     selected_history_attachment_ids: tuple[str, ...] = ()
+    planner_outcome: PlannerOutcome = "planned"
+
+    @classmethod
+    def fallback(cls, query: str, outcome: PlannerFallbackOutcome) -> QueryPlan:
+        return cls(
+            original_query=query,
+            standalone_query=query,
+            planner_outcome=outcome,
+        )
 
 
 class QueryPlannerFilterEvidence(BaseModel):
@@ -208,6 +222,46 @@ def _build_custom_keys_hint(schema: dict[str, Any] | None) -> str:
     return f"Known custom metadata keys: {', '.join(custom_keys)}\n\n"
 
 
+def _build_schema_context(schema: dict[str, Any] | None) -> str:
+    return (_build_schema_section(schema) + _build_custom_keys_hint(schema)).strip()
+
+
+def _planner_user_payload(
+    query: str,
+    *,
+    metadata_schema: str | None = None,
+    history: list[dict[str, Any]] | None = None,
+    prior_images: list[dict[str, Any]] | None = None,
+    prior_documents: list[dict[str, Any]] | None = None,
+    current_images: list[str] | None = None,
+    current_documents: list[dict[str, Any]] | None = None,
+    history_image_limit: int | None = None,
+    history_document_limit: int | None = None,
+) -> str:
+    payload: dict[str, Any] = {"query": query}
+    if metadata_schema:
+        payload["metadata_schema"] = metadata_schema
+    history_text = _convert_history_to_text(history)
+    if history_text:
+        payload["conversation_history"] = history_text
+    if prior_images:
+        payload["prior_images"] = prior_images
+    if prior_documents:
+        payload["prior_documents"] = prior_documents
+    if current_images:
+        payload["current_images"] = current_images
+    if current_documents:
+        payload["current_documents"] = current_documents
+    limits: dict[str, int] = {}
+    if history_image_limit is not None:
+        limits["history_images"] = max(0, history_image_limit)
+    if history_document_limit is not None:
+        limits["history_documents"] = max(0, history_document_limit)
+    if limits:
+        payload["limits"] = limits
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def _is_empty_filter(f: MetadataFilter) -> bool:
     return f.is_empty()
 
@@ -229,122 +283,11 @@ def _scope_ids(
     return tuple(list(deduped)[: max(0, limit)])
 
 
-def _equal_demand_token_budgets(demands: dict[str, int], token_budget: int) -> dict[str, int]:
-    """Water-fill one token pool fairly across independently capped demands."""
-    budgets = dict.fromkeys(demands, 0)
-    remaining = max(0, token_budget)
-    active = {key for key, demand in demands.items() if demand > 0}
-    while active and remaining:
-        share = remaining // len(active)
-        satisfied = {key for key in active if demands[key] - budgets[key] <= share}
-        if satisfied:
-            for key in sorted(satisfied):
-                grant = demands[key] - budgets[key]
-                budgets[key] += grant
-                remaining -= grant
-            active -= satisfied
-            continue
-        for key in sorted(active):
-            grant = min(share, demands[key] - budgets[key])
-            budgets[key] += grant
-            remaining -= grant
-        for key in sorted(active):
-            if remaining <= 0:
-                break
-            if budgets[key] < demands[key]:
-                budgets[key] += 1
-                remaining -= 1
-        break
-    return budgets
-
-
-def _budget_current_attachment_catalog(
-    rows: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    """Defensively enforce the current-turn 8192-token digest contract."""
-    if not rows:
-        return []
-    demands = {
-        str(row["attachment_id"]): estimate_tokens(str(row.get("parse_summary") or ""))
-        for row in rows
-    }
-    budgets = _equal_demand_token_budgets(
-        demands,
-        ATTACHMENT_PLANNER_DIGEST_TOKEN_BUDGET,
-    )
-    return [
-        {
-            **row,
-            "parse_summary": truncate_to_estimated_tokens(
-                str(row.get("parse_summary") or ""),
-                budgets[str(row["attachment_id"])],
-            ),
-        }
-        for row in rows
-    ]
-
-
-def _budget_current_image_descriptions(descriptions: list[str] | None) -> list[str]:
-    """Bound current image semantics as one planner-context pool."""
-    if not descriptions:
-        return []
-    demands = {
-        str(index): estimate_tokens(description) for index, description in enumerate(descriptions)
-    }
-    budgets = _equal_demand_token_budgets(
-        demands,
-        _WEB_PLANNER_CURRENT_IMAGE_DESCRIPTION_TOKEN_BUDGET,
-    )
-    return [
-        truncate_to_estimated_tokens(description, budgets[str(index)])
-        for index, description in enumerate(descriptions)
-    ]
-
-
-def _render_web_history_catalog_sections(
-    image_rows: list[dict[str, Any]],
-    attachment_rows: list[dict[str, Any]],
-    *,
-    allowed_image_count: int,
-    allowed_attachment_count: int,
-) -> str:
-    sections: list[str] = []
-    if image_rows:
-        image_lines = "\n".join(
-            f"{row['image_id']} | turn {row['turn_number']} | "
-            f"ord {row['ordinal']} | {row['vlm_description']}"
-            for row in image_rows
-        )
-        sections.append(
-            PLANNER_WEB_SELECTION_TEMPLATE.format(
-                allowed_count=max(0, allowed_image_count),
-                catalog_lines=image_lines,
-            )
-        )
-    if attachment_rows:
-        attachment_lines = "\n".join(
-            f"{row['attachment_id']} | turn {row['turn_number']} | "
-            f"ord {row['ordinal']} | {row['filename']} | {row['parse_summary']}"
-            for row in attachment_rows
-        )
-        sections.append(
-            WEB_PLANNER_HISTORY_ATTACHMENT_TEMPLATE.format(
-                allowed_count=max(0, allowed_attachment_count),
-                catalog_lines=attachment_lines,
-            )
-        )
-    return "".join(sections)
-
-
-def _pack_web_history_catalogs(
+def _prepare_history_catalogs(
     image_catalog: list[dict[str, Any]] | None,
     attachment_catalog: list[dict[str, Any]] | None,
-    *,
-    allowed_image_count: int,
-    allowed_attachment_count: int,
-    token_budget: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    """Pack the most recent cross-modal history catalog into one token cap."""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Bound each catalog item and order both catalogs newest-first."""
     entries: list[tuple[int, int, str, dict[str, Any]]] = []
     for row in image_catalog or []:
         prepared = {
@@ -379,31 +322,50 @@ def _pack_web_history_catalogs(
             )
         )
 
-    selected_images: list[dict[str, Any]] = []
-    selected_attachments: list[dict[str, Any]] = []
-    budget = max(0, token_budget)
+    prepared_images: list[dict[str, Any]] = []
+    prepared_attachments: list[dict[str, Any]] = []
     for _, _, kind, row in sorted(entries, key=lambda item: item[:3], reverse=True):
-        candidate_images = [*selected_images, row] if kind == "image" else selected_images
-        candidate_attachments = (
-            [*selected_attachments, row] if kind == "attachment" else selected_attachments
-        )
-        candidate = _render_web_history_catalog_sections(
-            candidate_images,
-            candidate_attachments,
-            allowed_image_count=allowed_image_count,
-            allowed_attachment_count=allowed_attachment_count,
-        )
-        if estimate_tokens(candidate) <= budget:
-            selected_images = candidate_images
-            selected_attachments = candidate_attachments
+        if kind == "image":
+            prepared_images.append(row)
+        else:
+            prepared_attachments.append(row)
+    return prepared_images, prepared_attachments
 
-    rendered = _render_web_history_catalog_sections(
-        selected_images,
-        selected_attachments,
-        allowed_image_count=allowed_image_count,
-        allowed_attachment_count=allowed_attachment_count,
-    )
-    return selected_images, selected_attachments, rendered
+
+def _planner_request_tokens(system_prompt: str, user_payload: str) -> int:
+    return estimate_tokens(system_prompt) + estimate_tokens(user_payload)
+
+
+def _drop_oldest_history_turn(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if (
+        len(history) >= 2
+        and history[0].get("role") == "user"
+        and history[1].get("role") == "assistant"
+    ):
+        return history[2:]
+    return history[1:]
+
+
+def _drop_oldest_catalog_entry(
+    images: list[dict[str, Any]],
+    documents: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    entries = [
+        (
+            int(row.get("turn_number") or -1),
+            int(row.get("ordinal") or 0),
+            kind,
+            index,
+        )
+        for kind, rows in (("image", images), ("document", documents))
+        for index, row in enumerate(rows)
+    ]
+    if not entries:
+        return images, documents
+    _, _, kind, index = min(entries)
+    if kind == "image":
+        return [*images[:index], *images[index + 1 :]], documents
+    return images, [*documents[:index], *documents[index + 1 :]]
 
 
 def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int = 3) -> str:
@@ -482,13 +444,9 @@ class QueryPlanner:
         Handles conversation rewriting, semantic query extraction, and metadata
         filter extraction in a single prompt.
         """
-        fallback = QueryPlan(
-            original_query=query,
-            standalone_query=query,
-        )
 
         if self._llm_func is None:
-            return fallback
+            return QueryPlan.fallback(query, "fallback_no_model")
 
         # Truncate history
         history = self._truncate_history(conversation_history, max_turns, max_tokens)
@@ -499,23 +457,8 @@ class QueryPlanner:
         t1 = time.monotonic()
         logger.info("[Planner] schema refresh: %.1fs", t1 - t0)
 
-        # Build prompt
-        schema_section = _build_schema_section(schema)
-        custom_keys_hint = _build_custom_keys_hint(schema)
-
-        if history:
-            history_text = _convert_history_to_text(history)
-            history_section = PLANNER_HISTORY_TEMPLATE.format(
-                history_text=history_text, query=query
-            )
-        else:
-            history_section = PLANNER_NO_HISTORY_TEMPLATE.format(query=query)
-
-        system_prompt = PLANNER_SYSTEM_PROMPT.format(
-            schema_section=schema_section,
-            custom_keys_hint=custom_keys_hint,
-            history_section=history_section,
-        )
+        schema_context = _build_schema_context(schema)
+        system_prompt = PLANNER_SYSTEM_PROMPT
 
         # Web-variant: append the image catalog + selection guidance and switch to
         # the schema that carries selected_history_image_ids. The public prompt and
@@ -523,23 +466,40 @@ class QueryPlanner:
         structured_output = QUERY_PLAN_STRUCTURED_OUTPUT
         if image_catalog:
             structured_output = QUERY_PLAN_WEB_STRUCTURED_OUTPUT
-            catalog_lines = "\n".join(
-                f"{row['image_id']} | turn {row['turn_number']} | "
-                f"ord {row['ordinal']} | {row['vlm_description']}"
-                for row in image_catalog
-            )
-            system_prompt += PLANNER_WEB_SELECTION_TEMPLATE.format(
-                allowed_count=max(0, allowed_history_image_count),
-                catalog_lines=catalog_lines,
+        if image_catalog or current_image_descriptions:
+            system_prompt += "\n\n" + PLANNER_IMAGE_CONTEXT_GUIDANCE
+        prior_images, _ = _prepare_history_catalogs(image_catalog, None)
+
+        def render_input() -> str:
+            return _planner_user_payload(
+                query,
+                metadata_schema=schema_context,
+                history=history,
+                prior_images=prior_images,
+                current_images=current_image_descriptions,
+                history_image_limit=allowed_history_image_count if image_catalog else None,
             )
 
-        # Current-turn images are always incorporated (no selection): fold their
-        # descriptions into the query so bm25/filters/rewrite become image-aware
-        # even for stateless REST/MCP calls with no conversation history.
-        if current_image_descriptions:
-            system_prompt += PLANNER_CURRENT_IMAGE_TEMPLATE.format(
-                image_lines="\n".join(f"- {desc}" for desc in current_image_descriptions)
-            )
+        planner_input = render_input()
+        if (
+            schema_context
+            and _planner_request_tokens(system_prompt, planner_input)
+            > _PLANNER_INPUT_TOKEN_ENVELOPE
+        ):
+            schema_context = ""
+            planner_input = render_input()
+        evict_history = True
+        while (history or prior_images) and _planner_request_tokens(
+            system_prompt, planner_input
+        ) > (_PLANNER_INPUT_TOKEN_ENVELOPE):
+            if history and (evict_history or not prior_images):
+                history = _drop_oldest_history_turn(history)
+            else:
+                prior_images = prior_images[:-1]
+            evict_history = not evict_history
+            planner_input = render_input()
+        if _planner_request_tokens(system_prompt, planner_input) > _PLANNER_INPUT_TOKEN_ENVELOPE:
+            return QueryPlan.fallback(query, "fallback_input_overflow")
 
         # LLM call with adaptive retry (up to 2 retries with exponential backoff)
         _MAX_RETRIES = 2
@@ -547,7 +507,7 @@ class QueryPlanner:
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 response = await self._call_llm(
-                    query, system_prompt, structured_output=structured_output
+                    planner_input, system_prompt, structured_output=structured_output
                 )
                 logger.info(
                     "[Planner] LLM call: %.1fs (attempt %d)", time.monotonic() - t1, attempt
@@ -571,25 +531,22 @@ class QueryPlanner:
                         time.monotonic() - t1,
                         exc_info=True,
                     )
-                    return fallback
+                    return QueryPlan.fallback(query, "fallback_provider_error")
 
         # Parse response (response is guaranteed str here; None means all retries failed)
         if response is None:
-            return fallback
+            return QueryPlan.fallback(query, "fallback_provider_error")
         plan = self._parse_response(response, query, structured_output=structured_output)
         if plan is None:
-            return fallback
+            return QueryPlan.fallback(query, "fallback_invalid_response")
 
         # LLM output is not authorization: keep only ids present in the scoped
         # catalog, deduped and truncated to the allowed count.
         if image_catalog:
-            allowed = {str(row["image_id"]) for row in image_catalog}
-            deduped: dict[str, None] = {}
-            for image_id in plan.selected_history_image_ids:
-                if str(image_id) in allowed:
-                    deduped.setdefault(str(image_id), None)
-            plan.selected_history_image_ids = tuple(
-                list(deduped)[: max(0, allowed_history_image_count)]
+            plan.selected_history_image_ids = _scope_ids(
+                plan.selected_history_image_ids,
+                {str(row["image_id"]) for row in prior_images},
+                allowed_history_image_count,
             )
 
         # Merge explicit filter (explicit wins)
@@ -678,125 +635,78 @@ class QueryPlanner:
         rendering, structured-output parsing, filter merging) and adds scoped
         selection of prior Composer documents and images.
         """
-        fallback = QueryPlan(
-            original_query=query,
-            standalone_query=query,
-        )
 
         if self._llm_func is None:
-            return fallback
+            return QueryPlan.fallback(query, "fallback_no_model")
 
-        planner_query = truncate_to_estimated_tokens(
-            query,
-            _WEB_PLANNER_QUERY_TOKEN_BUDGET,
-        )
+        planner_query = query
 
         t0 = time.monotonic()
         schema = schema if schema is not None else await self._refresh_schema()
         t1 = time.monotonic()
         logger.info("[Planner] schema refresh: %.1fs", t1 - t0)
 
-        schema_section = _build_schema_section(schema)
-        custom_keys_hint = _build_custom_keys_hint(schema)
-        schema_section = truncate_to_estimated_tokens(
-            schema_section + custom_keys_hint,
-            _WEB_PLANNER_SCHEMA_TOKEN_BUDGET,
-        )
-        custom_keys_hint = ""
-
-        current_sections: list[str] = []
-        current_attachment_rows = _budget_current_attachment_catalog(current_attachment_catalog)
-        if current_attachment_rows:
-            current_lines = "\n".join(
-                f"{row['attachment_id']} | {row['filename']} | {row['parse_summary']}"
-                for row in current_attachment_rows
-            )
-            current_sections.append(
-                WEB_PLANNER_CURRENT_ATTACHMENT_TEMPLATE.format(catalog_lines=current_lines)
-            )
-        planned_image_descriptions = _budget_current_image_descriptions(current_image_descriptions)
-        if planned_image_descriptions:
-            current_sections.append(
-                PLANNER_CURRENT_IMAGE_TEMPLATE.format(
-                    image_lines="\n".join(f"- {desc}" for desc in planned_image_descriptions)
-                )
-            )
-        current_context = "".join(current_sections)
-
-        no_history_section = PLANNER_NO_HISTORY_TEMPLATE.format(query=planner_query)
-        fixed_no_catalog_prompt = (
-            WEB_PLANNER_SYSTEM_PROMPT.format(
-                schema_section=schema_section,
-                custom_keys_hint=custom_keys_hint,
-                history_section=no_history_section,
-            )
-            + current_context
-        )
-        available_catalog_tokens = max(
-            0,
-            _WEB_PLANNER_INPUT_TOKEN_ENVELOPE
-            - estimate_tokens(fixed_no_catalog_prompt)
-            - estimate_tokens(planner_query)
-            - _WEB_PLANNER_ESTIMATION_MARGIN,
-        )
-        catalog_budget = min(
-            _WEB_PLANNER_HISTORY_CATALOG_TOKEN_BUDGET,
-            available_catalog_tokens,
-        )
-        planned_image_catalog, planned_attachment_catalog, history_catalog_context = (
-            _pack_web_history_catalogs(
-                image_catalog,
-                attachment_catalog,
-                allowed_image_count=allowed_history_image_count,
-                allowed_attachment_count=allowed_history_attachment_count,
-                token_budget=catalog_budget,
-            )
+        schema_context = _build_schema_context(schema)
+        current_attachment_rows = list(current_attachment_catalog or [])
+        planned_image_descriptions = list(current_image_descriptions or [])
+        planned_image_catalog, planned_attachment_catalog = _prepare_history_catalogs(
+            image_catalog,
+            attachment_catalog,
         )
 
-        history = self._truncate_history(
-            conversation_history,
-            max_turns,
-            max(0, max_tokens),
-        )
+        history = self._truncate_history(conversation_history, max_turns, max_tokens)
 
-        def render_prompt(messages: list[dict[str, Any]]) -> str:
-            history_section = (
-                PLANNER_HISTORY_TEMPLATE.format(
-                    history_text=_convert_history_to_text(messages),
-                    query=planner_query,
-                )
-                if messages
-                else no_history_section
-            )
-            return (
-                WEB_PLANNER_SYSTEM_PROMPT.format(
-                    schema_section=schema_section,
-                    custom_keys_hint=custom_keys_hint,
-                    history_section=history_section,
-                )
-                + history_catalog_context
-                + current_context
+        system_prompt = WEB_PLANNER_SYSTEM_PROMPT
+
+        def render_input(messages: list[dict[str, Any]]) -> str:
+            return _planner_user_payload(
+                planner_query,
+                metadata_schema=schema_context,
+                history=messages,
+                prior_images=planned_image_catalog,
+                prior_documents=planned_attachment_catalog,
+                current_images=planned_image_descriptions,
+                current_documents=current_attachment_rows,
+                history_image_limit=allowed_history_image_count,
+                history_document_limit=allowed_history_attachment_count,
             )
 
-        system_prompt = render_prompt(history)
-        while history and (
-            estimate_tokens(system_prompt) + estimate_tokens(planner_query)
-            > _WEB_PLANNER_INPUT_TOKEN_ENVELOPE
+        planner_input = render_input(history)
+        if (
+            schema_context
+            and _planner_request_tokens(system_prompt, planner_input)
+            > _PLANNER_INPUT_TOKEN_ENVELOPE
         ):
-            history = history[1:]
-            system_prompt = render_prompt(history)
-        planner_input_tokens = estimate_tokens(system_prompt) + estimate_tokens(planner_query)
-        if planner_input_tokens > _WEB_PLANNER_INPUT_TOKEN_ENVELOPE:
+            schema_context = ""
+            planner_input = render_input(history)
+        evict_history = True
+        while _planner_request_tokens(system_prompt, planner_input) > (
+            _PLANNER_INPUT_TOKEN_ENVELOPE
+        ):
+            has_catalog = bool(planned_image_catalog or planned_attachment_catalog)
+            if history and (evict_history or not has_catalog):
+                history = _drop_oldest_history_turn(history)
+            elif has_catalog:
+                planned_image_catalog, planned_attachment_catalog = _drop_oldest_catalog_entry(
+                    planned_image_catalog,
+                    planned_attachment_catalog,
+                )
+            else:
+                break
+            evict_history = not evict_history
+            planner_input = render_input(history)
+        planner_input_tokens = _planner_request_tokens(system_prompt, planner_input)
+        if planner_input_tokens > _PLANNER_INPUT_TOKEN_ENVELOPE:
             logger.error(
                 "[Planner] refusing Web plan above the %d-token envelope: %d tokens",
-                _WEB_PLANNER_INPUT_TOKEN_ENVELOPE,
+                _PLANNER_INPUT_TOKEN_ENVELOPE,
                 planner_input_tokens,
             )
-            return fallback
+            return QueryPlan.fallback(query, "fallback_input_overflow")
         logger.debug(
             "[Planner] Web input budget: envelope=%d input=%d history_messages=%d "
             "catalog_images=%d catalog_attachments=%d",
-            _WEB_PLANNER_INPUT_TOKEN_ENVELOPE,
+            _PLANNER_INPUT_TOKEN_ENVELOPE,
             planner_input_tokens,
             len(history),
             len(planned_image_catalog),
@@ -804,13 +714,13 @@ class QueryPlanner:
         )
 
         response = await self._call_llm_with_retry(
-            planner_query,
+            planner_input,
             system_prompt,
             structured_output=QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT,
             start_time=t1,
         )
         if response is None:
-            return fallback
+            return QueryPlan.fallback(query, "fallback_provider_error")
 
         plan = self._parse_response(
             response,
@@ -818,7 +728,7 @@ class QueryPlanner:
             structured_output=QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT,
         )
         if plan is None:
-            return fallback
+            return QueryPlan.fallback(query, "fallback_invalid_response")
 
         # LLM output is not authorization: keep only ids present in the scoped
         # catalogs, deduped and truncated to the allowed count.
@@ -966,7 +876,7 @@ class QueryPlanner:
         max_turns: int,
         max_tokens: int,
     ) -> list[dict[str, Any]]:
-        if not history:
+        if not history or max_turns <= 0 or max_tokens <= 0:
             return []
         max_messages = max_turns * 2
         return truncate_conversation_history(

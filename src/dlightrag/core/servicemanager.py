@@ -1128,8 +1128,10 @@ class RAGServiceManager:
             input={"query": query},
             metadata={
                 "workspaces": list(workspaces or []),
-                "history_turns": len(text_history or []),
+                "history_messages": len(text_history or []),
                 "history_image_catalog_count": len(image_catalog or []),
+                "history_attachment_catalog_count": len(attachment_catalog or []),
+                "current_attachment_count": len(current_attachment_catalog or []),
             },
         ) as trace:
             schema = await self._get_schema(workspaces)
@@ -1150,6 +1152,7 @@ class RAGServiceManager:
                 output={
                     "standalone_query": plan.standalone_query,
                     "has_metadata_filter": plan.metadata_filter is not None,
+                    "planner_outcome": plan.planner_outcome,
                 }
             )
             return plan
@@ -1206,7 +1209,7 @@ class RAGServiceManager:
             input={"query": query},
             metadata={
                 "workspaces": list(workspaces or []),
-                "history_turns": len(text_history or []),
+                "history_messages": len(text_history or []),
                 "history_image_catalog_count": len(image_catalog or []),
             },
         ) as trace:
@@ -1225,6 +1228,7 @@ class RAGServiceManager:
                 output={
                     "standalone_query": plan.standalone_query,
                     "has_metadata_filter": plan.metadata_filter is not None,
+                    "planner_outcome": plan.planner_outcome,
                 }
             )
             return plan

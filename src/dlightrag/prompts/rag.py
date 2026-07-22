@@ -2,11 +2,9 @@
 """Answer generation and evaluation prompts."""
 
 from .guidance import (
-    ANSWER_CITATION_EXAMPLE,
     ANSWER_CONTEXT_GUIDANCE,
     CITATION_GUIDANCE,
     HIGHLIGHT_GUIDANCE,
-    HIGHLIGHT_RESPONSE_FORMAT,
 )
 from .identity import CORE_IDENTITY
 
@@ -17,7 +15,6 @@ ANSWER_CORE = "\n\n".join(
         CORE_IDENTITY,
         ANSWER_CONTEXT_GUIDANCE,
         CITATION_GUIDANCE,
-        ANSWER_CITATION_EXAMPLE,
     ]
 )
 
@@ -35,10 +32,4 @@ def get_answer_system_prompt() -> str:
 
 # --- Semantic Highlighting ---
 
-HIGHLIGHT_SYSTEM_PROMPT = "\n\n".join(
-    [
-        CORE_IDENTITY,
-        HIGHLIGHT_GUIDANCE,
-        HIGHLIGHT_RESPONSE_FORMAT,
-    ]
-)
+HIGHLIGHT_SYSTEM_PROMPT = HIGHLIGHT_GUIDANCE
