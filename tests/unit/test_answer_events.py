@@ -80,8 +80,9 @@ def _metadata_updates(captured: dict[str, object]) -> list[dict[str, Any]]:
     return result
 
 
-async def _tokens():
-    yield "Complete answer"
+async def _tokens(tokens: tuple[str, ...] = ("Complete answer",)):
+    for token in tokens:
+        yield token
 
 
 async def _collect(
@@ -89,6 +90,8 @@ async def _collect(
     service: AsyncMock,
     result: CommitTurnResult | None = None,
     validated_images: tuple[ValidatedWebImage, ...] = (),
+    contexts: dict[str, Any] | None = None,
+    tokens: tuple[str, ...] = ("Complete answer",),
 ):
     if result is not None:
         service.commit_answer.return_value = result
@@ -98,7 +101,9 @@ async def _collect(
     )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
-        _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
+        _aanswer_stream_prepared=AsyncMock(
+            return_value=(contexts or {"chunks": []}, _tokens(tokens))
+        ),
     )
     prepared = PreparedWebConversation(
         principal_id="a" * 64,
@@ -127,6 +132,7 @@ async def _collect(
 
 async def test_successful_stream_commits_once_before_done() -> None:
     service = AsyncMock()
+    attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
     now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
     service.commit_answer.return_value = CommitTurnResult(
         saved=True,
@@ -142,13 +148,40 @@ async def test_successful_stream_commits_once_before_done() -> None:
         current_image_ids=("durable-image",),
     )
 
-    events = await _collect(service=service)
+    events = await _collect(
+        service=service,
+        contexts={
+            "chunks": [
+                {
+                    "reference_id": "att-1",
+                    "full_doc_id": attachment_id,
+                    "_workspace": "__web_attachment__",
+                    "file_path": "report.pdf",
+                    "content": "Attachment evidence",
+                    "chunk_id": "attachment-chunk-1",
+                    "metadata": {
+                        "source_type": "web_attachment",
+                        "source_uri": f"web-attachment://{attachment_id}",
+                        "source_download_locator": f"web-attachment://{attachment_id}",
+                    },
+                }
+            ]
+        },
+        tokens=("Complete answer [att-1-1]",),
+    )
 
     service.commit_answer.assert_awaited_once()
-    assert service.commit_answer.await_args.kwargs["answer_sources"] == {
-        "sources": [],
-        "answer_images": [],
-    }
+    answer_sources = service.commit_answer.await_args.kwargs["answer_sources"]
+    assert answer_sources["answer_images"] == []
+    assert len(answer_sources["sources"]) == 1
+    source = answer_sources["sources"][0]
+    assert source["id"] == "att-1"
+    assert source["source_uri"] == f"web-attachment://{attachment_id}"
+    assert source["download_url"] == (
+        f"/web/conversations/11111111-1111-4111-8111-111111111111/documents/{attachment_id}"
+    )
+    assert "composer_" not in json.dumps(answer_sources)
+    assert "att-1" not in source["download_url"]
     done = next(event for event in events if "event: done" in event)
     assert '"conversation_saved": true' in done
 

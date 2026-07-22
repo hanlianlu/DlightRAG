@@ -1116,6 +1116,8 @@ class TestWebAnswerAdapter:
     async def test_same_submission_replay_returns_stored_answer_before_model(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
+        attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
+        download_url = f"/web/conversations/{CONVERSATION_ID}/documents/{attachment_id}"
         web_app.state.manager.config = test_config
         web_app.state.web_conversation_service.prepare_answer.return_value = (
             PreparedWebConversation(
@@ -1129,8 +1131,24 @@ class TestWebAnswerAdapter:
                     summary=None,
                     turn_id="turn",
                     current_image_ids=("stored-image",),
-                    assistant_text="Stored answer",
-                    answer_sources={"sources": [], "answer_images": []},
+                    assistant_text="Stored answer [att-1-1]",
+                    answer_sources={
+                        "sources": [
+                            {
+                                "id": "att-1",
+                                "title": "report.pdf",
+                                "source_uri": f"web-attachment://{attachment_id}",
+                                "download_url": download_url,
+                                "chunks": [
+                                    {
+                                        "chunk_id": "attachment-chunk-1",
+                                        "content": "Attachment evidence",
+                                    }
+                                ],
+                            }
+                        ],
+                        "answer_images": [],
+                    },
                     replayed=True,
                 ),
             )
@@ -1148,6 +1166,18 @@ class TestWebAnswerAdapter:
         assert response.status_code == 200
         assert "Stored answer" in response.text
         assert "stored-image" in response.text
+        replay_payload = json.loads(
+            next(
+                line.removeprefix("data: ")
+                for line in response.text.splitlines()
+                if line.startswith("data: ")
+            )
+        )
+        replay_html = replay_payload["html"]
+        assert 'class="citation-badge" data-ref="att-1"' in replay_html
+        assert 'class="source-doc" data-ref="att-1"' in replay_html
+        assert download_url in replay_html
+        assert "composer_" not in response.text
         web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
 
 

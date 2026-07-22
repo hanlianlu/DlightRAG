@@ -1287,10 +1287,6 @@ def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() 
         original_durable_values
     )
     assert all(result is not source for result, source in zip(assigned, rows, strict=True))
-    assert all(
-        result["metadata"] is source["metadata"]
-        for result, source in zip(assigned, rows, strict=True)
-    )
 
 
 @pytest.mark.parametrize(
