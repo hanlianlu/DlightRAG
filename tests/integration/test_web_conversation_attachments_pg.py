@@ -385,6 +385,20 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
         content_sha256 = hashlib.sha256(document_bytes).hexdigest()
         attachment_id = str(uuid4())
         filename = "report.pdf"
+        assistant_text = "Here is the summary of report.pdf [att-1-1]."
+        answer_sources = {
+            "sources": [
+                {
+                    "id": "att-1",
+                    "source_uri": f"web-attachment://{attachment_id}",
+                    "download_url": (
+                        f"/web/conversations/{conversation_id}/documents/{attachment_id}"
+                    ),
+                    "chunks": [],
+                }
+            ],
+            "answer_images": [],
+        }
 
         commit = await store.commit_turn(
             principal_id=principal_id,
@@ -392,8 +406,8 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
             submission_id=str(uuid4()),
             expected_revision=0,
             user_text="Summarize the attached report.",
-            assistant_text="Here is the summary of report.pdf.",
-            answer_sources={},
+            assistant_text=assistant_text,
+            answer_sources=answer_sources,
             queried_workspaces=[],
             images=[],
             attachments=[
@@ -421,7 +435,15 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
         )
         assert snapshot is not None
         assert len(snapshot.history) == 1
-        history_attachments = snapshot.history[0]["attachments"]
+        history_row = snapshot.history[0]
+        assert history_row["assistant_text"] == assistant_text
+        assert history_row["answer_sources"] == answer_sources
+        assert "composer_" not in history_row["assistant_text"]
+        assert "composer_" not in json.dumps(history_row["answer_sources"])
+        stored_download_url = history_row["answer_sources"]["sources"][0]["download_url"]
+        assert "/documents/att-1" not in stored_download_url
+
+        history_attachments = history_row["attachments"]
         assert len(history_attachments) == 1
         projected = history_attachments[0]
         assert projected["attachment_id"] == attachment_id
