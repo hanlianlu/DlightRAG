@@ -22,6 +22,7 @@ from dlightrag.config import DlightragConfig
 from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.storage.web_conversations import CommitTurnResult
+from dlightrag.web.attachment_models import COMPOSER_DOCUMENT_EXTENSIONS
 from dlightrag.web.conversations import PreparedWebConversation
 
 if TYPE_CHECKING:
@@ -516,6 +517,16 @@ class TestWebIndex:
         assert resp.status_code == 200
         assert 'data-document-current-upload-limit="3"' in resp.text
         assert 'data-document-max-upload-bytes="104857600"' in resp.text
+        extensions_match = re.search(r"data-document-extensions='([^']+)'", resp.text)
+        accept_match = re.search(r'id="attachment-input"[^>]*accept="([^"]+)"', resp.text)
+        assert extensions_match is not None
+        assert accept_match is not None
+
+        expected_extensions = sorted(COMPOSER_DOCUMENT_EXTENSIONS)
+        assert json.loads(html.unescape(extensions_match.group(1))) == expected_extensions
+        assert accept_match.group(1) == ",".join(
+            ["image/*", *(f".{extension}" for extension in expected_extensions)]
+        )
 
     def test_web_markup_keeps_behavior_in_static_js(self) -> None:
         web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"

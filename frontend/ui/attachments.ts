@@ -3,7 +3,6 @@
 import {canAddImage, getImageAdmissionPolicy} from './image_policy.ts';
 import {
     acceptsDocumentUpload,
-    classifyAttachmentFile,
     getDocumentAdmissionPolicy,
 } from './attachment_policy.ts';
 import {
@@ -25,12 +24,10 @@ interface PendingDocument {
 const pendingDocuments: PendingDocument[] = [];
 
 export function addAttachmentFile(file: File): void {
-    const kind = classifyAttachmentFile(file);
-    if (kind === 'image') {
+    if (file.type.startsWith('image/')) {
         addImage(file);
         return;
     }
-    if (kind !== 'document') return;
     const policy = getDocumentAdmissionPolicy();
     if (!policy || !acceptsDocumentUpload(file, pendingDocuments.length, policy)) return;
     pendingDocuments.push({file, objectUrl: URL.createObjectURL(file)});

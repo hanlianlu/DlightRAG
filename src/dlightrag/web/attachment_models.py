@@ -20,41 +20,40 @@ from dlightrag.utils.images import (
 MAX_CURRENT_DOCUMENTS = 3
 MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
 
-_DOCUMENT_SUFFIXES = frozenset(
+COMPOSER_DOCUMENT_EXTENSIONS = frozenset(
     {
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".ppt",
-        ".pptx",
-        ".xls",
-        ".xlsx",
-        ".md",
-        ".markdown",
-        ".textpack",
-        ".txt",
-        ".csv",
-        ".json",
-        ".html",
-        ".htm",
-        ".xml",
-        ".yaml",
-        ".yml",
-        ".rtf",
-        ".odt",
-        ".epub",
-        ".tex",
-        ".log",
-        ".py",
-        ".js",
-        ".ts",
-        ".css",
-        ".scss",
-        ".sql",
-        ".sh",
-        ".conf",
-        ".ini",
-        ".properties",
+        "pdf",
+        "doc",
+        "docx",
+        "ppt",
+        "pptx",
+        "xls",
+        "xlsx",
+        "md",
+        "textpack",
+        "txt",
+        "csv",
+        "json",
+        "html",
+        "htm",
+        "xml",
+        "yaml",
+        "yml",
+        "rtf",
+        "odt",
+        "epub",
+        "tex",
+        "log",
+        "py",
+        "js",
+        "ts",
+        "css",
+        "scss",
+        "sql",
+        "sh",
+        "conf",
+        "ini",
+        "properties",
     }
 )
 
@@ -84,7 +83,8 @@ def classify_web_attachment(filename: str, mime_type: str | None) -> AttachmentK
     mime = (mime_type or mimetypes.guess_type(filename)[0] or "").lower()
     if mime.startswith("image/"):
         return "image"
-    return "document" if _suffix(filename) in _DOCUMENT_SUFFIXES else "unsupported"
+    extension = _suffix(filename).lstrip(".")
+    return "document" if extension in COMPOSER_DOCUMENT_EXTENSIONS else "unsupported"
 
 
 def validate_web_documents(
@@ -193,6 +193,7 @@ def validate_web_images(
 
 
 __all__ = [
+    "COMPOSER_DOCUMENT_EXTENSIONS",
     "MAX_CURRENT_DOCUMENTS",
     "MAX_DOCUMENT_BYTES",
     "ValidatedWebDocument",

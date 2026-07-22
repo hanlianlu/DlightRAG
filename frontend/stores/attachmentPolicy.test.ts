@@ -14,15 +14,22 @@ function file(name: string, type: string, size: number): File {
 }
 
 test('mixed attachment classification separates images and documents', () => {
-  assert.equal(classifyAttachmentFile(file('chart.png', 'image/png', 10)), 'image');
-  assert.equal(classifyAttachmentFile(file('report.pdf', 'application/pdf', 10)), 'document');
-  assert.equal(classifyAttachmentFile(file('notes.md', '', 10)), 'document');
-  assert.equal(classifyAttachmentFile(file('archive.zip', 'application/zip', 10)), 'unsupported');
-  assert.equal(classifyAttachmentFile(file('noext', '', 10)), 'unsupported');
+  const extensions = new Set(['pdf', 'md']);
+
+  assert.equal(classifyAttachmentFile(file('chart.png', 'image/png', 10), extensions), 'image');
+  assert.equal(classifyAttachmentFile(file('report.pdf', 'application/pdf', 10), extensions), 'document');
+  assert.equal(classifyAttachmentFile(file('notes.md', '', 10), extensions), 'document');
+  assert.equal(classifyAttachmentFile(file('notes.markdown', '', 10), extensions), 'unsupported');
+  assert.equal(classifyAttachmentFile(file('archive.zip', 'application/zip', 10), extensions), 'unsupported');
+  assert.equal(classifyAttachmentFile(file('noext', '', 10), extensions), 'unsupported');
 });
 
 test('document admission enforces independent count and byte limits', () => {
-  const policy = {currentUploadLimit: 3, maxUploadBytes: 100 * 1024 * 1024};
+  const policy = {
+    currentUploadLimit: 3,
+    maxUploadBytes: 100 * 1024 * 1024,
+    extensions: new Set(['pdf']),
+  };
 
   assert.equal(
     acceptsDocumentUpload(file('report.pdf', 'application/pdf', policy.maxUploadBytes), 0, policy),
@@ -34,6 +41,7 @@ test('document admission enforces independent count and byte limits', () => {
   );
   assert.equal(acceptsDocumentUpload(file('report.pdf', 'application/pdf', 1), 3, policy), false);
   assert.equal(acceptsDocumentUpload(file('chart.png', 'image/png', 1), 0, policy), false);
+  assert.equal(acceptsDocumentUpload(file('notes.md', 'text/markdown', 1), 0, policy), false);
 });
 
 test('document policy reads server projected data attributes', () => {
@@ -41,30 +49,63 @@ test('document policy reads server projected data attributes', () => {
     dataset: {
       documentCurrentUploadLimit: '3',
       documentMaxUploadBytes: '104857600',
+      documentExtensions: '["md","pdf"]',
     },
   } as unknown as HTMLElement;
 
-  assert.deepEqual(getDocumentAdmissionPolicy(root), {
-    currentUploadLimit: 3,
-    maxUploadBytes: 104857600,
-  });
+  const policy = getDocumentAdmissionPolicy(root);
+
+  assert.equal(policy?.currentUploadLimit, 3);
+  assert.equal(policy?.maxUploadBytes, 104857600);
+  assert.deepEqual(policy?.extensions, new Set(['md', 'pdf']));
 });
 
 test('document policy fails closed for missing or malformed attributes', () => {
   assert.equal(getDocumentAdmissionPolicy(null), null);
   assert.equal(
-    getDocumentAdmissionPolicy({dataset: {documentCurrentUploadLimit: '3'}} as unknown as HTMLElement),
-    null,
-  );
-  assert.equal(
     getDocumentAdmissionPolicy(
-      {dataset: {documentCurrentUploadLimit: 'three', documentMaxUploadBytes: '100'}} as unknown as HTMLElement,
+      {
+        dataset: {
+          documentCurrentUploadLimit: '3',
+          documentMaxUploadBytes: '100',
+        },
+      } as unknown as HTMLElement,
     ),
     null,
   );
   assert.equal(
     getDocumentAdmissionPolicy(
-      {dataset: {documentCurrentUploadLimit: '3', documentMaxUploadBytes: '0'}} as unknown as HTMLElement,
+      {
+        dataset: {
+          documentCurrentUploadLimit: 'three',
+          documentMaxUploadBytes: '100',
+          documentExtensions: '["pdf"]',
+        },
+      } as unknown as HTMLElement,
+    ),
+    null,
+  );
+  assert.equal(
+    getDocumentAdmissionPolicy(
+      {
+        dataset: {
+          documentCurrentUploadLimit: '3',
+          documentMaxUploadBytes: '0',
+          documentExtensions: '["pdf"]',
+        },
+      } as unknown as HTMLElement,
+    ),
+    null,
+  );
+  assert.equal(
+    getDocumentAdmissionPolicy(
+      {
+        dataset: {
+          documentCurrentUploadLimit: '3',
+          documentMaxUploadBytes: '100',
+          documentExtensions: '["pdf",42]',
+        },
+      } as unknown as HTMLElement,
     ),
     null,
   );

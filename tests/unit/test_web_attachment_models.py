@@ -4,8 +4,12 @@
 import hashlib
 
 import pytest
+from lightrag.parser.registry import suffix_capabilities
+from lightrag.parser.routing import resolve_parser_directives
 
+from dlightrag.config import ParserConfig
 from dlightrag.web.attachment_models import (
+    COMPOSER_DOCUMENT_EXTENSIONS,
     MAX_CURRENT_DOCUMENTS,
     MAX_DOCUMENT_BYTES,
     ValidatedWebDocument,
@@ -18,7 +22,25 @@ def test_classify_web_attachment_separates_images_and_documents() -> None:
     assert classify_web_attachment("chart.png", "image/png") == "image"
     assert classify_web_attachment("report.pdf", "application/pdf") == "document"
     assert classify_web_attachment("notes.md", "text/markdown") == "document"
+    assert classify_web_attachment("notes.markdown", "text/markdown") == "unsupported"
     assert classify_web_attachment("archive.zip", "application/zip") == "unsupported"
+
+
+def test_composer_document_policy_is_supported_by_default_parser_routing() -> None:
+    assert COMPOSER_DOCUMENT_EXTENSIONS
+    rules = ParserConfig().rules
+
+    unsupported: list[str] = []
+    for extension in sorted(COMPOSER_DOCUMENT_EXTENSIONS):
+        directives = resolve_parser_directives(
+            f"document.{extension}",
+            parser_rules=rules,
+            require_external_endpoint=False,
+        )
+        if extension not in suffix_capabilities(directives.engine):
+            unsupported.append(f"{extension}:{directives.engine}")
+
+    assert unsupported == []
 
 
 def test_validate_web_documents_enforces_count_and_size() -> None:

@@ -9,14 +9,8 @@ export type AttachmentKind = 'image' | 'document' | 'unsupported';
 export interface DocumentAdmissionPolicy {
     currentUploadLimit: number;
     maxUploadBytes: number;
+    extensions: ReadonlySet<string>;
 }
-
-// Mirrors the server-side `_DOCUMENT_SUFFIXES` admission set (without the dot).
-const DOCUMENT_EXTENSIONS = new Set([
-    'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'md', 'markdown', 'textpack',
-    'txt', 'csv', 'json', 'html', 'htm', 'xml', 'yaml', 'yml', 'rtf', 'odt', 'epub',
-    'tex', 'log', 'py', 'js', 'ts', 'css', 'scss', 'sql', 'sh', 'conf', 'ini', 'properties',
-]);
 
 function parseInteger(value: string | undefined, minimum: number): number | null {
     if (!value || !/^\d+$/.test(value)) return null;
@@ -25,10 +19,29 @@ function parseInteger(value: string | undefined, minimum: number): number | null
     return parsed;
 }
 
-export function classifyAttachmentFile(file: File): AttachmentKind {
+function parseExtensions(value: string | undefined): ReadonlySet<string> | null {
+    if (!value) return null;
+    try {
+        const parsed: unknown = JSON.parse(value);
+        if (!Array.isArray(parsed) || parsed.length === 0) return null;
+        const extensions = new Set<string>();
+        for (const extension of parsed) {
+            if (typeof extension !== 'string' || !/^[a-z0-9]+$/.test(extension)) return null;
+            extensions.add(extension);
+        }
+        return extensions;
+    } catch {
+        return null;
+    }
+}
+
+export function classifyAttachmentFile(
+    file: File,
+    extensions: ReadonlySet<string>,
+): AttachmentKind {
     if (file.type.startsWith('image/')) return 'image';
     const extension = file.name.split('.').pop()?.toLowerCase() || '';
-    return DOCUMENT_EXTENSIONS.has(extension) ? 'document' : 'unsupported';
+    return extensions.has(extension) ? 'document' : 'unsupported';
 }
 
 export function getDocumentAdmissionPolicy(
@@ -37,8 +50,9 @@ export function getDocumentAdmissionPolicy(
     if (!root) return null;
     const currentUploadLimit = parseInteger(root.dataset.documentCurrentUploadLimit, 0);
     const maxUploadBytes = parseInteger(root.dataset.documentMaxUploadBytes, 1);
-    if (currentUploadLimit === null || maxUploadBytes === null) return null;
-    return {currentUploadLimit, maxUploadBytes};
+    const extensions = parseExtensions(root.dataset.documentExtensions);
+    if (currentUploadLimit === null || maxUploadBytes === null || extensions === null) return null;
+    return {currentUploadLimit, maxUploadBytes, extensions};
 }
 
 export function acceptsDocumentUpload(
@@ -47,7 +61,7 @@ export function acceptsDocumentUpload(
     policy: DocumentAdmissionPolicy,
 ): boolean {
     return (
-        classifyAttachmentFile(file) === 'document' &&
+        classifyAttachmentFile(file, policy.extensions) === 'document' &&
         currentCount < policy.currentUploadLimit &&
         file.size <= policy.maxUploadBytes
     );

@@ -10,6 +10,7 @@ from dlightrag.access_control import AccessAction
 from dlightrag.utils import normalize_workspace
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.attachment_models import (
+    COMPOSER_DOCUMENT_EXTENSIONS,
     MAX_CURRENT_DOCUMENTS,
     MAX_DOCUMENT_BYTES,
     validate_web_images,
@@ -75,6 +76,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             manager.config.query_images.max_current_images,
             capability.effective_max_images,
         )
+    document_extensions = sorted(COMPOSER_DOCUMENT_EXTENSIONS)
 
     return templates.TemplateResponse(
         request,
@@ -89,6 +91,10 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "effective_current_upload_limit": effective_current_upload_limit,
             "query_document_max_upload_bytes": MAX_DOCUMENT_BYTES,
             "query_document_current_upload_limit": MAX_CURRENT_DOCUMENTS,
+            "query_document_extensions": document_extensions,
+            "query_attachment_accept": ",".join(
+                ["image/*", *(f".{extension}" for extension in document_extensions)]
+            ),
         },
     )
 
