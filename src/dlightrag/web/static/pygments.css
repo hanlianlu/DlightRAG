@@ -1,18 +1,7 @@
-/* Generated from Pygments styles: Friendly (light), GitHub Dark (dark). */
-/* Regenerate deterministically with:
- * uv run python - <<'PY'
- * import re
- * from pygments.formatters import HtmlFormatter
- * for mode, style in (("light", "friendly"), ("dark", "github-dark")):
- *     root = f'[data-color-mode="{mode}"] .highlight'
- *     for original in HtmlFormatter(style=style).get_style_defs(root).splitlines():
- *         if not original.startswith(root):
- *             continue
- *         line = re.sub(r"background(?:-color)?:\s*[^;}]+;?\s*", "", original)
- *         if not re.search(r"\{\s*\}", line):
- *             print(line)
- * PY
- */
+/* Generated file. Do not edit by hand. */
+/* Regenerate with: uv run scripts/generate_pygments_css.py > src/dlightrag/web/static/pygments.css */
+/* Source styles: Pygments HtmlFormatter Friendly (light), GitHub Dark (dark). */
+/* Background and background-color declarations are intentionally removed. */
 
 /* Friendly */
 [data-color-mode="light"] .highlight .c { color: #60A0B0; font-style: italic } /* Comment */
@@ -24,7 +13,7 @@
 [data-color-mode="light"] .highlight .cp { color: #007020 } /* Comment.Preproc */
 [data-color-mode="light"] .highlight .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
 [data-color-mode="light"] .highlight .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
-[data-color-mode="light"] .highlight .cs { color: #60A0B0; } /* Comment.Special */
+[data-color-mode="light"] .highlight .cs { color: #60A0B0;} /* Comment.Special */
 [data-color-mode="light"] .highlight .gd { color: #A00000 } /* Generic.Deleted */
 [data-color-mode="light"] .highlight .ge { font-style: italic } /* Generic.Emph */
 [data-color-mode="light"] .highlight .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
@@ -102,12 +91,12 @@
 [data-color-mode="dark"] .highlight .cpf { color: #8B949E; font-style: italic } /* Comment.PreprocFile */
 [data-color-mode="dark"] .highlight .c1 { color: #8B949E; font-style: italic } /* Comment.Single */
 [data-color-mode="dark"] .highlight .cs { color: #8B949E; font-weight: bold; font-style: italic } /* Comment.Special */
-[data-color-mode="dark"] .highlight .gd { color: #FFA198; } /* Generic.Deleted */
+[data-color-mode="dark"] .highlight .gd { color: #FFA198;} /* Generic.Deleted */
 [data-color-mode="dark"] .highlight .ge { color: #E6EDF3; font-style: italic } /* Generic.Emph */
 [data-color-mode="dark"] .highlight .ges { color: #E6EDF3; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
 [data-color-mode="dark"] .highlight .gr { color: #FFA198 } /* Generic.Error */
 [data-color-mode="dark"] .highlight .gh { color: #79C0FF; font-weight: bold } /* Generic.Heading */
-[data-color-mode="dark"] .highlight .gi { color: #56D364; } /* Generic.Inserted */
+[data-color-mode="dark"] .highlight .gi { color: #56D364;} /* Generic.Inserted */
 [data-color-mode="dark"] .highlight .go { color: #8B949E } /* Generic.Output */
 [data-color-mode="dark"] .highlight .gp { color: #8B949E } /* Generic.Prompt */
 [data-color-mode="dark"] .highlight .gs { color: #E6EDF3; font-weight: bold } /* Generic.Strong */
