@@ -278,6 +278,22 @@ def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
     assert (web_root / "static" / "vendor" / "htmx.min.js").is_file()
 
 
+def test_web_shell_bootstraps_theme_preference_before_stylesheet() -> None:
+    base_html = (ROOT / "src" / "dlightrag" / "web" / "templates" / "base.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert '<html lang="en" data-theme="system" data-color-mode="dark">' in base_html
+    assert '<meta name="color-scheme" content="dark light">' in base_html
+    assert "'dlightrag-theme'" in base_html
+    assert "localStorage.getItem" in base_html
+    assert "matchMedia('(prefers-color-scheme: dark)')" in base_html
+
+    bootstrap = base_html.index("localStorage.getItem")
+    first_stylesheet = base_html.index('<link rel="stylesheet" href="/static/generated/style.css')
+    assert bootstrap < first_stylesheet
+
+
 def test_web_static_css_build_keeps_only_served_bundles() -> None:
     static_root = ROOT / "src/dlightrag/web/static"
     generated_root = static_root / "generated"
