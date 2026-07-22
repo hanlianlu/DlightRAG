@@ -106,7 +106,7 @@ Core palette:
 | Elevated surface | `#292524` | `#e9e8e2` |
 | Primary text | `#f5f5f4` | `#24231f` |
 | Body text | `#d6d3d1` | `#45443f` |
-| Muted text | `#a8a29e` | `#75736b` |
+| Muted text | `#a8a29e` | `#66645d` |
 | Primary accent | `#d2b661` | `#806719` |
 | Danger | `#f87171` | `#b42318` |
 
