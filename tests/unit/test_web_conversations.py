@@ -1405,10 +1405,6 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
 async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
     service_under_test,
 ) -> None:
-    from dlightrag.core.answer.turn import (
-        HISTORICAL_DOCUMENT_PARSE_FAILED,
-        DocumentWarning,
-    )
     from dlightrag.core.request.attachments import (
         AttachmentContextChunk,
         ParsedAttachmentBundle,
@@ -1459,21 +1455,19 @@ async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
 
     attachment_service = _AttachmentService()
 
-    chunks, errors, bundles = await service_under_test._parse_attachment_documents(
+    chunks, failures, bundles = await service_under_test._parse_attachment_documents(
         attachment_service=attachment_service,
         prepared=prepared,
         documents=documents,
     )
 
     assert [chunk.attachment_id for chunk in chunks] == ["att-valid"]
-    assert errors == [
-        DocumentWarning(
-            code=HISTORICAL_DOCUMENT_PARSE_FAILED,
-            filename="report._unknown_.txt",
-            message=("Could not read report._unknown_.txt. The answer will continue without it."),
-        )
-    ]
-    assert "ValueError" not in errors[0].message
+    assert len(failures) == 1
+    failure = failures[0]
+    assert type(failure).__name__ == "_DocumentParseFailure"
+    assert failure.attachment_id == "att-invalid"
+    assert failure.filename == "report._unknown_.txt"
+    assert failure.error_type == "ValueError"
     assert [attachment_id for attachment_id, _bundle in bundles] == [
         "att-invalid",
         "att-valid",
@@ -1540,12 +1534,10 @@ async def test_prepare_answer_turn_warns_when_historical_document_parse_fails(
         return (
             [],
             [
-                DocumentWarning(
-                    code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+                SimpleNamespace(
+                    attachment_id=document_id,
                     filename="history-report.pdf",
-                    message=(
-                        "Could not read history-report.pdf. The answer will continue without it."
-                    ),
+                    error_type=raw_exception,
                 )
             ],
             [
@@ -1585,9 +1577,11 @@ async def test_prepare_answer_turn_warns_when_historical_document_parse_fails(
 async def test_prepare_answer_turn_warns_when_historical_documents_are_unavailable(
     service_under_test,
     conversation_store: AsyncMock,
+    caplog,
     fetch_failure: bool,
 ) -> None:
     from dlightrag.core.answer.turn import (
+        HISTORICAL_DOCUMENT_LOAD_FAILED,
         HISTORICAL_DOCUMENT_UNAVAILABLE,
         DocumentWarning,
     )
@@ -1633,22 +1627,36 @@ async def test_prepare_answer_turn_warns_when_historical_documents_are_unavailab
         workspaces=["default"],
     )
 
-    assert turn.document_warnings == (
-        DocumentWarning(
-            code=HISTORICAL_DOCUMENT_UNAVAILABLE,
-            filename="archived._draft_.pdf",
-            message=(
-                "archived._draft_.pdf is no longer available. The answer will continue without it."
-            ),
-        ),
-        DocumentWarning(
-            code=HISTORICAL_DOCUMENT_UNAVAILABLE,
-            filename="A referenced document",
-            message=(
-                "A referenced document is no longer available. The answer will continue without it."
-            ),
-        ),
+    expected_code = (
+        HISTORICAL_DOCUMENT_LOAD_FAILED if fetch_failure else HISTORICAL_DOCUMENT_UNAVAILABLE
     )
+    expected_messages = (
+        (
+            (
+                "archived._draft_.pdf could not be loaded for this answer. "
+                "The answer will continue without it."
+            ),
+            (
+                "A referenced document could not be loaded for this answer. "
+                "The answer will continue without it."
+            ),
+        )
+        if fetch_failure
+        else (
+            "archived._draft_.pdf is no longer available. The answer will continue without it.",
+            "A referenced document is no longer available. The answer will continue without it.",
+        )
+    )
+    assert turn.document_warnings == tuple(
+        DocumentWarning(code=expected_code, filename=filename, message=message)
+        for filename, message in zip(
+            ("archived._draft_.pdf", "A referenced document"),
+            expected_messages,
+            strict=True,
+        )
+    )
+    if fetch_failure:
+        assert any(record.exc_info is not None for record in caplog.records)
     assert catalog_document_id not in repr(turn.document_warnings)
     assert unknown_document_id not in repr(turn.document_warnings)
     assert raw_fetch_error not in repr(turn.document_warnings)
@@ -1659,7 +1667,10 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     service_under_test,
     conversation_store: AsyncMock,
 ) -> None:
-    from dlightrag.core.answer.turn import HISTORICAL_DOCUMENT_UNAVAILABLE
+    from dlightrag.core.answer.turn import (
+        HISTORICAL_DOCUMENT_PARSE_FAILED,
+        HISTORICAL_DOCUMENT_UNAVAILABLE,
+    )
     from dlightrag.core.request.attachments import (
         ParsedAttachmentBundle,
         build_text_attachment_chunk,
@@ -1678,7 +1689,7 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     document_a_id = "11111111-1111-1111-1111-111111111111"
     document_b_id = "22222222-2222-2222-2222-222222222222"
     missing_document_id = "33333333-3333-3333-3333-333333333333"
-    selected_ids = (document_a_id, document_b_id, missing_document_id)
+    selected_ids = (document_b_id, missing_document_id, document_a_id)
     document_a = StoredConversationAttachment(
         attachment_id=document_a_id,
         filename="a.pdf",
@@ -1712,7 +1723,6 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         assert kwargs["retrieval_attachment_ids"] == set()
         assert [row["reference_id"] for row in kwargs["history_rows"]] == [
             document_a_id,
-            document_b_id,
         ]
         return kwargs["history_rows"], {"composer_evidence_strategy": "full"}
 
@@ -1737,7 +1747,12 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     parsed_order: list[str] = []
 
     async def _fake_parse(*, documents, **_kwargs: object):
+        if not documents:
+            return [], [], []
         parsed_order.extend(document.attachment_id for document in documents)
+        parsed_documents = [
+            document for document in documents if document.attachment_id != document_b_id
+        ]
         chunks = [
             build_text_attachment_chunk(
                 attachment_id=document.attachment_id,
@@ -1746,13 +1761,24 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
                 chunk_index=index,
                 content=document.filename,
             )
-            for index, document in enumerate(documents, start=1)
+            for index, document in enumerate(parsed_documents, start=1)
+        ]
+        successful_bundles = [
+            (document.attachment_id, ParsedAttachmentBundle(chunks=[chunk], evidence_mode="full"))
+            for document, chunk in zip(parsed_documents, chunks, strict=True)
         ]
         bundles = [
-            (document.attachment_id, ParsedAttachmentBundle(chunks=[chunk], evidence_mode="full"))
-            for document, chunk in zip(documents, chunks, strict=True)
+            (document_b_id, ParsedAttachmentBundle(chunks=[], evidence_mode="full")),
+            *successful_bundles,
         ]
-        return chunks, [], bundles
+        failures = [
+            SimpleNamespace(
+                attachment_id=document_b_id,
+                filename="b.pdf",
+                error_type="ValueError",
+            )
+        ]
+        return chunks, failures, bundles
 
     service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
 
@@ -1765,22 +1791,25 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         workspaces=["default"],
     )
 
-    assert parsed_order == [document_a_id, document_b_id]
+    assert parsed_order == [document_b_id, document_a_id]
     assert [row["full_doc_id"] for row in turn.composer_context_chunks] == [
         document_a_id,
-        document_b_id,
     ]
     assert [row["reference_id"] for row in turn.composer_context_chunks] == [
         "att-1",
-        "att-2",
     ]
     assert all(
         row["metadata"]["attachment_scope"] == "history" for row in turn.composer_context_chunks
     )
     assert turn.history_attachments_selected == 2
-    assert len(turn.document_warnings) == 1
-    assert turn.document_warnings[0].code == HISTORICAL_DOCUMENT_UNAVAILABLE
-    assert turn.document_warnings[0].filename == "A referenced document"
+    assert [warning.filename for warning in turn.document_warnings] == [
+        "b.pdf",
+        "A referenced document",
+    ]
+    assert [warning.code for warning in turn.document_warnings] == [
+        HISTORICAL_DOCUMENT_PARSE_FAILED,
+        HISTORICAL_DOCUMENT_UNAVAILABLE,
+    ]
 
 
 async def test_prepare_answer_turn_rejects_current_document_parse_error_before_downstream(
@@ -1790,10 +1819,6 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
     from dlightrag.core.answer.errors import (
         CURRENT_DOCUMENT_PARSE_FAILED,
         CurrentDocumentParseError,
-    )
-    from dlightrag.core.answer.turn import (
-        HISTORICAL_DOCUMENT_PARSE_FAILED,
-        DocumentWarning,
     )
     from dlightrag.core.request.planner import QueryPlan
     from dlightrag.web.attachment_models import validate_web_documents
@@ -1827,10 +1852,10 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
         return (
             [],
             [
-                DocumentWarning(
-                    code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+                SimpleNamespace(
+                    attachment_id=document.attachment_id,
                     filename=document.safe_filename,
-                    message="generic history-only warning",
+                    error_type="ValueError",
                 )
             ],
             [],

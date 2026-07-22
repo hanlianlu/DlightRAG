@@ -379,13 +379,21 @@ async def _emit_answer_events(
         if observation is not None:
             observation.update(metadata=_capability_metrics(manager, turn))
 
-        for warning in turn.document_warnings:
+        if turn.document_warnings:
+            warning_count = len(turn.document_warnings)
+            warning_message = (
+                turn.document_warnings[0].message
+                if warning_count == 1
+                else (
+                    f"{warning_count} referenced documents could not be used. "
+                    "The answer will continue without them."
+                )
+            )
             yield sse_event(
                 "warning",
                 AnswerWarningEvent(
-                    code=warning.code,
-                    filename=warning.filename,
-                    message=warning.message,
+                    message=warning_message,
+                    documents=list(turn.document_warnings),
                 ),
             )
 

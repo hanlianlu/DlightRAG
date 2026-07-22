@@ -23,6 +23,7 @@ from dlightrag.core.answer.errors import (
 )
 from dlightrag.core.answer.turn import (
     HISTORICAL_DOCUMENT_PARSE_FAILED,
+    HISTORICAL_DOCUMENT_UNAVAILABLE,
     DocumentWarning,
     PreparedAnswerTurn,
 )
@@ -251,17 +252,24 @@ async def test_successful_stream_commits_once_before_done() -> None:
     assert '"conversation_saved": true' in done
 
 
-async def test_historical_document_warning_precedes_search_and_does_not_persist() -> None:
+async def test_historical_document_warnings_emit_one_ordered_event_and_continue() -> None:
     service = AsyncMock()
-    warning = DocumentWarning(
-        code=HISTORICAL_DOCUMENT_PARSE_FAILED,
-        filename="history-report.pdf",
-        message=("Could not read history-report.pdf. The answer will continue without it."),
+    warnings = (
+        DocumentWarning(
+            code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+            filename="history-report.pdf",
+            message=("Could not read history-report.pdf. The answer will continue without it."),
+        ),
+        DocumentWarning(
+            code=HISTORICAL_DOCUMENT_UNAVAILABLE,
+            filename="appendix.pdf",
+            message=("appendix.pdf is no longer available. The answer will continue without it."),
+        ),
     )
     service.prepare_answer_turn.return_value = PreparedAnswerTurn(
         current_query="summarize that report",
         retrieval_query="summarize the prior report",
-        document_warnings=(warning,),
+        document_warnings=warnings,
     )
     service.commit_answer.return_value = CommitTurnResult(
         saved=True,
@@ -303,15 +311,28 @@ async def test_historical_document_warning_precedes_search_and_does_not_persist(
     event_names = [event.splitlines()[0] for event in events]
     planning_index = event_names.index("event: progress")
     warning_index = event_names.index("event: warning")
+    assert event_names.count("event: warning") == 1
     searching_index = event_names.index("event: progress", planning_index + 1)
     generating_index = event_names.index("event: progress", searching_index + 1)
     done_index = event_names.index("event: done")
     assert planning_index < warning_index < searching_index < generating_index < done_index
     warning_payload = json.loads(events[warning_index].split("data: ", 1)[1])
     assert warning_payload == {
-        "code": HISTORICAL_DOCUMENT_PARSE_FAILED,
-        "filename": "history-report.pdf",
-        "message": warning.message,
+        "message": (
+            "2 referenced documents could not be used. The answer will continue without them."
+        ),
+        "documents": [
+            {
+                "code": HISTORICAL_DOCUMENT_PARSE_FAILED,
+                "filename": "history-report.pdf",
+                "message": warnings[0].message,
+            },
+            {
+                "code": HISTORICAL_DOCUMENT_UNAVAILABLE,
+                "filename": "appendix.pdf",
+                "message": warnings[1].message,
+            },
+        ],
     }
     answer_stream_prepared.assert_awaited_once()
     service.commit_answer.assert_awaited_once()

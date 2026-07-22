@@ -13,6 +13,7 @@ from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.answer.errors import CurrentDocumentParseError
 from dlightrag.core.answer.turn import (
+    HISTORICAL_DOCUMENT_LOAD_FAILED,
     HISTORICAL_DOCUMENT_PARSE_FAILED,
     HISTORICAL_DOCUMENT_UNAVAILABLE,
     DocumentWarning,
@@ -89,6 +90,13 @@ class PreparedWebConversation:
     # Caption-only catalog of prior document attachments for the Web planner to
     # scope which history documents a follow-up refers to (never bytes).
     attachment_catalog: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _DocumentParseFailure:
+    attachment_id: str
+    filename: str
+    error_type: str
 
 
 class WebConversationService:
@@ -272,15 +280,15 @@ class WebConversationService:
         # documents; the resulting chunks are reused for the answer context below.
         (
             current_chunks,
-            current_warnings,
+            current_failures,
             current_bundles,
         ) = await self._parse_attachment_documents(
             attachment_service=attachment_service,
             prepared=prepared,
             documents=documents,
         )
-        if current_warnings:
-            failed = current_warnings[0]
+        if current_failures:
+            failed = current_failures[0]
             raise CurrentDocumentParseError(failed.filename)
         current_digests, digest_trace = build_attachment_planner_digests(current_bundles)
         if current_bundles:
@@ -343,11 +351,16 @@ class WebConversationService:
         composer_rows: list[dict[str, Any]] = []
         composer_trace: dict[str, Any] = {}
         history_docs_selected = 0
-        document_warnings: list[DocumentWarning] = []
+        warning_by_id: dict[str, DocumentWarning] = {}
         history_chunks: list[AttachmentContextChunk] = []
         history_bundles: list[tuple[str, ParsedAttachmentBundle]] = []
         selected_attachment_ids = tuple(plan.selected_history_attachment_ids)
         if selected_attachment_ids:
+            catalog_filenames = {
+                str(item.get("attachment_id")): safe_source_filename(str(item["filename"]))
+                for item in attachment_catalog
+                if item.get("attachment_id") and item.get("filename")
+            }
             try:
                 fetched_history_docs = await self._store_call(
                     self._store.fetch_documents_by_ids(
@@ -361,29 +374,32 @@ class WebConversationService:
                 logger.warning(
                     "[HistoricalDocument] fetch unavailable; continuing without %d documents",
                     len(selected_attachment_ids),
+                    exc_info=True,
                 )
                 fetched_history_docs = []
-            history_docs_by_id = {
-                document.attachment_id: document for document in fetched_history_docs
-            }
-            catalog_filenames = {
-                str(item.get("attachment_id")): safe_source_filename(str(item["filename"]))
-                for item in attachment_catalog
-                if item.get("attachment_id") and item.get("filename")
-            }
-            for attachment_id in selected_attachment_ids:
-                if attachment_id in history_docs_by_id:
-                    continue
-                filename = catalog_filenames.get(attachment_id, "A referenced document")
-                document_warnings.append(
-                    DocumentWarning(
-                        code=HISTORICAL_DOCUMENT_UNAVAILABLE,
+                for attachment_id in selected_attachment_ids:
+                    filename = catalog_filenames.get(attachment_id, "A referenced document")
+                    warning_by_id[attachment_id] = DocumentWarning(
+                        code=HISTORICAL_DOCUMENT_LOAD_FAILED,
                         filename=filename,
                         message=(
-                            f"{filename} is no longer available. "
+                            f"{filename} could not be loaded for this answer. "
                             "The answer will continue without it."
                         ),
                     )
+            history_docs_by_id = {
+                document.attachment_id: document for document in fetched_history_docs
+            }
+            for attachment_id in selected_attachment_ids:
+                if attachment_id in history_docs_by_id or attachment_id in warning_by_id:
+                    continue
+                filename = catalog_filenames.get(attachment_id, "A referenced document")
+                warning_by_id[attachment_id] = DocumentWarning(
+                    code=HISTORICAL_DOCUMENT_UNAVAILABLE,
+                    filename=filename,
+                    message=(
+                        f"{filename} is no longer available. The answer will continue without it."
+                    ),
                 )
             history_docs = [
                 history_docs_by_id[attachment_id]
@@ -395,14 +411,25 @@ class WebConversationService:
                 attachment_service = self._get_query_attachment_service(resources, prepared)
             (
                 history_chunks,
-                history_warnings,
+                history_failures,
                 history_bundles,
             ) = await self._parse_attachment_documents(
                 attachment_service=attachment_service,
                 prepared=prepared,
                 documents=history_docs,
             )
-            document_warnings.extend(history_warnings)
+            for failure in history_failures:
+                warning_by_id.setdefault(
+                    failure.attachment_id,
+                    DocumentWarning(
+                        code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+                        filename=failure.filename,
+                        message=(
+                            f"Could not read {failure.filename}. "
+                            "The answer will continue without it."
+                        ),
+                    ),
+                )
         if current_chunks or history_chunks:
             if attachment_service is None:
                 raise RuntimeError("attachment service missing for parsed Composer chunks")
@@ -466,7 +493,11 @@ class WebConversationService:
             current_attachment_digests=current_digests,
             history_attachment_catalog_count=len(attachment_catalog),
             history_attachments_selected=history_docs_selected,
-            document_warnings=tuple(document_warnings),
+            document_warnings=tuple(
+                warning_by_id[attachment_id]
+                for attachment_id in selected_attachment_ids
+                if attachment_id in warning_by_id
+            ),
         )
 
     def _get_query_attachment_service(
@@ -498,23 +529,24 @@ class WebConversationService:
         documents: list[Any],
     ) -> tuple[
         list[AttachmentContextChunk],
-        list[DocumentWarning],
+        list[_DocumentParseFailure],
         list[tuple[str, ParsedAttachmentBundle]],
     ]:
         """Parse/chunk documents and retain their bundles for planner digests.
 
         Parsing is content-addressed and cached by the injected store, so a
         document parsed here (current uploads, before planning) is a cache hit if
-        looked up again. Returns parsed chunks (in document order), any safe
-        warnings, and bundles that the caller may feed to the deterministic
-        planner-digest selector without reparsing.
+        looked up again. Returns parsed chunks (in document order), neutral parse
+        failures, and bundles that the caller may feed to the deterministic
+        planner-digest selector without reparsing. Failures are neutral internal
+        results; callers decide whether they are fatal or nonfatal.
         """
         if not documents:
             return [], [], []
         if attachment_service is None:
             raise RuntimeError("attachment service is required for document parsing")
         chunks: list[AttachmentContextChunk] = []
-        warnings: list[DocumentWarning] = []
+        failures: list[_DocumentParseFailure] = []
         bundles: list[tuple[str, ParsedAttachmentBundle]] = []
         for document in documents:
             bundle, meta = await attachment_service.achunks_for_attachment(
@@ -526,20 +558,17 @@ class WebConversationService:
                 content_sha256=document.content_sha256,
             )
             bundle = replace(bundle, trace=dict(meta))
-            if meta.get("attachment_parse_error"):
-                filename = safe_source_filename(document.filename)
-                warnings.append(
-                    DocumentWarning(
-                        code=HISTORICAL_DOCUMENT_PARSE_FAILED,
-                        filename=filename,
-                        message=(
-                            f"Could not read {filename}. The answer will continue without it."
-                        ),
+            if error_type := meta.get("attachment_parse_error"):
+                failures.append(
+                    _DocumentParseFailure(
+                        attachment_id=document.attachment_id,
+                        filename=safe_source_filename(document.filename),
+                        error_type=str(error_type),
                     )
                 )
             chunks.extend(bundle.chunks)
             bundles.append((document.attachment_id, bundle))
-        return chunks, warnings, bundles
+        return chunks, failures, bundles
 
     async def image(
         self,

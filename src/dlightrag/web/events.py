@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from dlightrag.core.answer.turn import DocumentWarning
 from dlightrag.core.client_contracts import ClientContractModel
 from dlightrag.web.conversation_models import ConversationSummary
 
@@ -35,9 +36,8 @@ class AnswerTraceEvent(ClientContractModel):
 
 
 class AnswerWarningEvent(ClientContractModel):
-    code: str
-    filename: str
     message: str
+    documents: list[DocumentWarning]
 
 
 class AnswerErrorEvent(ClientContractModel):
