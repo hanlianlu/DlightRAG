@@ -402,6 +402,7 @@ class WebConversationService:
                 retrieval_attachment_ids=retrieval_attachment_ids,
                 rerank_func=resources.rerank_func,
             )
+            composer_rows = _assign_composer_reference_ids(composer_rows)
             composer_trace = {**dense_trace, **composer_trace}
         if parse_errors or history_docs_selected < len(selected_attachment_ids):
             attachment_status = "degraded"
@@ -715,6 +716,30 @@ def _composer_context_rows(
         }
         rows.append(row)
     return rows
+
+
+def _assign_composer_reference_ids(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Copy final Composer rows and assign compact ids by document appearance."""
+    reference_ids: dict[str, str] = {}
+    assigned_rows: list[dict[str, Any]] = []
+    for row in rows:
+        full_doc_id = str(row.get("full_doc_id") or "")
+        if not full_doc_id.strip():
+            raise ValueError("Composer row is missing full_doc_id")
+        reference_id = reference_ids.get(full_doc_id)
+        if reference_id is None:
+            reference_id = f"att-{len(reference_ids) + 1}"
+            reference_ids[full_doc_id] = reference_id
+
+        assigned_row = dict(row)
+        metadata = row.get("metadata")
+        if isinstance(metadata, dict):
+            assigned_row["metadata"] = dict(metadata)
+        assigned_row["reference_id"] = reference_id
+        assigned_rows.append(assigned_row)
+    return assigned_rows
 
 
 def _composer_request_vectors(
