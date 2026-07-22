@@ -69,6 +69,24 @@ def test_extract_citing_sentences_mixed_levels():
     assert "1" in result
 
 
+def test_extract_citing_sentences_attachment_doc_and_chunk_levels():
+    text = "The attachment supports this [att-1]. Exact evidence is here [att-1-2]."
+
+    assert extract_all_citing_sentences(text) == {
+        "att-1": ["The attachment supports this [att-1]."],
+        "att-1-2": ["Exact evidence is here [att-1-2]."],
+    }
+
+
+def test_extract_citing_sentences_keeps_generic_chunk_compatibility():
+    text = "Legacy evidence [composer_deadbeef-4]. Generic evidence [project_alpha-2]."
+
+    assert extract_all_citing_sentences(text) == {
+        "composer_deadbeef-4": ["Legacy evidence [composer_deadbeef-4]."],
+        "project_alpha-2": ["Generic evidence [project_alpha-2]."],
+    }
+
+
 def test_extract_citing_sentences_ignores_generated_references_section():
     text = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
     result = extract_all_citing_sentences(text)

@@ -33,6 +33,22 @@ def test_attachment_doc_citation_is_unambiguous_and_keeps_ascii_boundary():
     assert DOC_CITATION_PATTERN.findall(text) == ["att-1", "composer_deadbeef"]
 
 
+def test_chunk_citations_reject_adjacent_ascii_identifier_text():
+    text = "Not citations: [att-1-2]x [1-2]_x [composer_ab-2]-x"
+
+    assert CITATION_PATTERN.findall(text) == []
+
+
+def test_chunk_citations_allow_chinese_adjacency():
+    text = "附件[att-1-2]和数字来源[1-2]及旧来源[composer_ab-2]均有效"
+
+    assert CITATION_PATTERN.findall(text) == [
+        ("att-1", "2"),
+        ("1", "2"),
+        ("composer_ab", "2"),
+    ]
+
+
 def test_citation_pattern_no_match():
     m = CITATION_PATTERN.search("no citations here")
     assert m is None
@@ -60,6 +76,20 @@ def test_clean_invalid_citations():
     assert "[1-1]" in cleaned
     assert "[1-99]" not in cleaned
     assert "[2-1]" not in cleaned
+
+
+def test_huge_chunk_index_stays_text_without_raising():
+    indexer = CitationIndexer()
+    indexer.build_index(
+        [
+            {"chunk_id": "c1", "reference_id": "1", "content": "text"},
+        ]
+    )
+    marker = f"[1-{'9' * 5000}]"
+
+    assert extract_citation_keys(marker) == []
+    assert extract_cited_chunks(indexer, marker) == {}
+    assert clean_invalid_citations(indexer, marker) == marker
 
 
 def test_extract_cited_chunks():

@@ -13,18 +13,40 @@ from .indexer import CitationIndexer
 
 logger = logging.getLogger(__name__)
 
+_CHUNK_INDEX = r"[0-9]{1,9}"
+_NUMERIC_REF = r"[0-9]+"
+_LEGACY_COMPOSER_REF = r"composer_[0-9a-f]+"
+_ATTACHMENT_REF = r"att-[0-9]+"
+# ``att-N`` is a reserved document namespace, so the generic branch excludes
+# interpreting it as reference ``att`` plus chunk N.
+_GENERIC_CHUNK_REF = rf"(?!att-{_CHUNK_INDEX}\])\w+"
+_CHUNK_REFERENCE_ID = (
+    rf"(?:{_ATTACHMENT_REF}|{_NUMERIC_REF}|{_LEGACY_COMPOSER_REF}|{_GENERIC_CHUNK_REF})"
+)
+
+# Keep the trailing guard ASCII-only so citations remain valid before Chinese text.
+_CITATION_TRAILING_BOUNDARY = r"(?![A-Za-z0-9_-])"
+
 # Chunk-level: [ref_id-chunk_idx] e.g., [1-2], [abc-3], [att-1-2].
-# Exclude [att-N] from the generic branch because it is a doc citation.
-CITATION_PATTERN = re.compile(r"\[(att-\d+|(?!att-\d+\])\w+)-(\d+)\]")
+CITATION_PATTERN = re.compile(
+    rf"\[({_CHUNK_REFERENCE_ID})-({_CHUNK_INDEX})\]{_CITATION_TRAILING_BOUNDARY}"
+)
 
 # Doc-level: [n], [att-N], or [composer_<uuidhex>] — must NOT match chunk refs or
 # adjacent identifier text. The Composer namespace is deliberately narrow so
 # ordinary Markdown labels do not become citations.
-# Keep the trailing guard ASCII-only so [1]和 remains a valid citation.
-DOC_CITATION_TRAILING_BOUNDARY = r"(?![A-Za-z0-9_-])"
 DOC_CITATION_PATTERN = re.compile(
-    rf"\[((?:\d+|att-\d+|composer_[0-9a-f]+))\]{DOC_CITATION_TRAILING_BOUNDARY}"
+    rf"\[((?:{_NUMERIC_REF}|{_ATTACHMENT_REF}|{_LEGACY_COMPOSER_REF}))\]"
+    rf"{_CITATION_TRAILING_BOUNDARY}"
 )
+
+
+def _parse_chunk_index(match: re.Match[str]) -> int | None:
+    try:
+        return int(match.group(2))
+    except TypeError, ValueError:
+        logger.debug("Ignoring citation with an invalid chunk index")
+        return None
 
 
 def extract_citation_keys(answer_text: str) -> list[str]:
@@ -61,7 +83,9 @@ def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str
     """
     positions: list[tuple[int, str, int | None]] = []
     for m in CITATION_PATTERN.finditer(answer_text):
-        positions.append((m.start(), m.group(1), int(m.group(2))))
+        chunk_idx = _parse_chunk_index(m)
+        if chunk_idx is not None:
+            positions.append((m.start(), m.group(1), chunk_idx))
     for m in DOC_CITATION_PATTERN.finditer(answer_text):
         positions.append((m.start(), m.group(1), None))
 
@@ -96,7 +120,9 @@ def clean_invalid_citations(indexer: CitationIndexer, answer_text: str) -> str:
 
     def _replace_chunk(m: re.Match) -> str:
         ref_id = m.group(1)
-        chunk_idx = int(m.group(2))
+        chunk_idx = _parse_chunk_index(m)
+        if chunk_idx is None:
+            return m.group(0)
         if indexer.get_chunk_id(ref_id, chunk_idx) is not None:
             return m.group(0)
         logger.debug("Removing invalid citation [%s-%d]", ref_id, chunk_idx)

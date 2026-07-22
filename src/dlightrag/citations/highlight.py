@@ -19,7 +19,7 @@ from dlightrag.prompts import (
 )
 from dlightrag.utils.concurrency import bounded_map
 
-from .parser import DOC_CITATION_TRAILING_BOUNDARY, strip_generated_references_section
+from .parser import CITATION_PATTERN, DOC_CITATION_PATTERN, strip_generated_references_section
 from .schemas import HighlightSource
 
 logger = logging.getLogger(__name__)
@@ -51,8 +51,6 @@ class HighlightBatchResponse(BaseModel):
 _SENTENCE_SPLIT_RE = re.compile(
     r"(?<=[.!?\u3002\uff01\uff1f])\s+|(?<=[.!?\u3002\uff01\uff1f])(?=\S)"
 )
-# Matches both chunk-level [n-m] and doc-level [n] citations.
-_CITATION_RE = re.compile(rf"\[\w+-\d+\]|\[\d+\]{DOC_CITATION_TRAILING_BOUNDARY}")
 
 
 def _strip_json_fences(text: str) -> str:
@@ -76,8 +74,14 @@ def extract_all_citing_sentences(answer_text: str) -> dict[str, list[str]]:
 
     result: dict[str, list[str]] = {}
     for sentence in sentences:
-        for m in _CITATION_RE.finditer(sentence):
-            key = m.group(0)[1:-1]
+        positions = [
+            *((match.start(), match.group(1)) for match in DOC_CITATION_PATTERN.finditer(sentence)),
+            *(
+                (match.start(), f"{match.group(1)}-{match.group(2)}")
+                for match in CITATION_PATTERN.finditer(sentence)
+            ),
+        ]
+        for _, key in sorted(positions):
             result.setdefault(key, [])
             if sentence not in result[key]:
                 result[key].append(sentence)
