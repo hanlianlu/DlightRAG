@@ -283,7 +283,12 @@ def test_web_shell_bootstraps_theme_preference_before_stylesheet() -> None:
         encoding="utf-8"
     )
 
-    assert '<html lang="en" data-theme="system" data-color-mode="dark">' in base_html
+    html_open = re.search(r"<html\b[^>]*>", base_html)
+    assert html_open is not None
+    html_open_tag = html_open.group(0)
+    assert 'lang="en"' in html_open_tag
+    assert 'data-theme="system"' in html_open_tag
+    assert 'data-color-mode="dark"' in html_open_tag
     assert '<meta name="color-scheme" content="dark light">' in base_html
     assert "'dlightrag-theme'" in base_html
     assert "localStorage.getItem" in base_html
