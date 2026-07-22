@@ -258,6 +258,10 @@ body.conversation-drawer-open {
     animation: pulse 1.2s ease-in-out infinite;
 }
 
+mjx-container {
+    color: inherit;
+}
+
 .streaming-dot.progress-phase {
     width: auto;
     height: auto;

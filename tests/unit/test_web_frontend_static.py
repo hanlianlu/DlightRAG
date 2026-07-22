@@ -310,6 +310,15 @@ def test_web_static_css_build_keeps_only_served_bundles() -> None:
     assert generated_css_files == {"style.css"}
 
 
+def test_pygments_css_contains_dual_color_mode_roots_and_style_provenance() -> None:
+    css = (ROOT / "src/dlightrag/web/static/pygments.css").read_text(encoding="utf-8")
+
+    assert '[data-color-mode="light"] .highlight' in css
+    assert '[data-color-mode="dark"] .highlight' in css
+    assert "Friendly" in css
+    assert "GitHub Dark" in css
+
+
 def test_web_static_js_build_has_no_orphan_chunks() -> None:
     static_js = ROOT / "src/dlightrag/web/static/generated/js"
     import_pattern = re.compile(r"""(?:import\(`\./([^`]+\.js)`\)|from"\./([^"]+\.js)")""")
