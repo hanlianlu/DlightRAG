@@ -66,7 +66,7 @@ def answer_blocks_from_markdown(
         source_ref = str(image.get("source_ref") or "")
         if source_ref:
             by_ref[source_ref].append(image)
-            source_id = source_ref.split("-", 1)[0]
+            source_id = source_ref.rsplit("-", 1)[0]
             by_ref[source_id].append(image)
 
     blocks: list[dict[str, Any]] = []

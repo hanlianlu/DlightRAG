@@ -1,7 +1,7 @@
 """Citation pattern matching and extraction.
 
 Supports two formats:
-- [n]       — doc-level citations (LightRAG's native format)
+- [ref]     — doc-level citations (LightRAG and attachment formats)
 - [ref-idx] — chunk-level citations (DlightRAG granular format)
 """
 
@@ -13,16 +13,17 @@ from .indexer import CitationIndexer
 
 logger = logging.getLogger(__name__)
 
-# Chunk-level: [ref_id-chunk_idx] e.g., [1-2], [abc-3]
-CITATION_PATTERN = re.compile(r"\[(\w+)-(\d+)\]")
+# Chunk-level: [ref_id-chunk_idx] e.g., [1-2], [abc-3], [att-1-2].
+# Exclude [att-N] from the generic branch because it is a doc citation.
+CITATION_PATTERN = re.compile(r"\[(att-\d+|(?!att-\d+\])\w+)-(\d+)\]")
 
-# Doc-level: [n] or [composer_<uuidhex>] — must NOT match chunk refs or
+# Doc-level: [n], [att-N], or [composer_<uuidhex>] — must NOT match chunk refs or
 # adjacent identifier text. The Composer namespace is deliberately narrow so
 # ordinary Markdown labels do not become citations.
 # Keep the trailing guard ASCII-only so [1]和 remains a valid citation.
 DOC_CITATION_TRAILING_BOUNDARY = r"(?![A-Za-z0-9_-])"
 DOC_CITATION_PATTERN = re.compile(
-    rf"\[((?:\d+|composer_[0-9a-f]+))\]{DOC_CITATION_TRAILING_BOUNDARY}"
+    rf"\[((?:\d+|att-\d+|composer_[0-9a-f]+))\]{DOC_CITATION_TRAILING_BOUNDARY}"
 )
 
 

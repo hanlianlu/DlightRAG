@@ -16,6 +16,23 @@ def test_citation_pattern_matches_ref_chunk():
     assert m.group(2) == "2"
 
 
+def test_citation_pattern_captures_attachment_and_legacy_composer_chunks():
+    attachment = CITATION_PATTERN.fullmatch("[att-12-3]")
+    composer = CITATION_PATTERN.fullmatch("[composer_deadbeef-4]")
+
+    assert attachment is not None
+    assert attachment.groups() == ("att-12", "3")
+    assert composer is not None
+    assert composer.groups() == ("composer_deadbeef", "4")
+
+
+def test_attachment_doc_citation_is_unambiguous_and_keeps_ascii_boundary():
+    text = "附件 [att-1]和旧文档 [composer_deadbeef]，不是引用 [att-2]x"
+
+    assert CITATION_PATTERN.search("[att-1]") is None
+    assert DOC_CITATION_PATTERN.findall(text) == ["att-1", "composer_deadbeef"]
+
+
 def test_citation_pattern_no_match():
     m = CITATION_PATTERN.search("no citations here")
     assert m is None
@@ -60,6 +77,27 @@ def test_extract_cited_chunks():
     assert "c1" in cited["1"]
     assert "2" in cited
     assert "c3" in cited["2"]
+
+
+def test_attachment_citations_flow_through_indexing_and_cleanup():
+    indexer = CitationIndexer()
+    indexer.build_index(
+        [
+            {"chunk_id": "a1", "reference_id": "att-1", "content": "first"},
+            {"chunk_id": "a2", "reference_id": "att-1", "content": "second"},
+            {"chunk_id": "b1", "reference_id": "att-12", "content": "other"},
+        ]
+    )
+    text = "All [att-1], exact [att-12-1], invalid [att-1-9] and [att-99]."
+
+    assert extract_citation_keys(text) == ["att-1", "att-12-1", "att-1-9", "att-99"]
+    assert extract_cited_chunks(indexer, text) == {
+        "att-1": ["a1", "a2"],
+        "att-12": ["b1"],
+    }
+    assert clean_invalid_citations(indexer, text) == (
+        "All [att-1], exact [att-12-1], invalid  and ."
+    )
 
 
 class TestDocCitationPattern:

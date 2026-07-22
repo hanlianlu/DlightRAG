@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from dlightrag.core.answer.media import answer_images_from_sources
+from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
 
 
 def _source(chunk_attrs: dict[str, Any]) -> Any:
@@ -63,3 +63,21 @@ def test_cited_chunk_without_any_url_is_excluded() -> None:
     images = answer_images_from_sources(sources, contexts={"chunks": []})
 
     assert images == []
+
+
+def test_attachment_doc_citation_fans_out_while_chunk_selects_exact_image() -> None:
+    images = [
+        {"id": "image-1", "source_ref": "att-1-1"},
+        {"id": "image-2", "source_ref": "att-1-2"},
+    ]
+
+    doc_blocks = answer_blocks_from_markdown("See [att-1].", images)
+    chunk_blocks = answer_blocks_from_markdown("See [att-1-2].", images)
+
+    assert [block["image_id"] for block in doc_blocks if block["type"] == "image_ref"] == [
+        "image-1",
+        "image-2",
+    ]
+    assert [block["image_id"] for block in chunk_blocks if block["type"] == "image_ref"] == [
+        "image-2"
+    ]
