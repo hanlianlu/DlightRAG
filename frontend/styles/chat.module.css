@@ -50,7 +50,7 @@
 }
 
 .dot {
-  color: var(--color-gold-200);
+  color: var(--color-accent-action);
 }
 
 .aiMessageContent {
@@ -73,7 +73,7 @@
   display: inline-block;
   width: var(--space-tight);
   height: var(--space-tight);
-  background: var(--color-gold-200);
+  background: var(--color-progress-fill);
   border-radius: 50%;
   animation: pulse 1.2s ease-in-out infinite;
 }
@@ -97,7 +97,7 @@
   display: inline-block;
   width: 5px;
   height: 5px;
-  background: var(--color-gold-200);
+  background: var(--color-progress-fill);
   border-radius: 50%;
   margin-left: var(--space-tight);
   vertical-align: middle;
@@ -135,7 +135,7 @@
 }
 
 .composerPlus:hover {
-  color: var(--color-gold-200);
+  color: var(--color-accent-action);
   background: var(--color-bg-elevated);
 }
 
@@ -310,7 +310,7 @@
 .historyImageRetry {
   background: transparent;
   border: 0;
-  color: var(--color-gold-100);
+  color: var(--color-accent-action);
   cursor: pointer;
   font: inherit;
   font-size: var(--font-size-caption);
@@ -319,12 +319,12 @@
 
 .historyImageButton:focus-visible,
 .historyImageRetry:focus-visible {
-  outline: 2px solid var(--color-gold-200);
+  outline: 2px solid var(--color-control-ring);
   outline-offset: 2px;
 }
 
 .historyImageRetry:hover {
-  color: var(--color-gold-200);
+  color: var(--color-accent-emphasis);
 }
 
 /* === Text Error === */
@@ -389,7 +389,7 @@
 }
 
 .aiMessageContent tr:nth-child(even) {
-  background: rgb(28 25 23 / 50%);
+  background: var(--color-row-alt);
 }
 
 .aiMessageContent pre {
@@ -412,7 +412,7 @@
   background: var(--color-bg-elevated);
   padding: var(--space-inline) var(--space-tight);
   border-radius: var(--radius-sm);
-  color: var(--color-gold-100);
+  color: var(--color-accent-action);
 }
 
 .aiMessageContent ul,
@@ -426,7 +426,7 @@
 }
 
 .aiMessageContent blockquote {
-  border-left: 3px solid var(--color-gold-500);
+  border-left: 3px solid var(--color-accent-emphasis);
   padding-left: var(--space-related);
   margin: 1em 0;
   color: var(--color-text-muted);
@@ -450,7 +450,7 @@
 }
 
 .aiMessageContent a {
-  color: var(--color-gold-200);
+  color: var(--color-accent-action);
   text-decoration: none;
 }
 
@@ -513,7 +513,7 @@
   left: 0;
   right: 0;
   background: linear-gradient(transparent, var(--color-scrim-gradient));
-  color: #d6d3d1;
+  color: var(--color-image-caption);
   font-size: var(--font-size-caption);
   padding: var(--space-tight) var(--space-inline) var(--space-inline);
 }

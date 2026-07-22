@@ -6,6 +6,7 @@
  */
 
 :root {
+   color-scheme: dark;
     /* ═══════════════════════════════════════════════════════════════════
        LAYER 1: Primitives
        Type and space use utopia.fyi formulas.
@@ -103,6 +104,57 @@
     /* ── Shadow ── */
     --shadow-overlay: 0 18px 48px rgba(0, 0, 0, 0.52);
 
+   /* ── Theme semantics: accents and actions ── */
+   --color-accent-action: var(--color-gold-200);
+   --color-accent-emphasis: var(--color-gold-500);
+   --color-accent-muted: var(--color-gold-300);
+   --color-action-bg: var(--color-gold-500);
+   --color-action-bg-hover: var(--color-gold-400);
+   --color-on-action: #ffffff;
+   --color-action-border: var(--color-accent-border-faint);
+   --color-action-border-hover: var(--color-accent-border-strong);
+   --color-action-bg-subtle: rgba(87, 74, 36, 0.28);
+   --color-action-bg-subtle-hover: rgba(87, 74, 36, 0.42);
+
+   /* ── Theme semantics: danger ── */
+   --color-danger-bg: #b91c1c;
+   --color-on-danger: #ffffff;
+
+   /* ── Theme semantics: controls and rows ── */
+   --color-control-surface: rgba(41, 37, 36, 0.56);
+   --color-control-surface-hover: var(--color-bg-hover);
+   --color-control-border-hover: rgba(210, 182, 97, 0.22);
+   --color-control-ring: rgba(210, 182, 97, 0.64);
+   --color-control-ring-soft: var(--color-accent-surface);
+   --color-selected-row: rgba(120, 113, 108, 0.13);
+   --color-row-alt: rgba(28, 25, 23, 0.50);
+   --color-row-hover-faint: rgba(255, 255, 255, 0.02);
+   --color-source-highlight: rgba(210, 182, 97, 0.18);
+
+   /* ── Theme semantics: source surfaces ── */
+   --color-source-surface: rgba(12, 10, 9, 0.72);
+   --color-source-surface-active: rgba(12, 10, 9, 0.86);
+   --color-source-accent: rgba(120, 113, 108, 0.18);
+   --color-source-accent-active: rgba(210, 182, 97, 0.28);
+
+   /* ── Theme semantics: panel, overlay, and shared elevations ── */
+   --color-overlay-backdrop: rgba(12, 10, 9, 0.62);
+   --color-overlay-border: rgba(168, 162, 158, 0.34);
+   --color-overlay-veil: rgba(12, 10, 9, 0.82);
+   --color-lightbox-nav-bg: rgba(245, 245, 244, 0.045);
+   --shadow-panel: -8px 0 32px rgba(0, 0, 0, 0.30);
+   --shadow-sidebar: 12px 0 36px rgba(0, 0, 0, 0.18);
+   --shadow-popover: 0 12px 34px rgba(0, 0, 0, 0.46);
+   --shadow-menu: 0 12px 28px rgba(0, 0, 0, 0.42);
+   --shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.30);
+   --shadow-lightbox-image: 0 20px 60px rgba(0, 0, 0, 0.35);
+
+   /* ── Theme semantics: upload/progress and image labels ── */
+   --color-upload-hover: rgba(210, 182, 97, 0.03);
+   --color-upload-focus: rgba(210, 182, 97, 0.48);
+   --color-progress-fill: var(--color-accent-action);
+   --color-image-caption: var(--color-text-tertiary);
+
     /* ── Font sizes (semantic aliases to Utopia type scale) ── */
     --font-size-caption:  var(--step--2);  /* badges, tiny labels */
     --font-size-detail:   var(--step--1);  /* meta, timestamps, captions */
@@ -145,5 +197,89 @@
     --inset-lightbox-nav-block: max(var(--space-layout), 12vh);
     --font-size-lightbox-nav-icon: clamp(30px, 4vw, 42px);
     --stroke-composer-plus-icon: 1.25;
-    --stroke-composer-plus-icon: 1.25;
+}
+
+:root[data-color-mode='light'] {
+   color-scheme: light;
+
+   --color-text-primary: #24231f;
+   --color-text-secondary: #35342f;
+   --color-text-tertiary: #45443f;
+   --color-text-muted: #66645d;
+   --color-text-subtle: #6f6d65;
+   --color-text-dim: #726f67;
+
+   --color-bg-base: #f5f5f2;
+   --color-bg-surface: #ffffff;
+   --color-bg-elevated: #e9e8e2;
+   --color-bg-subtle: #efefeb;
+   --color-bg-hover: rgba(69, 68, 63, 0.08);
+   --color-accent-hover: rgba(128, 103, 25, 0.11);
+   --color-accent-hover-strong: rgba(128, 103, 25, 0.18);
+
+   --color-border-subtle: rgba(69, 68, 63, 0.16);
+   --color-border-strong: rgba(69, 68, 63, 0.28);
+   --color-divider: rgba(69, 68, 63, 0.14);
+
+   --color-danger: #b42318;
+   --color-danger-bg: #b42318;
+   --color-danger-surface: rgba(180, 35, 24, 0.14);
+   --color-on-danger: #ffffff;
+
+   --color-accent-text: rgba(128, 103, 25, 0.85);
+   --color-accent-indicator: rgba(128, 103, 25, 0.78);
+   --color-accent-border-strong: rgba(128, 103, 25, 0.42);
+   --color-accent-border: rgba(128, 103, 25, 0.38);
+   --color-accent-border-soft: rgba(128, 103, 25, 0.30);
+   --color-accent-border-faint: rgba(128, 103, 25, 0.26);
+   --color-accent-surface: rgba(128, 103, 25, 0.16);
+   --color-accent-ghost: rgba(128, 103, 25, 0.09);
+
+   --color-scrim: rgba(36, 35, 31, 0.38);
+   --color-scrim-strong: rgba(36, 35, 31, 0.48);
+   --color-scrim-gradient: rgba(36, 35, 31, 0.66);
+
+   --shadow-overlay: 0 18px 48px rgba(36, 35, 31, 0.26);
+
+   --color-accent-action: #806719;
+   --color-accent-emphasis: #574a24;
+   --color-accent-muted: #806719;
+   --color-action-bg: #806719;
+   --color-action-bg-hover: #574a24;
+   --color-on-action: #ffffff;
+   --color-action-border: rgba(87, 74, 36, 0.26);
+   --color-action-border-hover: rgba(87, 74, 36, 0.38);
+   --color-action-bg-subtle: rgba(87, 74, 36, 0.14);
+   --color-action-bg-subtle-hover: rgba(87, 74, 36, 0.22);
+
+   --color-control-surface: #efefeb;
+   --color-control-surface-hover: rgba(69, 68, 63, 0.10);
+   --color-control-border-hover: rgba(128, 103, 25, 0.30);
+   --color-control-ring: rgba(128, 103, 25, 0.54);
+   --color-control-ring-soft: rgba(128, 103, 25, 0.20);
+   --color-selected-row: rgba(128, 103, 25, 0.16);
+   --color-row-alt: rgba(69, 68, 63, 0.06);
+   --color-row-hover-faint: rgba(69, 68, 63, 0.05);
+   --color-source-highlight: rgba(128, 103, 25, 0.20);
+
+   --color-source-surface: rgba(233, 232, 226, 0.78);
+   --color-source-surface-active: rgba(233, 232, 226, 0.96);
+   --color-source-accent: rgba(69, 68, 63, 0.16);
+   --color-source-accent-active: rgba(128, 103, 25, 0.32);
+
+   --color-overlay-backdrop: rgba(36, 35, 31, 0.32);
+   --color-overlay-border: rgba(111, 109, 101, 0.30);
+   --color-overlay-veil: rgba(36, 35, 31, 0.78);
+   --color-lightbox-nav-bg: rgba(255, 255, 255, 0.26);
+   --shadow-panel: -8px 0 32px rgba(36, 35, 31, 0.20);
+   --shadow-sidebar: 12px 0 36px rgba(36, 35, 31, 0.12);
+   --shadow-popover: 0 12px 34px rgba(36, 35, 31, 0.22);
+   --shadow-menu: 0 12px 28px rgba(36, 35, 31, 0.20);
+   --shadow-toast: 0 4px 16px rgba(36, 35, 31, 0.18);
+   --shadow-lightbox-image: 0 20px 60px rgba(36, 35, 31, 0.28);
+
+   --color-upload-hover: rgba(128, 103, 25, 0.07);
+   --color-upload-focus: rgba(128, 103, 25, 0.40);
+   --color-progress-fill: #806719;
+   --color-image-caption: #f5f5f2;
 }

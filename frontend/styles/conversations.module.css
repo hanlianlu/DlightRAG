@@ -7,7 +7,7 @@
 
 :global(#chat-sidebar) {
     background: color-mix(in srgb, var(--color-bg-surface) 92%, var(--color-bg-base));
-    box-shadow: 12px 0 36px rgb(0 0 0 / 18%);
+    box-shadow: var(--shadow-sidebar);
     color: var(--color-text-secondary);
     display: flex;
     flex-direction: column;
@@ -118,7 +118,7 @@
 }
 
 :global(.conversation-row[aria-current="page"]) {
-    background: rgb(120 113 108 / 13%);
+    background: var(--color-selected-row);
 }
 
 :global(.conversation-select) {
@@ -158,7 +158,7 @@
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
-    box-shadow: 0 12px 28px rgb(0 0 0 / 42%);
+    box-shadow: var(--shadow-menu);
     display: flex;
     flex-direction: column;
     min-width: 132px;
@@ -203,7 +203,7 @@
 }
 
 :global(.conversation-row input:focus) {
-    border-color: rgb(210 182 97 / 52%);
+    border-color: var(--color-action-border-hover);
     box-shadow: 0 0 0 2px var(--color-accent-hover);
 }
 
@@ -221,7 +221,7 @@
 :global(.conversation-list-status button) {
     background: transparent;
     border: 0;
-    color: var(--color-gold-200);
+    color: var(--color-accent-action);
     cursor: pointer;
     font: inherit;
     font-size: var(--font-size-detail);
@@ -300,16 +300,16 @@
 }
 
 :global(.conversation-dialog-actions .conversation-dialog-danger) {
-    background: #b91c1c;
+    background: var(--color-danger-bg);
     border-color: transparent;
-    color: var(--color-text-primary);
+    color: var(--color-on-danger);
 }
 
 :global(#chat-sidebar button:focus-visible),
 :global(#chat-sidebar input:focus-visible),
 :global(#conversation-sidebar-open:focus-visible),
 :global(.conversation-dialog-actions button:focus-visible) {
-    outline: 2px solid rgb(210 182 97 / 64%);
+    outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
 }
 

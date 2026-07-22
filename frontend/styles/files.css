@@ -26,7 +26,7 @@
     background: var(--color-accent-hover);
     border: 1px solid var(--color-border-strong);
     border-radius: var(--radius-sm);
-    color: var(--color-gold-200);
+    color: var(--color-accent-action);
     cursor: pointer;
     display: flex;
     font-size: var(--font-size-detail);
@@ -44,7 +44,7 @@
 }
 
 .ingest-target-dot {
-    background: var(--color-gold-200);
+    background: var(--color-accent-action);
     border-radius: 50%;
     flex-shrink: 0;
     height: calc(var(--size-icon-sm) * 0.45);
@@ -52,7 +52,7 @@
 }
 
 .ingest-target-caret {
-    color: var(--color-gold-300);
+    color: var(--color-accent-muted);
     flex-shrink: 0;
     transition: transform 0.15s;
 }
@@ -74,10 +74,10 @@
 .ingest-target-popover-radio.on {
     background: radial-gradient(
         circle at 50% 50%,
-        var(--color-gold-200) 0 calc(var(--size-icon-sm) * 0.23),
+        var(--color-accent-action) 0 calc(var(--size-icon-sm) * 0.23),
         transparent calc(var(--size-icon-sm) * 0.24)
     );
-    border-color: var(--color-gold-200);
+    border-color: var(--color-accent-action);
 }
 
 /* === File Management === */
@@ -165,7 +165,7 @@
 
 .progress-bar-fill {
     height: 100%;
-    background: var(--color-gold-200);
+    background: var(--color-progress-fill);
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 2px;
     transition: width 0.5s ease;
@@ -221,7 +221,7 @@
     width: calc(var(--size-icon-sm) * 0.75);
     height: calc(var(--size-icon-sm) * 0.75);
     border: 1.5px solid var(--color-border-subtle);
-    border-top-color: var(--color-gold-200);
+    border-top-color: var(--color-progress-fill);
     border-radius: 50%;
     flex-shrink: 0;
     animation: spin 0.7s linear infinite;
@@ -264,12 +264,12 @@
 
 .upload-zone:hover {
     border-color: var(--color-accent-border-soft);
-    background: rgb(210 182 97 / 3%);
+    background: var(--color-upload-hover);
 }
 
 .upload-zone:has(.upload-zone-file-action:focus-visible) {
-    border-color: rgb(210 182 97 / 48%);
-    outline: 2px solid var(--color-accent-surface);
+    border-color: var(--color-upload-focus);
+    outline: 2px solid var(--color-control-ring-soft);
     outline-offset: 2px;
 }
 

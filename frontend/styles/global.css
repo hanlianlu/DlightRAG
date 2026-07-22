@@ -90,7 +90,7 @@ body.conversation-drawer-open {
     content: '';
     width: 2px;
     height: clamp(32px, 3.6vw, 44px);
-    background: rgb(210 182 97 / 30%);
+    background: var(--color-control-ring-soft);
     border-radius: 1px;
     transition: background 0.15s, height 0.15s;
 }
@@ -100,7 +100,7 @@ body.conversation-drawer-open {
 }
 .panel-resize-handle:hover::after,
 .panel-resize-handle.active::after {
-    background: rgba(210, 182, 97, 0.6);
+    background: var(--color-control-ring);
     height: clamp(48px, 6vw, 72px);
 }
 
@@ -127,10 +127,10 @@ body.conversation-drawer-open {
 
 .primary-btn {
     align-items: center;
-    background: var(--color-gold-500);
-    border: 1px solid var(--color-accent-border-faint);
+    background: var(--color-action-bg);
+    border: 1px solid var(--color-action-border);
     border-radius: var(--radius-sm);
-    color: var(--color-gold-100);
+    color: var(--color-on-action);
     cursor: pointer;
     display: inline-flex;
     font: inherit;
@@ -142,9 +142,9 @@ body.conversation-drawer-open {
 }
 
 .primary-btn:hover {
-    background: var(--color-gold-400);
-    border-color: var(--color-accent-border-strong);
-    color: var(--color-text-primary);
+    background: var(--color-action-bg-hover);
+    border-color: var(--color-action-border-hover);
+    color: var(--color-on-action);
 }
 
 /* === Shared popovers === */
@@ -153,7 +153,7 @@ body.conversation-drawer-open {
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    box-shadow: 0 12px 34px rgb(0 0 0 / 46%);
+    box-shadow: var(--shadow-popover);
     display: flex;
     flex-direction: column;
     left: 0;
@@ -223,10 +223,10 @@ body.conversation-drawer-open {
 
 .ui-popover-create-btn {
     align-items: center;
-    background: rgb(87 74 36 / 28%);
-    border: 1px solid var(--color-accent-border-faint);
+    background: var(--color-action-bg-subtle);
+    border: 1px solid var(--color-action-border);
     border-radius: var(--radius-sm);
-    color: var(--color-gold-100);
+    color: var(--color-accent-action);
     cursor: pointer;
     display: flex;
     flex-shrink: 0;
@@ -238,8 +238,8 @@ body.conversation-drawer-open {
 }
 
 .ui-popover-create-btn:hover {
-    background: rgb(87 74 36 / 42%);
-    border-color: var(--color-accent-border-strong);
+    background: var(--color-action-bg-subtle-hover);
+    border-color: var(--color-action-border-hover);
 }
 
 /* === Streaming Indicator === */
@@ -253,7 +253,7 @@ body.conversation-drawer-open {
     display: inline-block;
     width: var(--space-tight);
     height: var(--space-tight);
-    background: var(--color-gold-200);
+    background: var(--color-progress-fill);
     border-radius: 50%;
     animation: pulse 1.2s ease-in-out infinite;
 }
@@ -277,7 +277,7 @@ body.conversation-drawer-open {
     display: inline-block;
     width: 5px;
     height: 5px;
-    background: var(--color-gold-200);
+    background: var(--color-progress-fill);
     border-radius: 50%;
     margin-left: var(--space-tight);
     vertical-align: middle;
@@ -299,7 +299,7 @@ body.conversation-drawer-open {
     z-index: 200;
     opacity: 0;
     transition: opacity 0.2s ease-out, transform 0.2s ease-out;
-    box-shadow: 0 4px 16px rgb(0 0 0 / 30%);
+    box-shadow: var(--shadow-toast);
 }
 
 .toast.visible {
@@ -313,8 +313,8 @@ body.conversation-drawer-open {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(12, 10, 9, 0.62);
-    border: 1px dashed rgba(168, 162, 158, 0.34);
+    background: var(--color-overlay-backdrop);
+    border: 1px dashed var(--color-overlay-border);
     z-index: 150;
     align-items: center;
     justify-content: center;

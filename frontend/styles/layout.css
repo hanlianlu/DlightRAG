@@ -74,7 +74,7 @@ body.files-panel-open #files-btn {
 
 .workspace-selector {
     align-items: center;
-    background: rgb(41 37 36 / 56%);
+    background: var(--color-control-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
     color: var(--color-text-subtle);
@@ -97,7 +97,7 @@ body.files-panel-open #files-btn {
 .workspace-selector:hover,
 .workspace-selector.open {
     background: var(--color-bg-hover);
-    border-color: rgb(210 182 97 / 22%);
+    border-color: var(--color-control-border-hover);
 }
 
 .workspace-dot {
@@ -281,15 +281,15 @@ body.panel-open .composer-inner {
     height: var(--size-button);
     border-radius: 50%;
     border: none;
-    background: var(--color-gold-500);
-    color: var(--color-gold-100);
+    background: var(--color-action-bg);
+    color: var(--color-on-action);
     cursor: pointer;
     flex-shrink: 0;
     transition: background 0.15s, color 0.15s, transform 0.1s;
 }
 
 .composer-send:hover {
-    background: var(--color-gold-400);
+    background: var(--color-action-bg-hover);
 }
 
 .composer-send:active {
@@ -330,7 +330,7 @@ body.panel-open .composer-inner {
 }
 
 .composer-plus:hover {
-    color: var(--color-gold-200);
+    color: var(--color-accent-action);
     background: var(--color-bg-elevated);
 }
 
@@ -367,7 +367,7 @@ body.panel-open .composer-inner {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    box-shadow: -8px 0 32px rgb(0 0 0 / 30%);
+    box-shadow: var(--shadow-panel);
 }
 
 body.conversation-sidebar-open .panel {
@@ -487,7 +487,7 @@ body.conversation-sidebar-open .panel {
 }
 
 .workspace-dialog-name {
-    color: var(--color-gold-100);
+    color: var(--color-accent-action);
     font-size: var(--font-size-body);
     font-weight: 600;
     margin: var(--space-tight) 0;
@@ -531,9 +531,9 @@ body.conversation-sidebar-open .panel {
 }
 
 .workspace-dialog-delete {
-    background: #b91c1c;
+    background: var(--color-danger-bg);
     border: none;
-    color: var(--color-text-primary);
+    color: var(--color-on-danger);
 }
 
 .workspace-dialog-delete:disabled {

@@ -4,7 +4,7 @@
  */
 
 .workspacePopoverAll {
-  color: var(--color-gold-100);
+  color: var(--color-accent-action);
 }
 
 .workspacePopoverItem {
@@ -24,12 +24,12 @@
 }
 
 .workspacePopoverCheck.on {
-  background: var(--color-gold-200);
-  border-color: var(--color-gold-200);
+  background: var(--color-action-bg);
+  border-color: var(--color-action-bg);
 }
 
 .workspacePopoverCheck.on::after {
-  color: var(--color-bg-base);
+  color: var(--color-on-action);
   content: '\2713';
   font-size: var(--font-size-caption);
   font-weight: 700;
