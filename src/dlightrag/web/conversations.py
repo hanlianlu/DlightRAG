@@ -11,6 +11,7 @@ import asyncpg
 
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.core.answer.errors import CURRENT_DOCUMENT_PARSE_FAILED, AnswerInputError
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.request.attachment_digest import build_attachment_planner_digests
 from dlightrag.core.request.attachments import (
@@ -19,6 +20,7 @@ from dlightrag.core.request.attachments import (
     AttachmentRequestVector,
     ParsedAttachmentBundle,
 )
+from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     CommitTurnResult,
@@ -272,6 +274,13 @@ class WebConversationService:
             prepared=prepared,
             documents=documents,
         )
+        if current_parse_errors:
+            failed = current_parse_errors[0]
+            raise AnswerInputError(
+                f'Could not parse current document "{failed["filename"]}". '
+                "Remove it and try again.",
+                error_kind=CURRENT_DOCUMENT_PARSE_FAILED,
+            )
         current_digests, digest_trace = build_attachment_planner_digests(current_bundles)
         if current_bundles:
             logger.info(
@@ -494,10 +503,17 @@ class WebConversationService:
             )
             bundle = replace(bundle, trace=dict(meta))
             if meta.get("attachment_parse_error"):
+                raw_error_type = meta["attachment_parse_error"]
+                if isinstance(raw_error_type, BaseException):
+                    error_type = type(raw_error_type).__name__
+                else:
+                    candidate = str(raw_error_type).rsplit(".", 1)[-1]
+                    error_type = candidate if candidate.isidentifier() else "DocumentParseError"
                 parse_errors.append(
                     {
                         "attachment_id": document.attachment_id,
-                        "error": str(meta["attachment_parse_error"]),
+                        "filename": safe_source_filename(document.filename),
+                        "error_type": error_type,
                     }
                 )
             chunks.extend(bundle.chunks)

@@ -8,8 +8,11 @@ import pytest
 from dlightrag.core.answer.capability import AnswerImageCapability, CapabilityStatus
 from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
+    CURRENT_DOCUMENT_PARSE_FAILED,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
+    AnswerInputError,
+    classify_answer_error,
 )
 from dlightrag.core.servicemanager import _check_answer_image_capability
 
@@ -24,6 +27,26 @@ def _capability(status: CapabilityStatus) -> AnswerImageCapability:
         model="m",
         failure_kind=None,
     )
+
+
+def test_answer_image_error_is_an_answer_input_error() -> None:
+    error = AnswerImageError("images unavailable", error_kind=CURRENT_IMAGES_UNSUPPORTED)
+
+    assert isinstance(error, AnswerInputError)
+
+
+def test_classify_answer_error_preserves_generic_input_kind() -> None:
+    error = AnswerInputError(
+        "Could not parse current document.",
+        error_kind=CURRENT_DOCUMENT_PARSE_FAILED,
+    )
+
+    assert classify_answer_error(error) == CURRENT_DOCUMENT_PARSE_FAILED
+
+    import dlightrag
+
+    assert dlightrag.AnswerInputError is AnswerInputError
+    assert dlightrag.CURRENT_DOCUMENT_PARSE_FAILED == CURRENT_DOCUMENT_PARSE_FAILED
 
 
 class TestAnswerImageCapabilityGuard:

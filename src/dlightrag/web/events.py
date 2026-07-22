@@ -36,6 +36,7 @@ class AnswerTraceEvent(ClientContractModel):
 
 class AnswerErrorEvent(ClientContractModel):
     message: str
+    error_kind: str
 
 
 __all__ = [

@@ -1464,7 +1464,13 @@ async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
     )
 
     assert [chunk.attachment_id for chunk in chunks] == ["att-valid"]
-    assert errors == [{"attachment_id": "att-invalid", "error": "ValueError"}]
+    assert errors == [
+        {
+            "attachment_id": "att-invalid",
+            "filename": "report._unknown_.txt",
+            "error_type": "ValueError",
+        }
+    ]
     assert [attachment_id for attachment_id, _bundle in bundles] == [
         "att-invalid",
         "att-valid",
@@ -1597,10 +1603,14 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     assert turn.attachment_resolution_status == "degraded"
 
 
-async def test_prepare_answer_turn_degrades_on_current_document_parse_error(
+async def test_prepare_answer_turn_rejects_current_document_parse_error_before_downstream(
     service_under_test,
     conversation_store: AsyncMock,
 ) -> None:
+    from dlightrag.core.answer.errors import (
+        CURRENT_DOCUMENT_PARSE_FAILED,
+        AnswerInputError,
+    )
     from dlightrag.core.request.planner import QueryPlan
     from dlightrag.web.attachment_models import validate_web_documents
     from dlightrag.web.conversations import PreparedWebConversation
@@ -1624,21 +1634,40 @@ async def test_prepare_answer_turn_degrades_on_current_document_parse_error(
         standalone_query="what does this say?",
         selected_history_attachment_ids=(),
     )
+    attachment_service = AsyncMock()
+    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
+        lambda _resources, _prepared: attachment_service
+    )
 
     async def _fake_parse(**_kwargs: object):
-        # Parser failed for the only document: no chunks, one scoped error.
-        return [], [{"attachment_id": document.attachment_id, "error": "ValueError"}], []
+        return (
+            [],
+            [
+                {
+                    "attachment_id": document.attachment_id,
+                    "filename": document.safe_filename,
+                    "error_type": "ValueError",
+                }
+            ],
+            [],
+        )
 
     service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
 
-    turn = await service_under_test.prepare_answer_turn(
-        manager=manager,
-        prepared=prepared,
-        query="what does this say?",
-        current_images=[],
-        current_documents=[document],
-        workspaces=["default"],
-    )
+    with pytest.raises(AnswerInputError) as exc_info:
+        await service_under_test.prepare_answer_turn(
+            manager=manager,
+            prepared=prepared,
+            query="what does this say?",
+            current_images=[],
+            current_documents=[document],
+            workspaces=["default"],
+        )
 
-    assert turn.composer_context_chunks == ()
-    assert turn.attachment_resolution_status == "degraded"
+    assert exc_info.value.error_kind == CURRENT_DOCUMENT_PARSE_FAILED
+    assert "broken.docx" in str(exc_info.value)
+    attachment_service.adense_rankings.assert_not_awaited()
+    manager.adescribe_query_images.assert_not_awaited()
+    manager.aplan_web_conversation_query.assert_not_awaited()
+    manager._aselect_web_composer_evidence.assert_not_awaited()
+    manager._aanswer_stream_prepared.assert_not_awaited()

@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.core.answer.capability import AnswerImageCapability
-from dlightrag.core.answer.errors import CurrentImagePayloadError
+from dlightrag.core.answer.errors import (
+    CURRENT_DOCUMENT_PARSE_FAILED,
+    AnswerInputError,
+    CurrentImagePayloadError,
+)
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.request.planner import QueryPlan
 from dlightrag.storage.web_conversations import CommitTurnResult
@@ -401,7 +405,12 @@ async def test_current_image_payload_error_maps_to_limit_error(
         )
     ]
 
-    assert any("event: error" in event for event in events)
+    error_event = next(event for event in events if "event: error" in event)
+    error_payload = json.loads(error_event.split("data: ", 1)[1])
+    assert error_payload == {
+        "message": "Service error. Please try again.",
+        "error_kind": "CURRENT_IMAGE_LIMIT_EXCEEDED",
+    }
     assert not any("event: token" in event for event in events)
     error_kinds = [
         metadata["error_kind"]
@@ -409,6 +418,63 @@ async def test_current_image_payload_error_maps_to_limit_error(
         if "error_kind" in metadata
     ]
     assert error_kinds == ["CURRENT_IMAGE_LIMIT_EXCEEDED"]
+    service.commit_answer.assert_not_awaited()
+
+
+async def test_current_document_parse_error_emits_safe_typed_error_before_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _record_observations(monkeypatch)
+    service = AsyncMock()
+    safe_message = 'Could not parse current document "broken.docx". Remove it and try again.'
+    parse_error = AnswerInputError(
+        safe_message,
+        error_kind=CURRENT_DOCUMENT_PARSE_FAILED,
+    )
+    parse_error.__cause__ = RuntimeError("raw parser exception: customer secret")
+    service.prepare_answer_turn.side_effect = parse_error
+    answer_stream_prepared = AsyncMock()
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        answer_image_capability=None,
+        _aanswer_stream_prepared=answer_stream_prepared,
+    )
+    prepared = PreparedWebConversation(
+        principal_id="a" * 64,
+        conversation_id="11111111-1111-4111-8111-111111111111",
+        content_revision=2,
+        text_history=(),
+    )
+
+    events = [
+        event
+        async for event in stream_answer_events(
+            manager=manager,
+            cfg=SimpleNamespace(),
+            query="summarize this",
+            workspaces=["default"],
+            workspace="default",
+            conversation_service=service,
+            prepared_conversation=prepared,
+            validated_images=(),
+            submission_id="22222222-2222-4222-8222-222222222222",
+        )
+    ]
+
+    error_event = next(event for event in events if "event: error" in event)
+    error_payload = json.loads(error_event.split("data: ", 1)[1])
+    assert error_payload == {
+        "message": safe_message,
+        "error_kind": CURRENT_DOCUMENT_PARSE_FAILED,
+    }
+    assert "raw parser exception" not in "".join(events)
+    error_kinds = [
+        metadata["error_kind"]
+        for metadata in _metadata_updates(captured)
+        if "error_kind" in metadata
+    ]
+    assert error_kinds == [CURRENT_DOCUMENT_PARSE_FAILED]
+    answer_stream_prepared.assert_not_awaited()
     service.commit_answer.assert_not_awaited()
 
 

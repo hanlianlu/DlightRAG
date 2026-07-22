@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Shared answer-image error taxonomy (design §14.2).
+"""Shared answer-input error taxonomy (design §14.2).
 
 One error-kind vocabulary and classifier consumed by every surface (Web SSE,
 REST, MCP) so callers can branch on a stable, machine-readable ``error_kind``
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
 CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"
+CURRENT_DOCUMENT_PARSE_FAILED = "CURRENT_DOCUMENT_PARSE_FAILED"
 ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 
@@ -20,7 +21,15 @@ class CurrentImagePayloadError(RuntimeError):
     """Explicit user images cannot fit the configured Composer transport."""
 
 
-class AnswerImageError(ValueError):
+class AnswerInputError(ValueError):
+    """Explicit answer input rejected with a stable machine-readable kind."""
+
+    def __init__(self, message: str, *, error_kind: str) -> None:
+        super().__init__(message)
+        self.error_kind = error_kind
+
+
+class AnswerImageError(AnswerInputError):
     """Answer-image request rejected at the capability/transport boundary.
 
     Carries a stable ``error_kind`` from the answer-image taxonomy so every
@@ -28,13 +37,12 @@ class AnswerImageError(ValueError):
     """
 
     def __init__(self, message: str, *, error_kind: str) -> None:
-        super().__init__(message)
-        self.error_kind = error_kind
+        super().__init__(message, error_kind=error_kind)
 
 
 def classify_answer_error(exc: BaseException) -> str:
-    """Map an answer-stream failure to a stable answer-image error kind."""
-    if isinstance(exc, AnswerImageError):
+    """Map an answer-stream failure to a stable answer-input error kind."""
+    if isinstance(exc, AnswerInputError):
         return exc.error_kind
     if isinstance(exc, CurrentImagePayloadError):
         return CURRENT_IMAGE_LIMIT_EXCEEDED
@@ -46,8 +54,10 @@ def classify_answer_error(exc: BaseException) -> str:
 __all__ = [
     "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
     "ANSWER_STREAM_FAILED",
+    "CURRENT_DOCUMENT_PARSE_FAILED",
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
+    "AnswerInputError",
     "AnswerImageError",
     "CurrentImagePayloadError",
     "classify_answer_error",

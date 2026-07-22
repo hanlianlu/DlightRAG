@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
-from dlightrag.core.answer.errors import classify_answer_error
+from dlightrag.core.answer.errors import AnswerInputError, classify_answer_error
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
 from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.answer.turn import PreparedAnswerTurn
@@ -567,7 +567,13 @@ async def _emit_answer_events(
                 metadata={"error_kind": error_kind},
             )
         logger.exception("Answer streaming failed")
-        yield sse_event("error", AnswerErrorEvent(message="Service error. Please try again."))
+        message = (
+            str(exc) if isinstance(exc, AnswerInputError) else "Service error. Please try again."
+        )
+        yield sse_event(
+            "error",
+            AnswerErrorEvent(message=message, error_kind=error_kind),
+        )
     finally:
         if observation is not None:
             observation.update(
