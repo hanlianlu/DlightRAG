@@ -397,7 +397,7 @@ dimension contract and no HNSW, IVFFLAT, or other ANN index.
 
 Every read and write is scoped by authenticated principal plus conversation and
 requires an unexpired owning conversation. Manual delete and TTL pruning
-cascade all attachment-derived rows. Max-turn trimming removes old turn records
+cascade all Composer-document-derived rows. Max-turn trimming removes old turn records
 but preserves the conversation-level parse/vector cache. Cache identity never
 crosses a conversation or principal boundary.
 

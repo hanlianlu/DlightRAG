@@ -1570,12 +1570,16 @@ async def test_prepare_answer_turn_warns_when_historical_document_parse_fails(
     assert raw_exception not in repr(turn.document_warnings)
 
 
-@pytest.mark.parametrize("fetch_failure", [False, True])
+@pytest.mark.parametrize(
+    "fetch_error_type",
+    [None, ConnectionError, asyncpg.InterfaceError],
+    ids=("missing", "connection-error", "interface-error"),
+)
 async def test_prepare_answer_turn_warns_when_historical_documents_are_unavailable(
     service_under_test,
     conversation_store: AsyncMock,
     caplog,
-    fetch_failure: bool,
+    fetch_error_type: type[Exception] | None,
 ) -> None:
     from dlightrag.core.answer.turn import (
         HISTORICAL_DOCUMENT_LOAD_FAILED,
@@ -1589,8 +1593,9 @@ async def test_prepare_answer_turn_warns_when_historical_documents_are_unavailab
     unknown_document_id = "22222222-2222-2222-2222-222222222222"
     raw_fetch_error = "database unavailable at private.internal"
     conversation_store.list_image_catalog.return_value = []
-    if fetch_failure:
-        conversation_store.fetch_documents_by_ids.side_effect = ConnectionError(raw_fetch_error)
+    fetch_failure = fetch_error_type is not None
+    if fetch_error_type is not None:
+        conversation_store.fetch_documents_by_ids.side_effect = fetch_error_type(raw_fetch_error)
     else:
         conversation_store.fetch_documents_by_ids.return_value = []
     prepared = PreparedWebConversation(

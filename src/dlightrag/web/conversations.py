@@ -62,9 +62,9 @@ _COMMIT_ATTEMPT_TIMEOUT_SECONDS = 45.0
 _RECONCILE_ATTEMPT_TIMEOUT_SECONDS = 10.0
 _RECONCILE_ATTEMPTS = 2
 _RECONCILE_BACKOFF_SECONDS = 0.25
-_AMBIGUOUS_COMMIT_EXCEPTIONS = (
+_WEB_STORAGE_UNAVAILABLE_EXCEPTIONS = (
     *POSTGRES_UNAVAILABLE_EXCEPTIONS,
-    asyncpg.exceptions.InterfaceError,
+    asyncpg.InterfaceError,
 )
 _HISTORY_THUMBNAIL_MAX_PX = 320
 _HISTORY_THUMBNAIL_MAX_BYTES = 128 * 1024
@@ -221,7 +221,7 @@ class WebConversationService:
                         ttl_days=self._ttl_days,
                         retry=False,
                     )
-            except _AMBIGUOUS_COMMIT_EXCEPTIONS as exc:
+            except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS as exc:
                 raise WebConversationUnavailableError from exc
         return PreparedWebConversation(
             principal_id=principal_id,
@@ -686,7 +686,7 @@ class WebConversationService:
                     max_turns=self._max_turns,
                     ttl_days=self._ttl_days,
                 )
-        except _AMBIGUOUS_COMMIT_EXCEPTIONS:
+        except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS:
             return await self._reconcile_commit(prepared, submission_id)
 
     async def update_answer_highlights(
@@ -728,7 +728,7 @@ class WebConversationService:
                         ttl_days=self._ttl_days,
                         retry=False,
                     )
-            except _AMBIGUOUS_COMMIT_EXCEPTIONS:
+            except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS:
                 if attempt + 1 < _RECONCILE_ATTEMPTS:
                     await asyncio.sleep(_RECONCILE_BACKOFF_SECONDS)
                 continue
@@ -754,7 +754,7 @@ class WebConversationService:
     async def _store_call(self, operation: Awaitable[T]) -> T:
         try:
             return await operation
-        except POSTGRES_UNAVAILABLE_EXCEPTIONS as exc:
+        except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS as exc:
             raise WebConversationUnavailableError from exc
 
 
