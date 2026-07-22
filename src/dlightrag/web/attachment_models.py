@@ -116,11 +116,11 @@ def validate_web_documents(
         safe_name = safe_upload_basename(filename)
         suffix = _suffix(safe_name)
         if classify_web_attachment(safe_name, mime_type) != "document":
-            raise ValueError(f"Unsupported document attachment: {safe_name}")
+            raise ValueError(f"Unsupported Composer document: {safe_name}")
         if not payload:
-            raise ValueError(f"Document attachment is empty: {safe_name}")
+            raise ValueError(f"Composer document is empty: {safe_name}")
         if len(payload) > MAX_DOCUMENT_BYTES:
-            raise ValueError("Document attachment exceeds 100 MB")
+            raise ValueError("Composer document exceeds 100 MB")
         detected_mime = (
             mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
         )

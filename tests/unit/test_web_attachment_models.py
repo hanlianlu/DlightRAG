@@ -50,16 +50,27 @@ def test_validate_web_documents_rejects_too_many_documents() -> None:
 
 
 def test_validate_web_documents_rejects_oversized_document() -> None:
-    with pytest.raises(ValueError, match="100 MB"):
+    with pytest.raises(ValueError) as exc_info:
         validate_web_documents([("huge.pdf", "application/pdf", b"x" * (MAX_DOCUMENT_BYTES + 1))])
+
+    assert str(exc_info.value) == "Composer document exceeds 100 MB"
 
 
 def test_validate_web_documents_rejects_unsafe_or_unsupported_names() -> None:
     with pytest.raises(ValueError, match="Unsafe"):
         validate_web_documents([("../secret.pdf", "application/pdf", b"x")])
 
-    with pytest.raises(ValueError, match="Unsupported"):
+    with pytest.raises(ValueError) as exc_info:
         validate_web_documents([("archive.zip", "application/zip", b"x")])
+
+    assert str(exc_info.value) == "Unsupported Composer document: archive.zip"
+
+
+def test_validate_web_documents_rejects_empty_document() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        validate_web_documents([("empty.pdf", "application/pdf", b"")])
+
+    assert str(exc_info.value) == "Composer document is empty: empty.pdf"
 
 
 def test_validated_document_model_block_is_not_an_image_block() -> None:

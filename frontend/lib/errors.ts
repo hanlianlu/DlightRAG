@@ -78,6 +78,17 @@ export function answerWarningMessage(payload: unknown): string {
     return isWarningPayload(payload) ? payload.message : WARNING_FALLBACK;
 }
 
+export function createAnswerWarningHandler(
+    show: (message: string) => void,
+): (message: string) => void {
+    let shown = false;
+    return (message: string): void => {
+        if (shown) return;
+        shown = true;
+        show(message);
+    };
+}
+
 export function notifyAnswerWarning(
     payload: unknown,
     onWarning: ((message: string) => void) | undefined,

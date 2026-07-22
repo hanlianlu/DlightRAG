@@ -1467,7 +1467,7 @@ async def test_parse_composer_documents_continues_after_invalid_parser_hint(
     assert type(failure).__name__ == "_DocumentParseFailure"
     assert failure.attachment_id == "att-invalid"
     assert failure.filename == "report._unknown_.txt"
-    assert failure.error_type == "ValueError"
+    assert not hasattr(failure, "error_type")
     assert [attachment_id for attachment_id, _bundle in bundles] == [
         "att-invalid",
         "att-valid",
@@ -1537,7 +1537,6 @@ async def test_prepare_answer_turn_warns_when_historical_document_parse_fails(
                 SimpleNamespace(
                     attachment_id=document_id,
                     filename="history-report.pdf",
-                    error_type=raw_exception,
                 )
             ],
             [
@@ -1775,7 +1774,6 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
             SimpleNamespace(
                 attachment_id=document_b_id,
                 filename="b.pdf",
-                error_type="ValueError",
             )
         ]
         return chunks, failures, bundles
@@ -1854,7 +1852,6 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
                 SimpleNamespace(
                     attachment_id=document.attachment_id,
                     filename=document.safe_filename,
-                    error_type="ValueError",
                 )
             ],
             [],

@@ -6,6 +6,7 @@ import {getPendingImageData} from './images.ts';
 import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
 import {showToast} from './toast.ts';
 import {streamSSE} from '../lib/sse.ts';
+import {createAnswerWarningHandler} from '../lib/errors.ts';
 import {
     createAnswerRenderer,
     createChatTurn,
@@ -153,6 +154,7 @@ export async function submitQuery(query: string): Promise<void> {
             documents: documentFiles,
         });
         clearAttachments();
+        const onWarning = createAnswerWarningHandler((message) => showToast(message, 5000));
         for (let attempt = 0; attempt < 2; attempt += 1) {
             try {
                 const response = await fetch('/web/answer', {
@@ -168,11 +170,7 @@ export async function submitQuery(query: string): Promise<void> {
                     return;
                 }
 
-                const activeRenderer = createAnswerRenderer(turn, {
-                    onWarning(message: string): void {
-                        showToast(message, 5000);
-                    },
-                });
+                const activeRenderer = createAnswerRenderer(turn, {onWarning});
                 await streamSSE(response, function(eventType, data) {
                     armIdleTimeout();
                     if (conversationStore.activeConversationId !== conversationId) return;

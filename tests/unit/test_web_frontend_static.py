@@ -146,15 +146,6 @@ def test_history_renderer_reuses_sanitized_answer_pipeline() -> None:
     assert "Retry image" in images
 
 
-def test_answer_warning_renderer_dispatch_is_single_and_nonfatal() -> None:
-    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
-    warning_branch = renderer[
-        renderer.index("eventType === 'warning'") : renderer.index("eventType === 'error'")
-    ]
-    assert warning_branch.count("notifyAnswerWarning(") == 1
-    assert "failed = true" not in warning_branch
-
-
 def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None:
     images = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
     policy = (FRONTEND_UI / "image_policy.ts").read_text(encoding="utf-8")

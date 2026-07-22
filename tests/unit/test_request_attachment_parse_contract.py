@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Pin the private LightRAG parser-owner and sidecar-builder contracts.
 
-The query-attachment parse-owner shim reuses LightRAG-internal parser hooks.
+The Composer document parse-owner shim reuses LightRAG-internal parser hooks.
 These tests fail loudly if a future LightRAG upgrade renames or reshapes one
 of the private methods the shim depends on, so the coupling is never silent.
 """

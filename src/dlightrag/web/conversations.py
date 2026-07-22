@@ -96,7 +96,6 @@ class PreparedWebConversation:
 class _DocumentParseFailure:
     attachment_id: str
     filename: str
-    error_type: str
 
 
 class WebConversationService:
@@ -554,12 +553,11 @@ class WebConversationService:
                 content_sha256=document.content_sha256,
             )
             bundle = replace(bundle, trace=dict(meta))
-            if error_type := meta.get("attachment_parse_error"):
+            if meta.get("attachment_parse_error"):
                 failures.append(
                     _DocumentParseFailure(
                         attachment_id=document.attachment_id,
                         filename=safe_source_filename(document.filename),
-                        error_type=str(error_type),
                     )
                 )
             chunks.extend(bundle.chunks)

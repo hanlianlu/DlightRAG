@@ -3,7 +3,12 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {answerErrorMessage, answerWarningMessage, notifyAnswerWarning} from '../lib/errors.ts';
+import {
+  answerErrorMessage,
+  answerWarningMessage,
+  createAnswerWarningHandler,
+  notifyAnswerWarning,
+} from '../lib/errors.ts';
 import type {WarningPayload} from '../lib/errors.ts';
 
 test('answer errors accept legacy string payloads', () => {
@@ -127,4 +132,19 @@ test('answer warnings invoke the callback once per aggregate event', () => {
 
   assert.equal(callCount, 1);
   assert.deepEqual(messages, [payload.message]);
+});
+
+test('answer warning handler forwards once per submission', () => {
+  const messages: string[] = [];
+  const firstSubmission = createAnswerWarningHandler((message) => messages.push(message));
+
+  firstSubmission('First warning');
+  firstSubmission('Repeated warning');
+
+  assert.deepEqual(messages, ['First warning']);
+
+  const nextSubmission = createAnswerWarningHandler((message) => messages.push(message));
+  nextSubmission('New submission warning');
+
+  assert.deepEqual(messages, ['First warning', 'New submission warning']);
 });
