@@ -8,8 +8,8 @@
  *     for original in HtmlFormatter(style=style).get_style_defs(root).splitlines():
  *         if not original.startswith(root):
  *             continue
- *         line = re.sub(r"background(?:-color)?:\\s*[^;}]+;?\\s*", "", original)
- *         if not re.search(r"\\{\\s*\\}", line):
+ *         line = re.sub(r"background(?:-color)?:\s*[^;}]+;?\s*", "", original)
+ *         if not re.search(r"\{\s*\}", line):
  *             print(line)
  * PY
  */
