@@ -122,7 +122,6 @@
 
    /* ── Theme semantics: controls and rows ── */
    --color-control-surface: rgba(41, 37, 36, 0.56);
-   --color-control-surface-hover: var(--color-bg-hover);
    --color-control-border-hover: rgba(210, 182, 97, 0.22);
    --color-control-ring: rgba(210, 182, 97, 0.64);
    --color-control-ring-soft: var(--color-accent-surface);
@@ -253,7 +252,6 @@
    --color-action-bg-subtle-hover: rgba(87, 74, 36, 0.22);
 
    --color-control-surface: #efefeb;
-   --color-control-surface-hover: rgba(69, 68, 63, 0.10);
    --color-control-border-hover: rgba(128, 103, 25, 0.30);
    --color-control-ring: rgba(128, 103, 25, 0.54);
    --color-control-ring-soft: rgba(128, 103, 25, 0.20);

@@ -195,7 +195,7 @@
 
 .highlight {
     background: var(--color-accent-hover-strong);
-    color: var(--color-on-action);
+    color: var(--color-text-primary);
     padding: 0 0.1em;
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 2px;
