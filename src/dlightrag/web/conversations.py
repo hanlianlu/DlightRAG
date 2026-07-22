@@ -725,20 +725,16 @@ def _assign_composer_reference_ids(
     reference_ids: dict[str, str] = {}
     assigned_rows: list[dict[str, Any]] = []
     for row in rows:
-        full_doc_id = str(row.get("full_doc_id") or "")
-        if not full_doc_id.strip():
+        value = row.get("full_doc_id")
+        if not isinstance(value, str) or not value.strip():
             raise ValueError("Composer row is missing full_doc_id")
+        full_doc_id = value.strip()
         reference_id = reference_ids.get(full_doc_id)
         if reference_id is None:
             reference_id = f"att-{len(reference_ids) + 1}"
             reference_ids[full_doc_id] = reference_id
 
-        assigned_row = dict(row)
-        metadata = row.get("metadata")
-        if isinstance(metadata, dict):
-            assigned_row["metadata"] = dict(metadata)
-        assigned_row["reference_id"] = reference_id
-        assigned_rows.append(assigned_row)
+        assigned_rows.append({**row, "reference_id": reference_id})
     return assigned_rows
 
 

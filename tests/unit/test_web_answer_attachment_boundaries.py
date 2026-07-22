@@ -82,10 +82,11 @@ async def test_public_retrieve_contract_does_not_accept_documents(
 
 
 def test_apply_attachment_source_links_projects_scoped_download_url() -> None:
+    attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
     attachment = SourceReferencePayload(
         id="att-1",
         title="report.pdf",
-        source_uri="web-attachment://att-1",
+        source_uri=f"web-attachment://{attachment_id}",
         download_url=None,
         chunks=[
             ChunkSnippet(
@@ -113,7 +114,11 @@ def test_apply_attachment_source_links_projects_scoped_download_url() -> None:
 
     projected = _apply_attachment_source_links([attachment, workspace], conversation_id="conv-9")
 
-    assert projected[0].download_url == "/web/conversations/conv-9/documents/att-1"
+    assert projected[0].id == "att-1"
+    download_url = projected[0].download_url
+    assert download_url is not None
+    assert download_url == f"/web/conversations/conv-9/documents/{attachment_id}"
+    assert "att-1" not in download_url
     assert projected[0].chunks is not None
     assert projected[0].chunks[0].image_url is None
     assert projected[0].chunks[0].thumbnail_url is None

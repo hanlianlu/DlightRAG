@@ -145,6 +145,10 @@ async def test_successful_stream_commits_once_before_done() -> None:
     events = await _collect(service=service)
 
     service.commit_answer.assert_awaited_once()
+    assert service.commit_answer.await_args.kwargs["answer_sources"] == {
+        "sources": [],
+        "answer_images": [],
+    }
     done = next(event for event in events if "event: done" in event)
     assert '"conversation_saved": true' in done
 

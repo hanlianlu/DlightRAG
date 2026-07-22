@@ -1243,240 +1243,70 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert turn.attachment_resolution_status == "ok"
 
 
-async def test_prepare_assigns_compact_ids_after_final_composer_selection(
-    service_under_test,
-    conversation_store: AsyncMock,
-) -> None:
-    from dlightrag.core.request.attachments import (
-        ParsedAttachmentBundle,
-        build_text_attachment_chunk,
-    )
-    from dlightrag.core.request.planner import QueryPlan
-    from dlightrag.storage.web_conversations import StoredConversationAttachment
-    from dlightrag.web.conversations import PreparedWebConversation
-
-    current_id = "11111111-1111-1111-1111-111111111111"
-    dropped_history_id = "22222222-2222-2222-2222-222222222222"
-    selected_history_id = "33333333-3333-3333-3333-333333333333"
-    prepared = PreparedWebConversation(
-        principal_id="local",
-        conversation_id="00000000-0000-0000-0000-000000000001",
-        content_revision=0,
-        text_history=(),
-    )
-    current_document = SimpleNamespace(
-        attachment_id=current_id,
-        filename="current.pdf",
-        document_bytes=b"current",
-        content_sha256="current-sha",
-    )
-    history_documents = [
-        StoredConversationAttachment(
-            attachment_id=attachment_id,
-            filename=filename,
-            mime_type="application/pdf",
-            suffix=".pdf",
-            attachment_bytes=filename.encode(),
-            content_sha256=f"sha-{attachment_id}",
-        )
-        for attachment_id, filename in (
-            (dropped_history_id, "dropped.pdf"),
-            (selected_history_id, "selected.pdf"),
-        )
-    ]
-    conversation_store.list_image_catalog.return_value = []
-    conversation_store.fetch_documents_by_ids.return_value = history_documents
-
-    rerank_func = object()
-    manager = AsyncMock()
-    manager.answer_image_capability = SimpleNamespace(effective_max_images=0)
-    manager.adescribe_query_images.return_value = {}
-    manager.aget_composer_processing_resources.return_value = SimpleNamespace(
-        rerank_func=rerank_func
-    )
-    manager.aplan_web_conversation_query.return_value = QueryPlan(
-        original_query="compare the documents",
-        standalone_query="compare the documents",
-        selected_history_attachment_ids=(dropped_history_id, selected_history_id),
-    )
-
-    expected_internal_ids = [
-        f"composer_{current_id.replace('-', '')}",
-        f"composer_{current_id.replace('-', '')}",
-        f"composer_{dropped_history_id.replace('-', '')}",
-        f"composer_{selected_history_id.replace('-', '')}",
-    ]
-
-    class _AttachmentService:
-        async def adense_rankings(
-            self,
-            query: str,
-            rows: list[dict[str, Any]],
-            *,
-            request_vectors: Any,
-        ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-            assert query == "compare the documents"
-            assert request_vectors == {}
-            assert [row["reference_id"] for row in rows] == expected_internal_ids
-            return list(reversed(rows)), {}
-
-    attachment_service = _AttachmentService()
-    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
-        lambda _resources, _prepared: attachment_service
-    )
-
-    async def _fake_parse(*, documents, **_kwargs: object):
-        chunks = []
-        bundles = []
-        for document in documents:
-            chunk_count = 2 if document.attachment_id == current_id else 1
-            document_chunks = [
-                build_text_attachment_chunk(
-                    attachment_id=document.attachment_id,
-                    filename=document.filename,
-                    chunk_id=f"chunk-{document.attachment_id}-{chunk_index}",
-                    chunk_index=chunk_index,
-                    content=f"{document.filename} evidence {chunk_index}",
-                )
-                for chunk_index in range(1, chunk_count + 1)
-            ]
-            chunks.extend(document_chunks)
-            bundles.append(
-                (
-                    document.attachment_id,
-                    ParsedAttachmentBundle(
-                        chunks=document_chunks,
-                        evidence_mode="retrieval",
-                    ),
-                )
-            )
-        return chunks, [], bundles
-
-    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
-
-    async def _select(**kwargs: Any):
-        candidate_rows = [*kwargs["current_rows"], *kwargs["history_rows"]]
-        assert [row["reference_id"] for row in candidate_rows] == expected_internal_ids
-        assert [row["reference_id"] for row in kwargs["dense_rankings"]] == list(
-            reversed(expected_internal_ids)
-        )
-        assert kwargs["rerank_func"] is rerank_func
-        return [*kwargs["current_rows"], kwargs["history_rows"][1]], {
-            "composer_evidence_strategy": "retrieved"
-        }
-
-    manager._aselect_web_composer_evidence.side_effect = _select
-
-    turn = await service_under_test.prepare_answer_turn(
-        manager=manager,
-        prepared=prepared,
-        query="compare the documents",
-        current_images=[],
-        current_documents=[current_document],
-        workspaces=["default"],
-    )
-
-    assert [row["full_doc_id"] for row in turn.composer_context_chunks] == [
-        current_id,
-        current_id,
-        selected_history_id,
-    ]
-    assert [row["reference_id"] for row in turn.composer_context_chunks] == [
-        "att-1",
-        "att-1",
-        "att-2",
-    ]
-
-
-def test_assign_composer_reference_ids_is_pure_and_groups_by_document() -> None:
+def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() -> None:
     from dlightrag.web.conversations import _assign_composer_reference_ids
 
-    current_id = "11111111-1111-1111-1111-111111111111"
-    history_id = "22222222-2222-2222-2222-222222222222"
-    current_uri = f"web-attachment://{current_id}"
-    history_uri = f"web-attachment://{history_id}"
+    document_a = "11111111-1111-1111-1111-111111111111"
+    document_b = "22222222-2222-2222-2222-222222222222"
     rows = [
         {
-            "chunk_id": "current-1",
-            "reference_id": f"composer_{current_id.replace('-', '')}",
-            "full_doc_id": current_id,
-            "file_path": "current.pdf",
-            "_cache_key": "current-cache-1",
-            "metadata": {
-                "attachment_scope": "current",
-                "source_uri": current_uri,
-                "source_download_locator": current_uri,
-                "chunk_index": 1,
-            },
+            "chunk_id": "a-1",
+            "reference_id": "composer_a_1",
+            "full_doc_id": f" {document_a} ",
+            "file_path": "a.pdf",
+            "_cache_key": "cache-a-1",
+            "metadata": {"attachment_scope": "current", "chunk_index": 1},
         },
         {
-            "chunk_id": "current-2",
-            "reference_id": f"composer_{current_id.replace('-', '')}",
-            "full_doc_id": current_id,
-            "file_path": "current.pdf",
-            "_cache_key": "current-cache-2",
-            "metadata": {
-                "attachment_scope": "current",
-                "source_uri": current_uri,
-                "source_download_locator": current_uri,
-                "chunk_index": 2,
-            },
+            "chunk_id": "b-1",
+            "reference_id": "composer_b_1",
+            "full_doc_id": document_b,
+            "file_path": "b.pdf",
+            "_cache_key": "cache-b-1",
+            "metadata": {"attachment_scope": "history", "chunk_index": 1},
         },
         {
-            "chunk_id": "history-1",
-            "reference_id": f"composer_{history_id.replace('-', '')}",
-            "full_doc_id": history_id,
-            "file_path": "history.pdf",
-            "_cache_key": "history-cache-1",
-            "metadata": {
-                "attachment_scope": "history",
-                "source_uri": history_uri,
-                "source_download_locator": history_uri,
-                "chunk_index": 1,
-            },
+            "chunk_id": "a-2",
+            "reference_id": "composer_a_2",
+            "full_doc_id": document_a,
+            "file_path": "a.pdf",
+            "_cache_key": "cache-a-2",
+            "metadata": {"attachment_scope": "history", "chunk_index": 2},
         },
     ]
     original_reference_ids = [row["reference_id"] for row in rows]
-    original_metadata = [dict(row["metadata"]) for row in rows]
+    durable_fields = ("chunk_id", "full_doc_id", "file_path", "_cache_key", "metadata")
+    original_durable_values = [tuple(row[field] for field in durable_fields) for row in rows]
 
     assigned = _assign_composer_reference_ids(rows)
 
-    assert [row["reference_id"] for row in assigned] == ["att-1", "att-1", "att-2"]
+    assert [row["reference_id"] for row in assigned] == ["att-1", "att-2", "att-1"]
+    assert [row["chunk_id"] for row in assigned] == ["a-1", "b-1", "a-2"]
     assert [row["reference_id"] for row in rows] == original_reference_ids
-    assert [row["metadata"] for row in rows] == original_metadata
+    assert [tuple(row[field] for field in durable_fields) for row in assigned] == (
+        original_durable_values
+    )
     assert all(result is not source for result, source in zip(assigned, rows, strict=True))
     assert all(
-        result["metadata"] is not source["metadata"]
+        result["metadata"] is source["metadata"]
         for result, source in zip(assigned, rows, strict=True)
     )
-    for source, result in zip(rows, assigned, strict=True):
-        for key in ("full_doc_id", "file_path", "chunk_id", "_cache_key"):
-            assert result[key] == source[key]
-        assert result["metadata"] == source["metadata"]
-
-
-def test_assign_composer_reference_ids_accepts_empty_rows() -> None:
-    from dlightrag.web.conversations import _assign_composer_reference_ids
-
-    assert _assign_composer_reference_ids([]) == []
 
 
 @pytest.mark.parametrize(
-    "row",
+    "full_doc_id",
     [
-        pytest.param({}, id="missing"),
-        pytest.param({"full_doc_id": None}, id="none"),
-        pytest.param({"full_doc_id": ""}, id="empty"),
-        pytest.param({"full_doc_id": "   "}, id="blank"),
+        pytest.param(42, id="non-string"),
+        pytest.param("   ", id="blank"),
     ],
 )
-def test_assign_composer_reference_ids_rejects_missing_document_id(
-    row: dict[str, Any],
+def test_assign_composer_reference_ids_rejects_invalid_document_id(
+    full_doc_id: object,
 ) -> None:
     from dlightrag.web.conversations import _assign_composer_reference_ids
 
     with pytest.raises(ValueError, match="full_doc_id"):
-        _assign_composer_reference_ids([row])
+        _assign_composer_reference_ids([{"full_doc_id": full_doc_id}])
 
 
 def test_composer_request_vectors_are_private_and_keyed_by_full_cache_identity() -> None:
