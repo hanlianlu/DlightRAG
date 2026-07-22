@@ -34,7 +34,7 @@ class TestFinalizeAnswer:
         assert source.document_id == attachment_id
         assert source.source_uri == f"web-attachment://{attachment_id}"
 
-    def test_composer_document_level_reference_cites_all_attachment_chunks(self) -> None:
+    def test_legacy_composer_reference_cites_all_attachment_chunks(self) -> None:
         from dlightrag.citations.finalization import finalize_answer
 
         attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"

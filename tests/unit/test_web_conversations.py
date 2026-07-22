@@ -1166,9 +1166,7 @@ async def test_prepare_answer_turn_merges_current_document_context(
 
     async def _select(**kwargs: Any):
         assert kwargs["dense_rankings"] == []
-        assert [row["reference_id"] for row in kwargs["current_rows"]] == [
-            f"composer_{document.attachment_id.replace('-', '')}"
-        ]
+        assert [row["reference_id"] for row in kwargs["current_rows"]] == [document.attachment_id]
         return kwargs["current_rows"], {"composer_evidence_strategy": "full"}
 
     manager._aselect_web_composer_evidence.side_effect = _select
@@ -1251,7 +1249,7 @@ def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() 
     rows = [
         {
             "chunk_id": "a-1",
-            "reference_id": "composer_a_1",
+            "reference_id": document_a,
             "full_doc_id": f" {document_a} ",
             "file_path": "a.pdf",
             "_cache_key": "cache-a-1",
@@ -1259,7 +1257,7 @@ def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() 
         },
         {
             "chunk_id": "b-1",
-            "reference_id": "composer_b_1",
+            "reference_id": document_b,
             "full_doc_id": document_b,
             "file_path": "b.pdf",
             "_cache_key": "cache-b-1",
@@ -1267,7 +1265,7 @@ def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() 
         },
         {
             "chunk_id": "a-2",
-            "reference_id": "composer_a_2",
+            "reference_id": document_a,
             "full_doc_id": document_a,
             "file_path": "a.pdf",
             "_cache_key": "cache-a-2",
@@ -1492,9 +1490,12 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         content_revision=0,
         text_history=(),
     )
-    selected_ids = ("att-a", "att-b", "att-missing")
+    document_a_id = "11111111-1111-1111-1111-111111111111"
+    document_b_id = "22222222-2222-2222-2222-222222222222"
+    missing_document_id = "33333333-3333-3333-3333-333333333333"
+    selected_ids = (document_a_id, document_b_id, missing_document_id)
     document_a = StoredConversationAttachment(
-        attachment_id="att-a",
+        attachment_id=document_a_id,
         filename="a.pdf",
         mime_type="application/pdf",
         suffix=".pdf",
@@ -1502,7 +1503,7 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         content_sha256="sha-a",
     )
     document_b = StoredConversationAttachment(
-        attachment_id="att-b",
+        attachment_id=document_b_id,
         filename="b.pdf",
         mime_type="application/pdf",
         suffix=".pdf",
@@ -1525,8 +1526,8 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         assert kwargs["dense_rankings"] == []
         assert kwargs["retrieval_attachment_ids"] == set()
         assert [row["reference_id"] for row in kwargs["history_rows"]] == [
-            "composer_atta",
-            "composer_attb",
+            document_a_id,
+            document_b_id,
         ]
         return kwargs["history_rows"], {"composer_evidence_strategy": "full"}
 
@@ -1579,10 +1580,10 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         workspaces=["default"],
     )
 
-    assert parsed_order == ["att-a", "att-b"]
+    assert parsed_order == [document_a_id, document_b_id]
     assert [row["full_doc_id"] for row in turn.composer_context_chunks] == [
-        "att-a",
-        "att-b",
+        document_a_id,
+        document_b_id,
     ]
     assert [row["reference_id"] for row in turn.composer_context_chunks] == [
         "att-1",

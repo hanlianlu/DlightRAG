@@ -224,6 +224,7 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
             assert query == "standalone"
             assert request_vectors == {}
             assert [row["full_doc_id"] for row in rows] == [_ID, history_id]
+            assert [row["reference_id"] for row in rows] == [_ID, history_id]
             dense_calls.append(rows)
             dense_rankings.extend(reversed(rows))
             return (
@@ -280,6 +281,8 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
         events.append("selector")
         assert [row["full_doc_id"] for row in kwargs["current_rows"]] == [_ID]
         assert [row["full_doc_id"] for row in kwargs["history_rows"]] == [history_id]
+        assert [row["reference_id"] for row in kwargs["current_rows"]] == [_ID]
+        assert [row["reference_id"] for row in kwargs["history_rows"]] == [history_id]
         assert kwargs["dense_rankings"] is dense_rankings
         assert kwargs["retrieval_attachment_ids"] == {_ID, history_id}
         assert kwargs["rerank_func"] is rerank_func
@@ -310,6 +313,7 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
     assert events == ["parse-current", "parse-history", "dense", "selector"]
     assert len(dense_calls) == 1
     assert [row["full_doc_id"] for row in turn.composer_context_chunks] == [_ID, history_id]
+    assert [row["reference_id"] for row in turn.composer_context_chunks] == ["att-1", "att-2"]
     assert turn.composer_evidence_trace["composer_dense_status"] == "ranked"
 
 

@@ -1116,10 +1116,11 @@ class TestWebAnswerAdapter:
     @pytest.mark.parametrize(
         ("source_id", "citation_ref"),
         [
-            ("att-1", "att-1-1"),
-            (
+            pytest.param("att-1", "att-1-1", id="compact-attachment"),
+            pytest.param(
                 "composer_98ec1e3a1187454b8929743bd5bc7d4b",
                 "composer_98ec1e3a1187454b8929743bd5bc7d4b-1",
+                id="legacy-composer-stored-snapshot",
             ),
         ],
     )

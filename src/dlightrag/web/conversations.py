@@ -707,7 +707,6 @@ def _composer_context_rows(
     rows: list[dict[str, Any]] = []
     for chunk in chunks:
         row = chunk.to_context_row()
-        row["reference_id"] = f"composer_{chunk.attachment_id.replace('-', '').lower()}"
         row["metadata"] = {
             **(row.get("metadata") or {}),
             "attachment_scope": scope,
