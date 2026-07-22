@@ -725,9 +725,9 @@ def _assign_composer_reference_ids(
     assigned_rows: list[dict[str, Any]] = []
     for row in rows:
         value = row.get("full_doc_id")
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str) or not value or value != value.strip():
             raise ValueError("Composer row is missing full_doc_id")
-        full_doc_id = value.strip()
+        full_doc_id = value
         reference_id = reference_ids.get(full_doc_id)
         if reference_id is None:
             reference_id = f"att-{len(reference_ids) + 1}"

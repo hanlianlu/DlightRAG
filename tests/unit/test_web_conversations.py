@@ -1241,7 +1241,7 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert turn.attachment_resolution_status == "ok"
 
 
-def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() -> None:
+def test_assign_composer_reference_ids_preserves_rows_and_groups_ids() -> None:
     from dlightrag.web.conversations import _assign_composer_reference_ids
 
     document_a = "11111111-1111-1111-1111-111111111111"
@@ -1250,7 +1250,7 @@ def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() 
         {
             "chunk_id": "a-1",
             "reference_id": document_a,
-            "full_doc_id": f" {document_a} ",
+            "full_doc_id": document_a,
             "file_path": "a.pdf",
             "_cache_key": "cache-a-1",
             "metadata": {"attachment_scope": "current", "chunk_index": 1},
@@ -1292,6 +1292,7 @@ def test_assign_composer_reference_ids_preserves_rows_and_groups_stripped_ids() 
     [
         pytest.param(42, id="non-string"),
         pytest.param("   ", id="blank"),
+        pytest.param(" 11111111-1111-1111-1111-111111111111 ", id="whitespace"),
     ],
 )
 def test_assign_composer_reference_ids_rejects_invalid_document_id(
