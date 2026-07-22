@@ -55,7 +55,7 @@ async def api_client(_retrieve_app: FastAPI) -> Any:
 async def test_public_retrieve_contract_does_not_accept_documents(
     api_client: AsyncClient,
 ) -> None:
-    """The public retrieve contract must reject or ignore Composer document inputs.
+    """The public retrieve contract must reject Composer document inputs.
 
     ``RetrieveRequest`` forbids extra fields, so a ``documents`` payload is
     rejected with 422 and the Web Composer document pipeline is never reachable
@@ -66,14 +66,7 @@ async def test_public_retrieve_contract_does_not_accept_documents(
         json={"query": "hello", "documents": [{"filename": "report.pdf"}]},
     )
 
-    assert response.status_code in {200, 422}
-    if response.status_code == 200:
-        payload = response.json()
-        assert "documents" not in payload
-        assert all(
-            (chunk.get("metadata") or {}).get("source_type") != "web_attachment"
-            for chunk in payload.get("contexts", {}).get("chunks", [])
-        )
+    assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------

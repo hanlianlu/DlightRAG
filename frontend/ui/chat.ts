@@ -6,7 +6,6 @@ import {getPendingImageData} from './images.ts';
 import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
 import {showToast} from './toast.ts';
 import {streamSSE} from '../lib/sse.ts';
-import {createAnswerWarningHandler} from '../lib/errors.ts';
 import {
     createAnswerRenderer,
     createChatTurn,
@@ -145,6 +144,11 @@ export async function submitQuery(query: string): Promise<void> {
             return;
         }
         const submissionId = pendingSubmissionStore.getOrCreate(conversationId, fingerprint);
+        const onWarning = (message: string): void => {
+            if (pendingSubmissionStore.claimWarningDelivery(conversationId, submissionId)) {
+                showToast(message, 5000);
+            }
+        };
         const {body: requestBody, headers: requestHeaders} = buildAnswerRequestBody({
             query,
             images: imageData,
@@ -154,7 +158,6 @@ export async function submitQuery(query: string): Promise<void> {
             documents: documentFiles,
         });
         clearAttachments();
-        const onWarning = createAnswerWarningHandler((message) => showToast(message, 5000));
         for (let attempt = 0; attempt < 2; attempt += 1) {
             try {
                 const response = await fetch('/web/answer', {

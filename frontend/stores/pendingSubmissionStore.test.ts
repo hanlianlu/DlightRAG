@@ -20,6 +20,41 @@ test('unchanged retry reuses its key while changed payload invalidates it', () =
   assert.equal(store.getOrCreate('conversation-1', 'fingerprint-b'), 'submission-2');
 });
 
+test('warning delivery can be claimed once across unchanged retries', () => {
+  const store = new PendingSubmissionStore(() => 'submission-1');
+  const submissionId = store.getOrCreate('conversation-1', 'fingerprint-a');
+
+  assert.equal(store.claimWarningDelivery('conversation-1', submissionId), true);
+  assert.equal(store.getOrCreate('conversation-1', 'fingerprint-a'), submissionId);
+  assert.equal(store.claimWarningDelivery('conversation-1', submissionId), false);
+});
+
+test('wrong or stale submission IDs cannot claim warning delivery', () => {
+  const ids = ['submission-1', 'submission-2'];
+  const store = new PendingSubmissionStore(() => ids.shift()!);
+  const staleSubmissionId = store.getOrCreate('conversation-1', 'fingerprint-a');
+
+  assert.equal(store.claimWarningDelivery('conversation-1', 'wrong-submission'), false);
+  const currentSubmissionId = store.getOrCreate('conversation-1', 'fingerprint-b');
+  assert.equal(store.claimWarningDelivery('conversation-1', staleSubmissionId), false);
+  assert.equal(store.claimWarningDelivery('conversation-1', currentSubmissionId), true);
+});
+
+test('new payload and clear reset warning delivery for the next submission', () => {
+  const ids = ['submission-1', 'submission-2', 'submission-3'];
+  const store = new PendingSubmissionStore(() => ids.shift()!);
+  const firstSubmissionId = store.getOrCreate('conversation-1', 'fingerprint-a');
+
+  assert.equal(store.claimWarningDelivery('conversation-1', firstSubmissionId), true);
+  const changedSubmissionId = store.getOrCreate('conversation-1', 'fingerprint-b');
+  assert.equal(store.claimWarningDelivery('conversation-1', changedSubmissionId), true);
+
+  store.clear('conversation-1');
+  assert.equal(store.claimWarningDelivery('conversation-1', changedSubmissionId), false);
+  const recreatedSubmissionId = store.getOrCreate('conversation-1', 'fingerprint-b');
+  assert.equal(store.claimWarningDelivery('conversation-1', recreatedSubmissionId), true);
+});
+
 test('pending keys are scoped by conversation and clear explicitly', () => {
   let next = 0;
   const store = new PendingSubmissionStore(() => `submission-${++next}`);

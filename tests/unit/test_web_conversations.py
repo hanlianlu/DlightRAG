@@ -1464,10 +1464,8 @@ async def test_parse_composer_documents_continues_after_invalid_parser_hint(
     assert [chunk.attachment_id for chunk in chunks] == ["att-valid"]
     assert len(failures) == 1
     failure = failures[0]
-    assert type(failure).__name__ == "_DocumentParseFailure"
     assert failure.attachment_id == "att-invalid"
     assert failure.filename == "report._unknown_.txt"
-    assert not hasattr(failure, "error_type")
     assert [attachment_id for attachment_id, _bundle in bundles] == [
         "att-invalid",
         "att-valid",

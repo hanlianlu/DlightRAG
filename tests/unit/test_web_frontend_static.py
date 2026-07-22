@@ -38,6 +38,9 @@ def test_web_answer_frontend_has_no_legacy_session_or_history_payload() -> None:
     assert submission_key < request_body < retry_loop
     assert "body: requestBody" in chat_source[retry_loop:]
     assert "pendingSubmissionStore.getOrCreate" in chat_source
+    assert (
+        "pendingSubmissionStore.claimWarningDelivery(conversationId, submissionId)" in chat_source
+    )
     assert "pendingSubmissionStore.clear" in chat_source
     pending_source = (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(encoding="utf-8")
     assert "commit_outcome_unknown" not in pending_source

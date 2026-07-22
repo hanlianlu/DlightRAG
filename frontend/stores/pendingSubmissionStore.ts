@@ -14,6 +14,7 @@ export interface ConversationSavePresentation {
 interface PendingSubmission {
   submissionId: string;
   payloadFingerprint: string;
+  warningDelivered: boolean;
 }
 
 const DEFINITIVE_NON_COMMIT_REASONS = new Set([
@@ -35,8 +36,19 @@ export class PendingSubmissionStore {
     if (existing?.payloadFingerprint === payloadFingerprint) return existing.submissionId;
 
     const submissionId = this.createId();
-    this.pending.set(conversationId, {submissionId, payloadFingerprint});
+    this.pending.set(conversationId, {
+      submissionId,
+      payloadFingerprint,
+      warningDelivered: false,
+    });
     return submissionId;
+  }
+
+  claimWarningDelivery(conversationId: string, submissionId: string): boolean {
+    const pending = this.pending.get(conversationId);
+    if (!pending || pending.submissionId !== submissionId || pending.warningDelivered) return false;
+    pending.warningDelivered = true;
+    return true;
   }
 
   clear(conversationId: string): void {
