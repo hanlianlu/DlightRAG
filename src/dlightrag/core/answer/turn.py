@@ -9,6 +9,18 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from dlightrag.core.request.planner import QueryPlan
 
+HISTORICAL_DOCUMENT_UNAVAILABLE = "HISTORICAL_DOCUMENT_UNAVAILABLE"
+HISTORICAL_DOCUMENT_PARSE_FAILED = "HISTORICAL_DOCUMENT_PARSE_FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentWarning:
+    """Public request-local warning for a historical document."""
+
+    code: str
+    filename: str
+    message: str
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedAnswerTurn:
@@ -40,7 +52,7 @@ class PreparedAnswerTurn:
     current_attachment_digests: dict[str, str] = field(default_factory=dict)
     history_attachment_catalog_count: int = 0
     history_attachments_selected: int = 0
-    attachment_resolution_status: str = "ok"
+    document_warnings: tuple[DocumentWarning, ...] = ()
 
     @classmethod
     def stateless(
@@ -64,4 +76,9 @@ class PreparedAnswerTurn:
         )
 
 
-__all__ = ["PreparedAnswerTurn"]
+__all__ = [
+    "HISTORICAL_DOCUMENT_PARSE_FAILED",
+    "HISTORICAL_DOCUMENT_UNAVAILABLE",
+    "DocumentWarning",
+    "PreparedAnswerTurn",
+]

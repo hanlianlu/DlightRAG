@@ -35,6 +35,7 @@ from dlightrag.web.events import (
     AnswerMetaEvent,
     AnswerProgressEvent,
     AnswerTraceEvent,
+    AnswerWarningEvent,
 )
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
@@ -377,6 +378,16 @@ async def _emit_answer_events(
         )
         if observation is not None:
             observation.update(metadata=_capability_metrics(manager, turn))
+
+        for warning in turn.document_warnings:
+            yield sse_event(
+                "warning",
+                AnswerWarningEvent(
+                    code=warning.code,
+                    filename=warning.filename,
+                    message=warning.message,
+                ),
+            )
 
         yield sse_event("progress", AnswerProgressEvent(phase="searching"))
 

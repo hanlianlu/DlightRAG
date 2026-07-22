@@ -3,7 +3,7 @@
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
 import {createDocumentChip} from './document_chip.ts';
-import {answerErrorMessage} from './errors.ts';
+import {answerErrorMessage, notifyAnswerWarning} from './errors.ts';
 import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
 import {parseData} from './sse.ts';
 import chatStyles from '../styles/chat.module.css';
@@ -34,6 +34,10 @@ export interface DonePayload {
   conversation_saved?: boolean;
   conversation_save_reason?: string | null;
   conversation?: ConversationSummary | null;
+}
+
+export interface AnswerRendererOptions {
+  onWarning?: (message: string) => void;
 }
 
 interface ProgressPayload {
@@ -306,7 +310,7 @@ export function setAnswerError(turn: ChatTurn, message: unknown): void {
   turn.contentDiv.classList.add(chatStyles.textError);
 }
 
-export function createAnswerRenderer(turn: ChatTurn) {
+export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOptions = {}) {
   let fullAnswer = '';
   let failed = false;
   let saveOutcome: DonePayload | null = null;
@@ -435,6 +439,9 @@ export function createAnswerRenderer(turn: ChatTurn) {
       else if (eventType === 'done') handleDone(data);
       else if (eventType === 'highlights') handleHighlights(data);
       else if (eventType === 'progress') handleProgress(data);
+      else if (eventType === 'warning') {
+        notifyAnswerWarning(parseData(data), options.onWarning);
+      }
       else if (eventType === 'error') {
         failed = true;
         setAnswerError(turn, answerErrorMessage(parseData(data)));

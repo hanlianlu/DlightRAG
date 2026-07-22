@@ -4,6 +4,7 @@ import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {getPendingImageData} from './images.ts';
 import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
+import {showToast} from './toast.ts';
 import {streamSSE} from '../lib/sse.ts';
 import {
     createAnswerRenderer,
@@ -167,7 +168,11 @@ export async function submitQuery(query: string): Promise<void> {
                     return;
                 }
 
-                const activeRenderer = createAnswerRenderer(turn);
+                const activeRenderer = createAnswerRenderer(turn, {
+                    onWarning(message: string): void {
+                        showToast(message, 5000);
+                    },
+                });
                 await streamSSE(response, function(eventType, data) {
                     armIdleTimeout();
                     if (conversationStore.activeConversationId !== conversationId) return;

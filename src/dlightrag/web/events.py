@@ -34,6 +34,12 @@ class AnswerTraceEvent(ClientContractModel):
     trace: dict[str, Any]
 
 
+class AnswerWarningEvent(ClientContractModel):
+    code: str
+    filename: str
+    message: str
+
+
 class AnswerErrorEvent(ClientContractModel):
     message: str
     error_kind: str
@@ -45,4 +51,5 @@ __all__ = [
     "AnswerMetaEvent",
     "AnswerProgressEvent",
     "AnswerTraceEvent",
+    "AnswerWarningEvent",
 ]

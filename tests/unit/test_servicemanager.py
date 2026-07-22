@@ -362,8 +362,8 @@ def test_stateless_turn_carries_no_web_composer_context() -> None:
     turn = answer_turn.PreparedAnswerTurn.stateless("q")
     assert turn.composer_context_chunks == ()
     assert turn.composer_evidence_trace == {}
+    assert turn.document_warnings == ()
     assert turn.web_composer_visuals is False
-    assert turn.attachment_resolution_status == "ok"
 
 
 async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:

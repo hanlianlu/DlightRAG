@@ -21,7 +21,11 @@ from dlightrag.core.answer.errors import (
     CurrentDocumentParseError,
     CurrentImagePayloadError,
 )
-from dlightrag.core.answer.turn import PreparedAnswerTurn
+from dlightrag.core.answer.turn import (
+    HISTORICAL_DOCUMENT_PARSE_FAILED,
+    DocumentWarning,
+    PreparedAnswerTurn,
+)
 from dlightrag.core.request.planner import QueryPlan
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.answer_events import stream_answer_events
@@ -245,6 +249,75 @@ async def test_successful_stream_commits_once_before_done() -> None:
     assert "att-1" not in source["download_url"]
     done = next(event for event in events if "event: done" in event)
     assert '"conversation_saved": true' in done
+
+
+async def test_historical_document_warning_precedes_search_and_does_not_persist() -> None:
+    service = AsyncMock()
+    warning = DocumentWarning(
+        code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+        filename="history-report.pdf",
+        message=("Could not read history-report.pdf. The answer will continue without it."),
+    )
+    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
+        current_query="summarize that report",
+        retrieval_query="summarize the prior report",
+        document_warnings=(warning,),
+    )
+    service.commit_answer.return_value = CommitTurnResult(
+        saved=True,
+        reason=None,
+        summary=None,
+        turn_id="turn-id",
+    )
+    answer_stream_prepared = AsyncMock(
+        return_value=({"chunks": []}, _tokens(("Answer without the report",)))
+    )
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        _aanswer_stream_prepared=answer_stream_prepared,
+    )
+    prepared = PreparedWebConversation(
+        principal_id="a" * 64,
+        conversation_id="11111111-1111-4111-8111-111111111111",
+        content_revision=2,
+        text_history=(),
+    )
+
+    events = [
+        event
+        async for event in stream_answer_events(
+            manager=manager,
+            cfg=SimpleNamespace(
+                citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))
+            ),
+            query="summarize that report",
+            workspaces=["default"],
+            workspace="default",
+            conversation_service=service,
+            prepared_conversation=prepared,
+            validated_images=(),
+            submission_id="22222222-2222-4222-8222-222222222222",
+        )
+    ]
+
+    event_names = [event.splitlines()[0] for event in events]
+    planning_index = event_names.index("event: progress")
+    warning_index = event_names.index("event: warning")
+    searching_index = event_names.index("event: progress", planning_index + 1)
+    generating_index = event_names.index("event: progress", searching_index + 1)
+    done_index = event_names.index("event: done")
+    assert planning_index < warning_index < searching_index < generating_index < done_index
+    warning_payload = json.loads(events[warning_index].split("data: ", 1)[1])
+    assert warning_payload == {
+        "code": HISTORICAL_DOCUMENT_PARSE_FAILED,
+        "filename": "history-report.pdf",
+        "message": warning.message,
+    }
+    answer_stream_prepared.assert_awaited_once()
+    service.commit_answer.assert_awaited_once()
+    answer_sources = service.commit_answer.await_args.kwargs["answer_sources"]
+    assert "warning" not in json.dumps(answer_sources).lower()
+    assert HISTORICAL_DOCUMENT_PARSE_FAILED not in json.dumps(answer_sources)
 
 
 async def test_revision_conflict_is_visible_and_not_appended() -> None:

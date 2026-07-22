@@ -17,3 +17,16 @@ export function answerErrorMessage(
               : undefined;
     return typeof message === 'string' && message.trim() ? message : fallback;
 }
+
+export function notifyAnswerWarning(
+    payload: unknown,
+    onWarning: ((message: string) => void) | undefined,
+): void {
+    if (!onWarning) return;
+    onWarning(
+        answerErrorMessage(
+            payload,
+            'A document could not be used. The answer will continue without it.',
+        ),
+    );
+}

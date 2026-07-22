@@ -1117,7 +1117,6 @@ async def test_prepare_answer_turn_passes_documents_to_web_planner(
     manager.aplan_web_conversation_query.assert_awaited_once()
     manager.aplan_query.assert_not_awaited()
     assert turn.composer_context_chunks == ()
-    assert turn.attachment_resolution_status == "ok"
 
 
 async def test_prepare_answer_turn_merges_current_document_context(
@@ -1238,7 +1237,6 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert processing_trace[0]["attachment_embedding_text"] == 0
     assert processing_trace[0]["attachment_embedding_fallback"] == 0
     assert processing_trace[0]["attachment_embedding_failed"] == 0
-    assert turn.attachment_resolution_status == "ok"
 
 
 def test_assign_composer_reference_ids_preserves_rows_and_groups_ids() -> None:
@@ -1407,6 +1405,10 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
 async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
     service_under_test,
 ) -> None:
+    from dlightrag.core.answer.turn import (
+        HISTORICAL_DOCUMENT_PARSE_FAILED,
+        DocumentWarning,
+    )
     from dlightrag.core.request.attachments import (
         AttachmentContextChunk,
         ParsedAttachmentBundle,
@@ -1465,12 +1467,13 @@ async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
 
     assert [chunk.attachment_id for chunk in chunks] == ["att-valid"]
     assert errors == [
-        {
-            "attachment_id": "att-invalid",
-            "filename": "report._unknown_.txt",
-            "error_type": "ValueError",
-        }
+        DocumentWarning(
+            code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+            filename="report._unknown_.txt",
+            message=("Could not read report._unknown_.txt. The answer will continue without it."),
+        )
     ]
+    assert "ValueError" not in errors[0].message
     assert [attachment_id for attachment_id, _bundle in bundles] == [
         "att-invalid",
         "att-valid",
@@ -1478,10 +1481,185 @@ async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
     assert bundles[0][1].trace["attachment_analysis_outcome"] == "degraded"
 
 
+async def test_prepare_answer_turn_warns_when_historical_document_parse_fails(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.core.answer.turn import (
+        HISTORICAL_DOCUMENT_PARSE_FAILED,
+        DocumentWarning,
+    )
+    from dlightrag.core.request.attachments import ParsedAttachmentBundle
+    from dlightrag.core.request.planner import QueryPlan
+    from dlightrag.storage.web_conversations import StoredConversationAttachment
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    document_id = "11111111-1111-1111-1111-111111111111"
+    conversation_store.list_image_catalog.return_value = []
+    conversation_store.fetch_documents_by_ids.return_value = [
+        StoredConversationAttachment(
+            attachment_id=document_id,
+            filename="history-report.pdf",
+            mime_type="application/pdf",
+            suffix=".pdf",
+            attachment_bytes=b"broken",
+            content_sha256="sha-history",
+        )
+    ]
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+        attachment_catalog=(
+            {
+                "attachment_id": document_id,
+                "filename": "history-report.pdf",
+                "parse_summary": "A prior report",
+            },
+        ),
+    )
+    manager = AsyncMock()
+    manager.answer_image_capability = SimpleNamespace(effective_max_images=0)
+    manager.adescribe_query_images.return_value = {}
+    manager.aplan_web_conversation_query.return_value = QueryPlan(
+        original_query="summarize that report",
+        standalone_query="summarize the prior report",
+        selected_history_attachment_ids=(document_id,),
+    )
+    attachment_service = AsyncMock()
+    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
+        lambda _resources, _prepared: attachment_service
+    )
+    raw_exception = "Parser exploded at /private/path/report.pdf"
+
+    async def _fake_parse(*, documents, **_kwargs: object):
+        if not documents:
+            return [], [], []
+        assert [document.attachment_id for document in documents] == [document_id]
+        return (
+            [],
+            [
+                DocumentWarning(
+                    code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+                    filename="history-report.pdf",
+                    message=(
+                        "Could not read history-report.pdf. The answer will continue without it."
+                    ),
+                )
+            ],
+            [
+                (
+                    document_id,
+                    ParsedAttachmentBundle(
+                        chunks=[],
+                        trace={"attachment_parse_error": raw_exception},
+                    ),
+                )
+            ],
+        )
+
+    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
+
+    turn = await service_under_test.prepare_answer_turn(
+        manager=manager,
+        prepared=prepared,
+        query="summarize that report",
+        current_images=[],
+        current_documents=[],
+        workspaces=["default"],
+    )
+
+    manager.aplan_web_conversation_query.assert_awaited_once()
+    assert turn.document_warnings == (
+        DocumentWarning(
+            code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+            filename="history-report.pdf",
+            message=("Could not read history-report.pdf. The answer will continue without it."),
+        ),
+    )
+    assert raw_exception not in repr(turn.document_warnings)
+
+
+@pytest.mark.parametrize("fetch_failure", [False, True])
+async def test_prepare_answer_turn_warns_when_historical_documents_are_unavailable(
+    service_under_test,
+    conversation_store: AsyncMock,
+    fetch_failure: bool,
+) -> None:
+    from dlightrag.core.answer.turn import (
+        HISTORICAL_DOCUMENT_UNAVAILABLE,
+        DocumentWarning,
+    )
+    from dlightrag.core.request.planner import QueryPlan
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    catalog_document_id = "11111111-1111-1111-1111-111111111111"
+    unknown_document_id = "22222222-2222-2222-2222-222222222222"
+    raw_fetch_error = "database unavailable at private.internal"
+    conversation_store.list_image_catalog.return_value = []
+    if fetch_failure:
+        conversation_store.fetch_documents_by_ids.side_effect = ConnectionError(raw_fetch_error)
+    else:
+        conversation_store.fetch_documents_by_ids.return_value = []
+    prepared = PreparedWebConversation(
+        principal_id="local",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=0,
+        text_history=(),
+        attachment_catalog=(
+            {
+                "attachment_id": catalog_document_id,
+                "filename": "archived.[draft].pdf",
+                "parse_summary": "Archived report",
+            },
+        ),
+    )
+    manager = AsyncMock()
+    manager.answer_image_capability = SimpleNamespace(effective_max_images=0)
+    manager.adescribe_query_images.return_value = {}
+    manager.aplan_web_conversation_query.return_value = QueryPlan(
+        original_query="compare those reports",
+        standalone_query="compare the archived reports",
+        selected_history_attachment_ids=(catalog_document_id, unknown_document_id),
+    )
+
+    turn = await service_under_test.prepare_answer_turn(
+        manager=manager,
+        prepared=prepared,
+        query="compare those reports",
+        current_images=[],
+        current_documents=[],
+        workspaces=["default"],
+    )
+
+    assert turn.document_warnings == (
+        DocumentWarning(
+            code=HISTORICAL_DOCUMENT_UNAVAILABLE,
+            filename="archived._draft_.pdf",
+            message=(
+                "archived._draft_.pdf is no longer available. The answer will continue without it."
+            ),
+        ),
+        DocumentWarning(
+            code=HISTORICAL_DOCUMENT_UNAVAILABLE,
+            filename="A referenced document",
+            message=(
+                "A referenced document is no longer available. The answer will continue without it."
+            ),
+        ),
+    )
+    assert catalog_document_id not in repr(turn.document_warnings)
+    assert unknown_document_id not in repr(turn.document_warnings)
+    assert raw_fetch_error not in repr(turn.document_warnings)
+    manager.aplan_web_conversation_query.assert_awaited_once()
+
+
 async def test_prepare_answer_turn_preserves_selected_history_document_order(
     service_under_test,
     conversation_store: AsyncMock,
 ) -> None:
+    from dlightrag.core.answer.turn import HISTORICAL_DOCUMENT_UNAVAILABLE
     from dlightrag.core.request.attachments import (
         ParsedAttachmentBundle,
         build_text_attachment_chunk,
@@ -1600,7 +1778,9 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         row["metadata"]["attachment_scope"] == "history" for row in turn.composer_context_chunks
     )
     assert turn.history_attachments_selected == 2
-    assert turn.attachment_resolution_status == "degraded"
+    assert len(turn.document_warnings) == 1
+    assert turn.document_warnings[0].code == HISTORICAL_DOCUMENT_UNAVAILABLE
+    assert turn.document_warnings[0].filename == "A referenced document"
 
 
 async def test_prepare_answer_turn_rejects_current_document_parse_error_before_downstream(
@@ -1610,6 +1790,10 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
     from dlightrag.core.answer.errors import (
         CURRENT_DOCUMENT_PARSE_FAILED,
         CurrentDocumentParseError,
+    )
+    from dlightrag.core.answer.turn import (
+        HISTORICAL_DOCUMENT_PARSE_FAILED,
+        DocumentWarning,
     )
     from dlightrag.core.request.planner import QueryPlan
     from dlightrag.web.attachment_models import validate_web_documents
@@ -1643,11 +1827,11 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
         return (
             [],
             [
-                {
-                    "attachment_id": document.attachment_id,
-                    "filename": document.safe_filename,
-                    "error_type": "ValueError",
-                }
+                DocumentWarning(
+                    code=HISTORICAL_DOCUMENT_PARSE_FAILED,
+                    filename=document.safe_filename,
+                    message="generic history-only warning",
+                )
             ],
             [],
         )

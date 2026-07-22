@@ -146,6 +146,23 @@ def test_history_renderer_reuses_sanitized_answer_pipeline() -> None:
     assert "Retry image" in images
 
 
+def test_answer_warning_uses_request_local_renderer_callback_and_toast() -> None:
+    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
+    chat = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
+
+    assert "export interface AnswerRendererOptions" in renderer
+    assert "options: AnswerRendererOptions = {}" in renderer
+    assert "notifyAnswerWarning(parseData(data), options.onWarning);" in renderer
+    warning_branch = renderer[
+        renderer.index("eventType === 'warning'") : renderer.index("eventType === 'error'")
+    ]
+    assert "failed = true" not in warning_branch
+    assert "from './toast.ts'" in chat
+    assert "createAnswerRenderer(turn, {" in chat
+    assert "showToast(message, 5000);" in chat
+    assert "document_warnings" not in renderer
+
+
 def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None:
     images = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
     policy = (FRONTEND_UI / "image_policy.ts").read_text(encoding="utf-8")
