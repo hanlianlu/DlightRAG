@@ -340,6 +340,10 @@ def e2e_base_url(
         return ({}, _token_stream())
 
     manager._aanswer_stream_prepared.side_effect = _mock_answer_stream
+    manager.answer_image_capability = SimpleNamespace(
+        status="supported",
+        effective_max_images=3,
+    )
     manager.alist_workspaces.return_value = MOCK_WORKSPACE_LIST
     manager.alist_workspace_records.return_value = MOCK_WORKSPACES
     manager.alist_ingested_files.return_value = []

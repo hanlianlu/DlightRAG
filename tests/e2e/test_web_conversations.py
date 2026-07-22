@@ -422,6 +422,24 @@ def test_escape_closes_files_workspace_popover_without_closing_panel(page: Page)
 
 
 @pytest.mark.e2e
+def test_composer_attachment_picker_keeps_files_panel_open(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.locator("#upload-zone").wait_for()
+
+    panel = page.locator("#panel")
+    with page.expect_file_chooser() as chooser_info:
+        page.get_by_role("button", name="Attach files").click()
+    chooser_info.value.set_files([])
+
+    assert panel.evaluate("element => element.classList.contains('open')") is True
+    assert panel.get_attribute("data-panel-kind") == "files"
+
+
+@pytest.mark.e2e
 @pytest.mark.parametrize("viewport", [(900, 800), (390, 844)])
 def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     page: Page, viewport: tuple[int, int]

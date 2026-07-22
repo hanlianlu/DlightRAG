@@ -125,6 +125,38 @@ def _inject_answer_with_sources(page) -> None:
     )
 
 
+def _inject_static_source_answer(page) -> None:
+    page.evaluate(
+        r"""
+        () => {
+          const aiMessageClass = Array.from(document.styleSheets)
+            .flatMap((sheet) => Array.from(sheet.cssRules))
+            .flatMap((rule) => Array.from(rule.selectorText?.matchAll(/\.([\w-]*aiMessage[\w-]*)/g) ?? []))
+            .map((match) => match[1])
+            .find((className) => !className.includes('Content') && !className.includes('Header'));
+          if (!aiMessageClass) throw new Error('AI message class not found');
+          const answer = document.createElement('div');
+          answer.className = aiMessageClass;
+          answer.innerHTML = `
+            <div class="source-data hidden">
+              <div class="source-doc" data-ref="1">
+                <div class="source-doc-chunks" hidden>
+                  <div class="source-chunk" data-ref="1" data-chunk="1">
+                    <div class="source-chunk-content">Evidence text</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div data-action="open-ref-source" data-ref="1" role="button" tabindex="0">
+              Open report.pdf
+            </div>
+          `;
+          document.querySelector('#chat-messages')?.appendChild(answer);
+        }
+        """
+    )
+
+
 @pytest.mark.e2e
 def test_reference_item_keyboard_opens_source_panel(page):
     """Keyboard activation on a reference item opens its expanded source."""
@@ -137,6 +169,29 @@ def test_reference_item_keyboard_opens_source_panel(page):
     assert page.locator("#panel-title").text_content() == "Sources"
     assert page.locator("#panel-content .source-chunk-content").text_content() == "Evidence text"
     assert "Wrong decoy" not in page.locator("#panel-content").text_content()
+
+
+@pytest.mark.e2e
+def test_composer_attachment_picker_keeps_sources_panel_open(page):
+    _open_ready_page(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _inject_static_source_answer(page)
+    page.get_by_role("button", name="Open report.pdf").click()
+
+    panel = page.locator("#panel")
+    page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
+    with page.expect_file_chooser() as chooser_info:
+        page.get_by_role("button", name="Attach files").click()
+    chooser_info.value.set_files(
+        {
+            "name": "notes.pdf",
+            "mimeType": "application/pdf",
+            "buffer": b"%PDF-1.4 selected attachment",
+        }
+    )
+
+    assert panel.evaluate("element => element.classList.contains('open')") is True
+    assert panel.get_attribute("data-panel-kind") == "sources"
 
 
 @pytest.mark.e2e
