@@ -5,8 +5,8 @@ import { bus, type DlightragEvents } from '../events/bus.ts';
 export abstract class Store {
   protected emit<E extends keyof DlightragEvents>(
     event: E,
-    payload: DlightragEvents[E],
+    ...payload: Parameters<DlightragEvents[E]>
   ): void {
-    (bus.emit as (event: string, payload: unknown) => void)(event as string, payload);
+    bus.emit(event, ...payload);
   }
 }

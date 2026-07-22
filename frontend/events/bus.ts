@@ -10,17 +10,17 @@ export interface WorkspaceRecord {
 }
 
 export interface DlightragEvents {
-  workspaceCreated: { workspace: string; displayName: string };
-  workspaceDeleted: { workspace: string; nextWorkspace: string };
-  workspaceToggled: { workspaces: readonly string[] };
-  ingestWorkspaceChanged: { workspace: string };
-  conversationListChanged: { conversations: readonly ConversationSummary[] };
-  conversationSelected: { conversationId: string | null };
-  conversationHistoryChanged: { history: ConversationHistory };
-  conversationAnswerSaved: { conversationId: string };
-  conversationSaveCheckRequested: { conversationId: string };
-  conversationDeferredSelectionReady: { conversationId: string };
-  conversationStreamChanged: { active: boolean };
+  workspaceCreated: (payload: { workspace: string; displayName: string }) => void;
+  workspaceDeleted: (payload: { workspace: string; nextWorkspace: string }) => void;
+  workspaceToggled: (payload: { workspaces: readonly string[] }) => void;
+  ingestWorkspaceChanged: (payload: { workspace: string }) => void;
+  conversationListChanged: (payload: { conversations: readonly ConversationSummary[] }) => void;
+  conversationSelected: (payload: { conversationId: string | null }) => void;
+  conversationHistoryChanged: (payload: { history: ConversationHistory }) => void;
+  conversationAnswerSaved: (payload: { conversationId: string }) => void;
+  conversationSaveCheckRequested: (payload: { conversationId: string }) => void;
+  conversationDeferredSelectionReady: (payload: { conversationId: string }) => void;
+  conversationStreamChanged: (payload: { active: boolean }) => void;
 }
 
 export const bus: Emitter<DlightragEvents> = createNanoEvents<DlightragEvents>();

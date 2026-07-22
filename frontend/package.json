@@ -11,14 +11,14 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "stylelint": "^17.14.0",
+    "stylelint": "^17.14.1",
     "stylelint-config-standard": "^40.0.0",
     "typescript": "^7.0.2",
-    "vite": "^8.1.4"
+    "vite": "^8.1.5"
   },
   "dependencies": {
-    "dompurify": "^3.4.11",
+    "dompurify": "^3.4.12",
     "htmx.org": "^2.0.10",
-    "nanoevents": "^9.1.0"
+    "nanoevents": "^10.0.0"
   }
 }
