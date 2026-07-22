@@ -226,7 +226,7 @@ def _pack_with_document_guarantees(
         used_by_reference[reference_id] = used + tokens
         return True
 
-    # Every referenced attachment gets its best-ranked chunk and, when room
+    # Every referenced Composer document gets its best-ranked chunk and, when room
     # permits, a separate structure/coverage representative.
     coverage_ids = {str(row.get("chunk_id") or "") for row in _coverage_ranking(original_rows)}
     for reference_id in doc_order:

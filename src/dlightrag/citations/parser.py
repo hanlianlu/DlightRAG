@@ -1,7 +1,7 @@
 """Citation pattern matching and extraction.
 
 Supports two formats:
-- [ref]     — doc-level citations (LightRAG and attachment formats)
+- [ref]     — doc-level citations (LightRAG and Composer document formats)
 - [ref-idx] — chunk-level citations (DlightRAG granular format)
 """
 

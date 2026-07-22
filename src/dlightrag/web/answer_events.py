@@ -163,19 +163,20 @@ def _done_from_committed_turn(commit: CommitTurnResult) -> AnswerDoneEvent:
 def _apply_attachment_source_links(
     sources: list[SourceReferencePayload], *, conversation_id: str
 ) -> list[SourceReferencePayload]:
-    """Project conversation-scoped download URLs onto Web attachment sources.
+    """Project scoped download URLs onto Web Composer document sources.
 
     Web Composer document sources carry a ``web-attachment://<attachment_id>``
     ``source_uri`` and no workspace, so ``project_source_payloads`` leaves their
     ``download_url`` unset. Rewrite it to the conversation-scoped attachment
-    route and drop chunk image URLs (attachment figures are delivered inline as
-    ``image_data``, not via the workspace image route). Workspace sources are
-    left untouched.
+    route and drop chunk image URLs (Composer document figures are delivered
+    inline as ``image_data``, not via the workspace image route). Workspace
+    sources are left untouched.
     """
     projected: list[SourceReferencePayload] = []
     for source in sources:
         # ``source_uri`` is ``str | None``; guard against a future None so this
-        # never raises AttributeError. Real attachment sources are unchanged.
+        # never raises AttributeError. Real Composer document sources are
+        # unchanged.
         if not (source.source_uri or "").startswith("web-attachment://"):
             projected.append(source)
             continue

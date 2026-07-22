@@ -42,8 +42,9 @@ class PreparedAnswerTurn:
     history_image_catalog_count: int = 0
     history_image_resolution_status: str = "ok"
     # Composer-only evidence selected from current and referenced historical
-    # Web attachments. Workspace RAG retrieval never sees or reranks these rows;
-    # core only places them ahead of the untouched RAG rows for answer assembly.
+    # Web Composer documents. Workspace RAG retrieval never sees or reranks
+    # these rows; core only places them ahead of the untouched RAG rows for
+    # answer assembly.
     composer_context_chunks: tuple[dict[str, Any], ...] = ()
     composer_evidence_trace: dict[str, Any] = field(default_factory=dict)
     web_composer_visuals: bool = False

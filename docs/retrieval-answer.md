@@ -438,7 +438,7 @@ Final Composer context keeps current document evidence before selected
 historical document evidence. Each document is packed independently, but the
 complete Answer envelope also contains system and user instructions,
 conversation history, images, workspace RAG evidence, KG context, and
-references. The per-attachment allowance is not a guarantee that this complete
+references. The per-document allowance is not a guarantee that this complete
 envelope fits the answer model; final assembly may raise an overflow error
 rather than silently trim evidence.
 
@@ -449,7 +449,7 @@ apply throughout the Composer lifecycle.
 
 Composer document chunks carry a `web-attachment://<attachment_id>` source URI and a
 `__web_attachment__` sentinel workspace, so they never resolve a workspace image
-route. Attachment figures are delivered inline as `image_data` in the answer
+route. Composer document figures are delivered inline as `image_data` in the answer
 context, and the Web answer layer projects a conversation-scoped
 `/web/conversations/<conversation_id>/documents/<attachment_id>` download URL
 onto the finalized Composer document source.

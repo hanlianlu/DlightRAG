@@ -4,12 +4,12 @@
 These cover three seams that keep Composer documents a Web-only
 feature:
 
-* the public REST ``/retrieve`` contract never accepts or emits attachment
-  inputs/chunks (review finding I4 boundary);
-* the Web answer layer projects a conversation-scoped download URL onto
-  attachment sources (Task 8 Step 3);
+* the public REST ``/retrieve`` contract never accepts or emits Composer
+    document inputs/chunks (review finding I4 boundary);
+* the Web answer layer projects a conversation-scoped download URL onto Composer
+    document sources (Task 8 Step 3);
 * the conversation document download route is principal-scoped, returning 404
-  to a caller who does not own the attachment (review finding I4 isolation).
+    to a caller who does not own the Composer document (review finding I4 isolation).
 """
 
 from collections.abc import Iterator
@@ -55,11 +55,11 @@ async def api_client(_retrieve_app: FastAPI) -> Any:
 async def test_public_retrieve_contract_does_not_accept_documents(
     api_client: AsyncClient,
 ) -> None:
-    """The public retrieve contract must reject or ignore attachment inputs.
+    """The public retrieve contract must reject or ignore Composer document inputs.
 
     ``RetrieveRequest`` forbids extra fields, so a ``documents`` payload is
-    rejected with 422 and the Web attachment pipeline is never reachable from
-    the public REST surface.
+    rejected with 422 and the Web Composer document pipeline is never reachable
+    from the public REST surface.
     """
     response = await api_client.post(
         "/retrieve",
@@ -77,7 +77,7 @@ async def test_public_retrieve_contract_does_not_accept_documents(
 
 
 # ---------------------------------------------------------------------------
-# Attachment source download-link projection (Task 8 Step 3)
+# Composer document source download-link projection (Task 8 Step 3)
 # ---------------------------------------------------------------------------
 
 

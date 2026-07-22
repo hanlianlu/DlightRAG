@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Web-only query attachment parsing, chunking, budgeting and retrieval.
+"""Web-only Composer document parsing, chunking, budgeting and retrieval.
 
 This module is CORE-layer: it must never import from ``dlightrag.web`` /
 ``api`` / ``mcp``. Its inputs are primitives or core-local dataclasses so the
@@ -200,7 +200,7 @@ def _validated_attachment_vector_page_indices(
 
 @dataclass(frozen=True, slots=True)
 class AttachmentContextChunk:
-    """One parsed, retrievable unit of a query-time document attachment.
+    """One parsed, retrievable unit of a Composer document.
 
     Text and visual chunks share this shape; visual chunks additionally carry
     ``image_bytes`` / ``image_mime_type``. This is the only chunk type the
@@ -228,7 +228,7 @@ class AttachmentContextChunk:
 
         Emits image bytes as-is; the single ``AnswerContextPacker`` +
         ``AnswerImageBudget`` is the only owner of image budgeting across
-        workspace and attachment chunks, so no pre-budget flag is set here.
+        workspace and Composer document chunks, so no pre-budget flag is set here.
         """
         source_uri = f"web-attachment://{self.attachment_id}"
         metadata = {
@@ -274,7 +274,7 @@ class ParsedAttachmentBundle:
 
 @dataclass(frozen=True, slots=True)
 class ParsedAttachmentDocument:
-    """Raw parser output for one attachment, before chunking."""
+    """Raw parser output for one Composer document, before chunking."""
 
     content: str
     blocks_path: str
@@ -620,7 +620,7 @@ async def parse_attachment_to_bundle(
     document_bytes: bytes,
     parser_rules: str,
 ) -> ParsedAttachmentBundle:
-    """Parse and chunk one attachment while all parser sidecars remain alive."""
+    """Parse and chunk one Composer document while all parser sidecars remain alive."""
     async with parse_attachment_document(
         attachment_id=attachment_id,
         filename=filename,

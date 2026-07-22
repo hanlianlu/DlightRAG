@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for Web query attachment parsing and budget packing."""
+"""Tests for Web Composer document parsing and budget packing."""
 
 import asyncio
 import io

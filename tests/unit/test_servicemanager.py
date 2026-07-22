@@ -314,7 +314,8 @@ async def test_prepared_stream_adds_composer_count_without_rebudgeting_rag(test_
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
 
-    # Effective cap grows by the attachment count so workspace context survives.
+    # Effective cap grows by the Composer document chunk count so workspace
+    # context survives.
     assert captured["context_top_k"] == base_top_k + len(attachment_chunks)
     # Workspace chunk ids remain within the grown budget window.
     packed = captured["contexts"]["chunks"][: captured["context_top_k"]]

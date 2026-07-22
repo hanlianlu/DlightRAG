@@ -63,7 +63,7 @@ AttachmentKind = Literal["image", "document", "unsupported"]
 
 @dataclass(frozen=True, slots=True)
 class ValidatedWebDocument:
-    """One current-turn Web document attachment after admission."""
+    """One current-turn Web Composer document after admission."""
 
     attachment_id: str
     ordinal: int
