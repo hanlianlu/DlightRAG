@@ -1854,7 +1854,7 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
             [
                 SimpleNamespace(
                     attachment_id=document.attachment_id,
-                    filename=document.safe_filename,
+                    filename=document.filename,
                 )
             ],
             [],

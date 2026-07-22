@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Web Composer document admission."""
 
-from pathlib import Path
+import hashlib
 
 import pytest
 
@@ -39,7 +39,8 @@ def test_validate_web_documents_enforces_count_and_size() -> None:
     assert all(isinstance(item, ValidatedWebDocument) for item in validated)
     assert validated[0].filename == "a.pdf"
     assert validated[0].suffix == ".pdf"
-    assert validated[0].byte_size == len(payload)
+    assert validated[0].document_bytes == payload
+    assert validated[0].content_sha256 == hashlib.sha256(payload).hexdigest()
 
 
 def test_validate_web_documents_rejects_too_many_documents() -> None:
@@ -71,13 +72,3 @@ def test_validate_web_documents_rejects_empty_document() -> None:
         validate_web_documents([("empty.pdf", "application/pdf", b"")])
 
     assert str(exc_info.value) == "Composer document is empty: empty.pdf"
-
-
-def test_validated_document_model_block_is_not_an_image_block() -> None:
-    doc = validate_web_documents([("report.pdf", "application/pdf", b"hello")])[0]
-
-    assert doc.attachment_id
-    assert doc.content_sha256
-    assert doc.as_catalog_row(turn_number=1)["filename"] == "report.pdf"
-    assert "image_url" not in doc.as_catalog_row(turn_number=1)
-    assert Path(doc.safe_filename).name == "report.pdf"

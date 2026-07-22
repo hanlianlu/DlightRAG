@@ -375,6 +375,19 @@ is neutralized by the parse-owner shim. This path cannot write workspace
 `full_docs`, `doc_status`, chunks, vectors, BM25, LLM cache, or KG rows and never
 enters public `/retrieve`.
 
+The Web transport admits current Composer documents before creating the SSE
+response. Application-invalid or per-document oversized uploads return HTTP
+422, while a four-document request exceeds the three-document limit and returns
+the route's explicit HTTP 413; none of these responses starts SSE. Parsing runs
+later inside the HTTP 200 stream under the answer pipeline. A current Composer
+document parse failure emits an `error` event with
+`error_kind: CURRENT_DOCUMENT_PARSE_FAILED` and stops before query planning,
+retrieval, and generation. After planning, load, missing-document, or parse
+failures for selected historical Composer documents are folded into one
+nonfatal aggregate `warning` event. The answer continues without those
+documents, and the warning remains request-local rather than being persisted in
+the conversation turn.
+
 `RAGServiceManager` lazily owns and closes one cache-neutral
 `ComposerModelBundle` for VLM and EXTRACT. `QueryImageDescriber` and Composer
 analysis share its VLM callable under the manager's direct-LLM concurrency

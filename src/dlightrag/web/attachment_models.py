@@ -71,25 +71,7 @@ class ValidatedWebDocument:
     mime_type: str
     suffix: str
     document_bytes: bytes
-    byte_size: int
     content_sha256: str
-
-    @property
-    def safe_filename(self) -> str:
-        return safe_upload_basename(self.filename)
-
-    def as_catalog_row(self, *, turn_number: int | None = None) -> dict[str, object]:
-        row: dict[str, object] = {
-            "attachment_id": self.attachment_id,
-            "ordinal": self.ordinal,
-            "filename": self.filename,
-            "mime_type": self.mime_type,
-            "suffix": self.suffix,
-            "byte_size": self.byte_size,
-        }
-        if turn_number is not None:
-            row["turn_number"] = turn_number
-        return row
 
 
 def _suffix(filename: str) -> str:
@@ -132,7 +114,6 @@ def validate_web_documents(
                 mime_type=detected_mime,
                 suffix=suffix,
                 document_bytes=payload,
-                byte_size=len(payload),
                 content_sha256=hashlib.sha256(payload).hexdigest(),
             )
         )

@@ -427,6 +427,18 @@ and are never credentials. History and image
 reads always filter by both the authenticated principal and conversation ID, so
 another principal receives the same 404 as a missing conversation.
 
+Composer document admission completes before `/web/answer` returns its SSE
+response. Unsupported, empty, unsafe-name, and per-document oversized uploads
+return HTTP 422; a four-document request exceeds the three-document limit and
+returns the route's explicit HTTP 413. No SSE stream starts for these admission
+failures. Once HTTP 200 SSE has started, a current Composer document parse
+failure emits an `error` event with
+`error_kind: CURRENT_DOCUMENT_PARSE_FAILED` and stops before query planning,
+retrieval, or generation. Load, missing-document, and parse failures for
+planner-selected historical Composer documents are nonfatal: the stream emits
+one aggregate `warning` event, continues the answer, and does not persist the
+warning with the conversation turn.
+
 Web conversations retain up to 100 complete turns with 30-day inactivity
 retention. Current Web images are admitted using `query_images.max_current_images`
 and `query_images.max_upload_bytes`; the defaults are three images and 15 MiB per
