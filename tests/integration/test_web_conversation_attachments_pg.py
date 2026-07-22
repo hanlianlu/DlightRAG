@@ -8,10 +8,10 @@ principal-scoped document reads, and the ON DELETE CASCADE lifecycle.
 
 Workspace non-write is proved without brittle global row counts. A complete
 ``QueryAttachmentService`` cache miss runs through the parse-owner shim, strict
-analysis proxy, real LightRAG chunk/MM rendering, robust embedding, and Web
-materialization while write-failing workspace handles record any access. The
-only permitted result store is the principal/conversation-scoped
-``web_conversation_*`` tables.
+analysis proxy, real LightRAG chunk/MM rendering, route-aware vector
+materialization, and Web persistence while write-failing workspace handles
+record any access. The only permitted result store is the
+principal/conversation-scoped ``web_conversation_*`` tables.
 
 Requires a running PostgreSQL instance (localhost:5432, dlightrag/dlightrag).
 Skipped automatically if PostgreSQL is not available.
@@ -214,16 +214,26 @@ class _StorageGuardedLightRAG:
 
 
 class _DeterministicComposerParser:
-    def __init__(self, *, include_drawing: bool) -> None:
+    def __init__(self, *, include_drawing: bool, oversized: bool) -> None:
         self._include_drawing = include_drawing
+        self._oversized = oversized
+        self.content = (
+            "Quarterly revenue and operating margin. " * 2_600
+            if oversized
+            else "The report records quarterly revenue and operating margin."
+        )
 
     async def parse(self, ctx: Any) -> Any:
         from lightrag.parser.base import ParseResult
 
+        from dlightrag.core.request.attachments import ATTACHMENT_CONTEXT_TOKEN_LIMIT
+        from dlightrag.utils.tokens import estimate_tokens
+
         source_path = ctx.source_path("legacy")
         assert source_path.read_bytes() == b"Composer integration source"
         blocks_path = source_path.with_name("composer-contract.blocks.jsonl")
-        content = "The report records quarterly revenue and operating margin."
+        content = self.content
+        assert (estimate_tokens(content) > ATTACHMENT_CONTEXT_TOKEN_LIMIT) is self._oversized
         blocks_path.write_text(
             "\n".join(
                 (
@@ -1086,18 +1096,27 @@ async def test_max_turn_trimming_preserves_conversation_vector_cache() -> None:
     [False, True],
     ids=["text-table", "drawing"],
 )
+@pytest.mark.parametrize(
+    "evidence_mode",
+    ["full", "retrieval"],
+)
 async def test_composer_cache_miss_materializes_only_web_rows(
     monkeypatch: pytest.MonkeyPatch,
     test_config: Any,
     include_drawing: bool,
+    evidence_mode: str,
 ) -> None:
     from lightrag import LightRAG
 
     from dlightrag.core.document_embedding import RobustDocumentEmbedder
-    from dlightrag.core.request.attachments import QueryAttachmentService
+    from dlightrag.core.request.attachments import (
+        ATTACHMENT_CONTEXT_TOKEN_LIMIT,
+        QueryAttachmentService,
+    )
     from dlightrag.storage.web_conversations import PGWebConversationStore
+    from dlightrag.utils.tokens import estimate_tokens
 
-    principal_id = f"itest-composer-isolation-{uuid4()}"
+    principal_id = f"itest-composer-isolation-{evidence_mode}-{uuid4()}"
     document_bytes = b"Composer integration source"
     content_sha256 = hashlib.sha256(document_bytes).hexdigest()
     storage_accesses: list[str] = []
@@ -1120,7 +1139,13 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         }
     )
 
-    parser = _DeterministicComposerParser(include_drawing=include_drawing)
+    parser = _DeterministicComposerParser(
+        include_drawing=include_drawing,
+        oversized=evidence_mode == "retrieval",
+    )
+    assert (estimate_tokens(parser.content) > ATTACHMENT_CONTEXT_TOKEN_LIMIT) is (
+        evidence_mode == "retrieval"
+    )
     monkeypatch.setattr("lightrag.parser.registry.get_parser", lambda _engine: parser)
     monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "1")
     real_analyze_multimodal = LightRAG.analyze_multimodal
@@ -1196,12 +1221,16 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         assert trace["attachment_mm_chunk_count"] == 1 + int(include_drawing)
         assert trace["attachment_cache_write_status"] == "written"
         assert trace["attachment_cache_materialized"] is True
-        assert trace["attachment_embedding_fused"] == int(include_drawing)
-        assert trace["attachment_embedding_text"] == len(bundle.chunks) - int(include_drawing)
+        assert bundle.evidence_mode == evidence_mode
+        assert (
+            sum(estimate_tokens(chunk.content) for chunk in bundle.chunks)
+            > ATTACHMENT_CONTEXT_TOKEN_LIMIT
+        ) is (evidence_mode == "retrieval")
+        assert trace["attachment_embedding_fallback"] == 0
+        assert trace["attachment_embedding_failed"] == 0
+        assert trace["attachment_embedding_error"] is None
         assert len(rows) == len(bundle.chunks) >= 2
         assert any(row["sidecar_type"] == "table" for row in rows)
-        assert all(row["embedding_signature"] for row in rows)
-        assert all(len(json.loads(row["embedding_vector"])) == 3 for row in rows)
         metadata_rows = [json.loads(row["metadata"]) for row in rows]
         assert all(
             metadata["_composer_analysis_outcome"] == "success" for metadata in metadata_rows
@@ -1215,9 +1244,28 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         assert models.extract_calls == 1
         assert models.vlm_calls == int(include_drawing)
         assert lightrag.mm_renderer_calls == 0
-        assert sum(len(batch) for batch in embedding_provider.document_batches) == (
-            len(bundle.chunks) - int(include_drawing)
-        )
+        if evidence_mode == "full":
+            assert trace["attachment_vector_cache_hits"] == 0
+            assert trace["attachment_vector_cache_misses"] == 0
+            assert trace["attachment_vector_update_status"] == "not_attempted"
+            assert trace["attachment_vector_read_error"] is None
+            assert trace["attachment_vector_update_error"] is None
+            assert trace["attachment_embedding_fused"] == 0
+            assert trace["attachment_embedding_text"] == 0
+            assert all(row["embedding_signature"] is None for row in rows)
+            assert all(row["embedding_vector"] is None for row in rows)
+            assert embedding_provider.document_batches == []
+            assert embedding_provider.fused_batches == []
+        else:
+            assert trace["attachment_vector_cache_hits"] == 0
+            assert trace["attachment_vector_cache_misses"] == len(bundle.chunks)
+            assert trace["attachment_embedding_fused"] == int(include_drawing)
+            assert trace["attachment_embedding_text"] == len(bundle.chunks) - int(include_drawing)
+            assert all(row["embedding_signature"] for row in rows)
+            assert all(len(json.loads(row["embedding_vector"])) == 3 for row in rows)
+            assert sum(len(batch) for batch in embedding_provider.document_batches) == (
+                len(bundle.chunks) - int(include_drawing)
+            )
         if include_drawing:
             drawing_rows = [row for row in rows if row["sidecar_type"] == "drawing"]
             assert len(drawing_rows) == 1
@@ -1225,11 +1273,12 @@ async def test_composer_cache_miss_materializes_only_web_rows(
             assert drawing["image_bytes"] == _DRAWING_IMAGE_BYTES
             assert drawing["image_mime_type"] == "image/png"
             assert "A chart showing Q4 revenue of 42." in drawing["content"]
-            assert json.loads(drawing["embedding_signature"])["mode"] == "fused"
-            assert json.loads(drawing["embedding_vector"]) == [0.25, 0.5, 1.0]
-            assert len(embedding_provider.fused_batches) == 1
-            assert embedding_provider.fused_batches[0] == [drawing["content"]]
-        else:
+            if evidence_mode == "retrieval":
+                assert json.loads(drawing["embedding_signature"])["mode"] == "fused"
+                assert json.loads(drawing["embedding_vector"]) == [0.25, 0.5, 1.0]
+                assert len(embedding_provider.fused_batches) == 1
+                assert embedding_provider.fused_batches[0] == [drawing["content"]]
+        elif evidence_mode == "retrieval":
             assert embedding_provider.fused_batches == []
         assert storage_accesses == []
     finally:
