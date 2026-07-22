@@ -15,7 +15,10 @@ import pytest
 from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.answer.errors import (
     CURRENT_DOCUMENT_PARSE_FAILED,
+    CURRENT_IMAGES_UNSUPPORTED,
+    AnswerImageError,
     AnswerInputError,
+    CurrentDocumentParseError,
     CurrentImagePayloadError,
 )
 from dlightrag.core.answer.turn import PreparedAnswerTurn
@@ -132,6 +135,60 @@ async def _collect(
         )
     ]
     return events
+
+
+async def _collect_prepare_error(
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> tuple[list[str], dict[str, object], AsyncMock, AsyncMock]:
+    captured = _record_observations(monkeypatch)
+    service = AsyncMock()
+    service.prepare_answer_turn.side_effect = error
+    answer_stream_prepared = AsyncMock()
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        answer_image_capability=None,
+        _aanswer_stream_prepared=answer_stream_prepared,
+    )
+    prepared = PreparedWebConversation(
+        principal_id="a" * 64,
+        conversation_id="11111111-1111-4111-8111-111111111111",
+        content_revision=2,
+        text_history=(),
+    )
+    events = [
+        event
+        async for event in stream_answer_events(
+            manager=manager,
+            cfg=SimpleNamespace(),
+            query="summarize this",
+            workspaces=["default"],
+            workspace="default",
+            conversation_service=service,
+            prepared_conversation=prepared,
+            validated_images=(),
+            submission_id="22222222-2222-4222-8222-222222222222",
+        )
+    ]
+    return events, captured, service, answer_stream_prepared
+
+
+def test_answer_input_errors_expose_an_explicit_public_message() -> None:
+    error = AnswerInputError("Safe message", error_kind="TEST_INPUT_ERROR")
+
+    assert error.public_message == "Safe message"
+    assert str(error) == "Safe message"
+
+
+def test_current_document_parse_error_builds_its_public_contract_from_filename() -> None:
+    error = CurrentDocumentParseError("broken.docx")
+
+    assert error.public_message == (
+        "Could not read broken.docx. Check that the document is valid and "
+        "the document parser is available."
+    )
+    assert str(error) == error.public_message
+    assert error.error_kind == CURRENT_DOCUMENT_PARSE_FAILED
 
 
 async def test_successful_stream_commits_once_before_done() -> None:
@@ -424,50 +481,19 @@ async def test_current_image_payload_error_maps_to_limit_error(
 async def test_current_document_parse_error_emits_safe_typed_error_before_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured = _record_observations(monkeypatch)
-    service = AsyncMock()
-    safe_message = 'Could not parse current document "broken.docx". Remove it and try again.'
-    parse_error = AnswerInputError(
-        safe_message,
-        error_kind=CURRENT_DOCUMENT_PARSE_FAILED,
-    )
+    parse_error = CurrentDocumentParseError("broken.docx")
     parse_error.__cause__ = RuntimeError("raw parser exception: customer secret")
-    service.prepare_answer_turn.side_effect = parse_error
-    answer_stream_prepared = AsyncMock()
-    manager = _fake_manager(
-        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
-        answer_image_capability=None,
-        _aanswer_stream_prepared=answer_stream_prepared,
+    events, captured, service, answer_stream_prepared = await _collect_prepare_error(
+        monkeypatch, parse_error
     )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
-    )
-
-    events = [
-        event
-        async for event in stream_answer_events(
-            manager=manager,
-            cfg=SimpleNamespace(),
-            query="summarize this",
-            workspaces=["default"],
-            workspace="default",
-            conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            submission_id="22222222-2222-4222-8222-222222222222",
-        )
-    ]
 
     error_event = next(event for event in events if "event: error" in event)
     error_payload = json.loads(error_event.split("data: ", 1)[1])
     assert error_payload == {
-        "message": safe_message,
+        "message": parse_error.public_message,
         "error_kind": CURRENT_DOCUMENT_PARSE_FAILED,
     }
-    assert "raw parser exception" not in "".join(events)
+    assert "customer secret" not in "".join(events)
     error_kinds = [
         metadata["error_kind"]
         for metadata in _metadata_updates(captured)
@@ -476,6 +502,24 @@ async def test_current_document_parse_error_emits_safe_typed_error_before_genera
     assert error_kinds == [CURRENT_DOCUMENT_PARSE_FAILED]
     answer_stream_prepared.assert_not_awaited()
     service.commit_answer.assert_not_awaited()
+
+
+async def test_answer_image_error_emits_its_safe_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = AnswerImageError(
+        "Images are unavailable for this answer model.",
+        error_kind=CURRENT_IMAGES_UNSUPPORTED,
+    )
+    events, _captured, _service, _answer_stream_prepared = await _collect_prepare_error(
+        monkeypatch, error
+    )
+
+    error_event = next(event for event in events if "event: error" in event)
+    assert json.loads(error_event.split("data: ", 1)[1]) == {
+        "message": error.public_message,
+        "error_kind": CURRENT_IMAGES_UNSUPPORTED,
+    }
 
 
 async def test_cancellation_propagates_without_committing(

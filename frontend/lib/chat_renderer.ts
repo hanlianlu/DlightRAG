@@ -2,9 +2,10 @@
 
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
-import {parseData} from './sse.ts';
 import {createDocumentChip} from './document_chip.ts';
+import {answerErrorMessage} from './errors.ts';
 import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
+import {parseData} from './sse.ts';
 import chatStyles from '../styles/chat.module.css';
 import type {
   ConversationDocumentReference,
@@ -436,7 +437,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
       else if (eventType === 'progress') handleProgress(data);
       else if (eventType === 'error') {
         failed = true;
-        setAnswerError(turn, parseData(data));
+        setAnswerError(turn, answerErrorMessage(parseData(data)));
       }
     },
     get answer(): string {

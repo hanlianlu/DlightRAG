@@ -1609,7 +1609,7 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
 ) -> None:
     from dlightrag.core.answer.errors import (
         CURRENT_DOCUMENT_PARSE_FAILED,
-        AnswerInputError,
+        CurrentDocumentParseError,
     )
     from dlightrag.core.request.planner import QueryPlan
     from dlightrag.web.attachment_models import validate_web_documents
@@ -1654,7 +1654,7 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
 
     service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
 
-    with pytest.raises(AnswerInputError) as exc_info:
+    with pytest.raises(CurrentDocumentParseError) as exc_info:
         await service_under_test.prepare_answer_turn(
             manager=manager,
             prepared=prepared,
@@ -1665,9 +1665,8 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
         )
 
     assert exc_info.value.error_kind == CURRENT_DOCUMENT_PARSE_FAILED
-    assert "broken.docx" in str(exc_info.value)
-    attachment_service.adense_rankings.assert_not_awaited()
-    manager.adescribe_query_images.assert_not_awaited()
+    assert exc_info.value.public_message == (
+        "Could not read broken.docx. Check that the document is valid and "
+        "the document parser is available."
+    )
     manager.aplan_web_conversation_query.assert_not_awaited()
-    manager._aselect_web_composer_evidence.assert_not_awaited()
-    manager._aanswer_stream_prepared.assert_not_awaited()

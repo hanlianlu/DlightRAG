@@ -22,10 +22,14 @@ class CurrentImagePayloadError(RuntimeError):
 
 
 class AnswerInputError(ValueError):
-    """Explicit answer input rejected with a stable machine-readable kind."""
+    """Answer input rejected with a client-safe message and stable kind.
 
-    def __init__(self, message: str, *, error_kind: str) -> None:
-        super().__init__(message)
+    Subclasses must construct ``public_message`` only from sanitized content.
+    """
+
+    def __init__(self, public_message: str, *, error_kind: str) -> None:
+        super().__init__(public_message)
+        self.public_message = public_message
         self.error_kind = error_kind
 
 
@@ -37,7 +41,20 @@ class AnswerImageError(AnswerInputError):
     """
 
     def __init__(self, message: str, *, error_kind: str) -> None:
-        super().__init__(message, error_kind=error_kind)
+        super().__init__(public_message=message, error_kind=error_kind)
+
+
+class CurrentDocumentParseError(AnswerInputError):
+    """A current Composer document could not be parsed safely."""
+
+    def __init__(self, safe_filename: str) -> None:
+        super().__init__(
+            public_message=(
+                f"Could not read {safe_filename}. Check that the document is valid and "
+                "the document parser is available."
+            ),
+            error_kind=CURRENT_DOCUMENT_PARSE_FAILED,
+        )
 
 
 def classify_answer_error(exc: BaseException) -> str:
@@ -59,6 +76,7 @@ __all__ = [
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "AnswerInputError",
     "AnswerImageError",
+    "CurrentDocumentParseError",
     "CurrentImagePayloadError",
     "classify_answer_error",
 ]

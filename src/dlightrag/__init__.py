@@ -20,11 +20,9 @@ from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, Dligh
 from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     ANSWER_STREAM_FAILED,
-    CURRENT_DOCUMENT_PARSE_FAILED,
     CURRENT_IMAGE_LIMIT_EXCEEDED,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
-    AnswerInputError,
     classify_answer_error,
 )
 from dlightrag.core.client_contracts import IngestDocument, IngestSpec, QueryImage
@@ -45,10 +43,8 @@ __all__ = [
     "RAGServiceManager",
     "RetrievalResult",
     "AnswerImageError",
-    "AnswerInputError",
     "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
     "ANSWER_STREAM_FAILED",
-    "CURRENT_DOCUMENT_PARSE_FAILED",
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "classify_answer_error",

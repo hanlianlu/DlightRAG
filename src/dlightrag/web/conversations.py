@@ -11,7 +11,7 @@ import asyncpg
 
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
-from dlightrag.core.answer.errors import CURRENT_DOCUMENT_PARSE_FAILED, AnswerInputError
+from dlightrag.core.answer.errors import CurrentDocumentParseError
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.request.attachment_digest import build_attachment_planner_digests
 from dlightrag.core.request.attachments import (
@@ -276,11 +276,7 @@ class WebConversationService:
         )
         if current_parse_errors:
             failed = current_parse_errors[0]
-            raise AnswerInputError(
-                f'Could not parse current document "{failed["filename"]}". '
-                "Remove it and try again.",
-                error_kind=CURRENT_DOCUMENT_PARSE_FAILED,
-            )
+            raise CurrentDocumentParseError(failed["filename"])
         current_digests, digest_trace = build_attachment_planner_digests(current_bundles)
         if current_bundles:
             logger.info(

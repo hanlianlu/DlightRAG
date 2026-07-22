@@ -568,7 +568,9 @@ async def _emit_answer_events(
             )
         logger.exception("Answer streaming failed")
         message = (
-            str(exc) if isinstance(exc, AnswerInputError) else "Service error. Please try again."
+            exc.public_message
+            if isinstance(exc, AnswerInputError)
+            else "Service error. Please try again."
         )
         yield sse_event(
             "error",
