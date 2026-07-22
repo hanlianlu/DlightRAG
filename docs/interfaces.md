@@ -450,9 +450,9 @@ deterministically selects one `RAGService`, which owns and provides its
 initialized LightRAG parser/multimodal renderer, shared
 `RobustDocumentEmbedder` plus resolved image capability, and reranker. A Web
 turn borrows and never closes those resources. Parser/MM work remains
-request-local, embedding uses the shared embedder's own semaphore, and
-reranking invokes the service-owned callable; no per-turn resource pool is
-created.
+request-local. Retrieval-mode embedding uses the shared embedder's own
+semaphore, and retrieval-mode reranking invokes the service-owned callable; no
+per-turn resource pool is created.
 
 This provider-sharing lifecycle does not share results: result storage remains
 owned only by the principal-scoped Web PostgreSQL store. The Composer store uses

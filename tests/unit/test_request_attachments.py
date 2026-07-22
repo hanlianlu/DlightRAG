@@ -78,6 +78,44 @@ def retrieval_visual_chunk(chunk_id: str) -> AttachmentContextChunk:
     )
 
 
+def test_attachment_evidence_mode_routes_exact_default_budget_to_full() -> None:
+    content = "x" * (24_576 * 4)
+    chunks = [
+        attachments.build_text_attachment_chunk(
+            attachment_id="att-boundary-full",
+            filename="boundary-full.txt",
+            chunk_id="boundary-full",
+            chunk_index=1,
+            content=content,
+        )
+    ]
+
+    estimated_tokens = sum(estimate_tokens(chunk.content) for chunk in chunks)
+
+    assert estimated_tokens == 24_576
+    assert sum(chunk.token_estimate for chunk in chunks) == estimated_tokens
+    assert attachments._resolve_attachment_evidence_mode(chunks) == "full"
+
+
+def test_attachment_evidence_mode_routes_one_token_over_default_budget_to_retrieval() -> None:
+    content = "x" * (24_577 * 4)
+    chunks = [
+        attachments.build_text_attachment_chunk(
+            attachment_id="att-boundary-retrieval",
+            filename="boundary-retrieval.txt",
+            chunk_id="boundary-retrieval",
+            chunk_index=1,
+            content=content,
+        )
+    ]
+
+    estimated_tokens = sum(estimate_tokens(chunk.content) for chunk in chunks)
+
+    assert estimated_tokens == 24_577
+    assert sum(chunk.token_estimate for chunk in chunks) == estimated_tokens
+    assert attachments._resolve_attachment_evidence_mode(chunks) == "retrieval"
+
+
 def _png_bytes(*, size: tuple[int, int]) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", size, "white").save(buffer, format="PNG")

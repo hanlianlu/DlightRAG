@@ -371,16 +371,17 @@ selects one `RAGService`; that service owns and provides its initialized
 LightRAG parser/multimodal renderer, shared `RobustDocumentEmbedder` plus
 resolved image capability, and reranker. Composer borrows those service
 resources without closing them. Parser/MM work remains request-local,
-embedding uses the shared embedder's own semaphore, and reranking invokes the
-service-owned callable; Composer creates no duplicate concurrency pool.
+retrieval-mode embedding uses the shared embedder's own semaphore, and
+retrieval-mode reranking invokes the service-owned callable; Composer creates no
+duplicate concurrency pool.
 
-Provider sharing never shares results. Visual chunks use fused image+text
-document vectors when image capability is active; invalid images, unavailable
-capability, or fused provider failure use text-only document vectors. Enriched
-chunks, image bytes, embedding signatures, and JSONB vectors remain owned only
-by the principal-scoped Web PostgreSQL store in the existing
-`web_conversation_attachment_chunks` table. There is no pgvector dimension
-contract and no HNSW, IVFFLAT, or other ANN index.
+Provider sharing never shares results. In retrieval mode, visual chunks use
+fused image+text document vectors when image capability is active; invalid
+images, unavailable capability, or fused provider failure use text-only
+document vectors. Enriched chunks, image bytes, embedding signatures, and JSONB
+vectors remain owned only by the principal-scoped Web PostgreSQL store in the
+existing `web_conversation_attachment_chunks` table. There is no pgvector
+dimension contract and no HNSW, IVFFLAT, or other ANN index.
 
 Every read and write is scoped by authenticated principal plus conversation and
 requires an unexpired owning conversation. Manual delete and TTL pruning

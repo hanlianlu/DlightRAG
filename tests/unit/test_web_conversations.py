@@ -1190,9 +1190,10 @@ async def test_prepare_answer_turn_merges_current_document_context(
                 "attachment_analysis_error": None,
                 "attachment_mm_chunk_count": 0,
                 "attachment_vector_cache_hits": 0,
-                "attachment_vector_cache_misses": 1,
+                "attachment_vector_cache_misses": 0,
+                "attachment_vector_update_status": "not_attempted",
                 "attachment_embedding_fused": 0,
-                "attachment_embedding_text": 1,
+                "attachment_embedding_text": 0,
                 "attachment_embedding_fallback": 0,
                 "attachment_embedding_failed": 0,
             },
@@ -1229,7 +1230,13 @@ async def test_prepare_answer_turn_merges_current_document_context(
     processing_trace = turn.composer_evidence_trace["attachment_processing"]
     assert processing_trace[0]["attachment_id"] == document.attachment_id
     assert processing_trace[0]["attachment_analysis_outcome"] == "success"
-    assert processing_trace[0]["attachment_embedding_text"] == 1
+    assert processing_trace[0]["attachment_vector_cache_hits"] == 0
+    assert processing_trace[0]["attachment_vector_cache_misses"] == 0
+    assert processing_trace[0]["attachment_vector_update_status"] == "not_attempted"
+    assert processing_trace[0]["attachment_embedding_fused"] == 0
+    assert processing_trace[0]["attachment_embedding_text"] == 0
+    assert processing_trace[0]["attachment_embedding_fallback"] == 0
+    assert processing_trace[0]["attachment_embedding_failed"] == 0
     assert turn.attachment_resolution_status == "ok"
 
 

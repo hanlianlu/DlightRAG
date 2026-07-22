@@ -618,10 +618,19 @@ retention and upload controls do not change that behavior.
 Web Composer documents use the configured parser routing and
 `parser_sidecars.vlm.enabled` switch. On a cache miss they run the real parser,
 cache-neutral LightRAG VLM/EXTRACT analysis, and LightRAG multimodal renderer in
-temporary storage. `RAGServiceManager` lazily creates, owns, and closes one
-cache-neutral `ComposerModelBundle` for the VLM and EXTRACT roles. The bundle's
-VLM callable is shared with `QueryImageDescriber` and sidecar analysis; the
-manager's direct-LLM semaphore is their common concurrency bound rather than a
+temporary storage. After parse/chunk work or a cache load, each current or
+planner-selected history attachment is routed once by its total estimated chunk
+tokens. Attachments at or below 24,576 tokens use full mode: every chunk enters
+the Answer attachment context directly, with no document embedding, vector
+read, exact retrieval, BM25/RRF, or reranking. Attachments above 24,576 tokens
+use retrieval mode: document vectors are embedded and cached, exact dense and
+lexical/structural retrieval share one candidate pool, and each attachment is
+packed independently to at most 24,576 tokens.
+
+`RAGServiceManager` lazily creates, owns, and closes one cache-neutral
+`ComposerModelBundle` for the VLM and EXTRACT roles. The bundle's VLM callable
+is shared with `QueryImageDescriber` and sidecar analysis; the manager's
+direct-LLM semaphore is their common concurrency bound rather than a
 per-request or per-workspace limit.
 
 The first normalized requested workspace deterministically selects one
@@ -629,10 +638,11 @@ The first normalized requested workspace deterministically selects one
 parser/multimodal renderer, shared `RobustDocumentEmbedder` plus resolved image
 capability, and reranker. Composer only borrows them, does not close them, and
 does not add another resource pool: parser/MM work remains request-local,
-embedding uses the shared embedder's own semaphore, and reranking uses the
-service-owned callable. Fused image+text document embedding is used only when
-that resolved capability is active; otherwise, or after a fused provider
-failure, the document vector falls back to text-only embedding.
+retrieval-mode embedding uses the shared embedder's own semaphore, and
+retrieval-mode reranking uses the service-owned callable. In retrieval mode,
+fused image+text document embedding is used when that resolved capability is
+active; otherwise, or after a fused provider failure, the document vector falls
+back to text-only embedding.
 
 Provider and processing-resource sharing does not share results. Enriched
 chunks and JSONB vectors remain owned only by the Web PostgreSQL store in

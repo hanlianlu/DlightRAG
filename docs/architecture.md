@@ -68,12 +68,16 @@ temporary Web document
   -> real LightRAG parser in a TemporaryDirectory
   -> cache-neutral LightRAG VLM/EXTRACT analysis over a strict proxy
   -> real LightRAG text chunkers and multimodal sidecar renderer
-  -> shared RobustDocumentEmbedder
-       fused image+text when the selected service has working image capability
-       text-only when capability is absent or fused embedding fails
-  -> web_conversation_attachment_chunks
-       enriched content, image bytes, signatures, JSONB vectors
-  -> exact Composer-local retrieval and answer packing
+  -> route by total estimated chunk tokens
+       <= 24,576 -> full
+         -> Answer attachment context (all chunks)
+       > 24,576 -> retrieval
+         -> shared RobustDocumentEmbedder
+              fused image+text when the selected service has working image capability
+              text-only when capability is absent or fused embedding fails
+         -> web_conversation_attachment_chunks vector cache
+         -> exact Composer-local retrieval
+         -> Answer attachment context (independently packed to <= 24,576 tokens)
 ```
 
 `RAGServiceManager` lazily owns and closes one cache-neutral
@@ -84,9 +88,10 @@ normalized requested workspace deterministically selects one `RAGService`; that
 service owns and provides its initialized LightRAG parser/multimodal renderer,
 shared `RobustDocumentEmbedder` with resolved image capability, and reranker.
 Composer borrows those service resources without creating or closing them.
-Parser/MM work stays in the request's temporary-file scope, document embedding
-uses the shared embedder's own semaphore, and reranking invokes the existing
-service-owned callable; Composer adds no second resource pool.
+Parser/MM work stays in the request's temporary-file scope. Retrieval-mode
+document embedding uses the shared embedder's own semaphore, and retrieval-mode
+reranking invokes the existing service-owned callable; Composer adds no second
+resource pool.
 
 The lifecycle split does not merge result ownership. Composer output is
 isolated by `principal_id + conversation_id` in the Web PostgreSQL
