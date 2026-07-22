@@ -240,7 +240,8 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
             {"type": "text", "text": "## User-attached images\n"},
             {"type": "image_url", "image_url": {"url": "..."}},
             {"type": "text", "text": "## User-attached documents"},
-            {"type": "text", "text": "### Document [composer_...]: upload.pdf"},
+            {"type": "text", "text": "### Document [att-1]: upload.pdf"},
+            {"type": "text", "text": "[att-1-1] upload.pdf\nAttachment evidence..."},
             {"type": "text", "text": "## Knowledge-base evidence"},
             {"type": "text", "text": "### Document [1]: report.pdf"},
             {"type": "text", "text": "[1-1] report.pdf, Page 3\nEvidence text..."},
@@ -264,13 +265,23 @@ present, is inserted as prior messages before the current user message.
 The sections are intentional:
 
 - `## User-attached images` are part of the user's question, not retrieved evidence.
-- `## User-attached documents` contains Web Composer attachment evidence.
+- `## User-attached documents` contains Web Composer attachment evidence. Each
+  answer assigns compact document labels such as `att-1`; its chunk markers use
+  the `[att-1-1]` form.
 - `## Knowledge-base evidence` contains LightRAG excerpts and page/image previews.
 - Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
 - Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the answer image budget.
 - `## Knowledge Graph Context` gives entity/relationship facts, with source document tags when available.
 - `## Reference List` maps citation IDs to documents.
 - `## Question` is the actual user task and is placed last.
+
+Composer `att-N` labels are answer-scoped citation identities, not durable
+attachment IDs. New answer contexts and stored snapshots use these compact
+labels. The attachment UUID remains in the context row's `full_doc_id`, the
+source's `source_uri` (`web-attachment://<uuid>`), and the authenticated download
+identity (`/web/conversations/{conversation_id}/documents/{uuid}`). Existing
+stored snapshots that use `composer_<32hex>` labels are replayed unchanged for
+compatibility; DlightRAG does not emit those labels for new answers.
 
 REST, SDK, and MCP answer generation retains one adaptive image transport
 budget for current/history/RAG visuals. Web Composer turns use two independent

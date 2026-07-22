@@ -1113,44 +1113,61 @@ class TestWebAnswerAdapter:
         assert response.status_code == 422
         web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
 
+    @pytest.mark.parametrize(
+        ("source_id", "citation_ref"),
+        [
+            ("att-1", "att-1-1"),
+            (
+                "composer_98ec1e3a1187454b8929743bd5bc7d4b",
+                "composer_98ec1e3a1187454b8929743bd5bc7d4b-1",
+            ),
+        ],
+    )
     async def test_same_submission_replay_returns_stored_answer_before_model(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+        source_id: str,
+        citation_ref: str,
     ) -> None:
         attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
+        source_uri = f"web-attachment://{attachment_id}"
         download_url = f"/web/conversations/{CONVERSATION_ID}/documents/{attachment_id}"
         web_app.state.manager.config = test_config
+        committed_submission = CommitTurnResult(
+            saved=True,
+            reason=None,
+            summary=None,
+            turn_id="turn",
+            current_image_ids=("stored-image",),
+            assistant_text=f"Stored answer [{citation_ref}]",
+            answer_sources={
+                "sources": [
+                    {
+                        "id": source_id,
+                        "title": "report.pdf",
+                        "source_uri": source_uri,
+                        "download_url": download_url,
+                        "chunks": [
+                            {
+                                "chunk_id": "attachment-chunk-1",
+                                "content": "Attachment evidence",
+                            }
+                        ],
+                    }
+                ],
+                "answer_images": [],
+            },
+            replayed=True,
+        )
         web_app.state.web_conversation_service.prepare_answer.return_value = (
             PreparedWebConversation(
                 principal_id="a" * 64,
                 conversation_id=CONVERSATION_ID,
                 content_revision=1,
                 text_history=(),
-                committed_submission=CommitTurnResult(
-                    saved=True,
-                    reason=None,
-                    summary=None,
-                    turn_id="turn",
-                    current_image_ids=("stored-image",),
-                    assistant_text="Stored answer [att-1-1]",
-                    answer_sources={
-                        "sources": [
-                            {
-                                "id": "att-1",
-                                "title": "report.pdf",
-                                "source_uri": f"web-attachment://{attachment_id}",
-                                "download_url": download_url,
-                                "chunks": [
-                                    {
-                                        "chunk_id": "attachment-chunk-1",
-                                        "content": "Attachment evidence",
-                                    }
-                                ],
-                            }
-                        ],
-                        "answer_images": [],
-                    },
-                    replayed=True,
-                ),
+                committed_submission=committed_submission,
             )
         )
 
@@ -1174,10 +1191,13 @@ class TestWebAnswerAdapter:
             )
         )
         replay_html = replay_payload["html"]
-        assert 'class="citation-badge" data-ref="att-1"' in replay_html
-        assert 'class="source-doc" data-ref="att-1"' in replay_html
+        assert f'class="citation-badge" data-ref="{source_id}"' in replay_html
+        assert f'class="source-doc" data-ref="{source_id}"' in replay_html
+        assert committed_submission.answer_sources is not None
+        stored_source = committed_submission.answer_sources["sources"][0]
+        assert stored_source["source_uri"] == source_uri
+        assert stored_source["download_url"] == download_url
         assert download_url in replay_html
-        assert "composer_" not in response.text
         web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
 
 

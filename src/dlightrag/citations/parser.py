@@ -41,14 +41,6 @@ DOC_CITATION_PATTERN = re.compile(
 )
 
 
-def _parse_chunk_index(match: re.Match[str]) -> int | None:
-    try:
-        return int(match.group(2))
-    except TypeError, ValueError:
-        logger.debug("Ignoring citation with an invalid chunk index")
-        return None
-
-
 def extract_citation_keys(answer_text: str) -> list[str]:
     """Extract unique citation keys in order of appearance.
 
@@ -83,9 +75,7 @@ def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str
     """
     positions: list[tuple[int, str, int | None]] = []
     for m in CITATION_PATTERN.finditer(answer_text):
-        chunk_idx = _parse_chunk_index(m)
-        if chunk_idx is not None:
-            positions.append((m.start(), m.group(1), chunk_idx))
+        positions.append((m.start(), m.group(1), int(m.group(2))))
     for m in DOC_CITATION_PATTERN.finditer(answer_text):
         positions.append((m.start(), m.group(1), None))
 
@@ -120,9 +110,7 @@ def clean_invalid_citations(indexer: CitationIndexer, answer_text: str) -> str:
 
     def _replace_chunk(m: re.Match) -> str:
         ref_id = m.group(1)
-        chunk_idx = _parse_chunk_index(m)
-        if chunk_idx is None:
-            return m.group(0)
+        chunk_idx = int(m.group(2))
         if indexer.get_chunk_id(ref_id, chunk_idx) is not None:
             return m.group(0)
         logger.debug("Removing invalid citation [%s-%d]", ref_id, chunk_idx)
