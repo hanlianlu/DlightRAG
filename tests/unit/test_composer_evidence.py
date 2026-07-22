@@ -3,14 +3,13 @@
 
 import importlib
 import logging
+import subprocess
+import sys
 from typing import Any
 
 import pytest
 
-from dlightrag.core.request.composer_evidence import (
-    COMPOSER_ATTACHMENT_TOKEN_BUDGET,
-    ComposerEvidenceSelector,
-)
+from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
 from dlightrag.utils.tokens import estimate_tokens
 
 
@@ -45,7 +44,7 @@ async def test_full_pass_attachments_do_not_share_one_allowance() -> None:
     async def _must_not_run(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("short documents must not call rerank")
 
-    selector = ComposerEvidenceSelector(attachment_token_budget=4)
+    selector = ComposerEvidenceSelector(attachment_token_limit=4)
     current = [
         _row("c1", "A" * 16, attachment_id="doc-a"),
         _row("c2", "B" * 16, attachment_id="doc-b"),
@@ -90,7 +89,7 @@ async def test_attachment_at_exact_boundary_passes_without_retrieval() -> None:
     async def _must_not_run(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("boundary attachment must not call rerank")
 
-    selector = ComposerEvidenceSelector(attachment_token_budget=4)
+    selector = ComposerEvidenceSelector(attachment_token_limit=4)
     boundary = [_row("boundary", "A" * 16)]
 
     selected, trace = await selector.select(
@@ -116,7 +115,7 @@ async def test_attachment_one_token_over_boundary_uses_retrieval_without_overpac
         rerank_calls += 1
         return chunks
 
-    selector = ComposerEvidenceSelector(attachment_token_budget=4)
+    selector = ComposerEvidenceSelector(attachment_token_limit=4)
     oversized = [_row("oversized", "A" * 17)]
 
     selected, trace = await selector.select(
@@ -147,7 +146,7 @@ async def test_long_composer_documents_use_only_local_candidates_and_rerank() ->
         )
 
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=15,
+        attachment_token_limit=15,
         candidate_limit=8,
     )
     current = [
@@ -194,7 +193,7 @@ async def test_oversized_attachments_pack_with_independent_allowances() -> None:
         assert top_k == len(chunks)
         return sorted(chunks, key=lambda row: str(row["chunk_id"]))
 
-    selector = ComposerEvidenceSelector(attachment_token_budget=12)
+    selector = ComposerEvidenceSelector(attachment_token_limit=12)
     current = [
         _row(
             f"{attachment_id}-{index}",
@@ -240,7 +239,7 @@ async def test_packing_uses_a_later_representative_when_the_first_does_not_fit(
         return [rows[0], rows[2]]
 
     monkeypatch.setattr("dlightrag.core.request.composer_evidence.rrf_fuse", _limited_candidates)
-    selector = ComposerEvidenceSelector(attachment_token_budget=8, candidate_limit=2)
+    selector = ComposerEvidenceSelector(attachment_token_limit=8, candidate_limit=2)
 
     selected, _ = await selector.select(
         query="evidence",
@@ -280,7 +279,7 @@ async def test_packing_prefers_highest_ranked_fitting_row_before_representative(
         "dlightrag.core.request.composer_evidence.rrf_fuse",
         lambda _rankings: ranked_rows,
     )
-    selector = ComposerEvidenceSelector(attachment_token_budget=8, candidate_limit=3)
+    selector = ComposerEvidenceSelector(attachment_token_limit=8, candidate_limit=3)
 
     selected, _ = await selector.select(
         query="evidence",
@@ -304,7 +303,7 @@ async def test_composer_rerank_failure_falls_back_with_one_shared_traceback(
         raise failure
 
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=12,
+        attachment_token_limit=12,
         candidate_limit=4,
     )
     current = [
@@ -336,7 +335,7 @@ async def test_composer_rerank_failure_falls_back_with_one_shared_traceback(
 
 async def test_composer_without_dense_rows_falls_back_to_local_fusion() -> None:
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=50,
+        attachment_token_limit=50,
         candidate_limit=4,
     )
     rows = [
@@ -369,7 +368,7 @@ async def test_composer_bm25_failure_is_reported_in_trace(
         _fail_bm25,
     )
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=50,
+        attachment_token_limit=50,
         candidate_limit=4,
     )
     rows = [
@@ -392,7 +391,7 @@ async def test_composer_bm25_failure_is_reported_in_trace(
 
 async def test_short_document_full_pass_survives_beside_long_document() -> None:
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=12,
+        attachment_token_limit=12,
         candidate_limit=4,
     )
     short = [
@@ -444,7 +443,7 @@ async def test_selector_uses_resolved_ids_instead_of_reclassifying_by_tokens(
         return chunks
 
     monkeypatch.setattr("dlightrag.core.request.composer_evidence.rrf_fuse", _fuse)
-    selector = ComposerEvidenceSelector(attachment_token_budget=4)
+    selector = ComposerEvidenceSelector(attachment_token_limit=4)
 
     selected, trace = await selector.select(
         query="evidence",
@@ -474,7 +473,7 @@ async def test_default_candidate_limit_matches_rag_chunk_breadth() -> None:
         return chunks
 
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=100,
+        attachment_token_limit=100,
     )
     rows = [
         _row(
@@ -508,7 +507,7 @@ async def test_unified_rrf_merges_dense_rankings_for_oversized_chunks_only(
 
     monkeypatch.setattr("dlightrag.core.request.composer_evidence.rrf_fuse", _capture)
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=12,
+        attachment_token_limit=12,
         candidate_limit=8,
     )
     current_oversized = [
@@ -569,7 +568,7 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
         return list(reversed(chunks))
 
     selector = ComposerEvidenceSelector(
-        attachment_token_budget=100,
+        attachment_token_limit=100,
     )
     current = [
         _row(
@@ -616,10 +615,52 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
     assert trace["composer_evidence_reranked"] is True
 
 
-def test_partition_helpers_do_not_exist_or_export() -> None:
-    assert COMPOSER_ATTACHMENT_TOKEN_BUDGET == 24_576
-    composer_evidence = importlib.import_module("dlightrag.core.request.composer_evidence")
+def test_attachments_import_does_not_load_composer_evidence() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import dlightrag.core.request.attachments; "
+            "assert 'dlightrag.core.request.composer_evidence' not in sys.modules",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
+    assert result.returncode == 0, result.stderr
+
+
+async def test_attachment_limit_is_owned_upstream_and_defaults_selector_packing() -> None:
+    attachments = importlib.import_module("dlightrag.core.request.attachments")
+    composer_evidence = importlib.import_module("dlightrag.core.request.composer_evidence")
+    token_limit = attachments.ATTACHMENT_CONTEXT_TOKEN_LIMIT
+    rows = [
+        _row("limit", "target" * ((token_limit * 4) // len("target"))),
+        _row("overflow", "x" * 4, chunk_index=2),
+    ]
+
+    async def _rerank(*, query: str, chunks: list[dict[str, Any]], top_k: int):
+        assert query == "target"
+        assert top_k == len(chunks)
+        return sorted(chunks, key=lambda row: row["chunk_id"] != "limit")
+
+    selector = ComposerEvidenceSelector()
+    selected, _trace = await selector.select(
+        query="target",
+        current_rows=rows,
+        history_rows=[],
+        dense_rankings=rows,
+        retrieval_attachment_ids={"current-doc"},
+        rerank_func=_rerank,
+    )
+
+    assert token_limit == 24_576
+    assert [row["chunk_id"] for row in selected] == ["limit"]
+    assert sum(estimate_tokens(str(row["content"])) for row in selected) == token_limit
+    legacy_constant = "_".join(("COMPOSER", "ATTACHMENT", "TOKEN", "BUDGET"))
+    assert not hasattr(composer_evidence, legacy_constant)
+    assert "ATTACHMENT_CONTEXT_TOKEN_LIMIT" not in composer_evidence.__all__
     assert not hasattr(composer_evidence, "partition_composer_rows_by_attachment_budget")
     assert not hasattr(composer_evidence, "partition_composer_rows_by_document_size")
     assert "partition_composer_rows_by_attachment_budget" not in composer_evidence.__all__
@@ -628,7 +669,13 @@ def test_partition_helpers_do_not_exist_or_export() -> None:
 
 @pytest.mark.parametrize(
     "legacy_budget",
-    ["full_pass_tokens", "current_target_tokens", "history_target_tokens", "total_tokens"],
+    [
+        "attachment_token_budget",
+        "full_pass_tokens",
+        "current_target_tokens",
+        "history_target_tokens",
+        "total_tokens",
+    ],
 )
 def test_selector_rejects_legacy_budget_arguments(legacy_budget: str) -> None:
     selector_factory: Any = ComposerEvidenceSelector

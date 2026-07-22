@@ -13,6 +13,7 @@ import logging
 import re
 from typing import Any
 
+from dlightrag.core.request.attachments import ATTACHMENT_CONTEXT_TOKEN_LIMIT
 from dlightrag.core.request.composer_lexical import rank_composer_bm25
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import ContextRow
@@ -21,7 +22,6 @@ from dlightrag.utils.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
 
-COMPOSER_ATTACHMENT_TOKEN_BUDGET = 24_576
 COMPOSER_CANDIDATE_LIMIT = 30
 
 _STRUCTURE_RE = re.compile(r"(?im)^\s*(?:#{1,6}\s+|\[(?:table|image|equation) name\]|\[table\])")
@@ -34,10 +34,10 @@ class ComposerEvidenceSelector:
     def __init__(
         self,
         *,
-        attachment_token_budget: int = COMPOSER_ATTACHMENT_TOKEN_BUDGET,
+        attachment_token_limit: int = ATTACHMENT_CONTEXT_TOKEN_LIMIT,
         candidate_limit: int = COMPOSER_CANDIDATE_LIMIT,
     ) -> None:
-        self._attachment_token_budget = max(0, attachment_token_budget)
+        self._attachment_token_limit = max(0, attachment_token_limit)
         self._candidate_limit = max(1, candidate_limit)
 
     async def select(
@@ -103,7 +103,7 @@ class ComposerEvidenceSelector:
         selected_retrieval = _pack_with_document_guarantees(
             outcome.chunks,
             original_rows=retrieval_rows,
-            token_budget=self._attachment_token_budget,
+            token_budget=self._attachment_token_limit,
         )
 
         selected_ids = {
@@ -252,6 +252,5 @@ def _pack_with_document_guarantees(
 
 
 __all__ = [
-    "COMPOSER_ATTACHMENT_TOKEN_BUDGET",
     "ComposerEvidenceSelector",
 ]

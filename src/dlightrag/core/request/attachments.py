@@ -41,7 +41,6 @@ from dlightrag.core.request.composer_analysis import (
     aanalyze_composer_sidecars,
     build_composer_analysis_signature,
 )
-from dlightrag.core.request.composer_evidence import COMPOSER_ATTACHMENT_TOKEN_BUDGET
 from dlightrag.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
@@ -59,6 +58,7 @@ _COMPOSER_PRIVATE_METADATA_KEYS = frozenset(
         _COMPOSER_MM_RENDERED_METADATA_KEY,
     }
 )
+ATTACHMENT_CONTEXT_TOKEN_LIMIT = 24_576
 COMPOSER_DENSE_SCORE_THRESHOLD = 0.5
 COMPOSER_DENSE_BLOCK_SIZE = 256
 COMPOSER_DENSE_PAGE_SIZE = 256
@@ -434,7 +434,7 @@ def _resolve_attachment_evidence_mode(
     chunks: Sequence[AttachmentContextChunk],
 ) -> _AttachmentEvidenceMode:
     token_estimate = sum(estimate_tokens(chunk.content) for chunk in chunks)
-    return "full" if token_estimate <= COMPOSER_ATTACHMENT_TOKEN_BUDGET else "retrieval"
+    return "full" if token_estimate <= ATTACHMENT_CONTEXT_TOKEN_LIMIT else "retrieval"
 
 
 def _without_attachment_vectors(bundle: ParsedAttachmentBundle) -> ParsedAttachmentBundle:
@@ -1652,6 +1652,7 @@ class QueryAttachmentService:
 
 
 __all__ = [
+    "ATTACHMENT_CONTEXT_TOKEN_LIMIT",
     "AttachmentCacheKey",
     "AttachmentContextChunk",
     "AttachmentRequestVector",
