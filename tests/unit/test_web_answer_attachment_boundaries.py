@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Boundary and security tests for Web-only query document attachments.
+"""Boundary and security tests for Web-only Composer documents.
 
-These cover three seams that keep query-time document attachments a Web-only
+These cover three seams that keep Composer documents a Web-only
 feature:
 
 * the public REST ``/retrieve`` contract never accepts or emits attachment

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""In-memory BM25 for Web Composer attachment chunks."""
+"""In-memory BM25 for Web Composer document chunks."""
 
 from __future__ import annotations
 

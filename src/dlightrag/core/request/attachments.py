@@ -791,8 +791,8 @@ def _materialize_sidecar_image(
         return None, None
 
 
-class QueryAttachmentService:
-    """Parse-cache-first query-attachment retrieval, wired by dependency injection.
+class ComposerDocumentService:
+    """Parse-cache-first Composer document retrieval, wired by dependency injection.
 
     ``store`` (the Web-conversation store) and ``lightrag`` (a LightRAG accessor)
     are INJECTED to avoid a storage<->core import cycle; this module never
@@ -1659,7 +1659,7 @@ __all__ = [
     "AttachmentVectorPageRow",
     "ParsedAttachmentBundle",
     "ParsedAttachmentDocument",
-    "QueryAttachmentService",
+    "ComposerDocumentService",
     "build_composer_embedding_signature",
     "build_attachment_bundle_from_parse_result",
     "build_text_attachment_chunk",

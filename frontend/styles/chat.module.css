@@ -185,7 +185,7 @@
 
 /* === Composer Document Chips === */
 
-/* Document attachments share the thumbnail strip with image thumbnails but render
+/* Composer documents share the thumbnail strip with image thumbnails but render
    as compact chips carrying filename + size and a remove affordance. */
 .documentChip {
   position: relative;
@@ -244,7 +244,7 @@
   background: var(--color-bg-elevated);
 }
 
-/* History document attachments render as a right-aligned chip row above the
+/* Historical Composer documents render as a right-aligned chip row above the
    user bubble, mirroring the message image layout. */
 .messageDocuments {
   display: flex;

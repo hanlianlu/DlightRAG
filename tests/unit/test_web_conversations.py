@@ -1200,7 +1200,7 @@ async def test_prepare_answer_turn_merges_current_document_context(
         )
         return [chunk], [], [(document.attachment_id, bundle)]
 
-    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
+    service_under_test._parse_composer_documents = _fake_parse  # type: ignore[method-assign]
 
     turn = await service_under_test.prepare_answer_turn(
         manager=manager,
@@ -1227,7 +1227,7 @@ async def test_prepare_answer_turn_merges_current_document_context(
     assert turn.composer_evidence_trace["composer_dense_status"] == "no_rows"
     assert turn.composer_evidence_trace["composer_dense_chunks"] == 0
     query_embedder.aembed_query.assert_not_awaited()
-    processing_trace = turn.composer_evidence_trace["attachment_processing"]
+    processing_trace = turn.composer_evidence_trace["composer_document_processing"]
     assert processing_trace[0]["attachment_id"] == document.attachment_id
     assert processing_trace[0]["attachment_analysis_outcome"] == "success"
     assert processing_trace[0]["attachment_vector_cache_hits"] == 0
@@ -1334,7 +1334,7 @@ def test_composer_request_vectors_are_private_and_keyed_by_full_cache_identity()
     assert "embedding_vector" not in rows[0]
 
 
-async def test_parse_attachment_documents_preserves_resource_identity_order_and_trace(
+async def test_parse_composer_documents_preserves_resource_identity_order_and_trace(
     service_under_test,
 ) -> None:
     from dlightrag.core.request.attachments import (
@@ -1364,7 +1364,7 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
         ),
     ]
 
-    class _AttachmentService:
+    class _DocumentService:
         async def achunks_for_attachment(self, **kwargs: Any):
             attachment_id = kwargs["attachment_id"]
             chunk = AttachmentContextChunk(
@@ -1387,10 +1387,10 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
                 "attachment_embedding_failed": 0,
             }
 
-    attachment_service = _AttachmentService()
+    document_service = _DocumentService()
 
-    chunks, errors, bundles = await service_under_test._parse_attachment_documents(
-        attachment_service=attachment_service,
+    chunks, errors, bundles = await service_under_test._parse_composer_documents(
+        document_service=document_service,
         prepared=prepared,
         documents=documents,
     )
@@ -1402,7 +1402,7 @@ async def test_parse_attachment_documents_preserves_resource_identity_order_and_
     assert bundles[1][1].trace["attachment_embedding_fused"] == 1
 
 
-async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
+async def test_parse_composer_documents_continues_after_invalid_parser_hint(
     service_under_test,
 ) -> None:
     from dlightrag.core.request.attachments import (
@@ -1432,7 +1432,7 @@ async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
         ),
     ]
 
-    class _AttachmentService:
+    class _DocumentService:
         async def achunks_for_attachment(self, **kwargs: Any):
             attachment_id = kwargs["attachment_id"]
             if attachment_id == "att-invalid":
@@ -1453,10 +1453,10 @@ async def test_parse_attachment_documents_continues_after_invalid_parser_hint(
                 "attachment_analysis_outcome": "intentionally_disabled",
             }
 
-    attachment_service = _AttachmentService()
+    document_service = _DocumentService()
 
-    chunks, failures, bundles = await service_under_test._parse_attachment_documents(
-        attachment_service=attachment_service,
+    chunks, failures, bundles = await service_under_test._parse_composer_documents(
+        document_service=document_service,
         prepared=prepared,
         documents=documents,
     )
@@ -1521,9 +1521,9 @@ async def test_prepare_answer_turn_warns_when_historical_document_parse_fails(
         standalone_query="summarize the prior report",
         selected_history_attachment_ids=(document_id,),
     )
-    attachment_service = AsyncMock()
-    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
-        lambda _resources, _prepared: attachment_service
+    document_service = AsyncMock()
+    service_under_test._get_composer_document_service = (  # type: ignore[method-assign]
+        lambda _resources, _prepared: document_service
     )
     raw_exception = "Parser exploded at /private/path/report.pdf"
 
@@ -1551,7 +1551,7 @@ async def test_prepare_answer_turn_warns_when_historical_document_parse_fails(
             ],
         )
 
-    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
+    service_under_test._parse_composer_documents = _fake_parse  # type: ignore[method-assign]
 
     turn = await service_under_test.prepare_answer_turn(
         manager=manager,
@@ -1728,7 +1728,7 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
 
     manager._aselect_web_composer_evidence.side_effect = _select
 
-    class _AttachmentService:
+    class _DocumentService:
         async def adense_rankings(
             self,
             _query: str,
@@ -1740,9 +1740,9 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
             assert rows == []
             return [], {}
 
-    attachment_service = _AttachmentService()
-    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
-        lambda _resources, _prepared: attachment_service
+    document_service = _DocumentService()
+    service_under_test._get_composer_document_service = (  # type: ignore[method-assign]
+        lambda _resources, _prepared: document_service
     )
     parsed_order: list[str] = []
 
@@ -1780,7 +1780,7 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
         ]
         return chunks, failures, bundles
 
-    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
+    service_under_test._parse_composer_documents = _fake_parse  # type: ignore[method-assign]
 
     turn = await service_under_test.prepare_answer_turn(
         manager=manager,
@@ -1801,7 +1801,6 @@ async def test_prepare_answer_turn_preserves_selected_history_document_order(
     assert all(
         row["metadata"]["attachment_scope"] == "history" for row in turn.composer_context_chunks
     )
-    assert turn.history_attachments_selected == 2
     assert [warning.filename for warning in turn.document_warnings] == [
         "b.pdf",
         "A referenced document",
@@ -1843,9 +1842,9 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
         standalone_query="what does this say?",
         selected_history_attachment_ids=(),
     )
-    attachment_service = AsyncMock()
-    service_under_test._get_query_attachment_service = (  # type: ignore[method-assign]
-        lambda _resources, _prepared: attachment_service
+    document_service = AsyncMock()
+    service_under_test._get_composer_document_service = (  # type: ignore[method-assign]
+        lambda _resources, _prepared: document_service
     )
 
     async def _fake_parse(**_kwargs: object):
@@ -1861,7 +1860,7 @@ async def test_prepare_answer_turn_rejects_current_document_parse_error_before_d
             [],
         )
 
-    service_under_test._parse_attachment_documents = _fake_parse  # type: ignore[method-assign]
+    service_under_test._parse_composer_documents = _fake_parse  # type: ignore[method-assign]
 
     with pytest.raises(CurrentDocumentParseError) as exc_info:
         await service_under_test.prepare_answer_turn(

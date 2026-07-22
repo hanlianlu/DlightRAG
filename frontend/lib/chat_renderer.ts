@@ -136,7 +136,7 @@ function _safeDocumentHref(src: unknown): string {
   return '';
 }
 
-// Render stored document attachments as compact chips (filename + size) that
+// Render stored Composer documents as compact chips (filename + size) that
 // download the original via a same-origin link, using the shared chip component.
 function renderMessageDocuments(
   container: Element,

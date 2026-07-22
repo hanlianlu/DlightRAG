@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Composer-only evidence selection for temporary document attachments.
+"""Composer-only evidence selection for temporary Composer documents.
 
 This module never imports workspace retrieval or storage. It selects evidence
-only from current-turn and planner-selected historical Web attachments; the
+only from current-turn and planner-selected historical Composer documents; the
 LightRAG lane remains independently retrieved and ranked.
 """
 
@@ -29,7 +29,7 @@ _STRUCTURAL_TYPES = frozenset({"table", "drawing", "image", "figure", "equation"
 
 
 class ComposerEvidenceSelector:
-    """Select temporary attachment evidence without touching RAG results."""
+    """Select temporary Composer document evidence without touching RAG results."""
 
     def __init__(
         self,

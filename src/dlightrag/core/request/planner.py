@@ -676,7 +676,7 @@ class QueryPlanner:
         Separate contract from the stateless :meth:`plan` used by REST/MCP/SDK/
         retrieve. Reuses the shared planner helpers (history truncation, schema
         rendering, structured-output parsing, filter merging) and adds scoped
-        selection of prior document attachments / images.
+        selection of prior Composer documents and images.
         """
         fallback = QueryPlan(
             original_query=query,

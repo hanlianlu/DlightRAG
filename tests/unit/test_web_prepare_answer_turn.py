@@ -212,7 +212,7 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
     dense_rankings: list[dict[str, Any]] = []
     dense_calls: list[list[dict[str, Any]]] = []
 
-    class _AttachmentService:
+    class _DocumentService:
         async def adense_rankings(
             self,
             query: str,
@@ -235,25 +235,25 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
                 },
             )
 
-    attachment_service = _AttachmentService()
+    document_service = _DocumentService()
     factory_calls: list[tuple[object, PreparedWebConversation]] = []
 
-    def attachment_service_factory(
+    def document_service_factory(
         value: object,
         prepared: PreparedWebConversation,
-    ) -> _AttachmentService:
+    ) -> _DocumentService:
         factory_calls.append((value, prepared))
-        return attachment_service
+        return document_service
 
-    service._get_query_attachment_service = attachment_service_factory  # type: ignore[method-assign]
+    service._get_composer_document_service = document_service_factory  # type: ignore[method-assign]
 
     async def parse_with_shared_service(
         *,
-        attachment_service: object,
+        document_service: object,
         prepared: PreparedWebConversation,
         documents: list[Any],
     ) -> tuple[list[Any], list[dict[str, str]], list[Any]]:
-        assert attachment_service is expected_attachment_service
+        assert document_service is expected_document_service
         scope = "current" if documents[0].attachment_id == _ID else "history"
         events.append(f"parse-{scope}")
         chunks = [
@@ -275,7 +275,7 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
         ]
         return chunks, [], bundles
 
-    expected_attachment_service = attachment_service
+    expected_document_service = document_service
 
     async def select_evidence(**kwargs: Any):
         events.append("selector")
@@ -291,7 +291,7 @@ async def test_prepare_resolves_processing_resources_once_and_reuses_identity() 
         }
 
     manager._aselect_web_composer_evidence = select_evidence  # type: ignore[attr-defined]
-    service._parse_attachment_documents = parse_with_shared_service  # type: ignore[method-assign]
+    service._parse_composer_documents = parse_with_shared_service  # type: ignore[method-assign]
     current = SimpleNamespace(
         attachment_id=_ID,
         filename="current.pdf",
@@ -324,8 +324,8 @@ async def test_prepare_merges_actual_global_dense_trace(
         AttachmentCacheKey,
         AttachmentContextChunk,
         AttachmentVectorPageRow,
+        ComposerDocumentService,
         ParsedAttachmentBundle,
-        QueryAttachmentService,
         build_composer_embedding_signature,
     )
 
@@ -408,11 +408,11 @@ async def test_prepare_merges_actual_global_dense_trace(
 
     async def parse_with_real_service(
         *,
-        attachment_service: object,
+        document_service: object,
         prepared: PreparedWebConversation,
         documents: list[Any],
     ) -> tuple[list[AttachmentContextChunk], list[dict[str, str]], list[Any]]:
-        assert isinstance(attachment_service, QueryAttachmentService)
+        assert isinstance(document_service, ComposerDocumentService)
         chunks = [
             AttachmentContextChunk(
                 chunk_id=f"chunk-{document.attachment_id}",
@@ -442,7 +442,7 @@ async def test_prepare_merges_actual_global_dense_trace(
             "composer_evidence_strategy": "retrieved"
         }
 
-    service._parse_attachment_documents = parse_with_real_service  # type: ignore[method-assign]
+    service._parse_composer_documents = parse_with_real_service  # type: ignore[method-assign]
     manager._aselect_web_composer_evidence = select_evidence  # type: ignore[attr-defined]
     current = SimpleNamespace(
         attachment_id=_ID,

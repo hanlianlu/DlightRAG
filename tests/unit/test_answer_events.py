@@ -958,7 +958,7 @@ async def test_documents_thread_into_prepare_commit_and_surface_attachment_ids()
     service.prepare_answer_turn.return_value = PreparedAnswerTurn(
         current_query="hello",
         retrieval_query="hello",
-        current_attachment_digests={document.attachment_id: "Termination clause digest"},
+        current_document_digests={document.attachment_id: "Termination clause digest"},
     )
     service.commit_answer.return_value = CommitTurnResult(
         saved=True,

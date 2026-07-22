@@ -87,7 +87,7 @@ class PreparedWebConversation:
     content_revision: int
     text_history: tuple[dict[str, Any], ...]
     committed_submission: CommitTurnResult | None = None
-    # Caption-only catalog of prior document attachments for the Web planner to
+    # Caption-only catalog of prior Composer documents for the Web planner to
     # scope which history documents a follow-up refers to (never bytes).
     attachment_catalog: tuple[dict[str, Any], ...] = ()
 
@@ -246,7 +246,7 @@ class WebConversationService:
         """Plan the turn and materialize referenced history images/documents.
 
         The Web-variant planner rewrites the query and selects scoped history
-        images and document attachments in one call; the selected ids are
+        query images and Composer documents in one call; the selected ids are
         re-validated and materialized here (web owns the store), and the
         finished plan is injected so core skips re-planning. Current images
         always come first and are never displaced by history selection.
@@ -255,8 +255,8 @@ class WebConversationService:
         """
         documents = list(current_documents or [])
         resources = await manager.aget_composer_processing_resources(workspaces)
-        attachment_service = (
-            self._get_query_attachment_service(resources, prepared) if documents else None
+        document_service = (
+            self._get_composer_document_service(resources, prepared) if documents else None
         )
         capability = manager.answer_image_capability
         effective = capability.effective_max_images if capability is not None else 0
@@ -273,7 +273,7 @@ class WebConversationService:
                 )
             )
 
-        attachment_catalog = list(prepared.attachment_catalog)
+        document_catalog = list(prepared.attachment_catalog)
         # Parse current-turn documents BEFORE planning so the planner sees their
         # content and can make the standalone query document-aware. Parsing is
         # content-addressed and cached, so this is the only parse of these
@@ -282,8 +282,8 @@ class WebConversationService:
             current_chunks,
             current_failures,
             current_bundles,
-        ) = await self._parse_attachment_documents(
-            attachment_service=attachment_service,
+        ) = await self._parse_composer_documents(
+            document_service=document_service,
             prepared=prepared,
             documents=documents,
         )
@@ -301,7 +301,7 @@ class WebConversationService:
                 digest_trace["attachment_digest_strategy"],
                 digest_trace["attachment_digest_document_budgets"],
             )
-        current_attachment_catalog = [
+        current_document_catalog = [
             {
                 "attachment_id": document.attachment_id,
                 "filename": document.filename,
@@ -314,8 +314,8 @@ class WebConversationService:
             query,
             text_history=list(prepared.text_history),
             image_catalog=catalog or None,
-            attachment_catalog=attachment_catalog or None,
-            current_attachment_catalog=current_attachment_catalog or None,
+            attachment_catalog=document_catalog or None,
+            current_attachment_catalog=current_document_catalog or None,
             allowed_history_image_count=remaining,
             allowed_history_attachment_count=_MAX_HISTORY_ATTACHMENTS,
             current_image_descriptions=list(described.values()) or None,
@@ -346,11 +346,10 @@ class WebConversationService:
         resolution_status = "degraded" if selected_count > len(history_blocks) else "ok"
 
         # Resolve the Composer lane independently from workspace RAG. Current
-        # uploads and planner-selected historical attachments retain distinct
+        # uploads and planner-selected historical documents retain distinct
         # scope metadata and are selected against the standalone query only.
         composer_rows: list[dict[str, Any]] = []
         composer_trace: dict[str, Any] = {}
-        history_docs_selected = 0
         warning_by_id: dict[str, DocumentWarning] = {}
         history_chunks: list[AttachmentContextChunk] = []
         history_bundles: list[tuple[str, ParsedAttachmentBundle]] = []
@@ -358,7 +357,7 @@ class WebConversationService:
         if selected_attachment_ids:
             catalog_filenames = {
                 str(item.get("attachment_id")): safe_source_filename(str(item["filename"]))
-                for item in attachment_catalog
+                for item in document_catalog
                 if item.get("attachment_id") and item.get("filename")
             }
             try:
@@ -406,15 +405,14 @@ class WebConversationService:
                 for attachment_id in selected_attachment_ids
                 if attachment_id in history_docs_by_id
             ]
-            history_docs_selected = len(history_docs)
-            if history_docs and attachment_service is None:
-                attachment_service = self._get_query_attachment_service(resources, prepared)
+            if history_docs and document_service is None:
+                document_service = self._get_composer_document_service(resources, prepared)
             (
                 history_chunks,
                 history_failures,
                 history_bundles,
-            ) = await self._parse_attachment_documents(
-                attachment_service=attachment_service,
+            ) = await self._parse_composer_documents(
+                document_service=document_service,
                 prepared=prepared,
                 documents=history_docs,
             )
@@ -431,8 +429,8 @@ class WebConversationService:
                     ),
                 )
         if current_chunks or history_chunks:
-            if attachment_service is None:
-                raise RuntimeError("attachment service missing for parsed Composer chunks")
+            if document_service is None:
+                raise RuntimeError("document service missing for parsed Composer chunks")
             retrieval_attachment_ids = {
                 attachment_id
                 for attachment_id, bundle in [*current_bundles, *history_bundles]
@@ -451,7 +449,7 @@ class WebConversationService:
                 if chunk.attachment_id in retrieval_attachment_ids
             ]
             request_vectors = _composer_request_vectors(retrieval_chunks)
-            dense_rankings, dense_trace = await attachment_service.adense_rankings(
+            dense_rankings, dense_trace = await document_service.adense_rankings(
                 plan.standalone_query,
                 retrieval_rows,
                 request_vectors=request_vectors,
@@ -466,15 +464,15 @@ class WebConversationService:
             )
             composer_rows = _assign_composer_reference_ids(composer_rows)
             composer_trace = {**dense_trace, **composer_trace}
-        attachment_processing = [
+        composer_document_processing = [
             {"attachment_id": attachment_id, **bundle.trace}
             for attachment_id, bundle in [*current_bundles, *history_bundles]
             if bundle.trace
         ]
-        if attachment_processing:
+        if composer_document_processing:
             composer_trace = {
                 **composer_trace,
-                "attachment_processing": attachment_processing,
+                "composer_document_processing": composer_document_processing,
             }
 
         return PreparedAnswerTurn(
@@ -490,9 +488,7 @@ class WebConversationService:
             composer_context_chunks=tuple(composer_rows),
             composer_evidence_trace=composer_trace,
             web_composer_visuals=True,
-            current_attachment_digests=current_digests,
-            history_attachment_catalog_count=len(attachment_catalog),
-            history_attachments_selected=history_docs_selected,
+            current_document_digests=current_digests,
             document_warnings=tuple(
                 warning_by_id[attachment_id]
                 for attachment_id in selected_attachment_ids
@@ -500,15 +496,15 @@ class WebConversationService:
             ),
         )
 
-    def _get_query_attachment_service(
+    def _get_composer_document_service(
         self,
         resources: ComposerProcessingResources,
         prepared: PreparedWebConversation,
     ) -> Any:
-        """Construct the Web-only query-attachment service (store injected via DI)."""
-        from dlightrag.core.request.attachments import QueryAttachmentService
+        """Construct the Web-only Composer document service with its injected store."""
+        from dlightrag.core.request.attachments import ComposerDocumentService
 
-        return QueryAttachmentService(
+        return ComposerDocumentService(
             lightrag=resources.lightrag,
             store=self._store,
             parser_rules=resources.config.parser.rules,
@@ -521,10 +517,10 @@ class WebConversationService:
             conversation_id=prepared.conversation_id,
         )
 
-    async def _parse_attachment_documents(
+    async def _parse_composer_documents(
         self,
         *,
-        attachment_service: Any | None,
+        document_service: Any | None,
         prepared: PreparedWebConversation,
         documents: list[Any],
     ) -> tuple[
@@ -543,13 +539,13 @@ class WebConversationService:
         """
         if not documents:
             return [], [], []
-        if attachment_service is None:
-            raise RuntimeError("attachment service is required for document parsing")
+        if document_service is None:
+            raise RuntimeError("document service is required for document parsing")
         chunks: list[AttachmentContextChunk] = []
         failures: list[_DocumentParseFailure] = []
         bundles: list[tuple[str, ParsedAttachmentBundle]] = []
         for document in documents:
-            bundle, meta = await attachment_service.achunks_for_attachment(
+            bundle, meta = await document_service.achunks_for_attachment(
                 principal_id=prepared.principal_id,
                 conversation_id=prepared.conversation_id,
                 attachment_id=document.attachment_id,

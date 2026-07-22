@@ -24,8 +24,8 @@ from dlightrag.core.request.attachment_digest import (
 )
 from dlightrag.core.request.attachments import (
     AttachmentContextChunk,
+    ComposerDocumentService,
     ParsedAttachmentBundle,
-    QueryAttachmentService,
     _ParseOwnerShim,
     parse_attachment_to_bundle,
     resolve_attachment_chunk_signature,
@@ -377,7 +377,7 @@ async def test_dense_rankings_embed_query_once_without_embedding_documents(
             ),
         ],
     )
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -605,8 +605,8 @@ def _dense_service(
     embedder: Any,
     principal_id: str = "principal-1",
     conversation_id: str = "conversation-1",
-) -> QueryAttachmentService:
-    return QueryAttachmentService(
+) -> ComposerDocumentService:
+    return ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -935,7 +935,7 @@ async def test_dense_rankings_accept_current_fused_provider_text_fallback(
             )
         ],
     )
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -1327,7 +1327,7 @@ async def test_service_returns_cache_hit_without_parsing(
 
     monkeypatch.setattr(attachments, "parse_attachment_document", _boom)
 
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -1404,7 +1404,7 @@ async def test_cache_hit_skips_parse_analysis_and_document_embedding(
 
     monkeypatch.setattr(attachments, "parse_attachment_document", _boom, raising=False)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _boom, raising=False)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -1495,7 +1495,7 @@ async def test_cache_hit_trace_uses_persisted_analysis_and_rendered_markers(
             )
         ],
     )
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -1558,7 +1558,7 @@ async def test_cache_hit_embedding_signature_failure_is_attachment_scoped(
         raise RuntimeError("embedding signature unavailable")
 
     monkeypatch.setattr(attachments, "build_composer_embedding_signature", _signature_failure)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=_SpyStore(cached),
         parser_rules="",
@@ -1635,7 +1635,7 @@ async def test_fresh_small_bundle_routes_once_without_document_embedding(
         _route_once,
         raising=False,
     )
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -1711,7 +1711,7 @@ async def test_cached_small_bundle_routes_once_without_reading_stale_vectors(
         return original_policy(chunks)
 
     monkeypatch.setattr(attachments, "_resolve_attachment_evidence_mode", _route_once)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -1812,7 +1812,7 @@ async def test_fresh_oversized_bundle_routes_once_and_embeds_before_materialize(
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
     monkeypatch.setattr(attachments, "_resolve_attachment_evidence_mode", _route_once)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -1893,7 +1893,7 @@ async def test_cached_oversized_bundle_routes_once_and_refreshes_stale_vectors(
         return original_policy(chunks)
 
     monkeypatch.setattr(attachments, "_resolve_attachment_evidence_mode", _route_once)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2008,7 +2008,7 @@ async def test_cache_miss_runs_parse_analysis_chunk_embedding_then_one_materiali
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope, raising=False)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze, raising=False)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2093,7 +2093,7 @@ async def _assert_analysis_outcome_controls_text_cache_materialization(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2177,7 +2177,7 @@ async def test_mm_chunk_trace_counts_rendered_list_not_ordinary_sidecar_provenan
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
     store = _SpyStore(cached=None)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2293,7 +2293,7 @@ async def test_partial_degradation_keeps_successful_visual_text_embeds_and_ranks
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2438,7 +2438,7 @@ async def test_embedding_model_change_reuses_parse_analysis_and_refreshes_vector
 
     monkeypatch.setattr(attachments, "parse_attachment_document", _boom)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _boom)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2530,7 +2530,7 @@ async def test_analysis_exception_is_stage_specific_and_keeps_rendered_text(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analysis_failure)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2585,7 +2585,7 @@ async def test_rendering_exception_is_not_mislabeled_as_parser_failure(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render_failure)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=_SpyStore(cached=None),
         parser_rules="",
@@ -2643,7 +2643,7 @@ async def test_embedding_exception_is_stage_specific_and_keeps_chunks_for_retry(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2735,7 +2735,7 @@ async def test_mixed_vector_cache_reuses_text_row_and_retries_only_visual_as_fus
             ),
         ],
     )
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2849,7 +2849,7 @@ async def test_vector_cache_validation_releases_each_page_and_refreshes_only_mis
                 del page
 
     store = _PagedStore(cached)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -2948,7 +2948,7 @@ async def test_visual_chunk_uses_fused_vector_when_capability_active(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=_SpyStore(cached=None),
         parser_rules="",
@@ -3053,7 +3053,7 @@ async def test_fused_failure_caches_text_fallback_but_remains_fused_retryable(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3191,7 +3191,7 @@ async def test_deterministic_image_rejection_reuses_cached_text_without_reopenin
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
     store = _SpyStore(cached=None)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3276,7 +3276,7 @@ async def test_parser_cancellation_reraises_cancelled_error_releases_tempdir_and
     )
     store = _SpyStore(cached=None)
     monkeypatch.setattr(attachments, "parse_attachment_document", _cancelled_parse)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3428,7 +3428,7 @@ async def test_embedding_cancellation_reraises_cancelled_error_and_writes_no_par
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3543,7 +3543,7 @@ async def test_parse_context_keeps_mutated_sidecars_alive_through_rendering(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _analyze)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=_SpyStore(cached=None),
         parser_rules="",
@@ -3619,7 +3619,7 @@ async def test_identical_bytes_in_another_conversation_do_not_hit_cache(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3690,7 +3690,7 @@ async def test_expired_conversation_never_materializes_derived_results(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3767,7 +3767,7 @@ async def test_cache_io_failures_keep_request_local_enriched_bundle(
     monkeypatch.setattr(attachments, "parse_attachment_document", _parse_scope)
     monkeypatch.setattr(attachments, "aanalyze_composer_sidecars", _disabled)
     monkeypatch.setattr(attachments, "build_attachment_bundle_from_parse_result", _render)
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=_FailingCacheStore(cached=None),
         parser_rules="",
@@ -3860,7 +3860,7 @@ async def test_service_cache_miss_parses_and_materializes(
         ),
     )
 
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3902,7 +3902,7 @@ async def test_service_parse_failure_is_attachment_scoped(
         aembed_documents=AsyncMock(),
     )
 
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",
@@ -3936,7 +3936,7 @@ async def test_invalid_parser_hint_is_attachment_scoped(test_config: Any) -> Non
         image_enabled=False,
         aembed_documents=AsyncMock(),
     )
-    service = QueryAttachmentService(
+    service = ComposerDocumentService(
         lightrag=_FakeLightRAG(),
         store=store,
         parser_rules="",

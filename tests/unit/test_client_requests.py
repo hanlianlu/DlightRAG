@@ -83,7 +83,7 @@ def test_public_docs_describe_slice_a_conversation_boundaries() -> None:
 
 def test_architecture_docs_describe_composer_trim_lifecycle() -> None:
     architecture = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-    composer = architecture.split("## Web Composer Attachment Flow", 1)[1].split(
+    composer = architecture.split("## Web Composer Document Flow", 1)[1].split(
         "## Retrieval And Answer Flow", 1
     )[0]
 

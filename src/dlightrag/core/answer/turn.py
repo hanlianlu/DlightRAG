@@ -47,12 +47,10 @@ class PreparedAnswerTurn:
     composer_context_chunks: tuple[dict[str, Any], ...] = ()
     composer_evidence_trace: dict[str, Any] = field(default_factory=dict)
     web_composer_visuals: bool = False
-    # Current attachment id -> deterministic planner digest. The Web adapter
+    # Current document id -> deterministic planner digest. The Web adapter
     # persists these with the completed turn so future planner turns can resolve
     # references to prior documents without reparsing them.
-    current_attachment_digests: dict[str, str] = field(default_factory=dict)
-    history_attachment_catalog_count: int = 0
-    history_attachments_selected: int = 0
+    current_document_digests: dict[str, str] = field(default_factory=dict)
     document_warnings: tuple[DocumentWarning, ...] = ()
 
     @classmethod

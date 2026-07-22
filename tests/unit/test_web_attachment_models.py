@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for Web query document attachment admission."""
+"""Tests for Web Composer document admission."""
 
 from pathlib import Path
 

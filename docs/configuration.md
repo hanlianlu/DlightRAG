@@ -586,8 +586,9 @@ answer transport use the same ceiling.
 
 ## Query Images And Visual Assets
 
-Current-request images are described with the VLM before retrieval when a VLM
-is configured. Public REST, MCP, CLI, and Python answer/retrieve calls are
+In Web/UI terminology, **query attachments** are query images plus Composer
+documents. Current-request images are described with the VLM before retrieval
+when a VLM is configured. Public REST, MCP, CLI, and Python answer/retrieve calls are
 stateless; durable conversation images belong only to the Web conversation
 store. `max_upload_bytes` is the decoded per-image Web admission limit, not the
 answer-model compression budget. Its default is 15 MiB and the backend and
@@ -619,12 +620,12 @@ Web Composer documents use the configured parser routing and
 `parser_sidecars.vlm.enabled` switch. On a cache miss they run the real parser,
 cache-neutral LightRAG VLM/EXTRACT analysis, and LightRAG multimodal renderer in
 temporary storage. After parse/chunk work or a cache load, each current or
-planner-selected history attachment is routed once by its total estimated chunk
-tokens. Attachments at or below 24,576 tokens use full mode: every chunk enters
-the Answer attachment context directly, with no document embedding, vector
-read, exact retrieval, BM25/RRF, or reranking. Attachments above 24,576 tokens
+planner-selected historical Composer document is routed once by its total estimated
+chunk tokens. Documents at or below 24,576 tokens use full mode: every chunk enters
+the Answer Composer document context directly, with no document embedding, vector
+read, exact retrieval, BM25/RRF, or reranking. Documents above 24,576 tokens
 use retrieval mode: document vectors are embedded and cached, exact dense and
-lexical/structural retrieval share one candidate pool, and each attachment is
+lexical/structural retrieval share one candidate pool, and each document is
 packed independently to at most 24,576 tokens.
 
 `RAGServiceManager` lazily creates, owns, and closes one cache-neutral
@@ -726,10 +727,10 @@ request_timeout: 300
 
 `max_conversation_tokens` caps recent text history supplied to the query
 planner. Web planning additionally reserves current-request context: current
-document attachments share an 8192-token, structure-aware digest budget; prior
+Composer documents share an 8192-token, structure-aware digest budget; prior
 image/document catalogs share 4096 tokens; and the complete rendered planner
 input is bounded to 102400 estimated tokens. When the envelope is full, the
-oldest text history and catalog entries yield before current attachments. These
+oldest text history and catalog entries yield before current Composer documents. These
 are internal planner safety budgets rather than additional public settings.
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`

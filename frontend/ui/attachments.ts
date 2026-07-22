@@ -21,6 +21,7 @@ interface PendingDocument {
     objectUrl: string;
 }
 
+// Query attachments are current query images plus Composer documents.
 const pendingDocuments: PendingDocument[] = [];
 
 export function addAttachmentFile(file: File): void {

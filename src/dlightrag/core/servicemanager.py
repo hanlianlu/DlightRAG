@@ -1116,7 +1116,7 @@ class RAGServiceManager:
 
         Web ``/web/answer`` only. Routes through the separate
         :meth:`QueryPlanner.plan_web_conversation` contract so scoped history
-        documents/images and an attachment query are planned in the same call.
+        Composer documents and query images are planned in the same call.
         REST/MCP/SDK/retrieve keep using :meth:`aplan_query`.
         """
         planner = self._get_query_planner()
@@ -1130,7 +1130,6 @@ class RAGServiceManager:
                 "workspaces": list(workspaces or []),
                 "history_turns": len(text_history or []),
                 "history_image_catalog_count": len(image_catalog or []),
-                "history_attachment_catalog_count": len(attachment_catalog or []),
             },
         ) as trace:
             schema = await self._get_schema(workspaces)
@@ -1420,6 +1419,11 @@ class RAGServiceManager:
     ) -> RetrievalResult:
         """Retrieve from one or more workspaces (federated if multiple).
 
+        ``query_images`` are current-request images. VLM descriptions inform
+        query planning, and the raw images are embedded only when optional
+        direct visual retrieval is active. Public retrieval is stateless: it
+        accepts neither history nor Web Composer documents.
+
         Args:
             plan: Pre-computed QueryPlan from QueryPlanner. When provided,
                 uses plan.standalone_query for search and plan.metadata_filter
@@ -1511,13 +1515,16 @@ class RAGServiceManager:
     ) -> RetrievalResult:
         """Answer from one or more workspaces: plan -> retrieve -> generate.
 
-        ``query_images`` are user-attached ``image_url`` blocks inlined into the
-        answer LLM call; they inform answer generation and (via VLM descriptions)
-        the retrieval plan, but are not embedded for retrieval.
+        ``query_images`` are current-request images. VLM descriptions inform
+        query planning, the raw images are embedded when optional direct visual
+        retrieval is active, and bounded image blocks are included in the
+        answer-model request.
 
         ``history`` is caller-supplied prior turns (``role``/``content`` dicts).
         It is stateless -- the caller owns persistence and passes it per request;
         it feeds the planner's standalone-query rewrite and answer generation.
+        Public answer calls do not accept Web Composer documents; those belong
+        only to the server-owned Web conversation surface.
         """
         turn = PreparedAnswerTurn.stateless(query, query_images)
         ws_list = await self._resolve_manager_query_workspaces(

@@ -27,7 +27,7 @@ dependencies = [
     "httpx>=0.28.0",
     "pillow>=12.3.0",
     "lingua-language-detector>=2.2.0",
-    # Request-local lexical retrieval for Web Composer document attachments.
+    # Request-local lexical retrieval for Web Composer documents.
     "bm25s>=0.3.9",
     # JSON repair for LLM output
     "json-repair>=0.61.7",

@@ -265,7 +265,7 @@ present, is inserted as prior messages before the current user message.
 The sections are intentional:
 
 - `## User-attached images` are part of the user's question, not retrieved evidence.
-- `## User-attached documents` contains Web Composer attachment evidence. Each
+- `## User-attached documents` contains Web Composer document evidence. Each
   answer assigns compact document labels such as `att-1`; its chunk markers use
   the `[att-1-1]` form.
 - `## Knowledge-base evidence` contains LightRAG excerpts and page/image previews.
@@ -364,9 +364,10 @@ There is no cross-workspace global rerank. Round-robin is intentional: it keeps
 workspace representation stable without assuming rerank scores from different
 workspace/model calls are globally calibrated.
 
-## Web Query Attachments
+## Web Composer Documents
 
-Web query document attachments use the configured real LightRAG parser in a
+In Web/UI terminology, **query attachments** are query images plus Composer
+documents. The document lane uses the configured real LightRAG parser in a
 `TemporaryDirectory`. A strict storage-free proxy then invokes LightRAG's real
 VLM/EXTRACT multimodal analyzer with `llm_response_cache=None`, followed by the
 real LightRAG text chunkers and multimodal sidecar renderer. Parser persistence
@@ -400,29 +401,30 @@ cascade all attachment-derived rows. Max-turn trimming removes old turn records
 but preserves the conversation-level parse/vector cache. Cache identity never
 crosses a conversation or principal boundary.
 
-After parse/chunk work or a cache load, each current or planner-selected history
-attachment is routed exactly once by its total estimated chunk tokens:
+After parse/chunk work or a cache load, each current or planner-selected
+historical Composer document is routed exactly once by its total estimated chunk
+tokens:
 
 ```text
-attachment
+Composer document
   |-- <= 24,576 tokens -> full
   |     all chunks enter the Answer Composer context directly
   |     no document embedding or vector read
   |     no dense, BM25, structure/coverage, RRF, or rerank work
   `-- > 24,576 tokens -> retrieval
         eagerly embed and cache text or fused document vectors
-        current + selected history retrieval attachments share:
+        current + selected historical retrieval documents share:
           one global exact-dense ordering
           one BM25 + structure + coverage + dense RRF(k=60)
           one top-30 candidate set total
           one rerank_with_fallback() call
-        pack each attachment independently to <= 24,576 tokens
-        no attachment borrows another attachment's unused allowance
+        pack each document independently to <= 24,576 tokens
+        no document borrows another document's unused allowance
 ```
 
-The 24,576-token threshold and allowance are fixed for each attachment. There
+The 24,576-token threshold and allowance are fixed for each Composer document. There
 are no separate current, history, or combined Composer token targets. All
-retrieval-mode rows across current and selected history attachments compete in
+retrieval-mode rows across current and selected historical Composer documents compete in
 that single top-30 pool. Dense ranking embeds the standalone query once with
 query semantics, streams their cached document vectors in bounded blocks,
 converts each block to `float32`, computes exact cosine similarity, and admits
@@ -432,8 +434,8 @@ disable only the affected dense evidence; BM25, structure, and
 first/middle/last coverage continue. Rerank failure keeps the fused RRF order
 through the same shared fallback executor used by workspace RAG.
 
-Final Composer context keeps current attachment evidence before selected
-history attachment evidence. Each attachment is packed independently, but the
+Final Composer context keeps current document evidence before selected
+historical document evidence. Each document is packed independently, but the
 complete Answer envelope also contains system and user instructions,
 conversation history, images, workspace RAG evidence, KG context, and
 references. The per-attachment allowance is not a guarantee that this complete
@@ -441,16 +443,16 @@ envelope fits the answer model; final assembly may raise an overflow error
 rather than silently trim evidence.
 
 There is no Composer-to-ingest or Composer-to-workspace promotion bridge:
-Composer attachments and their cache rows never move into ingest or workspace
+Composer documents and their cache rows never move into ingest or workspace
 storage. Principal, conversation, ownership, and TTL boundaries continue to
 apply throughout the Composer lifecycle.
 
-Attachment chunks carry a `web-attachment://<attachment_id>` source URI and a
+Composer document chunks carry a `web-attachment://<attachment_id>` source URI and a
 `__web_attachment__` sentinel workspace, so they never resolve a workspace image
 route. Attachment figures are delivered inline as `image_data` in the answer
 context, and the Web answer layer projects a conversation-scoped
 `/web/conversations/<conversation_id>/documents/<attachment_id>` download URL
-onto the finalized attachment source.
+onto the finalized Composer document source.
 
 Current direct images, selected history images, and visuals from current/history
 Composer documents share one Composer visual budget. Workspace RAG visuals use

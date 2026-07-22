@@ -7,7 +7,7 @@ insert, the history JSONB aggregation, the content-addressed parse cache, the
 principal-scoped document reads, and the ON DELETE CASCADE lifecycle.
 
 Workspace non-write is proved without brittle global row counts. A complete
-``QueryAttachmentService`` cache miss runs through the parse-owner shim, strict
+``ComposerDocumentService`` cache miss runs through the parse-owner shim, strict
 analysis proxy, real LightRAG chunk/MM rendering, route-aware vector
 materialization, and Web persistence while write-failing workspace handles
 record any access. The only permitted result store is the
@@ -1133,7 +1133,7 @@ async def test_composer_cache_miss_materializes_only_web_rows(
     from dlightrag.core.document_embedding import RobustDocumentEmbedder
     from dlightrag.core.request.attachments import (
         ATTACHMENT_CONTEXT_TOKEN_LIMIT,
-        QueryAttachmentService,
+        ComposerDocumentService,
     )
     from dlightrag.storage.web_conversations import PGWebConversationStore
     from dlightrag.utils.tokens import estimate_tokens
@@ -1205,7 +1205,7 @@ async def test_composer_cache_miss_materializes_only_web_rows(
         await _delete_principal(pool, principal_id)
         conversation = await store.create_conversation(principal_id)
         conversation_id = str(conversation["conversation_id"])
-        service = QueryAttachmentService(
+        service = ComposerDocumentService(
             lightrag=lightrag,
             store=store,
             parser_rules="",

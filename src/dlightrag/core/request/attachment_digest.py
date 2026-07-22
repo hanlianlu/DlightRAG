@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Structure-aware planner digests for temporary Web document attachments."""
+"""Structure-aware planner digests for temporary Web Composer documents."""
 
 from __future__ import annotations
 

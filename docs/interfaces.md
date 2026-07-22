@@ -15,13 +15,15 @@ configuration fields live in [configuration.md](configuration.md).
 | MCP Server | Agent tools over stdio or streamable HTTP | Durable ingest jobs |
 | Web UI | Browser upload and chat | Durable ingest jobs behind the Files panel |
 
-Web `/web/answer` also supports query-time document attachments. These are
-conversation-scoped Web attachments, not REST/MCP/SDK retrieve inputs and not
-workspace ingestion records. On a cache miss, DlightRAG uses the real configured
-LightRAG parser, cache-neutral VLM/EXTRACT analysis, and the LightRAG multimodal
-renderer in temporary storage. Final chunks and JSONB vectors live only in the
-owning `web_conversation_attachment_chunks` rows; they do not enter workspace
-documents, BM25, vectors, KG, or LLM cache.
+In the Web UI, **query attachments** means query images plus Composer documents.
+Both may be current-turn inputs, and the planner may resolve relevant historical
+images and Composer documents from the owning conversation. Composer documents
+are not REST/MCP/SDK retrieve inputs or workspace ingestion records. On a cache
+miss, DlightRAG uses the real configured LightRAG parser, cache-neutral
+VLM/EXTRACT analysis, and the LightRAG multimodal renderer in temporary storage.
+Final chunks and JSONB vectors live only in the owning
+`web_conversation_attachment_chunks` rows; they do not enter workspace documents,
+BM25, vectors, KG, or LLM cache.
 
 ### Choosing an interface
 
@@ -419,8 +421,9 @@ LightRAG's document status and DlightRAG's content-hash guard.
 The Web-only conversation lifecycle is server-owned and principal-scoped. The
 browser creates, lists, selects, renames, deletes, and reloads conversations
 through `/web/conversations`; it sends only `conversation_id`, the current query,
-current images, and the selected search workspaces to `/web/answer`. Conversation
-IDs are server-generated UUIDs and are never credentials. History and image
+current query attachments (query images plus Composer documents), and the selected
+search workspaces to `/web/answer`. Conversation IDs are server-generated UUIDs
+and are never credentials. History and image
 reads always filter by both the authenticated principal and conversation ID, so
 another principal receives the same 404 as a missing conversation.
 
@@ -429,7 +432,7 @@ retention. Current Web images are admitted using `query_images.max_current_image
 and `query_images.max_upload_bytes`; the defaults are three images and 15 MiB per
 decoded image, and the browser upload entry is gated by the query-role answer
 model's discovered image capability (unsupported or unknown disables uploads).
-All attachment-derived cache rows are owned by authenticated principal plus
+All Composer-document-derived cache rows are owned by authenticated principal plus
 conversation. The same bytes and signatures may be reused inside that one
 conversation only; there is no cross-conversation or cross-principal reuse.
 Manual delete and TTL pruning cascade attachment bytes, enriched chunks, image
@@ -444,7 +447,7 @@ other's remaining count or bytes.
 
 `RAGServiceManager` owns and closes one cache-neutral `ComposerModelBundle` for
 VLM and EXTRACT. It shares the bundle's VLM callable with
-`QueryImageDescriber` and attachment analysis under the manager's direct-LLM
+`QueryImageDescriber` and Composer document analysis under the manager's direct-LLM
 concurrency bound. Separately, the first normalized requested workspace
 deterministically selects one `RAGService`, which owns and provides its
 initialized LightRAG parser/multimodal renderer, shared
@@ -467,6 +470,9 @@ multi-turn follow-ups, but DlightRAG never persists it: the client owns
 conversation storage and re-sends the turns it wants on each request. They do
 not accept a server `conversation_id` or durable historical-image IDs, and
 `query_images` belong only to the current request and are never persisted.
+They are VLM-described for planning, embedded when optional direct visual
+retrieval is active, and included as bounded model blocks for answers. These
+public calls accept no Composer documents.
 
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 `DELETE /workspaces/{workspace}`), while the `/web/*` surface uses htmx action

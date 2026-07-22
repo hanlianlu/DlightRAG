@@ -165,7 +165,7 @@ def _apply_attachment_source_links(
 ) -> list[SourceReferencePayload]:
     """Project conversation-scoped download URLs onto Web attachment sources.
 
-    Web query attachments carry a ``web-attachment://<attachment_id>``
+    Web Composer document sources carry a ``web-attachment://<attachment_id>``
     ``source_uri`` and no workspace, so ``project_source_payloads`` leaves their
     ``download_url`` unset. Rewrite it to the conversation-scoped attachment
     route and drop chunk image URLs (attachment figures are delivered inline as
@@ -467,7 +467,7 @@ async def _emit_answer_events(
                     images=validated_images,
                     image_descriptions=image_descriptions,
                     documents=validated_documents,
-                    document_parse_summaries=turn.current_attachment_digests,
+                    document_parse_summaries=turn.current_document_digests,
                 )
             )
             while True:

@@ -58,10 +58,12 @@ visual chunk with a fused vector that interleaves the VLM description and the
 image. With a text-only embedding model, this alignment is skipped and
 LightRAG's semantic visual chunk remains the multimodal ingestion path.
 
-## Web Composer Attachment Flow
+## Web Composer Document Flow
 
-Web Composer documents borrow processing capability from the first normalized
-requested workspace, but they never become workspace documents:
+In Web and UI terminology, **query attachments** are the umbrella for query
+images plus Composer documents. Composer documents borrow processing capability
+from the first normalized requested workspace, but they never become workspace
+documents:
 
 ```text
 temporary Web document
@@ -70,14 +72,14 @@ temporary Web document
   -> real LightRAG text chunkers and multimodal sidecar renderer
   -> route by total estimated chunk tokens
        <= 24,576 -> full
-         -> Answer attachment context (all chunks)
+         -> Answer Composer document context (all chunks)
        > 24,576 -> retrieval
          -> shared RobustDocumentEmbedder
               fused image+text when the selected service has working image capability
               text-only when capability is absent or fused embedding fails
          -> web_conversation_attachment_chunks vector cache
          -> exact Composer-local retrieval
-         -> Answer attachment context (independently packed to <= 24,576 tokens)
+         -> Answer Composer document context (independently packed to <= 24,576 tokens)
 ```
 
 `RAGServiceManager` lazily owns and closes one cache-neutral

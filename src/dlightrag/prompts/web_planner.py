@@ -14,12 +14,12 @@ WEB_PLANNER_EXTRA_GUIDANCE = """\
 You are planning one Web conversation turn. In addition to the workspace query
 above, also produce these keys:
 
-- "selected_history_attachment_ids": Ids of prior document attachments (from the
+- "selected_history_attachment_ids": Ids of prior Composer documents (from the
   catalog below) that the current message refers to. Never invent ids; choose
   only from the catalog. Omit when the current message does not reference prior
-  attachments -- current attachments are already in scope.
+  documents -- current Composer documents are already in scope.
 - "selected_history_image_ids": Ids of prior images (from the image catalog
-  below) that the current message refers to. Same rules as attachment ids."""
+  below) that the current message refers to. Same rules as document ids."""
 
 WEB_PLANNER_SYSTEM_PROMPT = "\n\n".join(
     [CORE_IDENTITY, PLANNER_GUIDANCE, WEB_PLANNER_EXTRA_GUIDANCE]
@@ -27,24 +27,24 @@ WEB_PLANNER_SYSTEM_PROMPT = "\n\n".join(
 
 WEB_PLANNER_HISTORY_ATTACHMENT_TEMPLATE = """\
 
-You are given a catalog of document attachments shared earlier in this
-conversation. When the current message refers to an earlier attachment (e.g.
+You are given a catalog of Composer documents shared earlier in this
+conversation. When the current message refers to an earlier document (e.g.
 "the contract from before", "that report"), select the matching ids by comparing
-the user's wording against each attachment's filename and summary. Never invent
+the user's wording against each document's filename and summary. Never invent
 ids; choose only from the catalog below. Return them in
 `selected_history_attachment_ids`, most relevant first, at most {allowed_count}.
 
-Prior document attachments (id | turn | ordinal | filename | summary):
+Prior Composer documents (id | turn | ordinal | filename | summary):
 {catalog_lines}
 """
 
 WEB_PLANNER_CURRENT_ATTACHMENT_TEMPLATE = """\
 
-The user attached document(s) with the current message (listed below). These are
+The user added Composer document(s) with the current message (listed below). These are
 already in scope for this turn -- do not add them to
 `selected_history_attachment_ids`. Fold their salient content into the standalone
 query when relevant.
 
-Current document attachments (id | filename | summary):
+Current Composer documents (id | filename | summary):
 {catalog_lines}
 """

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for Composer-only attachment evidence selection."""
+"""Tests for Composer-only document evidence selection."""
 
 import importlib
 import logging
