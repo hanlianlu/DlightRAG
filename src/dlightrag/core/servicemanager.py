@@ -917,8 +917,9 @@ class RAGServiceManager:
                     log_safe(exc),
                 )
 
-            # Close and evict from cache even after reset errors.
-            if ws in self._services:
+            # Close and evict from cache even after reset errors, but never for a
+            # dry run -- a preview must not tear down the live workspace runtime.
+            if not dry_run and ws in self._services:
                 try:
                     await self._services[ws].aclose()
                 except Exception:
@@ -976,8 +977,6 @@ class RAGServiceManager:
 
             self._query_planner = QueryPlanner(
                 llm_func=self._sem_bound(get_planner_model_func(self._config)),
-                schema_provider=self._get_schema,
-                schema_ttl=300.0,
             )
         return self._query_planner
 
@@ -1057,6 +1056,7 @@ class RAGServiceManager:
             return cached[1]
 
         schemas: list[dict[str, Any]] = []
+        complete = True
         for workspace in ws_key:
             try:
                 svc = await self._get_service(workspace)
@@ -1066,14 +1066,20 @@ class RAGServiceManager:
                     if isinstance(schema, dict):
                         schemas.append(schema)
             except Exception:
+                complete = False
                 logger.debug(
                     "Schema lookup failed for workspace %s",
                     log_safe(workspace),
                     exc_info=True,
                 )
         merged = _merge_schema_rows(schemas)
-        self._schema_cache[ws_key] = (now, merged)
-        return merged
+        if complete:
+            self._schema_cache[ws_key] = (now, merged)
+            return merged
+        # A lookup failed: never cache the degraded schema. Prefer the
+        # last-known-good entry (even if stale) over a partial merge, and
+        # otherwise return best-effort so the next call retries.
+        return cached[1] if cached is not None else merged
 
     async def aplan_query(
         self,

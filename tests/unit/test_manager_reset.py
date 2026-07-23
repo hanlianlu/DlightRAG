@@ -129,6 +129,9 @@ class TestManagerAresetSingleWorkspace:
         assert store.deleted_workspaces == []
         assert result["workspaces"]["ws1"]["ingest_jobs_cancelled"] == 0
         assert result["workspaces"]["ws1"]["ingest_jobs_deleted"] == 0
+        # A dry run must not tear down or evict the live workspace service.
+        svc.aclose.assert_not_awaited()
+        assert manager._services.get("ws1") is svc
 
 
 class TestManagerAresetAllWorkspaces:

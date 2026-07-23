@@ -613,59 +613,6 @@ class TestFilterMerge:
 
 
 # ---------------------------------------------------------------------------
-# Schema caching
-# ---------------------------------------------------------------------------
-
-
-class TestSchemaCache:
-    async def test_caches_schema(self):
-        schema = {"columns": [{"name": "x", "type": "text"}]}
-        provider = AsyncMock(return_value=schema)
-        llm = AsyncMock(return_value=json.dumps({"standalone_query": "q", "filters": {}}))
-        planner = QueryPlanner(llm_func=llm, schema_provider=provider, schema_ttl=300.0)
-
-        await planner.plan("q1")
-        await planner.plan("q2")
-        # Provider only called once due to TTL
-        assert provider.await_count == 1
-
-    async def test_ttl_expired_refreshes(self):
-        schema = {"columns": [{"name": "x", "type": "text"}]}
-        provider = AsyncMock(return_value=schema)
-        llm = AsyncMock(return_value=json.dumps({"standalone_query": "q", "filters": {}}))
-        planner = QueryPlanner(llm_func=llm, schema_provider=provider, schema_ttl=0.0)
-
-        await planner.plan("q1")
-        await planner.plan("q2")
-        # TTL=0 means always refresh
-        assert provider.await_count == 2
-
-    async def test_provider_failure_uses_stale(self):
-        schema = {"columns": [{"name": "x", "type": "text"}]}
-        provider = AsyncMock(return_value=schema)
-        llm = AsyncMock(return_value=json.dumps({"standalone_query": "q", "filters": {}}))
-        planner = QueryPlanner(llm_func=llm, schema_provider=provider, schema_ttl=0.0)
-
-        # First call succeeds
-        await planner.plan("q1")
-        assert provider.await_count == 1
-
-        # Second call: provider fails but existing cached schema is used
-        provider.side_effect = RuntimeError("DB down")
-        plan = await planner.plan("q2")
-        assert plan.standalone_query == "q"
-
-    async def test_provider_initial_failure_is_ignored(self):
-        provider = AsyncMock(side_effect=RuntimeError("DB down"))
-        llm = AsyncMock(return_value=json.dumps({"standalone_query": "q", "filters": {}}))
-        planner = QueryPlanner(llm_func=llm, schema_provider=provider)
-
-        plan = await planner.plan("q")
-
-        assert plan.standalone_query == "q"
-
-
-# ---------------------------------------------------------------------------
 # History truncation
 # ---------------------------------------------------------------------------
 

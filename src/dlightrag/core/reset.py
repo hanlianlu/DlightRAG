@@ -92,9 +92,14 @@ async def areset(
                 collected_graph_names.append(graph_name)
             try:
                 if not dry_run:
-                    result = drop_fn()
-                    if result is not None:
-                        await result  # type: ignore[misc]
+                    outcome = drop_fn()
+                    if outcome is not None:
+                        outcome = await outcome  # type: ignore[misc]
+                    # LightRAG PostgreSQL storages swallow failures into
+                    # {"status": "error", ...} instead of raising, so an
+                    # unchecked drop would be miscounted as a success.
+                    if isinstance(outcome, dict) and outcome.get("status") == "error":
+                        raise RuntimeError(str(outcome.get("message") or "drop reported an error"))
                 stats["lightrag_storages_dropped"] += 1
             except Exception as exc:
                 errors.append(f"Phase 1 ({attr}): {exc}")
@@ -157,7 +162,9 @@ async def areset(
             errors.append(f"Phase 5 (filesystem): {exc}")
             logger.warning("areset Phase 5 failed: %s", log_safe(exc))
 
-    service._initialized = False
+    # A dry run is a preview: never invalidate the live runtime.
+    if not dry_run:
+        service._initialized = False
     logger.info("areset complete for workspace=%s: %s", log_safe(workspace), log_safe(stats))
     return stats
 

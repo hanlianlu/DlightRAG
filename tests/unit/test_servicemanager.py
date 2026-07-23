@@ -2550,6 +2550,26 @@ class TestPlannerSchemaScope:
         assert "jurisdiction" in second_payload["metadata_schema"]
         assert "department" not in second_payload["metadata_schema"]
 
+    async def test_partial_schema_failure_does_not_poison_cache(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        reports = AsyncMock()
+        reports._metadata_index.get_field_schema = AsyncMock(
+            return_value={"columns": [], "custom_keys": ["department"]}
+        )
+        manager._services = {"reports": reports}
+
+        # A transient lookup failure must not be cached as a degraded schema.
+        reports._metadata_index.get_field_schema.side_effect = RuntimeError("db down")
+        degraded = await manager._get_schema(["reports"])
+        assert degraded == {}
+        assert manager._schema_cache == {}
+
+        # The next call retries and caches the recovered schema.
+        reports._metadata_index.get_field_schema.side_effect = None
+        recovered = await manager._get_schema(["reports"])
+        assert recovered["custom_keys"] == ["department"]
+        assert ("reports",) in manager._schema_cache
+
     async def test_aplan_query_threads_image_catalog_to_web_variant(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
         reports = AsyncMock()

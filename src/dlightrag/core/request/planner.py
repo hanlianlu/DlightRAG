@@ -13,7 +13,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -390,15 +390,8 @@ class QueryPlanner:
     def __init__(
         self,
         llm_func: Callable[..., Any] | None = None,
-        *,
-        schema_provider: Callable[[], Awaitable[dict[str, Any]]] | None = None,
-        schema_ttl: float = 300.0,
     ) -> None:
         self._llm_func = llm_func
-        self._schema: dict[str, Any] | None = None
-        self._schema_provider = schema_provider
-        self._schema_ts: float = 0.0
-        self._schema_ttl = schema_ttl
 
     async def _call_llm(
         self,
@@ -451,12 +444,7 @@ class QueryPlanner:
         # Truncate history
         history = self._truncate_history(conversation_history, max_turns, max_tokens)
 
-        # Refresh schema (TTL-cached)
-        t0 = time.monotonic()
-        schema = schema if schema is not None else await self._refresh_schema()
-        t1 = time.monotonic()
-        logger.info("[Planner] schema refresh: %.1fs", t1 - t0)
-
+        # Schema is fetched and cached by the service manager, then passed in.
         schema_context = _build_schema_context(schema)
         system_prompt = PLANNER_SYSTEM_PROMPT
 
@@ -504,13 +492,16 @@ class QueryPlanner:
         # LLM call with adaptive retry (up to 2 retries with exponential backoff)
         _MAX_RETRIES = 2
         response: str | None = None
+        llm_start = time.monotonic()
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 response = await self._call_llm(
                     planner_input, system_prompt, structured_output=structured_output
                 )
                 logger.info(
-                    "[Planner] LLM call: %.1fs (attempt %d)", time.monotonic() - t1, attempt
+                    "[Planner] LLM call: %.1fs (attempt %d)",
+                    time.monotonic() - llm_start,
+                    attempt,
                 )
                 break
             except Exception:
@@ -528,7 +519,7 @@ class QueryPlanner:
                     logger.warning(
                         "QueryPlanner LLM call failed after %d attempts (%.1fs)",
                         _MAX_RETRIES + 1,
-                        time.monotonic() - t1,
+                        time.monotonic() - llm_start,
                         exc_info=True,
                     )
                     return QueryPlan.fallback(query, "fallback_provider_error")
@@ -641,11 +632,7 @@ class QueryPlanner:
 
         planner_query = query
 
-        t0 = time.monotonic()
-        schema = schema if schema is not None else await self._refresh_schema()
-        t1 = time.monotonic()
-        logger.info("[Planner] schema refresh: %.1fs", t1 - t0)
-
+        # Schema is fetched and cached by the service manager, then passed in.
         schema_context = _build_schema_context(schema)
         current_attachment_rows = list(current_attachment_catalog or [])
         planned_image_descriptions = list(current_image_descriptions or [])
@@ -713,11 +700,12 @@ class QueryPlanner:
             len(planned_attachment_catalog),
         )
 
+        llm_start = time.monotonic()
         response = await self._call_llm_with_retry(
             planner_input,
             system_prompt,
             structured_output=QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT,
-            start_time=t1,
+            start_time=llm_start,
         )
         if response is None:
             return QueryPlan.fallback(query, "fallback_provider_error")
@@ -882,16 +870,3 @@ class QueryPlanner:
         return truncate_conversation_history(
             history, max_messages=max_messages, max_tokens=max_tokens
         )
-
-    async def _refresh_schema(self) -> dict[str, Any] | None:
-        """Return cached schema, refreshing if TTL expired."""
-        now = time.monotonic()
-        if self._schema is not None and (now - self._schema_ts) < self._schema_ttl:
-            return self._schema
-        if self._schema_provider is not None:
-            try:
-                self._schema = await self._schema_provider()
-                self._schema_ts = now
-            except Exception:
-                logger.debug("Schema refresh failed, keeping existing cache")
-        return self._schema

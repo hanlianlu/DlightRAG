@@ -118,6 +118,19 @@ class TestAresetPhase1:
 
         assert result["lightrag_storages_dropped"] == len(_FAKE_STORAGE_ATTRS)
 
+    async def test_drop_reporting_error_status_is_recorded(self) -> None:
+        service = _make_service()
+        service._lightrag.chunks_vdb.drop = AsyncMock(
+            return_value={"status": "error", "message": "boom"}
+        )
+
+        result = await service.areset()
+
+        # LightRAG PG stores swallow failures into an error dict instead of
+        # raising, so the failed store must surface as an error, not a success.
+        assert result["lightrag_storages_dropped"] == len(_FAKE_STORAGE_ATTRS) - 1
+        assert any("chunks_vdb" in error and "boom" in error for error in result["errors"])
+
     async def test_skips_lightrag_storage_class_attributes(self) -> None:
         class StorageClass:
             async def drop(self):
@@ -274,6 +287,8 @@ class TestAresetDryRun:
         for attr in ("full_docs", "chunks_vdb"):
             getattr(service._lightrag, attr).drop.assert_not_awaited()
         cast(Any, service._metadata_index).clear.assert_not_awaited()
+        # A preview must leave the live runtime intact.
+        assert service._initialized is True
 
 
 class TestAresetErrorHandling:
