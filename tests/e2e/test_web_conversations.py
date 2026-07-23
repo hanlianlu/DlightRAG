@@ -144,7 +144,8 @@ def _text_bottom(page: Page, selector: str) -> float:
         page.locator(selector).evaluate(
             """element => {
                 const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-                const node = walker.nextNode();
+                let node = walker.nextNode();
+                while (node && !node.textContent?.trim()) node = walker.nextNode();
                 if (!node) throw new Error(`No text node in ${element.id || element.className}`);
                 const range = document.createRange();
                 range.selectNodeContents(node);
@@ -390,11 +391,29 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
     assert composer["x"] >= sidebar["x"] + sidebar["width"]
     assert composer["x"] + composer["width"] <= panel["x"]
 
-    composer_edge_inset = page.locator("#query-form").evaluate(
-        "form => form.querySelector('.composer-plus-icon').getBoundingClientRect().left"
-        " - form.getBoundingClientRect().left"
+    composer_leading_geometry = page.locator("#query-form").evaluate(
+        """form => {
+            const button = form.querySelector('.composer-plus');
+            const icon = form.querySelector('.composer-plus-icon');
+            const formRect = form.getBoundingClientRect();
+            const buttonRect = button.getBoundingClientRect();
+            const iconRect = icon.getBoundingClientRect();
+            const styles = getComputedStyle(form);
+            return {
+                buttonInset: buttonRect.left - formRect.left,
+                expectedButtonInset:
+                    parseFloat(styles.borderLeftWidth) + parseFloat(styles.paddingLeft),
+                iconInset: iconRect.left - buttonRect.left,
+                expectedIconInset: (buttonRect.width - iconRect.width) / 2,
+            };
+        }"""
     )
-    assert 6 <= composer_edge_inset <= 12
+    assert composer_leading_geometry["buttonInset"] == pytest.approx(
+        composer_leading_geometry["expectedButtonInset"], abs=1
+    )
+    assert composer_leading_geometry["iconInset"] == pytest.approx(
+        composer_leading_geometry["expectedIconInset"], abs=1
+    )
 
     page.get_by_role("button", name="New chat").click()
     page.wait_for_function(
@@ -544,7 +563,9 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     expanded = shell_geometry()
     assert expanded["composerX"] == pytest.approx(expanded["sidebarWidth"], abs=1)
     assert expanded["composerWidth"] == pytest.approx(520, abs=1)
-    assert expanded["panelWidth"] == pytest.approx(632, abs=1)
+    assert expanded["panelWidth"] == pytest.approx(
+        1440 - expanded["sidebarWidth"] - expanded["composerWidth"], abs=1
+    )
     assert expanded["composerRight"] == pytest.approx(expanded["panelX"], abs=1)
     assert expanded["effectiveWidth"] == pytest.approx(expanded["panelWidth"], abs=1)
     assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == "920"
