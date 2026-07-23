@@ -8,7 +8,7 @@ import os
 import posixpath
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig
@@ -160,6 +160,25 @@ class ComposerAnalysisSettings:
         )
 
 
+class ComposerAnalysisAdapterFactory(Protocol):
+    """Build one cache-neutral LightRAG analysis adapter for a Composer role.
+
+    Injected into :meth:`ComposerModelBundle.acreate` so this module never
+    imports the LLM factory layer, keeping it a dependency leaf.
+    """
+
+    def __call__(
+        self,
+        config: DlightragConfig,
+        *,
+        role: Literal["vlm", "extract"],
+    ) -> tuple[
+        Callable[..., Awaitable[Any]],
+        dict[str, Any],
+        Callable[[], Awaitable[None]],
+    ]: ...
+
+
 @dataclass(slots=True)
 class ComposerModelBundle:
     """Own the cache-neutral VLM and EXTRACT callables used by Composer."""
@@ -191,20 +210,22 @@ class ComposerModelBundle:
         config: DlightragConfig,
         *,
         bind: Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]],
+        adapter_factory: ComposerAnalysisAdapterFactory,
     ) -> ComposerModelBundle:
-        """Create both role adapters once and bind them to manager concurrency."""
-        from dlightrag.models.llm import create_composer_analysis_adapter
+        """Create both role adapters once and bind them to manager concurrency.
 
+        ``adapter_factory`` is injected by the composition root (normally
+        :func:`dlightrag.models.llm.create_composer_analysis_adapter`) so this
+        module stays a dependency leaf and never imports the LLM factory layer.
+        """
         closers: list[Callable[[], Awaitable[None]]] = []
         try:
-            vlm_func, vlm_identity, close_vlm = create_composer_analysis_adapter(config, role="vlm")
+            vlm_func, vlm_identity, close_vlm = adapter_factory(config, role="vlm")
             closers.append(close_vlm)
             await asyncio.sleep(0)
             bound_vlm = bind(vlm_func)
 
-            extract_func, extract_identity, close_extract = create_composer_analysis_adapter(
-                config, role="extract"
-            )
+            extract_func, extract_identity, close_extract = adapter_factory(config, role="extract")
             closers.append(close_extract)
             await asyncio.sleep(0)
             bound_extract = bind(extract_func)

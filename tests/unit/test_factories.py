@@ -874,10 +874,7 @@ class TestComposerAnalysisAdapter:
         assert seen == {}
 
     @pytest.mark.asyncio
-    async def test_composer_bundle_owns_and_closes_each_role_once(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from dlightrag.models import llm
+    async def test_composer_bundle_owns_and_closes_each_role_once(self) -> None:
         from dlightrag.models.composer import ComposerModelBundle
 
         vlm = AsyncMock()
@@ -892,10 +889,11 @@ class TestComposerAnalysisAdapter:
                 return vlm, {"provider": "openai", "model": "vision"}, close_vlm
             return extract, {"provider": "openai", "model": "extract"}, close_extract
 
-        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
         cfg = DlightragConfig(embedding=_embedding_config())
 
-        bundle = await ComposerModelBundle.acreate(cfg, bind=lambda func: func)
+        bundle = await ComposerModelBundle.acreate(
+            cfg, bind=lambda func: func, adapter_factory=create_adapter
+        )
 
         assert bundle.vlm_func is vlm
         assert bundle.extract_func is extract
@@ -910,10 +908,7 @@ class TestComposerAnalysisAdapter:
         close_extract.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_composer_bundle_rolls_back_vlm_when_extract_creation_fails(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from dlightrag.models import llm
+    async def test_composer_bundle_rolls_back_vlm_when_extract_creation_fails(self) -> None:
         from dlightrag.models.composer import ComposerModelBundle
 
         close_vlm = AsyncMock()
@@ -923,19 +918,19 @@ class TestComposerAnalysisAdapter:
                 raise RuntimeError("extract construction failed")
             return AsyncMock(), {"provider": "openai", "model": "vision"}, close_vlm
 
-        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
         cfg = DlightragConfig(embedding=_embedding_config())
 
         with pytest.raises(RuntimeError, match="extract construction failed"):
-            await ComposerModelBundle.acreate(cfg, bind=lambda func: func)
+            await ComposerModelBundle.acreate(
+                cfg, bind=lambda func: func, adapter_factory=create_adapter
+            )
 
         close_vlm.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_composer_bundle_rolls_back_both_roles_when_extract_binding_fails(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
-        from dlightrag.models import llm
         from dlightrag.models.composer import ComposerModelBundle
 
         vlm = AsyncMock()
@@ -953,20 +948,16 @@ class TestComposerAnalysisAdapter:
                 raise RuntimeError("extract binding failed")
             return func
 
-        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
         cfg = DlightragConfig(embedding=_embedding_config())
 
         with pytest.raises(RuntimeError, match="extract binding failed"):
-            await ComposerModelBundle.acreate(cfg, bind=bind)
+            await ComposerModelBundle.acreate(cfg, bind=bind, adapter_factory=create_adapter)
 
         close_vlm.assert_awaited_once()
         close_extract.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_composer_bundle_construction_cancellation_rolls_back_vlm(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from dlightrag.models import llm
+    async def test_composer_bundle_construction_cancellation_rolls_back_vlm(self) -> None:
         from dlightrag.models.composer import ComposerModelBundle
 
         close_vlm = AsyncMock()
@@ -978,11 +969,12 @@ class TestComposerAnalysisAdapter:
             task.cancel("construction cancelled")
             return AsyncMock(), {}, close_vlm
 
-        monkeypatch.setattr(llm, "create_composer_analysis_adapter", create_adapter)
         cfg = DlightragConfig(embedding=_embedding_config())
 
         with pytest.raises(asyncio.CancelledError, match="construction cancelled"):
-            await ComposerModelBundle.acreate(cfg, bind=lambda func: func)
+            await ComposerModelBundle.acreate(
+                cfg, bind=lambda func: func, adapter_factory=create_adapter
+            )
 
         close_vlm.assert_awaited_once()
 

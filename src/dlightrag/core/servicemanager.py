@@ -1008,10 +1008,12 @@ class RAGServiceManager:
         async with self._composer_model_bundle_lock:
             if self._composer_model_bundle is None:
                 from dlightrag.models.composer import ComposerModelBundle
+                from dlightrag.models.llm import create_composer_analysis_adapter
 
                 self._composer_model_bundle = await ComposerModelBundle.acreate(
                     self._config,
                     bind=self._sem_bound,
+                    adapter_factory=create_composer_analysis_adapter,
                 )
         return self._composer_model_bundle
 
