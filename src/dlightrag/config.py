@@ -1140,7 +1140,7 @@ class DlightragConfig(BaseSettings):
         description="Timeout in seconds for retrieve/answer/query operations.",
     )
     answer_stream_idle_timeout: float = Field(
-        default=120.0,
+        default=180.0,
         gt=0,
         description=(
             "Max seconds to wait for the next streamed answer token. Guards against "
