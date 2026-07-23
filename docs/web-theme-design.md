@@ -26,6 +26,7 @@ This work is limited to appearance. It does not add internationalization, Mermai
 - Prefer semantic CSS tokens over component-specific light-mode overrides.
 - Reuse the existing popover dismissal and keyboard-navigation infrastructure.
 - Avoid unrelated layout, typography, or component refactors.
+- Direct frontend dependencies must use current stable release floors with caret ranges for compatible onward updates; major upgrades must stay compatible with the CI Node baseline and pass frontend gates.
 - Tests are evidence and regression records, not sources of product requirements. Update or remove tests that encode obsolete, overly granular, or low-value behavior instead of preserving that behavior in production code.
 - The final implementation must be developed in an isolated worktree, rebuilt, validated, merged to `main`, committed and pushed, then leave no temporary worktree or branch behind.
 
