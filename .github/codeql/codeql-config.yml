@@ -1,8 +1,10 @@
 name: DlightRAG CodeQL
 
 queries:
+  # security-extended = security queries only. Code-quality/maintainability
+  # rules (the security-and-quality superset) are already enforced by ruff +
+  # pyright in CI, so enabling them here only produced note-level duplicates.
   - uses: security-extended
-  - uses: security-and-quality
 
 query-filters:
   - exclude:
