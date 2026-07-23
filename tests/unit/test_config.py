@@ -196,12 +196,6 @@ class TestRerankConfig:
         assert cfg.score_threshold is None
         assert cfg.max_concurrency == 8
         assert cfg.batch_size == 8
-        assert cfg.image_max_bytes == 1_500_000
-        assert cfg.image_max_total_bytes == 8_000_000
-        assert cfg.image_max_px == 1280
-        assert cfg.image_min_px == 768
-        assert cfg.image_quality == 86
-        assert cfg.image_min_quality == 76
 
     def test_jina_strategy(self):
         cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-v3", api_key="key")
@@ -233,9 +227,6 @@ class TestRerankConfig:
         [
             {"max_concurrency": 0},
             {"batch_size": 0},
-            {"image_max_bytes": 0},
-            {"image_quality": 0},
-            {"image_quality": 96},
             {"score_threshold": -0.1},
             {"temperature": -0.1},
         ],
@@ -640,12 +631,6 @@ def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
 def test_multimodal_retrieval_defaults() -> None:
     cfg = _default_test_config()
 
-    assert cfg.rerank.image_max_bytes == 1_500_000
-    assert cfg.rerank.image_max_total_bytes == 8_000_000
-    assert cfg.rerank.image_max_px == 1280
-    assert cfg.rerank.image_min_px == 768
-    assert cfg.rerank.image_quality == 86
-    assert cfg.rerank.image_min_quality == 76
     assert cfg.citations.highlights.enabled is True
     assert cfg.answer.max_images == 8
     assert cfg.answer.image_max_bytes == 3_000_000

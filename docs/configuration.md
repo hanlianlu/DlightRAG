@@ -383,7 +383,6 @@ doc_status_storage: PGDocStatusStorage
 Advanced PostgreSQL and index tuning:
 
 ```yaml
-postgres_required_major: 18
 pg_vector_index_type: HNSW_HALFVEC
 pg_hnsw_m: 32
 pg_hnsw_ef_construction: 256
@@ -736,8 +735,11 @@ capped at 8192 tokens; each prior document summary and image description is
 capped at 1024 and 512 tokens respectively. These are internal semantic limits
 rather than additional public settings.
 
-`max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
-applies to Web uploads. `ingest_timeout` limits how long the SDK convenience
+`max_upload_bytes` is the per-file document cap shared by every ingest path
+(REST multipart ingest, URL, Composer, and Web folder uploads): one document may
+not exceed it. `max_upload_size_mb` is the additional per-request total cap for
+multi-file Web uploads (a temp-directory guard). `ingest_timeout` limits how long
+the SDK convenience
 method `RAGServiceManager.aingest()` waits for its durable job. When it expires,
 the job keeps running and the method returns its current row instead of
 cancelling it. REST, Web, and MCP start jobs immediately and are not governed by
@@ -763,6 +765,9 @@ max_total_tokens: 40000
 vector_db_kwargs: {}
 ```
 
-`kg_entity_types` is intentionally public because it shapes domain extraction.
-For stronger domain control, use `extraction.entity_type_prompt_file` with a
-file under `prompts/entity_type/`.
+`kg_entity_types` is public because it shapes domain extraction, but it is empty
+by default so DlightRAG defers to LightRAG's built-in general taxonomy
+(Person/Organization/Location/Event/Concept/Method/Content/Data/Artifact/
+NaturalObject/...). Set a domain list only to bias extraction toward a specific
+corpus. For stronger domain control, use `extraction.entity_type_prompt_file`
+with a file under `prompts/entity_type/`.

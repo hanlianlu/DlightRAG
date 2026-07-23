@@ -229,12 +229,18 @@ async def upload_files(
     """Upload files and start background ingest.  Returns immediately."""
     manager = get_manager(request)
     cfg = request_config(request)
-    max_bytes = cfg.max_upload_size_mb * 1024 * 1024
+    # Per-file document cap is the single shared limit used by every ingest
+    # path (REST /ingest/blob, URL, Composer): one document may not exceed it.
+    # The larger per-request cap is a temp-directory guard for multi-file
+    # (folder) uploads.
+    per_file_max_bytes = cfg.max_upload_bytes
+    batch_max_bytes = cfg.max_upload_size_mb * 1024 * 1024
+    per_file_max_mb = per_file_max_bytes // (1024 * 1024)
 
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > max_bytes:
+    if content_length and int(content_length) > batch_max_bytes:
         return error_response(
-            f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
+            f"Upload exceeds limit ({cfg.max_upload_size_mb} MB per request)",
             status_code=413,
         )
 
@@ -277,14 +283,15 @@ async def upload_files(
                 bytes_written = await write_upload_stream(
                     f,
                     dest,
-                    max_bytes=max_bytes,
+                    max_bytes=min(batch_max_bytes, bytes_written + per_file_max_bytes),
                     bytes_written=bytes_written,
                 )
             except UploadTooLargeError:
                 if upload_dir is not None:
                     shutil.rmtree(upload_dir, ignore_errors=True)
                 return error_response(
-                    f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
+                    f"Upload exceeds limit ({per_file_max_mb} MB per file, "
+                    f"{cfg.max_upload_size_mb} MB per request)",
                     status_code=413,
                 )
             saved_paths.append(dest)

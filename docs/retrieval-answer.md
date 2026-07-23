@@ -208,10 +208,10 @@ silently switch that configuration to `chat_llm_reranker`.
 
 Reranking has an independent image budget because it runs after retrieval
 hydration but before answer-context packing. `chat_llm_reranker` and
-image-capable HTTP rerankers bound each request with `rerank.image_max_bytes`,
-`rerank.image_max_total_bytes`, and the rerank-stage size/quality floors before
-constructing model payloads. Visual chunks whose images cannot fit fall back to
-their text, if present, rather than sending unbounded data URIs.
+image-capable HTTP rerankers bound each request with fixed rerank-stage image
+size, byte, and quality limits before constructing model payloads. Visual chunks
+whose images cannot fit fall back to their text, if present, rather than sending
+unbounded data URIs.
 
 ## Answer Generation
 

@@ -390,38 +390,6 @@ class RerankConfig(BaseModel):
     )
     max_concurrency: int = Field(default=8, ge=1)
     batch_size: int = Field(default=8, ge=1)
-    image_max_bytes: int = Field(
-        default=1_500_000,
-        ge=1,
-        description="Maximum compressed binary bytes per image sent to rerank model calls.",
-    )
-    image_max_total_bytes: int = Field(
-        default=8_000_000,
-        ge=1,
-        description="Maximum total compressed binary image bytes per rerank model request.",
-    )
-    image_max_px: int = Field(
-        default=1280,
-        ge=1,
-        description="Maximum image long edge sent to rerank model calls.",
-    )
-    image_min_px: int = Field(
-        default=768,
-        ge=1,
-        description="Minimum long edge preserved before skipping oversized rerank images.",
-    )
-    image_quality: int = Field(
-        default=86,
-        ge=1,
-        le=95,
-        description="Initial JPEG quality for rerank model image previews.",
-    )
-    image_min_quality: int = Field(
-        default=76,
-        ge=1,
-        le=95,
-        description="Minimum JPEG quality before skipping oversized rerank images.",
-    )
     temperature: float | None = Field(default=None, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -687,7 +655,7 @@ class DlightragConfig(BaseSettings):
 
     # ===== PostgreSQL (Default Storage Backend) =====
     postgres_host: str = Field(default="localhost")
-    postgres_port: int = Field(default=5432)
+    postgres_port: int = Field(default=5432, ge=1, le=65535)
     postgres_user: str = Field(default="dlightrag")
     postgres_password: str = Field(default="dlightrag")
     postgres_database: str = Field(default="dlightrag")
@@ -776,8 +744,6 @@ class DlightragConfig(BaseSettings):
     )
     workspace: str = Field(default="default")
 
-    postgres_required_major: int = Field(default=18)
-
     # pgvector index configuration. LightRAG derives VECTOR/HALFVEC from this.
     # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary").
     pg_vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = Field(
@@ -834,7 +800,7 @@ class DlightragConfig(BaseSettings):
 
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")
-    chunk_p_token_size: int = Field(default=1024)
+    chunk_p_token_size: int = Field(default=1024, ge=1)
 
     # ===== Ingestion Performance =====
     # Advanced (env-only; keep out of curated config.yaml —
@@ -925,8 +891,8 @@ class DlightragConfig(BaseSettings):
     )
 
     # ===== Query Configuration =====
-    top_k: int = Field(default=60)
-    chunk_top_k: int = Field(default=30)
+    top_k: int = Field(default=60, ge=1)
+    chunk_top_k: int = Field(default=30, ge=1)
     bm25_enabled: bool = Field(default=True)
 
     # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary"):
@@ -960,20 +926,21 @@ class DlightragConfig(BaseSettings):
         le=1,
         description="BM25 document-length normalization parameter passed to pg_textsearch.",
     )
-    rrf_k: int = Field(default=60)
-    direct_visual_top_k: int = Field(default=20)
+    rrf_k: int = Field(default=60, ge=1)
+    direct_visual_top_k: int = Field(default=20, ge=0)
 
     # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary"):
     # metadata exact-vector threshold and KG token budgets.
     metadata_filter_exact_vector_threshold: int = Field(
         default=8192,
+        ge=0,
         description="Use exact vector scoring inside metadata candidates at or below this size.",
     )
-    max_entity_tokens: int = Field(default=6000)
-    max_relation_tokens: int = Field(default=8000)
-    max_total_tokens: int = Field(default=40000)
-    max_conversation_turns: int = Field(default=50)
-    max_conversation_tokens: int = Field(default=81_920)
+    max_entity_tokens: int = Field(default=6000, ge=1)
+    max_relation_tokens: int = Field(default=8000, ge=1)
+    max_total_tokens: int = Field(default=40000, ge=1)
+    max_conversation_turns: int = Field(default=50, ge=0)
+    max_conversation_tokens: int = Field(default=81_920, ge=0)
 
     # ===== Knowledge Graph =====
     kg_chunk_pick_method: Literal["VECTOR", "WEIGHT"] = Field(
@@ -984,24 +951,21 @@ class DlightragConfig(BaseSettings):
         "Maps to LightRAG's KG_CHUNK_PICK_METHOD (1.4.7+).",
     )
     kg_entity_types: list[str] = Field(
-        default=[
-            "Product",
-            "Component",
-            "Technology",
-            "Design",
-            "Genre",
-            "Organization",
-            "Standard",
-            "Biography",
-            "Location",
-            "Event",
-        ],
+        default_factory=list,
+        description=(
+            "Optional one-line entity-type extraction hint. Empty (default) defers to "
+            "LightRAG's built-in general taxonomy (Person/Organization/Location/Event/"
+            "Concept/Method/Content/Data/Artifact/NaturalObject/...). Set a domain list "
+            "only to bias extraction toward a specific corpus."
+        ),
     )
 
     # ===== Sourcing (Optional) =====
     blob_connection_string: str | None = Field(default=None)
-    azure_sas_expiry: int = Field(default=3600, description="Azure SAS URL expiry in seconds")
-    s3_presign_expiry: int = Field(default=3600, description="S3 presigned URL expiry in seconds")
+    azure_sas_expiry: int = Field(default=3600, ge=1, description="Azure SAS URL expiry in seconds")
+    s3_presign_expiry: int = Field(
+        default=3600, ge=1, description="S3 presigned URL expiry in seconds"
+    )
     s3_region: str | None = Field(default=None, description="S3 client region")
 
     # ===== MCP Server =====
@@ -1015,7 +979,7 @@ class DlightragConfig(BaseSettings):
         "api_auth_token is set with an explicit auth_mode so bearer-token middleware "
         "guards the transport.",
     )
-    mcp_port: int = Field(default=8101)
+    mcp_port: int = Field(default=8101, ge=1, le=65535)
     mcp_allowed_hosts: list[str] = Field(
         default_factory=lambda: list(_LOCAL_MCP_ALLOWED_HOSTS),
         description=(
@@ -1034,7 +998,7 @@ class DlightragConfig(BaseSettings):
 
     # ===== REST API Server =====
     api_host: str = Field(default="127.0.0.1")
-    api_port: int = Field(default=8100)
+    api_port: int = Field(default=8100, ge=1, le=65535)
     api_auth_token: str | None = Field(
         default=None,
         description=(

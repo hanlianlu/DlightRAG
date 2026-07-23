@@ -493,10 +493,7 @@ class RAGService:
             ) from e
 
         try:
-            await ensure_postgres_major(
-                conn,
-                required_major=self.config.postgres_required_major,
-            )
+            await ensure_postgres_major(conn)
             if self.config.pg_vector_index_type == "HNSW_HALFVEC":
                 await ensure_pgvector_halfvec(conn)
             await self._check_postgres_concurrency_sanity(conn)

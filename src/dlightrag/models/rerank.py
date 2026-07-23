@@ -398,12 +398,6 @@ def build_rerank_func(
             score_threshold=rc.score_threshold,
             batch_size=rc.batch_size,
             multimodal=rc.input_modality != "text",
-            image_max_bytes=rc.image_max_bytes,
-            image_max_total_bytes=rc.image_max_total_bytes,
-            image_max_px=rc.image_max_px,
-            image_min_px=rc.image_min_px,
-            image_quality=rc.image_quality,
-            image_min_quality=rc.image_min_quality,
         )
         return _RerankCallable(fn=wrap_rerank_func(fn, name="rerank/chat_llm_reranker"))
 
@@ -424,13 +418,13 @@ def build_rerank_func(
 
     budget_factory = partial(
         ImagePayloadBudget,
-        max_total_bytes=rc.image_max_total_bytes,
-        max_bytes_per_image=rc.image_max_bytes,
+        max_total_bytes=_DEFAULT_IMAGE_MAX_TOTAL_BYTES,
+        max_bytes_per_image=_DEFAULT_IMAGE_MAX_BYTES,
         max_pixels=MODEL_IMAGE_MAX_PIXELS,
-        max_px=rc.image_max_px,
-        min_px=rc.image_min_px,
-        quality=rc.image_quality,
-        min_quality=rc.image_min_quality,
+        max_px=_DEFAULT_IMAGE_MAX_PX,
+        min_px=_DEFAULT_IMAGE_MIN_PX,
+        quality=_DEFAULT_IMAGE_QUALITY,
+        min_quality=_DEFAULT_IMAGE_MIN_QUALITY,
     )
     client = httpx.AsyncClient(timeout=60.0)
     fn = partial(

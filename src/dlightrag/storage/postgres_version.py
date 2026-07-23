@@ -5,6 +5,12 @@ from typing import Any
 
 _BOOTSTRAPPABLE_EXTENSIONS = frozenset({"pg_textsearch", "pg_jieba"})
 
+# DlightRAG's PostgreSQL major is a hard runtime requirement, not a tunable:
+# Apache AGE, pgvector halfvec, pg_textsearch, and pg_jieba are all pinned to
+# the PG18 ecosystem. It is a named constant (not config) so it cannot be
+# lowered into a cryptic runtime failure.
+REQUIRED_POSTGRES_MAJOR = 18
+
 
 def parse_server_version_num(value: str | int) -> int:
     """Return PostgreSQL major version from SHOW server_version_num."""
@@ -12,7 +18,9 @@ def parse_server_version_num(value: str | int) -> int:
     return number // 10000
 
 
-def validate_postgres_major(value: str | int, *, required_major: int = 18) -> None:
+def validate_postgres_major(
+    value: str | int, *, required_major: int = REQUIRED_POSTGRES_MAJOR
+) -> None:
     """Raise if the connected server is below the required PostgreSQL major."""
     actual = parse_server_version_num(value)
     if actual < required_major:
@@ -37,7 +45,9 @@ def validate_pgvector_halfvec(value: str) -> None:
         )
 
 
-async def ensure_postgres_major(conn: Any, *, required_major: int = 18) -> None:
+async def ensure_postgres_major(
+    conn: Any, *, required_major: int = REQUIRED_POSTGRES_MAJOR
+) -> None:
     """Validate an asyncpg connection against the required PostgreSQL major."""
     value = await conn.fetchval("SHOW server_version_num")
     validate_postgres_major(value, required_major=required_major)
