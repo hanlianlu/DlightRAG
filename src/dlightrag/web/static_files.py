@@ -14,7 +14,10 @@ class NoCacheStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope) -> Response:  # type: ignore[override]
         response = await super().get_response(path, scope)
-        if response.status_code < 400:
+        # Vendored third-party assets (e.g. MathJax under vendor/) are immutable
+        # and multi-megabyte, so keep their default validators (ETag/Last-Modified)
+        # to allow 304 revalidation instead of re-downloading them every load.
+        if response.status_code < 400 and not path.startswith("vendor/"):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"

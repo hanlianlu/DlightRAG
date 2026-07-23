@@ -172,6 +172,15 @@ async def test_web_static_assets_are_not_browser_persistent(client):
     assert "DOMContentLoaded" in resp.text
 
 
+async def test_vendored_assets_allow_revalidation_caching(client):
+    resp = await client.get("/static/vendor/mathjax/tex-mml-svg.js")
+
+    assert resp.status_code == 200
+    # Immutable vendored assets are not marked no-store, so the browser can
+    # revalidate (304) instead of re-downloading the multi-MB MathJax payload.
+    assert "no-store" not in resp.headers.get("cache-control", "")
+
+
 def _configure_web_manager(manager, cfg: DlightragConfig):
     manager.config = cfg
     manager.aget_pipeline_status = AsyncMock(

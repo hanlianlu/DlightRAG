@@ -10,6 +10,12 @@ declare module '*.css' {}
 // ── Window extensions ────────────────────────────────────────────────
 
 interface MathJaxConfig {
+  loader?: {
+    paths?: {[key: string]: string};
+  };
+  svg?: {
+    dynamicPrefix?: string;
+  };
   tex?: {
     inlineMath?: [string, string][];
     displayMath?: [string, string][];
