@@ -67,7 +67,7 @@ llm:
       temperature: 0.4
       timeout: 120.0
       model_kwargs:
-        enable_thinking: true
+        enable_thinking: false
     vlm:
       provider: openai
       model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
