@@ -621,7 +621,7 @@ dev = [
 requires-dist = [
     { name = "aiobotocore", specifier = ">=3.8.0" },
     { name = "aiofiles" },
-    { name = "anthropic", specifier = ">=0.118.0" },
+    { name = "anthropic", specifier = ">=0.119.0" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "azure-storage-blob", specifier = ">=12.28.0" },
     { name = "bcrypt" },
@@ -639,7 +639,7 @@ requires-dist = [
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
     { name = "nh3", specifier = ">=0.2" },
-    { name = "openai", specifier = ">=2.47.0" },
+    { name = "openai", specifier = ">=2.48.0" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pydantic", specifier = ">=2.11.0" },
