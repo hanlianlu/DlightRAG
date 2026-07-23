@@ -29,7 +29,10 @@ from playwright.sync_api import Browser, Page, sync_playwright
 
 from dlightrag.api.server import create_app
 from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.storage.web_conversations import CommitTurnResult, StoredConversationImage
+from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.web.conversation_models import (
     ConversationHistory,
     ConversationImageReference,
@@ -149,6 +152,23 @@ class E2EConversationService:
                 text_history=tuple(text_history),
             )
 
+    async def prepare_answer_turn(
+        self,
+        *,
+        manager: Any,
+        prepared: PreparedWebConversation,
+        query: str,
+        current_images: list[dict[str, Any]],
+        current_documents: list[Any] | None = None,
+        workspaces: list[str] | None = None,
+    ) -> PreparedAnswerTurn:
+        del manager, current_documents, workspaces
+        return PreparedAnswerTurn.stateless(
+            query,
+            current_images,
+            history=list(prepared.text_history),
+        )
+
     async def image(
         self, _user: Any, conversation_id: str, image_id: str
     ) -> StoredConversationImage | None:
@@ -229,8 +249,10 @@ class E2EConversationService:
         queried_workspaces: list[str],
         images: tuple[Any, ...],
         image_descriptions: dict[str, str],
+        documents: tuple[Any, ...] = (),
+        document_parse_summaries: dict[str, str] | None = None,
     ) -> CommitTurnResult:
-        del submission_id
+        del submission_id, document_parse_summaries
         with self._lock:
             value = self._conversations.get(prepared.conversation_id)
             if value is None or value["content_revision"] != prepared.content_revision:
@@ -326,6 +348,7 @@ def e2e_base_url(
         answer_stream_idle_timeout=120.0,
         citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
         embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
+        answer=SimpleNamespace(image_max_pixels=MODEL_IMAGE_MAX_PIXELS),
         query_images=SimpleNamespace(
             max_current_images=3,
             max_upload_bytes=15 * 1024 * 1024,
@@ -340,9 +363,14 @@ def e2e_base_url(
         return ({}, _token_stream())
 
     manager._aanswer_stream_prepared.side_effect = _mock_answer_stream
-    manager.answer_image_capability = SimpleNamespace(
+    manager.answer_image_capability = AnswerImageCapability(
         status="supported",
+        configured_ceiling=3,
         effective_max_images=3,
+        provider="test",
+        base_url=None,
+        model="test-model",
+        failure_kind=None,
     )
     manager.alist_workspaces.return_value = MOCK_WORKSPACE_LIST
     manager.alist_workspace_records.return_value = MOCK_WORKSPACES
