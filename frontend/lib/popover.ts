@@ -27,6 +27,8 @@ export interface AutoDismiss {
 
 export function createAutoDismiss(options: AutoDismissOptions): AutoDismiss {
     const {getAnchor, isOpen, onDismiss} = options;
+    let active = false;
+    let pendingInstall: ReturnType<typeof setTimeout> | null = null;
 
     function onOutsideClick(event: MouseEvent): void {
         const anchor = getAnchor();
@@ -45,12 +47,22 @@ export function createAutoDismiss(options: AutoDismissOptions): AutoDismiss {
 
     return {
         activate(): void {
+            if (active) return;
+            active = true;
             document.addEventListener('keydown', onEscapeKey, true);
-            setTimeout(() => {
+            pendingInstall = setTimeout(() => {
+                pendingInstall = null;
+                if (!active) return;
                 document.addEventListener('click', onOutsideClick);
             }, 0);
         },
         deactivate(): void {
+            if (!active && pendingInstall === null) return;
+            active = false;
+            if (pendingInstall !== null) {
+                clearTimeout(pendingInstall);
+                pendingInstall = null;
+            }
             document.removeEventListener('click', onOutsideClick);
             document.removeEventListener('keydown', onEscapeKey, true);
         },

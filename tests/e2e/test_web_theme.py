@@ -18,7 +18,8 @@ def _choose_theme(page: Page, value: str) -> None:
 
 
 def _wait_ui_ready(page: Page) -> None:
-    expect(page.locator("#workspace-label")).to_have_text("All workspaces (2)")
+    expect(page.locator("#theme-trigger")).to_be_visible()
+    expect(page.locator("#workspace-label")).not_to_have_text("")
 
 
 @pytest.mark.e2e
@@ -65,13 +66,24 @@ def test_theme_menu_keyboard_navigation_and_escape_focus_restore(page: Page) -> 
 
     trigger = page.locator("#theme-trigger")
     trigger.focus()
-    page.keyboard.press("ArrowDown")
 
+    page.keyboard.press("Enter")
     menu = page.locator("#theme-menu")
     expect(menu).to_be_visible()
     checked = menu.locator("[role='menuitemradio'][aria-checked='true']")
     expect(checked).to_be_focused()
     expect(checked).to_have_attribute("data-theme-value", "system")
+
+    page.keyboard.press("Escape")
+    expect(trigger).to_be_focused()
+    expect(trigger).to_have_attribute("aria-expanded", "false")
+    expect(menu).to_be_hidden()
+
+    trigger.focus()
+    page.keyboard.press("ArrowDown")
+
+    expect(menu).to_be_visible()
+    expect(checked).to_be_focused()
 
     page.keyboard.press("End")
     dark_item = menu.locator("[data-theme-value='dark']")

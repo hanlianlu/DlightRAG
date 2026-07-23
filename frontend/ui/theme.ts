@@ -190,7 +190,7 @@ export function setupTheme(): void {
             if (isMenuOpen) {
                 closeMenu(false);
             } else {
-                openMenu(false);
+                openMenu(true);
             }
         }
     });
