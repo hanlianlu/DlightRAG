@@ -13,29 +13,15 @@
 set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
-MINERU_ENV_FILE="${MINERU_ENV_FILE:-$REPO_ROOT/.env.mineru}"
+# shellcheck source=scripts/mineru/env.sh
+source "$SCRIPTS_DIR/env.sh"
 
 # ── load credentials from .env.mineru (env vars take precedence) ──────
-load_key() {
-  local key="$1"
-  if [[ -n "${!key:-}" ]]; then return; fi
-  if [[ ! -f "$MINERU_ENV_FILE" ]]; then return; fi
-  local line
-  line="$(grep -E "^[[:space:]]*${key}=" "$MINERU_ENV_FILE" | tail -n 1 || true)"
-  if [[ -z "$line" ]]; then return; fi
-  local value="${line#*=}"
-  value="${value%$'\r'}"
-  if [[ "$value" == \"*\" && "$value" == *\" ]]; then value="${value:1:${#value}-2}"; fi
-  if [[ "$value" == \'*\' && "$value" == *\' ]]; then value="${value:1:${#value}-2}"; fi
-  export "$key=$value"
-}
-
-load_key MINERU_TITLE_AIDED_ENABLE
-load_key MINERU_TITLE_AIDED_API_KEY
-load_key MINERU_TITLE_AIDED_BASE_URL
-load_key MINERU_TITLE_AIDED_MODEL
-load_key MINERU_TITLE_AIDED_ENABLE_THINKING
+load_mineru_env_key MINERU_TITLE_AIDED_ENABLE
+load_mineru_env_key MINERU_TITLE_AIDED_API_KEY
+load_mineru_env_key MINERU_TITLE_AIDED_BASE_URL
+load_mineru_env_key MINERU_TITLE_AIDED_MODEL
+load_mineru_env_key MINERU_TITLE_AIDED_ENABLE_THINKING
 
 ENABLE="${MINERU_TITLE_AIDED_ENABLE:-true}"
 API_KEY="${MINERU_TITLE_AIDED_API_KEY:-}"
@@ -70,7 +56,7 @@ fi
 
 # ── generate ~/mineru.json via Python (merges with any existing config) ──
 TARGET="${HOME}/mineru.json"
-PYTHON_BIN="${REPO_ROOT}/.venv-mineru/bin/python3"
+PYTHON_BIN="${mineru_repo_root}/.venv-mineru/bin/python3"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$(command -v python3 || echo python3)"
