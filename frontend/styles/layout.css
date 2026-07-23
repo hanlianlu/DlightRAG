@@ -155,7 +155,7 @@ body.files-panel-open #files-btn {
 .topbar-btn {
     background: transparent;
     border: none;
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     flex-shrink: 0;
     font-size: var(--font-size-detail);
     font-weight: 500;
@@ -169,7 +169,7 @@ body.files-panel-open #files-btn {
 
 .topbar-scope-label,
 .ingest-target-label {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     flex: 0 0 auto;
     font-size: var(--font-size-detail);
     font-weight: 500;
@@ -187,7 +187,7 @@ body.files-panel-open #files-btn {
     background: var(--color-control-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     cursor: pointer;
     display: inline-flex;
     flex: 0 1 auto;
@@ -233,7 +233,7 @@ body.files-panel-open #files-btn {
 }
 
 .workspace-caret {
-    color: var(--color-text-subtle);
+    color: var(--color-text-muted);
     flex-shrink: 0;
 }
 
