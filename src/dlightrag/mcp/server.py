@@ -19,6 +19,7 @@ from pydantic import Field
 import dlightrag
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
+from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
@@ -38,7 +39,6 @@ from dlightrag.core.client_requests import (
 )
 from dlightrag.core.request.workspaces import (
     NoQueryableWorkspacesError,
-    resolve_query_workspaces,
 )
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
@@ -152,26 +152,13 @@ async def _enforce_access(action: str, workspace: str | None = None) -> None:
         raise ValueError(str(exc)) from None
 
 
-async def _enforce_workspaces_access(
-    action: str,
-    workspaces: list[str] | None,
-) -> None:
-    from dlightrag.utils import normalize_workspace
-
-    for workspace in workspaces or [_get_config().workspace]:
-        await _enforce_access(action, normalize_workspace(workspace))
-
-
 async def _filter_workspace_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    workspaces = [str(row["workspace"]) for row in records]
-    allowed = set(
-        await access_control_from_config(_get_config()).filter_workspaces(
-            current_request_scope(),
-            AccessAction.WORKSPACE_QUERY,
-            workspaces,
-        )
+    return await core_access.filter_workspace_records(
+        access_control_from_config(_get_config()),
+        current_request_scope(),
+        AccessAction.WORKSPACE_QUERY,
+        records,
     )
-    return [row for row in records if str(row["workspace"]) in allowed]
 
 
 async def _resolve_authorized_query_workspaces(
@@ -181,25 +168,19 @@ async def _resolve_authorized_query_workspaces(
     all_workspaces: bool,
 ) -> list[str]:
     """Resolve MCP query targets after applying the current request ACL."""
-    available: list[str] | None = None
-    if all_workspaces:
-        records = await manager.alist_workspace_records()
-        visible = await _filter_workspace_records(records)
-        available = [str(row["workspace"]) for row in visible]
-
     try:
-        resolved = resolve_query_workspaces(
+        return await core_access.resolve_authorized_query_workspaces(
+            access_control_from_config(_get_config()),
+            current_request_scope(),
+            manager,
             default_workspace=_get_config().workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
-            available_workspaces=available,
         )
     except NoQueryableWorkspacesError:
         raise PermissionError("No workspaces are available for query") from None
-
-    if not all_workspaces:
-        await _enforce_workspaces_access(AccessAction.WORKSPACE_QUERY, resolved)
-    return resolved
+    except AccessDeniedError as exc:
+        raise ValueError(str(exc)) from None
 
 
 @mcp_app.tool(

@@ -10,9 +10,10 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from dlightrag.access_control import AccessDeniedError, access_control_from_config
+from dlightrag.access_control import AccessControl, AccessDeniedError, access_control_from_config
 from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
+from dlightrag.core import access as core_access
 from dlightrag.core.scope import RequestScope
 from dlightrag.web.markdown import render_chunk_content, render_markdown
 
@@ -286,13 +287,16 @@ def get_request_scope(
     return RequestScope.from_user(user).for_workspaces(workspaces)
 
 
+def _web_access_control(request: Request) -> AccessControl:
+    return getattr(request.app.state, "access_control", None) or access_control_from_config(
+        request_config(request)
+    )
+
+
 async def enforce_web_access(request: Request, action: str, workspace: str | None) -> None:
     user = getattr(request.state, "user_context", None)
-    access_control = getattr(
-        request.app.state, "access_control", None
-    ) or access_control_from_config(request_config(request))
     try:
-        await access_control.check(user, action, workspace=workspace)
+        await _web_access_control(request).check(user, action, workspace=workspace)
     except AccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from None
 
@@ -303,9 +307,6 @@ async def filter_web_workspace_records(
     records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     user = getattr(request.state, "user_context", None)
-    workspaces = [str(row["workspace"]) for row in records]
-    access_control = getattr(
-        request.app.state, "access_control", None
-    ) or access_control_from_config(request_config(request))
-    allowed = set(await access_control.filter_workspaces(user, action, workspaces))
-    return [row for row in records if str(row["workspace"]) in allowed]
+    return await core_access.filter_workspace_records(
+        _web_access_control(request), user, action, records
+    )
