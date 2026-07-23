@@ -224,7 +224,7 @@ def validate_config() -> None:
     """Load config via DlightRAG to validate what we wrote. Raises on invalid.
 
     Imported lazily so the pure logic stays importable without the runtime
-    package. Wired into the orchestrator (Plan 3) where the full config exists.
+    package.
     """
     from dlightrag.config import load_config, reset_config
 
@@ -288,7 +288,7 @@ def run_preflight() -> list[Check]:
 
 
 # ---------------------------------------------------------------------------
-# MinerU extras + hybrid service-model resolution (consumed by Plan 2)
+# MinerU extras + hybrid service-model resolution
 # ---------------------------------------------------------------------------
 def select_mineru_extras(info: PlatformInfo, *, has_gpu: bool) -> str:
     if info.os == "macos" and info.arch in ("arm64", "aarch64"):
@@ -441,11 +441,12 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
 
     from rich.console import Console
 
-    Console().print(
+    console = Console()
+    console.print(
         "[dim]Provider = API protocol (openai / anthropic / gemini). Pick your vendor below — "
         "DeepSeek, OpenRouter, Azure, etc. map to the OpenAI-compatible protocol automatically.[/dim]"
     )
-    Console().print(
+    console.print(
         "[dim]Minimum replaces old role-specific LLMs. Custom replaces old roles with "
         "extract/keyword choices.[/dim]"
     )
