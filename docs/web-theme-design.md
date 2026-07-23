@@ -87,7 +87,8 @@ Interaction behavior:
 - ArrowDown opens and focuses the active choice;
 - ArrowUp, ArrowDown, Home, and End provide roving navigation;
 - Enter or Space applies a choice and closes the menu;
-- Escape or outside click closes it and restores trigger focus;
+- Escape closes and restores trigger focus;
+- outside pointer click closes while preserving the clicked target's natural focus;
 - a choice applies immediately without reload or HTMX activity.
 
 The existing generic popover dismissal helper remains the lifecycle owner. The current listbox arrow-navigation helper may be renamed and generalized to a role-selector-based roving helper, with the workspace selector updated to the new name. No compatibility wrapper should remain if all callers migrate together.
@@ -166,7 +167,8 @@ Playwright verifies:
 - explicit selection overrides the system and persists across reload;
 - System responds to a runtime media-query change;
 - local storage failure still permits in-page switching;
-- menu keyboard navigation, radio semantics, Escape behavior, and focus restoration;
+- menu keyboard navigation and radio semantics;
+- Escape dismissal restores trigger focus, while outside pointer dismissal preserves clicked-target focus;
 - theme survives representative HTMX partial updates;
 - desktop and mobile geometry remain stable.
 

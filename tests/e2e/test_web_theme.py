@@ -79,6 +79,19 @@ def test_theme_menu_keyboard_navigation_and_escape_focus_restore(page: Page) -> 
     expect(trigger).to_have_attribute("aria-expanded", "false")
     expect(menu).to_be_hidden()
 
+    _open_theme_menu(page)
+    files_button = page.locator("#files-btn")
+    files_button.click()
+    expect(menu).to_be_hidden()
+    expect(trigger).to_have_attribute("aria-expanded", "false")
+    expect(page.locator("#panel-close-btn")).to_be_visible()
+    assert page.evaluate(
+        """() => {
+            const active = document.activeElement;
+            return Boolean(active && active.id !== 'theme-trigger');
+        }"""
+    )
+
     trigger.focus()
     page.keyboard.press("ArrowDown")
 

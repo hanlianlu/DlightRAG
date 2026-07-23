@@ -643,7 +643,7 @@ function applyPreference(preference: ThemePreference, persist: boolean): void {
 }
 ```
 
-Use `createAutoDismiss` for outside-click/Escape, `installRovingArrowNavigation(menu, '[role="menuitemradio"]')` for movement, and one shared `closeMenu({restoreFocus: true})` path for dismissal. Handle `storage` events whose key is `THEME_STORAGE_KEY` or `null` by parsing the new value and applying without writing it back.
+Use `createAutoDismiss` for outside-click/Escape and `installRovingArrowNavigation(menu, '[role="menuitemradio"]')` for movement. Dismissal behavior must preserve modern pointer focus semantics: Escape restores trigger focus; outside pointer click closes while preserving the clicked target's natural focus. Handle `storage` events whose key is `THEME_STORAGE_KEY` or `null` by parsing the new value and applying without writing it back.
 
 Add `setupTheme` to the existing dynamic-import tuple in `frontend/ui/main.ts` and call it before feature modules that do not depend on it.
 
