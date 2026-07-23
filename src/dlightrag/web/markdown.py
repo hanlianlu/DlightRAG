@@ -139,12 +139,22 @@ def _render_math_inline(_renderer, tokens: list, idx: int, _options, _env) -> st
 def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
     """Pygments highlight callback for markdown-it-py fenced code blocks.
 
-    Returns highlighted HTML if language is known, a plain ``<pre><code>``
-    block for unknown languages, or empty string (no lang) to fall back to
-    the default ``<pre><code>`` wrapper.
+    Returns highlighted HTML if language is known, a marked escaped source
+    block for Mermaid (so the client can lazily upgrade it to a diagram), a
+    plain ``<pre><code>`` block for other unknown languages, or empty string
+    (no lang) to fall back to the default ``<pre><code>`` wrapper.
     """
     if not lang:
         return ""
+    if lang.lower() == "mermaid":
+        # Mermaid has no Pygments lexer. Emit a marked, escaped source block:
+        # the client renders it to an SVG when possible and it degrades to
+        # readable source otherwise. The class/data-* marker survives nh3.
+        return (
+            '<pre class="mermaid-source" data-lang="mermaid"><code>'
+            + _html.escape(code)
+            + "</code></pre>"
+        )
     try:
         lexer = get_lexer_by_name(lang)
     except ClassNotFound:

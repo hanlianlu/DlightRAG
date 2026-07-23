@@ -77,3 +77,18 @@ export function llmFragmentFromSanitizedHtml(html: string): DocumentFragment {
   setSanitizedLlmHtml(template, html);
   return template.content;
 }
+
+// Mermaid renders untrusted model output into SVG. We display it as an isolated
+// <img> (secure static mode already blocks scripts and external references) and
+// sanitize the markup first as defense in depth: strip scripting and HTML-in-SVG
+// (foreignObject) while keeping the scoped <style> Mermaid needs for its baked-in
+// theme colors.
+const SVG_SANITIZE_CONFIG: Config = {
+  USE_PROFILES: {svg: true, svgFilters: true},
+  FORBID_TAGS: ['foreignObject', 'script'],
+  ALLOW_UNKNOWN_PROTOCOLS: false,
+};
+
+export function sanitizeSvg(svg: string): string {
+  return DOMPurify.sanitize(svg, SVG_SANITIZE_CONFIG) as string;
+}

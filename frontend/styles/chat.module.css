@@ -403,6 +403,14 @@
   line-height: 1.5;
 }
 
+/* Rendered Mermaid diagram (replaces the .mermaid-source fallback). The inner
+   <img> is sized by the .aiMessageContent img rule below. */
+.aiMessageContent :global(.mermaid-figure) {
+  margin: 1em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
 .aiMessageContent code {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   font-size: 0.9em;

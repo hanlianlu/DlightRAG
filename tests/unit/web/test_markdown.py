@@ -55,6 +55,36 @@ def test_render_markdown_fenced_code_no_lang():
     assert "plain code" in result
 
 
+def test_render_markdown_mermaid_fence_marked():
+    """A mermaid fence is emitted as a marked source block for client upgrade."""
+    from dlightrag.web.markdown import render_markdown
+
+    result = render_markdown("```mermaid\ngraph TD\n  A-->B\n```")
+    assert 'class="mermaid-source"' in result
+    assert 'data-lang="mermaid"' in result
+    assert "graph TD" in result
+
+
+def test_render_markdown_mermaid_source_escaped():
+    """Markup inside a mermaid fence stays escaped (no HTML smuggling)."""
+    from dlightrag.web.markdown import render_markdown
+
+    result = render_markdown('```mermaid\ngraph TD\n  A["<script>alert(1)</script>"]\n```')
+    assert "<script>" not in result
+    assert "&lt;script&gt;" in result
+    assert 'class="mermaid-source"' in result
+
+
+def test_mermaid_marker_survives_nh3():
+    """The mermaid marker must survive server-side nh3 sanitization."""
+    from dlightrag.web.safe_html import safe_answer_preview
+
+    result = safe_answer_preview("```mermaid\ngraph TD\n  A-->B\n```")
+    assert 'class="mermaid-source"' in result
+    assert 'data-lang="mermaid"' in result
+    assert "graph TD" in result
+
+
 def test_render_markdown_inline_code():
     from dlightrag.web.markdown import render_markdown
 

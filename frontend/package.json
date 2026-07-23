@@ -19,6 +19,7 @@
   "dependencies": {
     "dompurify": "^3.4.12",
     "htmx.org": "^2.0.10",
+    "mermaid": "^11.16.0",
     "nanoevents": "^10.0.0"
   }
 }

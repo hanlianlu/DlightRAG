@@ -2,6 +2,7 @@
 
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
+import {renderDiagrams} from '../ui/mermaid.ts';
 import {createDocumentChip} from './document_chip.ts';
 import {answerErrorMessage, notifyAnswerWarning} from './errors.ts';
 import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
@@ -231,6 +232,7 @@ function applyFinalAnswerHtml(turn: ChatTurn, html: string): void {
   }
 
   renderMath(turn.contentDiv);
+  renderDiagrams(turn.contentDiv);
   fixExternalLinks(turn.contentDiv);
 }
 
@@ -385,6 +387,10 @@ export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOpti
       const block = blocks[i].cloneNode(true) as HTMLElement;
       turn.contentDiv.appendChild(block);
       typesetBlockMath(block);
+      // Only a completed (non-trailing) block has a stable fence; the trailing
+      // block may still be mid-stream, so its diagram waits for a later preview
+      // or the done backstop in applyFinalAnswerHtml.
+      if (i < blocks.length - 1) renderDiagrams(block);
       fixExternalLinks(block);
     }
     // Every block except the last is now complete, so freeze them.
