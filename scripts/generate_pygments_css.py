@@ -15,9 +15,13 @@ TARGET_PATH = "src/dlightrag/web/static/pygments.css"
 REGEN_COMMAND = f"uv run scripts/generate_pygments_css.py > {TARGET_PATH}"
 
 STYLE_VARIANTS: tuple[tuple[str, str, str], ...] = (
-    ("light", "Friendly", "friendly"),
+    ("light", "Xcode", "xcode"),
     ("dark", "GitHub Dark", "github-dark"),
 )
+FOREGROUND_FIXES = {
+    "light": {"#836C28": "#7D6622"},
+    "dark": {"#6E7681": "#858D98"},
+}
 
 # Only strip background paint so theme container remains authoritative.
 BACKGROUND_DECL_RE = re.compile(r"\s*background(?:-color)?\s*:\s*[^;{}]+;?")
@@ -38,6 +42,8 @@ def _iter_style_rules(mode: str, pygments_style: str) -> list[str]:
         cleaned = _strip_background_declarations(line)
         if EMPTY_RULE_RE.search(cleaned):
             continue
+        for original, replacement in FOREGROUND_FIXES[mode].items():
+            cleaned = cleaned.replace(f"color: {original}", f"color: {replacement}")
         rules.append(cleaned.rstrip())
     return rules
 
@@ -46,8 +52,9 @@ def generate_css() -> str:
     lines: list[str] = [
         "/* Generated file. Do not edit by hand. */",
         f"/* Regenerate with: {REGEN_COMMAND} */",
-        "/* Source styles: Pygments HtmlFormatter Friendly (light), GitHub Dark (dark). */",
+        "/* Source styles: Pygments HtmlFormatter Xcode (light), GitHub Dark (dark). */",
         "/* Background and background-color declarations are intentionally removed. */",
+        "/* Two low-contrast upstream foregrounds are adjusted for DlightRAG surfaces. */",
     ]
 
     for mode, section_name, pygments_style in STYLE_VARIANTS:

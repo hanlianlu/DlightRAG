@@ -106,7 +106,7 @@
 
    /* ── Theme semantics: accents and actions ── */
    --color-accent-action: var(--color-gold-200);
-   --color-accent-emphasis: var(--color-gold-500);
+   --color-accent-emphasis: var(--color-gold-100);
    --color-accent-muted: var(--color-gold-300);
    --color-action-bg: var(--color-gold-500);
    --color-action-bg-hover: var(--color-gold-400);

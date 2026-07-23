@@ -139,7 +139,10 @@ export function setupTheme(): void {
     }
 
     function openMenu(focusCurrent: boolean): void {
-        if (isMenuOpen) return;
+        if (isMenuOpen) {
+            if (focusCurrent) focusMenuItem(items, preference);
+            return;
+        }
         isMenuOpen = true;
         menu.hidden = false;
         trigger.setAttribute('aria-expanded', 'true');
@@ -176,6 +179,7 @@ export function setupTheme(): void {
             closeMenu(false);
             return;
         }
+        trigger.focus();
         openMenu(false);
     });
 

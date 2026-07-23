@@ -315,8 +315,10 @@ def test_pygments_css_contains_dual_color_mode_roots_and_style_provenance() -> N
 
     assert '[data-color-mode="light"] .highlight' in css
     assert '[data-color-mode="dark"] .highlight' in css
-    assert "Friendly" in css
+    assert "Xcode" in css
     assert "GitHub Dark" in css
+    assert "#7D6622" in css and "#836C28" not in css
+    assert "#858D98" in css and "#6E7681" not in css
 
 
 def test_web_static_js_build_has_no_orphan_chunks() -> None:

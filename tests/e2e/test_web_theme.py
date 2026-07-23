@@ -80,6 +80,12 @@ def test_theme_menu_keyboard_navigation_and_escape_focus_restore(page: Page) -> 
     expect(menu).to_be_hidden()
 
     _open_theme_menu(page)
+    expect(trigger).to_be_focused()
+    page.keyboard.press("ArrowDown")
+    expect(checked).to_be_focused()
+    page.keyboard.press("Escape")
+
+    _open_theme_menu(page)
     files_button = page.locator("#files-btn")
     files_button.click()
     expect(menu).to_be_hidden()

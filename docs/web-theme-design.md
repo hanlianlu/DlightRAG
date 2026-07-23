@@ -124,10 +124,10 @@ This is a color-boundary cleanup, not a general CSS rewrite. Existing spacing, t
 
 The checked-in `pygments.css` contains two generated, root-scoped palettes:
 
-- Pygments `friendly` for `data-color-mode="light"`;
+- Pygments `xcode` for `data-color-mode="light"`;
 - Pygments `github-dark` for `data-color-mode="dark"`.
 
-Generated selectors are scoped to the effective color mode. Pygments-owned container backgrounds are removed so code blocks continue to use DlightRAG surface tokens. The file includes its deterministic regeneration commands.
+Generated selectors are scoped to the effective color mode. Pygments-owned container backgrounds are removed so code blocks continue to use DlightRAG surface tokens. Two low-contrast upstream foregrounds are replaced with fixed accessible values. The file includes its deterministic regeneration command.
 
 This also fixes the current mismatch where default light-syntax colors are displayed on a dark code background.
 
