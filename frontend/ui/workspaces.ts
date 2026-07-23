@@ -5,7 +5,7 @@ import {readWorkspaceDetail, toWorkspaceRecord, type WorkspaceEventDetail} from 
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
-import {installListboxArrowNavigation} from '../lib/listbox.ts';
+import {installRovingArrowNavigation} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 
 let popoverEl: HTMLElement | null = null;
@@ -206,7 +206,7 @@ export function openWorkspacePopover(): void {
     popover.appendChild(createRow());
     selector.appendChild(popover);
     popoverEl = popover;
-    installListboxArrowNavigation(popover);
+    installRovingArrowNavigation(popover, '[role="option"]');
     workspaceDismiss.activate();
 }
 

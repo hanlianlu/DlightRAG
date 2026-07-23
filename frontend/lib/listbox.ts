@@ -1,12 +1,11 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 /**
- * Add ArrowUp/ArrowDown/Home/End roving navigation to a `role="listbox"`
- * container whose focusable children carry `role="option"`. Wrapping is
- * circular; Home/End jump to the first/last option. Enter/Space activation
- * stays with each option's own handler.
+ * Add ArrowUp/ArrowDown/Home/End roving navigation to a container and a
+ * focusable item selector. Wrapping is circular; Home/End jump to the
+ * first/last item. Enter/Space activation stays with each item's own handler.
  */
-export function installListboxArrowNavigation(container: HTMLElement): void {
+export function installRovingArrowNavigation(container: HTMLElement, itemSelector: string): void {
     container.addEventListener('keydown', (event) => {
         if (
             event.key !== 'ArrowDown' &&
@@ -16,7 +15,7 @@ export function installListboxArrowNavigation(container: HTMLElement): void {
         ) {
             return;
         }
-        const options = Array.from(container.querySelectorAll<HTMLElement>('[role="option"]'));
+        const options = Array.from(container.querySelectorAll<HTMLElement>(itemSelector));
         if (options.length === 0) return;
         event.preventDefault();
         const current = options.indexOf(document.activeElement as HTMLElement);

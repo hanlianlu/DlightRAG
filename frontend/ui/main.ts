@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         {setupFilesPanel},
         {setupPanelResize},
         {initWorkspaces},
+        {setupTheme},
         {setupConversations},
     ] = await Promise.all([
         import('./chat.ts'),
@@ -30,9 +31,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         import('./files-panel.ts'),
         import('./resize.ts'),
         import('./workspaces.ts'),
+        import('./theme.ts'),
         import('./conversations.ts'),
     ]);
 
+    setupTheme();
     initWorkspaces();
     setupPanel();
     setupSourcePanel();

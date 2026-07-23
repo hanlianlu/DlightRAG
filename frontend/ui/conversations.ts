@@ -41,8 +41,22 @@ let openMenuId: string | null = null;
 let renameId: string | null = null;
 let renameDraft: string | null = null;
 let drawerOpen = false;
-let desktopCollapsed = window.localStorage.getItem(COLLAPSED_KEY) === 'true';
+let desktopCollapsed = false;
 let drawerReturnFocus: HTMLElement | null = null;
+
+try {
+    desktopCollapsed = window.localStorage.getItem(COLLAPSED_KEY) === 'true';
+} catch (_error) {
+    desktopCollapsed = false;
+}
+
+function setCollapsedPreference(value: boolean): void {
+    try {
+        window.localStorage.setItem(COLLAPSED_KEY, value ? 'true' : 'false');
+    } catch (_error) {
+        // Ignore unavailable or blocked storage.
+    }
+}
 
 function isDesktop(): boolean {
     return window.matchMedia(DESKTOP_MEDIA).matches;
@@ -455,7 +469,7 @@ function applySidebarState(): void {
 function openSidebar(trigger: HTMLElement | null): void {
     if (isDesktop()) {
         desktopCollapsed = false;
-        window.localStorage.setItem(COLLAPSED_KEY, 'false');
+        setCollapsedPreference(false);
         applySidebarState();
         document.getElementById('new-conversation-btn')?.focus();
         return;
@@ -478,7 +492,7 @@ function openSidebar(trigger: HTMLElement | null): void {
 function toggleSidebar(): void {
     if (isDesktop()) {
         desktopCollapsed = true;
-        window.localStorage.setItem(COLLAPSED_KEY, 'true');
+        setCollapsedPreference(true);
         applySidebarState();
         document.getElementById('conversation-sidebar-open')?.focus();
         return;

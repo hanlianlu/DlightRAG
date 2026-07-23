@@ -15,7 +15,7 @@ export interface AutoDismissOptions {
     /** Whether the popover is currently open (guards the Escape handler). */
     isOpen: () => boolean;
     /** Invoked when an outside click or Escape should close the popover. */
-    onDismiss: () => void;
+    onDismiss: (reason: 'outside' | 'escape') => void;
 }
 
 export interface AutoDismiss {
@@ -31,7 +31,7 @@ export function createAutoDismiss(options: AutoDismissOptions): AutoDismiss {
     function onOutsideClick(event: MouseEvent): void {
         const anchor = getAnchor();
         if (anchor && event.target instanceof Node && !anchor.contains(event.target)) {
-            onDismiss();
+            onDismiss('outside');
         }
     }
 
@@ -40,7 +40,7 @@ export function createAutoDismiss(options: AutoDismissOptions): AutoDismiss {
         if (document.querySelector('dialog[open]')) return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        onDismiss();
+        onDismiss('escape');
     }
 
     return {

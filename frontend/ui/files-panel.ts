@@ -3,7 +3,7 @@
 import {bus} from '../events/bus.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
-import {installListboxArrowNavigation} from '../lib/listbox.ts';
+import {installRovingArrowNavigation} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
@@ -326,7 +326,7 @@ function toggleIngestPopover(container: HTMLElement): void {
 
     container.appendChild(popover);
     ingestPopoverEl = popover;
-    installListboxArrowNavigation(popover);
+    installRovingArrowNavigation(popover, '[role="option"]');
     ingestDismiss.activate();
 }
 

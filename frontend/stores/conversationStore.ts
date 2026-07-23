@@ -6,7 +6,28 @@ import {Store} from './base.ts';
 const ACTIVE_KEY = 'dlightrag.active_conversation_id';
 
 function storedActiveConversationId(): string | null {
-  return typeof window === 'undefined' ? null : window.localStorage.getItem(ACTIVE_KEY);
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(ACTIVE_KEY);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function storeActiveConversationId(conversationId: string): void {
+  try {
+    window.localStorage.setItem(ACTIVE_KEY, conversationId);
+  } catch (_error) {
+    // Ignore unavailable or blocked storage.
+  }
+}
+
+function clearStoredActiveConversationId(): void {
+  try {
+    window.localStorage.removeItem(ACTIVE_KEY);
+  } catch (_error) {
+    // Ignore unavailable or blocked storage.
+  }
 }
 
 export class ConversationStore extends Store {
@@ -89,7 +110,7 @@ export class ConversationStore extends Store {
       this.#answerReady = false;
     }
     this.#activeConversationId = conversationId;
-    window.localStorage.setItem(ACTIVE_KEY, conversationId);
+    storeActiveConversationId(conversationId);
     this.emit('conversationSelected', {conversationId});
     return true;
   }
@@ -129,7 +150,7 @@ export class ConversationStore extends Store {
       this.#history = null;
       this.#generation += 1;
       this.#answerReady = false;
-      window.localStorage.removeItem(ACTIVE_KEY);
+      clearStoredActiveConversationId();
       this.emit('conversationSelected', {conversationId: null});
     }
     if (this.#pendingSelectionId === conversationId) this.#pendingSelectionId = null;

@@ -5,3 +5,4 @@ This product includes software developed by Hanlian Lyu.
 
 This project builds on the following open-source projects:
 - LightRAG (https://github.com/HKUDS/LightRAG) - MIT License
+- Lucide Icons (https://lucide.dev) - ISC License (embedded Sun, Moon, and Monitor SVG path geometry in web templates)
