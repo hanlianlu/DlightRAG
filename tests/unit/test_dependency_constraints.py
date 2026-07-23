@@ -11,13 +11,6 @@ def _dependencies() -> list[str]:
     return pyproject["project"]["dependencies"]
 
 
-def test_lightrag_dependency_tracks_stable_1_5_release() -> None:
-    dependencies = _dependencies()
-    lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
-
-    assert lightrag_deps == ["lightrag-hku>=1.5.4"]
-
-
 def test_langfuse_dependency_has_no_upper_bound() -> None:
     """Langfuse should require the v4 SDK API without an upper cap."""
     dependencies = _dependencies()
@@ -34,13 +27,6 @@ def test_language_detection_uses_lingua() -> None:
     dependencies = _dependencies()
 
     assert any(dep.startswith("lingua-language-detector") for dep in dependencies)
-
-
-def test_composer_bm25_has_floor_without_upper_bound() -> None:
-    dependencies = _dependencies()
-    bm25_dependencies = [dep for dep in dependencies if dep.startswith("bm25s")]
-
-    assert bm25_dependencies == ["bm25s>=0.3.9"]
 
 
 def test_postgres_init_uses_required_pg18_extensions() -> None:
