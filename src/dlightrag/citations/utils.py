@@ -23,6 +23,15 @@ def split_source_ids(source_id: Any) -> list[str]:
     return [part.strip() for part in str(source_id).split(",") if part.strip()]
 
 
+def context_chunk_key(chunk_id: Any, *, workspace: Any = None) -> str:
+    """Return an internal chunk identity scoped by workspace when available."""
+    value = str(chunk_id or "")
+    if not value:
+        return ""
+    workspace_value = str(workspace or "")
+    return f"{workspace_value}:{value}" if workspace_value else value
+
+
 def _wrap_equation_math(content: str) -> str:
     """Render an equation chunk's LaTeX body as MathJax display math.
 

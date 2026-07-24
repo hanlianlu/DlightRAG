@@ -1321,6 +1321,82 @@ class TestHealthEndpointEnhanced:
 
 
 # ---------------------------------------------------------------------------
+# TestReadinessEndpoint
+# ---------------------------------------------------------------------------
+
+
+class TestReadinessEndpoint:
+    """Test strict traffic-readiness semantics independently from /health."""
+
+    async def test_ready_returns_200_without_authentication(
+        self,
+        client: AsyncClient,
+        mock_config_no_auth_override: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.storage.pool import pg_pool
+
+        mock_config_no_auth_override.auth_mode = "simple"
+        mock_config_no_auth_override.api_auth_token = "required-elsewhere"
+        probe = AsyncMock(return_value=1)
+        monkeypatch.setattr(pg_pool, "run_once", probe)
+        app.state.manager = mock_manager
+
+        response = await client.get("/ready")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ready", "service_role": "writer"}
+        probe.assert_awaited_once()
+
+    async def test_not_ready_manager_returns_503_without_probing_postgres(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.storage.pool import pg_pool
+
+        mock_manager.is_ready = lambda: False
+        probe = AsyncMock(return_value=1)
+        monkeypatch.setattr(pg_pool, "run_once", probe)
+        app.state.manager = mock_manager
+
+        response = await client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "service_role": "writer",
+            "detail": "RAG service is not ready",
+        }
+        probe.assert_not_awaited()
+
+    async def test_reader_requires_read_only_database_session(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.storage.pool import pg_pool
+
+        mock_config.service_role = "reader"
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
+        app.state.manager = mock_manager
+
+        response = await client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "service_role": "reader",
+            "detail": "Reader database session is not read-only",
+        }
+
+
+# ---------------------------------------------------------------------------
 # TestDeleteEndpoint
 # ---------------------------------------------------------------------------
 

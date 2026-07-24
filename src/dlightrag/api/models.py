@@ -129,6 +129,7 @@ class IngestJobStatusResponse(ClientContractModel):
     failed_items: int | None = None
     current_window: int | None = None
     errors: list[str] | None = None
+    errors_truncated: bool | None = None
     result: dict[str, Any] | None = None
     created_at: datetime.datetime | str | None = None
     updated_at: datetime.datetime | str | None = None
@@ -231,6 +232,12 @@ class HealthResponse(ClientContractModel):
     warnings: list[str] | None = None
     postgres: str
     answer_image_capability: AnswerImageCapabilityResponse | None = None
+
+
+class ReadinessResponse(ClientContractModel):
+    status: Literal["ready", "not_ready"]
+    service_role: Literal["writer", "reader"]
+    detail: str | None = None
 
 
 class ErrorDetail(ClientContractModel):

@@ -48,6 +48,19 @@ class TestMergeResults:
         assert merged.contexts["chunks"][0]["_workspace"] == "legal"
         assert merged.contexts["chunks"][1]["_workspace"] == "finance"
 
+    def test_same_chunk_id_in_different_workspaces_keeps_both_sources(self) -> None:
+        r1 = _make_result(chunks=[{"chunk_id": "chunk-same", "file_path": "/legal/report.pdf"}])
+        r2 = _make_result(chunks=[{"chunk_id": "chunk-same", "file_path": "/finance/report.pdf"}])
+
+        merged = merge_results([r1, r2], ["legal", "finance"])
+
+        assert [
+            (chunk["_workspace"], chunk["file_path"]) for chunk in merged.contexts["chunks"]
+        ] == [
+            ("legal", "/legal/report.pdf"),
+            ("finance", "/finance/report.pdf"),
+        ]
+
     def test_chunk_top_k_truncates(self) -> None:
         r1 = _make_result(chunks=[{"id": f"a{i}"} for i in range(10)])
         r2 = _make_result(chunks=[{"id": f"b{i}"} for i in range(10)])

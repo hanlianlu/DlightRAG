@@ -1,12 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Answer media registry and block helpers."""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
 from dlightrag.citations.parser import CITATION_PATTERN, DOC_CITATION_PATTERN
 from dlightrag.citations.schemas import SourceReference
+from dlightrag.citations.utils import context_chunk_key
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 
@@ -17,6 +18,9 @@ def answer_images_from_sources(
 ) -> list[dict[str, Any]]:
     """Return cited visual assets in a transport-neutral shape."""
     sent = _answer_image_sent_by_chunk(contexts)
+    chunk_counts = Counter(
+        chunk.chunk_id for source in sources for chunk in (source.chunks or []) if chunk.chunk_id
+    )
     seen: set[str] = set()
     images: list[dict[str, Any]] = []
     for source in sources:
@@ -24,12 +28,13 @@ def answer_images_from_sources(
         label = source.title or source_id
         for chunk in source.chunks or []:
             chunk_id = chunk.chunk_id
+            image_id = context_chunk_key(chunk_id, workspace=source.workspace)
             # Transport state no longer gates gallery/citation inclusion: a cited
             # visual chunk renders from its stored URL even when its raw image
             # missed the answer-image budget. Only malformed empty chunks (no URL)
             # are excluded; empty-content unsent chunks are already dropped upstream
             # in answer_context packing so they can never be cited here.
-            if not chunk_id or chunk_id in seen:
+            if not chunk_id or image_id in seen:
                 continue
             url = _public_render_url(chunk.image_url)
             thumbnail_url = _public_render_url(chunk.thumbnail_url) or url
@@ -41,16 +46,16 @@ def answer_images_from_sources(
             source_ref = f"{source_id}-{chunk_idx}" if chunk_idx else source_id
             images.append(
                 {
-                    "id": chunk_id,
+                    "id": image_id if chunk_counts[chunk_id] > 1 else chunk_id,
                     "chunk_id": chunk_id,
                     "source_ref": source_ref,
                     "url": url,
                     "thumbnail_url": thumbnail_url,
                     "label": label,
-                    "answer_image_sent": sent.get(chunk_id, True),
+                    "answer_image_sent": sent.get(image_id, sent.get(chunk_id, True)),
                 }
             )
-            seen.add(chunk_id)
+            seen.add(image_id)
     return images
 
 
@@ -99,7 +104,10 @@ def _answer_image_sent_by_chunk(contexts: RetrievalContexts | None) -> dict[str,
     if not contexts:
         return {}
     return {
-        str(chunk.get("chunk_id") or chunk.get("id")): chunk.get("_answer_image_sent") is not False
+        context_chunk_key(
+            chunk.get("chunk_id") or chunk.get("id"),
+            workspace=chunk.get("_workspace"),
+        ): chunk.get("_answer_image_sent") is not False
         for chunk in contexts.get("chunks", [])
         if chunk.get("chunk_id") or chunk.get("id")
     }

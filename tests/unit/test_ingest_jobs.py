@@ -4,7 +4,7 @@
 import json
 from typing import Any
 
-from dlightrag.storage.ingest_jobs import PGIngestJobStore
+from dlightrag.storage.ingest_jobs import _SCHEMA_MIGRATIONS, PGIngestJobStore
 
 
 class _Acquire:
@@ -63,6 +63,7 @@ class _Conn:
                 "current_window": 0,
                 "result_json": "{}",
                 "errors": "[]",
+                "errors_truncated": False,
                 "created_at": None,
                 "updated_at": None,
                 "started_at": None,
@@ -101,7 +102,14 @@ class _Conn:
             self.row["processed_items"] += args[2]
             self.row["failed_items"] += args[3]
             self.row["current_window"] = args[4]
-            self.row["errors"] = json.dumps(json.loads(self.row["errors"]) + json.loads(args[5]))
+            retained = json.loads(self.row["errors"])
+            incoming = json.loads(args[5])
+            if "errors_truncated =" in query:
+                self.row["errors_truncated"] = len(retained) + len(incoming) > args[8]
+                retained = (retained + incoming)[: args[8]]
+            else:
+                retained += incoming
+            self.row["errors"] = json.dumps(retained)
             return 1
         if "SET status = 'succeeded'" in query and self.row is not None:
             self.row["status"] = "succeeded"
@@ -111,7 +119,14 @@ class _Conn:
             return 1
         if "SET status = 'failed'" in query and self.row is not None:
             self.row["status"] = "failed"
-            self.row["errors"] = json.dumps(json.loads(self.row["errors"]) + json.loads(args[1]))
+            retained = json.loads(self.row["errors"])
+            incoming = json.loads(args[1])
+            if "errors_truncated =" in query:
+                self.row["errors_truncated"] = len(retained) + len(incoming) > args[3]
+                retained = (retained + incoming)[: args[3]]
+            else:
+                retained += incoming
+            self.row["errors"] = json.dumps(retained)
             self.row["lease_owner"] = None
             self.row["lease_expires_at"] = None
             return 1
@@ -122,6 +137,18 @@ class _Conn:
 
     def transaction(self) -> _Tx:
         return _Tx()
+
+
+def test_ingest_error_truncation_migration_normalizes_legacy_rows() -> None:
+    migration = next(
+        item for item in _SCHEMA_MIGRATIONS if item.version == "0003_ingest_job_error_truncation"
+    )
+    sql = "\n".join(migration.statements)
+
+    assert "UPDATE dlightrag_ingest_jobs" in sql
+    assert "WITH ORDINALITY" in sql
+    assert "errors_truncated = TRUE" in sql
+    assert "jsonb_array_length(errors) > 200" in sql
 
 
 async def test_ingest_job_store_records_window_progress_and_result() -> None:
@@ -160,6 +187,83 @@ async def test_ingest_job_store_records_window_progress_and_result() -> None:
     assert row["request"] == {"bucket": "b", "prefix": "docs/"}
     assert row["result"] == {"processed": 63}
     assert row["errors"] == ["s3://b/docs/bad.pdf: failed"]
+    assert row["errors_truncated"] is False
+
+
+async def test_ingest_job_store_caps_retained_errors_and_reports_truncation() -> None:
+    conn = _Conn()
+    store = PGIngestJobStore(pool=_Pool(conn))
+    errors = [f"document-{index}.pdf: failed" for index in range(250)]
+
+    await store.initialize()
+    await store.create(
+        job_id="job-many-errors",
+        workspace="default",
+        source_type="local",
+        request={"path": "/inputs"},
+    )
+    await store.claim_running(
+        "job-many-errors",
+        lease_owner="owner-1",
+        lease_seconds=300,
+    )
+    await store.record_window(
+        "job-many-errors",
+        total_delta=250,
+        processed_delta=0,
+        failed_delta=250,
+        current_window=1,
+        errors=errors,
+        lease_owner="owner-1",
+        lease_seconds=300,
+    )
+
+    row = await store.get("job-many-errors")
+
+    assert row is not None
+    assert row["failed_items"] == 250
+    assert row["errors"] == errors[:200]
+    assert row["errors_truncated"] is True
+
+
+async def test_ingest_job_store_caps_terminal_failure_error() -> None:
+    conn = _Conn()
+    store = PGIngestJobStore(pool=_Pool(conn))
+    retained_errors = [f"document-{index}.pdf: failed" for index in range(200)]
+
+    await store.initialize()
+    await store.create(
+        job_id="job-terminal-error",
+        workspace="default",
+        source_type="local",
+        request={"path": "/inputs"},
+    )
+    await store.claim_running(
+        "job-terminal-error",
+        lease_owner="owner-1",
+        lease_seconds=300,
+    )
+    await store.record_window(
+        "job-terminal-error",
+        total_delta=200,
+        processed_delta=0,
+        failed_delta=200,
+        current_window=1,
+        errors=retained_errors,
+        lease_owner="owner-1",
+        lease_seconds=300,
+    )
+    await store.fail(
+        "job-terminal-error",
+        error="terminal worker failure",
+        lease_owner="owner-1",
+    )
+
+    row = await store.get("job-terminal-error")
+
+    assert row is not None
+    assert row["errors"] == retained_errors
+    assert row["errors_truncated"] is True
 
 
 async def test_ingest_job_store_claims_job_with_database_lease() -> None:
@@ -243,9 +347,11 @@ async def test_ingest_job_store_prunes_stale_jobs() -> None:
     assert len(conn.fetchvals) == 2
     mark_query, mark_args = conn.fetchvals[0]
     assert "status IN ('queued', 'running')" in mark_query
+    assert "errors_truncated =" in mark_query
     assert mark_args[0] == 24 * 3600
     assert json.loads(mark_args[1]) == ["ingest job abandoned after process exit"]
     assert mark_args[2] == 500
+    assert mark_args[3] == 200
     delete_query, delete_args = conn.fetchvals[1]
     assert "status IN ('succeeded', 'failed')" in delete_query
     assert delete_args == (14 * 24 * 3600, 500)

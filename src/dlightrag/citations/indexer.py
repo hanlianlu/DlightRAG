@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .utils import split_source_ids
+from .utils import context_chunk_key, split_source_ids
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class CitationIndexer:
         for ctx in contexts:
             cid = ctx.get("chunk_id")
             if cid and (ctx.get("content") or ctx.get("image_data")):
-                valid_chunk_ids.add(cid)
+                valid_chunk_ids.add(context_chunk_key(cid, workspace=ctx.get("_workspace")))
 
         ref_chunks: dict[str, list[str]] = {}
         # Parallel per-ref sets give O(1) membership so build_index is O(C),
@@ -53,7 +53,11 @@ class CitationIndexer:
             if not ref_id:
                 continue
             chunk_id = ctx.get("chunk_id")
-            if chunk_id and chunk_id in valid_chunk_ids:
+            chunk_key = context_chunk_key(
+                chunk_id,
+                workspace=ctx.get("_workspace"),
+            )
+            if chunk_id and chunk_key in valid_chunk_ids:
                 seen = seen_by_ref.setdefault(ref_id, set())
                 ordered = ref_chunks.setdefault(ref_id, [])
                 if chunk_id not in seen:
@@ -74,7 +78,11 @@ class CitationIndexer:
                 source_id = ctx.get("source_id")
                 if source_id:
                     for sid in split_source_ids(source_id):
-                        if sid in valid_chunk_ids:
+                        source_key = context_chunk_key(
+                            sid,
+                            workspace=ctx.get("_workspace"),
+                        )
+                        if source_key in valid_chunk_ids:
                             seen = seen_by_ref.setdefault(ref_id, set())
                             ordered = ref_chunks.setdefault(ref_id, [])
                             if sid not in seen:
@@ -87,7 +95,8 @@ class CitationIndexer:
             for idx, cid in enumerate(chunk_ids, start=1):
                 self._index[ref_id][cid] = idx
                 self._reverse[ref_id][idx] = cid
-                self._chunk_to_ref[cid] = (ref_id, idx)
+                workspace = self._doc_workspaces.get(ref_id)
+                self._chunk_to_ref[context_chunk_key(cid, workspace=workspace)] = (ref_id, idx)
 
     def get_chunk_idx(self, ref_id: str | int, chunk_id: str) -> int | None:
         return self._index.get(str(ref_id), {}).get(chunk_id)
@@ -103,7 +112,7 @@ class CitationIndexer:
         """Return the normalized workspace ID recorded for a reference."""
         return self._doc_workspaces.get(str(ref_id))
 
-    def get_doc_tags(self, source_id: str | None) -> list[str]:
+    def get_doc_tags(self, source_id: str | None, *, workspace: str | None = None) -> list[str]:
         """Return unique doc-level tags for a source_id.
 
         Returns doc-level ``[n]`` tags (not chunk-level ``[n-m]``) — suitable
@@ -118,7 +127,7 @@ class CitationIndexer:
         tags: list[str] = []
         seen: set[str] = set()
         for cid in split_source_ids(source_id):
-            ref_info = self._chunk_to_ref.get(cid)
+            ref_info = self._chunk_to_ref.get(context_chunk_key(cid, workspace=workspace))
             if ref_info:
                 ref_id = ref_info[0]
                 if ref_id not in seen:

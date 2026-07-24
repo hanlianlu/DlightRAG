@@ -559,7 +559,7 @@ async def test_current_image_payload_error_maps_to_limit_error(
     error_event = next(event for event in events if "event: error" in event)
     error_payload = json.loads(error_event.split("data: ", 1)[1])
     assert error_payload == {
-        "message": "Service error. Please try again.",
+        "message": "2 current-turn images exceed 1",
         "error_kind": "CURRENT_IMAGE_LIMIT_EXCEEDED",
     }
     assert not any("event: token" in event for event in events)

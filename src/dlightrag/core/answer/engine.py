@@ -24,6 +24,7 @@ from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
+from dlightrag.citations.utils import context_chunk_key
 from dlightrag.core.answer.context import AnswerContextPacker
 from dlightrag.core.answer.errors import CurrentImagePayloadError
 from dlightrag.core.answer.images import AnswerImageBudget
@@ -330,7 +331,7 @@ class AnswerEngine:
                 current_blocks=current_blocks,
                 selected_history_blocks=selected_history_blocks,
                 history_messages=history_messages,
-                chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
+                chunk_image_blocks_by_context_key=prepared.chunk_image_blocks,
             )
             return _PreparedModelCall(
                 contexts=prepared.contexts,
@@ -446,7 +447,7 @@ class AnswerEngine:
         current_blocks: list[dict[str, Any]],
         selected_history_blocks: list[dict[str, Any]],
         history_messages: list[dict[str, Any]],
-        chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]],
+        chunk_image_blocks_by_context_key: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Place budgeted image blocks into the final message structure."""
         content: list[dict[str, Any]] = []
@@ -460,7 +461,7 @@ class AnswerEngine:
             self._build_excerpt_blocks(
                 contexts,
                 indexer,
-                image_blocks_by_chunk_id=chunk_image_blocks_by_chunk_id,
+                image_blocks_by_context_key=chunk_image_blocks_by_context_key,
             )
         )
         content.append({"type": "text", "text": user_prompt})
@@ -544,7 +545,7 @@ class AnswerEngine:
             contexts=packed.contexts,
             user_prompt=user_prompt,
             indexer=indexer,
-            chunk_image_blocks=packed.image_blocks_by_chunk_id,
+            chunk_image_blocks=packed.image_blocks_by_context_key,
             trace=trace,
         )
 
@@ -581,7 +582,10 @@ class AnswerEngine:
                 desc = e.get("description", "")
                 cite = ""
                 if indexer:
-                    tags = indexer.get_doc_tags(e.get("source_id"))
+                    tags = indexer.get_doc_tags(
+                        e.get("source_id"),
+                        workspace=e.get("_workspace"),
+                    )
                     if tags:
                         cite = f" (from {', '.join(tags)})"
                 parts.append(f"- **{name}** ({etype}): {desc}{cite}")
@@ -595,7 +599,10 @@ class AnswerEngine:
                 desc = r.get("description", "")
                 cite = ""
                 if indexer:
-                    tags = indexer.get_doc_tags(r.get("source_id"))
+                    tags = indexer.get_doc_tags(
+                        r.get("source_id"),
+                        workspace=r.get("_workspace"),
+                    )
                     if tags:
                         cite = f" (from {', '.join(tags)})"
                 parts.append(f"- {src} -> {tgt}: {desc}{cite}")
@@ -606,7 +613,7 @@ class AnswerEngine:
     def _build_excerpt_blocks(
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
-        image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
+        image_blocks_by_context_key: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Build lane-labelled per-document blocks with interleaved images."""
         chunks = contexts.get("chunks", [])
@@ -629,7 +636,7 @@ class AnswerEngine:
                 AnswerEngine._build_excerpt_lane_blocks(
                     composer_chunks,
                     indexer=indexer,
-                    image_blocks_by_chunk_id=image_blocks_by_chunk_id,
+                    image_blocks_by_context_key=image_blocks_by_context_key,
                 )
             )
         if rag_chunks:
@@ -638,7 +645,7 @@ class AnswerEngine:
                 AnswerEngine._build_excerpt_lane_blocks(
                     rag_chunks,
                     indexer=indexer,
-                    image_blocks_by_chunk_id=image_blocks_by_chunk_id,
+                    image_blocks_by_context_key=image_blocks_by_context_key,
                 )
             )
         return blocks
@@ -648,7 +655,7 @@ class AnswerEngine:
         chunks: list[dict[str, Any]],
         *,
         indexer: CitationIndexer | None,
-        image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None,
+        image_blocks_by_context_key: dict[str, dict[str, Any]] | None,
     ) -> list[dict[str, Any]]:
         """Render one evidence lane without changing chunk order."""
         # Group chunks by reference_id, preserving first-seen order
@@ -703,8 +710,13 @@ class AnswerEngine:
                 # Image with enriched label. The label is emitted only when the
                 # corresponding image block is actually sent to the answer model.
                 if img_data:
-                    if image_blocks_by_chunk_id is not None:
-                        block = image_blocks_by_chunk_id.get(str(chunk_id))
+                    if image_blocks_by_context_key is not None:
+                        block = image_blocks_by_context_key.get(
+                            context_chunk_key(
+                                chunk_id,
+                                workspace=chunk.get("_workspace"),
+                            )
+                        )
                     else:
                         block = {
                             "type": "image_url",

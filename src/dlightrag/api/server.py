@@ -19,9 +19,7 @@ from dlightrag.api.models import ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
 from dlightrag.core.answer.errors import (
-    CURRENT_IMAGE_LIMIT_EXCEEDED,
     AnswerImageError,
-    CurrentImagePayloadError,
 )
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
@@ -41,12 +39,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.exception("Failed to initialize RAG service manager")
         raise
     _app.state.manager = manager
+    conversation_service = None
     try:
         conversation_service = getattr(_app.state, "web_conversation_service", None)
         if conversation_service is not None:
             await conversation_service.initialize()
         yield
     finally:
+        if conversation_service is not None:
+            await conversation_service.aclose()
         await manager.aclose()
 
 
@@ -130,16 +131,6 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     ) -> JSONResponse:
         """Answer-image capability/transport rejection -> 400 with a stable error_kind."""
         body = ErrorDetail(detail=str(exc), error_type="validation", error_kind=exc.error_kind)
-        return JSONResponse(status_code=400, content=body.model_dump())
-
-    @application.exception_handler(CurrentImagePayloadError)
-    async def current_image_payload_handler(
-        request: Request,  # noqa: ARG001
-        exc: CurrentImagePayloadError,
-    ) -> JSONResponse:
-        body = ErrorDetail(
-            detail=str(exc), error_type="validation", error_kind=CURRENT_IMAGE_LIMIT_EXCEEDED
-        )
         return JSONResponse(status_code=400, content=body.model_dump())
 
     # -- API routes --

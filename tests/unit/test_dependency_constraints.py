@@ -104,6 +104,13 @@ def test_compose_binds_api_port_to_loopback_on_host() -> None:
     assert 'DLIGHTRAG_API_HOST: "0.0.0.0"' in compose
 
 
+def test_compose_api_healthcheck_uses_strict_readiness_endpoint() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "http://127.0.0.1:8100/ready" in compose
+    assert "urllib.request.urlopen" in compose
+
+
 def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
     """App image builds should not require GHCR metadata just to obtain uv."""
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")

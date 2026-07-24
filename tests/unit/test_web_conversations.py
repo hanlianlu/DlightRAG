@@ -611,6 +611,7 @@ def conversation_store() -> AsyncMock:
     store.snapshot.return_value = _conversation_snapshot()
     store.rename_conversation.return_value = _conversation_row()
     store.delete_conversation.return_value = True
+    store.prune_expired.return_value = 0
     return store
 
 
@@ -1030,7 +1031,39 @@ async def test_initialize_applies_schema_then_global_prune(
     await service_under_test.initialize()
 
     conversation_store.initialize.assert_awaited_once_with()
-    conversation_store.prune_expired.assert_awaited_once_with(ttl_days=30)
+    conversation_store.prune_expired.assert_awaited_once_with(ttl_days=30, batch_size=500)
+    await service_under_test.aclose()
+
+
+async def test_initialize_runs_periodic_prune_until_closed(
+    service_under_test,
+    conversation_store: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    periodic_prune = asyncio.Event()
+    calls = 0
+
+    async def prune_expired(*, ttl_days: int, batch_size: int) -> int:
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            periodic_prune.set()
+        return 0
+
+    conversation_store.prune_expired.side_effect = prune_expired
+    monkeypatch.setattr("dlightrag.web.conversations._PRUNE_INTERVAL_SECONDS", 0.001)
+
+    await service_under_test.initialize()
+    await asyncio.wait_for(periodic_prune.wait(), timeout=0.1)
+    await service_under_test.aclose()
+
+    assert calls >= 2
+    assert all(
+        call.kwargs == {"ttl_days": 30, "batch_size": 500}
+        for call in conversation_store.prune_expired.await_args_list
+    )
 
 
 def test_conversation_turn_projects_document_references() -> None:

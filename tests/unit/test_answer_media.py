@@ -8,7 +8,11 @@ from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_imag
 
 def _source(chunk_attrs: dict[str, Any]) -> Any:
     chunk = type("C", (), chunk_attrs)()
-    return type("S", (), {"id": "s1", "title": "Doc", "chunks": [chunk]})()
+    return type(
+        "S",
+        (),
+        {"id": "s1", "title": "Doc", "workspace": "default", "chunks": [chunk]},
+    )()
 
 
 def test_cited_chunk_renders_even_when_raw_image_not_sent() -> None:
@@ -46,6 +50,65 @@ def test_sent_chunk_is_annotated_true() -> None:
     images = answer_images_from_sources(sources, contexts=contexts)
 
     assert images[0]["answer_image_sent"] is True
+
+
+def test_same_chunk_id_in_two_workspaces_keeps_both_images() -> None:
+    legal_chunk = type(
+        "C",
+        (),
+        {
+            "chunk_id": "shared-hash",
+            "chunk_idx": 1,
+            "image_url": "/images/legal/shared-hash?size=full",
+            "thumbnail_url": "/images/legal/shared-hash?size=thumb",
+        },
+    )()
+    finance_chunk = type(
+        "C",
+        (),
+        {
+            "chunk_id": "shared-hash",
+            "chunk_idx": 1,
+            "image_url": "/images/finance/shared-hash?size=full",
+            "thumbnail_url": "/images/finance/shared-hash?size=thumb",
+        },
+    )()
+    sources = [
+        type(
+            "S",
+            (),
+            {"id": "1", "title": "Legal", "workspace": "legal", "chunks": [legal_chunk]},
+        )(),
+        type(
+            "S",
+            (),
+            {
+                "id": "2",
+                "title": "Finance",
+                "workspace": "finance",
+                "chunks": [finance_chunk],
+            },
+        )(),
+    ]
+    contexts: Any = {
+        "chunks": [
+            {"chunk_id": "shared-hash", "_workspace": "legal", "_answer_image_sent": True},
+            {
+                "chunk_id": "shared-hash",
+                "_workspace": "finance",
+                "_answer_image_sent": False,
+            },
+        ]
+    }
+
+    images = answer_images_from_sources(sources, contexts=contexts)
+
+    assert [image["id"] for image in images] == [
+        "legal:shared-hash",
+        "finance:shared-hash",
+    ]
+    assert [image["chunk_id"] for image in images] == ["shared-hash", "shared-hash"]
+    assert [image["answer_image_sent"] for image in images] == [True, False]
 
 
 def test_cited_chunk_without_any_url_is_excluded() -> None:

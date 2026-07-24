@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from dlightrag.citations.utils import split_source_ids
+from dlightrag.citations.utils import context_chunk_key, split_source_ids
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
 
@@ -14,7 +14,7 @@ class PackedAnswerContext:
     """Contexts and image blocks that are actually sent to the answer model."""
 
     contexts: RetrievalContexts
-    image_blocks_by_chunk_id: dict[str, dict[str, Any]] = field(default_factory=dict)
+    image_blocks_by_context_key: dict[str, dict[str, Any]] = field(default_factory=dict)
     trace: dict[str, Any] = field(default_factory=dict)
 
 
@@ -67,6 +67,10 @@ class AnswerContextPacker:
                     break
 
                 chunk_id = str(chunk.get("chunk_id") or "")
+                chunk_key = context_chunk_key(
+                    chunk_id,
+                    workspace=chunk.get("_workspace"),
+                )
                 content = str(chunk.get("content") or "").strip()
                 image_data = chunk.get("image_data")
                 image_block: dict[str, Any] | None = None
@@ -82,9 +86,9 @@ class AnswerContextPacker:
 
                 if content or image_block is not None:
                     packed_chunk = dict(chunk)
-                    if image_block is not None and chunk_id:
+                    if image_block is not None and chunk_key:
                         packed_chunk["_answer_image_sent"] = True
-                        image_blocks[chunk_id] = image_block
+                        image_blocks[chunk_key] = image_block
                     elif image_data:
                         packed_chunk["_answer_image_sent"] = False
                     packed.append(packed_chunk)
@@ -106,7 +110,11 @@ class AnswerContextPacker:
         )
         packed_chunks = [*packed_composer, *packed_rag]
 
-        included_chunk_ids = {str(c.get("chunk_id")) for c in packed_chunks if c.get("chunk_id")}
+        included_chunk_ids = {
+            context_chunk_key(c.get("chunk_id"), workspace=c.get("_workspace"))
+            for c in packed_chunks
+            if c.get("chunk_id")
+        }
         packed_contexts: RetrievalContexts = {
             key: [dict(item) for item in value]
             for key, value in contexts.items()
@@ -143,7 +151,7 @@ class AnswerContextPacker:
         }
         return PackedAnswerContext(
             contexts=packed_contexts,
-            image_blocks_by_chunk_id=image_blocks,
+            image_blocks_by_context_key=image_blocks,
             trace=trace,
         )
 
@@ -158,7 +166,10 @@ def _filter_by_source_ids(
     filtered: list[ContextRow] = []
     for item in items:
         source_ids = split_source_ids(item.get("source_id"))
-        if any(source in included_chunk_ids for source in source_ids):
+        if any(
+            context_chunk_key(source, workspace=item.get("_workspace")) in included_chunk_ids
+            for source in source_ids
+        ):
             filtered.append(item)
     return filtered
 

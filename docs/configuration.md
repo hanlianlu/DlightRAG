@@ -633,7 +633,10 @@ visual_assets:
 
 `web_conversations` applies only to the principal-scoped Web-only conversation
 lifecycle. It keeps at most 100 complete turns and uses 30-day inactivity
-retention; expired conversations are hidden immediately and pruned without
+retention; expired conversations are hidden immediately and reclaimed in
+skip-locked batches by a lightweight hourly task. Listing conversations also
+removes expired rows for the active principal. Cleanup cascades through stored
+turns, images, attachments, and Composer cache rows without
 touching ingest documents, chunks, vectors, graph data, source files, visual
 assets, or jobs. Current-turn images always have priority; historical images
 that miss a transport slot contribute their stored text descriptions. These

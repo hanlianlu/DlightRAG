@@ -484,6 +484,24 @@ async def test_list_prunes_expired_rows_before_selecting() -> None:
     assert conn.calls[1][1] == ("principal-a", 30)
 
 
+async def test_global_expiry_prune_is_batched_and_skip_locked() -> None:
+    conn = FakeConnection()
+    conn.fetchrow_result = {"count": 500}
+    store = make_store(conn)
+
+    deleted = await store.prune_expired(ttl_days=30, batch_size=500)
+
+    assert deleted == 500
+    query, args = conn.calls[-1]
+    assert "LIMIT $2" in query
+    assert "FOR UPDATE SKIP LOCKED" in query
+    assert args == (30, 500)
+    migration_sql = "\n".join(
+        statement for migration in WEB_CONVERSATION_MIGRATIONS for statement in migration.statements
+    )
+    assert "idx_web_conversations_updated" in migration_sql
+
+
 async def test_same_conversation_id_is_scoped_by_principal() -> None:
     conn = FakeConnection()
     conn.fetchrow_result = None

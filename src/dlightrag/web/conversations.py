@@ -4,6 +4,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -72,6 +73,8 @@ _HISTORY_THUMBNAIL_QUALITY = 82
 _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
 _MAX_HISTORY_ATTACHMENTS = 3
+_PRUNE_INTERVAL_SECONDS = 60 * 60
+_PRUNE_BATCH_SIZE = 500
 
 
 class WebConversationUnavailableError(RuntimeError):
@@ -111,14 +114,40 @@ class WebConversationService:
         self._store = store
         self._max_turns = max_turns
         self._ttl_days = ttl_days
+        self._prune_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
-        """Apply schema migrations and best-effort global startup retention."""
+        """Apply schema migrations and start bounded global retention."""
         await self._store.initialize()
+        await self._prune_expired_batch()
+        if self._prune_task is None:
+            self._prune_task = asyncio.create_task(self._prune_expired_loop())
+
+    async def _prune_expired_batch(self) -> int:
         try:
-            await self._store.prune_expired(ttl_days=self._ttl_days)
+            return await self._store.prune_expired(
+                ttl_days=self._ttl_days,
+                batch_size=_PRUNE_BATCH_SIZE,
+            )
         except Exception:
-            logger.exception("Failed to prune expired Web conversations at startup")
+            logger.exception("Failed to prune expired Web conversations")
+            return 0
+
+    async def _prune_expired_loop(self) -> None:
+        while True:
+            await asyncio.sleep(_PRUNE_INTERVAL_SECONDS)
+            while await self._prune_expired_batch() >= _PRUNE_BATCH_SIZE:
+                await asyncio.sleep(0)
+
+    async def aclose(self) -> None:
+        """Stop periodic retention. Safe to call more than once."""
+        task = self._prune_task
+        self._prune_task = None
+        if task is None:
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
     async def create(self, user: UserContext | None) -> ConversationSummary:
         principal_id = principal_id_from_user(user)

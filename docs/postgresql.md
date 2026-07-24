@@ -207,6 +207,9 @@ Infrastructure requirements:
 - Bring up a writer to create/migrate schema first, let replication ship it,
   then start readers. On schema-changing releases, migrate on the writer first,
   then roll readers.
+- Route traffic only to instances whose unauthenticated `GET /ready` probe
+  returns HTTP 200. Reader readiness also verifies the DlightRAG pool is in a
+  read-only transaction mode; `/health` remains a diagnostic HTTP 200 response.
 - Readers observe **eventual consistency**: a document ingested on the writer is
   retrievable on readers only after replication catches up.
 - Physical replication does not copy the `working_dir`. If readers must serve

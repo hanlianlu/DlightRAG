@@ -982,6 +982,55 @@ class TestAnswerEngineHelpers:
         assert "(from [1])" in entity_line
         assert "(from [1])" in rel_line
 
+    def test_format_kg_context_disambiguates_same_chunk_id_by_workspace(self) -> None:
+        from dlightrag.citations.indexer import CitationIndexer
+
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "shared-hash",
+                    "reference_id": "1",
+                    "file_path": "/legal/report.pdf",
+                    "content": "Legal evidence",
+                    "_workspace": "legal",
+                },
+                {
+                    "chunk_id": "shared-hash",
+                    "reference_id": "2",
+                    "file_path": "/finance/report.pdf",
+                    "content": "Finance evidence",
+                    "_workspace": "finance",
+                },
+            ],
+            "entities": [
+                {
+                    "entity_name": "Clause",
+                    "entity_type": "Legal",
+                    "description": "Legal clause",
+                    "source_id": "shared-hash",
+                    "_workspace": "legal",
+                },
+                {
+                    "entity_name": "Revenue",
+                    "entity_type": "Metric",
+                    "description": "Finance metric",
+                    "source_id": "shared-hash",
+                    "_workspace": "finance",
+                },
+            ],
+            "relationships": [],
+        }
+        indexer = CitationIndexer()
+        indexer.build_index(contexts["chunks"])
+
+        result = AnswerEngine._format_kg_context(contexts, indexer=indexer)
+
+        lines = result.splitlines()
+        legal_line = next(line for line in lines if "Clause" in line)
+        finance_line = next(line for line in lines if "Revenue" in line)
+        assert "(from [1])" in legal_line
+        assert "(from [2])" in finance_line
+
     def test_build_user_prompt_contains_all_parts(self) -> None:
         engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
         contexts = _text_contexts()

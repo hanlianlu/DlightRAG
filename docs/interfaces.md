@@ -371,6 +371,7 @@ Background ingestion through REST or MCP returns a job first:
   "failed_items": 0,
   "current_window": 0,
   "errors": [],
+  "errors_truncated": false,
   "request": {
     "workspace": "default",
     "source_type": "s3",
@@ -384,7 +385,9 @@ Background ingestion through REST or MCP returns a job first:
 `GET /ingest/jobs/{job_id}` and MCP `get_ingest_job` return the same job row.
 `status` is one of `queued`, `running`, `succeeded`, or `failed`. When the job
 succeeds, `result` contains the same single-file or staged batch response shown
-above. REST, Web, and MCP start the job immediately and do not wait on
+above. At most 200 error messages are retained per job; `failed_items` remains
+the authoritative failed-item count and `errors_truncated` reports whether
+additional messages were omitted. REST, Web, and MCP start the job immediately and do not wait on
 `ingest_timeout`. The SDK convenience method `RAGServiceManager.aingest()` starts
 the same durable job, waits up to `ingest_timeout`, and returns either the
 completed result or the still-running job row without cancelling it. On service
@@ -502,6 +505,13 @@ discover it up front. REST `GET /health` returns `answer_image_capability`
 (`CURRENT_IMAGES_UNSUPPORTED` or `ANSWER_IMAGE_CAPABILITY_UNKNOWN`): REST returns
 HTTP 400 (or a classified SSE `error` event carrying `error_kind` when streaming),
 MCP returns the error text, and the SDK raises `AnswerImageError`.
+
+`GET /health` is a diagnostic/liveness response and remains HTTP 200 when the
+process is degraded. Unauthenticated `GET /ready` is the traffic-readiness
+probe: it returns HTTP 200 only after the manager is initialized and the
+DlightRAG PostgreSQL pool responds. Reader processes additionally prove that
+their database session is read-only. Any failed readiness condition returns a
+minimal HTTP 503 response without exposing the underlying exception.
 
 The Web shell defaults answer scope to `Search in: All authorized workspaces`.
 That authorization-relative multi-workspace selection is independent from

@@ -17,10 +17,6 @@ ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
 
-class CurrentImagePayloadError(RuntimeError):
-    """Explicit user images cannot fit the configured Composer transport."""
-
-
 class AnswerInputError(ValueError):
     """Answer input rejected with a client-safe message and stable kind.
 
@@ -44,6 +40,13 @@ class AnswerImageError(AnswerInputError):
         super().__init__(public_message=message, error_kind=error_kind)
 
 
+class CurrentImagePayloadError(AnswerImageError):
+    """Explicit user images cannot fit the configured answer transport."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, error_kind=CURRENT_IMAGE_LIMIT_EXCEEDED)
+
+
 class CurrentDocumentParseError(AnswerInputError):
     """A current Composer document could not be parsed safely."""
 
@@ -61,8 +64,6 @@ def classify_answer_error(exc: BaseException) -> str:
     """Map an answer-stream failure to a stable answer-input error kind."""
     if isinstance(exc, AnswerInputError):
         return exc.error_kind
-    if isinstance(exc, CurrentImagePayloadError):
-        return CURRENT_IMAGE_LIMIT_EXCEEDED
     if _IMAGES_NOT_SUPPORTED_MARKER in str(exc):
         return CURRENT_IMAGES_UNSUPPORTED
     return ANSWER_STREAM_FAILED

@@ -49,15 +49,16 @@ def merge_results(
             if i < len(ws_chunks):
                 merged_chunks.append(ws_chunks[i])
 
-    # Dedup by chunk_id, keeping highest-scored occurrence (already ordered)
-    seen: set[str] = set()
+    # Chunk IDs are content-derived and can repeat across workspace namespaces.
+    seen: set[tuple[str, str]] = set()
     deduped: list[dict[str, Any]] = []
     for c in merged_chunks:
-        cid = c.get("chunk_id", "")
-        if cid and cid in seen:
+        cid = str(c.get("chunk_id") or "")
+        identity = (str(c.get("_workspace") or ""), cid)
+        if cid and identity in seen:
             continue
         if cid:
-            seen.add(cid)
+            seen.add(identity)
         deduped.append(c)
     merged_chunks = deduped
 

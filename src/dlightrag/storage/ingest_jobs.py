@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_ingest_jobs (
     current_window  INTEGER NOT NULL DEFAULT 0,
     result_json     JSONB NOT NULL DEFAULT '{}'::jsonb,
     errors          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    errors_truncated BOOLEAN NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at      TIMESTAMPTZ,
@@ -60,6 +61,7 @@ WHERE job_id = $1
 RETURNING
 job_id, workspace, source_type, status, request_json, total_items,
 processed_items, failed_items, current_window, result_json, errors,
+errors_truncated,
 created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
 """
 
@@ -87,10 +89,18 @@ WITH updated AS (
         processed_items = processed_items + $3,
         failed_items = failed_items + $4,
         current_window = $5,
-        errors = CASE
-            WHEN jsonb_array_length(errors) >= $9 THEN errors
-            ELSE errors || $6::jsonb
-        END,
+        errors = (
+            SELECT COALESCE(jsonb_agg(value ORDER BY ordinal), '[]'::jsonb)
+            FROM (
+                SELECT value, ordinal
+                FROM jsonb_array_elements(errors || $6::jsonb)
+                    WITH ORDINALITY AS entry(value, ordinal)
+                ORDER BY ordinal
+                LIMIT $9
+            ) AS retained
+        ),
+        errors_truncated = errors_truncated
+            OR jsonb_array_length(errors) + jsonb_array_length($6::jsonb) > $9,
         lease_expires_at = NOW() + ($8 * INTERVAL '1 second'),
         updated_at = NOW()
     WHERE job_id = $1
@@ -120,7 +130,18 @@ _FAIL = """
 WITH updated AS (
     UPDATE dlightrag_ingest_jobs
     SET status = 'failed',
-        errors = errors || $2::jsonb,
+        errors = (
+            SELECT COALESCE(jsonb_agg(value ORDER BY ordinal), '[]'::jsonb)
+            FROM (
+                SELECT value, ordinal
+                FROM jsonb_array_elements(errors || $2::jsonb)
+                    WITH ORDINALITY AS entry(value, ordinal)
+                ORDER BY ordinal
+                LIMIT $4
+            ) AS retained
+        ),
+        errors_truncated = errors_truncated
+            OR jsonb_array_length(errors) + jsonb_array_length($2::jsonb) > $4,
         lease_owner = NULL,
         lease_expires_at = NULL,
         updated_at = NOW(),
@@ -136,6 +157,7 @@ _GET = """
 SELECT
 job_id, workspace, source_type, status, request_json, total_items,
 processed_items, failed_items, current_window, result_json, errors,
+errors_truncated,
 created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
 FROM dlightrag_ingest_jobs
 WHERE job_id = $1
@@ -145,6 +167,7 @@ _LIST_RECOVERABLE = """
 SELECT
 job_id, workspace, source_type, status, request_json, total_items,
 processed_items, failed_items, current_window, result_json, errors,
+errors_truncated,
 created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
 FROM dlightrag_ingest_jobs
 WHERE (
@@ -160,7 +183,18 @@ _MARK_ABANDONED = """
 WITH updated AS (
     UPDATE dlightrag_ingest_jobs
     SET status = 'failed',
-        errors = errors || $2::jsonb,
+        errors = (
+            SELECT COALESCE(jsonb_agg(value ORDER BY ordinal), '[]'::jsonb)
+            FROM (
+                SELECT value, ordinal
+                FROM jsonb_array_elements(errors || $2::jsonb)
+                    WITH ORDINALITY AS entry(value, ordinal)
+                ORDER BY ordinal
+                LIMIT $4
+            ) AS retained
+        ),
+        errors_truncated = errors_truncated
+            OR jsonb_array_length(errors) + jsonb_array_length($2::jsonb) > $4,
         updated_at = NOW(),
         finished_at = NOW()
     WHERE job_id IN (
@@ -215,6 +249,29 @@ _SCHEMA_MIGRATIONS = (
             f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
             f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status_lease "
             f"ON {TABLE} (status, lease_expires_at)",
+        ),
+    ),
+    Migration(
+        "0003_ingest_job_error_truncation",
+        "Track whether retained ingest errors were truncated",
+        (
+            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS "
+            "errors_truncated BOOLEAN NOT NULL DEFAULT FALSE",
+            f"""
+UPDATE {TABLE}
+SET errors = (
+        SELECT COALESCE(jsonb_agg(value ORDER BY ordinal), '[]'::jsonb)
+        FROM (
+            SELECT value, ordinal
+            FROM jsonb_array_elements(errors)
+                WITH ORDINALITY AS entry(value, ordinal)
+            ORDER BY ordinal
+            LIMIT {_MAX_JOB_ERRORS}
+        ) AS retained
+    ),
+    errors_truncated = TRUE
+WHERE jsonb_array_length(errors) > {_MAX_JOB_ERRORS}
+""".strip(),  # noqa: S608 - interpolates only the fixed table name and integer cap
         ),
     ),
 )
@@ -322,7 +379,13 @@ class PGIngestJobStore:
 
     async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool:
         async def _operation(conn: Any) -> int:
-            updated = await conn.fetchval(_FAIL, job_id, json.dumps([error]), lease_owner)
+            updated = await conn.fetchval(
+                _FAIL,
+                job_id,
+                json.dumps([error]),
+                lease_owner,
+                _MAX_JOB_ERRORS,
+            )
             return int(updated or 0)
 
         return await self._run(_operation) > 0
@@ -367,6 +430,7 @@ class PGIngestJobStore:
                 stale_running_seconds,
                 json.dumps([ABANDONED_ERROR]),
                 batch_size,
+                _MAX_JOB_ERRORS,
             )
             deleted = await conn.fetchval(_PRUNE_COMPLETED, completed_ttl_seconds, batch_size)
             return {
@@ -394,6 +458,7 @@ def _serialize_row(row: Any) -> dict[str, Any]:
     data["request"] = _json_value(data.pop("request_json", {}), default={})
     data["result"] = _json_value(data.pop("result_json", {}), default={})
     data["errors"] = _json_value(data.get("errors"), default=[])
+    data["errors_truncated"] = bool(data.get("errors_truncated", False))
     return data
 
 

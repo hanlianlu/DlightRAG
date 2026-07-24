@@ -207,6 +207,14 @@ BEGIN
 END $$""",
         ),
     ),
+    Migration(
+        "0005_web_conversation_expiry_index",
+        "Index global Web conversation expiry scans",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_web_conversations_updated "
+            "ON web_conversations (updated_at, principal_id, conversation_id)",
+        ),
+    ),
 )
 
 _SUMMARY_COLUMNS = """
@@ -566,10 +574,19 @@ WHERE principal_id = $1
 """
 
 _PRUNE_EXPIRED = """
-WITH deleted AS (
-    DELETE FROM web_conversations
+WITH candidates AS (
+    SELECT principal_id, conversation_id
+    FROM web_conversations
     WHERE updated_at < NOW() - ($1 * INTERVAL '1 day')
-    RETURNING 1
+    ORDER BY updated_at, principal_id, conversation_id
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+), deleted AS (
+    DELETE FROM web_conversations AS conversations
+    USING candidates
+    WHERE conversations.principal_id = candidates.principal_id
+      AND conversations.conversation_id = candidates.conversation_id
+    RETURNING conversations.conversation_id
 )
 SELECT COUNT(*)::int AS count FROM deleted
 """
@@ -1615,12 +1632,14 @@ class PGWebConversationStore:
 
         return await self._run_write(_operation)
 
-    async def prune_expired(self, *, ttl_days: int) -> int:
-        """Delete expired Web conversations across principals at startup."""
+    async def prune_expired(self, *, ttl_days: int, batch_size: int = 500) -> int:
+        """Delete one skip-locked batch of expired conversations."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> int:
-            row = await conn.fetchrow(_PRUNE_EXPIRED, ttl_days)
+            row = await conn.fetchrow(_PRUNE_EXPIRED, ttl_days, batch_size)
             return int(row["count"]) if row is not None else 0
 
         return await self._run_write(_operation)

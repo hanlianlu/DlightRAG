@@ -2,10 +2,12 @@
 """System status and health API routes."""
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
-from dlightrag.api.models import HealthResponse
+from dlightrag.api.models import HealthResponse, ReadinessResponse
 from dlightrag.app_state import request_config
 from dlightrag.core.answer.capability import answer_image_capability_summary
 
@@ -14,6 +16,15 @@ from .deps import get_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _not_ready(*, service_role: Literal["writer", "reader"], detail: str) -> JSONResponse:
+    payload = ReadinessResponse(
+        status="not_ready",
+        service_role=service_role,
+        detail=detail,
+    )
+    return JSONResponse(status_code=503, content=payload.model_dump(exclude_none=True))
 
 
 @router.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
@@ -63,3 +74,43 @@ async def health(request: Request) -> dict[str, object]:
         status["status"] = "degraded"
 
     return status
+
+
+@router.get(
+    "/ready",
+    response_model=ReadinessResponse,
+    response_model_exclude_none=True,
+    responses={503: {"model": ReadinessResponse}},
+)
+async def readiness(request: Request) -> ReadinessResponse | JSONResponse:
+    """Return whether this process can accept query traffic."""
+    config = request_config(request)
+    manager = get_manager(request)
+    if not manager.is_ready():
+        return _not_ready(
+            service_role=config.service_role,
+            detail="RAG service is not ready",
+        )
+
+    try:
+        from dlightrag.storage.pool import pg_pool
+
+        if config.is_reader:
+            read_only = await pg_pool.run_once(
+                lambda conn: conn.fetchval("SHOW transaction_read_only")
+            )
+            if str(read_only).lower() != "on":
+                return _not_ready(
+                    service_role=config.service_role,
+                    detail="Reader database session is not read-only",
+                )
+        else:
+            await pg_pool.run_once(lambda conn: conn.fetchval("SELECT 1"))
+    except Exception:
+        logger.warning("Readiness check: PostgreSQL probe failed", exc_info=True)
+        return _not_ready(
+            service_role=config.service_role,
+            detail="PostgreSQL readiness check failed",
+        )
+
+    return ReadinessResponse(status="ready", service_role=config.service_role)

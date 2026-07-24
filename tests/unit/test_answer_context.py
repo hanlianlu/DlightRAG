@@ -39,7 +39,7 @@ def test_packer_skips_image_only_chunks_when_image_budget_is_exhausted() -> None
     )
 
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["text-1"]
-    assert packed.image_blocks_by_chunk_id == {}
+    assert packed.image_blocks_by_context_key == {}
     assert packed.trace["answer_context_images_skipped"] == 1
     assert packed.contexts["entities"] == []
 
@@ -67,13 +67,13 @@ def test_packer_keeps_text_when_chunk_image_does_not_fit() -> None:
     )
 
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["mixed-1"]
-    assert packed.image_blocks_by_chunk_id == {}
+    assert packed.image_blocks_by_context_key == {}
     assert packed.contexts["chunks"][0]["content"] == "The chart shows revenue growth."
     assert packed.trace["answer_context_images_skipped"] == 1
     assert packed.contexts["entities"][0]["entity_name"] == "Revenue"
 
 
-def test_packer_keeps_fitting_image_blocks_by_chunk_id() -> None:
+def test_packer_keeps_fitting_image_blocks_by_context_key() -> None:
     contexts: RetrievalContexts = {
         "chunks": [
             {
@@ -96,7 +96,7 @@ def test_packer_keeps_fitting_image_blocks_by_chunk_id() -> None:
     )
 
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["visual-1"]
-    assert packed.image_blocks_by_chunk_id["visual-1"]["type"] == "image_url"
+    assert packed.image_blocks_by_context_key["visual-1"]["type"] == "image_url"
     assert packed.trace["answer_context_images_sent"] == 1
 
 
@@ -125,14 +125,51 @@ def test_composer_and_rag_visuals_use_independent_budgets() -> None:
         context_top_k=2,
     )
 
-    assert "rag-visual" in with_composer.image_blocks_by_chunk_id
-    assert "composer-visual" in with_composer.image_blocks_by_chunk_id
+    assert "rag-visual" in with_composer.image_blocks_by_context_key
+    assert "composer-visual" in with_composer.image_blocks_by_context_key
     assert with_composer.trace["answer_context_rag_images_sent"] == 1
     assert with_composer.trace["answer_context_composer_images_sent"] == 1
     assert [row["chunk_id"] for row in with_composer.contexts["chunks"]] == [
         "composer-visual",
         "rag-visual",
     ]
+
+
+def test_federated_same_chunk_id_keeps_distinct_image_blocks() -> None:
+    contexts: RetrievalContexts = {
+        "chunks": [
+            {
+                "chunk_id": "shared-hash",
+                "reference_id": "1",
+                "file_path": "/legal/report.pdf",
+                "content": "Legal figure",
+                "image_data": _PNG_B64,
+                "_workspace": "legal",
+            },
+            {
+                "chunk_id": "shared-hash",
+                "reference_id": "2",
+                "file_path": "/finance/report.pdf",
+                "content": "Finance figure",
+                "image_data": _PNG_B64,
+                "_workspace": "finance",
+            },
+        ],
+        "entities": [],
+        "relationships": [],
+    }
+
+    packed = AnswerContextPacker().pack(
+        contexts,
+        rag_image_budget=_budget(max_images=2),
+        composer_image_budget=_budget(max_images=2),
+    )
+
+    assert set(packed.image_blocks_by_context_key) == {
+        "legal:shared-hash",
+        "finance:shared-hash",
+    }
+    assert packed.trace["answer_context_images_sent"] == 2
 
 
 def test_composer_byte_exhaustion_does_not_consume_rag_bytes() -> None:
@@ -163,8 +200,8 @@ def test_composer_byte_exhaustion_does_not_consume_rag_bytes() -> None:
         context_top_k=2,
     )
 
-    assert "composer-visual" not in packed.image_blocks_by_chunk_id
-    assert "rag-visual" in packed.image_blocks_by_chunk_id
+    assert "composer-visual" not in packed.image_blocks_by_context_key
+    assert "rag-visual" in packed.image_blocks_by_context_key
     assert composer_budget.used_bytes == 0
     assert rag_budget.used_bytes > 0
     assert packed.trace["answer_context_composer_images_skipped"] == 1
