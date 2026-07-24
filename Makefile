@@ -10,7 +10,7 @@ LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(L
 LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
 LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env"
 
-.PHONY: mineru-install mineru-api mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -18,11 +18,16 @@ mineru-install:
 mineru-api:
 	scripts/mineru/api.sh
 
+mineru-gradio:
+	scripts/mineru/gradio.sh
+
 mineru-title-aided:
 	scripts/mineru/title_aided.sh
 
 # Background MinerU service — dispatched per OS by service.sh
-# (macOS: launchd | Linux/WSL2: systemd --user).
+# (macOS: launchd | Linux/WSL2: systemd --user). One command manages BOTH the
+# API backend and the Gradio WebUI (the WebUI reuses the API; opt out with
+# MINERU_GRADIO_ENABLE=false in .env.mineru).
 mineru-service-install:
 	scripts/mineru/service.sh install
 

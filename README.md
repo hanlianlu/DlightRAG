@@ -128,6 +128,20 @@ make mineru-api
 current terminal. Docker Compose does not run MinerU; it maps the host-native
 endpoint into DlightRAG containers as `http://host.docker.internal:8210`.
 
+To run MinerU in the background instead (launchd on macOS, `systemd --user` on
+Linux/WSL2), use the service targets — one command starts **both** the API
+backend and the Gradio WebUI. The WebUI reuses that same backend automatically,
+so it needs no extra setup and never loads a second copy of the models:
+
+```bash
+make mineru-service-install   # install + start at login
+make mineru-service-status    # also: -start / -stop / -logs / -uninstall
+```
+
+The WebUI opens at `http://127.0.0.1:7860` (unauthenticated — keep it on
+loopback). Set `MINERU_GRADIO_ENABLE=false` in `.env.mineru` to manage the API
+backend alone.
+
 3. Start DlightRAG and PostgreSQL:
 
 ```bash
