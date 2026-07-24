@@ -140,7 +140,7 @@ wheels = [
 
 [[package]]
 name = "anthropic"
-version = "0.119.0"
+version = "0.120.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -152,9 +152,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2a/c5/f1d53b7d27b25a7f491d39c5cd9d39805be2d115d7f7431a8bf22f286afe/anthropic-0.119.0.tar.gz", hash = "sha256:40a81b094ae2a0056a77771257943b19bd46edce1326e22f85c2794492097f0a", size = 999050, upload-time = "2026-07-23T17:34:40.233Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/5c/3331da4fc009d448008a50c78d86cc929e8c937cd1442245ce3f80561c4e/anthropic-0.120.0.tar.gz", hash = "sha256:6ba6007dc9b00365b20f6101a6618f5196ac1ceef81512e4b5cc0e7436d4975d", size = 1008042, upload-time = "2026-07-24T16:32:52.384Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dc/2e/5e90df53b474e856a3ae065c0df77e62bf58cb2df8819ec850d08b82518a/anthropic-0.119.0-py3-none-any.whl", hash = "sha256:2b39107077489d19d7c66000e9d9263293d431550fcf6b543ead785c6ac85962", size = 1012756, upload-time = "2026-07-23T17:34:41.896Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/8a/8522bdf809e1f95f0d9c936540987a3f6afba01d2921a2bf488dedf836a8/anthropic-0.120.0-py3-none-any.whl", hash = "sha256:591bd531563ec7b63a1e138f5c11f14cb94edda99623b349c2ce2ece8e08b8a5", size = 1022602, upload-time = "2026-07-24T16:32:50.506Z" },
 ]
 
 [[package]]
@@ -564,7 +564,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.7.13"
+version = "1.7.14"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -621,7 +621,7 @@ dev = [
 requires-dist = [
     { name = "aiobotocore", specifier = ">=3.8.0" },
     { name = "aiofiles" },
-    { name = "anthropic", specifier = ">=0.119.0" },
+    { name = "anthropic", specifier = ">=0.120.0" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "azure-storage-blob", specifier = ">=12.28.0" },
     { name = "bcrypt" },
@@ -2497,14 +2497,14 @@ wheels = [
 
 [[package]]
 name = "tqdm"
-version = "4.69.0"
+version = "4.69.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/69/40407dfc835517f058b603dbf37a6df094d8582b015a51eddc988febbcb7/tqdm-4.69.0.tar.gz", hash = "sha256:700c5e85dcd5f009dd6222588a29180a193a748247a5d855b4d67db93d79a53b", size = 792569, upload-time = "2026-07-17T18:09:06.2Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/84/da0e5038228fa34dfd77c5026b173ed035d2a3ba31f1077590c013de2bff/tqdm-4.69.1.tar.gz", hash = "sha256:2be21080a0ce17e902c2f1baeb6a74bf551b67bbdfa4bc0109fad471d0b4cb0d", size = 793046, upload-time = "2026-07-24T14:22:02.08Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/21/99a0cdaf54eb35e77623c41b5a2c9472ee4404bba687052791fe2aba6773/tqdm-4.69.0-py3-none-any.whl", hash = "sha256:9979978912be667a6ef21fd5d8abf54e324e63d82f7f43c360792ebc2bc4e622", size = 676680, upload-time = "2026-07-17T18:09:04.172Z" },
+    { url = "https://files.pythonhosted.org/packages/01/50/5817619a0fca56aff06383dbfde7ae017b3ca383915b3f1e4713164273cf/tqdm-4.69.1-py3-none-any.whl", hash = "sha256:0a654b96f7a2660cceb615b56f307ec2bef96c515409014a429a561981ab52b4", size = 675452, upload-time = "2026-07-24T14:22:00.048Z" },
 ]
 
 [[package]]
