@@ -27,8 +27,8 @@ class CitationIndexer:
         self._doc_names: dict[str, str] = {}
         # Per-ref normalized workspace provenance: ref_id -> workspace ID
         self._doc_workspaces: dict[str, str] = {}
-        # Per-chunk metadata: chunk_id -> {"page_idx": int, ...}
-        self._chunk_meta: dict[str, dict[str, Any]] = {}
+        # Per-reference chunk metadata: (ref_id, chunk_id) -> fields.
+        self._chunk_meta: dict[tuple[str, str], dict[str, Any]] = {}
 
     def build_index(self, contexts: list[dict[str, Any]]) -> None:
         self._index.clear()
@@ -64,7 +64,7 @@ class CitationIndexer:
                     seen.add(chunk_id)
                     ordered.append(chunk_id)
                     # Store metadata on first encounter
-                    self._chunk_meta[chunk_id] = {
+                    self._chunk_meta[(ref_id, str(chunk_id))] = {
                         "page_idx": ctx.get("page_idx", 0),
                     }
                 # Store doc-level metadata (first chunk wins)
@@ -186,7 +186,7 @@ class CitationIndexer:
                 cid = self._reverse[ref_id].get(idx)
                 if cid is None:
                     continue
-                meta = self._chunk_meta.get(cid, {})
+                meta = self._chunk_meta.get((ref_id, cid), {})
                 page_idx = meta.get("page_idx", 0)
                 page_label = f"Page {page_idx}" if page_idx else f"Chunk {idx}"
                 lines.append(f"  [{ref_id}-{idx}] {page_label}")

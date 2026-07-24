@@ -15,6 +15,13 @@ from dlightrag.core.retrieval.protocols import (
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
 
+def tag_context_workspace(contexts: RetrievalContexts, workspace: str) -> None:
+    """Attach one workspace identity to every retrieval context row."""
+    for key in ("chunks", "entities", "relationships"):
+        for row in contexts.get(key, []):
+            row.setdefault("_workspace", workspace)
+
+
 def canonicalize_reference_ids(
     chunks: list[dict[str, Any]],
     *,
@@ -134,4 +141,5 @@ __all__ = [
     "RetrievalResult",
     "SourceDownloadLinkBuilder",
     "canonicalize_reference_ids",
+    "tag_context_workspace",
 ]

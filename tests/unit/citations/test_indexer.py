@@ -127,3 +127,32 @@ def test_reference_list_exposes_workspace_provenance_without_breaking_legacy_con
 
     assert indexer.get_doc_workspace("1") is None
     assert "[1] rebuilt-legacy.pdf" in indexer.format_reference_list()
+
+
+def test_reference_list_keeps_page_metadata_reference_local_for_same_chunk_id() -> None:
+    indexer = CitationIndexer()
+    indexer.build_index(
+        [
+            {
+                "chunk_id": "shared-hash",
+                "reference_id": "1",
+                "content": "Legal evidence",
+                "file_path": "/legal/report.pdf",
+                "page_idx": 3,
+                "_workspace": "legal",
+            },
+            {
+                "chunk_id": "shared-hash",
+                "reference_id": "2",
+                "content": "Finance evidence",
+                "file_path": "/finance/report.pdf",
+                "page_idx": 9,
+                "_workspace": "finance",
+            },
+        ]
+    )
+
+    references = indexer.format_reference_list()
+
+    assert "[1-1] Page 3" in references
+    assert "[2-1] Page 9" in references

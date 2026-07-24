@@ -240,6 +240,46 @@ class TestRAGServiceRetrieve:
         await service.aretrieve("test query")
         orchestrator.aretrieve.assert_awaited_once()
 
+    async def test_aretrieve_tags_all_context_rows_with_workspace(self, test_config) -> None:
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service, orchestrator = self._make_retrieval_service(test_config)
+        service._lightrag_stores = None
+        orchestrator.aretrieve.return_value = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {
+                        "chunk_id": "shared-hash",
+                        "reference_id": "1",
+                        "file_path": "/docs/report.pdf",
+                        "content": "Evidence",
+                    }
+                ],
+                "entities": [
+                    {
+                        "entity_name": "Revenue",
+                        "description": "Metric",
+                        "source_id": "shared-hash",
+                    }
+                ],
+                "relationships": [
+                    {
+                        "src_id": "Acme",
+                        "tgt_id": "Revenue",
+                        "source_id": "shared-hash",
+                    }
+                ],
+            }
+        )
+
+        result = await service.aretrieve("test query")
+
+        assert {
+            row["_workspace"]
+            for key in ("chunks", "entities", "relationships")
+            for row in result.contexts[key]
+        } == {test_config.workspace}
+
     async def test_aretrieve_forwards_caller_bm25_query(self, test_config):
         service, orchestrator = self._make_retrieval_service(test_config)
         await service.aretrieve("test query", bm25_query="alpha beta")

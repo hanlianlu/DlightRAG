@@ -157,8 +157,9 @@ async def federated_retrieve(
     if len(workspaces) == 1:
         svc = await get_service(workspaces[0])
         result = await svc.aretrieve(query=query, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs)
-        for chunk in result.contexts.get("chunks", []):
-            chunk["_workspace"] = workspaces[0]
+        from dlightrag.core.retrieval import tag_context_workspace
+
+        tag_context_workspace(result.contexts, workspaces[0])
         result.trace.setdefault("workspace", workspaces[0])
         result.trace.setdefault("federated", False)
         return result

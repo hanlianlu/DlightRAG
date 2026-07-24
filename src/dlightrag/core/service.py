@@ -2040,13 +2040,12 @@ class RAGService:
         # --- Step 4: Canonicalize reference_id across all merged chunks ---
         # Required so fused chunks get stable doc-level IDs and become citable
         # as [ref-chunk_idx].
-        from dlightrag.core.retrieval import canonicalize_reference_ids
+        from dlightrag.core.retrieval import canonicalize_reference_ids, tag_context_workspace
 
         kg_result.contexts["chunks"] = canonicalize_reference_ids(
             kg_result.contexts.get("chunks", [])
         )
-        for chunk in kg_result.contexts.get("chunks", []):
-            chunk.setdefault("_workspace", self.config.workspace)
+        tag_context_workspace(kg_result.contexts, self.config.workspace)
         kg_result.trace["workspace"] = self.config.workspace
 
         return kg_result
