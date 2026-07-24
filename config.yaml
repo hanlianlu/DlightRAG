@@ -147,6 +147,14 @@ metadata:
 
 workspace: default
 
+## Process role. 'writer' (default) provisions schema, ingests, and serves every
+## API against a write-capable endpoint. 'reader' serves only stateless
+## query/read APIs against an infra-managed physical read replica under eventual
+## consistency (no schema writes; mutating APIs return 403). For a reader, point
+## postgres_host at the read endpoint. See
+## docs/postgresql.md#reader-role-and-read-replicas.
+# service_role: writer
+
 ## Docker Compose supplies local PostgreSQL defaults. Update these and Docker Compose for an external PostgreSQL endpoint. 
 ## postgres_ssl_mode options include disable | allow | prefer | require | verify-ca | verify-full
 
