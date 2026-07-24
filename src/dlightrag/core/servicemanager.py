@@ -320,6 +320,13 @@ class RAGServiceManager:
         manager = cls(config=config)
         init_tracing(manager._config)
 
+        # Bind the process-wide domain pool to this service config so the
+        # reader read-only invariant (and endpoint) cannot silently diverge
+        # from a caller-supplied SDK config that never called set_config().
+        from dlightrag.storage.pool import pg_pool
+
+        pg_pool.bind(manager._config)
+
         await manager._initialize_workspace_registry()
 
         # Discover all known workspaces for recovery, but only instantiate the
@@ -344,8 +351,11 @@ class RAGServiceManager:
             default_err = exc
             logger.warning("Failed to warm up default workspace '%s'", default_ws, exc_info=True)
 
-        await manager._start_ingest_job_recovery()
-        await manager._recover_stalled_docs(all_ws)
+        # Readers attach to a replica: no ingest-job recovery or stalled-doc
+        # resets, both of which write.
+        if not manager._config.is_reader:
+            await manager._start_ingest_job_recovery()
+            await manager._recover_stalled_docs(all_ws)
         if default_ws in manager._services:
             manager._ready = True
         else:
@@ -361,12 +371,13 @@ class RAGServiceManager:
 
         self._workspace_registry = PGWorkspaceRegistry()
         try:
-            await self._workspace_registry.initialize()
-            await self._workspace_registry.upsert(
-                workspace=normalize_workspace(self._config.workspace),
-                display_name=self._config.workspace,
-                embedding_model=self._config.embedding.model,
-            )
+            await self._workspace_registry.initialize(read_only=self._config.is_reader)
+            if not self._config.is_reader:
+                await self._workspace_registry.upsert(
+                    workspace=normalize_workspace(self._config.workspace),
+                    display_name=self._config.workspace,
+                    embedding_model=self._config.embedding.model,
+                )
         except Exception as exc:
             self._startup_warnings.append("Workspace registry unavailable")
             logger.warning("Workspace registry initialization failed: %s", exc)
@@ -704,6 +715,7 @@ class RAGServiceManager:
         request: IngestSpec,
     ) -> dict[str, Any]:
         """Start a background ingest job and return its durable job row."""
+        self._config.require_writer("ingestion")
         kwargs = ingest_kwargs_from_payload(request)
         return await self._ingest_jobs.start_job(
             workspace,
@@ -722,9 +734,11 @@ class RAGServiceManager:
         timeout: float | None = None,
     ) -> dict[str, Any] | None:
         """Wait for an in-process ingest job without cancelling it on timeout."""
+        self._config.require_writer("ingest job access")
         return await self._ingest_jobs.await_job(job_id, timeout=timeout)
 
     async def aget_ingest_job(self, job_id: str) -> dict[str, Any] | None:
+        self._config.require_writer("ingest job access")
         return await self._ingest_jobs.get_job(job_id)
 
     def _get_file_panel_store(self) -> PGFilePanelStore:
@@ -736,6 +750,7 @@ class RAGServiceManager:
 
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
+        self._config.require_writer("workspace creation")
         svc = await self._get_service(workspace)
         await svc.aregister_workspace(display_name=display_name)
 
@@ -859,6 +874,7 @@ class RAGServiceManager:
         removes local files. After reset, the service is closed and evicted
         from cache.
         """
+        self._config.require_writer("workspace reset")
         if workspace is not None:
             requested_workspace = workspace
             target_workspace = normalize_workspace(workspace)

@@ -82,8 +82,21 @@ class PGWorkspaceRegistry:
 
         return await pg_pool.run(operation)
 
-    async def initialize(self) -> None:
-        """Create or verify the registry table."""
+    async def initialize(self, *, read_only: bool = False) -> None:
+        """Create/migrate the registry table, or verify it (read-only reader)."""
+        if read_only:
+
+            async def _verify(conn: Any) -> None:
+                exists = await conn.fetchval(
+                    "SELECT to_regclass('dlightrag_workspace_meta') IS NOT NULL"
+                )
+                if not exists:
+                    raise RuntimeError(
+                        "dlightrag_workspace_meta is missing; initialize it on the writer first"
+                    )
+
+            await self._run(_verify)
+            return
 
         async def _operation(conn: Any) -> None:
             await apply_migrations(

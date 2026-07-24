@@ -654,6 +654,16 @@ class DlightragConfig(BaseSettings):
         return tuple(sources)
 
     # ===== PostgreSQL (Default Storage Backend) =====
+    service_role: Literal["writer", "reader"] = Field(
+        default="writer",
+        description=(
+            "Process role. 'writer' serves ingest plus all APIs against a "
+            "write-capable endpoint. 'reader' serves stateless query/read APIs "
+            "against an infra-provided read endpoint (physical replica) under "
+            "eventual consistency; it performs no schema writes and rejects "
+            "mutating APIs. Both roles use one single endpoint per process."
+        ),
+    )
     postgres_host: str = Field(default="localhost")
     postgres_port: int = Field(default=5432, ge=1, le=65535)
     postgres_user: str = Field(default="dlightrag")
@@ -1267,6 +1277,24 @@ class DlightragConfig(BaseSettings):
         return self.working_dir_path / "inputs"
 
     @property
+    def is_reader(self) -> bool:
+        """Whether this process runs as a read-only replica reader."""
+        return self.service_role == "reader"
+
+    def require_writer(self, operation: str) -> None:
+        """Reject a mutating operation on a read-only reader process.
+
+        Fail-closed guard shared by every write facade (REST/MCP/SDK) so a
+        reader rejects writes at the boundary instead of erroring deep in a
+        read-only transaction.
+        """
+        if self.is_reader:
+            raise PermissionError(
+                f"{operation} is not available on a read-only reader instance; "
+                "route writes to a writer instance connected to the primary endpoint."
+            )
+
+    @property
     def mcp_dns_rebinding_protection(self) -> bool:
         """Enable MCP Host/Origin allowlist checks only when auth is off.
 
@@ -1311,8 +1339,14 @@ class DlightragConfig(BaseSettings):
             raise ValueError(f"PostgreSQL SSL configuration error: {exc}") from exc
 
     def pg_connection_kwargs(self) -> dict[str, Any]:
-        """Return asyncpg connection kwargs for DlightRAG's PostgreSQL endpoint."""
-        kwargs = {
+        """Return asyncpg connection kwargs for DlightRAG's PostgreSQL endpoint.
+
+        Reader processes carry ``default_transaction_read_only=on`` in the
+        startup packet so every direct connection is read-only regardless of the
+        endpoint it resolves to. The GUC survives asyncpg pool ``RESET ALL``
+        because startup-packet settings become the session default.
+        """
+        kwargs: dict[str, Any] = {
             "host": self.postgres_host,
             "port": self.postgres_port,
             "user": self.postgres_user,
@@ -1322,6 +1356,8 @@ class DlightragConfig(BaseSettings):
         ssl_value = self._pg_ssl_value()
         if ssl_value is not None:
             kwargs["ssl"] = ssl_value
+        if self.is_reader:
+            kwargs["server_settings"] = {"default_transaction_read_only": "on"}
         return kwargs
 
     @staticmethod
@@ -1340,6 +1376,10 @@ class DlightragConfig(BaseSettings):
             rendered = self._env_value(value)
             if rendered is not None:
                 settings[str(key)] = rendered
+        if self.is_reader:
+            # Reader defense-in-depth: force read-only sessions on both pools.
+            # Applied last so no operator session setting can weaken it.
+            settings["default_transaction_read_only"] = "on"
         return settings
 
     def postgres_server_settings_env_value(self) -> str:

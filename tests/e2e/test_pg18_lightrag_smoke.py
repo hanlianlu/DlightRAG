@@ -154,3 +154,91 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
             await service.areset(keep_files=False)
         await service.aclose()
         await pg_pool.close()
+
+
+async def test_reader_role_attaches_read_only_and_rejects_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reader attaches to an existing schema read-only, serves reads, rejects writes.
+
+    Writer and reader run sequentially in one process (fully closing between
+    phases resets the process-wide LightRAG client and domain pool). This
+    validates DlightRAG's reader code against a real PostgreSQL under a read-only
+    session; physical streaming replication itself is an infrastructure
+    guarantee and is out of scope for this test.
+    """
+    from dlightrag.config import reset_config, set_config
+    from dlightrag.core.service import RAGService
+    from dlightrag.storage.pool import pg_pool
+
+    conn_kwargs = pg_conn_kwargs_from_env()
+    workspace = make_workspace_name("reader")
+    writer_cfg = make_e2e_config(
+        working_dir=tmp_path / "storage",
+        workspace=workspace,
+        conn_kwargs=conn_kwargs,
+    )
+    set_config(writer_cfg)
+    install_fake_model_functions(monkeypatch, dim=writer_cfg.embedding.dim)
+
+    # ── Writer: provision schema + ingest ──────────────────────────────
+    writer = await RAGService.acreate(config=writer_cfg)
+    try:
+        doc_path = tmp_path / "reader-smoke.md"
+        doc_path.write_text(
+            "# Reader smoke\n\nA replica reader attaches to the existing schema "
+            "and serves stateless reads.\n",
+            encoding="utf-8",
+        )
+        result = await writer.aingest(
+            source_type="local",
+            path=str(doc_path),
+            replace=True,
+            title="Reader Smoke",
+            metadata={"e2e_case": "reader"},
+            metadata_policy="validate",
+        )
+        doc_id = result["doc_id"]
+        chunk_id = result["chunks"][0]
+    finally:
+        await writer.aclose()
+        await pg_pool.close()
+        reset_config()
+
+    # ── Reader: read-only attach + retrieve + write rejection ──────────
+    reader_cfg = writer_cfg.model_copy(update={"service_role": "reader"})
+    set_config(reader_cfg)
+    reader = await RAGService.acreate(config=reader_cfg)
+    try:
+        assert reader.config.is_reader
+
+        retrieval = await reader.aretrieve(
+            "reader attaches to the existing schema", top_k=5, chunk_top_k=5
+        )
+        chunk_ids = {c.get("chunk_id") for c in retrieval.contexts.get("chunks", [])}
+        assert chunk_id in chunk_ids
+
+        metadata = await reader.aget_metadata(doc_id)
+        assert metadata["doc_title"] == "Reader Smoke"
+
+        with pytest.raises(PermissionError):
+            await reader.areset()
+        with pytest.raises(PermissionError):
+            await reader.aupdate_metadata(doc_id, {"note": "nope"})
+        with pytest.raises(PermissionError):
+            await reader.aingest(source_type="local", path=str(doc_path))
+    finally:
+        await reader.aclose()
+        await pg_pool.close()
+        reset_config()
+
+    # ── Cleanup: remove the workspace via a writer ─────────────────────
+    set_config(writer_cfg)
+    cleanup = await RAGService.acreate(config=writer_cfg)
+    try:
+        await cleanup.areset(keep_files=False)
+    finally:
+        await cleanup.aclose()
+        await pg_pool.close()
+        reset_config()

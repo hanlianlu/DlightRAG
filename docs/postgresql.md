@@ -156,11 +156,14 @@ print(required_patch_names(PostgreSQLDB))
 
 ## PG Pool Architecture
 
-DlightRAG uses one configured PostgreSQL endpoint per service process. That
-endpoint must be write-capable because startup may apply DlightRAG schema
-migrations, LightRAG may initialize storage, and operational APIs can mutate
-workspace state. LightRAG's staged pipeline already supports ingest and query
-in the same process; local query-while-ingest behavior should be tuned through
+DlightRAG uses one configured PostgreSQL endpoint per service process, selected
+by `service_role`. A **writer** process (the default) targets a write-capable
+endpoint because startup may apply DlightRAG schema migrations, LightRAG may
+initialize storage, and operational APIs can mutate workspace state. A
+**reader** process targets an infra-provided read endpoint and never writes (see
+[Reader role and read replicas](#reader-role-and-read-replicas)). LightRAG's
+staged pipeline already supports ingest and query in the same writer process;
+local query-while-ingest behavior should be tuned through
 parser/analyze/insert/model concurrency before changing database topology.
 
 DlightRAG uses two asyncpg pools:
@@ -174,10 +177,45 @@ The dedicated DlightRAG pool avoids contention between LightRAG internals and
 metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
 and session-level PostgreSQL tuning.
 
-If production infrastructure needs read replicas, configure them outside
-DlightRAG through managed PostgreSQL, a proxy, or platform-level routing.
-DlightRAG itself does not accept separate replica credentials, runtime roles,
-or read-after-write replay policies.
+## Reader role and read replicas
+
+To scale read/query load horizontally, run additional processes with
+`service_role: reader` (or `DLIGHTRAG_SERVICE_ROLE=reader`) whose `postgres_host`
+points at an infra-managed **read endpoint**. Replica routing, health, and
+failover stay entirely in the infrastructure layer; DlightRAG accepts no replica
+credentials, no app-level routing, and no read-after-write replay policy.
+
+A reader:
+
+- attaches to the already-provisioned schema without any DDL, migration, or AGE
+  graph creation, and verifies the required tables/labels exist (fail-fast if
+  the writer has not created them yet);
+- forces `default_transaction_read_only=on` on every connection (both pools and
+  direct probes) as defense-in-depth, so a reader accidentally pointed at a
+  writable endpoint still cannot write;
+- disables the LightRAG response cache and rejects mutating REST/MCP/SDK calls
+  with HTTP 403; and
+- serves only stateless query/read APIs; the bundled Web conversation surface
+  runs on writer instances.
+
+Infrastructure requirements:
+
+- Use **physical streaming replication** (it copies AGE, pgvector, and DDL
+  byte-for-byte; logical replication does not propagate DDL and is unfit for the
+  AGE/extension stack).
+- Keep replication **asynchronous**; never make ingest wait on a replica.
+- Bring up a writer to create/migrate schema first, let replication ship it,
+  then start readers. On schema-changing releases, migrate on the writer first,
+  then roll readers.
+- Readers observe **eventual consistency**: a document ingested on the writer is
+  retrievable on readers only after replication catches up.
+- Physical replication does not copy the `working_dir`. If readers must serve
+  visual evidence or retained local source downloads, mount the writer's
+  `working_dir` read-only at the **same absolute path**; otherwise prefer remote
+  (S3/Azure/HTTPS) source locators.
+- Tune `hot_standby_feedback` and `max_standby_streaming_delay` to reduce
+  standby query cancellations, and monitor replication slot / WAL retention so a
+  dead replica cannot fill the primary's disk.
 
 ## Version Support Log
 

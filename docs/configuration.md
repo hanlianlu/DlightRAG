@@ -26,7 +26,8 @@ Keep these in normal `config.yaml`:
 - parser sidecar endpoint and visual context controls: `parser_sidecars`
 - metadata schema: `metadata.fields`
 - domain entity guidance: `kg_entity_types`, `extraction.entity_type_prompt_file`
-- PostgreSQL endpoint and workspace identity: `workspace`, `postgres_*`
+- PostgreSQL endpoint, process role, and workspace identity: `workspace`,
+  `service_role`, `postgres_*`
 - high-level concurrency raised above upstream defaults: `max_async`,
   `embedding_func_max_async`, `embedding_batch_num`
 - retrieval/answer breadth: `top_k`, `chunk_top_k`, `direct_visual_top_k`,
@@ -404,6 +405,29 @@ LightRAG backend pool. Each process opens up to the sum of the two, so multiply
 by the worker count and keep the total under PostgreSQL `max_connections`. Raise
 `postgres_pool_max_size` for high single-worker concurrency; lower it when
 running many workers.
+
+### Process role (writer / reader)
+
+`service_role` selects what a process does with its single PostgreSQL endpoint:
+
+```yaml
+service_role: writer   # default: ingest + all APIs against a write-capable endpoint
+```
+
+- `writer` (default) preserves today's behavior: it provisions schema, ingests,
+  and serves every API.
+- `reader` serves only stateless query/read APIs (`/retrieve`, `/answer`, and
+  ancillary reads) against an infra-provided **read endpoint** (a physical
+  streaming-replication standby). A reader performs no schema writes, disables
+  the LightRAG response cache, forces `default_transaction_read_only=on` on
+  every connection, and rejects mutating APIs with HTTP 403. It does not serve
+  the bundled Web conversation surface.
+
+Readers run under **eventual consistency**: a document ingested on the writer is
+retrievable on readers only after replication catches up. Point a reader with
+`DLIGHTRAG_SERVICE_ROLE=reader` (or `service_role: reader`) and set its
+`postgres_host` to the read endpoint. See [postgresql.md](postgresql.md#reader-role-and-read-replicas)
+for deployment, replication, and asset-sharing requirements.
 
 Use [postgresql.md](postgresql.md) for production sizing, SSL, shared memory, and extension
 notes.

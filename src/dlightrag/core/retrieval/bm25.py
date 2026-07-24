@@ -214,6 +214,47 @@ class PostgresBM25:
 
         await self._run(_operation)
 
+    async def verify_indexes(
+        self,
+        *,
+        k1: float = 1.2,
+        b: float = 0.75,
+    ) -> None:
+        """Verify BM25 schema and indexes exist without emitting DDL (reader)."""
+        options_by_profile = [
+            BM25IndexOptions(profile=profile, k1=k1, b=b) for profile in self._profiles
+        ]
+
+        async def _operation(conn: Any) -> None:
+            await self._verify_schema(conn)
+            for options in options_by_profile:
+                await self._verify_text_config(conn, options.profile.text_config)
+                indexdef = await self._fetch_indexdef(conn, options.profile.index_name)
+                if not options.matches_indexdef(indexdef):
+                    raise RuntimeError(
+                        f"BM25 index {options.profile.index_name} is missing or does not "
+                        "match configured options; initialize it on the writer first"
+                    )
+
+        await self._run(_operation)
+
+    @staticmethod
+    async def _verify_schema(conn: Any) -> None:
+        exists = await conn.fetchval(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'lightrag_doc_chunks'
+              AND column_name = $1
+            LIMIT 1
+            """,
+            BM25_LANGUAGE_COLUMN,
+        )
+        if not exists:
+            raise RuntimeError(
+                f"{BM25_TABLE}.{BM25_LANGUAGE_COLUMN} is missing; initialize it on the writer first"
+            )
+
     @staticmethod
     async def _ensure_schema(conn: Any) -> None:
         await conn.execute(

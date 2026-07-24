@@ -61,6 +61,11 @@ def create_app(*, include_web: bool = True) -> FastAPI:
 
     cfg = get_config()
 
+    # Reader processes serve only the stateless query/read API surface; the
+    # bundled Web app owns conversation persistence, which is writer-only.
+    if cfg.is_reader:
+        include_web = False
+
     application = FastAPI(
         title="dlightrag",
         description="DlightRAG - LightRAG-main unified multimodal RAG service",

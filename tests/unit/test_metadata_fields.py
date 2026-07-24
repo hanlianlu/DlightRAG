@@ -12,6 +12,20 @@ from dlightrag.core.retrieval.metadata_fields import (
 from dlightrag.core.retrieval.models import MetadataFilter
 
 
+def _writer_config():
+    """Minimal writer config so the RAGService write guard passes."""
+    from typing import Any, cast
+
+    from dlightrag.config import DlightragConfig, EmbeddingConfig
+
+    return cast(Any, DlightragConfig)(
+        _env_file=None,
+        embedding=EmbeddingConfig(
+            provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
+        ),
+    )
+
+
 class TestMetadataFieldDef:
     """MetadataFieldDef frozen dataclass basics."""
 
@@ -320,6 +334,7 @@ async def test_metadata_update_revalidates_without_reindexing() -> None:
     from dlightrag.core.service import RAGService
 
     service = object.__new__(RAGService)
+    service.config = _writer_config()
     service._metadata_index = AsyncMock()
     service._metadata_registry = MetadataFieldRegistry.from_config(
         {

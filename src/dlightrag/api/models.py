@@ -224,6 +224,7 @@ class AnswerImageCapabilityResponse(ClientContractModel):
 class HealthResponse(ClientContractModel):
     status: Literal["healthy", "degraded"]
     rag_initialized: bool
+    service_role: Literal["writer", "reader"]
     crafted_by: str
     maintained_by: str
     storage: HealthStorageResponse

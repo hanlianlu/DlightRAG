@@ -28,6 +28,7 @@ async def health(request: Request) -> dict[str, object]:
     status: dict[str, object] = {
         "status": "degraded" if is_degraded else "healthy",
         "rag_initialized": manager.is_ready(),
+        "service_role": config.service_role,
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {
@@ -42,11 +43,19 @@ async def health(request: Request) -> dict[str, object]:
 
     # Check PostgreSQL connectivity through the shared pool rather than opening a
     # fresh connection per request -- the latter is wasteful and lets unauthenticated
-    # health traffic exhaust the server's connection slots.
+    # health traffic exhaust the server's connection slots. Readers additionally
+    # confirm the domain pool holds the read-only session invariant.
     try:
         from dlightrag.storage.pool import pg_pool
 
-        await pg_pool.run_once(lambda conn: conn.fetchval("SELECT 1"))
+        if config.is_reader:
+            read_only = await pg_pool.run_once(
+                lambda conn: conn.fetchval("SHOW transaction_read_only")
+            )
+            if str(read_only).lower() != "on":
+                raise RuntimeError("reader domain pool is not read-only")
+        else:
+            await pg_pool.run_once(lambda conn: conn.fetchval("SELECT 1"))
         status["postgres"] = "connected"
     except Exception:
         logger.warning("Health check: PostgreSQL probe failed", exc_info=True)

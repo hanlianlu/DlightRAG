@@ -17,7 +17,7 @@ in [postgresql.md](postgresql.md).
 Clients
   -> REST / Web / MCP / SDK adapters
   -> RAGServiceManager
-       workspace routing, user scope, federation, read-after-write barriers
+       workspace routing, user scope, federation, writer/reader role gating
   -> RAGService
        one workspace runtime, ingest, retrieve, answer, reset
   -> LightRAG main

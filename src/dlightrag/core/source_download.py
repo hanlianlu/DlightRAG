@@ -113,10 +113,11 @@ class SourceDownloadService:
                 raise SourceDownloadNotFoundError("Source not found")
             resolved = archived
             repaired = str(resolved)
-            await self._metadata_index.upsert(
-                document_id,
-                {"download_locator": repaired, "file_path": repaired},
-            )
+            if not self._config.is_reader:
+                await self._metadata_index.upsert(
+                    document_id,
+                    {"download_locator": repaired, "file_path": repaired},
+                )
 
         media_type, _ = mimetypes.guess_type(str(resolved))
         return LocalDownloadTarget(

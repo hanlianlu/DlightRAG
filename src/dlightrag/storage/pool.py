@@ -53,10 +53,48 @@ class PGPool:
     def __init__(self) -> None:
         self._pool: asyncpg.Pool | None = None
         self._lock: asyncio.Lock | None = None
+        self._config: Any = None
         self._transient_exceptions = (
             *POSTGRES_UNAVAILABLE_EXCEPTIONS,
             asyncpg.exceptions.InterfaceError,
         )
+
+    @staticmethod
+    def _binding_signature(config: Any) -> tuple[Any, ...]:
+        """Connection-identity fields that must not change under one process."""
+        return (
+            config.postgres_host,
+            config.postgres_port,
+            config.postgres_user,
+            config.postgres_database,
+            config.service_role,
+            config.postgres_ssl_mode,
+            tuple(sorted(config.postgres_server_settings_dict().items())),
+        )
+
+    def bind(self, config: Any) -> None:
+        """Bind the pool to an explicit config (manager/service startup).
+
+        Prevents the domain pool from silently diverging from the process's
+        service config -- notably the reader read-only invariant -- when a
+        caller constructs a config without ``set_config()``. A second,
+        connection-incompatible config in the same process fails fast.
+        """
+        if self._config is not None and self._binding_signature(
+            self._config
+        ) != self._binding_signature(config):
+            raise RuntimeError(
+                "DlightRAG domain pool is already bound to a different PostgreSQL "
+                "endpoint/role; one process supports a single service config."
+            )
+        self._config = config
+
+    def _active_config(self) -> Any:
+        if self._config is not None:
+            return self._config
+        from dlightrag.config import get_config
+
+        return get_config()
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -65,9 +103,7 @@ class PGPool:
 
     async def get(self) -> asyncpg.Pool:
         """Return a shared pool, creating it on first call."""
-        from dlightrag.config import get_config
-
-        config = get_config()
+        config = self._active_config()
         if self._pool is not None:
             return self._pool
         async with self._get_lock():
@@ -108,9 +144,7 @@ class PGPool:
         destroying the pool amplifies one transient failure into a cascading
         disruption for all concurrent callers.
         """
-        from dlightrag.config import get_config
-
-        config = get_config()
+        config = self._active_config()
         attempts = max(
             1,
             int(getattr(config, "postgres_connection_retries", _DEFAULT_RETRY_ATTEMPTS)),
@@ -159,9 +193,7 @@ class PGPool:
         Use this for outcome-sensitive mutations whose transaction may have
         committed before a connection error reaches the client.
         """
-        from dlightrag.config import get_config
-
-        config = get_config()
+        config = self._active_config()
         pool = await self.get()
         async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
             return await operation(conn)
@@ -174,6 +206,7 @@ class PGPool:
         """Close the shared pool. Safe to call multiple times."""
         pool = self._pool
         if pool is None:
+            self._config = None
             return
         try:
             if timeout is None:
@@ -190,6 +223,7 @@ class PGPool:
             logger.warning("DlightRAG domain store pool close failed", exc_info=True)
         finally:
             self._pool = None
+            self._config = None
 
 
 pg_pool = PGPool()

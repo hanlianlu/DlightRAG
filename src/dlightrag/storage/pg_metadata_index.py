@@ -181,8 +181,11 @@ class PGMetadataIndex:
 
         return await pg_pool.run(operation)
 
-    async def initialize(self) -> None:
-        """Create table and indexes. Call once during service startup."""
+    async def initialize(self, *, read_only: bool = False) -> None:
+        """Create table and indexes, or verify them (read-only reader)."""
+        if read_only:
+            await self._verify_schema()
+            return
 
         async def _operation(conn: Any) -> None:
             await apply_migrations(
@@ -190,6 +193,18 @@ class PGMetadataIndex:
                 scope="doc_metadata",
                 migrations=_SCHEMA_MIGRATIONS,
             )
+
+        await self._run(_operation)
+
+    async def _verify_schema(self) -> None:
+        """Confirm the metadata table exists without emitting DDL."""
+
+        async def _operation(conn: Any) -> None:
+            exists = await conn.fetchval("SELECT to_regclass('dlightrag_doc_metadata') IS NOT NULL")
+            if not exists:
+                raise RuntimeError(
+                    "dlightrag_doc_metadata is missing; initialize it on the writer first"
+                )
 
         await self._run(_operation)
 
