@@ -155,6 +155,14 @@ function applyFilePanelHtml(html: string, workspace: string, request?: PanelRequ
     }
 }
 
+// Mutation routes swap the panel with the HTML fragment they return. Auth
+// denials (403) come back as a JSON `{"detail": ...}` body, not an HTML
+// fragment, so gate the swap on content type: keep that JSON out of the panel
+// while still showing the HTML error fragments (413/409/500).
+function isPanelHtmlResponse(response: Response): boolean {
+    return (response.headers.get('content-type') || '').includes('text/html');
+}
+
 async function requestFilePanelHtml(
     request: PanelRequest,
     path: string,
@@ -402,8 +410,9 @@ export async function uploadFilesToWorkspace(
             body: formData,
             signal: request.controller.signal,
         });
-        const html = await response.text();
-        applyFilePanelHtml(html, workspace, request);
+        if (isPanelHtmlResponse(response)) {
+            applyFilePanelHtml(await response.text(), workspace, request);
+        }
         showToast(
             response.ok ? 'Files received — processing in background' : 'Upload failed.',
             response.ok ? 3000 : 5000,
@@ -435,8 +444,9 @@ async function deleteFile(filePath: string): Promise<void> {
             method: 'DELETE',
             signal: request.controller.signal,
         });
-        const html = await response.text();
-        applyFilePanelHtml(html, workspace, request);
+        if (isPanelHtmlResponse(response)) {
+            applyFilePanelHtml(await response.text(), workspace, request);
+        }
         showToast(response.ok ? 'File deleted.' : 'Deletion failed.', response.ok ? 3000 : 5000);
     } catch (error: unknown) {
         if (isAbortError(error)) return;
