@@ -34,7 +34,6 @@ llm:
     base_url: https://openrouter.ai/api/v1
     structured_output: json_schema
     temperature: 0.4
-    timeout: 120.0
     model_kwargs:
       thinking:
         type: disabled
@@ -45,7 +44,6 @@ llm:
       base_url: https://api.deepseek.com
       structured_output: json_object
       temperature: 0.0
-      timeout: 120.0
       model_kwargs:
         thinking:
           type: disabled
@@ -55,7 +53,6 @@ llm:
       base_url: https://api.deepseek.com
       structured_output: json_object
       temperature: 0.0
-      timeout: 120.0
       model_kwargs:
         thinking:
           type: disabled
@@ -65,7 +62,6 @@ llm:
       base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
       structured_output: json_object
       temperature: 0.4
-      timeout: 120.0
       model_kwargs:
         chat_template_kwargs:
           enable_thinking: false
@@ -75,7 +71,6 @@ llm:
       base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
       structured_output: json_object
       temperature: 0.0
-      timeout: 120.0
       model_kwargs:
         chat_template_kwargs:
           enable_thinking: false
@@ -85,9 +80,7 @@ embedding:
   model: voyage-multimodal-3.5
   base_url: https://api.voyageai.com/v1
   dim: 1024
-  max_token_size: 8192
   input_modality: auto
-  asymmetric: auto
 
 rerank:
   enabled: true
@@ -108,14 +101,10 @@ extraction:
   # entity_type_prompt_file: domain-entities.yaml
 
 parser_sidecars:
-  vlm:
-    surrounding_leading_max_tokens: 128
-    surrounding_trailing_max_tokens: 128
   mineru:
     api_mode: local
     local_endpoint: http://127.0.0.1:8210
     language: ch
-    auxiliary_block_policy: conservative
     ## MinerU parse engine. Unset = LightRAG default (hybrid-auto-engine, VLM-assisted).
     ## Set backend: pipeline for MinerU's non-VLM OCR engine (avoids VLM transcription
     ## artifacts on hard scans; weaker on complex layout/charts).
