@@ -312,6 +312,18 @@ export function setAnswerError(turn: ChatTurn, message: unknown): void {
   turn.contentDiv.classList.add(chatStyles.textError);
 }
 
+export function markAnswerStopped(turn: ChatTurn): void {
+  // Keep the partial answer that already streamed; drop the live streaming
+  // indicator and append a subtle "Stopped" marker instead of wiping content.
+  turn.contentDiv
+    .querySelectorAll('.' + chatStyles.streamingDot + ', .' + chatStyles.progressPhase)
+    .forEach((el) => el.remove());
+  const note = document.createElement('div');
+  note.className = chatStyles.stoppedNote;
+  note.textContent = 'Stopped';
+  turn.contentDiv.appendChild(note);
+}
+
 export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOptions = {}) {
   let fullAnswer = '';
   let failed = false;

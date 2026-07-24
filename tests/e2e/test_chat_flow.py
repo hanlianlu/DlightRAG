@@ -62,6 +62,9 @@ def test_chat_history_appends_turns(page):
     page.click(".composer-send")
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
     page.wait_for_selector(".app.has-messages", timeout=10000)
+    # One answer at a time: wait for the first stream to finish (the Send button
+    # returns from its Stop state) before submitting the next query.
+    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
 
     initial_user_messages = page.locator('[class*="userMessageWrapper"]').count()
 

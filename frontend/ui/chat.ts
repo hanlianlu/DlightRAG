@@ -9,6 +9,7 @@ import {streamSSE} from '../lib/sse.ts';
 import {
     createAnswerRenderer,
     createChatTurn,
+    markAnswerStopped,
     renderAnswerSaveOutcome,
     setAnswerError,
 } from '../lib/chat_renderer.ts';
@@ -205,10 +206,14 @@ export async function submitQuery(query: string): Promise<void> {
             }
         }
     } catch (_) {
-        setAnswerError(
-            turn,
-            controller.signal.aborted ? 'Answer stopped.' : 'Connection error. Please try again.',
-        );
+        if (controller.signal.aborted) {
+            // User stopped: keep the partial answer and drop the now-stale
+            // pending submission instead of wiping the turn.
+            if (conversationId) pendingSubmissionStore.clear(conversationId);
+            markAnswerStopped(turn);
+        } else {
+            setAnswerError(turn, 'Connection error. Please try again.');
+        }
     } finally {
         releaseLiveViewport();
         clearTimeout(idleTimer);
@@ -229,9 +234,10 @@ export function setupQueryForm(): void {
     const sendBtn = form.querySelector('.composer-send') as HTMLButtonElement | null;
 
     function toggleSendButton() {
-        if (sendBtn) {
-            sendBtn.disabled = !queryInput.value.trim();
-        }
+        if (!sendBtn) return;
+        // While an answer streams the button acts as Stop and stays actionable;
+        // otherwise it is Send, enabled only when there is text to send.
+        sendBtn.disabled = queryInFlight ? false : !queryInput.value.trim();
     }
 
     function autoResize() {
@@ -265,6 +271,7 @@ export function setupQueryForm(): void {
         }
         e.preventDefault();
         allowNextLineBreak = false;
+        if (queryInFlight) return;  // one answer at a time — keep the draft
         submitComposerForm(queryForm);
     });
     queryInput.addEventListener('keyup', function(e: KeyboardEvent) {
@@ -274,8 +281,24 @@ export function setupQueryForm(): void {
 
     toggleSendButton();
 
+    // Send ⇄ Stop: while an answer streams the button stops it; otherwise it
+    // submits. Enter is gated separately so drafting a follow-up never stops
+    // the current answer by accident.
+    sendBtn?.addEventListener('click', function(e) {
+        if (!queryInFlight) return;
+        e.preventDefault();
+        cancelQuery();
+    });
+    bus.on('conversationStreamChanged', function({active}) {
+        if (!sendBtn) return;
+        sendBtn.classList.toggle('is-stop', active);
+        sendBtn.setAttribute('aria-label', active ? 'Stop' : 'Send');
+        toggleSendButton();
+    });
+
     queryForm.addEventListener('submit', function(e: SubmitEvent) {
         e.preventDefault();
+        if (queryInFlight) return;  // never clear or submit while an answer streams
         const query = queryInput.value.trim();
         if (!query) return;
         queryInput.value = '';

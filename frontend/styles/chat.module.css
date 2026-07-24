@@ -333,6 +333,12 @@
   color: var(--color-danger);
 }
 
+.stoppedNote {
+  margin-top: var(--space-tight);
+  font-size: var(--font-size-detail);
+  color: var(--color-text-dim);
+}
+
 /* === Markdown Content (scoped to AI answer) === */
 
 .aiMessageContent h1,

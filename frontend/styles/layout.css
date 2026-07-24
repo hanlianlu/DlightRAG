@@ -413,6 +413,19 @@ body.panel-open .composer-inner {
     transform: none;
 }
 
+/* Send ⇄ Stop: swap the paper-plane for a stop square while an answer streams. */
+.composer-send-icon--stop {
+    display: none;
+}
+
+.composer-send.is-stop .composer-send-icon--send {
+    display: none;
+}
+
+.composer-send.is-stop .composer-send-icon--stop {
+    display: block;
+}
+
 /* === Composer + Button === */
 
 .composer-plus {
