@@ -61,6 +61,23 @@ with Path(path).open("wb") as fh:
 PY
 }
 
+# launchd's bootout is asynchronous; bootstrapping the same label before the old
+# job finishes tearing down can fail with "5: Input/output error". Retry a few
+# times with a short backoff so re-installing over a running agent succeeds.
+bootstrap_retry() {
+  local target_domain="$1" plist="$2" i
+  for i in 1 2 3 4 5; do
+    if launchctl bootstrap "$target_domain" "$plist" 2>/dev/null; then
+      return 0
+    fi
+    if [ "$i" -lt 5 ]; then
+      sleep 0.5
+    fi
+  done
+  # Final attempt without suppression surfaces the real error.
+  launchctl bootstrap "$target_domain" "$plist"
+}
+
 case "${1:-}" in
   install)
     for name in "${all_services[@]}"; do
@@ -68,12 +85,12 @@ case "${1:-}" in
     done
     for name in "${enabled_services[@]}"; do
       write_plist "$name"
-      launchctl bootstrap "$domain" "$(plist_for "$name")"
+      bootstrap_retry "$domain" "$(plist_for "$name")"
     done
     ;;
   start)
     for name in "${enabled_services[@]}"; do
-      launchctl bootstrap "$domain" "$(plist_for "$name")"
+      bootstrap_retry "$domain" "$(plist_for "$name")"
     done
     ;;
   stop)
