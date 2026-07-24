@@ -34,7 +34,6 @@ body {
     font-size: var(--font-size-body);
     background: var(--color-bg-base);
     color: var(--color-text-tertiary);
-    height: 100vh;
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
 }

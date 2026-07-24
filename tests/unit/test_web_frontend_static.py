@@ -134,6 +134,23 @@ def test_conversation_sidebar_keeps_single_store_and_protected_ui_surfaces() -> 
     assert ':global(.conversation-row[aria-current="page"])' in styles
 
 
+def test_mobile_shell_tracks_dynamic_viewport() -> None:
+    layout_path = FRONTEND_STYLES / "layout.css"
+    shell_styles = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            FRONTEND_STYLES / "global.css",
+            layout_path,
+            FRONTEND_STYLES / "conversations.module.css",
+        )
+    )
+
+    assert "height: 100dvh" in _css_rule(layout_path, ".app")
+    assert "height: 100dvh" in _css_rule(layout_path, ".panel")
+    assert "min-height: 0" in _css_rule(layout_path, ".chat-area")
+    assert "100vh" not in shell_styles
+
+
 def test_history_renderer_reuses_sanitized_answer_pipeline() -> None:
     renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
     images = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
