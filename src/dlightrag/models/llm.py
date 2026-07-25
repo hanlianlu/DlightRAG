@@ -435,7 +435,6 @@ def get_multimodal_embedder(config: DlightragConfig) -> Any:
         provider=get_embed_provider(cfg.provider),
         input_modality=cfg.input_modality,
         asymmetric=cfg.asymmetric,
-        batch_size=config.embedding_func_max_async,
         timeout=float(config.embedding_request_timeout),
     )
 
