@@ -54,6 +54,9 @@ class PreparedIngestFile:
     author: str | None = None
     metadata: Mapping[str, Any] | None = None
     metadata_policy: MetadataIngestPolicy | None = None
+    source_uri_explicit: bool = True
+    download_locator_explicit: bool = True
+    display_filename_explicit: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "parser_path", Path(self.parser_path))
@@ -140,6 +143,9 @@ class UnifiedIngestionEngine:
                 author=author,
                 metadata=metadata,
                 metadata_policy=metadata_policy,
+                source_uri_explicit=source_uri is not None,
+                download_locator_explicit=download_locator is not None,
+                display_filename_explicit=display_filename is not None,
             ),
             resolve_parser_directives=False,
         )
@@ -321,7 +327,7 @@ class UnifiedIngestionEngine:
                 metadata_policy=effective_metadata_policy,
             ),
             metadata_update_requested=(
-                _source_contract_override_requested(item, workspace=self._workspace)
+                _source_contract_update_requested(item)
                 or effective_title is not None
                 or effective_author is not None
                 or effective_metadata is not None
@@ -409,9 +415,11 @@ class UnifiedIngestionEngine:
         )
 
     async def _metadata_update_required(self, entry: _PendingDocumentIngest) -> bool:
+        if not entry.metadata_update_requested:
+            return False
         persisted = await self._metadata_index.get(entry.doc_id)
         if not isinstance(persisted, Mapping):
-            return entry.metadata_update_requested
+            return True
         return _hash_match_metadata_record(entry.metadata_record) != _hash_match_metadata_record(
             persisted
         )
@@ -686,6 +694,8 @@ def _prepare_ingest_item(
         parser_path=parser_path,
         source_uri=_raw_path_source_uri(parser_path, workspace=workspace),
         download_locator=str(parser_path.resolve()),
+        source_uri_explicit=False,
+        download_locator_explicit=False,
     )
 
 
@@ -741,13 +751,9 @@ def _raw_path_source_uri(path: Path, *, workspace: str) -> str:
     return local_source_uri(workspace, Path(digest) / path.name)
 
 
-def _source_contract_override_requested(item: PreparedIngestFile, *, workspace: str) -> bool:
-    default_source_uri = _raw_path_source_uri(item.parser_path, workspace=workspace)
-    default_download_locator = str(item.parser_path.resolve())
+def _source_contract_update_requested(item: PreparedIngestFile) -> bool:
     return (
-        item.source_uri != default_source_uri
-        or item.download_locator != default_download_locator
-        or (item.display_filename is not None and item.display_filename != item.parser_path.name)
+        item.source_uri_explicit or item.download_locator_explicit or item.display_filename_explicit
     )
 
 
