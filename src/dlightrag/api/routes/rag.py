@@ -40,6 +40,7 @@ from dlightrag.core.answer.errors import ANSWER_STREAM_FAILED, classify_answer_e
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
 from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.client_contracts import IngestSpec, conversation_history_as_dicts
+from dlightrag.core.client_execution import execute_answer, execute_retrieve
 from dlightrag.core.client_payloads import (
     answer_payload,
     project_contexts_for_client,
@@ -156,7 +157,6 @@ async def retrieve(
 ) -> dict[str, Any]:
     """Retrieve contexts and sources without LLM answer generation."""
     manager = get_manager(request)
-    kwargs = query_kwargs_from_payload(body)
     resolved_workspaces = await resolve_authorized_query_workspaces(
         request,
         user,
@@ -169,14 +169,11 @@ async def retrieve(
         resolved_workspaces,
     )
     scope = request_scope(user, resolved_workspaces)
-
-    result = await manager.aretrieve(
-        body.query,
-        workspaces=resolved_workspaces,
-        top_k=body.top_k,
-        chunk_top_k=body.chunk_top_k,
+    result = await execute_retrieve(
+        manager=manager,
+        payload=body,
+        resolved_workspaces=resolved_workspaces,
         scope=scope,
-        **kwargs,
     )
     link_builder = SourceDownloadLinkBuilder()
     return retrieval_payload(
@@ -208,16 +205,11 @@ async def answer(
     history = conversation_history_as_dicts(body.history)
 
     if not body.stream:
-        result = await manager.aanswer(
-            body.query,
-            workspaces=resolved_workspaces,
-            top_k=body.top_k,
-            chunk_top_k=body.chunk_top_k,
-            answer_context_top_k=body.answer_context_top_k,
-            semantic_highlights=body.semantic_highlights,
-            history=history,
+        result = await execute_answer(
+            manager=manager,
+            payload=body,
+            resolved_workspaces=resolved_workspaces,
             scope=scope,
-            **kwargs,
         )
         link_builder = SourceDownloadLinkBuilder()
         return answer_payload(

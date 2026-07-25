@@ -296,6 +296,19 @@ async def test_mcp_retrieve_forwards_chunk_top_k(mock_mcp_manager) -> None:
     assert call_kwargs["chunk_top_k"] == 5
 
 
+async def test_mcp_retrieve_uses_shared_executor(
+    mock_mcp_manager: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    execute = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
+    monkeypatch.setattr(mcp_server, "execute_retrieve", execute)
+
+    result = await mcp_server.mcp_app.call_tool("retrieve", {"query": "x"})
+
+    assert _tool_json(result)["contexts"] == {"chunks": [], "entities": [], "relationships": []}
+    execute.assert_awaited_once()
+    mock_mcp_manager.aretrieve.assert_not_awaited()
+
+
 async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
     mock_mcp_manager,
     test_config: DlightragConfig,
@@ -779,6 +792,19 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert "referenced_image_ids" not in call_kwargs
     assert call_kwargs["filters"].doc_title == "Manual"
     assert call_kwargs["semantic_highlights"] is True
+
+
+async def test_mcp_answer_uses_shared_executor(
+    mock_mcp_manager: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    execute = AsyncMock(return_value=RetrievalResult(answer="shared", contexts={"chunks": []}))
+    monkeypatch.setattr(mcp_server, "execute_answer", execute)
+
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert _tool_json(result)["answer"] == "shared"
+    execute.assert_awaited_once()
+    mock_mcp_manager.aanswer.assert_not_awaited()
 
 
 async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:

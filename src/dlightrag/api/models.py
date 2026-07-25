@@ -8,11 +8,10 @@ from pydantic import Field
 
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.client_contracts import (
-    MAX_HISTORY_MESSAGES,
+    AnswerRequestContract,
     ClientContractModel,
-    ConversationMessage,
     IngestPayload,
-    QueryImage,
+    RetrieveRequestContract,
 )
 from dlightrag.core.request.workspaces import QueryWorkspaceSelection
 
@@ -39,27 +38,15 @@ class IngestRequest(IngestPayload):
     pass
 
 
-class RetrieveRequest(QueryWorkspaceSelection):
-    query: str
-    top_k: int | None = None
-    chunk_top_k: int | None = None
-    bm25_query: str | None = Field(default=None, max_length=1024)
+class RetrieveRequest(QueryWorkspaceSelection, RetrieveRequestContract):
     filters: MetadataFilterRequest | None = None
-    query_images: list[QueryImage] | None = Field(default=None, max_length=3)
 
 
-class AnswerRequest(QueryWorkspaceSelection):
-    query: str
+class AnswerRequest(QueryWorkspaceSelection, AnswerRequestContract):
     stream: bool = True
-    top_k: int | None = None
-    chunk_top_k: int | None = None
-    answer_context_top_k: int | None = Field(default=None, ge=1)
     filters: MetadataFilterRequest | None = None
-    semantic_highlights: bool = False
-    query_images: list[QueryImage] | None = Field(default=None, max_length=3)
     """User-attached images used for VLM semantic enhancement, direct visual
     retrieval and bounded answer-model image blocks."""
-    history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
     """Prior conversation turns supplied by the caller. Stateless: the client
     owns persistence and re-sends history each request; DlightRAG never stores
     it. Feeds the planner's standalone-query rewrite and answer generation."""

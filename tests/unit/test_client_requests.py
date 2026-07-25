@@ -443,3 +443,25 @@ def test_retrieve_input_accepts_bm25_query() -> None:
     args = RetrieveInput(query="q", bm25_query="alpha beta")
 
     assert args.bm25_query == "alpha beta"
+
+
+@pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
+def test_answer_contracts_reject_bm25_query(model) -> None:
+    with pytest.raises(ValidationError):
+        model.model_validate({"query": "q", "bm25_query": "alpha beta"})
+
+
+@pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
+def test_answer_contracts_require_positive_answer_context_limit(model) -> None:
+    with pytest.raises(ValidationError):
+        model.model_validate({"query": "q", "answer_context_top_k": 0})
+
+
+def test_mcp_query_images_stay_non_nullable_with_list_default() -> None:
+    for model in (RetrieveInput, AnswerInput):
+        parsed = model.model_validate({"query": "q"})
+        assert parsed.query_images == []
+        with pytest.raises(ValidationError):
+            model.model_validate({"query": "q", "query_images": None})
+        schema = model.model_json_schema()
+        assert schema["properties"]["query_images"]["type"] == "array"

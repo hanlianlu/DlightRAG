@@ -6,12 +6,14 @@ from typing import Any
 from pydantic import Field
 
 from dlightrag.core.client_contracts import (
-    MAX_HISTORY_MESSAGES,
+    MAX_QUERY_IMAGES,
+    AnswerRequestContract,
     ClientContractModel,
     ConversationMessage,
     IngestPayload,
     MetadataPolicy,
     QueryImage,
+    RetrieveRequestContract,
     SourceType,
 )
 from dlightrag.core.request.workspaces import QueryWorkspaceSelection
@@ -21,20 +23,20 @@ class MCPInput(ClientContractModel):
     pass
 
 
-class RetrieveInput(QueryWorkspaceSelection):
-    query: str
-    top_k: int | None = None
-    chunk_top_k: int | None = None
-    bm25_query: str | None = Field(default=None, max_length=1024)
+class RetrieveInput(QueryWorkspaceSelection, RetrieveRequestContract):
     filters: dict[str, Any] | None = None
-    query_images: list[QueryImage] = Field(default_factory=list, max_length=3)
+    query_images: list[QueryImage] = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
+        default_factory=list,
+        max_length=MAX_QUERY_IMAGES,
+    )
 
 
-class AnswerInput(RetrieveInput):
-    chunk_top_k: int | None = None
-    answer_context_top_k: int | None = None
-    semantic_highlights: bool = False
-    history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
+class AnswerInput(QueryWorkspaceSelection, AnswerRequestContract):
+    filters: dict[str, Any] | None = None
+    query_images: list[QueryImage] = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
+        default_factory=list,
+        max_length=MAX_QUERY_IMAGES,
+    )
 
 
 class IngestInput(IngestPayload):
