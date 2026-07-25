@@ -17,7 +17,8 @@ def _unwrap_worker_pool(value: Any) -> Any:
 async def shutdown_lightrag_worker_pools(lightrag: Any, *, dry_run: bool = False) -> int:
     """Best-effort shutdown of LightRAG worker pools.
 
-    Returns the number of unique shutdown-capable pools discovered.
+    Returns the number of unique shutdown-capable pools discovered during a
+    dry-run, or the number successfully shut down in real mode.
     """
     if lightrag is None:
         return 0
@@ -46,12 +47,14 @@ async def shutdown_lightrag_worker_pools(lightrag: Any, *, dry_run: bool = False
         seen.add(id(func))
         if not callable(getattr(func, "shutdown", None)):
             continue
-        shutdown_count += 1
         if dry_run:
+            shutdown_count += 1
             continue
         try:
             await shutdown_async_callable(func)
         except Exception:  # noqa: BLE001
             logger.debug("Failed to shutdown %s worker pool", label, exc_info=True)
+        else:
+            shutdown_count += 1
 
     return shutdown_count

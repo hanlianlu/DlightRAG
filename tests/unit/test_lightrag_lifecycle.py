@@ -63,7 +63,9 @@ class TestShutdownLightRagWorkerPools:
         assert count == 2
         shutdown.assert_not_awaited()
 
-    async def test_logs_debug_and_counts_target_when_shutdown_fails(self, caplog) -> None:
+    async def test_dry_run_counts_discovered_targets_but_real_mode_counts_only_successful_shutdowns(
+        self, caplog
+    ) -> None:
         broken = _shutdown_target()
         healthy = _shutdown_target()
         lightrag = SimpleNamespace(
@@ -82,12 +84,15 @@ class TestShutdownLightRagWorkerPools:
                 "dlightrag.core.lightrag_lifecycle.shutdown_async_callable",
                 new_callable=AsyncMock,
                 side_effect=_shutdown,
-            ),
+            ) as shutdown,
             caplog.at_level(logging.DEBUG),
         ):
-            count = await shutdown_lightrag_worker_pools(lightrag)
+            dry_run_count = await shutdown_lightrag_worker_pools(lightrag, dry_run=True)
+            real_count = await shutdown_lightrag_worker_pools(lightrag)
 
-        assert count == 2
+        assert dry_run_count == 2
+        assert real_count == 1
+        shutdown.assert_has_awaits([call(broken), call(healthy)])
         assert "Failed to shutdown embedding_func worker pool" in caplog.text
 
     async def test_preserves_cancellation(self) -> None:
