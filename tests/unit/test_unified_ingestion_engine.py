@@ -462,6 +462,42 @@ async def test_single_hash_match_metadata_update_bypasses_parser_directives(
     assert result["source_kind"] == "metadata_updated"
 
 
+async def test_batch_hash_match_skip_does_not_resolve_invalid_parser_directives(
+    tmp_path: Path,
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "bad.[unknown-iteP].pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+
+    result = await engine.aingest_files([source], replace=False)
+    single_result = await engine.aingest_file(source, replace=False)
+
+    assert result == {
+        "processed": 1,
+        "errors": [],
+        "results": [
+            {
+                "doc_id": compute_mdhash_id(
+                    normalize_document_file_path(source),
+                    prefix="doc-",
+                ),
+                "source_kind": "skipped",
+                "reason": "content_hash_match",
+                "chunks": ["chunk-a"],
+            }
+        ],
+    }
+    assert result["results"][0] == single_result
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
 async def test_batch_metadata_only_update_preserves_source_contract_and_chunks(
     tmp_path: Path, monkeypatch
 ) -> None:

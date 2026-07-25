@@ -204,6 +204,7 @@ class UnifiedIngestionEngine:
                     author=author,
                     metadata=metadata,
                     metadata_policy=metadata_policy,
+                    resolve_parser_directives=False,
                 )
             )
 
