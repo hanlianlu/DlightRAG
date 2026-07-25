@@ -295,3 +295,73 @@ async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:
     assert result.trace.get("lightrag_error") is True
     assert len(result.contexts["chunks"]) == 2
     assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["bm25-a", "bm25-b"]
+
+
+async def test_unified_retriever_bm25_failure_falls_back_to_semantic() -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={
+            "chunks": [{"chunk_id": "semantic-a"}],
+            "entities": [],
+            "relationships": [],
+        }
+    )
+    bm25 = AsyncMock()
+    bm25.search.side_effect = RuntimeError("BM25 unavailable")
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=AsyncMock(),
+        stores=AsyncMock(),
+    )
+
+    result = await retriever.aretrieve("query", top_k=5)
+
+    assert result.contexts["chunks"] == [{"chunk_id": "semantic-a"}]
+    assert result.trace["bm25_error_type"] == "RuntimeError"
+    assert result.trace["bm25_chunk_count"] == 0
+
+
+async def test_unified_retriever_raises_semantic_error_when_both_lanes_fail() -> None:
+    semantic_error = RuntimeError("semantic unavailable")
+    bm25_error = ConnectionError("BM25 unavailable")
+    backend = AsyncMock()
+    backend.aretrieve.side_effect = semantic_error
+    bm25 = AsyncMock()
+    bm25.search.side_effect = bm25_error
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=AsyncMock(),
+        stores=AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="semantic unavailable") as exc_info:
+        await retriever.aretrieve("query", top_k=5)
+
+    assert exc_info.value is semantic_error
+    assert exc_info.value.__cause__ is bm25_error
+
+
+async def test_unified_retriever_raises_semantic_error_when_bm25_is_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    semantic_error = RuntimeError("semantic unavailable")
+    backend = AsyncMock()
+    backend.aretrieve.side_effect = semantic_error
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=None,
+        metadata_index=AsyncMock(),
+        stores=AsyncMock(),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="dlightrag.core.retrieval.retriever"):
+        with pytest.raises(RuntimeError, match="semantic unavailable") as exc_info:
+            await retriever.aretrieve("query", top_k=5)
+
+    assert exc_info.value is semantic_error
+    assert "BM25 is disabled" in caplog.text
+    assert "falling back to BM25-only" not in caplog.text

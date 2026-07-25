@@ -12,15 +12,16 @@ from lightrag.base import DocStatus
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 from lightrag.kg import STORAGE_ENV_REQUIREMENTS
 from lightrag.namespace import NameSpace
-from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool, enumerate_kv_keys
+from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
 from dlightrag.core.lightrag_stores import LightRAGStores
-from dlightrag.core.retrieval.bm25_language import BM25LanguageClassifier
+from dlightrag.core.retrieval.bm25 import rebuild_postgres_bm25
 from dlightrag.core.service import RAGService
 from dlightrag.models.llm import get_embedding_func, get_multimodal_embedder
+from dlightrag.storage.pool import pg_pool
 
 logger = logging.getLogger(__name__)
 
@@ -269,42 +270,6 @@ async def restore_sidecar_image_vectors(
     return stats
 
 
-async def relabel_bm25_chunk_languages(
-    *,
-    config: DlightragConfig,
-    stores: Any,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-) -> dict[str, int]:
-    """Refresh DlightRAG BM25 language labels for all LightRAG text chunks."""
-    if not getattr(config, "bm25_enabled", False):
-        return {"processed_chunks": 0, "updated_chunks": 0}
-
-    supported_languages = tuple(
-        language
-        for profile in getattr(config, "bm25_profiles", ())
-        if not getattr(profile, "fallback", False)
-        for language in getattr(profile, "languages", ())
-    )
-    classifier = BM25LanguageClassifier(supported_languages)
-    chunk_ids = [str(chunk_id) for chunk_id in await enumerate_kv_keys(stores.text_chunks)]
-    stats = {"processed_chunks": len(chunk_ids), "updated_chunks": 0}
-
-    batch_limit = max(1, int(batch_size))
-    for start in range(0, len(chunk_ids), batch_limit):
-        batch_ids = chunk_ids[start : start + batch_limit]
-        rows = await stores.fetch_chunk_contents(batch_ids)
-        labels = {
-            str(row["id"]): classifier.detect(str(row.get("content") or ""))
-            for row in rows
-            if row.get("id")
-        }
-        if labels:
-            await stores.update_chunk_bm25_languages(labels)
-            stats["updated_chunks"] += len(labels)
-
-    return stats
-
-
 async def run_rebuild(
     *,
     config: DlightragConfig | None = None,
@@ -328,6 +293,7 @@ async def run_rebuild(
     tool = DlightRAGRebuildTool(resolved_config, embedding_func=embedding_func)
     tool.batch_size = batch_size
     exit_code = 0
+    domain_pool_bound = False
 
     from lightrag.kg.shared_storage import finalize_share_data, initialize_share_data
 
@@ -351,15 +317,14 @@ async def run_rebuild(
             exit_code = 1
 
         if exit_code == 0 and target in {"chunks", "all"}:
-            lightrag_surface = _lightrag_surface(tool)
-            stores = LightRAGStores(lightrag_surface)
-
-            bm25_stats = await relabel_bm25_chunk_languages(
-                config=resolved_config,
-                stores=stores,
-                batch_size=batch_size,
-            )
             if getattr(resolved_config, "bm25_enabled", False):
+                pg_pool.bind(resolved_config)
+                domain_pool_bound = True
+                bm25_stats = await rebuild_postgres_bm25(
+                    resolved_config,
+                    pool=pg_pool,
+                    batch_size=batch_size,
+                )
                 print(
                     "BM25 language labels: "
                     f"{bm25_stats['processed_chunks']} scanned, "
@@ -367,6 +332,8 @@ async def run_rebuild(
                 )
 
             if restore_sidecar_alignment and multimodal_embedder is not None:
+                lightrag_surface = _lightrag_surface(tool)
+                stores = LightRAGStores(lightrag_surface)
                 direct_enabled = await RAGService._resolve_direct_image_embedding_enabled(
                     multimodal_embedder,
                     startup_probe=resolved_config.embedding.startup_probe,
@@ -396,8 +363,12 @@ async def run_rebuild(
             finalize_share_data()
         except Exception:  # noqa: BLE001
             logger.warning("Failed to finalize LightRAG shared storage", exc_info=True)
-        if multimodal_embedder is not None and hasattr(multimodal_embedder, "aclose"):
-            await multimodal_embedder.aclose()
+        try:
+            if multimodal_embedder is not None and hasattr(multimodal_embedder, "aclose"):
+                await multimodal_embedder.aclose()
+        finally:
+            if domain_pool_bound:
+                await pg_pool.close()
     return exit_code
 
 
@@ -457,7 +428,6 @@ __all__ = [
     "DlightRAGRebuildTool",
     "build_parser",
     "main",
-    "relabel_bm25_chunk_languages",
     "restore_sidecar_image_vectors",
     "run_rebuild",
     "validate_args",

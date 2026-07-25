@@ -8,6 +8,32 @@ recovery workflows. PostgreSQL deployment tuning lives in
 
 The commands here are not part of normal ingestion or query traffic.
 
+## Workspace BM25 Rebuild
+
+`dlightrag-rebuild-bm25` provisions the configured pg_textsearch indexes and
+refreshes `dlightrag_bm25_language` for every existing chunk in one workspace.
+It does not parse documents, call model providers, rebuild vectors, or modify
+source files.
+
+Run it after enabling workspace BM25 for an existing corpus or changing
+`bm25_profiles`, `bm25_k1`, or `bm25_b`:
+
+```bash
+# Stop API, MCP, ingest, and reader processes that use the same workspace.
+uv run dlightrag-rebuild-bm25 --yes
+
+# Installed package with an explicit environment file:
+dlightrag-rebuild-bm25 --env-file /absolute/path/to/.env --yes
+```
+
+The configured `service_role` must be `writer`, and `bm25_enabled` must be
+`true`. Restart writer and reader processes only after the command completes.
+Use `--batch-size N` to bound each language-label update transaction.
+
+The `chunks` and `all` vector rebuild targets below invoke the same BM25
+maintenance after a successful chunk rebuild. Do not run both commands unless
+the vector rebuild is independently required.
+
 ## Offline Vector Storage Rebuild
 
 `dlightrag-rebuild-vdb` rebuilds LightRAG vector storage from existing
@@ -96,10 +122,8 @@ it, restart it with the other services after the rebuild.
 Upstream LightRAG's rebuild can rebuild chunk vectors from chunk text. DlightRAG
 adds two post-rebuild steps after successful `chunks` and `all` targets.
 
-First, when BM25 is enabled, it scans LightRAG text chunks and refreshes each
-row's `dlightrag_bm25_language` label with the configured BM25 language
-profiles. This keeps query-language-routed BM25 partial indexes aligned after
-offline chunk rebuilds.
+First, when workspace BM25 is enabled, it uses the same BM25 rebuild path above
+to ensure indexes and refresh each chunk's `dlightrag_bm25_language` label.
 
 Second, DlightRAG restores fused visual-vector alignment:
 

@@ -53,9 +53,8 @@ if TYPE_CHECKING:
     from dlightrag.core.document_embedding import RobustDocumentEmbedder
     from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
     from dlightrag.core.lightrag_stores import LightRAGStores
-    from dlightrag.core.retrieval.bm25 import PostgresBM25
     from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
-    from dlightrag.core.retrieval.protocols import RetrievalBackend
+    from dlightrag.core.retrieval.protocols import BM25Retriever, RetrievalBackend
     from dlightrag.core.retrieval.retriever import UnifiedRetriever
     from dlightrag.core.visual_assets import VisualAssetResolver
     from dlightrag.models.composer import ComposerModelBundle
@@ -297,7 +296,7 @@ class RAGService:
         )
         self._lightrag_stores: LightRAGStores | None = None
         self._ingestion_engine: UnifiedIngestionEngine | None = None
-        self._bm25: PostgresBM25 | None = None
+        self._bm25: BM25Retriever | None = None
         self._retrieval_orchestrator: UnifiedRetriever | None = None
         self._multimodal_embedder: MultimodalEmbedder | None = None
         self._document_embedder: RobustDocumentEmbedder | None = None
@@ -452,10 +451,12 @@ class RAGService:
         if not config.bm25_enabled:
             return ()
 
-        extensions: list[str] = ["pg_textsearch"]
-        if any(profile.text_config == "public.jiebacfg" for profile in config.bm25_profiles):
-            extensions.append("pg_jieba")
-        return tuple(extensions)
+        from dlightrag.core.retrieval.bm25 import (
+            profiles_from_config,
+            required_postgres_extensions,
+        )
+
+        return required_postgres_extensions(profiles_from_config(config.bm25_profiles))
 
     async def initialize(self) -> None:
         """Initialize LightRAG storages and caches (idempotent).
@@ -705,20 +706,12 @@ class RAGService:
         # Initialize metadata index
         self._metadata_index = await self._create_metadata_index(config, read_only=config.is_reader)
         from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
-        from dlightrag.core.retrieval.bm25 import BM25Profile
+        from dlightrag.core.retrieval.bm25 import create_postgres_bm25, profiles_from_config
         from dlightrag.core.retrieval.bm25_language import BM25LanguageClassifier
         from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
         self._metadata_registry = MetadataFieldRegistry.from_config(config.metadata.fields)
-        bm25_profiles = [
-            BM25Profile(
-                name=profile.name,
-                text_config=profile.text_config,
-                languages=tuple(profile.languages),
-                fallback=profile.fallback,
-            )
-            for profile in config.bm25_profiles
-        ]
+        bm25_profiles = profiles_from_config(config.bm25_profiles)
         bm25_language_classifier = (
             BM25LanguageClassifier(
                 tuple(
@@ -749,19 +742,13 @@ class RAGService:
             )
         )
 
-        if config.bm25_enabled:
-            from dlightrag.core.retrieval.bm25 import PostgresBM25
-            from dlightrag.storage.pool import pg_pool
+        from dlightrag.storage.pool import pg_pool
 
-            self._bm25 = PostgresBM25(
-                pool=pg_pool,
-                workspace=config.workspace,
-                profiles=bm25_profiles,
-            )
-            if config.is_reader:
-                await self._bm25.verify_indexes(k1=config.bm25_k1, b=config.bm25_b)
-            else:
-                await self._bm25.ensure_indexes(k1=config.bm25_k1, b=config.bm25_b)
+        self._bm25 = await create_postgres_bm25(
+            config,
+            pool=pg_pool,
+            profiles=bm25_profiles,
+        )
 
         from dlightrag.core.retrieval.retriever import UnifiedRetriever
 

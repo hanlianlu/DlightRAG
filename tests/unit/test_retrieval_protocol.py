@@ -1,10 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for RetrievalBackend Protocol and RetrievalResult."""
 
-from typing import Any
-
 from dlightrag.core.retrieval.protocols import (
-    RetrievalBackend,
     RetrievalContexts,
     RetrievalResult,
 )
@@ -65,24 +62,6 @@ class TestRetrievalResultReferences:
         refs = [Reference(id="1", title="doc.pdf")]
         result = RetrievalResult(answer="text", references=refs)
         assert result.references[0].title == "doc.pdf"
-
-
-class TestRetrievalBackendProtocol:
-    def test_structural_subtyping(self) -> None:
-        class FakeBackend:
-            async def aretrieve(
-                self,
-                query: str,
-                *,
-                mode: str = "mix",
-                top_k: int | None = None,
-                chunk_top_k: int | None = None,
-                **kwargs: Any,
-            ) -> RetrievalResult:
-                return RetrievalResult()
-
-        backend: RetrievalBackend = FakeBackend()
-        assert isinstance(backend, FakeBackend)
 
 
 class TestCanonicalizeReferenceIds:

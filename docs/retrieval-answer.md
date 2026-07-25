@@ -114,9 +114,18 @@ Chinese, English, German, Swedish, Spanish, French, Italian, Portuguese, Dutch,
 Russian, Danish, and Finnish queries to the matching partial index;
 unsupported, unknown, or ambiguous queries use the `simple`
 fallback. `bm25_profiles`, `bm25_k1`, and `bm25_b` define the index signatures;
-changing them requires a primary-role startup so DlightRAG can rebuild profile
-indexes before query workers attach. Each non-fallback BM25 profile maps to
+changing them for an existing corpus requires the offline workspace BM25
+rebuild before query workers attach. Each non-fallback BM25 profile maps to
 exactly one language; the fallback profile must not declare languages.
+`bm25_enabled` controls this workspace PostgreSQL lane only. Web Composer's
+request-local in-memory lexical evidence has no workspace index or shared
+configuration.
+
+The semantic and workspace BM25 lanes degrade independently. A BM25 query
+failure retains successful semantic results and records `bm25_error_type` in
+trace; a semantic failure can return BM25-only results and records
+`lightrag_error_type`. If both lanes fail, retrieval raises the semantic error
+with the BM25 failure chained as its cause.
 
 ## Metadata In-Filtering
 
@@ -471,4 +480,3 @@ Current direct images, selected history images, and visuals from current/history
 Composer documents share one Composer visual budget. Workspace RAG visuals use
 a separate budget with the same configured shape; the two budgets never borrow
 count or bytes from each other.
-

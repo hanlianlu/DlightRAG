@@ -560,6 +560,7 @@ async for token in token_iter:
 | `all_workspaces` | `bool` | `false` | Query every workspace visible to the current caller. For REST/MCP this is the existing `workspace.query`-authorized set; for the in-process SDK it is every registered workspace. Mutually exclusive with a non-empty `workspace`/`workspaces` selection. |
 | `top_k` | `int \| None` | config default | LightRAG KG breadth: entities in local retrieval and relationships in global retrieval. |
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
+| `bm25_query` | `str \| None` | `None` | `retrieve` only. Optional workspace BM25 query override; when omitted, the planner supplies lexical terms or retrieval uses the main query. REST and MCP inputs are capped at 1,024 characters. |
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
@@ -681,6 +682,11 @@ data: {"type":"image_meta","image_descriptions":["Image 1: a line chart"]}
 
 data: {"type":"done","answer":"The key findings are...","answer_images":[],"answer_blocks":[{"type":"markdown","text":"The key findings are..."}]}
 ```
+
+`bm25_enabled` reports whether the workspace PostgreSQL BM25 lane participated.
+If that lane fails while semantic retrieval succeeds, retrieval continues with
+semantic results and trace includes `bm25_error_type`. Conversely,
+`lightrag_error_type` records semantic-lane degradation to BM25-only results.
 
 REST uses the same answer and context shapes, while its HTTP adapter projects
 each source's authorized `download_url`. Transport-neutral manager/MCP payloads

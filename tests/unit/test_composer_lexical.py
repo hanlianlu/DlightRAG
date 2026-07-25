@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Composer-local in-memory BM25."""
 
+import pytest
+
 from dlightrag.core.request.composer_lexical import mixed_script_terms, rank_composer_bm25
 
 
@@ -41,26 +43,28 @@ def test_bm25_ranks_chinese_and_latin_queries() -> None:
     assert all(float(row["relevance_score"]) > 0 for row in [*chinese, *latin])
 
 
-def test_bm25_drops_all_zero_results() -> None:
-    rows = [_row("a", "fraction worksheet"), _row("b", "contract liability")]
-
-    ranked = rank_composer_bm25("这说的啥", rows, limit=2)
-
-    assert ranked == []
-
-
-def test_bm25_oov_query_does_not_rank_empty_visual_chunk() -> None:
-    rows = [_row("visual", ""), _row("text", "fraction worksheet")]
-
-    ranked = rank_composer_bm25("unknown-out-of-vocabulary", rows, limit=2)
-
-    assert ranked == []
-
-
-def test_bm25_all_empty_corpus_returns_no_results() -> None:
-    rows = [_row("visual-1", ""), _row("visual-2", "   ")]
-
-    ranked = rank_composer_bm25("anything", rows, limit=2)
+@pytest.mark.parametrize(
+    ("query", "rows"),
+    [
+        pytest.param(
+            "这说的啥",
+            [_row("a", "fraction worksheet"), _row("b", "contract liability")],
+            id="all_zero_results",
+        ),
+        pytest.param(
+            "unknown-out-of-vocabulary",
+            [_row("visual", ""), _row("text", "fraction worksheet")],
+            id="oov_query_does_not_rank_empty_visual_chunk",
+        ),
+        pytest.param(
+            "anything",
+            [_row("visual-1", ""), _row("visual-2", "   ")],
+            id="all_empty_corpus_returns_no_results",
+        ),
+    ],
+)
+def test_bm25_returns_no_results(query: str, rows: list[dict[str, object]]) -> None:
+    ranked = rank_composer_bm25(query, rows, limit=2)
 
     assert ranked == []
 

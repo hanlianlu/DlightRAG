@@ -1,24 +1,22 @@
+import pytest
+
 from dlightrag.citations.utils import filter_content_for_display, split_source_ids
 
 
-def test_split_source_ids_comma_separated():
-    assert split_source_ids("chunk1, chunk2, chunk3") == ["chunk1", "chunk2", "chunk3"]
-
-
-def test_split_source_ids_none():
-    assert split_source_ids(None) == []
-
-
-def test_split_source_ids_empty():
-    assert split_source_ids("") == []
-
-
-def test_split_source_ids_single():
-    assert split_source_ids("chunk1") == ["chunk1"]
-
-
-def test_split_source_ids_whitespace():
-    assert split_source_ids("  chunk1 ,  , chunk2  ") == ["chunk1", "chunk2"]
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(
+            "chunk1, chunk2, chunk3", ["chunk1", "chunk2", "chunk3"], id="comma_separated"
+        ),
+        pytest.param(None, [], id="none"),
+        pytest.param("", [], id="empty"),
+        pytest.param("chunk1", ["chunk1"], id="single"),
+        pytest.param("  chunk1 ,  , chunk2  ", ["chunk1", "chunk2"], id="whitespace"),
+    ],
+)
+def test_split_source_ids(raw: str | None, expected: list[str]) -> None:
+    assert split_source_ids(raw) == expected
 
 
 def test_filter_content_wraps_equation_math():

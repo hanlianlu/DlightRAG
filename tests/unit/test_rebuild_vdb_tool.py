@@ -38,6 +38,12 @@ def test_pyproject_exposes_rebuild_console_script() -> None:
     )
 
 
+def test_rebuild_vdb_exports_are_resolvable() -> None:
+    from dlightrag.tools import rebuild_vdb
+
+    assert all(hasattr(rebuild_vdb, name) for name in rebuild_vdb.__all__)
+
+
 async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.MonkeyPatch) -> None:
     from dlightrag.tools import rebuild_vdb as module
 
@@ -133,59 +139,22 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
     ]
 
 
-async def test_relabel_bm25_languages_labels_all_text_chunks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.tools import rebuild_vdb as module
-
-    config = _fake_config()
-    config.bm25_enabled = True
-    config.bm25_profiles = [SimpleNamespace(languages=("zh", "en"), fallback=False)]
-    stores = AsyncMock()
-    stores.text_chunks = AsyncMock()
-    stores.fetch_chunk_contents.return_value = [
-        {"id": "chunk-zh", "content": "现金流 风险"},
-        {"id": "chunk-en", "content": "risk factors"},
-    ]
-
-    class FakeClassifier:
-        def __init__(self, languages) -> None:
-            self.languages = tuple(languages)
-
-        def detect(self, content: str) -> str:
-            return {"现金流 风险": "zh", "risk factors": "en"}[content]
-
-    monkeypatch.setattr(
-        module, "enumerate_kv_keys", AsyncMock(return_value=["chunk-zh", "chunk-en"])
-    )
-    monkeypatch.setattr(module, "BM25LanguageClassifier", FakeClassifier)
-
-    stats = await module.relabel_bm25_chunk_languages(
-        config=cast(Any, config),
-        stores=stores,
-        batch_size=500,
-    )
-
-    assert stats == {"processed_chunks": 2, "updated_chunks": 2}
-    stores.fetch_chunk_contents.assert_awaited_once_with(["chunk-zh", "chunk-en"])
-    stores.update_chunk_bm25_languages.assert_awaited_once_with(
-        {"chunk-zh": "zh", "chunk-en": "en"}
-    )
-
-
 async def test_chunks_rebuild_relabels_bm25_languages_after_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dlightrag.tools import rebuild_vdb as module
 
     config = _fake_config()
+    config.bm25_enabled = True
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
-    relabel_mock = AsyncMock(return_value={"processed_chunks": 2, "updated_chunks": 2})
+    rebuild_mock = AsyncMock(return_value={"processed_chunks": 2, "updated_chunks": 2})
     monkeypatch.setattr(
         module,
-        "relabel_bm25_chunk_languages",
-        relabel_mock,
+        "rebuild_postgres_bm25",
+        rebuild_mock,
     )
+    fake_pool = SimpleNamespace(bind=MagicMock(), close=AsyncMock())
+    monkeypatch.setattr(module, "pg_pool", fake_pool)
 
     async def fake_setup(self) -> bool:
         self.graph = AsyncMock()
@@ -213,10 +182,16 @@ async def test_chunks_rebuild_relabels_bm25_languages_after_success(
     )
 
     assert exit_code == 0
-    relabel_mock.assert_awaited_once()
-    await_args = relabel_mock.await_args
+    rebuild_mock.assert_awaited_once()
+    await_args = rebuild_mock.await_args
     assert await_args is not None
-    assert await_args.kwargs["config"] is config
+    assert await_args.args == (config,)
+    assert await_args.kwargs == {
+        "pool": fake_pool,
+        "batch_size": module.DEFAULT_BATCH_SIZE,
+    }
+    fake_pool.bind.assert_called_once_with(config)
+    fake_pool.close.assert_awaited_once()
 
 
 async def test_graph_rebuild_does_not_restore_sidecar_alignment(
@@ -228,9 +203,9 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
     monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: object())
     restore_mock = AsyncMock()
-    relabel_mock = AsyncMock()
+    rebuild_mock = AsyncMock()
     monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore_mock)
-    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", relabel_mock)
+    monkeypatch.setattr(module, "rebuild_postgres_bm25", rebuild_mock)
 
     async def fake_setup(self) -> bool:
         self.graph = AsyncMock()
@@ -249,7 +224,7 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
 
     assert exit_code == 0
     restore_mock.assert_not_awaited()
-    relabel_mock.assert_not_awaited()
+    rebuild_mock.assert_not_awaited()
 
 
 async def test_failed_chunks_rebuild_skips_sidecar_alignment(
@@ -263,10 +238,10 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
     resolve_mock = AsyncMock()
     restore_mock = AsyncMock()
-    relabel_mock = AsyncMock()
+    rebuild_mock = AsyncMock()
     monkeypatch.setattr(module.RAGService, "_resolve_direct_image_embedding_enabled", resolve_mock)
     monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore_mock)
-    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", relabel_mock)
+    monkeypatch.setattr(module, "rebuild_postgres_bm25", rebuild_mock)
 
     async def fake_setup(self) -> bool:
         self.graph = AsyncMock()
@@ -291,7 +266,60 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     assert exit_code == 1
     resolve_mock.assert_not_awaited()
     restore_mock.assert_not_awaited()
-    relabel_mock.assert_not_awaited()
+    rebuild_mock.assert_not_awaited()
+
+
+async def test_chunks_rebuild_closes_domain_pool_when_embedder_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.tools import rebuild_vdb as module
+
+    config = _fake_config()
+    config.bm25_enabled = True
+    config.embedding.startup_probe = False
+    embedder = AsyncMock()
+    embedder.aclose.side_effect = RuntimeError("embedder close failed")
+    fake_pool = SimpleNamespace(bind=MagicMock(), close=AsyncMock())
+    monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: embedder)
+    monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
+    monkeypatch.setattr(module, "pg_pool", fake_pool)
+    monkeypatch.setattr(
+        module,
+        "rebuild_postgres_bm25",
+        AsyncMock(return_value={"processed_chunks": 0, "updated_chunks": 0}),
+    )
+    monkeypatch.setattr(
+        module.RAGService,
+        "_resolve_direct_image_embedding_enabled",
+        AsyncMock(return_value=False),
+    )
+
+    async def fake_setup(self) -> bool:
+        self.graph = AsyncMock()
+        self.entities_vdb = AsyncMock()
+        self.relationships_vdb = AsyncMock()
+        self.chunks_vdb = AsyncMock()
+        self.text_chunks = AsyncMock()
+        self.full_docs = AsyncMock()
+        self.doc_status = AsyncMock()
+        return True
+
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
+    monkeypatch.setattr(
+        module.DlightRAGRebuildTool,
+        "run_rebuild_chunks",
+        AsyncMock(return_value=[{"label": "chunks", "errors": []}]),
+    )
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: False)
+
+    with pytest.raises(RuntimeError, match="embedder close failed"):
+        await module.run_rebuild(
+            config=cast(Any, config),
+            target="chunks",
+            assume_yes=True,
+        )
+
+    fake_pool.close.assert_awaited_once()
 
 
 def _fake_config() -> SimpleNamespace:

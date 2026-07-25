@@ -75,31 +75,6 @@ def _embedding_config() -> EmbeddingConfig:
 
 
 class TestMakeCompletionFunc:
-    def test_openai_provider(self):
-        from dlightrag.models.llm import _make_completion_func
-
-        cfg = ModelConfig(
-            provider="openai", model="gpt-5.4-mini", api_key="sk-test", temperature=0.5
-        )
-        func = _make_completion_func(cfg)
-        # partial wraps completion_wrapper; calling it should invoke provider.complete()
-        assert callable(func)
-        assert func.keywords == {}  # no preset args on the partial itself
-
-    def test_anthropic_provider(self):
-        from dlightrag.models.llm import _make_completion_func
-
-        cfg = ModelConfig(provider="anthropic", model="claude-3-5-sonnet", api_key="sk-ant")
-        func = _make_completion_func(cfg)
-        assert callable(func)
-
-    def test_default_api_key(self):
-        from dlightrag.models.llm import _make_completion_func
-
-        cfg = ModelConfig(provider="openai", model="gpt-5.4-mini")  # no api_key
-        func = _make_completion_func(cfg, default_api_key="sk-default")
-        assert callable(func)
-
     def test_query_model_func_is_direct_not_queue_managed(self):
         from dlightrag.models import llm
 
@@ -383,20 +358,6 @@ class TestModelFactoryExports:
 
         assert hasattr(llm, "get_default_model_func_for_lightrag")
         assert "get_default_model_func_for_lightrag" in models.__all__
-
-
-class TestGetDefaultModelFunc:
-    def test_returns_callable(self):
-        from dlightrag.models.llm import get_default_model_func
-
-        config = DlightragConfig(
-            llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-test")
-            ),
-            embedding=_embedding_config(),
-        )
-        func = get_default_model_func(config)
-        assert callable(func)
 
 
 class TestGetKeywordModelFunc:

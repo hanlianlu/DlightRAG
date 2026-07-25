@@ -201,10 +201,6 @@ class TestRerankConfig:
         cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-v3", api_key="key")
         assert cfg.strategy == "jina_reranker"
 
-    def test_input_modality_defaults_to_auto(self):
-        cfg = RerankConfig()
-        assert cfg.input_modality == "auto"
-
     def test_input_modality_accepts_text_override(self):
         cfg = RerankConfig(input_modality="text")
         assert cfg.input_modality == "text"

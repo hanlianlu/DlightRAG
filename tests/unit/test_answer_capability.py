@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit tests for answer-model image capability derivation."""
 
+import dataclasses
+
 import pytest
 
 from dlightrag.config import DlightragConfig, EmbeddingConfig
@@ -13,17 +15,19 @@ from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.core.vision_probe import ImageProbeOutcome
 
 
-def test_config_disabled_forces_zero() -> None:
-    assert derive_effective_max_images("unsupported", 0) == 0
-
-
-def test_supported_uses_configured_ceiling() -> None:
-    assert derive_effective_max_images("supported", 6) == 6
-
-
-def test_unknown_and_unsupported_are_zero() -> None:
-    assert derive_effective_max_images("unknown", 6) == 0
-    assert derive_effective_max_images("unsupported", 6) == 0
+@pytest.mark.parametrize(
+    ("status", "configured_ceiling", "expected"),
+    [
+        pytest.param("unsupported", 0, 0, id="unsupported_zero_ceiling_forces_zero"),
+        pytest.param("supported", 6, 6, id="supported_uses_configured_ceiling"),
+        pytest.param("unknown", 6, 0, id="unknown_is_zero"),
+        pytest.param("unsupported", 6, 0, id="unsupported_is_zero"),
+    ],
+)
+def test_derive_effective_max_images(
+    status: CapabilityStatus, configured_ceiling: int, expected: int
+) -> None:
+    assert derive_effective_max_images(status, configured_ceiling) == expected
 
 
 def test_capability_snapshot_is_frozen() -> None:
@@ -37,6 +41,9 @@ def test_capability_snapshot_is_frozen() -> None:
         failure_kind=None,
     )
     assert cap.effective_max_images == 6
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        cap.effective_max_images = 0  # type: ignore[misc]
 
 
 async def test_capability_probe_targets_query_role(monkeypatch) -> None:
@@ -121,17 +128,26 @@ async def test_unknown_capability_lazily_reprobes_to_supported(
     assert cap.effective_max_images == 8
 
 
-async def test_supported_capability_is_terminal_no_reprobe(
+@pytest.mark.parametrize(
+    ("status", "effective"),
+    [
+        pytest.param("supported", 8, id="supported_is_terminal_no_reprobe"),
+        pytest.param("unsupported", 0, id="unsupported_is_terminal_no_reprobe"),
+    ],
+)
+async def test_terminal_status_is_terminal_no_reprobe(
     monkeypatch: pytest.MonkeyPatch,
+    status: CapabilityStatus,
+    effective: int,
 ) -> None:
     manager = RAGServiceManager(config=_reprobe_config())
-    manager._answer_image_capability = _capability("supported", 8)
+    manager._answer_image_capability = _capability(status, effective)
     calls = 0
 
     async def fake_discover() -> AnswerImageCapability:
         nonlocal calls
         calls += 1
-        return _capability("unknown", 0)
+        return _capability("unknown" if status == "supported" else "supported", 0)
 
     monkeypatch.setattr(manager, "_discover_answer_image_capability", fake_discover)
 
@@ -139,28 +155,7 @@ async def test_supported_capability_is_terminal_no_reprobe(
 
     cap = manager.answer_image_capability
     assert calls == 0
-    assert cap is not None and cap.status == "supported"
-
-
-async def test_unsupported_capability_is_terminal_no_reprobe(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager = RAGServiceManager(config=_reprobe_config())
-    manager._answer_image_capability = _capability("unsupported", 0)
-    calls = 0
-
-    async def fake_discover() -> AnswerImageCapability:
-        nonlocal calls
-        calls += 1
-        return _capability("supported", 8)
-
-    monkeypatch.setattr(manager, "_discover_answer_image_capability", fake_discover)
-
-    await manager._maybe_reprobe_answer_image_capability()
-
-    cap = manager.answer_image_capability
-    assert calls == 0
-    assert cap is not None and cap.status == "unsupported"
+    assert cap is not None and cap.status == status
 
 
 async def test_reprobe_respects_cooldown_when_still_unknown(

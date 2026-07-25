@@ -22,14 +22,16 @@ from dlightrag.models.structured import StructuredOutput
 
 
 class TestBuildSchemaSection:
-    def test_none_schema(self):
-        assert _build_schema_section(None) == ""
-
-    def test_empty_schema(self):
-        assert _build_schema_section({}) == ""
-
-    def test_no_columns(self):
-        assert _build_schema_section({"columns": []}) == ""
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            pytest.param(None, id="none_schema"),
+            pytest.param({}, id="empty_schema"),
+            pytest.param({"columns": []}, id="no_columns"),
+        ],
+    )
+    def test_returns_empty_string(self, schema):
+        assert _build_schema_section(schema) == ""
 
     def test_with_columns(self):
         schema = {
@@ -44,11 +46,15 @@ class TestBuildSchemaSection:
 
 
 class TestBuildCustomKeysHint:
-    def test_none_schema(self):
-        assert _build_custom_keys_hint(None) == ""
-
-    def test_no_custom_keys(self):
-        assert _build_custom_keys_hint({"custom_keys": []}) == ""
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            pytest.param(None, id="none_schema"),
+            pytest.param({"custom_keys": []}, id="no_custom_keys"),
+        ],
+    )
+    def test_returns_empty_string(self, schema):
+        assert _build_custom_keys_hint(schema) == ""
 
     def test_with_keys(self):
         result = _build_custom_keys_hint({"custom_keys": ["project", "team"]})

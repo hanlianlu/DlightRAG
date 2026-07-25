@@ -30,7 +30,7 @@ Keep these in normal `config.yaml`:
   `service_role`, `postgres_*`
 - high-level concurrency raised above upstream defaults: `max_async`,
   `embedding_func_max_async`, `embedding_batch_num`
-- retrieval/answer breadth: `top_k`, `chunk_top_k`, `direct_visual_top_k`,
+- retrieval/answer controls: `top_k`, `chunk_top_k`, `bm25_enabled`, `direct_visual_top_k`,
   `answer.*`
 - auth and observability mode switches when they are not secret
 
@@ -474,6 +474,7 @@ are advanced index signatures.
 Defaults:
 
 ```yaml
+bm25_enabled: true
 bm25_profiles:
   - name: zh
     text_config: public.jiebacfg
@@ -518,10 +519,16 @@ bm25_k1: 1.2
 bm25_b: 0.75
 ```
 
+`bm25_enabled` controls workspace PostgreSQL BM25 indexing, ingest-time
+language labels, and query fusion. It does not disable Web Composer's
+request-local in-memory lexical evidence, which never reads or writes workspace
+indexes.
+
 Changing profile names, text configs, languages, `bm25_k1`, or `bm25_b`
-changes the expected pg_textsearch index signature. Restart DlightRAG against
-its configured PostgreSQL endpoint so it can rebuild or verify indexes before
-serving traffic.
+changes the expected pg_textsearch index signature. Enabling BM25 for an
+existing corpus or changing profile languages also requires relabeling existing
+chunks; restarting alone does not rewrite historical labels. Use the offline
+workspace BM25 rebuild described in [operations.md](operations.md#workspace-bm25-rebuild).
 
 ## Fusion And Filtering
 

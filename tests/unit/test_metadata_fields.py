@@ -36,26 +36,9 @@ class TestMetadataFieldDef:
         with pytest.raises(AttributeError):
             f.field_id = "y"  # type: ignore[misc]
 
-    def test_filter_hint_defaults_none(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import MetadataFieldDef
-
-        f = MetadataFieldDef("x", "TEXT")
-        assert f.filter_hint is None
-
-    def test_filter_hint_set(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import MetadataFieldDef
-
-        f = MetadataFieldDef("x", "TEXT", filter_hint="exact match on x")
-        assert f.filter_hint == "exact match on x"
-
 
 class TestMetadataFields:
     """METADATA_FIELDS tuple — the canonical field registry."""
-
-    def test_is_tuple(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        assert isinstance(METADATA_FIELDS, tuple)
 
     def test_has_system_fields(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS

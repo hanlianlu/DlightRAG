@@ -18,16 +18,9 @@ class TestCompletionProviderABC:
 
 
 class TestProviderRegistry:
-    def test_get_openai_provider(self):
-        p = get_provider("openai", api_key="test-key")
-        assert isinstance(p, CompletionProvider)
-
-    def test_get_anthropic_provider(self):
-        p = get_provider("anthropic", api_key="test-key")
-        assert isinstance(p, CompletionProvider)
-
-    def test_get_gemini_provider(self):
-        p = get_provider("gemini", api_key="test-key")
+    @pytest.mark.parametrize("provider_name", ["openai", "anthropic", "gemini"])
+    def test_get_provider_returns_completion_provider(self, provider_name: str):
+        p = get_provider(provider_name, api_key="test-key")
         assert isinstance(p, CompletionProvider)
 
     def test_unknown_provider_raises(self):

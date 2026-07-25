@@ -1460,16 +1460,6 @@ class TestWebWorkspaceCreate:
             display_name="new workspace",
         )
 
-    async def test_create_workspace_empty_name(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.post(
-            "/web/workspaces/create",
-            data={"workspace_name": ""},
-        )
-        assert resp.status_code == 400
-        assert 'class="file-error"' in resp.text
-
     async def test_create_workspace_duplicate(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
@@ -1479,23 +1469,28 @@ class TestWebWorkspaceCreate:
         )
         assert resp.status_code == 409
 
-    async def test_create_workspace_forbidden_chars(
-        self, client: AsyncClient, test_config: DlightragConfig
+    @pytest.mark.parametrize(
+        ("workspace_name", "expect_error_markup"),
+        [
+            pytest.param("", True, id="empty_name"),
+            pytest.param("bad/name", False, id="forbidden_chars"),
+            pytest.param("a" * 65, False, id="too_long"),
+        ],
+    )
+    async def test_create_workspace_invalid_name(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        workspace_name: str,
+        expect_error_markup: bool,
     ) -> None:
         resp = await client.post(
             "/web/workspaces/create",
-            data={"workspace_name": "bad/name"},
+            data={"workspace_name": workspace_name},
         )
         assert resp.status_code == 400
-
-    async def test_create_workspace_too_long(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.post(
-            "/web/workspaces/create",
-            data={"workspace_name": "a" * 65},
-        )
-        assert resp.status_code == 400
+        if expect_error_markup:
+            assert 'class="file-error"' in resp.text
 
 
 class TestWebWorkspaceDelete:
@@ -1555,21 +1550,23 @@ class TestWebWorkspaceDelete:
         }
         mock_manager.areset.assert_awaited_once_with(workspace="test_fallback_ws")
 
-    async def test_delete_workspace_confirm_mismatch(
-        self, client: AsyncClient, test_config: DlightragConfig
+    @pytest.mark.parametrize(
+        ("workspace_name", "confirm_name"),
+        [
+            pytest.param("test-ws", "wrong", id="confirm_mismatch"),
+            pytest.param("", "", id="empty_name"),
+        ],
+    )
+    async def test_delete_workspace_invalid(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        workspace_name: str,
+        confirm_name: str,
     ) -> None:
         resp = await client.post(
             "/web/workspaces/delete",
-            data={"workspace_name": "test-ws", "confirm_name": "wrong"},
-        )
-        assert resp.status_code == 400
-
-    async def test_delete_workspace_empty_name(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.post(
-            "/web/workspaces/delete",
-            data={"workspace_name": "", "confirm_name": ""},
+            data={"workspace_name": workspace_name, "confirm_name": confirm_name},
         )
         assert resp.status_code == 400
 

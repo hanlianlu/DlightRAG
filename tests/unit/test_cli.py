@@ -424,26 +424,27 @@ def test_ragas_eval_cli_leaves_api_auto_resolution_to_adapter(
 class TestValidateLocal:
     """Validation for local source (default)."""
 
-    def test_valid_local(self) -> None:
-        args = _parse_ingest(["./docs"])
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(["./docs"], id="valid_local"),
+            pytest.param(["./docs", "--replace"], id="valid_local_with_flags"),
+        ],
+    )
+    def test_valid(self, argv: list[str]) -> None:
+        args = _parse_ingest(argv)
         _validate_ingest_args(args)  # should not raise
 
-    def test_valid_local_with_flags(self) -> None:
-        args = _parse_ingest(["./docs", "--replace"])
-        _validate_ingest_args(args)
-
-    def test_local_requires_path(self) -> None:
-        args = _parse_ingest([])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_local_rejects_container(self) -> None:
-        args = _parse_ingest(["./docs", "--container", "c"])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_local_rejects_bucket(self) -> None:
-        args = _parse_ingest(["./docs", "--bucket", "b"])
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param([], id="local_requires_path"),
+            pytest.param(["./docs", "--container", "c"], id="local_rejects_container"),
+            pytest.param(["./docs", "--bucket", "b"], id="local_rejects_bucket"),
+        ],
+    )
+    def test_invalid(self, argv: list[str]) -> None:
+        args = _parse_ingest(argv)
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
 
@@ -456,55 +457,63 @@ class TestValidateLocal:
 class TestValidateAzureBlob:
     """Validation for azure_blob source."""
 
-    def test_valid_azure_container_only(self) -> None:
-        args = _parse_ingest(["--source", "azure_blob", "--container", "c"])
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(
+                ["--source", "azure_blob", "--container", "c"],
+                id="valid_azure_container_only",
+            ),
+            pytest.param(
+                ["--source", "azure_blob", "--container", "c", "--prefix", "docs/"],
+                id="valid_azure_with_prefix",
+            ),
+            pytest.param(
+                ["--source", "azure_blob", "--container", "c", "--blob-path", "f.pdf"],
+                id="valid_azure_with_blob_path",
+            ),
+        ],
+    )
+    def test_valid(self, argv: list[str]) -> None:
+        args = _parse_ingest(argv)
         _validate_ingest_args(args)
 
-    def test_valid_azure_with_prefix(self) -> None:
-        args = _parse_ingest(["--source", "azure_blob", "--container", "c", "--prefix", "docs/"])
-        _validate_ingest_args(args)
-
-    def test_valid_azure_with_blob_path(self) -> None:
-        args = _parse_ingest(["--source", "azure_blob", "--container", "c", "--blob-path", "f.pdf"])
-        _validate_ingest_args(args)
-
-    def test_azure_requires_container(self) -> None:
-        args = _parse_ingest(["--source", "azure_blob"])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_azure_rejects_positional_path(self) -> None:
-        args = _parse_ingest(["./docs", "--source", "azure_blob", "--container", "c"])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_azure_blob_path_and_prefix_mutually_exclusive(self) -> None:
-        args = _parse_ingest(
-            [
-                "--source",
-                "azure_blob",
-                "--container",
-                "c",
-                "--blob-path",
-                "f.pdf",
-                "--prefix",
-                "docs/",
-            ]
-        )
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_azure_rejects_bucket(self) -> None:
-        args = _parse_ingest(
-            [
-                "--source",
-                "azure_blob",
-                "--container",
-                "c",
-                "--bucket",
-                "b",
-            ]
-        )
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(["--source", "azure_blob"], id="azure_requires_container"),
+            pytest.param(
+                ["./docs", "--source", "azure_blob", "--container", "c"],
+                id="azure_rejects_positional_path",
+            ),
+            pytest.param(
+                [
+                    "--source",
+                    "azure_blob",
+                    "--container",
+                    "c",
+                    "--blob-path",
+                    "f.pdf",
+                    "--prefix",
+                    "docs/",
+                ],
+                id="azure_blob_path_and_prefix_mutually_exclusive",
+            ),
+            pytest.param(
+                [
+                    "--source",
+                    "azure_blob",
+                    "--container",
+                    "c",
+                    "--bucket",
+                    "b",
+                ],
+                id="azure_rejects_bucket",
+            ),
+        ],
+    )
+    def test_invalid(self, argv: list[str]) -> None:
+        args = _parse_ingest(argv)
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
 
@@ -517,52 +526,60 @@ class TestValidateAzureBlob:
 class TestValidateS3:
     """Validation for s3 source."""
 
-    def test_valid_s3_with_key(self) -> None:
-        args = _parse_ingest(["--source", "s3", "--bucket", "my-bucket", "--s3-key", "doc.pdf"])
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(
+                ["--source", "s3", "--bucket", "my-bucket", "--s3-key", "doc.pdf"],
+                id="valid_s3_with_key",
+            ),
+            pytest.param(
+                ["--source", "s3", "--bucket", "my-bucket", "--prefix", "docs/"],
+                id="valid_s3_with_prefix",
+            ),
+        ],
+    )
+    def test_valid(self, argv: list[str]) -> None:
+        args = _parse_ingest(argv)
         _validate_ingest_args(args)
 
-    def test_valid_s3_with_prefix(self) -> None:
-        args = _parse_ingest(["--source", "s3", "--bucket", "my-bucket", "--prefix", "docs/"])
-        _validate_ingest_args(args)
-
-    def test_s3_requires_bucket(self) -> None:
-        args = _parse_ingest(["--source", "s3"])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_s3_rejects_positional_path(self) -> None:
-        args = _parse_ingest(["./docs", "--source", "s3", "--bucket", "b"])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_s3_key_and_prefix_mutually_exclusive(self) -> None:
-        args = _parse_ingest(
-            [
-                "--source",
-                "s3",
-                "--bucket",
-                "b",
-                "--s3-key",
-                "doc.pdf",
-                "--prefix",
-                "docs/",
-            ]
-        )
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_s3_rejects_container(self) -> None:
-        args = _parse_ingest(
-            [
-                "--source",
-                "s3",
-                "--bucket",
-                "b",
-                "--s3-key",
-                "doc.pdf",
-                "--container",
-                "c",
-            ]
-        )
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(["--source", "s3"], id="s3_requires_bucket"),
+            pytest.param(
+                ["./docs", "--source", "s3", "--bucket", "b"],
+                id="s3_rejects_positional_path",
+            ),
+            pytest.param(
+                [
+                    "--source",
+                    "s3",
+                    "--bucket",
+                    "b",
+                    "--s3-key",
+                    "doc.pdf",
+                    "--prefix",
+                    "docs/",
+                ],
+                id="s3_key_and_prefix_mutually_exclusive",
+            ),
+            pytest.param(
+                [
+                    "--source",
+                    "s3",
+                    "--bucket",
+                    "b",
+                    "--s3-key",
+                    "doc.pdf",
+                    "--container",
+                    "c",
+                ],
+                id="s3_rejects_container",
+            ),
+        ],
+    )
+    def test_invalid(self, argv: list[str]) -> None:
+        args = _parse_ingest(argv)
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)

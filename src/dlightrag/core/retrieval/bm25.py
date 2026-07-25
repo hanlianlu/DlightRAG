@@ -4,6 +4,7 @@
 import inspect
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,6 +79,27 @@ class BM25Profile:
 
 
 BM25_PROFILE_FALLBACK = BM25Profile(name="simple", text_config="simple", fallback=True)
+
+
+def profiles_from_config(config_profiles: Iterable[Any]) -> tuple[BM25Profile, ...]:
+    """Convert typed settings profiles into immutable runtime profiles."""
+    return tuple(
+        BM25Profile(
+            name=profile.name,
+            text_config=profile.text_config,
+            languages=tuple(profile.languages),
+            fallback=profile.fallback,
+        )
+        for profile in config_profiles
+    )
+
+
+def required_postgres_extensions(profiles: Iterable[BM25Profile]) -> tuple[str, ...]:
+    """Return PostgreSQL extensions required by the configured BM25 profiles."""
+    extensions = ["pg_textsearch"]
+    if any(profile.text_config == "public.jiebacfg" for profile in profiles):
+        extensions.append("pg_jieba")
+    return tuple(extensions)
 
 
 @dataclass(frozen=True)
@@ -237,6 +259,56 @@ class PostgresBM25:
                     )
 
         await self._run(_operation)
+
+    async def relabel_chunk_languages(self, *, batch_size: int = 500) -> dict[str, int]:
+        """Refresh BM25 language labels for every chunk in this workspace."""
+        batch_limit = int(batch_size)
+        if batch_limit < 1:
+            raise ValueError("BM25 batch_size must be positive")
+
+        async def _operation(conn: Any) -> dict[str, int]:
+            stats = {"processed_chunks": 0, "updated_chunks": 0}
+            cursor = ""
+            while True:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT id, content
+                    FROM {BM25_TABLE}
+                    WHERE workspace = $1 AND id > $2
+                    ORDER BY id
+                    LIMIT $3
+                    """,  # noqa: S608 - internal table constant.
+                    self._workspace,
+                    cursor,
+                    batch_limit,
+                )
+                if not rows:
+                    break
+
+                chunk_ids = [str(row["id"]) for row in rows]
+                languages = [
+                    self._language_classifier.detect(str(row["content"] or "")) for row in rows
+                ]
+                await conn.execute(
+                    (
+                        f"UPDATE {BM25_TABLE} AS chunks "  # noqa: S608 - internal constants.
+                        f"SET {BM25_LANGUAGE_COLUMN}=labels.language, "
+                        "update_time=CURRENT_TIMESTAMP "
+                        "FROM UNNEST($2::text[], $3::text[]) AS labels(id, language) "
+                        "WHERE chunks.workspace=$1 AND chunks.id=labels.id"
+                    ),
+                    self._workspace,
+                    chunk_ids,
+                    languages,
+                )
+                stats["processed_chunks"] += len(rows)
+                stats["updated_chunks"] += len(chunk_ids)
+                cursor = chunk_ids[-1]
+                if len(rows) < batch_limit:
+                    break
+            return stats
+
+        return await self._run(_operation)
 
     @staticmethod
     async def _verify_schema(conn: Any) -> None:
@@ -416,3 +488,41 @@ class PostgresBM25:
         if row.get("full_doc_id"):
             chunk["full_doc_id"] = row["full_doc_id"]
         return chunk
+
+
+async def create_postgres_bm25(
+    config: Any,
+    *,
+    pool: Any,
+    profiles: tuple[BM25Profile, ...] | None = None,
+) -> PostgresBM25 | None:
+    """Construct and provision workspace BM25 for the configured service role."""
+    if not config.bm25_enabled:
+        return None
+
+    runtime_profiles = profiles or profiles_from_config(config.bm25_profiles)
+    retriever = PostgresBM25(
+        pool=pool,
+        workspace=config.workspace,
+        profiles=runtime_profiles,
+    )
+    if config.is_reader:
+        await retriever.verify_indexes(k1=config.bm25_k1, b=config.bm25_b)
+    else:
+        await retriever.ensure_indexes(k1=config.bm25_k1, b=config.bm25_b)
+    return retriever
+
+
+async def rebuild_postgres_bm25(
+    config: Any,
+    *,
+    pool: Any,
+    batch_size: int = 500,
+) -> dict[str, int]:
+    """Provision workspace BM25 and refresh every stored chunk language."""
+    if config.bm25_enabled and config.is_reader:
+        raise RuntimeError("BM25 rebuild requires the writer service role")
+    retriever = await create_postgres_bm25(config, pool=pool)
+    if retriever is None:
+        return {"processed_chunks": 0, "updated_chunks": 0}
+    return await retriever.relabel_chunk_languages(batch_size=batch_size)

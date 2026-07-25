@@ -116,20 +116,47 @@ class UnifiedRetriever:
                 else None
             )
 
+            lightrag_error: Exception | None = None
             try:
                 lightrag_result = await lightrag_task
-            except Exception:
-                logger.warning(
-                    "LightRAG retrieval failed; falling back to BM25-only", exc_info=True
-                )
+            except Exception as exc:
+                lightrag_error = exc
+                if bm25_task is None:
+                    logger.error(
+                        "LightRAG retrieval failed and BM25 is disabled",
+                        exc_info=True,
+                    )
+                else:
+                    logger.warning(
+                        "LightRAG retrieval failed; falling back to BM25-only",
+                        exc_info=True,
+                    )
                 lightrag_result = RetrievalResult(
-                    trace={"lightrag_error": True},
+                    trace={
+                        "lightrag_error": True,
+                        "lightrag_error_type": type(exc).__name__,
+                    },
                 )
-            bm25_chunks = await bm25_task if bm25_task is not None else []
+            bm25_error: Exception | None = None
+            try:
+                bm25_chunks = await bm25_task if bm25_task is not None else []
+            except Exception as exc:
+                bm25_error = exc
+                bm25_chunks = []
+                logger.warning(
+                    "BM25 retrieval failed; falling back to semantic-only", exc_info=True
+                )
+            if lightrag_error is not None:
+                if bm25_task is None:
+                    raise lightrag_error
+                if bm25_error is not None:
+                    raise lightrag_error from bm25_error
 
         trace.update(getattr(lightrag_result, "trace", {}) or {})
         trace["bm25_enabled"] = self._bm25 is not None
         trace["bm25_query"] = lexical_query if self._bm25 is not None else None
+        if bm25_error is not None:
+            trace["bm25_error_type"] = type(bm25_error).__name__
         trace["bm25_chunk_count"] = len(bm25_chunks)
         trace["semantic_chunk_count"] = len(lightrag_result.contexts.get("chunks", []))
         semantic_chunks = lightrag_result.contexts.get("chunks", [])

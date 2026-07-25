@@ -67,11 +67,15 @@ class TestConvertHistoryToText:
         assert "user: now look at this" in result
         assert "[user shared 1 image]" in result
 
-    def test_empty_history_returns_empty_string(self) -> None:
-        assert _convert_history_to_text([]) == ""
-
-    def test_none_history_returns_empty_string(self) -> None:
-        assert _convert_history_to_text(None) == ""
+    @pytest.mark.parametrize(
+        "history",
+        [
+            pytest.param([], id="empty_history"),
+            pytest.param(None, id="none_history"),
+        ],
+    )
+    def test_empty_or_none_history_returns_empty_string(self, history) -> None:
+        assert _convert_history_to_text(history) == ""
 
 
 @pytest.mark.asyncio

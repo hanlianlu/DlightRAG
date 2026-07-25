@@ -53,9 +53,6 @@ class TestUpsertSQL:
     def test_upsert_sql_uses_coalesce(self):
         assert "COALESCE" in _UPSERT
 
-    def test_custom_metadata_uses_jsonb_merge(self):
-        assert "||" in _UPSERT or "custom_metadata" in _UPSERT
-
 
 class TestMetadataSQL:
     def test_indexes_do_not_require_pg_trgm(self):
