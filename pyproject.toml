@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.7.14"
+version = "1.7.15"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -44,7 +44,7 @@ dependencies = [
     "mcp[cli]>=1.9.0",
     # REST API server
     "PyJWT>=2.8.0",
-    "fastapi>=0.139.2",
+    "fastapi>=0.140.0",
     "uvicorn[standard]>=0.51.0",
     "python-multipart>=0.0.22",
     # Web frontend
