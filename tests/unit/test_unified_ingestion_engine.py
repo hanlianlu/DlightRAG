@@ -414,6 +414,110 @@ async def test_metadata_only_update_forwards_explicit_source_contract(
     assert prepare_metadata.call_args.kwargs["download_locator"] == str(source)
 
 
+async def test_single_hash_match_skip_bypasses_parser_directives(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+
+    def fail_parser_directives(_path: Path) -> tuple[str, str, dict[str, object] | None]:
+        raise AssertionError("parser directives should not be resolved for hash-match fast path")
+
+    monkeypatch.setattr(engine, "_parser_directives_for", fail_parser_directives)
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result["source_kind"] == "skipped"
+
+
+async def test_single_hash_match_metadata_update_bypasses_parser_directives(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+
+    def fail_parser_directives(_path: Path) -> tuple[str, str, dict[str, object] | None]:
+        raise AssertionError("parser directives should not be resolved for hash-match fast path")
+
+    monkeypatch.setattr(engine, "_parser_directives_for", fail_parser_directives)
+
+    result = await engine.aingest_file(source, replace=False, title="Updated title")
+
+    assert result["source_kind"] == "metadata_updated"
+
+
+async def test_batch_metadata_only_update_preserves_source_contract_and_chunks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    content = b"%PDF-1.4"
+    parser_source = tmp_path / "report__s3_abcd1234.pdf"
+    parser_source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-report"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
+    monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
+
+    result = await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=parser_source,
+                source_uri="bynder://asset/1",
+                download_locator="https://cdn.example.com/assets/1.pdf",
+                display_filename="report.pdf",
+                title="Updated title",
+                author="Updated author",
+                metadata={"category": "finance"},
+            )
+        ],
+        replace=False,
+    )
+
+    assert result["processed"] == 1
+    assert result["errors"] == []
+    assert result["results"] == [
+        {
+            "doc_id": compute_mdhash_id(
+                normalize_document_file_path(parser_source),
+                prefix="doc-",
+            ),
+            "source_kind": "metadata_updated",
+            "reason": "content_hash_match",
+            "chunks": ["chunk-report"],
+        }
+    ]
+    assert prepare_metadata.call_args.kwargs["source_uri"] == "bynder://asset/1"
+    assert prepare_metadata.call_args.kwargs["download_locator"] == (
+        "https://cdn.example.com/assets/1.pdf"
+    )
+    _, saved = deps["metadata_index"].upsert.await_args.args
+    assert saved["file_path"] == "https://cdn.example.com/assets/1.pdf"
+    assert saved["source_uri"] == "bynder://asset/1"
+    assert saved["download_locator"] == "https://cdn.example.com/assets/1.pdf"
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    deps["lightrag"].apipeline_process_enqueue_documents.assert_not_awaited()
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+
+
 async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) -> None:
     source = tmp_path / "1912.09363v3.pdf"
     source.write_bytes(b"%PDF-1.4")
