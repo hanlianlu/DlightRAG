@@ -1192,6 +1192,8 @@ class RAGService:
             file_path,
             source_uri=source_uri,
             download_locator=str(file_path),
+            source_uri_explicit=False,
+            download_locator_explicit=False,
             replace=replace,
             title=title,
             author=author,
@@ -1244,6 +1246,8 @@ class RAGService:
                     staged.relative_to(self._workspace_input_root()),
                 ),
                 download_locator=str(staged),
+                source_uri_explicit=False,
+                download_locator_explicit=False,
             )
             for staged in staged_paths
         ]
@@ -1293,7 +1297,8 @@ class RAGService:
             prepared_items.append(
                 PreparedIngestFile(
                     parser_path=staged,
-                    source_uri=local_source_uri(
+                    source_uri=document.source_uri
+                    or local_source_uri(
                         self.config.workspace,
                         staged.relative_to(self._workspace_input_root()),
                     ),
@@ -1303,6 +1308,9 @@ class RAGService:
                     author=document.author,
                     metadata=document.metadata,
                     metadata_policy=document.metadata_policy,
+                    source_uri_explicit=document.source_uri is not None,
+                    download_locator_explicit=False,
+                    display_filename_explicit=document.filename is not None,
                 )
             )
         result = await self._ingestion_engine.aingest_files(

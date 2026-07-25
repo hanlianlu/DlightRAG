@@ -120,6 +120,9 @@ class UnifiedIngestionEngine:
         source_uri: str | None = None,
         download_locator: str | None = None,
         display_filename: str | None = None,
+        source_uri_explicit: bool | None = None,
+        download_locator_explicit: bool | None = None,
+        display_filename_explicit: bool | None = None,
         replace: bool = False,
         title: str | None = None,
         author: str | None = None,
@@ -143,9 +146,19 @@ class UnifiedIngestionEngine:
                 author=author,
                 metadata=metadata,
                 metadata_policy=metadata_policy,
-                source_uri_explicit=source_uri is not None,
-                download_locator_explicit=download_locator is not None,
-                display_filename_explicit=display_filename is not None,
+                source_uri_explicit=(
+                    source_uri is not None if source_uri_explicit is None else source_uri_explicit
+                ),
+                download_locator_explicit=(
+                    download_locator is not None
+                    if download_locator_explicit is None
+                    else download_locator_explicit
+                ),
+                display_filename_explicit=(
+                    display_filename is not None
+                    if display_filename_explicit is None
+                    else display_filename_explicit
+                ),
             ),
             resolve_parser_directives=False,
         )

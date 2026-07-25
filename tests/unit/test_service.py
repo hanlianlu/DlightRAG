@@ -1627,8 +1627,10 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         input_root = test_config.input_dir_path / test_config.workspace
         source = input_root / "docs" / "report.pdf"
+        explicit = input_root / "docs" / "custom.pdf"
         source.parent.mkdir(parents=True)
         source.write_bytes(b"%PDF-fake")
+        explicit.write_bytes(b"%PDF-explicit")
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
@@ -1642,14 +1644,31 @@ class TestRAGServiceLightRAGMainPath:
 
         result = await service.aingest(
             source_type="local",
-            documents=[{"path": str(source), "metadata": {"asset_id": "local-a"}}],
+            documents=[
+                {"path": str(source), "metadata": {"asset_id": "local-a"}},
+                {
+                    "path": str(explicit),
+                    "source_uri": "local://custom/docs/custom.pdf",
+                    "filename": "renamed.pdf",
+                },
+            ],
         )
 
-        assert result["processed"] == 1
+        assert result["processed"] == 2
         assert seen_items[0].parser_path == source
         assert seen_items[0].source_uri == f"local://{test_config.workspace}/docs/report.pdf"
         assert seen_items[0].download_locator == str(source)
         assert seen_items[0].metadata == {"asset_id": "local-a"}
+        assert seen_items[0].source_uri_explicit is False
+        assert seen_items[0].download_locator_explicit is False
+        assert seen_items[0].display_filename_explicit is False
+        assert seen_items[1].parser_path == explicit
+        assert seen_items[1].source_uri == "local://custom/docs/custom.pdf"
+        assert seen_items[1].download_locator == str(explicit)
+        assert seen_items[1].display_filename == "renamed.pdf"
+        assert seen_items[1].source_uri_explicit is True
+        assert seen_items[1].download_locator_explicit is False
+        assert seen_items[1].display_filename_explicit is True
 
     async def test_aingest_source_accepts_sync_close(self, test_config: DlightragConfig) -> None:
         class SyncCloseSource(AsyncDataSource):
@@ -1858,6 +1877,13 @@ class TestRAGServiceLightRAGMainPath:
         assert staged.read_bytes() == b"%PDF-fake"
         assert result["doc_id"] == "d1"
         assert result["page_count"] == 3
+        assert (
+            service._ingestion_engine.aingest_file.call_args.kwargs["source_uri_explicit"] is False
+        )
+        assert (
+            service._ingestion_engine.aingest_file.call_args.kwargs["download_locator_explicit"]
+            is False
+        )
 
     async def test_aingest_local_directory_uses_batch_pipeline(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -1915,6 +1941,9 @@ class TestRAGServiceLightRAGMainPath:
             str(staged_root / "b.pdf"),
             str(staged_root / "nested" / "c.pptx"),
         ]
+        assert all(item.source_uri_explicit is False for item in items)
+        assert all(item.download_locator_explicit is False for item in items)
+        assert all(item.display_filename_explicit is False for item in items)
         assert (staged_root / "a.docx").read_bytes() == b"fake"
         assert (staged_root / "b.pdf").read_bytes() == b"fake"
         assert (staged_root / "nested" / "c.pptx").read_bytes() == b"fake"

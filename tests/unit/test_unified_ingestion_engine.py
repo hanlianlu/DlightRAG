@@ -704,6 +704,42 @@ async def test_single_hash_match_local_noop_skips_without_metadata_lookup(
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
+async def test_single_hash_match_internal_local_contract_skips_without_metadata_lookup(
+    tmp_path: Path,
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    deps["metadata_index"].get.side_effect = AssertionError(
+        "metadata_index.get should not be consulted for internally generated local contracts"
+    )
+
+    result = await engine.aingest_file(
+        source,
+        source_uri=_raw_path_source_uri(source, workspace="default"),
+        download_locator=str(source.resolve()),
+        source_uri_explicit=False,
+        download_locator_explicit=False,
+        replace=False,
+    )
+
+    assert result == {
+        "doc_id": compute_mdhash_id(normalize_document_file_path(source), prefix="doc-"),
+        "source_kind": "skipped",
+        "reason": "content_hash_match",
+        "chunks": ["chunk-a"],
+    }
+    deps["metadata_index"].get.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
 async def test_single_hash_match_explicit_default_source_contract_updates_metadata(
     tmp_path: Path,
 ) -> None:
@@ -771,6 +807,55 @@ async def test_batch_hash_match_local_noop_skips_without_metadata_lookup(
     )
 
     result = await engine.aingest_files([source], replace=False)
+
+    assert result == {
+        "processed": 1,
+        "errors": [],
+        "results": [
+            {
+                "doc_id": compute_mdhash_id(
+                    normalize_document_file_path(source),
+                    prefix="doc-",
+                ),
+                "source_kind": "skipped",
+                "reason": "content_hash_match",
+                "chunks": ["chunk-a"],
+            }
+        ],
+    }
+    deps["metadata_index"].get.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_batch_hash_match_internal_local_contract_skips_without_metadata_lookup(
+    tmp_path: Path,
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    deps["metadata_index"].get.side_effect = AssertionError(
+        "metadata_index.get should not be consulted for internally generated local contracts"
+    )
+
+    result = await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=source,
+                source_uri=_raw_path_source_uri(source, workspace="default"),
+                download_locator=str(source.resolve()),
+                source_uri_explicit=False,
+                download_locator_explicit=False,
+            )
+        ],
+        replace=False,
+    )
 
     assert result == {
         "processed": 1,
