@@ -76,6 +76,7 @@ class _DocumentIngestDecision:
     enqueue: bool
     cleanup_kind: str | None = None
     result: dict[str, Any] | None = None
+    metadata_update: bool = False
 
 
 class UnifiedIngestionEngine:
@@ -144,6 +145,9 @@ class UnifiedIngestionEngine:
         )
         decision = await self._decide_document_ingest(entry, replace=replace)
         if decision.result is not None:
+            if decision.metadata_update:
+                async with self._get_ingest_lock(entry.doc_id):
+                    await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
             return decision.result
         entry = self._ensure_enqueue_entry(entry)
         parse_engine, process_options = _required_enqueue_fields(entry)
@@ -210,7 +214,8 @@ class UnifiedIngestionEngine:
 
         results_by_index: dict[int, dict[str, Any]] = {}
         errors: list[str] = []
-        to_enqueue: list[_PendingDocumentIngest] = []
+        deferred_metadata_updates: list[tuple[_PendingDocumentIngest, dict[str, Any]]] = []
+        to_enqueue: list[tuple[_PendingDocumentIngest, _DocumentIngestDecision]] = []
 
         async with AsyncExitStack() as stack:
             for doc_id in sorted({entry.doc_id for entry in entries}):
@@ -218,29 +223,42 @@ class UnifiedIngestionEngine:
 
             for entry in entries:
                 decision = await self._decide_document_ingest(entry, replace=replace)
+                if decision.enqueue:
+                    to_enqueue.append((entry, decision))
+                    continue
+                if decision.metadata_update and decision.result is not None:
+                    deferred_metadata_updates.append((entry, decision.result))
+                    continue
                 if decision.result is not None:
                     results_by_index[entry.index] = decision.result
-                    continue
+            validated_to_enqueue = [
+                (self._ensure_enqueue_entry(entry), decision) for entry, decision in to_enqueue
+            ]
+
+            for entry, decision in validated_to_enqueue:
                 if decision.cleanup_kind is not None:
                     await self._cleanup_partial_doc(entry.doc_id)
-                if decision.enqueue:
-                    to_enqueue.append(self._ensure_enqueue_entry(entry))
 
-            if to_enqueue:
-                chunk_options = self._batch_chunk_options(to_enqueue)
-                for entry in to_enqueue:
+            for entry, result in deferred_metadata_updates:
+                await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
+                results_by_index[entry.index] = result
+
+            if validated_to_enqueue:
+                enqueue_entries = [entry for entry, _decision in validated_to_enqueue]
+                chunk_options = self._batch_chunk_options(enqueue_entries)
+                for entry in enqueue_entries:
                     await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
                 await self._lightrag.apipeline_enqueue_documents(
-                    input=[""] * len(to_enqueue),
-                    file_paths=[str(entry.parser_path) for entry in to_enqueue],
+                    input=[""] * len(enqueue_entries),
+                    file_paths=[str(entry.parser_path) for entry in enqueue_entries],
                     docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
-                    parse_engine=[entry.parse_engine for entry in to_enqueue],
-                    process_options=[entry.process_options for entry in to_enqueue],
+                    parse_engine=[entry.parse_engine for entry in enqueue_entries],
+                    process_options=[entry.process_options for entry in enqueue_entries],
                     chunk_options=chunk_options,
                 )
                 await self._lightrag.apipeline_process_enqueue_documents()
 
-                for entry in to_enqueue:
+                for entry in enqueue_entries:
                     try:
                         parse_engine, process_options = _required_enqueue_fields(entry)
                         results_by_index[entry.index] = await self._finalize_ingested_document(
@@ -303,7 +321,8 @@ class UnifiedIngestionEngine:
                 metadata_policy=effective_metadata_policy,
             ),
             metadata_update_requested=(
-                effective_title is not None
+                _source_contract_override_requested(item, workspace=self._workspace)
+                or effective_title is not None
                 or effective_author is not None
                 or effective_metadata is not None
             ),
@@ -342,9 +361,9 @@ class UnifiedIngestionEngine:
         if replace:
             return _DocumentIngestDecision(enqueue=True, cleanup_kind="replace")
 
-        hash_match_result = await self._hash_match_result(entry, existing_status)
-        if hash_match_result is not None:
-            return _DocumentIngestDecision(enqueue=False, result=hash_match_result)
+        hash_match_decision = await self._hash_match_decision(entry, existing_status)
+        if hash_match_decision is not None:
+            return hash_match_decision
 
         if _normalized_status(existing_status) == "processed":
             return _DocumentIngestDecision(enqueue=True)
@@ -354,11 +373,11 @@ class UnifiedIngestionEngine:
             cleanup_kind="partial",
         )
 
-    async def _hash_match_result(
+    async def _hash_match_decision(
         self,
         entry: _PendingDocumentIngest,
         existing_status: Mapping[str, Any] | None,
-    ) -> dict[str, Any] | None:
+    ) -> _DocumentIngestDecision | None:
         stored_hash = _mapping_get(existing_status, "content_hash")
         if _normalized_status(existing_status) != "processed" or not stored_hash:
             return None
@@ -367,21 +386,35 @@ class UnifiedIngestionEngine:
             return None
 
         chunks = list(_mapping_get(existing_status, "chunks_list") or [])
-        if not entry.metadata_update_requested:
-            return {
+        if not await self._metadata_update_required(entry):
+            return _DocumentIngestDecision(
+                enqueue=False,
+                result={
+                    "doc_id": entry.doc_id,
+                    "source_kind": "skipped",
+                    "reason": "content_hash_match",
+                    "chunks": chunks,
+                },
+            )
+
+        return _DocumentIngestDecision(
+            enqueue=False,
+            metadata_update=True,
+            result={
                 "doc_id": entry.doc_id,
-                "source_kind": "skipped",
+                "source_kind": "metadata_updated",
                 "reason": "content_hash_match",
                 "chunks": chunks,
-            }
+            },
+        )
 
-        await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
-        return {
-            "doc_id": entry.doc_id,
-            "source_kind": "metadata_updated",
-            "reason": "content_hash_match",
-            "chunks": chunks,
-        }
+    async def _metadata_update_required(self, entry: _PendingDocumentIngest) -> bool:
+        persisted = await self._metadata_index.get(entry.doc_id)
+        if not isinstance(persisted, Mapping):
+            return entry.metadata_update_requested
+        return _hash_match_metadata_record(entry.metadata_record) != _hash_match_metadata_record(
+            persisted
+        )
 
     def _prepare_metadata_record(
         self,
@@ -677,9 +710,45 @@ def _with_finalized_local_download_locator(
     return finalized
 
 
+def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str, Any]:
+    comparable = {
+        "filename": metadata_record.get("filename"),
+        "filename_stem": metadata_record.get("filename_stem"),
+        "file_path": metadata_record.get("file_path"),
+        "source_uri": metadata_record.get("source_uri"),
+        "download_locator": metadata_record.get("download_locator"),
+        "file_extension": metadata_record.get("file_extension"),
+        "ingest_strategy": metadata_record.get("ingest_strategy"),
+        "doc_title": metadata_record.get("doc_title"),
+        "doc_author": metadata_record.get("doc_author"),
+        "user_metadata": deepcopy(metadata_record.get("user_metadata")),
+        "metadata_filterable": deepcopy(metadata_record.get("metadata_filterable")),
+        "metadata_json": deepcopy(metadata_record.get("metadata_json")),
+    }
+    for field in ("file_path", "download_locator"):
+        comparable[field] = _canonicalize_local_metadata_locator(comparable[field])
+    return comparable
+
+
+def _canonicalize_local_metadata_locator(locator: Any) -> Any:
+    if not isinstance(locator, str) or "://" in locator:
+        return locator
+    return str(lightrag_archived_source_path(Path(locator)).resolve())
+
+
 def _raw_path_source_uri(path: Path, *, workspace: str) -> str:
     digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
     return local_source_uri(workspace, Path(digest) / path.name)
+
+
+def _source_contract_override_requested(item: PreparedIngestFile, *, workspace: str) -> bool:
+    default_source_uri = _raw_path_source_uri(item.parser_path, workspace=workspace)
+    default_download_locator = str(item.parser_path.resolve())
+    return (
+        item.source_uri != default_source_uri
+        or item.download_locator != default_download_locator
+        or (item.display_filename is not None and item.display_filename != item.parser_path.name)
+    )
 
 
 def _overlay_metadata(

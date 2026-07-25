@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from lightrag.base import DocStatus
+from lightrag.parser.routing import FilenameParserHintError
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
@@ -20,6 +21,7 @@ from dlightrag.core.ingestion.engine import (
     PreparedIngestFile,
     UnifiedIngestionEngine,
     _prepare_ingest_item,
+    _raw_path_source_uri,
 )
 from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
@@ -61,6 +63,7 @@ def _make_engine(**overrides):
         "chunk_options": {},
     }
     defaults.update(overrides)
+    defaults["metadata_index"].get.return_value = None
     return UnifiedIngestionEngine(**defaults), defaults
 
 
@@ -494,6 +497,180 @@ async def test_batch_hash_match_skip_does_not_resolve_invalid_parser_directives(
         ],
     }
     assert result["results"][0] == single_result
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_batch_replace_validates_all_enqueue_candidates_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    good = tmp_path / "good.pdf"
+    bad = tmp_path / "bad.[unknown-iteP].pdf"
+    good.write_bytes(b"%PDF-1.4 good")
+    bad.write_bytes(b"%PDF-1.4 bad")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        {"chunks_list": ["chunk-good"], "content_hash": "sha256:good", "status": "processed"},
+        {"chunks_list": ["chunk-bad"], "content_hash": "sha256:bad", "status": "processed"},
+    ]
+
+    with pytest.raises(FilenameParserHintError):
+        await engine.aingest_files([good, bad], replace=True)
+
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["metadata_index"].delete.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    deps["lightrag"].apipeline_process_enqueue_documents.assert_not_awaited()
+
+
+async def test_batch_hash_match_metadata_update_waits_for_enqueue_validation(
+    tmp_path: Path,
+) -> None:
+    content = b"%PDF-1.4"
+    first = tmp_path / "first.pdf"
+    bad = tmp_path / "bad.[unknown-iteP].pdf"
+    first.write_bytes(content)
+    bad.write_bytes(b"%PDF-1.4 bad")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        {"chunks_list": ["chunk-first"], "content_hash": _sha256(content), "status": "processed"},
+        None,
+    ]
+    deps["metadata_index"].get.return_value = {
+        "filename": "first.pdf",
+        "filename_stem": "first",
+        "file_path": str(first),
+        "source_uri": "local://default/first.pdf",
+        "download_locator": str(first),
+        "file_extension": "pdf",
+        "ingest_strategy": "lightrag_sidecar_unified",
+        "doc_title": "Old title",
+        "user_metadata": {},
+        "metadata_filterable": {},
+        "metadata_json": {},
+    }
+
+    with pytest.raises(FilenameParserHintError):
+        await engine.aingest_files(
+            [
+                PreparedIngestFile(
+                    parser_path=first,
+                    source_uri="local://default/first.pdf",
+                    download_locator=str(first),
+                    title="Updated title",
+                ),
+                bad,
+            ],
+            replace=False,
+        )
+
+    deps["metadata_index"].get.assert_awaited_once()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    deps["lightrag"].apipeline_process_enqueue_documents.assert_not_awaited()
+
+
+async def test_batch_partial_cleanup_waits_for_enqueue_validation(
+    tmp_path: Path,
+) -> None:
+    good = tmp_path / "good.pdf"
+    bad = tmp_path / "bad.[unknown-iteP].pdf"
+    good.write_bytes(b"%PDF-1.4 good")
+    bad.write_bytes(b"%PDF-1.4 bad")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        {"chunks_list": ["chunk-good"], "content_hash": "sha256:stale", "status": "analyzing"},
+        None,
+    ]
+
+    with pytest.raises(FilenameParserHintError):
+        await engine.aingest_files([good, bad], replace=False)
+
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["metadata_index"].delete.assert_not_awaited()
+    deps["metadata_index"].upsert.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    deps["lightrag"].apipeline_process_enqueue_documents.assert_not_awaited()
+
+
+async def test_single_hash_match_source_contract_change_updates_metadata(
+    tmp_path: Path,
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    deps["metadata_index"].get.return_value = {
+        "filename": "sample.pdf",
+        "filename_stem": "sample",
+        "file_path": "https://cdn.example.com/old-sample.pdf",
+        "source_uri": "bynder://asset/old",
+        "download_locator": "https://cdn.example.com/old-sample.pdf",
+        "file_extension": "pdf",
+        "ingest_strategy": "lightrag_sidecar_unified",
+        "user_metadata": {},
+        "metadata_filterable": {},
+        "metadata_json": {},
+    }
+
+    result = await engine.aingest_file(
+        source,
+        source_uri="bynder://asset/new",
+        download_locator="https://cdn.example.com/new-sample.pdf",
+        display_filename="renamed-sample.pdf",
+        replace=False,
+    )
+
+    assert result == {
+        "doc_id": compute_mdhash_id(normalize_document_file_path(source), prefix="doc-"),
+        "source_kind": "metadata_updated",
+        "reason": "content_hash_match",
+        "chunks": ["chunk-a"],
+    }
+    deps["metadata_index"].upsert.assert_awaited_once()
+    _, saved = deps["metadata_index"].upsert.await_args.args
+    assert saved["filename"] == "renamed-sample.pdf"
+    assert saved["filename_stem"] == "renamed-sample"
+    assert saved["file_path"] == "https://cdn.example.com/new-sample.pdf"
+    assert saved["source_uri"] == "bynder://asset/new"
+    assert saved["download_locator"] == "https://cdn.example.com/new-sample.pdf"
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_single_hash_match_local_noop_skips_when_persisted_metadata_matches(
+    tmp_path: Path,
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    deps["metadata_index"].get.return_value = {
+        "filename": "sample.pdf",
+        "filename_stem": "sample",
+        "file_path": str((source.parent / "__parsed__" / source.name).resolve()),
+        "source_uri": _raw_path_source_uri(source, workspace="default"),
+        "download_locator": str((source.parent / "__parsed__" / source.name).resolve()),
+        "file_extension": "pdf",
+        "ingest_strategy": "lightrag_sidecar_unified",
+        "user_metadata": {},
+        "metadata_filterable": {},
+        "metadata_json": {},
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result["source_kind"] == "skipped"
     deps["metadata_index"].upsert.assert_not_awaited()
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
