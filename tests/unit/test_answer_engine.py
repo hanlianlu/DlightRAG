@@ -2,7 +2,8 @@
 """Tests for AnswerEngine messages-first interface."""
 
 import base64
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -160,6 +161,52 @@ class TestAnswerEngineGenerate:
         assert len(result.references) == 1
         assert result.references[0].id == "2"
         assert result.references[0].title == "other.pdf"
+
+    @pytest.mark.asyncio
+    async def test_generate_passes_prepared_indexer_to_finalize_answer(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import dlightrag.core.answer.engine as answer_module
+        from dlightrag.citations.indexer import CitationIndexer
+
+        sentinel_indexer = CitationIndexer()
+        prepared_contexts = _text_contexts()
+        prepared = answer_module._PreparedModelCall(
+            contexts=prepared_contexts,
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}],
+            indexer=sentinel_indexer,
+            trace={
+                "answer_context_chunks": 1,
+                "answer_context_target_chunks": 1,
+                "answer_context_images_sent": 0,
+                "answer_context_images_skipped": 0,
+            },
+            no_context=False,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):  # noqa: ANN001, ANN202
+            return prepared
+
+        finalize_answer = Mock(return_value=SimpleNamespace(answer="done", sources=[]))
+        monkeypatch.setattr(
+            answer_module,
+            "asyncio",
+            SimpleNamespace(to_thread=fake_to_thread),
+            raising=False,
+        )
+        monkeypatch.setattr("dlightrag.citations.finalize_answer", finalize_answer)
+
+        model_func = AsyncMock(return_value="raw answer")
+        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+
+        await engine.generate("query", _text_contexts())
+
+        finalize_answer.assert_called_once_with(
+            "raw answer",
+            prepared_contexts,
+            indexer=sentinel_indexer,
+        )
 
     @pytest.mark.asyncio
     async def test_generate_no_model_func(self) -> None:
@@ -541,8 +588,6 @@ class TestAnswerEngineStream:
 
     @pytest.mark.asyncio
     async def test_generate_stream_prepares_model_payload_off_event_loop(self, monkeypatch) -> None:
-        from types import SimpleNamespace
-
         import dlightrag.core.answer.engine as answer_module
 
         calls = []

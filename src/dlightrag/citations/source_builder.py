@@ -25,6 +25,7 @@ def build_sources(
     contexts: RetrievalContexts,
     *,
     indexer: CitationIndexer | None = None,
+    enriched_chunks: list[dict[str, Any]] | None = None,
     image_url_prefix: str | None = "/images",
     default_workspace: str | None = None,
 ) -> list[SourceReference]:
@@ -39,6 +40,7 @@ def build_sources(
     return build_sources_from_chunks(
         contexts.get("chunks", []),
         indexer=indexer,
+        enriched_chunks=enriched_chunks,
         image_url_prefix=image_url_prefix,
         default_workspace=default_workspace,
     )
@@ -48,19 +50,22 @@ def build_sources_from_chunks(
     chunks: list[dict[str, Any]],
     *,
     indexer: CitationIndexer | None = None,
+    enriched_chunks: list[dict[str, Any]] | None = None,
     cited_chunks: dict[str, list[str]] | None = None,
     source_catalog: list[SourceReference] | None = None,
     image_url_prefix: str | None = "/images",
     default_workspace: str | None = None,
 ) -> list[SourceReference]:
     """Project chunk contexts into document sources using citation index order."""
-    if not chunks:
+    if not chunks and not enriched_chunks:
         return []
 
     if indexer is None:
         indexer = CitationIndexer()
-        indexer.build_index(chunks)
-    chunks = indexer.inject_chunk_idx(chunks)
+        indexer.build_index(chunks or enriched_chunks or [])
+    projected_chunks = (
+        enriched_chunks if enriched_chunks is not None else indexer.inject_chunk_idx(chunks)
+    )
 
     catalog_by_id = {source.id: source for source in source_catalog or []}
     catalog_chunks: dict[str, dict[str, ChunkSnippet]] = {}
@@ -72,7 +77,7 @@ def build_sources_from_chunks(
 
     # Group by reference_id, preserving first-appearance order
     groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
-    for chunk in chunks:
+    for chunk in projected_chunks:
         ref_id = str(chunk.get("reference_id", ""))
         if not ref_id:
             continue

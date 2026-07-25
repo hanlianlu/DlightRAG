@@ -171,7 +171,7 @@ class AnswerEngine:
         # not from model-generated reference-section text.
         from dlightrag.citations import finalize_answer
 
-        finalized = finalize_answer(raw, prepared.contexts)
+        finalized = finalize_answer(raw, prepared.contexts, indexer=prepared.indexer)
 
         logger.info(
             "[AE] generate: parsed sources=%d answer_len=%d",

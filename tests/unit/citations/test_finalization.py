@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for shared answer finalization."""
 
+from unittest.mock import MagicMock
+
 
 class TestFinalizeAnswer:
     def test_compact_attachment_reference_preserves_durable_identity(self) -> None:
@@ -102,6 +104,52 @@ class TestFinalizeAnswer:
         assert result.sources == []
         assert result.cited_chunks == {}
         assert result.flat_contexts == []
+
+    def test_supplied_indexer_is_not_rebuilt_and_chunk_idx_is_injected_once(
+        self,
+        monkeypatch,
+    ) -> None:
+        from dlightrag.citations.finalization import finalize_answer, flatten_context_chunks
+        from dlightrag.citations.indexer import CitationIndexer
+
+        contexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "file_path": "/docs/report.pdf",
+                    "content": "Evidence.",
+                    "_workspace": "default",
+                    "metadata": {
+                        "source_uri": "local://default/report.pdf",
+                        "source_download_locator": "/docs/report.pdf",
+                    },
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+        indexer = CitationIndexer()
+        indexer.build_index(flatten_context_chunks(contexts))
+
+        build_index = MagicMock(side_effect=AssertionError("finalize_answer rebuilt the indexer"))
+        inject_calls = 0
+        original_inject = indexer.inject_chunk_idx
+
+        def counted_inject(context_rows):  # noqa: ANN001, ANN202
+            nonlocal inject_calls
+            inject_calls += 1
+            return original_inject(context_rows)
+
+        monkeypatch.setattr(indexer, "build_index", build_index)
+        monkeypatch.setattr(indexer, "inject_chunk_idx", counted_inject)
+
+        result = finalize_answer("Answer cites [1-1].", contexts, indexer=indexer)
+
+        assert result.cited_chunks == {"1": ["c1"]}
+        assert result.flat_contexts[0]["chunk_idx"] == 1
+        build_index.assert_not_called()
+        assert inject_calls == 1
 
     def test_reuses_one_citation_index_for_sources_and_validation(self, monkeypatch) -> None:
         from dlightrag.citations import indexer as indexer_module

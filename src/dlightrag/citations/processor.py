@@ -34,12 +34,18 @@ class CitationProcessor:
         available_sources: list[SourceReference],
         *,
         indexer: CitationIndexer | None = None,
+        enriched_contexts: list[dict[str, Any]] | None = None,
     ) -> None:
+        self._contexts = contexts
         self._available_sources = available_sources
         self._indexer = indexer or CitationIndexer()
         if indexer is None:
             self._indexer.build_index(contexts)
-        self._enriched_contexts = self._indexer.inject_chunk_idx(contexts)
+        self._enriched_contexts = (
+            enriched_contexts
+            if enriched_contexts is not None
+            else self._indexer.inject_chunk_idx(contexts)
+        )
 
     def process(self, answer_text: str) -> CitationResult:
         """Clean citations, extract chunks, build source references."""
@@ -60,8 +66,9 @@ class CitationProcessor:
             return []
 
         sources = build_sources_from_chunks(
-            self._enriched_contexts,
+            self._contexts,
             indexer=self._indexer,
+            enriched_chunks=self._enriched_contexts,
             cited_chunks=cited_chunks,
             source_catalog=self._available_sources,
         )
