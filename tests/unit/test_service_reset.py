@@ -2,6 +2,7 @@
 """Tests for RAGService.areset() — 6-phase workspace reset via dlightrag.core.reset."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -81,29 +82,32 @@ class TestAresetPhase0:
 
     async def test_cancels_worker_pools(self) -> None:
         service = _make_service()
-        # Create a separate lightrag mock with worker pool shutdown
-        lr = MagicMock()
-        shutdown_mock = AsyncMock()
-        inner_func = MagicMock()
-        inner_func.shutdown = shutdown_mock
-        embedding_func = MagicMock()
-        embedding_func.func = inner_func
+        with patch(
+            "dlightrag.core.reset.shutdown_lightrag_worker_pools",
+            new_callable=AsyncMock,
+            return_value=2,
+        ) as shutdown:
+            result = await service.areset()
+
+        assert result["pending_tasks_cancelled"] == 2
+        shutdown.assert_awaited_once_with(service.lightrag, dry_run=False)
+
+    async def test_dry_run_counts_worker_pools_without_shutting_down(self) -> None:
+        service = _make_service()
+        inner_func = SimpleNamespace(shutdown=AsyncMock())
+        embedding_func = SimpleNamespace(func=inner_func)
+        lr = SimpleNamespace()
         lr.embedding_func = embedding_func
-        lr.llm_model_func = MagicMock(spec=[])  # no shutdown
-        role_shutdown = AsyncMock()
-        role_func = MagicMock()
-        role_func.shutdown = role_shutdown
+        lr.llm_model_func = SimpleNamespace()
+        role_func = SimpleNamespace(shutdown=AsyncMock())
         lr.role_llm_funcs = {"query": role_func}
-        # Give it a droppable storage so Phase 1 works
-        storage = MagicMock()
-        storage.drop = AsyncMock()
-        lr.__dict__["chunks_vdb"] = storage
+        lr.chunks_vdb = SimpleNamespace(drop=AsyncMock())
         service._lightrag = lr
 
-        result = await service.areset()
-        assert result["pending_tasks_cancelled"] >= 2
-        shutdown_mock.assert_awaited_once()
-        role_shutdown.assert_awaited_once()
+        result = await service.areset(dry_run=True)
+        assert result["pending_tasks_cancelled"] == 2
+        inner_func.shutdown.assert_not_called()
+        role_func.shutdown.assert_not_called()
 
 
 class TestAresetPhase1:

@@ -37,6 +37,7 @@ from dlightrag.core.ingestion.paths import (
     staged_input_path,
     workspace_input_root,
 )
+from dlightrag.core.lightrag_lifecycle import shutdown_lightrag_worker_pools
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import (
@@ -1069,33 +1070,7 @@ class RAGService:
 
     async def _shutdown_worker_pools(self) -> None:
         """Shutdown LightRAG priority-queue worker pools."""
-        lr = self.lightrag
-        if lr is None:
-            return
-
-        from dlightrag.utils.concurrency import shutdown_async_callable
-
-        funcs: list[tuple[str, Any]] = []
-        for attr in ("embedding_func", "llm_model_func", "rerank_model_func"):
-            try:
-                obj = getattr(lr, attr, None)
-                funcs.append((attr, getattr(obj, "func", obj)))
-            except Exception:  # noqa: BLE001
-                logger.debug("Failed to collect %s worker pool", attr, exc_info=True)
-
-        role_funcs = getattr(lr, "role_llm_funcs", None) or {}
-        items = role_funcs.items() if isinstance(role_funcs, Mapping) else ()
-        funcs.extend((f"role_llm_funcs.{role}", func) for role, func in items)
-
-        seen: set[int] = set()
-        for label, func in funcs:
-            if func is None or id(func) in seen:
-                continue
-            seen.add(id(func))
-            try:
-                await shutdown_async_callable(func)
-            except Exception:  # noqa: BLE001
-                logger.debug("Failed to shutdown %s worker pool", label, exc_info=True)
+        await shutdown_lightrag_worker_pools(self.lightrag)
 
     async def _upsert_workspace_meta(self, *, display_name: str | None = None) -> None:
         """Persist this workspace in DlightRAG's PostgreSQL registry."""

@@ -179,28 +179,19 @@ class TestRAGServiceClose:
     ) -> None:
         service = RAGService(config=test_config)
         service._initialized = True
-        query_func = MagicMock()
-        query_func.shutdown = AsyncMock()
-        extract_func = MagicMock()
-        extract_func.shutdown = AsyncMock()
-        embedding_func = MagicMock()
-        embedding_func.shutdown = AsyncMock()
         lightrag = MagicMock()
-        lightrag.embedding_func = MagicMock(func=embedding_func)
-        lightrag.llm_model_func = None
-        lightrag.rerank_model_func = None
-        lightrag.role_llm_funcs = {
-            "query": query_func,
-            "extract": extract_func,
-        }
         lightrag.finalize_storages = AsyncMock()
         service._lightrag = lightrag
 
-        await service.aclose()
+        with patch(
+            "dlightrag.core.service.shutdown_lightrag_worker_pools",
+            new_callable=AsyncMock,
+            return_value=3,
+        ) as shutdown:
+            await service.aclose()
 
-        embedding_func.shutdown.assert_awaited_once()
-        query_func.shutdown.assert_awaited_once()
-        extract_func.shutdown.assert_awaited_once()
+        shutdown.assert_awaited_once_with(lightrag)
+        lightrag.finalize_storages.assert_awaited_once()
 
     async def test_warmup_uses_lightrag_query_param(self, test_config: DlightragConfig) -> None:
         service = RAGService(config=test_config)
