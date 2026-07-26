@@ -77,6 +77,14 @@ def _example_migrations() -> tuple[Migration, ...]:
     )
 
 
+def _three_migrations() -> tuple[Migration, ...]:
+    return (
+        Migration("0001", "first", ("CREATE TABLE example (id TEXT)",)),
+        Migration("0002", "second", ("ALTER TABLE example ADD COLUMN name TEXT",)),
+        Migration("0003", "third", ("CREATE INDEX example_name_idx ON example (name)",)),
+    )
+
+
 async def test_apply_migrations_skips_versions_already_recorded_for_scope() -> None:
     conn = _Conn()
     migrations = _example_migrations()
@@ -194,6 +202,27 @@ async def test_apply_migrations_releases_lock_when_gap_validation_fails() -> Non
     assert executed_sql.count("SELECT pg_advisory_lock($1)") == 1
     assert executed_sql.count("SELECT pg_advisory_unlock($1)") == 1
     assert executed_sql[-1] == "SELECT pg_advisory_unlock($1)"
+
+
+async def test_apply_migrations_can_run_missing_versions_from_non_prefix_ledger() -> None:
+    conn = _Conn()
+    conn.applied.add(("example", "0002"))
+
+    await apply_migrations(
+        conn,
+        scope="example",
+        migrations=_three_migrations(),
+        require_applied_prefix=False,
+    )
+
+    executed_sql = [query for query, _ in conn.executed]
+    assert executed_sql.count("CREATE TABLE example (id TEXT)") == 1
+    assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 0
+    assert executed_sql.count("CREATE INDEX example_name_idx ON example (name)") == 1
+    assert conn.applied == {("example", "0001"), ("example", "0002"), ("example", "0003")}
+    assert executed_sql.index("CREATE TABLE example (id TEXT)") < executed_sql.index(
+        "CREATE INDEX example_name_idx ON example (name)"
+    )
 
 
 async def test_apply_migrations_rejects_duplicate_versions_before_mutating_db() -> None:

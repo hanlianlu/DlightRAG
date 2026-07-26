@@ -179,6 +179,30 @@ async def test_metadata_index_initializes_schema_with_migrations() -> None:
     assert conn.applied == {("doc_metadata", migration.version) for migration in _SCHEMA_MIGRATIONS}
 
 
+async def test_metadata_index_initialization_disables_prefix_only_validation() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+    seen: dict[str, Any] = {}
+
+    async def fake_apply_migrations(conn: Any, **kwargs: Any) -> None:
+        seen["conn"] = conn
+        seen.update(kwargs)
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(object())
+
+    original = pg_metadata_index.apply_migrations
+    pg_metadata_index.apply_migrations = fake_apply_migrations  # type: ignore[assignment]
+    idx._run = run  # type: ignore[method-assign]
+    try:
+        await idx.initialize()
+    finally:
+        pg_metadata_index.apply_migrations = original  # type: ignore[assignment]
+
+    assert seen["scope"] == "doc_metadata"
+    assert seen["migrations"] == _SCHEMA_MIGRATIONS
+    assert seen["require_applied_prefix"] is False
+
+
 async def test_metadata_index_finds_by_exact_file_path() -> None:
     idx = pg_metadata_index.PGMetadataIndex(workspace="default")
     seen: dict[str, Any] = {}

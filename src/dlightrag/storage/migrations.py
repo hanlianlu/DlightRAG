@@ -44,13 +44,23 @@ def _advisory_lock_key(scope: str) -> int:
     return int.from_bytes(digest, "big", signed=True)
 
 
-async def apply_migrations(conn: Any, *, scope: str, migrations: tuple[Migration, ...]) -> None:
+async def apply_migrations(
+    conn: Any,
+    *,
+    scope: str,
+    migrations: tuple[Migration, ...],
+    require_applied_prefix: bool = True,
+) -> None:
     """Ensure idempotent migrations and record their versions in the ledger.
 
     A per-scope session advisory lock serializes concurrent callers (e.g. app
     replicas first-touching a lazily-initialized store), so they cannot race on
     the same ``IF NOT EXISTS`` DDL. RAGService startup already holds a broader
     init lock; this keeps ``apply_migrations`` safe on its own path too.
+
+    ``require_applied_prefix`` keeps static migration scopes fail-fast by
+    default. Dynamic scopes that may insert idempotent declared versions later
+    can opt out and replay any missing versions in the current declared order.
     """
     _validate_unique_versions(migrations)
     lock_key = _advisory_lock_key(scope)
@@ -58,7 +68,12 @@ async def apply_migrations(conn: Any, *, scope: str, migrations: tuple[Migration
     try:
         await conn.execute(_CREATE_LEDGER)
         applied_versions = await _applied_versions_for_scope(conn, scope)
-        _validate_applied_state(scope, migrations, applied_versions)
+        _validate_applied_state(
+            scope,
+            migrations,
+            applied_versions,
+            require_applied_prefix=require_applied_prefix,
+        )
         for migration in migrations:
             if migration.version in applied_versions:
                 continue
@@ -92,8 +107,15 @@ def _validate_unique_versions(migrations: tuple[Migration, ...]) -> None:
 
 
 def _validate_applied_state(
-    scope: str, migrations: tuple[Migration, ...], applied_versions: set[str]
+    scope: str,
+    migrations: tuple[Migration, ...],
+    applied_versions: set[str],
+    *,
+    require_applied_prefix: bool,
 ) -> None:
+    if not require_applied_prefix:
+        return
+
     declared_versions = [migration.version for migration in migrations]
     applied_indices = [
         index for index, version in enumerate(declared_versions) if version in applied_versions
