@@ -253,11 +253,12 @@ class VLMSidecarConfig(BaseModel):
 
     enabled: bool = True
     max_image_bytes: int = Field(default=5_242_880, ge=1)
-    # None (default) defers to LightRAG's built-in DEFAULT_MM_IMAGE_MIN_PIXEL:
-    # DlightRAG does not override the upstream minimum. When left unset the
-    # VLM_MIN_IMAGE_PIXEL env var is not emitted, so LightRAG's own gate applies.
-    # Set an explicit integer only to impose a stricter/looser minimum.
-    min_image_pixel: int | None = Field(default=None, ge=1)
+    # DlightRAG raises the minimum-image-side gate above LightRAG's built-in
+    # DEFAULT_MM_IMAGE_MIN_PIXEL (64) to 80px: sub-80px crops are treated as
+    # decorative (icons, separators, page ornaments) and skipped from VLM
+    # analysis, so they never become hallucinated figure chunks. Emitted as
+    # VLM_MIN_IMAGE_PIXEL. Set None to defer to LightRAG's own gate instead.
+    min_image_pixel: int | None = Field(default=80, ge=1)
     surrounding_leading_max_tokens: int | None = Field(default=256, ge=0)
     surrounding_trailing_max_tokens: int | None = Field(default=256, ge=0)
 

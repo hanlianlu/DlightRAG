@@ -72,9 +72,10 @@ parser_sidecars:
   vlm:
     enabled: true
     max_image_bytes: 5242880
-    # Unset by default: DlightRAG defers to LightRAG's native minimum (64px).
-    # Set an explicit integer only to impose a different minimum image side.
-    # min_image_pixel: 64
+    # DlightRAG default 80px, above LightRAG's native 64px minimum: sub-80px
+    # crops are treated as decorative (icons/separators/ornaments) and skipped
+    # from VLM analysis. Set None to defer to LightRAG's gate, or tune the value.
+    min_image_pixel: 80
   mineru:
     api_mode: local
     local_endpoint: http://127.0.0.1:8210
