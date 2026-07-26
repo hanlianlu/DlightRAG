@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # truncates to the configured token budget before prompting the model.
 MAX_HISTORY_MESSAGES = 100
 MAX_HISTORY_CONTENT_CHARS = 16000
+MAX_BM25_QUERY_CHARS = 1024
+MAX_QUERY_IMAGES = 3
 
 
 class ClientContractModel(BaseModel):
@@ -60,6 +62,30 @@ type QueryImage = ImageURLContentBlock
 
 type SourceType = Literal["local", "azure_blob", "s3", "url"]
 type MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
+
+
+class QueryRequestContract(ClientContractModel):
+    """Shared transport-neutral fields for client query requests."""
+
+    query: str
+    top_k: int | None = None
+    chunk_top_k: int | None = None
+
+
+class RetrieveRequestContract(QueryRequestContract):
+    """Shared transport-neutral contract for retrieve requests."""
+
+    bm25_query: str | None = Field(default=None, max_length=MAX_BM25_QUERY_CHARS)
+    query_images: list[QueryImage] | None = Field(default=None, max_length=MAX_QUERY_IMAGES)
+
+
+class AnswerRequestContract(QueryRequestContract):
+    """Shared transport-neutral contract for answer requests."""
+
+    query_images: list[QueryImage] | None = Field(default=None, max_length=MAX_QUERY_IMAGES)
+    answer_context_top_k: int | None = Field(default=None, ge=1)
+    semantic_highlights: bool = False
+    history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
 
 
 class IngestDocument(ClientContractModel):
@@ -239,15 +265,20 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 __all__ = [
     "ClientContractModel",
     "ConversationMessage",
+    "AnswerRequestContract",
     "ImageURL",
     "ImageURLContentBlock",
     "IngestDocument",
     "IngestPayload",
     "IngestSpec",
+    "MAX_BM25_QUERY_CHARS",
     "MAX_HISTORY_CONTENT_CHARS",
     "MAX_HISTORY_MESSAGES",
+    "MAX_QUERY_IMAGES",
     "MetadataPolicy",
     "QueryImage",
+    "QueryRequestContract",
+    "RetrieveRequestContract",
     "SourceType",
     "conversation_history_as_dicts",
     "dump_optional_list",

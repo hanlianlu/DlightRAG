@@ -16,10 +16,10 @@ parameters to avoid circular imports. The public API remains
 
 import logging
 import shutil
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from dlightrag.core.lightrag_lifecycle import shutdown_lightrag_worker_pools
 from dlightrag.utils import log_safe, normalize_workspace
 
 logger = logging.getLogger(__name__)
@@ -203,39 +203,7 @@ async def _cancel_pending_tasks(service: Any, *, dry_run: bool) -> int:
 
     Returns count of cancelled items.
     """
-    cancelled = 0
-
-    lr = service.lightrag
-    if lr is not None:
-        from dlightrag.utils.concurrency import shutdown_async_callable
-
-        funcs: list[tuple[str, Any]] = []
-        for attr in ("embedding_func", "llm_model_func", "rerank_model_func"):
-            try:
-                obj = getattr(lr, attr, None)
-                funcs.append((attr, getattr(obj, "func", obj)))
-            except Exception:  # noqa: BLE001
-                logger.debug("Failed to collect %s worker pool", attr, exc_info=True)
-
-        role_funcs = getattr(lr, "role_llm_funcs", None) or {}
-        items = role_funcs.items() if isinstance(role_funcs, Mapping) else ()
-        funcs.extend((f"role_llm_funcs.{role}", func) for role, func in items)
-
-        seen: set[int] = set()
-        for label, func in funcs:
-            if func is None or id(func) in seen:
-                continue
-            seen.add(id(func))
-            if not callable(getattr(func, "shutdown", None)):
-                continue
-            try:
-                if not dry_run:
-                    await shutdown_async_callable(func)
-                cancelled += 1
-            except Exception:  # noqa: BLE001
-                logger.debug("Failed to shutdown %s worker pool", label, exc_info=True)
-
-    return cancelled
+    return await shutdown_lightrag_worker_pools(service.lightrag, dry_run=dry_run)
 
 
 async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:

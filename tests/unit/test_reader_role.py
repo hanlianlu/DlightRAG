@@ -1,7 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit tests for the read-only replica reader role."""
 
+import asyncio
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -159,3 +162,296 @@ class TestReadOnlyAdapter:
         # It inherits LightRAG's reconnect/retry machinery unchanged.
         assert ReadOnlyPostgreSQLDB._ensure_pool is PostgreSQLDB._ensure_pool
         assert ReadOnlyPostgreSQLDB._run_with_retry is PostgreSQLDB._run_with_retry
+
+    async def test_attach_entry_point_initializes_binds_schema_and_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.storage.lightrag_readonly as readonly
+
+        class FakeConn:
+            def __init__(self) -> None:
+                self.fetchval_calls: list[tuple[str, tuple[Any, ...]]] = []
+
+            async def fetchval(self, sql: str, *args: Any) -> Any:
+                self.fetchval_calls.append((sql, args))
+                if sql == "SHOW transaction_read_only":
+                    return "on"
+                if "SELECT 1 FROM " in sql:
+                    return 1
+                if "FROM pg_tables" in sql:
+                    return 1
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+        class FakeAcquire:
+            def __init__(self, conn: FakeConn) -> None:
+                self._conn = conn
+
+            async def __aenter__(self) -> FakeConn:
+                return self._conn
+
+            async def __aexit__(self, *_exc: object) -> bool:
+                return False
+
+        class FakePool:
+            def __init__(self, conn: FakeConn) -> None:
+                self._conn = conn
+
+            def acquire(self) -> FakeAcquire:
+                return FakeAcquire(self._conn)
+
+        class FakeDB:
+            def __init__(self, db_config: dict[str, Any]) -> None:
+                self.db_config = db_config
+                self.workspace = "db-workspace"
+                self.pool = FakePool(conn)
+                self.initdb = AsyncMock()
+
+        class GraphStorage:
+            def __init__(self) -> None:
+                self.db = None
+                self.workspace = None
+                self.graph_name = "stale"
+
+            def _get_workspace_graph_name(self) -> str:
+                return f"graph::{self.workspace}"
+
+        conn = FakeConn()
+        set_workspace_calls: list[str | None] = []
+        init_pipeline_status = AsyncMock()
+        manager = SimpleNamespace(
+            _lock=asyncio.Lock(),
+            _instances={"db": None, "ref_count": 0, "vector_signature": None},
+            get_config=lambda *, vector_storage=None: {
+                "database": "db",
+                "vector_storage": vector_storage,
+            },
+            _build_vector_signature=lambda config, vector_storage: {
+                "database": config["database"],
+                "vector_storage": vector_storage,
+            },
+        )
+        manager._assert_compatible_vector_signature = lambda signature: None
+        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+        monkeypatch.setattr(readonly, "ReadOnlyPostgreSQLDB", FakeDB, raising=False)
+        monkeypatch.setattr(
+            readonly,
+            "namespace_to_table_name",
+            lambda namespace: {"full_docs": "LIGHTRAG_DOC_FULL"}.get(namespace),
+            raising=False,
+        )
+        monkeypatch.setattr(readonly, "get_default_workspace", lambda: None, raising=False)
+        monkeypatch.setattr(
+            readonly,
+            "set_default_workspace",
+            lambda workspace=None: set_workspace_calls.append(workspace),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            readonly,
+            "initialize_pipeline_status",
+            init_pipeline_status,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            readonly,
+            "StoragesStatus",
+            SimpleNamespace(INITIALIZED="initialized"),
+            raising=False,
+        )
+
+        graph = GraphStorage()
+        full_docs = SimpleNamespace(db=None, workspace=None, namespace="full_docs", table_name=None)
+        chunks_vdb = SimpleNamespace(
+            db=None,
+            workspace=None,
+            namespace=None,
+            table_name="LIGHTRAG_DOC_CHUNKS",
+        )
+        llm_cache = SimpleNamespace(
+            db=None, workspace="kept-workspace", namespace=None, table_name=None
+        )
+        lightrag = SimpleNamespace(
+            workspace="reader-workspace",
+            full_docs=full_docs,
+            text_chunks=None,
+            full_entities=None,
+            full_relations=None,
+            entity_chunks=None,
+            relation_chunks=None,
+            entities_vdb=None,
+            relationships_vdb=None,
+            chunks_vdb=chunks_vdb,
+            chunk_entity_relation_graph=graph,
+            llm_response_cache=llm_cache,
+            doc_status=None,
+        )
+
+        await readonly.attach_lightrag_storages_read_only(
+            lightrag, config=_config(service_role="reader")
+        )
+
+        db = manager._instances["db"]
+        assert isinstance(db, FakeDB)
+        db.initdb.assert_awaited_once()
+        assert manager._instances["ref_count"] == 4
+        assert manager._instances["vector_signature"] == {
+            "database": "db",
+            "vector_storage": _config(service_role="reader").vector_storage,
+        }
+        assert full_docs.db is db
+        assert chunks_vdb.db is db
+        assert llm_cache.db is db
+        assert full_docs.workspace == "db-workspace"
+        assert chunks_vdb.workspace == "db-workspace"
+        assert graph.workspace == "db-workspace"
+        assert graph.graph_name == "graph::db-workspace"
+        init_pipeline_status.assert_awaited_once_with(workspace="reader-workspace")
+        assert set_workspace_calls == ["reader-workspace"]
+        assert lightrag._storages_status == "initialized"
+        assert lightrag._owning_loop is asyncio.get_running_loop()
+        assert any(sql == "SHOW transaction_read_only" for sql, _ in conn.fetchval_calls)
+        assert any("SELECT 1 FROM " in sql for sql, _ in conn.fetchval_calls)
+        assert any("FROM pg_tables" in sql for sql, _ in conn.fetchval_calls)
+
+    async def test_attach_entry_point_reuses_db_and_preserves_signature_checks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.storage.lightrag_readonly as readonly
+
+        class FakeConn:
+            async def fetchval(self, sql: str, *args: Any) -> Any:
+                if sql == "SHOW transaction_read_only":
+                    return "on"
+                if "SELECT 1 FROM " in sql:
+                    return 1
+                if "FROM pg_tables" in sql:
+                    return 1
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+        class FakeAcquire:
+            def __init__(self, conn: FakeConn) -> None:
+                self._conn = conn
+
+            async def __aenter__(self) -> FakeConn:
+                return self._conn
+
+            async def __aexit__(self, *_exc: object) -> bool:
+                return False
+
+        existing_db = SimpleNamespace(
+            pool=SimpleNamespace(acquire=lambda: FakeAcquire(FakeConn())), workspace=""
+        )
+        seen_signatures: list[dict[str, Any]] = []
+        manager = SimpleNamespace(
+            _lock=asyncio.Lock(),
+            _instances={"db": existing_db, "ref_count": 7, "vector_signature": {"database": "db"}},
+            get_config=lambda *, vector_storage=None: {"database": "db"},
+            _build_vector_signature=lambda config, vector_storage: {"database": config["database"]},
+            _assert_compatible_vector_signature=lambda signature: seen_signatures.append(signature),
+        )
+        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+        monkeypatch.setattr(
+            readonly,
+            "namespace_to_table_name",
+            lambda namespace: "LIGHTRAG_DOC_FULL",
+            raising=False,
+        )
+        monkeypatch.setattr(readonly, "get_default_workspace", lambda: "already-set", raising=False)
+        monkeypatch.setattr(readonly, "set_default_workspace", AsyncMock(), raising=False)
+        monkeypatch.setattr(
+            readonly,
+            "initialize_pipeline_status",
+            AsyncMock(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            readonly,
+            "StoragesStatus",
+            SimpleNamespace(INITIALIZED="initialized"),
+            raising=False,
+        )
+
+        lightrag = SimpleNamespace(
+            workspace="reader-workspace",
+            full_docs=SimpleNamespace(
+                db=None, workspace=None, namespace="full_docs", table_name=None
+            ),
+            text_chunks=None,
+            full_entities=None,
+            full_relations=None,
+            entity_chunks=None,
+            relation_chunks=None,
+            entities_vdb=None,
+            relationships_vdb=None,
+            chunks_vdb=None,
+            chunk_entity_relation_graph=None,
+            llm_response_cache=None,
+            doc_status=None,
+        )
+
+        await readonly.attach_lightrag_storages_read_only(
+            lightrag, config=_config(service_role="reader")
+        )
+
+        assert manager._instances["db"] is existing_db
+        assert manager._instances["ref_count"] == 8
+        assert seen_signatures == [{"database": "db"}]
+
+    async def test_attach_entry_point_signature_mismatch_keeps_refcount(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.storage.lightrag_readonly as readonly
+
+        class FakeConn:
+            async def fetchval(self, sql: str, *args: Any) -> Any:
+                raise AssertionError(f"schema should not be queried after signature failure: {sql}")
+
+        class FakeAcquire:
+            def __init__(self, conn: FakeConn) -> None:
+                self._conn = conn
+
+            async def __aenter__(self) -> FakeConn:
+                return self._conn
+
+            async def __aexit__(self, *_exc: object) -> bool:
+                return False
+
+        existing_db = SimpleNamespace(
+            pool=SimpleNamespace(acquire=lambda: FakeAcquire(FakeConn())), workspace=""
+        )
+        manager = SimpleNamespace(
+            _lock=asyncio.Lock(),
+            _instances={"db": existing_db, "ref_count": 5, "vector_signature": {"database": "db"}},
+            get_config=lambda *, vector_storage=None: {"database": "db"},
+            _build_vector_signature=lambda config, vector_storage: {"database": config["database"]},
+            _assert_compatible_vector_signature=lambda signature: (_ for _ in ()).throw(
+                RuntimeError("vector mismatch")
+            ),
+        )
+        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+
+        lightrag = SimpleNamespace(
+            workspace="reader-workspace",
+            full_docs=SimpleNamespace(
+                db=None, workspace=None, namespace="full_docs", table_name=None
+            ),
+            text_chunks=None,
+            full_entities=None,
+            full_relations=None,
+            entity_chunks=None,
+            relation_chunks=None,
+            entities_vdb=None,
+            relationships_vdb=None,
+            chunks_vdb=None,
+            chunk_entity_relation_graph=None,
+            llm_response_cache=None,
+            doc_status=None,
+        )
+
+        with pytest.raises(RuntimeError, match="vector mismatch"):
+            await readonly.attach_lightrag_storages_read_only(
+                lightrag,
+                config=_config(service_role="reader"),
+            )
+
+        assert manager._instances["ref_count"] == 5

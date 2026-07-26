@@ -489,42 +489,13 @@ class QueryPlanner:
         if _planner_request_tokens(system_prompt, planner_input) > _PLANNER_INPUT_TOKEN_ENVELOPE:
             return QueryPlan.fallback(query, "fallback_input_overflow")
 
-        # LLM call with adaptive retry (up to 2 retries with exponential backoff)
-        _MAX_RETRIES = 2
-        response: str | None = None
         llm_start = time.monotonic()
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                response = await self._call_llm(
-                    planner_input, system_prompt, structured_output=structured_output
-                )
-                logger.info(
-                    "[Planner] LLM call: %.1fs (attempt %d)",
-                    time.monotonic() - llm_start,
-                    attempt,
-                )
-                break
-            except Exception:
-                if attempt < _MAX_RETRIES:
-                    delay = 2**attempt  # 1s, 2s
-                    logger.warning(
-                        "QueryPlanner LLM call failed (attempt %d/%d), retrying in %ds",
-                        attempt + 1,
-                        _MAX_RETRIES + 1,
-                        delay,
-                        exc_info=True,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.warning(
-                        "QueryPlanner LLM call failed after %d attempts (%.1fs)",
-                        _MAX_RETRIES + 1,
-                        time.monotonic() - llm_start,
-                        exc_info=True,
-                    )
-                    return QueryPlan.fallback(query, "fallback_provider_error")
-
-        # Parse response (response is guaranteed str here; None means all retries failed)
+        response = await self._call_llm_with_retry(
+            planner_input,
+            system_prompt,
+            structured_output=structured_output,
+            start_time=llm_start,
+        )
         if response is None:
             return QueryPlan.fallback(query, "fallback_provider_error")
         plan = self._parse_response(response, query, structured_output=structured_output)

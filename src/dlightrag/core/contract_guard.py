@@ -29,11 +29,29 @@ class LightRAGContractGuard:
     _BM25_COLUMNS = {"id", "content", "file_path"}
     _CONFIGURE_AGE_PARAMS = ("connection", "graph_name")
     _EXECUTE_PARAMS = ("self", "sql", "data", "upsert", "ignore_if_exists")
+    _CLIENT_MANAGER_CONFIG_PARAMS = ("vector_storage",)
+    _CLIENT_MANAGER_BUILD_SIGNATURE_PARAMS = ("config", "vector_storage")
+    _CLIENT_MANAGER_ASSERT_SIGNATURE_PARAMS = ("requested_signature",)
+    _NAMESPACE_TO_TABLE_NAME_PARAMS = ("namespace",)
+    _READ_ONLY_STORAGE_ATTRS = (
+        "full_docs",
+        "text_chunks",
+        "full_entities",
+        "full_relations",
+        "entity_chunks",
+        "relation_chunks",
+        "entities_vdb",
+        "relationships_vdb",
+        "chunks_vdb",
+        "chunk_entity_relation_graph",
+        "llm_response_cache",
+        "doc_status",
+    )
 
     def __init__(self, lightrag: Any) -> None:
         self._lightrag = lightrag
 
-    async def verify_all(self) -> None:
+    async def verify_all(self, *, include_read_only_attach_contract: bool = False) -> None:
         """Run all checks, collect errors, raise if any."""
         errors: list[str] = []
         self._require_pg_backend(errors)
@@ -42,6 +60,8 @@ class LightRAGContractGuard:
             await self._check_bm25_table(errors)
             self._check_embedding_func_attr(errors)
             self._check_pool_access(errors)
+            if include_read_only_attach_contract:
+                self._check_read_only_attach_contract(errors)
         self._check_patch_signatures(errors)
         if errors:
             raise RuntimeError(
@@ -49,6 +69,16 @@ class LightRAGContractGuard:
                 f"({len(errors)} issue(s)):\n" + "\n".join(f"  - {e}" for e in errors)
             )
         logger.info("LightRAG contract check passed (backend=postgresql)")
+
+    def verify_read_only_attach_contract(self) -> None:
+        """Validate the private surfaces the read-only attach adapter relies on."""
+        errors: list[str] = []
+        self._check_read_only_attach_contract(errors)
+        if errors:
+            raise RuntimeError(
+                f"LightRAG contract check failed "
+                f"({len(errors)} issue(s)):\n" + "\n".join(f"  - {e}" for e in errors)
+            )
 
     def _require_pg_backend(self, errors: list[str]) -> None:
         """Require chunks_vdb to expose PostgreSQL pool access."""
@@ -124,8 +154,120 @@ class LightRAGContractGuard:
         if not hasattr(vdb.db, "pool"):
             errors.append("chunks_vdb.db missing 'pool' attribute (PG backend expected)")
 
+    def _check_read_only_attach_contract(self, errors: list[str]) -> None:
+        """Check E: reader attach adapter surfaces remain available."""
+        import inspect
+
+        keyword_compatible_kinds = (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        positional_compatible_kinds = (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+
+        def _matches_expected_prefix_with_optional_suffix(
+            signature: inspect.Signature,
+            expected: tuple[str, ...],
+            required_kinds: tuple[tuple[inspect._ParameterKind, ...], ...],
+        ) -> bool:
+            parameters = tuple(signature.parameters.values())
+            param_names = tuple(parameter.name for parameter in parameters)
+            if param_names[: len(expected)] != expected:
+                return False
+            for parameter, allowed_kinds in zip(
+                parameters[: len(expected)], required_kinds, strict=True
+            ):
+                if parameter.kind not in allowed_kinds:
+                    return False
+            for parameter in parameters[len(expected) :]:
+                if parameter.kind in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                ):
+                    continue
+                if parameter.default is inspect.Parameter.empty:
+                    return False
+            return True
+
+        try:
+            from lightrag.kg.postgres_impl import ClientManager, namespace_to_table_name
+        except ImportError as e:
+            errors.append(f"Cannot import reader attach surfaces: {e}")
+            return
+
+        for attr in self._READ_ONLY_STORAGE_ATTRS:
+            if not hasattr(self._lightrag, attr):
+                errors.append(f"LightRAG missing '{attr}' storage attribute for reader attach")
+
+        graph_storage = getattr(self._lightrag, "chunk_entity_relation_graph", None)
+        if graph_storage is not None and not callable(
+            getattr(graph_storage, "_get_workspace_graph_name", None)
+        ):
+            errors.append(
+                "chunk_entity_relation_graph missing callable '_get_workspace_graph_name'"
+            )
+
+        required_client_attrs = (
+            "get_config",
+            "_build_vector_signature",
+            "_assert_compatible_vector_signature",
+            "_lock",
+            "_instances",
+        )
+        for attr in required_client_attrs:
+            if not hasattr(ClientManager, attr):
+                errors.append(f"ClientManager.{attr} missing for reader attach")
+
+        instances = getattr(ClientManager, "_instances", None)
+        if instances is not None:
+            for key in ("db", "ref_count", "vector_signature"):
+                if key not in instances:
+                    errors.append(f"ClientManager._instances missing key '{key}'")
+
+        signature_checks = (
+            (
+                "ClientManager.get_config",
+                getattr(ClientManager, "get_config", None),
+                self._CLIENT_MANAGER_CONFIG_PARAMS,
+                (keyword_compatible_kinds,),
+            ),
+            (
+                "ClientManager._build_vector_signature",
+                getattr(ClientManager, "_build_vector_signature", None),
+                self._CLIENT_MANAGER_BUILD_SIGNATURE_PARAMS,
+                (positional_compatible_kinds, positional_compatible_kinds),
+            ),
+            (
+                "ClientManager._assert_compatible_vector_signature",
+                getattr(ClientManager, "_assert_compatible_vector_signature", None),
+                self._CLIENT_MANAGER_ASSERT_SIGNATURE_PARAMS,
+                (positional_compatible_kinds,),
+            ),
+            (
+                "namespace_to_table_name",
+                namespace_to_table_name,
+                self._NAMESPACE_TO_TABLE_NAME_PARAMS,
+                (positional_compatible_kinds,),
+            ),
+        )
+        for name, value, expected, required_kinds in signature_checks:
+            if value is None or not callable(value):
+                continue
+            try:
+                signature = inspect.signature(value)
+                params = tuple(signature.parameters.keys())
+            except (ValueError, TypeError) as e:
+                errors.append(f"Cannot inspect {name}: {e}")
+                continue
+            if not _matches_expected_prefix_with_optional_suffix(
+                signature, expected, required_kinds
+            ):
+                errors.append(f"{name} signature changed: expected prefix {expected}, got {params}")
+
     def _check_patch_signatures(self, errors: list[str]) -> None:
-        """Check E: PostgreSQLDB method signatures match _lightrag_patches assumptions.
+        """Check F: PostgreSQLDB method signatures match _lightrag_patches assumptions.
 
         PostgreSQLDB is part of the supported storage contract.
         """

@@ -6,6 +6,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.core.request.attachments import ParsedAttachmentBundle
@@ -33,6 +34,21 @@ _STRUCTURE_MARKER_RE = re.compile(
 _STRUCTURAL_SIDECAR_TYPES = frozenset({"table", "drawing", "image", "figure", "equation"})
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedDigestChunk:
+    content: str
+    is_structural: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedDigestDocument:
+    attachment_id: str
+    chunks: list[_PreparedDigestChunk]
+    full_text: str
+    input_tokens: int
+    structural_indices: list[int]
+
+
 def build_attachment_planner_digests(
     documents: list[tuple[str, ParsedAttachmentBundle]],
     *,
@@ -47,40 +63,35 @@ def build_attachment_planner_digests(
     document. Each document has the same semantic maximum; the Planner's total
     input envelope arbitrates aggregate request size.
     """
-    cleaned: list[tuple[str, ParsedAttachmentBundle, list[str], int]] = []
-    for attachment_id, bundle in documents:
-        chunks = [_clean_digest_text(chunk.content) for chunk in bundle.chunks]
-        chunks = [content for content in chunks if content]
-        input_tokens = estimate_tokens("\n\n".join(chunks))
-        cleaned.append((attachment_id, bundle, chunks, input_tokens))
+    prepared = [
+        _prepare_digest_document(attachment_id=attachment_id, bundle=bundle)
+        for attachment_id, bundle in documents
+    ]
 
     document_limit = max(0, max_tokens_per_document)
     budgets = {
-        attachment_id: min(input_tokens, document_limit)
-        for attachment_id, _, _, input_tokens in cleaned
+        document.attachment_id: min(document.input_tokens, document_limit) for document in prepared
     }
     digests: dict[str, str] = {}
     output_tokens = 0
     anchor_tokens = 0
     sample_tokens = 0
     sampled = False
-    for attachment_id, bundle, chunks, input_tokens in cleaned:
+    for document in prepared:
         digest, document_trace = _build_document_planner_digest(
-            bundle=bundle,
-            cleaned_chunks=chunks,
-            input_tokens=input_tokens,
-            token_budget=budgets.get(attachment_id, 0),
+            document=document,
+            token_budget=budgets.get(document.attachment_id, 0),
         )
-        digests[attachment_id] = digest
-        output_tokens += estimate_tokens(digest)
+        digests[document.attachment_id] = digest
+        output_tokens += int(document_trace["output_tokens"])
         anchor_tokens += int(document_trace["anchor_tokens"])
         sample_tokens += int(document_trace["sample_tokens"])
         sampled = sampled or bool(document_trace["sampled"])
 
-    input_tokens = sum(item[3] for item in cleaned)
+    input_tokens = sum(document.input_tokens for document in prepared)
     return digests, {
         "attachment_digest_strategy": "sampled" if sampled else "full",
-        "attachment_digest_documents": len(cleaned),
+        "attachment_digest_documents": len(prepared),
         "attachment_digest_max_tokens_per_document": document_limit,
         "attachment_digest_document_budgets": budgets,
         "attachment_digest_input_tokens": input_tokens,
@@ -93,24 +104,23 @@ def build_attachment_planner_digests(
 
 def _build_document_planner_digest(
     *,
-    bundle: ParsedAttachmentBundle,
-    cleaned_chunks: list[str],
-    input_tokens: int,
+    document: _PreparedDigestDocument,
     token_budget: int,
 ) -> tuple[str, dict[str, int | bool]]:
-    if token_budget <= 0 or not cleaned_chunks:
-        return "", {"anchor_tokens": 0, "sample_tokens": 0, "sampled": False}
+    if token_budget <= 0 or not document.chunks:
+        return "", {"anchor_tokens": 0, "sample_tokens": 0, "output_tokens": 0, "sampled": False}
 
-    full_text = "\n\n".join(cleaned_chunks)
-    if input_tokens <= token_budget and estimate_tokens(full_text) <= token_budget:
-        return full_text, {
+    if document.input_tokens <= token_budget:
+        return document.full_text, {
             "anchor_tokens": 0,
-            "sample_tokens": estimate_tokens(full_text),
+            "sample_tokens": document.input_tokens,
+            "output_tokens": document.input_tokens,
             "sampled": False,
         }
 
+    cleaned_chunks = [chunk.content for chunk in document.chunks]
     anchor_budget = min(_ANCHOR_MAX_TOKENS, int(token_budget * _ANCHOR_RATIO))
-    anchor_indices = _structural_chunk_indices(bundle, cleaned_chunks)
+    anchor_indices = document.structural_indices
     anchor_slots = min(len(anchor_indices), max(1, anchor_budget // 256))
     selected_anchor_indices = _uniform_indices(anchor_indices, anchor_slots)
     anchor_text = _fit_digest_segments(
@@ -143,11 +153,14 @@ def _build_document_planner_digest(
     if sample_text:
         sections.append(f"[Coverage]\n{sample_text}")
     digest = "\n\n".join(sections)
-    if estimate_tokens(digest) > token_budget:
+    digest_tokens = estimate_tokens(digest)
+    if digest_tokens > token_budget:
         digest = truncate_to_estimated_tokens(digest, token_budget)
+        digest_tokens = estimate_tokens(digest)
     return digest, {
         "anchor_tokens": used_anchor_tokens,
         "sample_tokens": estimate_tokens(sample_text),
+        "output_tokens": digest_tokens,
         "sampled": True,
     }
 
@@ -186,35 +199,56 @@ def _compact_json_table(match: re.Match[str]) -> str:
     return f"[Table] {payload}"
 
 
-def _structural_chunk_indices(
-    bundle: ParsedAttachmentBundle, cleaned_chunks: list[str]
-) -> list[int]:
-    indices: list[int] = [0] if cleaned_chunks else []
-    cleaned_index = 0
+def _prepare_digest_document(
+    *,
+    attachment_id: str,
+    bundle: ParsedAttachmentBundle,
+) -> _PreparedDigestDocument:
+    prepared_chunks: list[_PreparedDigestChunk] = []
+    structural_indices: list[int] = []
     for chunk in bundle.chunks:
         cleaned = _clean_digest_text(chunk.content)
         if not cleaned:
             continue
-        metadata = chunk.metadata or {}
-        metadata_is_structural = any(
-            metadata.get(key)
-            for key in (
-                "heading",
-                "title",
-                "caption",
-                "parent_headings",
-                "content_type",
-                "block_type",
+        prepared_chunks.append(
+            _PreparedDigestChunk(
+                content=cleaned,
+                is_structural=_is_structural_chunk(chunk=chunk, cleaned_text=cleaned),
             )
         )
-        if (
-            (chunk.sidecar_type or "").casefold() in _STRUCTURAL_SIDECAR_TYPES
-            or metadata_is_structural
-            or _STRUCTURE_MARKER_RE.search(cleaned)
-        ):
-            indices.append(cleaned_index)
-        cleaned_index += 1
-    return list(dict.fromkeys(indices))
+        if prepared_chunks[-1].is_structural:
+            structural_indices.append(len(prepared_chunks) - 1)
+    if prepared_chunks:
+        structural_indices = list(dict.fromkeys([0, *structural_indices]))
+    full_text = "\n\n".join(chunk.content for chunk in prepared_chunks)
+    input_tokens = estimate_tokens(full_text) if full_text else 0
+    return _PreparedDigestDocument(
+        attachment_id=attachment_id,
+        chunks=prepared_chunks,
+        full_text=full_text,
+        input_tokens=input_tokens,
+        structural_indices=structural_indices,
+    )
+
+
+def _is_structural_chunk(*, chunk: Any, cleaned_text: str) -> bool:
+    metadata = chunk.metadata or {}
+    metadata_is_structural = any(
+        metadata.get(key)
+        for key in (
+            "heading",
+            "title",
+            "caption",
+            "parent_headings",
+            "content_type",
+            "block_type",
+        )
+    )
+    return bool(
+        (chunk.sidecar_type or "").casefold() in _STRUCTURAL_SIDECAR_TYPES
+        or metadata_is_structural
+        or _STRUCTURE_MARKER_RE.search(cleaned_text)
+    )
 
 
 def _uniform_indices(indices: list[int], count: int) -> list[int]:

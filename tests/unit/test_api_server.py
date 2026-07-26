@@ -1245,6 +1245,25 @@ class TestRetrieveEndpoint:
         assert resp.status_code == 200
         assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] == 5
 
+    async def test_retrieve_uses_shared_executor(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.api.routes import rag as rag_routes
+
+        execute = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
+        monkeypatch.setattr(rag_routes, "execute_retrieve", execute)
+        app.state.manager = mock_manager
+
+        resp = await client.post("/retrieve", json={"query": "hello"})
+
+        assert resp.status_code == 200
+        execute.assert_awaited_once()
+        mock_manager.aretrieve.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # TestHealthEndpoint
@@ -1671,6 +1690,26 @@ class TestAnswerEndpoint:
 
         assert resp.status_code == 200
         assert mock_manager.aanswer.call_args.kwargs["history"] == history
+
+    async def test_non_stream_answer_uses_shared_executor(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.api.routes import rag as rag_routes
+
+        execute = AsyncMock(return_value=RetrievalResult(answer="shared", contexts={"chunks": []}))
+        monkeypatch.setattr(rag_routes, "execute_answer", execute)
+        app.state.manager = mock_manager
+
+        resp = await client.post("/answer", json={"query": "hello", "stream": False})
+
+        assert resp.status_code == 200
+        assert resp.json()["answer"] == "shared"
+        execute.assert_awaited_once()
+        mock_manager.aanswer.assert_not_awaited()
 
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

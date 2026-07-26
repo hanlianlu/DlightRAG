@@ -189,8 +189,9 @@ WEB_CONVERSATION_MIGRATIONS = (
             # deletion, principal prune, and TTL expiry all delete the
             # web_conversations row, so the cache is reclaimed on every path.
             # ADD CONSTRAINT is not idempotent (Postgres has no IF NOT EXISTS
-            # form) and apply_migrations re-runs every statement on each startup,
-            # so guard it with a catalog existence check to stay idempotent.
+            # form), so guard it with a catalog existence check. That keeps 0004
+            # safe if deployment drift leaves this version unrecorded and it must
+            # run once after earlier statements already succeeded.
             """DO $$
 BEGIN
     IF NOT EXISTS (

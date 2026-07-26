@@ -523,6 +523,18 @@ class TestPlanFallback:
         assert plan.standalone_query == "query"
         assert plan.metadata_filter is None
 
+    async def test_plan_uses_retry_helper_and_falls_back_on_exhausted_provider(self):
+        llm = AsyncMock(return_value='{"standalone_query":"should not be used","filters":{}}')
+        planner = QueryPlanner(llm_func=llm)
+        planner._call_llm_with_retry = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+        plan = await planner.plan("query")
+
+        planner._call_llm_with_retry.assert_awaited_once()
+        llm.assert_not_awaited()
+        assert plan.planner_outcome == "fallback_provider_error"
+        assert plan.standalone_query == "query"
+
     async def test_empty_response_returns_fallback(self):
         llm = AsyncMock(return_value="")
         planner = QueryPlanner(llm_func=llm)

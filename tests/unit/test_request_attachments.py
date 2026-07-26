@@ -205,6 +205,65 @@ def test_attachment_planner_digest_caps_each_document_independently() -> None:
     assert trace["attachment_digest_output_tokens"] > ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS
 
 
+def test_attachment_planner_digest_cleans_each_source_chunk_once_preserving_structure_after_drops(
+    monkeypatch: Any,
+) -> None:
+    bundle = planner_bundle(
+        "spied",
+        [
+            "Name: _________",
+            "Overview heading\n" + ("alpha " * 80),
+            "TABLE-MARKER [Table Name] Revenue by region\n" + ("beta " * 80),
+            "Final takeaways\n" + ("gamma " * 80),
+        ],
+        sidecar_types={3: "table"},
+    )
+    clean_calls: list[str] = []
+    original_clean = attachment_digest._clean_digest_text
+
+    def _spy_clean(text: str) -> str:
+        clean_calls.append(text)
+        return original_clean(text)
+
+    monkeypatch.setattr(attachment_digest, "_clean_digest_text", _spy_clean)
+
+    digests, _ = build_attachment_planner_digests(
+        [("spied", bundle)],
+        max_tokens_per_document=96,
+    )
+
+    assert clean_calls == [chunk.content for chunk in bundle.chunks]
+    structure_section, _, _ = digests["spied"].partition("\n\n[Coverage]\n")
+    assert "TABLE-MARKER" in structure_section
+
+
+def test_attachment_planner_digest_reuses_full_text_estimate_for_full_passthrough(
+    monkeypatch: Any,
+) -> None:
+    bundle = planner_bundle(
+        "short",
+        [
+            "Fractions Challenge Worksheet\nInstructions: simplify every fraction.",
+            "Problem 20: Explain how the numerator and denominator change.",
+        ],
+    )
+    expected_full_text = "\n\n".join(chunk.content for chunk in bundle.chunks)
+    estimate_calls: list[str] = []
+    original_estimate = attachment_digest.estimate_tokens
+
+    def _spy_estimate(text: str) -> int:
+        estimate_calls.append(text)
+        return original_estimate(text)
+
+    monkeypatch.setattr(attachment_digest, "estimate_tokens", _spy_estimate)
+
+    digests, trace = build_attachment_planner_digests([("short", bundle)])
+
+    assert digests["short"] == expected_full_text
+    assert estimate_calls.count(expected_full_text) == 1
+    assert trace["attachment_digest_input_tokens"] == trace["attachment_digest_output_tokens"]
+
+
 def test_attachment_planner_token_samples_do_not_cluster_at_the_front() -> None:
     contents = [f"chunk-{index} " + ("x " * 200) for index in range(24)]
 

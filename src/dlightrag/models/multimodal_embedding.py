@@ -65,7 +65,6 @@ class MultimodalEmbedder:
         provider: EmbedProvider,
         input_modality: EmbeddingInputModality = "auto",
         asymmetric: AsymmetricMode = "auto",
-        batch_size: int = 4,
         timeout: float = 120.0,
     ) -> None:
         self.model = model
@@ -76,7 +75,6 @@ class MultimodalEmbedder:
         self.supports_images = self.input_modality == "multimodal"
         self.asymmetric = resolve_asymmetric(provider, asymmetric)
         self.supports_asymmetric = self.asymmetric
-        self.batch_size = batch_size
         self.api_key = api_key
         self._client = httpx.AsyncClient(
             timeout=timeout,

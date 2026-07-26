@@ -557,6 +557,120 @@ class TestGetEmbeddingFunc:
         assert emb.embedding_dim == 1024
         assert emb.max_token_size == 8192
 
+    def test_enables_asymmetric_by_default_for_capable_provider(self) -> None:
+        from dlightrag.models.llm import get_embedding_func
+
+        config = DlightragConfig(embedding=_embedding_config())
+
+        embedding_func = get_embedding_func(config)
+
+        assert embedding_func.supports_asymmetric is True
+
+    def test_uses_symmetric_fallback_for_unsupported_auto(self) -> None:
+        from dlightrag.models.llm import get_embedding_func
+
+        config = DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="openai_compatible",
+                model="qwen3-vl-embedding-2b",
+                api_key="sk-test",
+                dim=2048,
+                input_modality="multimodal",
+                startup_probe=False,
+            )
+        )
+
+        embedding_func = get_embedding_func(config)
+
+        assert embedding_func.supports_asymmetric is False
+
+    @pytest.mark.asyncio
+    async def test_can_reuse_service_embedder(self) -> None:
+        from dlightrag.models.llm import get_embedding_func
+
+        config = DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="ollama",
+                model="nomic-embed-text",
+                api_key="",
+                dim=3,
+                startup_probe=False,
+            )
+        )
+        embedder = MagicMock()
+        embedder.supports_asymmetric = False
+        embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+
+        embedding_func = get_embedding_func(config, embedder=embedder)
+        result = await embedding_func.func(["hello"], context="query")
+
+        assert result.tolist() == [[0.1, 0.2, 0.3]]
+        embedder.embed_texts.assert_awaited_once_with(["hello"], context="query")
+
+    def test_rejects_required_asymmetric_for_unsupported_provider(self) -> None:
+        from dlightrag.models.llm import get_embedding_func
+
+        config = DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="openai_compatible",
+                model="qwen3-vl-embedding-2b",
+                api_key="sk-test",
+                dim=2048,
+                input_modality="multimodal",
+                asymmetric="require",
+                startup_probe=False,
+            )
+        )
+
+        with pytest.raises(ValueError, match="does not support asymmetric"):
+            get_embedding_func(config)
+
+
+class TestGetMultimodalEmbedder:
+    def test_factory_does_not_pass_batch_size(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from dlightrag.models import llm
+
+        captured: dict[str, Any] = {}
+
+        class FakeEmbedder:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+        monkeypatch.setattr(
+            "dlightrag.models.multimodal_embedding.MultimodalEmbedder", FakeEmbedder
+        )
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-test")
+            ),
+            embedding=_embedding_config(),
+        )
+
+        llm.get_multimodal_embedder(config)
+
+        assert "batch_size" not in captured
+
+    @pytest.mark.asyncio
+    async def test_factory_applies_input_modality(self) -> None:
+        from dlightrag.models.llm import get_multimodal_embedder
+
+        config = DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                input_modality="text",
+                startup_probe=False,
+            )
+        )
+
+        embedder = get_multimodal_embedder(config)
+        try:
+            assert embedder.supports_images is False
+        finally:
+            await embedder.aclose()
+
 
 class TestAdaptForLightrag:
     @pytest.mark.asyncio

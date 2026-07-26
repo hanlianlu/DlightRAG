@@ -192,6 +192,7 @@ class PGMetadataIndex:
                 conn,
                 scope="doc_metadata",
                 migrations=_SCHEMA_MIGRATIONS,
+                require_applied_prefix=False,
             )
 
         await self._run(_operation)

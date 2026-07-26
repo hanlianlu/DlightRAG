@@ -59,13 +59,17 @@ class _Conn:
         if query.startswith("INSERT INTO dlightrag_schema_migrations"):
             self.applied.add((str(args[0]), str(args[1])))
 
-    async def fetch(self, query: str) -> list[dict[str, Any]]:
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        if "dlightrag_schema_migrations" in query and "version" in query:
+            scope = str(args[0])
+            versions = sorted(
+                version for applied_scope, version in self.applied if applied_scope == scope
+            )
+            return [{"version": version} for version in versions]
         assert "dlightrag_workspace_meta" in query
         return self.rows
 
     async def fetchval(self, query: str, *args: Any) -> Any:
-        if "dlightrag_schema_migrations" in query and "version" in query:
-            return 1 if (str(args[0]), str(args[1])) in self.applied else None
         return True
 
     async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:

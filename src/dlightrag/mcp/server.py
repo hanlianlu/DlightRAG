@@ -25,8 +25,8 @@ from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     MetadataPolicy,
     SourceType,
-    conversation_history_as_dicts,
 )
+from dlightrag.core.client_execution import execute_answer, execute_retrieve
 from dlightrag.core.client_payloads import (
     answer_payload,
     retrieval_payload,
@@ -35,7 +35,6 @@ from dlightrag.core.client_requests import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
-    query_kwargs_from_payload,
 )
 from dlightrag.core.request.workspaces import (
     NoQueryableWorkspacesError,
@@ -236,13 +235,11 @@ async def retrieve_tool(
         all_workspaces=args.all_workspaces,
     )
     scope = current_request_scope().for_workspaces(resolved_workspaces)
-    result = await manager.aretrieve(
-        args.query,
-        workspaces=resolved_workspaces,
-        top_k=args.top_k,
-        chunk_top_k=args.chunk_top_k,
+    result = await execute_retrieve(
+        manager=manager,
+        payload=args,
+        resolved_workspaces=resolved_workspaces,
         scope=scope,
-        **query_kwargs_from_payload(args),
     )
     return retrieval_payload(result)
 
@@ -299,16 +296,11 @@ async def answer_tool(
         all_workspaces=args.all_workspaces,
     )
     scope = current_request_scope().for_workspaces(resolved_workspaces)
-    result = await manager.aanswer(
-        args.query,
-        workspaces=resolved_workspaces,
-        top_k=args.top_k,
-        chunk_top_k=args.chunk_top_k,
-        answer_context_top_k=args.answer_context_top_k,
-        semantic_highlights=args.semantic_highlights,
-        history=conversation_history_as_dicts(args.history),
+    result = await execute_answer(
+        manager=manager,
+        payload=args,
+        resolved_workspaces=resolved_workspaces,
         scope=scope,
-        **query_kwargs_from_payload(args),
     )
     return answer_payload(result)
 
