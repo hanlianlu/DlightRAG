@@ -224,6 +224,7 @@ from dlightrag.models.llm import (  # noqa: E402
     get_multimodal_embedder,
     get_rerank_func,
 )
+from dlightrag.storage.lightrag_readonly import attach_lightrag_storages_read_only  # noqa: E402
 from dlightrag.storage.postgres_version import (  # noqa: E402
     ensure_pgvector_halfvec,
     ensure_postgres_extensions,
@@ -657,8 +658,10 @@ class RAGService:
             enable_llm_cache=not config.is_reader,
             enable_llm_cache_for_entity_extract=not config.is_reader,
         )
+        contract_guard = LightRAGContractGuard(lightrag)
         if config.is_reader:
-            await self._attach_lightrag_storages_read_only(lightrag)
+            contract_guard.verify_read_only_attach_contract()
+            await attach_lightrag_storages_read_only(lightrag, config=config)
         else:
             await lightrag.initialize_storages()
         self._lightrag = lightrag
@@ -669,7 +672,7 @@ class RAGService:
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
-            await LightRAGContractGuard(lightrag).verify_all()
+            await contract_guard.verify_all(include_read_only_attach_contract=not config.is_reader)
 
             from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
 
@@ -800,143 +803,6 @@ class RAGService:
             ", read-only" if read_only else "",
         )
         return idx
-
-    async def _attach_lightrag_storages_read_only(self, lightrag: Any) -> None:
-        """Attach LightRAG PostgreSQL storages to a read-only pool without DDL.
-
-        Reader processes must never run LightRAG's bootstrap (extensions,
-        tables, AGE labels, indexes). This binds the already-constructed storage
-        objects to a process-wide read-only pool, verifies the required schema
-        exists, preserves the pgvector codec and reconnect/retry machinery, and
-        marks storages initialized. Concurrent workspaces share one client via
-        ``ClientManager`` reference counting; the standard ``finalize_storages``
-        path releases it.
-        """
-        from lightrag.kg.postgres_impl import ClientManager, namespace_to_table_name
-        from lightrag.kg.shared_storage import (
-            get_default_workspace,
-            initialize_pipeline_status,
-            set_default_workspace,
-        )
-        from lightrag.lightrag import StoragesStatus
-
-        from dlightrag.storage.lightrag_readonly import ReadOnlyPostgreSQLDB
-
-        db_config = ClientManager.get_config(vector_storage=self.config.vector_storage)
-        signature = ClientManager._build_vector_signature(db_config, self.config.vector_storage)
-
-        active_storages = [
-            storage
-            for storage in (
-                lightrag.full_docs,
-                lightrag.text_chunks,
-                lightrag.full_entities,
-                lightrag.full_relations,
-                lightrag.entity_chunks,
-                lightrag.relation_chunks,
-                lightrag.entities_vdb,
-                lightrag.relationships_vdb,
-                lightrag.chunks_vdb,
-                lightrag.chunk_entity_relation_graph,
-                lightrag.llm_response_cache,
-                lightrag.doc_status,
-            )
-            if storage is not None
-        ]
-
-        async with ClientManager._lock:
-            db = ClientManager._instances["db"]
-            if db is None:
-                db = ReadOnlyPostgreSQLDB(db_config)
-                await db.initdb()
-                ClientManager._instances["db"] = db
-                ClientManager._instances["ref_count"] = 0
-                ClientManager._instances["vector_signature"] = signature
-            else:
-                ClientManager._assert_compatible_vector_signature(signature)
-            ClientManager._instances["ref_count"] += len(active_storages)
-
-        for storage in active_storages:
-            storage.db = db
-            if db.workspace:
-                storage.workspace = db.workspace
-            elif not getattr(storage, "workspace", None):
-                storage.workspace = self.config.workspace
-            if hasattr(storage, "_get_workspace_graph_name"):
-                storage.graph_name = storage._get_workspace_graph_name()
-
-        await self._verify_lightrag_read_only_schema(
-            db=db,
-            storages=active_storages,
-            namespace_to_table_name=namespace_to_table_name,
-        )
-
-        lightrag._owning_loop = asyncio.get_running_loop()
-        if get_default_workspace() is None:
-            set_default_workspace(lightrag.workspace)
-        await initialize_pipeline_status(workspace=lightrag.workspace)
-        lightrag._storages_status = StoragesStatus.INITIALIZED
-
-    async def _verify_lightrag_read_only_schema(
-        self,
-        *,
-        db: Any,
-        storages: list[Any],
-        namespace_to_table_name: Any,
-    ) -> None:
-        """Verify read-only attach targets exist without any DDL."""
-        from dlightrag.storage.sql_identifiers import pg_qualified_identifier
-
-        if db.pool is None:
-            raise RuntimeError("LightRAG read-only PostgreSQL pool was not created")
-
-        tables: set[str] = set()
-        graph_names: set[str] = set()
-        for storage in storages:
-            table_name = getattr(storage, "table_name", None)
-            if isinstance(table_name, str) and table_name:
-                tables.add(table_name)
-            else:
-                namespace = getattr(storage, "namespace", None)
-                if namespace:
-                    mapped = namespace_to_table_name(namespace)
-                    if mapped:
-                        tables.add(mapped)
-            graph_name = getattr(storage, "graph_name", None)
-            if isinstance(graph_name, str) and graph_name:
-                graph_names.add(graph_name)
-
-        async with db.pool.acquire() as conn:
-            read_only = await conn.fetchval("SHOW transaction_read_only")
-            if str(read_only).lower() != "on":
-                raise RuntimeError(
-                    "LightRAG reader pool is not read-only; expected "
-                    "default_transaction_read_only=on"
-                )
-            for table in sorted(tables):
-                try:
-                    # table is a fixed LightRAG namespace name, validated by
-                    # pg_qualified_identifier; not user input.
-                    await conn.fetchval(
-                        f"SELECT 1 FROM {pg_qualified_identifier(table)} LIMIT 1"  # noqa: S608
-                    )
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"LightRAG table {table} is missing or unreadable; "
-                        "initialize it on the writer first"
-                    ) from exc
-            for graph_name in sorted(graph_names):
-                labels_present = await conn.fetchval(
-                    "SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = $1 "
-                    "AND tablename = 'base') AND EXISTS(SELECT 1 FROM pg_tables "
-                    "WHERE schemaname = $1 AND tablename = 'DIRECTED')",
-                    graph_name,
-                )
-                if not labels_present:
-                    raise RuntimeError(
-                        f"LightRAG AGE graph {graph_name} is missing labels; "
-                        "initialize it on the writer first"
-                    )
 
     def _ensure_initialized(self) -> None:
         """Raise error if not initialized."""
