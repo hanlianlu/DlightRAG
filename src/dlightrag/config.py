@@ -258,8 +258,8 @@ class VLMSidecarConfig(BaseModel):
     # VLM_MIN_IMAGE_PIXEL env var is not emitted, so LightRAG's own gate applies.
     # Set an explicit integer only to impose a stricter/looser minimum.
     min_image_pixel: int | None = Field(default=None, ge=1)
-    surrounding_leading_max_tokens: int | None = Field(default=128, ge=0)
-    surrounding_trailing_max_tokens: int | None = Field(default=128, ge=0)
+    surrounding_leading_max_tokens: int | None = Field(default=256, ge=0)
+    surrounding_trailing_max_tokens: int | None = Field(default=256, ge=0)
 
     # Pydantic field → LightRAG env var. Single source of truth;
     # _lightrag_sidecar_env_map() and _LIGHTRAG_SIDECAR_ENV_KEYS derive from this.

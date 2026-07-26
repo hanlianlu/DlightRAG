@@ -556,8 +556,8 @@ def test_parser_defaults_export_lightrag_env() -> None:
     assert cfg.extraction.language == "English"
     assert cfg.parser_sidecars.vlm.enabled is True
     assert cfg.parser_sidecars.vlm.max_image_bytes == 5_242_880
-    assert cfg.parser_sidecars.vlm.surrounding_leading_max_tokens == 128
-    assert cfg.parser_sidecars.vlm.surrounding_trailing_max_tokens == 128
+    assert cfg.parser_sidecars.vlm.surrounding_leading_max_tokens == 256
+    assert cfg.parser_sidecars.vlm.surrounding_trailing_max_tokens == 256
     assert cfg.parser_sidecars.mineru.api_mode == "local"
     assert cfg.parser_sidecars.mineru.local_endpoint == "http://127.0.0.1:8210"
     assert cfg.parser_sidecars.mineru.language == "ch"
@@ -966,8 +966,8 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
     assert cfg.llm.default.api_key == "sk-env"
     assert "vlm_process_enable" not in cfg.model_fields_set
     assert os.environ["VLM_PROCESS_ENABLE"] == "true"
-    assert os.environ["SURROUNDING_LEADING_MAX_TOKENS"] == "128"
-    assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "128"
+    assert os.environ["SURROUNDING_LEADING_MAX_TOKENS"] == "256"
+    assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "256"
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
     assert os.environ["MINERU_LANGUAGE"] == "arabic"
