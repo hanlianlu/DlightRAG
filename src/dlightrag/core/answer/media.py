@@ -25,7 +25,7 @@ def answer_images_from_sources(
     images: list[dict[str, Any]] = []
     for source in sources:
         source_id = source.id
-        label = source.title or source_id
+        base_label = source.title or source_id
         for chunk in source.chunks or []:
             chunk_id = chunk.chunk_id
             image_id = context_chunk_key(chunk_id, workspace=source.workspace)
@@ -44,6 +44,10 @@ def answer_images_from_sources(
             thumbnail_url = thumbnail_url or url
             chunk_idx = chunk.chunk_idx
             source_ref = f"{source_id}-{chunk_idx}" if chunk_idx else source_id
+            # Anchor each gallery image to its real cited page so the caption
+            # cannot drift from the page the answer text references.
+            page_idx = getattr(chunk, "page_idx", None)
+            label = f"{base_label} · Page {page_idx}" if page_idx else base_label
             images.append(
                 {
                     "id": image_id if chunk_counts[chunk_id] > 1 else chunk_id,

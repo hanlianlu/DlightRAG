@@ -281,7 +281,7 @@ class TestAnswerEngineGenerate:
                 "source_ref": "1-1",
                 "url": "/images/default/c1?size=full",
                 "thumbnail_url": "/images/default/c1?size=thumb",
-                "label": "chart.pdf",
+                "label": "chart.pdf · Page 1",
                 "answer_image_sent": True,
             }
         ]

@@ -52,6 +52,41 @@ def test_sent_chunk_is_annotated_true() -> None:
     assert images[0]["answer_image_sent"] is True
 
 
+def test_gallery_label_includes_cited_page() -> None:
+    sources = [
+        _source(
+            {
+                "chunk_id": "c1",
+                "chunk_idx": 1,
+                "page_idx": 7,
+                "image_url": "/img/c1",
+                "thumbnail_url": "/img/c1/thumb",
+            }
+        )
+    ]
+
+    images = answer_images_from_sources(sources, contexts={"chunks": []})
+
+    assert images[0]["label"] == "Doc · Page 7"
+
+
+def test_gallery_label_falls_back_to_title_without_page() -> None:
+    sources = [
+        _source(
+            {
+                "chunk_id": "c1",
+                "chunk_idx": 1,
+                "image_url": "/img/c1",
+                "thumbnail_url": "/img/c1/thumb",
+            }
+        )
+    ]
+
+    images = answer_images_from_sources(sources, contexts={"chunks": []})
+
+    assert images[0]["label"] == "Doc"
+
+
 def test_same_chunk_id_in_two_workspaces_keeps_both_images() -> None:
     legal_chunk = type(
         "C",
