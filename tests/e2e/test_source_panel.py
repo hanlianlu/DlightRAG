@@ -195,6 +195,24 @@ def test_composer_attachment_picker_keeps_sources_panel_open(page):
 
 
 @pytest.mark.e2e
+def test_theme_menu_and_selection_keep_sources_panel_open(page):
+    _open_ready_page(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _inject_static_source_answer(page)
+    page.get_by_role("button", name="Open report.pdf").click()
+    panel = page.locator("#panel")
+    page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
+
+    page.get_by_role("button", name="Appearance").click()
+    assert panel.evaluate("element => element.classList.contains('open')") is True
+    page.locator("#theme-menu [data-theme-value='dark']").click()
+
+    assert page.locator("html").get_attribute("data-color-mode") == "dark"
+    assert panel.evaluate("element => element.classList.contains('open')") is True
+    assert panel.get_attribute("data-panel-kind") == "sources"
+
+
+@pytest.mark.e2e
 def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
     _open_ready_page(page)
     _inject_answer_with_sources(page)

@@ -43,6 +43,16 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
             state.conversations.insert(0, item)
             route.fulfill(status=201, json=item)
             return
+        if path == "/web/conversations" and method == "DELETE":
+            if state.delete_status != 204:
+                route.fulfill(
+                    status=state.delete_status,
+                    json={"detail": "Deletion failed"},
+                )
+                return
+            state.conversations.clear()
+            route.fulfill(status=204, body="")
+            return
 
         parts = path.split("/")
         conversation_id = parts[3] if len(parts) > 3 else ""
@@ -347,6 +357,135 @@ def test_inactive_delete_never_touches_active_draft(page: Page) -> None:
     assert _active_id(page) == active_id
     assert page.get_by_role("textbox", name="Message").input_value() == "active draft remains"
     assert page.locator("#thumbnail-strip").locator(":scope > *").count() == 1
+
+
+@pytest.mark.e2e
+def test_delete_all_conversations_is_quiet_accessible_and_creates_fresh_session(
+    page: Page,
+) -> None:
+    state = _install_conversation_routes(page)
+    page.goto("/web/")
+    _new_conversation(page)
+    _new_conversation(page)
+    assert len(state.conversations) == 3
+
+    trigger = page.get_by_role("button", name="Delete all conversations")
+    retention = trigger.get_by_text("Inactive conversations expire after 30 days.")
+    danger_label = trigger.get_by_text("Delete all conversations", exact=True)
+    assert retention.is_visible()
+    assert float(danger_label.evaluate("element => getComputedStyle(element).opacity")) == 0
+    assert trigger.evaluate("element => getComputedStyle(element).borderTopStyle") == "none"
+
+    trigger.hover()
+    page.wait_for_function(
+        "() => getComputedStyle(document.querySelector('.conversation-retention-note')).opacity === '0'"
+    )
+    assert float(retention.evaluate("element => getComputedStyle(element).opacity")) == 0
+    assert float(danger_label.evaluate("element => getComputedStyle(element).opacity")) == 1
+    trigger.click()
+
+    dialog = page.get_by_role("dialog", name="Delete all conversations?")
+    title = dialog.get_by_role("heading", name="Delete all conversations?")
+    actions = dialog.locator(".conversation-dialog-actions")
+    assert dialog.evaluate(
+        """element => {
+            const bounds = element.getBoundingClientRect();
+            return Math.abs(bounds.left + bounds.width / 2 - innerWidth / 2) < 1
+                && Math.abs(bounds.top + bounds.height / 2 - innerHeight / 2) < 1;
+        }"""
+    )
+    assert title.evaluate("element => getComputedStyle(element).textAlign") == "center"
+    assert actions.evaluate("element => getComputedStyle(element).justifyContent") == "center"
+    assert dialog.locator("p:visible").count() == 0
+    dialog.get_by_role("button", name="Cancel").click()
+    assert len(state.conversations) == 3
+
+    _add_draft_with_image(page, "discard this draft")
+    trigger.click()
+    dialog.get_by_text("Draft and attachments will also be deleted.").wait_for()
+    dialog.get_by_role("button", name="Delete all").click()
+
+    page.wait_for_function("() => document.querySelectorAll('[data-conversation-id]').length === 1")
+    page.wait_for_function("document.querySelector('.composer-input').value === ''")
+    assert len(state.conversations) == 1
+    assert page.locator("[aria-current='page']").count() == 1
+    assert page.locator("#thumbnail-strip").locator(":scope > *").count() == 0
+
+
+@pytest.mark.e2e
+def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page: Page) -> None:
+    state = _install_conversation_routes(page)
+    state.delete_status = 500
+    page.goto("/web/")
+    _new_conversation(page)
+    _add_draft_with_image(page, "keep this draft")
+
+    trigger = page.get_by_role("button", name="Delete all conversations")
+    trigger.click()
+    dialog = page.get_by_role("dialog", name="Delete all conversations?")
+    danger = dialog.get_by_role("button", name="Delete all")
+    for color_mode in ("light", "dark"):
+        page.locator("html").evaluate(
+            "(element, mode) => { element.dataset.colorMode = mode; }",
+            color_mode,
+        )
+        assert dialog.evaluate(
+            """element => {
+                const probe = document.createElement('div');
+                probe.style.backgroundColor = 'var(--color-bg-surface)';
+                document.body.append(probe);
+                const expected = getComputedStyle(probe).backgroundColor;
+                probe.remove();
+                return getComputedStyle(element).backgroundColor === expected;
+            }"""
+        )
+        assert danger.evaluate(
+            """element => {
+                const probe = document.createElement('div');
+                probe.style.backgroundColor = 'var(--color-danger-bg)';
+                document.body.append(probe);
+                const expected = getComputedStyle(probe).backgroundColor;
+                probe.remove();
+                return getComputedStyle(element).backgroundColor === expected;
+            }"""
+        )
+
+    danger.click()
+    page.get_by_text("Could not delete conversations.").wait_for()
+    assert len(state.conversations) == 2
+    assert page.locator("[data-conversation-id]").count() == 2
+    assert page.get_by_role("textbox", name="Message").input_value() == "keep this draft"
+    assert page.locator("#thumbnail-strip").locator(":scope > *").count() == 1
+
+
+@pytest.mark.e2e
+def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto("/web/")
+    page.get_by_role("button", name="Open conversations").click()
+
+    trigger = page.get_by_role("button", name="Delete all conversations")
+    trigger.focus()
+    page.keyboard.press("Enter")
+    dialog = page.get_by_role("dialog", name="Delete all conversations?")
+    dialog.wait_for()
+    bounds = dialog.bounding_box()
+    assert bounds is not None
+    assert abs(bounds["x"] + bounds["width"] / 2 - 195) < 1
+    assert abs(bounds["y"] + bounds["height"] / 2 - 422) < 1
+    title = dialog.get_by_role("heading", name="Delete all conversations?")
+    assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
+    assert (
+        dialog.locator(".conversation-dialog-actions").evaluate(
+            "element => getComputedStyle(element).justifyContent"
+        )
+        == "center"
+    )
+
+    page.keyboard.press("Escape")
+    dialog.wait_for(state="hidden")
+    page.wait_for_function("document.activeElement?.id === 'delete-all-conversations-btn'")
 
 
 @pytest.mark.e2e

@@ -210,6 +210,10 @@ class WebConversationService:
             )
         )
 
+    async def delete_all(self, user: UserContext | None) -> int:
+        principal_id = principal_id_from_user(user)
+        return await self._store_call(self._store.delete_all_conversations(principal_id))
+
     async def prepare_answer(
         self,
         user: UserContext | None,

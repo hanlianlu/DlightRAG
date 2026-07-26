@@ -109,6 +109,8 @@ def test_index_has_final_conversation_shell() -> None:
         'id="conversation-sidebar-toggle"',
         'id="conversation-sidebar-open"',
         'id="delete-conversation-dialog"',
+        'id="delete-all-conversations-btn"',
+        'id="delete-all-conversations-dialog"',
         'id="discard-draft-dialog"',
     ):
         assert selector in template

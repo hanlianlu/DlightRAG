@@ -353,6 +353,29 @@ class _DeterministicEmbeddingProvider:
 
 
 @pytest.mark.usefixtures("pg_check")
+async def test_delete_all_conversations_preserves_other_principals() -> None:
+    from dlightrag.storage.web_conversations import PGWebConversationStore
+
+    principal_id = f"itest-delete-all-{uuid4()}"
+    other_principal_id = f"itest-delete-all-other-{uuid4()}"
+    pool = await _open_pool()
+    try:
+        store = PGWebConversationStore(pool=pool)
+        await store.initialize()
+        await store.create_conversation(principal_id)
+        await store.create_conversation(principal_id)
+        await store.create_conversation(other_principal_id)
+
+        assert await store.delete_all_conversations(principal_id) == 2
+        assert await store.list_conversations(principal_id, ttl_days=_TTL_DAYS) == []
+        assert len(await store.list_conversations(other_principal_id, ttl_days=_TTL_DAYS)) == 1
+    finally:
+        await _delete_principal(pool, principal_id)
+        await _delete_principal(pool, other_principal_id)
+        await pool.close()
+
+
+@pytest.mark.usefixtures("pg_check")
 async def test_web_conversation_attachment_storage_round_trip() -> None:
     """Attachment insert/select/cache/cascade round-trips against live pg18."""
     from dlightrag.core.request.attachments import (

@@ -101,3 +101,10 @@ export async function deleteConversation(
     throw new ConversationApiError(response.status, 'Failed to delete conversation');
   }
 }
+
+export async function deleteAllConversations(signal?: AbortSignal): Promise<void> {
+  const response = await fetch('/web/conversations', {method: 'DELETE', signal});
+  if (!response.ok) {
+    throw new ConversationApiError(response.status, 'Failed to delete conversations');
+  }
+}

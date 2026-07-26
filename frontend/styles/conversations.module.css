@@ -234,12 +234,52 @@
     height: calc(var(--size-button) + var(--space-tight));
 }
 
-:global(.conversation-retention-note) {
+:global(#delete-all-conversations-btn) {
+    align-items: center;
+    background: transparent;
+    border: 0;
     color: var(--color-text-dim);
+    cursor: pointer;
+    display: grid;
     flex: 0 0 auto;
+    font: inherit;
     font-size: var(--font-size-caption);
     line-height: var(--line-height-control);
     padding: var(--space-component) var(--space-related) var(--space-related);
+    text-align: left;
+}
+
+:global(#delete-all-conversations-btn > span) {
+    grid-area: 1 / 1;
+    transition: color 140ms, opacity 140ms, transform 140ms;
+}
+
+:global(.conversation-retention-note) {
+    opacity: 1;
+}
+
+:global(.conversation-delete-all-label) {
+    color: var(--color-danger);
+    font-weight: 600;
+    opacity: 0;
+    transform: translateY(var(--space-inline));
+}
+
+:global(#delete-all-conversations-btn:hover .conversation-retention-note),
+:global(#delete-all-conversations-btn:focus-visible .conversation-retention-note) {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--space-inline)));
+}
+
+:global(#delete-all-conversations-btn:hover .conversation-delete-all-label),
+:global(#delete-all-conversations-btn:focus-visible .conversation-delete-all-label) {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+:global(#delete-all-conversations-btn:disabled) {
+    cursor: not-allowed;
+    opacity: 0.46;
 }
 
 :global(#conversation-sidebar-backdrop) {
@@ -250,23 +290,27 @@
 }
 
 :global(#delete-conversation-dialog),
+:global(#delete-all-conversations-dialog),
 :global(#discard-draft-dialog) {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
+    margin: auto;
     max-width: 420px;
     padding: var(--space-section);
     width: min(420px, calc(100vw - 32px));
 }
 
 :global(#delete-conversation-dialog::backdrop),
+:global(#delete-all-conversations-dialog::backdrop),
 :global(#discard-draft-dialog::backdrop) {
     background: var(--color-scrim-strong);
 }
 
 :global(#delete-conversation-dialog h2),
+:global(#delete-all-conversations-dialog h2),
 :global(#discard-draft-dialog h2) {
     color: var(--color-text-primary);
     font-size: var(--font-size-subhead);
@@ -274,6 +318,7 @@
 }
 
 :global(#delete-conversation-dialog p),
+:global(#delete-all-conversations-dialog p),
 :global(#discard-draft-dialog p) {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
@@ -302,6 +347,20 @@
     background: var(--color-danger-bg);
     border-color: transparent;
     color: var(--color-on-danger);
+}
+
+:global(#delete-all-conversations-dialog h2) {
+    text-align: center;
+    white-space: nowrap;
+}
+
+:global(#delete-all-conversations-dialog p) {
+    margin-top: var(--space-component);
+    text-align: center;
+}
+
+:global(#delete-all-conversations-dialog .conversation-dialog-actions) {
+    justify-content: center;
 }
 
 :global(#chat-sidebar button:focus-visible),
@@ -365,5 +424,9 @@
 
     :global(.conversation-skeleton) {
         animation: none;
+    }
+
+    :global(#delete-all-conversations-btn > span) {
+        transition: none;
     }
 }

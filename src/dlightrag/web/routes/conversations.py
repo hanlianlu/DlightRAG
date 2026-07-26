@@ -57,6 +57,18 @@ async def create_conversation(
     return await service.create(_user(request))
 
 
+@router.delete(
+    "/conversations",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_all_conversations(
+    request: Request,
+    service: WebConversationService = Depends(get_web_conversation_service),
+) -> Response:
+    await service.delete_all(_user(request))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get(
     "/conversations/{conversation_id}/history",
     response_model=ConversationHistory,

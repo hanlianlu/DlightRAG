@@ -360,6 +360,17 @@ async def test_fetch_images_by_ids_empty_short_circuits() -> None:
     assert conn.calls == []  # never issues a query for an empty id list
 
 
+async def test_delete_all_conversations_is_principal_scoped() -> None:
+    conn = FakeConnection()
+    conn.fetchrow_result = {"deleted_count": 3}
+    store = make_store(conn)
+
+    deleted_count = await store.delete_all_conversations("alice")
+
+    assert deleted_count == 3
+    assert conn.calls[-1][1] == ("alice",)
+
+
 async def test_outcome_sensitive_mutations_use_single_attempt_pool_path(monkeypatch) -> None:
     conn = FakeConnection()
     production_pool = FakeProductionPool(conn)

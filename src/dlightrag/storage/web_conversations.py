@@ -264,6 +264,16 @@ WHERE principal_id = $1
 RETURNING 1
 """
 
+_DELETE_ALL_CONVERSATIONS = """
+WITH deleted AS (
+        DELETE FROM web_conversations
+        WHERE principal_id = $1
+        RETURNING 1
+)
+SELECT count(*)::int AS deleted_count
+FROM deleted
+"""
+
 _GET_CONVERSATION = """
 SELECT
     principal_id,
@@ -1059,6 +1069,16 @@ class PGWebConversationStore:
                 ttl_days,
             )
             return row is not None
+
+        return await self._run_write(_operation)
+
+    async def delete_all_conversations(self, principal_id: str) -> int:
+        """Delete every conversation owned by one principal."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> int:
+            row = await conn.fetchrow(_DELETE_ALL_CONVERSATIONS, principal_id)
+            return int(row["deleted_count"]) if row is not None else 0
 
         return await self._run_write(_operation)
 

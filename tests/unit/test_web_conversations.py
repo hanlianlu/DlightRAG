@@ -39,6 +39,7 @@ def conversation_service() -> AsyncMock:
     }
     service.rename.return_value = {**summary, "title": "Renamed chat"}
     service.delete.return_value = True
+    service.delete_all.return_value = 2
     service.image.return_value = SimpleNamespace(
         image_id="00000000-0000-0000-0000-000000000002",
         mime_type="image/png",
@@ -153,6 +154,19 @@ async def test_delete_returns_204(
     assert response.status_code == 204
     assert response.content == b""
     conversation_service.delete.assert_awaited_once()
+
+
+async def test_delete_all_returns_204_when_no_conversations_exist(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    conversation_service.delete_all.return_value = 0
+
+    response = await conversation_client.delete("/web/conversations")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    conversation_service.delete_all.assert_awaited_once()
 
 
 async def test_delete_has_no_messages_subroute(conversation_client: AsyncClient) -> None:
@@ -611,6 +625,7 @@ def conversation_store() -> AsyncMock:
     store.snapshot.return_value = _conversation_snapshot()
     store.rename_conversation.return_value = _conversation_row()
     store.delete_conversation.return_value = True
+    store.delete_all_conversations.return_value = 2
     store.prune_expired.return_value = 0
     return store
 
@@ -655,6 +670,7 @@ async def test_service_derives_principal_for_each_lifecycle_operation(
         jwt_user,
         "00000000-0000-0000-0000-000000000001",
     )
+    await service_under_test.delete_all(jwt_user)
 
     assert conversation_store.create_conversation.await_args.args == (expected_principal,)
     assert conversation_store.list_conversations.await_args.args == (expected_principal,)
@@ -666,6 +682,7 @@ async def test_service_derives_principal_for_each_lifecycle_operation(
         expected_principal,
         "00000000-0000-0000-0000-000000000001",
     )
+    assert conversation_store.delete_all_conversations.await_args.args == (expected_principal,)
 
 
 async def test_history_projects_safe_images_sources_and_rendered_answer(

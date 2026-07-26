@@ -3,6 +3,7 @@
 const PANEL_DISMISS_EXEMPT_SELECTOR = [
     '.panel',
     '#files-btn',
+    '#theme-control',
     '#chat-sidebar',
     '#conversation-sidebar-open',
     '#composer',

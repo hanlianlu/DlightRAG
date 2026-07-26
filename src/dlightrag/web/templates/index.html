@@ -28,7 +28,12 @@
             </button>
         </div>
         <div id="conversation-list" role="list" aria-live="polite"></div>
-        <p class="conversation-retention-note">Inactive conversations expire after 30 days.</p>
+        <button id="delete-all-conversations-btn"
+                type="button"
+                aria-label="Delete all conversations">
+            <span class="conversation-retention-note">Inactive conversations expire after 30 days.</span>
+            <span class="conversation-delete-all-label" aria-hidden="true">Delete all conversations</span>
+        </button>
     </nav>
     <div id="conversation-sidebar-backdrop" hidden></div>
 
@@ -238,6 +243,18 @@
             <div class="conversation-dialog-actions">
                 <button type="submit" value="cancel">Cancel</button>
                 <button type="submit" value="delete" class="conversation-dialog-danger">Delete</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="delete-all-conversations-dialog"
+            aria-labelledby="delete-all-conversations-title">
+        <form method="dialog">
+            <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
+            <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
+            <div class="conversation-dialog-actions">
+                <button type="submit" value="cancel">Cancel</button>
+                <button type="submit" value="delete-all" class="conversation-dialog-danger">Delete all</button>
             </div>
         </form>
     </dialog>

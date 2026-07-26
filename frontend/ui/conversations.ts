@@ -4,6 +4,7 @@ import conversationStyles from '../styles/conversations.module.css';
 import {
     ConversationApiError,
     createConversation,
+    deleteAllConversations,
     deleteConversation,
     getConversationHistory,
     listConversations,
@@ -112,6 +113,10 @@ function resolveActiveConversationSelect(): HTMLButtonElement | null {
 
 function resolveNewConversationButton(): HTMLButtonElement | null {
     return document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
+}
+
+function resolveDeleteAllButton(): HTMLButtonElement | null {
+    return document.getElementById('delete-all-conversations-btn') as HTMLButtonElement | null;
 }
 
 function restoreStableFocus(resolveTarget: FocusResolver): void {
@@ -367,6 +372,8 @@ function updateConversationListDisabledState(): void {
     const disabled = isQueryInFlight() || pendingLifecycleAction;
     const newButton = document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
     if (newButton) newButton.disabled = disabled;
+    const deleteAllButton = resolveDeleteAllButton();
+    if (deleteAllButton) deleteAllButton.disabled = disabled;
     const list = document.getElementById('conversation-list');
     if (!list) return;
     list.querySelectorAll<HTMLButtonElement>(
@@ -382,6 +389,8 @@ function renderConversationList(): void {
     list.replaceChildren();
     const newButton = document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
     if (newButton) newButton.disabled = isQueryInFlight() || pendingLifecycleAction;
+    const deleteAllButton = resolveDeleteAllButton();
+    if (deleteAllButton) deleteAllButton.disabled = isQueryInFlight() || pendingLifecycleAction;
 
     if (listState === 'loading' && conversationStore.conversations.length === 0) {
         for (let index = 0; index < 3; index += 1) {
@@ -703,6 +712,47 @@ async function requestDelete(conversationId: string): Promise<void> {
     }
 }
 
+async function requestDeleteAll(): Promise<void> {
+    if (pendingLifecycleAction || lifecycleBlocked()) return;
+    const trigger = resolveDeleteAllButton;
+    const discardsDraft = hasUnsavedDraft();
+    const dialog = document.getElementById(
+        'delete-all-conversations-dialog',
+    ) as HTMLDialogElement | null;
+    const warning = document.getElementById('delete-all-conversations-draft-warning');
+    if (warning) warning.hidden = !discardsDraft;
+    if (dialog) {
+        if (discardsDraft) {
+            dialog.setAttribute('aria-describedby', 'delete-all-conversations-draft-warning');
+        } else {
+            dialog.removeAttribute('aria-describedby');
+        }
+    }
+    if (!dialog || await dialogResult(dialog, trigger) !== 'delete-all') return;
+    if (lifecycleBlocked()) return;
+
+    setLifecyclePending(true);
+    let resolveFinalFocus: FocusResolver = trigger;
+    try {
+        await deleteAllConversations();
+        clearDraft();
+        clearConversationSources();
+        for (const conversation of [...conversationStore.conversations]) {
+            conversationStore.remove(conversation.conversation_id);
+        }
+        listState = 'ready';
+        await createFallbackConversation(false);
+        resolveFinalFocus = function() {
+            return resolveActiveConversationSelect() || resolveNewConversationButton();
+        };
+    } catch {
+        showToast('Could not delete conversations.', 5000);
+    } finally {
+        setLifecyclePending(false);
+        restoreStableFocus(resolveFinalFocus);
+    }
+}
+
 export async function initializeConversations(): Promise<void> {
     bootstrapController?.abort();
     const controller = new AbortController();
@@ -739,6 +789,9 @@ export function setupConversations(): void {
     document.getElementById('chat-sidebar')?.classList.add(conversationStyles.root);
     document.getElementById('new-conversation-btn')?.addEventListener('click', function() {
         void requestNewConversation();
+    });
+    resolveDeleteAllButton()?.addEventListener('click', function() {
+        void requestDeleteAll();
     });
     document.getElementById('conversation-sidebar-toggle')?.addEventListener('click', toggleSidebar);
     document.getElementById('conversation-sidebar-open')?.addEventListener('click', function(event) {
