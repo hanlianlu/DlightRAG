@@ -158,13 +158,29 @@ class LightRAGContractGuard:
         """Check E: reader attach adapter surfaces remain available."""
         import inspect
 
+        keyword_compatible_kinds = (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        positional_compatible_kinds = (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+
         def _matches_expected_prefix_with_optional_suffix(
-            signature: inspect.Signature, expected: tuple[str, ...]
+            signature: inspect.Signature,
+            expected: tuple[str, ...],
+            required_kinds: tuple[tuple[inspect._ParameterKind, ...], ...],
         ) -> bool:
             parameters = tuple(signature.parameters.values())
             param_names = tuple(parameter.name for parameter in parameters)
             if param_names[: len(expected)] != expected:
                 return False
+            for parameter, allowed_kinds in zip(
+                parameters[: len(expected)], required_kinds, strict=True
+            ):
+                if parameter.kind not in allowed_kinds:
+                    return False
             for parameter in parameters[len(expected) :]:
                 if parameter.kind in (
                     inspect.Parameter.VAR_POSITIONAL,
@@ -215,24 +231,28 @@ class LightRAGContractGuard:
                 "ClientManager.get_config",
                 getattr(ClientManager, "get_config", None),
                 self._CLIENT_MANAGER_CONFIG_PARAMS,
+                (keyword_compatible_kinds,),
             ),
             (
                 "ClientManager._build_vector_signature",
                 getattr(ClientManager, "_build_vector_signature", None),
                 self._CLIENT_MANAGER_BUILD_SIGNATURE_PARAMS,
+                (positional_compatible_kinds, positional_compatible_kinds),
             ),
             (
                 "ClientManager._assert_compatible_vector_signature",
                 getattr(ClientManager, "_assert_compatible_vector_signature", None),
                 self._CLIENT_MANAGER_ASSERT_SIGNATURE_PARAMS,
+                (positional_compatible_kinds,),
             ),
             (
                 "namespace_to_table_name",
                 namespace_to_table_name,
                 self._NAMESPACE_TO_TABLE_NAME_PARAMS,
+                (positional_compatible_kinds,),
             ),
         )
-        for name, value, expected in signature_checks:
+        for name, value, expected, required_kinds in signature_checks:
             if value is None or not callable(value):
                 continue
             try:
@@ -241,7 +261,9 @@ class LightRAGContractGuard:
             except (ValueError, TypeError) as e:
                 errors.append(f"Cannot inspect {name}: {e}")
                 continue
-            if not _matches_expected_prefix_with_optional_suffix(signature, expected):
+            if not _matches_expected_prefix_with_optional_suffix(
+                signature, expected, required_kinds
+            ):
                 errors.append(f"{name} signature changed: expected prefix {expected}, got {params}")
 
     def _check_patch_signatures(self, errors: list[str]) -> None:

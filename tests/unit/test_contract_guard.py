@@ -92,7 +92,7 @@ def test_verify_read_only_attach_contract_reports_missing_workspace_graph_helper
             guard.verify_read_only_attach_contract()
 
 
-def test_verify_read_only_attach_contract_allows_appended_optional_signature_params() -> None:
+def test_verify_read_only_attach_contract_rejects_positional_only_keyword_arg() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
     guard = LightRAGContractGuard(_fake_lightrag())
@@ -102,18 +102,44 @@ def test_verify_read_only_attach_contract_allows_appended_optional_signature_par
         _instances = {"db": None, "ref_count": 0, "vector_signature": None}
 
         @staticmethod
-        def get_config(vector_storage, optional=None):
+        def get_config(vector_storage, /, optional=None):
             return {"database": "db", "optional": optional}
 
         @staticmethod
-        def _build_vector_signature(config, vector_storage, optional=None):
+        def _build_vector_signature(config, vector_storage):
+            return {"database": config["database"]}
+
+        @staticmethod
+        def _assert_compatible_vector_signature(requested_signature):
+            return None
+
+    with patch.object(postgres_impl, "ClientManager", FakeClientManager):
+        with pytest.raises(RuntimeError, match="ClientManager.get_config signature changed"):
+            guard.verify_read_only_attach_contract()
+
+
+def test_verify_read_only_attach_contract_allows_appended_optional_keyword_params() -> None:
+    import lightrag.kg.postgres_impl as postgres_impl
+
+    guard = LightRAGContractGuard(_fake_lightrag())
+
+    class FakeClientManager:
+        _lock = object()
+        _instances = {"db": None, "ref_count": 0, "vector_signature": None}
+
+        @staticmethod
+        def get_config(vector_storage, *, optional=None):
+            return {"database": "db", "optional": optional}
+
+        @staticmethod
+        def _build_vector_signature(config, vector_storage, *, optional=None):
             return {"database": config["database"], "optional": optional}
 
         @staticmethod
-        def _assert_compatible_vector_signature(requested_signature, optional=None):
+        def _assert_compatible_vector_signature(requested_signature, *, optional=None):
             return None
 
-    def namespace_to_table_name(namespace, optional=None):
+    def namespace_to_table_name(namespace, *, optional=None):
         return namespace, optional
 
     with (
