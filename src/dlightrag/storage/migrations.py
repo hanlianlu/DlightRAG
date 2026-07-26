@@ -58,6 +58,7 @@ async def apply_migrations(conn: Any, *, scope: str, migrations: tuple[Migration
     try:
         await conn.execute(_CREATE_LEDGER)
         applied_versions = await _applied_versions_for_scope(conn, scope)
+        _validate_applied_state(scope, migrations, applied_versions)
         for migration in migrations:
             if migration.version in applied_versions:
                 continue
@@ -88,3 +89,39 @@ def _validate_unique_versions(migrations: tuple[Migration, ...]) -> None:
         if migration.version in seen:
             raise ValueError(f"Duplicate schema migration version: {migration.version}")
         seen.add(migration.version)
+
+
+def _validate_applied_state(
+    scope: str, migrations: tuple[Migration, ...], applied_versions: set[str]
+) -> None:
+    declared_versions = [migration.version for migration in migrations]
+    applied_indices = [
+        index for index, version in enumerate(declared_versions) if version in applied_versions
+    ]
+    if not applied_indices:
+        return
+
+    last_applied_index = max(applied_indices)
+    missing_versions = [
+        version
+        for index, version in enumerate(declared_versions[:last_applied_index])
+        if version not in applied_versions
+    ]
+    if not missing_versions:
+        return
+
+    first_missing_index = next(
+        index for index, version in enumerate(declared_versions) if version not in applied_versions
+    )
+    out_of_order_versions = [
+        version
+        for version in declared_versions[first_missing_index:]
+        if version in applied_versions
+    ]
+    raise RuntimeError(
+        "Schema migration ledger for "
+        f"scope '{scope}' is non-prefix across current migrations; "
+        f"missing current versions: {', '.join(missing_versions)}; "
+        "out-of-order recorded current versions: "
+        f"{', '.join(out_of_order_versions)}"
+    )

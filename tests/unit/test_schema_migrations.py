@@ -146,17 +146,54 @@ async def test_apply_migrations_isolates_applied_versions_per_scope() -> None:
     assert applied_reads == ["alpha", "beta"]
 
 
-async def test_apply_migrations_runs_lower_missing_versions_before_higher_recorded_ones() -> None:
+async def test_apply_migrations_rejects_gapped_current_ledger_before_running_migrations() -> None:
     conn = _Conn()
     conn.applied.add(("example", "0002"))
+    migrations = _example_migrations()
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"scope 'example'.*missing current versions: 0001.*"
+            r"out-of-order recorded current versions: 0002"
+        ),
+    ):
+        await apply_migrations(conn, scope="example", migrations=migrations)
+
+    executed_sql = [query for query, _ in conn.executed]
+    assert "CREATE TABLE example (id TEXT)" not in executed_sql
+    assert "ALTER TABLE example ADD COLUMN name TEXT" not in executed_sql
+    assert not any(
+        query.startswith("INSERT INTO dlightrag_schema_migrations") for query in executed_sql
+    )
+    assert conn.applied == {("example", "0002")}
+    assert conn.transaction_events == []
+
+
+async def test_apply_migrations_tolerates_historical_unknown_ledger_versions() -> None:
+    conn = _Conn()
+    conn.applied.update({("example", "0001"), ("example", "0999")})
     migrations = _example_migrations()
 
     await apply_migrations(conn, scope="example", migrations=migrations)
 
     executed_sql = [query for query, _ in conn.executed]
-    assert executed_sql.count("CREATE TABLE example (id TEXT)") == 1
-    assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 0
-    assert conn.applied == {("example", "0001"), ("example", "0002")}
+    assert executed_sql.count("CREATE TABLE example (id TEXT)") == 0
+    assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 1
+    assert conn.applied == {("example", "0001"), ("example", "0002"), ("example", "0999")}
+
+
+async def test_apply_migrations_releases_lock_when_gap_validation_fails() -> None:
+    conn = _Conn()
+    conn.applied.add(("example", "0002"))
+
+    with pytest.raises(RuntimeError, match=r"scope 'example'"):
+        await apply_migrations(conn, scope="example", migrations=_example_migrations())
+
+    executed_sql = [query for query, _ in conn.executed]
+    assert executed_sql.count("SELECT pg_advisory_lock($1)") == 1
+    assert executed_sql.count("SELECT pg_advisory_unlock($1)") == 1
+    assert executed_sql[-1] == "SELECT pg_advisory_unlock($1)"
 
 
 async def test_apply_migrations_rejects_duplicate_versions_before_mutating_db() -> None:
