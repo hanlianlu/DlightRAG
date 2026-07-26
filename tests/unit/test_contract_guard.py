@@ -38,7 +38,7 @@ def _stub_runtime_checks(monkeypatch: pytest.MonkeyPatch, guard: LightRAGContrac
     monkeypatch.setattr(guard, "_check_patch_signatures", lambda errors: None)
 
 
-async def test_verify_all_reports_missing_client_manager_attach_surfaces(
+async def test_verify_all_excludes_reader_attach_contract_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import lightrag.kg.postgres_impl as postgres_impl
@@ -54,17 +54,30 @@ async def test_verify_all_reports_missing_client_manager_attach_surfaces(
     )
 
     with patch.object(postgres_impl, "ClientManager", fake_manager):
+        await guard.verify_all()
+
+
+def test_verify_read_only_attach_contract_reports_missing_client_manager_attach_surfaces() -> None:
+    import lightrag.kg.postgres_impl as postgres_impl
+
+    guard = LightRAGContractGuard(_fake_lightrag())
+
+    fake_manager = SimpleNamespace(
+        get_config=lambda *, vector_storage=None: {"database": "db"},
+        _build_vector_signature=lambda config, vector_storage: {"database": "db"},
+        _assert_compatible_vector_signature=lambda signature: None,
+        _lock=object(),
+    )
+
+    with patch.object(postgres_impl, "ClientManager", fake_manager):
         with pytest.raises(RuntimeError, match=r"ClientManager\._instances"):
-            await guard.verify_all()
+            guard.verify_read_only_attach_contract()
 
 
-async def test_verify_all_reports_missing_workspace_graph_helper(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_verify_read_only_attach_contract_reports_missing_workspace_graph_helper() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
     guard = LightRAGContractGuard(_fake_lightrag(graph_storage=SimpleNamespace(graph_name="graph")))
-    _stub_runtime_checks(monkeypatch, guard)
 
     fake_manager = SimpleNamespace(
         get_config=lambda *, vector_storage=None: {"database": "db"},
@@ -76,4 +89,87 @@ async def test_verify_all_reports_missing_workspace_graph_helper(
 
     with patch.object(postgres_impl, "ClientManager", fake_manager):
         with pytest.raises(RuntimeError, match="_get_workspace_graph_name"):
-            await guard.verify_all()
+            guard.verify_read_only_attach_contract()
+
+
+def test_verify_read_only_attach_contract_allows_appended_optional_signature_params() -> None:
+    import lightrag.kg.postgres_impl as postgres_impl
+
+    guard = LightRAGContractGuard(_fake_lightrag())
+
+    class FakeClientManager:
+        _lock = object()
+        _instances = {"db": None, "ref_count": 0, "vector_signature": None}
+
+        @staticmethod
+        def get_config(vector_storage, optional=None):
+            return {"database": "db", "optional": optional}
+
+        @staticmethod
+        def _build_vector_signature(config, vector_storage, optional=None):
+            return {"database": config["database"], "optional": optional}
+
+        @staticmethod
+        def _assert_compatible_vector_signature(requested_signature, optional=None):
+            return None
+
+    def namespace_to_table_name(namespace, optional=None):
+        return namespace, optional
+
+    with (
+        patch.object(postgres_impl, "ClientManager", FakeClientManager),
+        patch.object(postgres_impl, "namespace_to_table_name", namespace_to_table_name),
+    ):
+        guard.verify_read_only_attach_contract()
+
+
+def test_verify_read_only_attach_contract_rejects_changed_required_signature_prefix() -> None:
+    import lightrag.kg.postgres_impl as postgres_impl
+
+    guard = LightRAGContractGuard(_fake_lightrag())
+
+    class FakeClientManager:
+        _lock = object()
+        _instances = {"db": None, "ref_count": 0, "vector_signature": None}
+
+        @staticmethod
+        def get_config(config, optional=None):
+            return {"database": "db", "optional": optional}
+
+        @staticmethod
+        def _build_vector_signature(config, vector_storage):
+            return {"database": config["database"]}
+
+        @staticmethod
+        def _assert_compatible_vector_signature(requested_signature):
+            return None
+
+    with patch.object(postgres_impl, "ClientManager", FakeClientManager):
+        with pytest.raises(RuntimeError, match="ClientManager.get_config signature changed"):
+            guard.verify_read_only_attach_contract()
+
+
+def test_verify_read_only_attach_contract_rejects_appended_required_signature_params() -> None:
+    import lightrag.kg.postgres_impl as postgres_impl
+
+    guard = LightRAGContractGuard(_fake_lightrag())
+
+    class FakeClientManager:
+        _lock = object()
+        _instances = {"db": None, "ref_count": 0, "vector_signature": None}
+
+        @staticmethod
+        def get_config(vector_storage, required_suffix):
+            return {"database": "db", "required_suffix": required_suffix}
+
+        @staticmethod
+        def _build_vector_signature(config, vector_storage):
+            return {"database": config["database"]}
+
+        @staticmethod
+        def _assert_compatible_vector_signature(requested_signature):
+            return None
+
+    with patch.object(postgres_impl, "ClientManager", FakeClientManager):
+        with pytest.raises(RuntimeError, match="ClientManager.get_config signature changed"):
+            guard.verify_read_only_attach_contract()

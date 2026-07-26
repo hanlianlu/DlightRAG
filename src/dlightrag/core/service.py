@@ -672,7 +672,7 @@ class RAGService:
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
-            await contract_guard.verify_all(include_read_only_attach_contract=not config.is_reader)
+            await contract_guard.verify_all()
 
             from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
 

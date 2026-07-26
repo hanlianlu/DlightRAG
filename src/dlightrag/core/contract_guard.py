@@ -51,7 +51,7 @@ class LightRAGContractGuard:
     def __init__(self, lightrag: Any) -> None:
         self._lightrag = lightrag
 
-    async def verify_all(self, *, include_read_only_attach_contract: bool = True) -> None:
+    async def verify_all(self, *, include_read_only_attach_contract: bool = False) -> None:
         """Run all checks, collect errors, raise if any."""
         errors: list[str] = []
         self._require_pg_backend(errors)
@@ -158,6 +158,23 @@ class LightRAGContractGuard:
         """Check E: reader attach adapter surfaces remain available."""
         import inspect
 
+        def _matches_expected_prefix_with_optional_suffix(
+            signature: inspect.Signature, expected: tuple[str, ...]
+        ) -> bool:
+            parameters = tuple(signature.parameters.values())
+            param_names = tuple(parameter.name for parameter in parameters)
+            if param_names[: len(expected)] != expected:
+                return False
+            for parameter in parameters[len(expected) :]:
+                if parameter.kind in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                ):
+                    continue
+                if parameter.default is inspect.Parameter.empty:
+                    return False
+            return True
+
         try:
             from lightrag.kg.postgres_impl import ClientManager, namespace_to_table_name
         except ImportError as e:
@@ -219,12 +236,13 @@ class LightRAGContractGuard:
             if value is None or not callable(value):
                 continue
             try:
-                params = tuple(inspect.signature(value).parameters.keys())
+                signature = inspect.signature(value)
+                params = tuple(signature.parameters.keys())
             except (ValueError, TypeError) as e:
                 errors.append(f"Cannot inspect {name}: {e}")
                 continue
-            if params != expected:
-                errors.append(f"{name} signature changed: expected {expected}, got {params}")
+            if not _matches_expected_prefix_with_optional_suffix(signature, expected):
+                errors.append(f"{name} signature changed: expected prefix {expected}, got {params}")
 
     def _check_patch_signatures(self, errors: list[str]) -> None:
         """Check F: PostgreSQLDB method signatures match _lightrag_patches assumptions.
