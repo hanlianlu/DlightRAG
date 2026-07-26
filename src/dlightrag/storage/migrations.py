@@ -19,6 +19,12 @@ VALUES ($1, $2, $3)
 ON CONFLICT (scope, version) DO NOTHING
 """
 
+_SELECT_APPLIED = """SELECT version
+FROM dlightrag_schema_migrations
+WHERE scope = $1
+ORDER BY version
+"""
+
 
 @dataclass(frozen=True)
 class Migration:
@@ -51,13 +57,29 @@ async def apply_migrations(conn: Any, *, scope: str, migrations: tuple[Migration
     await conn.execute("SELECT pg_advisory_lock($1)", lock_key)
     try:
         await conn.execute(_CREATE_LEDGER)
+        applied_versions = await _applied_versions_for_scope(conn, scope)
         for migration in migrations:
+            if migration.version in applied_versions:
+                continue
             async with conn.transaction():
                 for statement in migration.statements:
                     await conn.execute(statement)
                 await conn.execute(_INSERT_APPLIED, scope, migration.version, migration.description)
+            applied_versions.add(migration.version)
     finally:
         await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
+
+
+async def _applied_versions_for_scope(conn: Any, scope: str) -> set[str]:
+    rows = await conn.fetch(_SELECT_APPLIED, scope)
+    return {_version_from_row(row) for row in rows}
+
+
+def _version_from_row(row: Any) -> str:
+    try:
+        return str(row["version"])
+    except (KeyError, TypeError) as exc:  # pragma: no cover - guarded by unit fakes
+        raise TypeError("schema migration rows must expose a 'version' field") from exc
 
 
 def _validate_unique_versions(migrations: tuple[Migration, ...]) -> None:

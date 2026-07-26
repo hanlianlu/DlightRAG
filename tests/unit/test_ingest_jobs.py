@@ -93,6 +93,12 @@ class _Conn:
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
         self.fetches.append((query, args))
+        if "dlightrag_schema_migrations" in query and "version" in query:
+            scope = str(args[0])
+            versions = sorted(
+                version for applied_scope, version in self.applied if applied_scope == scope
+            )
+            return [{"version": version} for version in versions]
         return self.fetch_results.pop(0) if self.fetch_results else []
 
     async def fetchval(self, query: str, *args: Any) -> int:

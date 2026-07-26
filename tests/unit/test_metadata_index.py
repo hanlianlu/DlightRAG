@@ -39,9 +39,16 @@ class _Conn:
     async def fetchval(self, query: str, *args: Any) -> Any:
         if "information_schema.tables" in query:
             return self.table_exists
-        if "dlightrag_schema_migrations" in query and "version" in query:
-            return 1 if (str(args[0]), str(args[1])) in self.applied else None
         return None
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
+        if "dlightrag_schema_migrations" in query and "version" in query:
+            scope = str(args[0])
+            versions = sorted(
+                version for applied_scope, version in self.applied if applied_scope == scope
+            )
+            return [{"version": version} for version in versions]
+        return []
 
     async def execute(self, query: str, *args: Any) -> None:
         self.executed.append((query, args))

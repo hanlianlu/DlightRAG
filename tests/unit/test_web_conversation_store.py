@@ -33,16 +33,30 @@ class FakeConnection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.transactions: list[dict[str, Any]] = []
+        self.applied: set[tuple[str, str]] = set()
         self.fetch_result: list[dict[str, Any]] = []
         self.fetchrow_result: dict[str, Any] | None = None
         self.fetchrow_results: list[dict[str, Any] | None] = []
 
     async def execute(self, query: str, *args: Any) -> str:
         self.calls.append((query, args))
+        if query.startswith("INSERT INTO dlightrag_schema_migrations"):
+            self.applied.add((str(args[0]), str(args[1])))
+            return "INSERT 0 1"
+        if query.startswith("SELECT pg_advisory_lock") or query.startswith(
+            "SELECT pg_advisory_unlock"
+        ):
+            return "SELECT 1"
         return "OK"
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
         self.calls.append((query, args))
+        if "dlightrag_schema_migrations" in query and "version" in query:
+            scope = str(args[0])
+            versions = sorted(
+                version for applied_scope, version in self.applied if applied_scope == scope
+            )
+            return [{"version": version} for version in versions]
         return self.fetch_result
 
     async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
