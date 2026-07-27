@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from lightrag.constants import (
     DEFAULT_COSINE_THRESHOLD,
-    DEFAULT_MM_IMAGE_MIN_PIXEL,
     PARSED_DIR_NAME,
 )
 
@@ -399,9 +398,7 @@ class RAGService:
             embedder=embedder,
             image_enabled=image_enabled,
             dimension=config.embedding.dim,
-            min_image_pixel=(
-                config.parser_sidecars.vlm.min_image_pixel or DEFAULT_MM_IMAGE_MIN_PIXEL
-            ),
+            min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
             batch_size=8,
             max_concurrency=config.embedding_func_max_async,
         )
@@ -737,7 +734,7 @@ class RAGService:
                 metadata_index=self._metadata_index,
                 document_embedder=document_embedder,
                 workspace=config.workspace,
-                parser_rules=config.parser.rules,
+                parser_rules=config.parser_rules,
                 chunk_options=config.parser.chunk_options,
                 metadata_registry=self._metadata_registry,
                 allow_ad_hoc_metadata=config.metadata.allow_ad_hoc_json,

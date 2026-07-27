@@ -109,8 +109,7 @@ CREATE TABLE IF NOT EXISTS web_conversation_attachment_chunks (
     chunk_id TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
-    page_idx INTEGER,
-    bbox JSONB,
+    page_number INTEGER,
     sidecar_type TEXT,
     image_bytes BYTEA,
     image_mime_type TEXT,
@@ -119,6 +118,8 @@ CREATE TABLE IF NOT EXISTS web_conversation_attachment_chunks (
     embedding_signature TEXT,
     embedding_vector JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT web_conversation_attachment_chunks_page_number_check
+            CHECK (page_number IS NULL OR page_number >= 1),
     PRIMARY KEY (
         principal_id,
         conversation_id,
@@ -214,6 +215,28 @@ END $$""",
         (
             "CREATE INDEX IF NOT EXISTS idx_web_conversations_updated "
             "ON web_conversations (updated_at, principal_id, conversation_id)",
+        ),
+    ),
+    Migration(
+        "0006_web_conversation_page_number",
+        "Replace spatial attachment provenance with a 1-based page number",
+        (
+            "ALTER TABLE web_conversation_attachment_chunks DROP COLUMN IF EXISTS bbox",
+            "ALTER TABLE web_conversation_attachment_chunks DROP COLUMN IF EXISTS page_idx",
+            "ALTER TABLE web_conversation_attachment_chunks "
+            "ADD COLUMN IF NOT EXISTS page_number INTEGER",
+            """DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'web_conversation_attachment_chunks_page_number_check'
+          AND conrelid = 'web_conversation_attachment_chunks'::regclass
+    ) THEN
+        ALTER TABLE web_conversation_attachment_chunks
+        ADD CONSTRAINT web_conversation_attachment_chunks_page_number_check
+        CHECK (page_number IS NULL OR page_number >= 1);
+    END IF;
+END $$""",
         ),
     ),
 )
@@ -645,8 +668,7 @@ SELECT
     c.chunk_id,
     c.chunk_index,
     c.content,
-    c.page_idx,
-    c.bbox,
+    c.page_number,
     c.sidecar_type,
     c.image_bytes,
     c.image_mime_type,
@@ -688,13 +710,13 @@ WHERE principal_id = $1
 _INSERT_ATTACHMENT_CHUNK = """
 INSERT INTO web_conversation_attachment_chunks (
     principal_id, conversation_id, content_sha256, parser_signature, chunk_signature,
-    chunk_id, chunk_index, content, page_idx, bbox, sidecar_type,
+    chunk_id, chunk_index, content, page_number, sidecar_type,
     image_bytes, image_mime_type, token_estimate, metadata,
     embedding_signature, embedding_vector
 )
 VALUES (
-    $1, $2::text::uuid, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12,
-    $13, $14, $15::jsonb, $16, $17::jsonb
+    $1, $2::text::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+    $12, $13, $14::jsonb, $15, $16::jsonb
 )
 """
 
@@ -1268,8 +1290,7 @@ class PGWebConversationStore:
                     chunk_index=int(row["chunk_index"]),
                     content=str(row["content"]),
                     token_estimate=int(row["token_estimate"]),
-                    page_idx=row["page_idx"],
-                    bbox=_json_value(row["bbox"]) if row["bbox"] is not None else None,
+                    page_number=row["page_number"],
                     sidecar_type=row["sidecar_type"],
                     image_bytes=bytes(row["image_bytes"])
                     if row["image_bytes"] is not None
@@ -1337,8 +1358,7 @@ class PGWebConversationStore:
                         cache_chunk_id,
                         chunk.chunk_index,
                         chunk.content,
-                        chunk.page_idx,
-                        json.dumps(chunk.bbox) if chunk.bbox is not None else None,
+                        chunk.page_number,
                         chunk.sidecar_type,
                         chunk.image_bytes,
                         chunk.image_mime_type,

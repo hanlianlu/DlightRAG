@@ -209,8 +209,7 @@ def test_project_contexts_for_client_strips_inline_images_and_adds_image_urls() 
                 "reference_id": "1",
                 "file_path": "/private/report.pdf",
                 "content": "Figure evidence",
-                "page_idx": 2,
-                "bbox": {"page_index": 1, "range": [1, 2, 3, 4]},
+                "page_number": 2,
                 "image_mime_type": "image/png",
                 "relevance_score": 0.87,
                 "metadata": {"department": "finance"},
@@ -234,7 +233,9 @@ def test_project_contexts_for_client_strips_inline_images_and_adds_image_urls() 
     assert "image_data" not in chunk
     assert chunk["image_url"] == "/images/workspace%20a/image%20chunk%2F1?size=full"
     assert chunk["thumbnail_url"] == "/images/workspace%20a/image%20chunk%2F1?size=thumb"
-    assert chunk["bbox"] == {"page_index": 1, "range": [1, 2, 3, 4]}
+    assert chunk["page_number"] == 2
+    assert "page_idx" not in chunk
+    assert "bbox" not in chunk
     assert chunk["metadata"] == {"department": "finance"}
     assert "full_doc_id" not in chunk
     assert "score" not in chunk

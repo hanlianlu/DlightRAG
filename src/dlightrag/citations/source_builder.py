@@ -135,10 +135,9 @@ def build_sources_from_chunks(
                 ChunkSnippet(
                     chunk_id=c["chunk_id"],
                     chunk_idx=c.get("chunk_idx") or indexer.get_chunk_idx(ref_id, c["chunk_id"]),
-                    page_idx=c.get("page_idx")
-                    if c.get("page_idx") is not None
-                    else (c.get("metadata", {}) or {}).get("page_idx"),
-                    bbox=c.get("bbox") or (c.get("metadata", {}) or {}).get("bbox"),
+                    page_number=c.get("page_number")
+                    if c.get("page_number") is not None
+                    else (c.get("metadata", {}) or {}).get("page_number"),
                     content=filter_content_for_display(c.get("content", "")),
                     image_url=image_url,
                     thumbnail_url=thumbnail_url,

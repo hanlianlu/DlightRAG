@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from lightrag.constants import DEFAULT_COSINE_THRESHOLD, DEFAULT_MM_IMAGE_MIN_PIXEL
+from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 
 from dlightrag.config import DlightragConfig
 from dlightrag.core.document_embedding import RobustDocumentEmbedder
@@ -388,12 +388,12 @@ class TestRAGServiceRetrieve:
 
         async def hydrate(_stores, chunks, *, include_image_data=True):
             for chunk in chunks:
-                chunk["page_idx"] = 7
+                chunk["page_number"] = 7
 
         async def fail_rerank(query: str, chunks: list[dict], top_k: int) -> list[dict]:
             assert query == "test query"
             assert top_k == 3
-            assert all(chunk["page_idx"] == 7 for chunk in chunks)
+            assert all(chunk["page_number"] == 7 for chunk in chunks)
             raise RuntimeError("provider unavailable")
 
         service._rerank_func = fail_rerank
@@ -437,7 +437,7 @@ class TestRAGServiceRetrieve:
 
         async def hydrate(_stores, chunks, *, include_image_data=True):
             seen.append([chunk["chunk_id"] for chunk in chunks])
-            chunks[0]["page_idx"] = 7
+            chunks[0]["page_number"] = 7
 
         monkeypatch.setattr(
             "dlightrag.core.retrieval.provenance.hydrate_lightrag_chunk_provenance",
@@ -447,7 +447,7 @@ class TestRAGServiceRetrieve:
         result = await service.aretrieve("test query")
 
         assert seen == [["bm25-b"]]
-        assert result.contexts["chunks"][1]["page_idx"] == 7
+        assert result.contexts["chunks"][1]["page_number"] == 7
 
     async def test_aretrieve_defers_image_hydration_for_text_reranker(
         self, test_config, monkeypatch: pytest.MonkeyPatch
@@ -764,19 +764,13 @@ class TestDirectImageEmbeddingCapability:
         assert enabled is True
         embedder.probe_image_embedding.assert_not_awaited()
 
-    @pytest.mark.parametrize(
-        ("configured_minimum", "expected_minimum"),
-        [(None, DEFAULT_MM_IMAGE_MIN_PIXEL), (64, 64)],
-    )
     def test_document_embedder_factory_uses_shared_runtime_limits(
         self,
         test_config: DlightragConfig,
-        configured_minimum: int | None,
-        expected_minimum: int,
     ) -> None:
         test_config.embedding.dim = 7
         test_config.embedding_func_max_async = 5
-        test_config.parser_sidecars.vlm.min_image_pixel = configured_minimum
+        test_config.parser_sidecars.vlm.min_image_pixel = 80
         embedder = MagicMock()
         expected = MagicMock()
 
@@ -795,7 +789,7 @@ class TestDirectImageEmbeddingCapability:
             embedder=embedder,
             image_enabled=True,
             dimension=7,
-            min_image_pixel=expected_minimum,
+            min_image_pixel=80,
             batch_size=8,
             max_concurrency=5,
         )
@@ -2607,7 +2601,7 @@ class TestRAGServiceLightRAGMainPath:
             metadata_index=metadata_index,
             document_embedder=document_embedder,
             workspace=test_config.workspace,
-            parser_rules=test_config.parser.rules,
+            parser_rules=test_config.parser_rules,
             chunk_options=test_config.parser.chunk_options,
         )
         service.alist_failed_docs = AsyncMock(

@@ -142,8 +142,7 @@ async def test_attachment_chunk_load_is_ttl_scoped_and_keeps_cache_identity_priv
             "chunk_id": "stored-cache-id",
             "chunk_index": 1,
             "content": "alpha",
-            "page_idx": None,
-            "bbox": None,
+            "page_number": None,
             "sidecar_type": None,
             "image_bytes": None,
             "image_mime_type": None,
@@ -728,6 +727,17 @@ def test_records_are_frozen_and_schema_is_exact() -> None:
     assert "BYTEA" in sql
     assert "submission_id UUID NOT NULL" in sql
     assert "principal_id, conversation_id, submission_id" in sql
+    page_migration = WEB_CONVERSATION_MIGRATIONS[-1]
+    assert page_migration.version == "0006_web_conversation_page_number"
+    assert any("DROP COLUMN IF EXISTS bbox" in statement for statement in page_migration.statements)
+    assert any(
+        "DROP COLUMN IF EXISTS page_idx" in statement for statement in page_migration.statements
+    )
+    assert any(
+        "ADD COLUMN IF NOT EXISTS page_number INTEGER" in statement
+        for statement in page_migration.statements
+    )
+    assert any("page_number >= 1" in statement for statement in page_migration.statements)
 
 
 async def test_same_submission_replay_returns_authoritative_turn_without_insert() -> None:

@@ -41,8 +41,8 @@ extraction, or LightRAG `mix` retrieval.
 source file or upload
   -> DlightRAG source staging and metadata normalization
   -> LightRAG parser routing
-       native route for DOCX, Markdown, and textpack inputs
-       MinerU-compatible route for configured sidecar document formats
+     one internal wildcard derived from the configured MinerU or Docling block
+     unsupported engine/suffix combinations use LightRAG native/legacy fallback
   -> LightRAG staged ingest
        chunks, multimodal semantic text, KG entities/relations, vector rows
   -> DlightRAG post-ingest maintenance
@@ -57,6 +57,13 @@ the startup probe succeeds, DlightRAG aligns the existing canonical LightRAG
 visual chunk with a fused vector that interleaves the VLM description and the
 image. With a text-only embedding model, this alignment is skipped and
 LightRAG's semantic visual chunk remains the multimodal ingestion path.
+
+Parser adapters converge on LightRAG's shared IR and sidecars. DlightRAG does
+not branch on MinerU versus Docling after that boundary. The same derived parser
+policy is injected into workspace ingestion and Web Composer document parsing;
+Composer adds no parser selector or client of its own. Tables and equations
+remain structured text evidence, while successful drawings use the shared VLM
+and fused-vector path.
 
 ## Web Composer Document Flow
 

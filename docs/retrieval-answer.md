@@ -39,14 +39,16 @@ source file
 ```
 
 All source files that LightRAG can ingest, including native image files, go
-through LightRAG parser/routing. Tables, equations, text, and document-derived
-image sidecars stay aligned with the LightRAG document record.
+through LightRAG parser/routing. DlightRAG derives one internal wildcard from
+the configured MinerU or Docling sidecar block; if both blocks exist, MinerU is
+effective. Tables, equations, text, and document-derived image sidecars stay
+aligned with the LightRAG document record.
 LightRAG raw-route documents can have no sidecar artifacts; those documents
 still participate in LightRAG text/KG/vector retrieval but do not receive
 fused visual-vector alignment.
-With DlightRAG's default
-`docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP` rules,
-this is a defensive path rather than the normal document parser route.
+The selected engine applies only to suffixes it supports. LightRAG routes other
+suffixes to their native/default or legacy path without first calling the
+external parser.
 
 Successful drawing sidecars have one canonical chunk identity. LightRAG's
 multimodal semantic chunk owns `llm_analyze_result` text and exposes it through
@@ -383,6 +385,11 @@ real LightRAG text chunkers and multimodal sidecar renderer. Parser persistence
 is neutralized by the parse-owner shim. This path cannot write workspace
 `full_docs`, `doc_status`, chunks, vectors, BM25, LLM cache, or KG rows and never
 enters public `/retrieve`.
+
+Composer receives the same internally derived MinerU/Docling wildcard as
+workspace ingestion. It has no separate parser configuration, client, retry
+policy, or fallback. Docling pictures therefore enter the same successful
+drawing/VLM/fused-vector path; tables and equations remain structured text.
 
 The Web transport admits current Composer documents before creating the SSE
 response. Application-invalid or per-document oversized uploads return HTTP

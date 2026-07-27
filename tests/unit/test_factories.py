@@ -17,8 +17,10 @@ from dlightrag.config import (
     LLMConfig,
     LLMRolesConfig,
     ModelConfig,
+    ParserSidecarsConfig,
     QueryImagesConfig,
     RerankConfig,
+    VLMSidecarConfig,
 )
 from dlightrag.models.structured import StructuredOutput
 
@@ -880,8 +882,6 @@ class TestComposerAnalysisAdapter:
             return value, 100
 
         monkeypatch.setattr(images, "bounded_image_data_uri", bounded_image_data_uri)
-        monkeypatch.setenv("VLM_MAX_IMAGE_BYTES", "300000")
-        monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "128")
         cfg = DlightragConfig(
             llm=LLMConfig(default=ModelConfig(model="vision", api_key="sk-test")),
             embedding=_embedding_config(),
@@ -889,6 +889,12 @@ class TestComposerAnalysisAdapter:
                 image_max_bytes=1_000_000,
                 image_max_total_bytes=2_000_000,
                 image_min_px=32,
+            ),
+            parser_sidecars=ParserSidecarsConfig(
+                vlm=VLMSidecarConfig(
+                    max_image_bytes=300_000,
+                    min_image_pixel=128,
+                )
             ),
         )
         adapter, _identity, _close = llm.create_composer_analysis_adapter(cfg, role="vlm")

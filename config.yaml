@@ -103,7 +103,7 @@ extraction:
 parser_sidecars:
   mineru:
     api_mode: local
-    local_endpoint: http://127.0.0.1:8210
+    local_endpoint: http://host.docker.internal:8210
     language: ch
     ## MinerU parse engine. Unset = LightRAG default (hybrid-auto-engine, VLM-assisted).
     ## Set backend: pipeline for MinerU's non-VLM OCR engine (avoids VLM transcription
@@ -113,6 +113,11 @@ parser_sidecars:
     # api_mode: official
     # official_endpoint: https://mineru.net
     ## Put DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN in .env.
+
+  ## To use Docling instead, comment/remove the MinerU block above and enable
+  ## this block. If both are configured, MinerU takes priority.
+  # docling:
+  #   endpoint: http://docling:5001
 
 # ─────────────────────────────────────────────────────────────────
 # Product Schema

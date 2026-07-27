@@ -9,13 +9,6 @@ x-common-env: &common-env
   DLIGHTRAG_POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
   DLIGHTRAG_WORKSPACE: ${DLIGHTRAG_WORKSPACE:-default}
   DLIGHTRAG_WORKING_DIR: /app/dlightrag_storage
-  # config.yaml defaults to a native host MinerU sidecar at 127.0.0.1:8210.
-  # Inside a DlightRAG container, 127.0.0.1 is the app container itself, so
-  # route that externally managed sidecar through Docker's host alias unless
-  # explicitly overridden.
-  MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}
-  # OFFICIAL_ENDPOINT: https://mineru.net
-
 x-app-image: &app-image dlightrag:local
 x-app-build: &app-build
   context: .
@@ -179,6 +172,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  docling:
+    profiles: [docling]
+    image: ${DOCLING_SERVE_IMAGE:-quay.io/docling-project/docling-serve-cpu:latest}
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5001"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health', timeout=3).close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
 volumes:
   dlightrag_data:

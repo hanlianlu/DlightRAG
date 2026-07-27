@@ -539,7 +539,7 @@ class WebConversationService:
         return ComposerDocumentService(
             lightrag=resources.lightrag,
             store=self._store,
-            parser_rules=resources.config.parser.rules,
+            parser_rules=resources.config.parser_rules,
             ttl_days=self._ttl_days,
             robust_document_embedder=resources.robust_document_embedder,
             direct_image_embedding_enabled=resources.direct_image_embedding_enabled,

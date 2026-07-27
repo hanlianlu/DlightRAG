@@ -97,6 +97,7 @@ Concurrency knobs affect different bottlenecks:
 | `max_parallel_insert` | staged insert/vector/KG write workers | PostgreSQL writes and vector indexes |
 | `max_parallel_parse_native` | native parser workers | CPU and file I/O |
 | `max_parallel_parse_mineru` | External parser workers for the MinerU-compatible route | Parser service, CPU/GPU, OCR latency |
+| `max_parallel_parse_docling` | External parser workers for the Docling route | Parser service, CPU/GPU, OCR latency |
 | `max_parallel_analyze` | visual/multimodal analysis workers | VLM endpoint limits |
 | `max_async` | LightRAG LLM request concurrency | LLM endpoint limits |
 | `embedding_func_max_async` | embedding request concurrency | embedding endpoint and vector writes |
@@ -116,6 +117,11 @@ and AGE graph schemas remain managed by LightRAG.
 
 DlightRAG ensures these idempotent DDL migrations on startup and records their
 versions in the ledger.
+
+Web Composer attachment chunks store only an optional 1-based `page_number` for
+display. Spatial bbox data and the ambiguous `page_idx` field are not part of
+the DlightRAG schema. Existing evidence rows keep their text/citation identity
+through the migration but do not receive a guessed historical page number.
 
 ## LightRAG AGE Contract Patches
 

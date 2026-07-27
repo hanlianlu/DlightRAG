@@ -146,7 +146,7 @@ def test_default_parser_routing_has_no_unrouted_fallback() -> None:
         ),
     )
 
-    assert ("leg" + "acy") not in cfg.parser.rules.lower()
+    assert ("leg" + "acy") not in cfg.parser_rules.lower()
 
 
 def test_config_yaml_uses_input_modality_for_rerank() -> None:
@@ -159,12 +159,13 @@ def test_config_yaml_uses_input_modality_for_rerank() -> None:
     assert "multimodal:" not in config
 
 
-def test_compose_routes_container_mineru_to_host_sidecar_by_default() -> None:
+def test_curated_config_routes_container_mineru_to_host_sidecar_by_default() -> None:
+    config = Path("config.yaml").read_text(encoding="utf-8")
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
-    assert (
-        "MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}"
-    ) in compose
+    assert "local_endpoint: http://host.docker.internal:8210" in config
+    assert "DLIGHTRAG_PARSER_SIDECARS__MINERU__LOCAL_ENDPOINT" not in compose
+    assert "DLIGHTRAG_PARSER_SIDECARS__DOCLING__ENDPOINT" not in compose
 
 
 def test_codeql_config_filters_self_referential_advanced_setup_alert() -> None:

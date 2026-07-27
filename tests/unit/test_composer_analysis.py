@@ -4,7 +4,6 @@
 import asyncio
 import base64
 import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,9 +13,7 @@ import pytest
 from lightrag import LightRAG
 from lightrag.constants import (
     DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
-    DEFAULT_MM_IMAGE_MIN_PIXEL,
 )
-from lightrag.multimodal_context import DEFAULT_SURROUNDING_MAX_TOKENS
 
 from dlightrag.config import (
     DlightragConfig,
@@ -53,7 +50,14 @@ class _Tokenizer:
         return value.split()
 
 
-def _config(*, enabled: bool = True) -> DlightragConfig:
+def _config(
+    *,
+    enabled: bool = True,
+    max_image_bytes: int = 5 * 1024 * 1024,
+    min_image_pixel: int = 80,
+    surrounding_leading_max_tokens: int = 256,
+    surrounding_trailing_max_tokens: int = 256,
+) -> DlightragConfig:
     return DlightragConfig(
         llm=LLMConfig(
             default=ModelConfig(
@@ -86,7 +90,15 @@ def _config(*, enabled: bool = True) -> DlightragConfig:
             api_key="sk-embed-secret",
             startup_probe=False,
         ),
-        parser_sidecars=ParserSidecarsConfig(vlm=VLMSidecarConfig(enabled=enabled)),
+        parser_sidecars=ParserSidecarsConfig(
+            vlm=VLMSidecarConfig(
+                enabled=enabled,
+                max_image_bytes=max_image_bytes,
+                min_image_pixel=min_image_pixel,
+                surrounding_leading_max_tokens=surrounding_leading_max_tokens,
+                surrounding_trailing_max_tokens=surrounding_trailing_max_tokens,
+            )
+        ),
     )
 
 
@@ -312,7 +324,6 @@ async def test_real_unbound_analyzer_degrades_when_composer_rejects_image(
 ) -> None:
     from dlightrag.models import llm
 
-    monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "1")
     image_path = tmp_path / "drawing.png"
     image_path.write_bytes(
         base64.b64decode(
@@ -335,10 +346,11 @@ async def test_real_unbound_analyzer_degrades_when_composer_rejects_image(
             return "{}"
 
     monkeypatch.setattr(llm, "get_provider", lambda *args, **kwargs: _Provider())
-    config = _config().model_copy(
+    base_config = _config(min_image_pixel=1)
+    config = base_config.model_copy(
         update={
-            "answer": _config().answer.model_copy(update={"max_images": 0}),
-            "query_images": _config().query_images.model_copy(update={"max_current_images": 0}),
+            "answer": base_config.answer.model_copy(update={"max_images": 0}),
+            "query_images": base_config.query_images.model_copy(update={"max_current_images": 0}),
         }
     )
     vlm, _identity, _close = llm.create_composer_analysis_adapter(config, role="vlm")
@@ -694,33 +706,18 @@ def test_analysis_signature_changes_with_each_image_transport_setting(
 
 
 @pytest.mark.parametrize(
-    ("env_name", "env_value", "payload_path", "expected"),
+    ("field_name", "field_value", "payload_key"),
     [
-        ("VLM_MAX_IMAGE_BYTES", "4000000", ("sidecar_limits", "max_image_bytes"), 4_000_000),
-        ("VLM_MIN_IMAGE_PIXEL", "96", ("sidecar_limits", "min_image_pixel"), 96),
-        (
-            "SURROUNDING_LEADING_MAX_TOKENS",
-            "321",
-            ("sidecar_limits", "surrounding_leading_max_tokens"),
-            321,
-        ),
-        (
-            "SURROUNDING_TRAILING_MAX_TOKENS",
-            "654",
-            ("sidecar_limits", "surrounding_trailing_max_tokens"),
-            654,
-        ),
-        ("MAX_EXTRACT_INPUT_TOKENS", "12345", ("max_extract_input_tokens",), 12_345),
+        ("max_image_bytes", 4_000_000, "max_image_bytes"),
+        ("surrounding_leading_max_tokens", 321, "surrounding_leading_max_tokens"),
+        ("surrounding_trailing_max_tokens", 654, "surrounding_trailing_max_tokens"),
     ],
 )
-def test_analysis_signature_tracks_each_effective_lightrag_env_override(
-    monkeypatch: pytest.MonkeyPatch,
-    env_name: str,
-    env_value: str,
-    payload_path: tuple[str, ...],
-    expected: int,
+def test_analysis_signature_tracks_typed_sidecar_limits(
+    field_name: str,
+    field_value: int,
+    payload_key: str,
 ) -> None:
-    _unset_analysis_env(monkeypatch)
     baseline_config = _config()
     baseline = build_composer_analysis_signature(
         lightrag=_lightrag(),
@@ -729,9 +726,8 @@ def test_analysis_signature_tracks_each_effective_lightrag_env_override(
         process_options="iteP",
     )
 
-    monkeypatch.setenv(env_name, env_value)
-    overridden_config = _config()
-    assert os.environ[env_name] == env_value
+    overrides: dict[str, Any] = {field_name: field_value}
+    overridden_config = _config(**overrides)
     updated = build_composer_analysis_signature(
         lightrag=_lightrag(),
         model_bundle=_bundle(),
@@ -740,14 +736,11 @@ def test_analysis_signature_tracks_each_effective_lightrag_env_override(
     )
 
     assert updated != baseline
-    recorded: object = json.loads(updated)
-    for key in payload_path:
-        assert isinstance(recorded, dict)
-        recorded = recorded[key]
-    assert recorded == expected
+    recorded = json.loads(updated)
+    assert recorded["sidecar_limits"][payload_key] == field_value
 
 
-def test_effective_analysis_settings_use_lightrag_defaults_when_env_is_unset(
+def test_effective_analysis_settings_use_typed_image_minimum_when_env_is_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _unset_analysis_env(monkeypatch)
@@ -765,60 +758,40 @@ def test_effective_analysis_settings_use_lightrag_defaults_when_env_is_unset(
     )
 
     assert settings.vlm_max_image_bytes == 5 * 1024 * 1024
-    assert settings.vlm_min_image_pixel == DEFAULT_MM_IMAGE_MIN_PIXEL
-    assert settings.surrounding_leading_max_tokens == DEFAULT_SURROUNDING_MAX_TOKENS
-    assert settings.surrounding_trailing_max_tokens == DEFAULT_SURROUNDING_MAX_TOKENS
+    assert settings.vlm_min_image_pixel == 80
+    assert settings.surrounding_leading_max_tokens == 256
+    assert settings.surrounding_trailing_max_tokens == 256
     assert settings.max_extract_input_tokens == DEFAULT_MAX_EXTRACT_INPUT_TOKENS
     assert payload["sidecar_limits"] == {
         "max_image_bytes": 5 * 1024 * 1024,
-        "min_image_pixel": DEFAULT_MM_IMAGE_MIN_PIXEL,
-        "surrounding_leading_max_tokens": DEFAULT_SURROUNDING_MAX_TOKENS,
-        "surrounding_trailing_max_tokens": DEFAULT_SURROUNDING_MAX_TOKENS,
+        "min_image_pixel": 80,
+        "surrounding_leading_max_tokens": 256,
+        "surrounding_trailing_max_tokens": 256,
     }
     assert payload["max_extract_input_tokens"] == DEFAULT_MAX_EXTRACT_INPUT_TOKENS
 
 
-@pytest.mark.parametrize(
-    ("configured", "env_value", "expected"),
-    [
-        (False, "true", True),
-        (True, "false", False),
-        (False, "ON", True),
-        (True, "not-a-bool", False),
-    ],
-)
-def test_vlm_process_env_overrides_typed_config_with_upstream_bool_parsing(
+def test_typed_image_minimum_wins_over_stale_upstream_env(
     monkeypatch: pytest.MonkeyPatch,
-    configured: bool,
-    env_value: str,
-    expected: bool,
 ) -> None:
-    from lightrag.utils import get_env_value
+    config = _config(min_image_pixel=96)
+    monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "32")
 
-    monkeypatch.setenv("VLM_PROCESS_ENABLE", env_value)
-    config = _config(enabled=configured)
     settings = ComposerAnalysisSettings.resolve(config)
-    signature = json.loads(
+    payload = json.loads(
         build_composer_analysis_signature(
             lightrag=_lightrag(),
             model_bundle=_bundle(),
             config=config,
-            process_options="iP",
+            process_options="iteP",
         )
     )
-    proxy = create_composer_analysis_proxy(
-        lightrag=_lightrag(),
-        model_bundle=_bundle(),
-        config=config,
-    )
 
-    assert settings.enabled is expected
-    assert settings.enabled is get_env_value("VLM_PROCESS_ENABLE", configured, bool)
-    assert signature["enabled"] is expected
-    assert proxy._build_global_config()["vlm_process_enable"] is expected
+    assert settings.vlm_min_image_pixel == 96
+    assert payload["sidecar_limits"]["min_image_pixel"] == 96
 
 
-async def test_effective_vlm_enablement_controls_runtime_preflight(
+async def test_typed_vlm_enablement_controls_runtime_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -830,13 +803,11 @@ async def test_effective_vlm_enablement_controls_runtime_preflight(
 
     analyze_mock = AsyncMock(side_effect=analyze)
     monkeypatch.setattr(LightRAG, "analyze_multimodal", analyze_mock)
-    monkeypatch.setenv("VLM_PROCESS_ENABLE", "false")
-
     disabled = await aanalyze_composer_sidecars(
         lightrag=_lightrag(),
         model_bundle=_bundle(),
-        config=_config(enabled=True),
-        doc_id="doc-disabled-by-env",
+        config=_config(enabled=False),
+        doc_id="doc-disabled-by-config",
         file_path="report.pdf",
         parsed_data={"blocks_path": str(blocks_path)},
         process_options="iP",
@@ -845,12 +816,11 @@ async def test_effective_vlm_enablement_controls_runtime_preflight(
     assert disabled.outcome is ComposerAnalysisOutcome.INTENTIONALLY_DISABLED
     analyze_mock.assert_not_awaited()
 
-    monkeypatch.setenv("VLM_PROCESS_ENABLE", "true")
     enabled = await aanalyze_composer_sidecars(
         lightrag=_lightrag(),
         model_bundle=_bundle(),
-        config=_config(enabled=False),
-        doc_id="doc-enabled-by-env",
+        config=_config(enabled=True),
+        doc_id="doc-enabled-by-config",
         file_path="report.pdf",
         parsed_data={"blocks_path": str(blocks_path)},
         process_options="iP",
@@ -863,34 +833,6 @@ async def test_effective_vlm_enablement_controls_runtime_preflight(
 @pytest.mark.parametrize(
     ("env_name", "env_value", "attribute", "payload_path", "expected"),
     [
-        (
-            "VLM_MAX_IMAGE_BYTES",
-            "1",
-            "vlm_max_image_bytes",
-            ("sidecar_limits", "max_image_bytes"),
-            256 * 1024,
-        ),
-        (
-            "VLM_MIN_IMAGE_PIXEL",
-            "0",
-            "vlm_min_image_pixel",
-            ("sidecar_limits", "min_image_pixel"),
-            1,
-        ),
-        (
-            "SURROUNDING_LEADING_MAX_TOKENS",
-            "-1",
-            "surrounding_leading_max_tokens",
-            ("sidecar_limits", "surrounding_leading_max_tokens"),
-            0,
-        ),
-        (
-            "SURROUNDING_TRAILING_MAX_TOKENS",
-            "-2",
-            "surrounding_trailing_max_tokens",
-            ("sidecar_limits", "surrounding_trailing_max_tokens"),
-            0,
-        ),
         (
             "MAX_EXTRACT_INPUT_TOKENS",
             "-3",
@@ -929,34 +871,9 @@ def test_effective_analysis_settings_apply_only_upstream_clamps(
     assert recorded == expected
 
 
-@pytest.mark.parametrize("env_name", ["VLM_MAX_IMAGE_BYTES", "VLM_MIN_IMAGE_PIXEL"])
-@pytest.mark.parametrize("env_value", ["", "not-an-int"])
-def test_effective_vlm_limits_raise_on_invalid_env_like_lightrag(
-    monkeypatch: pytest.MonkeyPatch,
-    env_name: str,
-    env_value: str,
-) -> None:
-    _unset_analysis_env(monkeypatch)
-    config = _config()
-    monkeypatch.setenv(env_name, env_value)
-
-    with pytest.raises(ValueError):
-        ComposerAnalysisSettings.resolve(config)
-
-
 @pytest.mark.parametrize(
     ("env_name", "attribute", "expected"),
     [
-        (
-            "SURROUNDING_LEADING_MAX_TOKENS",
-            "surrounding_leading_max_tokens",
-            DEFAULT_SURROUNDING_MAX_TOKENS,
-        ),
-        (
-            "SURROUNDING_TRAILING_MAX_TOKENS",
-            "surrounding_trailing_max_tokens",
-            DEFAULT_SURROUNDING_MAX_TOKENS,
-        ),
         (
             "MAX_EXTRACT_INPUT_TOKENS",
             "max_extract_input_tokens",
@@ -985,9 +902,7 @@ def test_effective_analysis_settings_preserve_answer_fingerprint_and_tighten_vlm
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _unset_analysis_env(monkeypatch)
-    config = _config()
-    monkeypatch.setenv("VLM_MAX_IMAGE_BYTES", "300000")
-    monkeypatch.setenv("VLM_MIN_IMAGE_PIXEL", "2048")
+    config = _config(max_image_bytes=300_000, min_image_pixel=2_048)
 
     settings = ComposerAnalysisSettings.resolve(config)
 

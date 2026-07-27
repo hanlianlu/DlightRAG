@@ -58,7 +58,7 @@ def test_gallery_label_includes_cited_page() -> None:
             {
                 "chunk_id": "c1",
                 "chunk_idx": 1,
-                "page_idx": 7,
+                "page_number": 7,
                 "image_url": "/img/c1",
                 "thumbnail_url": "/img/c1/thumb",
             }

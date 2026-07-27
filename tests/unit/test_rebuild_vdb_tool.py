@@ -333,7 +333,7 @@ def _fake_config() -> SimpleNamespace:
         embedding_batch_num=7,
         vector_db_kwargs={},
         metadata_filter_exact_vector_threshold=8192,
-        parser=SimpleNamespace(rules="docx:native-iteP,*:mineru-iteP"),
+        parser_rules="*:mineru-iteP",
         parser_sidecars=SimpleNamespace(
             vlm=SimpleNamespace(min_image_pixel=64),
         ),

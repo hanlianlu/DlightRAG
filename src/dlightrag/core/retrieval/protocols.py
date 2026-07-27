@@ -20,8 +20,7 @@ class ChunkContext(TypedDict):
     file_path: str
     content: str
     full_doc_id: NotRequired[str]
-    page_idx: NotRequired[int | None]
-    bbox: NotRequired[dict[str, Any] | None]
+    page_number: NotRequired[int | None]
     image_data: NotRequired[str | None]
     image_mime_type: NotRequired[str | None]
     image_url: NotRequired[str | None]

@@ -40,7 +40,7 @@ def _make_contexts():
             "file_path": "/docs/report.pdf",
             "content": "Market growth reached 15% this year.",
             "_workspace": "default",
-            "metadata": _metadata("report.pdf", "/docs/report.pdf", page_idx=3),
+            "metadata": _metadata("report.pdf", "/docs/report.pdf", page_number=3),
         },
         {
             "chunk_id": "c2",
@@ -49,7 +49,7 @@ def _make_contexts():
             "file_path": "/docs/report.pdf",
             "content": "Revenue exceeded expectations.",
             "_workspace": "default",
-            "metadata": _metadata("report.pdf", "/docs/report.pdf", page_idx=5),
+            "metadata": _metadata("report.pdf", "/docs/report.pdf", page_number=5),
         },
         {
             "chunk_id": "c3",
@@ -58,7 +58,7 @@ def _make_contexts():
             "file_path": "/docs/analysis.xlsx",
             "content": "Technical indicators show positive trend.",
             "_workspace": "default",
-            "metadata": _metadata("analysis.xlsx", "/docs/analysis.xlsx", page_idx=1),
+            "metadata": _metadata("analysis.xlsx", "/docs/analysis.xlsx", page_number=1),
         },
     ]
 
@@ -129,7 +129,7 @@ def test_image_only_chunk_is_citable():
             "content": "",
             "image_data": "base64-page-image",
             "file_path": "/data/chart.pdf",
-            "page_idx": 4,
+            "page_number": 4,
             "_workspace": "default",
             "metadata": _metadata("chart.pdf", "/data/chart.pdf"),
         }
@@ -177,17 +177,17 @@ def test_source_catalog_metadata_is_preserved():
     assert result.sources[0].download_locator == "s3://bucket/doc.pdf"
 
 
-class TestCitationProcessorFlatPageIdx:
-    """Test that page_idx is read from flat context field (not nested metadata)."""
+class TestCitationProcessorFlatPageNumber:
+    """Test that page_number is read from flat context metadata."""
 
-    def test_page_idx_from_flat_field(self):
+    def test_page_number_from_flat_field(self):
         contexts = [
             {
                 "chunk_id": "c1",
                 "reference_id": "1",
                 "content": "Page one content",
                 "file_path": "/data/doc.pdf",
-                "page_idx": 1,
+                "page_number": 1,
                 "_workspace": "default",
                 "metadata": _metadata("doc.pdf", "/data/doc.pdf"),
             },
@@ -196,7 +196,7 @@ class TestCitationProcessorFlatPageIdx:
                 "reference_id": "1",
                 "content": "Page two content",
                 "file_path": "/data/doc.pdf",
-                "page_idx": 2,
+                "page_number": 2,
                 "_workspace": "default",
                 "metadata": _metadata("doc.pdf", "/data/doc.pdf"),
             },
@@ -212,5 +212,5 @@ class TestCitationProcessorFlatPageIdx:
         src = result.sources[0]
         assert src.chunks is not None
         assert len(src.chunks) == 2
-        assert src.chunks[0].page_idx == 1
-        assert src.chunks[1].page_idx == 2
+        assert src.chunks[0].page_number == 1
+        assert src.chunks[1].page_number == 2

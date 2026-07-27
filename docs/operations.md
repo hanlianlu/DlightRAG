@@ -8,6 +8,23 @@ recovery workflows. PostgreSQL deployment tuning lives in
 
 The commands here are not part of normal ingestion or query traffic.
 
+## Optional Docling Parser
+
+Parser selection comes from `config.yaml`: keep one
+`parser_sidecars.mineru` or `parser_sidecars.docling` block. If both are
+present, MinerU takes priority. The optional local Docling service is not a
+core dependency and starts only with:
+
+```bash
+docker compose --profile docling up -d
+```
+
+It uses `quay.io/docling-project/docling-serve-cpu:latest` with
+`pull_policy: always`, publishes only `127.0.0.1:5001`, and exposes `/health`.
+Set `DOCLING_SERVE_IMAGE` for another official image. External deployments set
+the Docling block's endpoint and leave the profile disabled. DlightRAG does not
+provide Docling install, launchd, systemd, or service-management scripts.
+
 ## Workspace BM25 Rebuild
 
 `dlightrag-rebuild-bm25` provisions the configured pg_textsearch indexes and
@@ -223,7 +240,7 @@ the secret keys to `.env`. Set it for how DlightRAG itself runs:
 
 Inside a container `localhost` is the container itself, so a Dockerized app
 reaches the host-published Langfuse port through the Docker host alias, the same
-way it reaches the MinerU sidecar. Your browser and `make langfuse-health` use
+way it reaches a host-native parser. Your browser and `make langfuse-health` use
 `http://localhost:3300` because they run on the host. On native Linux Docker, a
 host alias reaching a loopback-bound port can need extra host networking. If
 `langfuse_host` is unset, DlightRAG falls back to Langfuse Cloud.

@@ -7,7 +7,7 @@ import pytest
 from lightrag.parser.registry import suffix_capabilities
 from lightrag.parser.routing import resolve_parser_directives
 
-from dlightrag.config import ParserConfig
+from dlightrag.config import DlightragConfig, EmbeddingConfig
 from dlightrag.web.attachment_models import (
     COMPOSER_DOCUMENT_EXTENSIONS,
     MAX_CURRENT_DOCUMENTS,
@@ -28,13 +28,20 @@ def test_classify_web_attachment_separates_images_and_documents() -> None:
 
 def test_composer_document_policy_is_supported_by_default_parser_routing() -> None:
     assert COMPOSER_DOCUMENT_EXTENSIONS
-    rules = ParserConfig().rules
+    config = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        )
+    )
 
     unsupported: list[str] = []
     for extension in sorted(COMPOSER_DOCUMENT_EXTENSIONS):
         directives = resolve_parser_directives(
             f"document.{extension}",
-            parser_rules=rules,
+            parser_rules=config.parser_rules,
             require_external_endpoint=False,
         )
         if extension not in suffix_capabilities(directives.engine):

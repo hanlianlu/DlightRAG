@@ -1,6 +1,6 @@
 """Citation data models — ported from sandbox_agent, framework-agnostic."""
 
-from typing import Any, Protocol
+from typing import Protocol
 
 from pydantic import BaseModel, Field
 
@@ -10,8 +10,7 @@ class ChunkSnippet(BaseModel):
 
     chunk_id: str
     chunk_idx: int | None = None
-    page_idx: int | None = None
-    bbox: dict[str, Any] | None = None
+    page_number: int | None = None
     content: str
     image_url: str | None = None
     thumbnail_url: str | None = None

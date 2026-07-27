@@ -275,8 +275,6 @@ class _DeterministicComposerParser:
                         "drawings": {
                             "drawing-1": {
                                 "path": image_path.name,
-                                "page_idx": 0,
-                                "bbox": [0, 0, 1, 1],
                             }
                         }
                     }
@@ -492,7 +490,7 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
                     chunk_index=0,
                     content="The quarterly results improved.",
                     token_estimate=7,
-                    page_idx=0,
+                    page_number=1,
                     metadata={"kind": "text"},
                     embedding_signature="embed@v1",
                     embedding_vector=[1.0, 0.0],
@@ -504,7 +502,7 @@ async def test_web_conversation_attachment_storage_round_trip() -> None:
                     chunk_index=1,
                     content="Figure 1: revenue chart.",
                     token_estimate=5,
-                    page_idx=0,
+                    page_number=1,
                     sidecar_type="image",
                     image_bytes=image_bytes,
                     image_mime_type="image/png",

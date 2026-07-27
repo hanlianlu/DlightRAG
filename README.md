@@ -31,15 +31,16 @@ DlightRAG has one unified production RAG path: LightRAG provides fusional one-ho
 
 | Path | Use this when | PostgreSQL | Parser endpoint | Security | Start here |
 |---|---|---|---|---|---|
-| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native MinerU-compatible sidecar | `auth_mode: none` on loopback | [Quick Start](#quick-start) |
-| Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable MinerU-compatible endpoint | Local or explicit auth | [Native API Variant](#native-api-variant) |
+| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native MinerU (default) or optional Docling profile | `auth_mode: none` on loopback | [Quick Start](#quick-start) |
+| Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable configured MinerU or Docling endpoint | Local or explicit auth | [Native API Variant](#native-api-variant) |
 | Shared service | Remote users, agents, team workspace | Managed or self-hosted PG18 | Official MinerU API or independent parser service | `simple` or `jwt` | [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md), [Security](docs/security.md) |
 | Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control | [Security](docs/security.md), [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md) |
 
-Do not install MinerU into the DlightRAG app container. DlightRAG consumes the
-MinerU-compatible HTTP endpoint that LightRAG expects. On macOS, keep MinerU as
-a native host process so MLX/MPS acceleration is available. On Linux GPU, run
-MinerU as an independent service/router or use the official API.
+Do not install a parser into the DlightRAG app container. Configure one
+`parser_sidecars.mineru` or `parser_sidecars.docling` block; DlightRAG derives
+LightRAG routing automatically. If both blocks are present, MinerU takes
+priority. On macOS, keep MinerU as a native host process for MLX/MPS, or use the
+optional Docling Compose profile.
 
 ## Quick Start
 
@@ -70,9 +71,9 @@ or [development](#operations-and-development).
 
 ### One-command setup (recommended)
 
-From a fresh clone, an interactive wizard configures your models, sets up MinerU
-(local or the official cloud API), brings up the stack, and ends with a clickable
-Web UI link:
+From a fresh clone, an interactive wizard configures your models, selects
+MinerU (local/official) or Docling (bundled/external), brings up the stack, and
+ends with a clickable Web UI link:
 
 ```bash
 git clone https://github.com/hanlianlu/dlightrag.git
@@ -116,7 +117,7 @@ sidecar settings, metadata schema, retrieval breadth, auth mode, Langfuse
 behavior, and deployment endpoints. Deep config reference is in
 [docs/configuration.md](docs/configuration.md).
 
-2. Install and start a native MinerU sidecar if one is not already running:
+2. Choose one parser. The checked-in config uses a native MinerU sidecar:
 
 ```bash
 cp .env.mineru.example .env.mineru
@@ -125,8 +126,8 @@ make mineru-api
 ```
 
 `make mineru-api` serves `http://127.0.0.1:8210` by default and blocks in the
-current terminal. Docker Compose does not run MinerU; it maps the host-native
-endpoint into DlightRAG containers as `http://host.docker.internal:8210`.
+current terminal. Its config block uses `http://host.docker.internal:8210`,
+which is reachable from the DlightRAG containers.
 
 To run MinerU in the background instead (launchd on macOS, `systemd --user` on
 Linux/WSL2), use the service targets — one command starts **both** the API
@@ -141,6 +142,17 @@ make mineru-service-status    # also: -start / -stop / -logs / -uninstall
 The WebUI opens at `http://127.0.0.1:7860` (unauthenticated — keep it on
 loopback). Set `MINERU_GRADIO_ENABLE=false` in `.env.mineru` to manage the API
 backend alone.
+
+Alternatively, comment/remove the MinerU block in `config.yaml`, enable the
+commented Docling block, and start the optional official CPU image:
+
+```bash
+docker compose --profile docling up -d
+```
+
+The image follows `quay.io/docling-project/docling-serve-cpu:latest`. Set a
+different official image with `DOCLING_SERVE_IMAGE`; external Docling users set
+the block's `endpoint` instead and do not enable the profile.
 
 3. Start DlightRAG and PostgreSQL:
 
@@ -173,11 +185,15 @@ Docker:
 ```bash
 docker compose up -d postgres
 uv sync
-uv run dlightrag-api
+DLIGHTRAG_PARSER_SIDECARS__MINERU__LOCAL_ENDPOINT=http://127.0.0.1:8210 \
+  uv run dlightrag-api
 ```
 
 Native runs can ingest host paths directly because the API process sees the
-same filesystem as your shell.
+same filesystem as your shell. The checked config is Docker-first, so the
+command overrides its Docker host alias with the native loopback endpoint. A
+native Docling deployment likewise sets its active block endpoint to
+`http://127.0.0.1:5001`.
 
 ## Use DlightRAG
 
@@ -400,8 +416,9 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 - [docs/postgresql.md](docs/postgresql.md) - PostgreSQL requirements and tuning.
 - [docs/operations.md](docs/operations.md) - maintenance commands and recovery workflows.
 - [docs/evaluation.md](docs/evaluation.md) - RAGAS evaluation workflow.
-- [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and MinerU official API contract.
+- [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and external parser contracts.
 - [MinerU Docker deployment docs](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/) - Linux/WSL2 Docker support and macOS warning.
+- [Docling Serve](https://github.com/docling-project/docling-serve) - official Docling HTTP service and container images.
 
 ## License
 

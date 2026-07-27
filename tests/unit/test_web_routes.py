@@ -1574,7 +1574,7 @@ class TestWebWorkspaceDelete:
 class TestSourcePanelTemplate:
     """Tests for source panel rendering contracts."""
 
-    def test_zero_page_idx_is_rendered_as_page_zero(self) -> None:
+    def test_page_number_is_rendered(self) -> None:
         from dlightrag.web.deps import templates
 
         html = templates.env.get_template("partials/source_panel.html").render(
@@ -1586,7 +1586,7 @@ class TestSourcePanelTemplate:
                     "chunks": [
                         {
                             "chunk_idx": 1,
-                            "page_idx": 0,
+                            "page_number": 1,
                             "content": "first page",
                         }
                     ],
@@ -1594,7 +1594,7 @@ class TestSourcePanelTemplate:
             ]
         )
 
-        assert "p.0" in html
+        assert "p.1" in html
         assert "#1" not in html
 
     def test_markdown_source_keeps_visible_download_action_when_url_exists(self) -> None:

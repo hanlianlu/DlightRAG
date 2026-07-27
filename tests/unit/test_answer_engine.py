@@ -44,7 +44,7 @@ def _text_contexts() -> RetrievalContexts:
                 "reference_id": "1",
                 "file_path": "/docs/report.pdf",
                 "content": "Revenue grew 15%.",
-                "page_idx": 3,
+                "page_number": 3,
                 "_workspace": "default",
                 "metadata": _source_metadata("/docs/report.pdf"),
             },
@@ -70,7 +70,7 @@ def _image_contexts() -> RetrievalContexts:
                 "reference_id": "1",
                 "file_path": "/docs/chart.pdf",
                 "content": "Chart showing growth",
-                "page_idx": 1,
+                "page_number": 1,
                 "image_data": _PNG_B64,
                 "_workspace": "default",
                 "metadata": _source_metadata("/docs/chart.pdf"),
@@ -90,7 +90,7 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "reference_id": "1",
                 "file_path": "/docs/report.pdf",
                 "content": "Revenue data.",
-                "page_idx": 3,
+                "page_number": 3,
                 "image_data": _PNG_B64,
                 "_workspace": "default",
                 "metadata": _source_metadata(
@@ -103,7 +103,7 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "reference_id": "1",
                 "file_path": "/docs/report.pdf",
                 "content": "Expenses data.",
-                "page_idx": 7,
+                "page_number": 7,
                 "image_data": _PNG_B64,
                 "_workspace": "default",
                 "metadata": _source_metadata("/docs/report.pdf"),
@@ -113,7 +113,7 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "reference_id": "2",
                 "file_path": "/docs/other.pdf",
                 "content": "Other info.",
-                "page_idx": 1,
+                "page_number": 1,
                 "_workspace": "default",
                 "metadata": _source_metadata("/docs/other.pdf"),
             },
@@ -991,7 +991,7 @@ class TestAnswerEngineHelpers:
                     "reference_id": "1",
                     "file_path": "/docs/report.pdf",
                     "content": "Revenue data.",
-                    "page_idx": 1,
+                    "page_number": 1,
                 },
             ],
             "entities": [
@@ -1192,7 +1192,7 @@ class TestBuildExcerptBlocks:
         text_blocks = [b for b in blocks if b.get("type") == "text"]
         all_text = "\n".join(b["text"] for b in text_blocks)
 
-        # c1 has metadata doc_title="2025 Annual Report" and page_idx=3
+        # c1 has metadata doc_title="2025 Annual Report" and page_number=3
         assert '"2025 Annual Report"' in all_text
         assert "Page 3" in all_text
 

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class CitationIndexer:
     """Bidirectional index: (ref_id, chunk_idx) <-> chunk_id.
 
-    Also stores per-chunk metadata (file_path, page_idx) so that
+    Also stores per-chunk metadata (file_path, page_number) so that
     :meth:`format_reference_list` can render the hierarchical reference
     list for VLM prompts — ensuring a single source of truth for the
     ``[ref_id-chunk_idx]`` mapping.
@@ -65,7 +65,7 @@ class CitationIndexer:
                     ordered.append(chunk_id)
                     # Store metadata on first encounter
                     self._chunk_meta[(ref_id, str(chunk_id))] = {
-                        "page_idx": ctx.get("page_idx", 0),
+                        "page_number": ctx.get("page_number"),
                     }
                 # Store doc-level metadata (first chunk wins)
                 if ref_id not in self._doc_names:
@@ -187,8 +187,8 @@ class CitationIndexer:
                 if cid is None:
                     continue
                 meta = self._chunk_meta.get((ref_id, cid), {})
-                page_idx = meta.get("page_idx", 0)
-                page_label = f"Page {page_idx}" if page_idx else f"Chunk {idx}"
+                page_number = meta.get("page_number")
+                page_label = f"Page {page_number}" if page_number else f"Chunk {idx}"
                 lines.append(f"  [{ref_id}-{idx}] {page_label}")
         return "\n".join(lines)
 

@@ -17,12 +17,10 @@ import os
 import re
 import ssl
 import warnings
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode
 
-from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -65,14 +63,14 @@ class LightRAGPipelineKwargs(TypedDict):
     max_parallel_insert: int
     max_parallel_parse_native: int
     max_parallel_parse_mineru: int
+    max_parallel_parse_docling: int
     max_parallel_analyze: int
     queue_size_parse: int
     queue_size_analyze: int
     queue_size_insert: int
 
 
-# Auto-derived from VLMSidecarConfig._ENV_MAP and MinerUSidecarConfig._ENV_MAP.
-# No manual maintenance — add a field + env mapping to the model and this picks it up.
+# Auto-derived from the typed sidecar models below.
 _LIGHTRAG_SIDECAR_ENV_KEYS: frozenset[str] = frozenset()  # populated after class definitions
 
 
@@ -88,30 +86,6 @@ def _find_yaml_config() -> Path | None:
     if cwd.is_file():
         return cwd
     return None
-
-
-def _iter_env_files(env_file: Any) -> Iterable[Path]:
-    if env_file is None:
-        return ()
-    if isinstance(env_file, (str, Path)):
-        return (Path(env_file),)
-    return tuple(Path(path) for path in env_file if path is not None)
-
-
-def _is_lightrag_sidecar_env_key(key: str) -> bool:
-    return key in _LIGHTRAG_SIDECAR_ENV_KEYS
-
-
-def _load_lightrag_sidecar_env(env_file: Any, *, force: bool = False) -> None:
-    """Load declared upstream LightRAG sidecar env vars from .env."""
-    for path in _iter_env_files(env_file):
-        if not path.is_file():
-            continue
-        for key, value in dotenv_values(path).items():
-            if not value or not _is_lightrag_sidecar_env_key(key):
-                continue
-            if force or key not in os.environ:
-                os.environ[key] = value
 
 
 def _canonical_provider_name(value: Any) -> Any:
@@ -199,11 +173,10 @@ class LLMConfig(BaseModel):
 
 
 class ParserConfig(BaseModel):
-    """LightRAG parser routing rules and optional chunker snapshot overrides."""
+    """Optional LightRAG chunker snapshot overrides."""
 
     model_config = ConfigDict(extra="forbid")
 
-    rules: str = "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
     chunk_options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -257,8 +230,8 @@ class VLMSidecarConfig(BaseModel):
     # DEFAULT_MM_IMAGE_MIN_PIXEL (64) to 80px: sub-80px crops are treated as
     # decorative (icons, separators, page ornaments) and skipped from VLM
     # analysis, so they never become hallucinated figure chunks. Emitted as
-    # VLM_MIN_IMAGE_PIXEL. Set None to defer to LightRAG's own gate instead.
-    min_image_pixel: int | None = Field(default=80, ge=1)
+    # VLM_MIN_IMAGE_PIXEL. Set 64 explicitly to use LightRAG's native threshold.
+    min_image_pixel: int = Field(default=80, ge=1)
     surrounding_leading_max_tokens: int | None = Field(default=256, ge=0)
     surrounding_trailing_max_tokens: int | None = Field(default=256, ge=0)
 
@@ -319,18 +292,39 @@ class MinerUSidecarConfig(BaseModel):
     }
 
 
+class DoclingSidecarConfig(BaseModel):
+    """LightRAG Docling parser endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint: str = "http://127.0.0.1:5001"
+
+    _ENV_MAP: ClassVar[dict[str, str]] = {"endpoint": "DOCLING_ENDPOINT"}
+
+
 class ParserSidecarsConfig(BaseModel):
-    """Typed config that DlightRAG bridges into LightRAG parser env vars."""
+    """Typed parser config; configured sidecar presence selects the engine."""
 
     model_config = ConfigDict(extra="forbid")
 
     vlm: VLMSidecarConfig = Field(default_factory=VLMSidecarConfig)
-    mineru: MinerUSidecarConfig = Field(default_factory=MinerUSidecarConfig)
+    mineru: MinerUSidecarConfig | None = None
+    docling: DoclingSidecarConfig | None = None
+
+    @model_validator(mode="after")
+    def _default_to_mineru(self) -> Self:
+        if self.mineru is None and self.docling is None:
+            self.mineru = MinerUSidecarConfig()
+        return self
+
+    @property
+    def active_parser(self) -> Literal["mineru", "docling"]:
+        return "mineru" if self.mineru is not None else "docling"
 
 
 # Populate the sidecar env keys frozenset from the model _ENV_MAP declarations.
 _SIDECAR_ENV_KEYS: set[str] = set()
-for _cls in (VLMSidecarConfig, MinerUSidecarConfig):
+for _cls in (VLMSidecarConfig, MinerUSidecarConfig, DoclingSidecarConfig):
     _SIDECAR_ENV_KEYS.update(_cls._ENV_MAP.values())
 _LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(_SIDECAR_ENV_KEYS)
 
@@ -831,6 +825,11 @@ class DlightragConfig(BaseSettings):
         default=2,
         ge=1,
         description="LightRAG external parser worker concurrency for the MinerU-compatible route.",
+    )
+    max_parallel_parse_docling: int = Field(
+        default=2,
+        ge=1,
+        description="LightRAG external parser worker concurrency for the Docling route.",
     )
     max_parallel_analyze: int = Field(
         default=5,
@@ -1398,22 +1397,34 @@ class DlightragConfig(BaseSettings):
             "max_parallel_insert": self.max_parallel_insert,
             "max_parallel_parse_native": self.max_parallel_parse_native,
             "max_parallel_parse_mineru": self.max_parallel_parse_mineru,
+            "max_parallel_parse_docling": self.max_parallel_parse_docling,
             "max_parallel_analyze": self.max_parallel_analyze,
             "queue_size_parse": self.queue_size_parse,
             "queue_size_analyze": self.queue_size_analyze,
             "queue_size_insert": self.queue_size_insert,
         }
 
-    def _lightrag_sidecar_env_map(self) -> dict[str, str]:
-        """Derive LightRAG sidecar env vars from typed config models.
+    @property
+    def parser_rules(self) -> str:
+        """Return the internal LightRAG wildcard for the configured sidecar."""
+        return f"*:{self.parser_sidecars.active_parser}-iteP"
 
-        Iterates VLMSidecarConfig._ENV_MAP and MinerUSidecarConfig._ENV_MAP
-        so adding a field only requires: (1) Pydantic field, (2) one line in _ENV_MAP.
-        """
+    def _lightrag_sidecar_env_map(self) -> dict[str, str]:
+        """Derive shared and active-parser LightRAG env vars from typed config."""
         raw: dict[str, str | int | float | bool | None] = {}
-        for config_obj in (self.parser_sidecars.vlm, self.parser_sidecars.mineru):
-            cls = type(config_obj)
-            for field_name, env_name in cls._ENV_MAP.items():
+        config_objects: list[VLMSidecarConfig | MinerUSidecarConfig | DoclingSidecarConfig] = [
+            self.parser_sidecars.vlm
+        ]
+        mineru = self.parser_sidecars.mineru
+        if mineru is not None:
+            config_objects.append(mineru)
+        else:
+            docling = self.parser_sidecars.docling
+            if docling is None:
+                raise RuntimeError("Parser sidecar invariant violated")
+            config_objects.append(docling)
+        for config_obj in config_objects:
+            for field_name, env_name in config_obj._ENV_MAP.items():
                 value = getattr(config_obj, field_name)
                 # force_reparse=False → don't emit the LightRAG env var
                 # (LightRAG defaults to not force-reparsing on its own)
@@ -1427,11 +1438,12 @@ class DlightragConfig(BaseSettings):
                 rendered[key] = text
         return rendered
 
-    def apply_lightrag_sidecar_env(self, *, force: bool = False) -> None:
-        """Bridge typed parser sidecar config into LightRAG's upstream env API."""
-        for key, value in self._lightrag_sidecar_env_map().items():
-            if force or key not in os.environ:
-                os.environ[key] = value
+    def apply_lightrag_sidecar_env(self) -> None:
+        """Synchronize typed sidecar config into LightRAG's private env API."""
+        env_map = self._lightrag_sidecar_env_map()
+        for key in _LIGHTRAG_SIDECAR_ENV_KEYS - env_map.keys():
+            os.environ.pop(key, None)
+        os.environ.update(env_map)
 
     def apply_lightrag_backend_env(self, *, force: bool = False) -> None:
         """Bridge this config's active PostgreSQL endpoint into LightRAG env vars."""
@@ -1484,13 +1496,14 @@ class DlightragConfig(BaseSettings):
     def apply_lightrag_runtime_env(self, *, force: bool = False) -> None:
         """Bridge LightRAG runtime settings controlled by DlightRAG."""
         if force or "LIGHTRAG_PARSER" not in os.environ:
-            os.environ["LIGHTRAG_PARSER"] = self.parser.rules
+            os.environ["LIGHTRAG_PARSER"] = self.parser_rules
         if force or "INPUT_DIR" not in os.environ:
             os.environ["INPUT_DIR"] = str(self.input_dir_path)
-        if force or "DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY" not in os.environ:
-            os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] = (
-                self.parser_sidecars.mineru.auxiliary_block_policy
-            )
+        mineru = self.parser_sidecars.mineru
+        if mineru is not None:
+            os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] = mineru.auxiliary_block_policy
+        else:
+            os.environ.pop("DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY", None)
 
     def model_post_init(self, _context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
@@ -1499,8 +1512,7 @@ class DlightragConfig(BaseSettings):
         if not path.is_absolute():
             self.working_dir = str(path.resolve())
 
-        _load_lightrag_sidecar_env(self.__class__.model_config.get("env_file"), force=False)
-        self.apply_lightrag_sidecar_env(force=False)
+        self.apply_lightrag_sidecar_env()
         self.apply_lightrag_backend_env(force=False)
         self.apply_lightrag_runtime_env(force=True)
 
@@ -1512,7 +1524,6 @@ _config: DlightragConfig | None = None
 def load_config(env_file: str | Path | None = None, **overrides: Any) -> DlightragConfig:
     """Build config from an optional .env file without globally loading dotenv."""
     if env_file is not None:
-        _load_lightrag_sidecar_env(env_file, force=False)
         return DlightragConfig(_env_file=env_file, **overrides)  # type: ignore[call-arg]
     return DlightragConfig(**overrides)
 

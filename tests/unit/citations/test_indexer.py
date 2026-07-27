@@ -138,7 +138,7 @@ def test_reference_list_keeps_page_metadata_reference_local_for_same_chunk_id() 
                 "reference_id": "1",
                 "content": "Legal evidence",
                 "file_path": "/legal/report.pdf",
-                "page_idx": 3,
+                "page_number": 3,
                 "_workspace": "legal",
             },
             {
@@ -146,7 +146,7 @@ def test_reference_list_keeps_page_metadata_reference_local_for_same_chunk_id() 
                 "reference_id": "2",
                 "content": "Finance evidence",
                 "file_path": "/finance/report.pdf",
-                "page_idx": 9,
+                "page_number": 9,
                 "_workspace": "finance",
             },
         ]

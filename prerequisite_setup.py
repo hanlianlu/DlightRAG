@@ -155,7 +155,9 @@ def write_config_yaml(
     llm_roles: dict[str, dict] | None = None,
     embedding: dict | None = None,
     rerank: dict | None = None,
+    parser_kind: str | None = None,
     mineru_api_mode: str | None = None,
+    docling_endpoint: str | None = None,
 ) -> None:
     yaml = _yaml()
     data = yaml.load(path)
@@ -178,8 +180,24 @@ def write_config_yaml(
                 data["rerank"].pop(stale_key, None)
         for key, value in rerank.items():
             data["rerank"][key] = value
-    if mineru_api_mode is not None:
-        data["parser_sidecars"]["mineru"]["api_mode"] = mineru_api_mode
+    if parser_kind is not None:
+        if parser_kind not in {"mineru", "docling"}:
+            raise ValueError(f"Unsupported parser kind: {parser_kind}")
+        parser = data.get("parser")
+        if isinstance(parser, dict):
+            parser.pop("rules", None)
+            if not parser:
+                data.pop("parser", None)
+        sidecars = data.setdefault("parser_sidecars", {})
+        if parser_kind == "mineru":
+            sidecars.pop("docling", None)
+            mineru = sidecars.setdefault("mineru", {})
+            mineru["api_mode"] = mineru_api_mode or "local"
+            mineru.setdefault("local_endpoint", "http://host.docker.internal:8210")
+            mineru.setdefault("language", "ch")
+        else:
+            sidecars.pop("mineru", None)
+            sidecars["docling"] = {"endpoint": docling_endpoint or "http://docling:5001"}
     yaml.dump(data, path)
 
 
@@ -332,8 +350,12 @@ def systemd_user_available() -> bool:
 # MinerU parser: official cloud vs local install + hybrid background service
 # ---------------------------------------------------------------------------
 def configure_mineru_official(token: str) -> None:
-    write_config_yaml(CONFIG_PATH, mineru_api_mode="official")
-    upsert_env(ENV_PATH, {"DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN": token})
+    write_config_yaml(CONFIG_PATH, parser_kind="mineru", mineru_api_mode="official")
+    upsert_env(
+        ENV_PATH,
+        {"DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN": token},
+        remove_keys=("COMPOSE_PROFILES",),
+    )
 
 
 def configure_mineru_local_env(extras: str, *, title_aided: dict | None = None) -> None:
@@ -355,7 +377,33 @@ def configure_mineru_local_env(extras: str, *, title_aided: dict | None = None) 
             "MINERU_TITLE_AIDED_ENABLE_THINKING",
         )
     upsert_env(MINERU_ENV_PATH, values, remove_keys=remove_keys)
-    write_config_yaml(CONFIG_PATH, mineru_api_mode="local")
+    write_config_yaml(CONFIG_PATH, parser_kind="mineru", mineru_api_mode="local")
+    upsert_env(
+        ENV_PATH,
+        {},
+        remove_keys=(
+            "COMPOSE_PROFILES",
+            "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN",
+        ),
+    )
+
+
+def configure_docling(endpoint: str, *, bundled: bool) -> None:
+    write_config_yaml(
+        CONFIG_PATH,
+        parser_kind="docling",
+        docling_endpoint=endpoint,
+    )
+    values = {"COMPOSE_PROFILES": "docling"} if bundled else {}
+    remove_keys = (
+        ("DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN",)
+        if bundled
+        else (
+            "COMPOSE_PROFILES",
+            "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN",
+        )
+    )
+    upsert_env(ENV_PATH, values, remove_keys=remove_keys)
 
 
 def build_mineru_local_commands(service_model: str) -> list[list[str]]:
@@ -378,7 +426,7 @@ def _note_foreground_mineru() -> None:
     )
 
 
-def run_mineru_step(
+def run_parser_step(
     prompter: Prompter,
     info: PlatformInfo,
     *,
@@ -386,17 +434,38 @@ def run_mineru_step(
     llm_title_aided: dict | None = None,
     runner=_default_runner,
     require_confirm: bool = False,
-) -> bool:
+) -> str | None:
     choice = prompter.select(
-        "Document parser (MinerU)",
-        ["Local (recommended)", "Official cloud API"],
+        "Document parser",
+        [
+            "MinerU local (recommended)",
+            "MinerU official cloud API",
+            "Docling bundled (Compose)",
+            "Docling external endpoint",
+        ],
     )
-    if choice == "Official cloud API":
+    if choice == "MinerU official cloud API":
         token = _ask_required(lambda: prompter.password("MinerU API token (required)"))
-        if require_confirm and not prompter.confirm(MINERU_OVERWRITE_CONFIRM, default=False):
-            return False
+        if require_confirm and not prompter.confirm(PARSER_OVERWRITE_CONFIRM, default=False):
+            return None
         configure_mineru_official(token)
-        return True
+        return "mineru"
+
+    if choice in {"Docling bundled (Compose)", "Docling external endpoint"}:
+        endpoint = "http://docling:5001"
+        if choice == "Docling external endpoint":
+            endpoint = "http://host.docker.internal:5001"
+            endpoint = _ask_required(
+                lambda: prompter.text(
+                    "Docling endpoint (required)",
+                    default=endpoint,
+                )
+            )
+        if require_confirm and not prompter.confirm(PARSER_OVERWRITE_CONFIRM, default=False):
+            return None
+        bundled = choice == "Docling bundled (Compose)"
+        configure_docling(endpoint, bundled=bundled)
+        return "docling" if bundled else "external"
 
     extras = select_mineru_extras(info, has_gpu=has_gpu)
     title_aided = None
@@ -407,8 +476,8 @@ def run_mineru_step(
     ):
         title_aided = llm_title_aided
     # Confirm AFTER collecting choices, right before overwriting existing settings.
-    if require_confirm and not prompter.confirm(MINERU_OVERWRITE_CONFIRM, default=False):
-        return False
+    if require_confirm and not prompter.confirm(PARSER_OVERWRITE_CONFIRM, default=False):
+        return None
     configure_mineru_local_env(extras, title_aided=title_aided)
 
     service_model = resolve_service_model(info, systemd_available=systemd_user_available())
@@ -416,7 +485,7 @@ def run_mineru_step(
         runner(cmd)
     if service_model == "foreground":
         _note_foreground_mineru()
-    return True
+    return "mineru"
 
 
 # ---------------------------------------------------------------------------
@@ -560,10 +629,10 @@ HOME_PROMPT = "DlightRAG is already set up — what next? · DlightRAG 已配置
 
 # "Change settings" sub-menu (section-level, per the design).
 SEC_MODELS = "Models & API keys · 模型与密钥"
-SEC_MINERU = "Document parsing (MinerU) · 文档解析"
+SEC_PARSER = "Document parser · 文档解析器"
 SEC_ALL = "Everything · 全部"
 SEC_BACK = "← Back · 返回"
-CHANGE_CHOICES = [SEC_MODELS, SEC_MINERU, SEC_ALL, SEC_BACK]
+CHANGE_CHOICES = [SEC_MODELS, SEC_PARSER, SEC_ALL, SEC_BACK]
 CHANGE_PROMPT = "What do you want to change? · 你想修改什么？"
 
 MODEL_MODE_MINIMUM = "Minimum · one LLM + one embedding"
@@ -575,8 +644,8 @@ MODELS_OVERWRITE_CONFIRM = (
     "Overwrite your current model settings and API keys with these answers? · "
     "用这些答案覆盖当前的模型设置与密钥？"
 )
-MINERU_OVERWRITE_CONFIRM = (
-    "Overwrite your current document-parsing (MinerU) settings? · 覆盖当前的文档解析设置？"
+PARSER_OVERWRITE_CONFIRM = (
+    "Overwrite your current document-parser settings? · 覆盖当前的文档解析器设置？"
 )
 RESET_WIPE_CONFIRM = (
     "Delete ALL documents you've already added (vectors, graph)? This cannot be undone. · "
@@ -628,8 +697,11 @@ def _questionary_prompter() -> Prompter:
 # ---------------------------------------------------------------------------
 # Docker bring-up + readiness poll
 # ---------------------------------------------------------------------------
-def docker_up_command() -> list[str]:
-    return ["docker", "compose", "up", "-d"]
+def docker_up_command(*, profile: str | None = None) -> list[str]:
+    command = ["docker", "compose"]
+    if profile is not None:
+        command.extend(["--profile", profile])
+    return [*command, "up", "-d"]
 
 
 def probe_readiness(url: str, *, opener=None) -> bool:
@@ -683,7 +755,14 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
     roles = llm.get("roles", {}) or {}
     embedding = data.get("embedding", {}) or {}
     rerank = data.get("rerank", {}) or {}
-    mineru = (data.get("parser_sidecars", {}) or {}).get("mineru", {}) or {}
+    parser_sidecars = data.get("parser_sidecars", {}) or {}
+    mineru = parser_sidecars.get("mineru", {}) or {}
+    docling = parser_sidecars.get("docling", {}) or {}
+    parser = (
+        {"name": "MinerU", "detail": mineru.get("api_mode", "?")}
+        if mineru
+        else {"name": "Docling", "detail": docling.get("endpoint", "?")}
+    )
     return {
         "llm_default": {
             "provider": default.get("provider", "?"),
@@ -710,7 +789,7 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "model": rerank.get("model"),
             "base_url": rerank.get("base_url"),
         },
-        "mineru_mode": mineru.get("api_mode", "?"),
+        "parser": parser,
         "workspace": data.get("workspace", "default"),
         "keys_set": {
             "LLM": bool(env.get("DLIGHTRAG_LLM__DEFAULT__API_KEY")),
@@ -744,7 +823,8 @@ def render_summary(console, summary: dict) -> None:
     table.add_row("Rerank", f"{rerank['strategy']}{rerank_model} ({rerank_state})")
     if rerank.get("base_url"):
         table.add_row("", f"[dim]{rerank['base_url']}[/dim]")
-    table.add_row("MinerU", summary["mineru_mode"])
+    parser = summary["parser"]
+    table.add_row("Parser", f"{parser['name']} · {parser['detail']}")
     table.add_row("Workspace", summary["workspace"])
     table.add_row(
         "API keys",
@@ -755,10 +835,10 @@ def render_summary(console, summary: dict) -> None:
     console.print(table)
 
 
-def _bring_up_stack(console) -> int:
+def _bring_up_stack(console, *, profile: str | None = None) -> int:
     console.print("Starting DlightRAG + PostgreSQL… · 正在启动…")
     try:
-        _default_runner(docker_up_command())
+        _default_runner(docker_up_command(profile=profile))
     except Exception as exc:
         console.print(f"[red]docker compose up failed:[/red] {exc}")
         return 1
@@ -803,14 +883,18 @@ def run_first_time_setup(
         return None
     if not _apply_and_validate(console, result):
         return 1
-    run_mineru_step(
+    parser_mode = run_parser_step(
         prompter,
         info,
         has_gpu=has_nvidia_gpu(),
         llm_title_aided=result["llm"],
         require_confirm=require_confirm,
     )
-    return _bring_up_stack(console) if launch else 0
+    return (
+        _bring_up_stack(console, profile="docling" if parser_mode == "docling" else None)
+        if launch
+        else 0
+    )
 
 
 def run_change_settings(console, prompter: Prompter, info: PlatformInfo) -> None:
@@ -827,8 +911,8 @@ def run_change_settings(console, prompter: Prompter, info: PlatformInfo) -> None
         if not _apply_and_validate(console, result):
             return
         changed = True
-    if section in (SEC_MINERU, SEC_ALL):
-        if run_mineru_step(
+    if section in (SEC_PARSER, SEC_ALL):
+        if run_parser_step(
             prompter,
             info,
             has_gpu=has_nvidia_gpu(),

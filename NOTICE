@@ -9,3 +9,6 @@ This project builds on the following open-source projects:
 - MinerU (https://github.com/opendatalab/MinerU) -
   MinerU Open Source License (Apache License 2.0 with additional terms);
   used as a separately installed sidecar service.
+- Docling / Docling Serve (https://github.com/docling-project/docling,
+  https://github.com/docling-project/docling-serve) - MIT License;
+  used through LightRAG as a separately deployed sidecar service.

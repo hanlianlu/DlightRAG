@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 
+from dlightrag.config import DoclingSidecarConfig, ParserSidecarsConfig
 from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.request.planner import QueryPlan
 from dlightrag.storage.web_conversations import StoredConversationImage
@@ -343,8 +344,17 @@ async def test_prepare_merges_actual_global_dense_trace(
         min_image_pixel=32,
         aembed_query=AsyncMock(return_value=[1.0, 0.0]),
     )
+    docling_config = test_config.model_copy(
+        update={
+            "parser_sidecars": ParserSidecarsConfig(
+                vlm=test_config.parser_sidecars.vlm,
+                mineru=None,
+                docling=DoclingSidecarConfig(endpoint="http://docling:5001"),
+            )
+        }
+    )
     signature = build_composer_embedding_signature(
-        config=test_config,
+        config=docling_config,
         embedder=cast("Any", embedder),
         mode="text",
     )
@@ -391,7 +401,7 @@ async def test_prepare_merges_actual_global_dense_trace(
     manager = _FakeManager(effective=0)
     resources = SimpleNamespace(
         lightrag=object(),
-        config=test_config,
+        config=docling_config,
         robust_document_embedder=embedder,
         direct_image_embedding_enabled=False,
         model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
@@ -416,6 +426,7 @@ async def test_prepare_merges_actual_global_dense_trace(
         documents: list[Any],
     ) -> tuple[list[AttachmentContextChunk], list[dict[str, str]], list[Any]]:
         assert isinstance(document_service, ComposerDocumentService)
+        assert document_service._parser_rules == "*:docling-iteP"
         chunks = [
             AttachmentContextChunk(
                 chunk_id=f"chunk-{document.attachment_id}",

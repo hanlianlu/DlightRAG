@@ -38,7 +38,7 @@ Keep these out of normal `config.yaml` unless debugging or load-testing proves
 they need to change:
 
 - storage backend literals
-- parser routing rules
+- raw LightRAG parser rules (derived internally from the active sidecar)
 - PostgreSQL retry/backoff internals
 - per-stage ingest worker counts (`max_parallel_*`) that match LightRAG defaults
 - queue sizes
@@ -53,16 +53,16 @@ they need to change:
 
 ## Parser Routing And Sidecars
 
-DlightRAG defaults to LightRAG native parsing for DOCX, Markdown, and textpack
-bundles, and a MinerU-compatible external parser endpoint for other supported
-document formats. Change parser routing only when validating a new LightRAG
-parser strategy.
+The configured external sidecar selects the parser automatically. Configure a
+`mineru` block or a `docling` block; DlightRAG derives the internal LightRAG
+wildcard. With neither block, the code default is MinerU. If both are present,
+only MinerU is effective. Workspace ingest and Web Composer documents consume
+the same derived routing policy.
 
 Advanced parser fields with code defaults:
 
 ```yaml
 parser:
-  rules: "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
   chunk_options: {}
 
 extraction:
@@ -73,17 +73,32 @@ parser_sidecars:
     enabled: true
     max_image_bytes: 5242880
     # DlightRAG default 80px, above LightRAG's native 64px minimum: sub-80px
-    # crops are treated as decorative (icons/separators/ornaments) and skipped
-    # from VLM analysis. Set None to defer to LightRAG's gate, or tune the value.
+    # crops are treated as decorative (icons/separators/ornaments) and skipped.
+    # Set 64 explicitly to use LightRAG's native threshold.
     min_image_pixel: 80
   mineru:
     api_mode: local
-    local_endpoint: http://127.0.0.1:8210
+    local_endpoint: http://host.docker.internal:8210
     language: ch
     # backend:            # unset ⇒ LightRAG default (hybrid-auto-engine)
     max_polls: 3600
     auxiliary_block_policy: conservative
 ```
+
+To use Docling instead, remove/comment the MinerU block and configure only:
+
+```yaml
+parser_sidecars:
+  docling:
+    endpoint: http://docling:5001
+```
+
+Docling has no DlightRAG tuning surface beyond its base endpoint. OCR, formula
+enrichment, polling, output formats, referenced images, raw-bundle cache, and
+retry semantics remain owned by LightRAG and Docling. The optional local
+profile starts with `docker compose --profile docling up -d`; an external
+deployment supplies its own reachable endpoint. Native DlightRAG processes use
+`127.0.0.1` endpoints when their parser runs on the same host.
 
 `parser_sidecars.mineru.language` is MinerU's OCR language hint for scanned or
 image-based documents. It is separate from `extraction.language`, which controls
@@ -94,7 +109,9 @@ inherit LightRAG's default (`hybrid-auto-engine`, VLM-assisted). Accepted values
 `pipeline`, `vlm-engine`, `hybrid-engine`, `vlm-auto-engine`, `hybrid-auto-engine`.
 Use `pipeline` (MinerU's non-VLM OCR engine) to avoid VLM transcription artifacts
 on difficult scans, at the cost of weaker complex-layout and chart handling. It
-maps to `MINERU_LOCAL_BACKEND`, so a deployment may also set that env directly.
+maps privately to `MINERU_LOCAL_BACKEND`. Public environment overrides use the
+typed `DLIGHTRAG_PARSER_SIDECARS__...` form; raw MinerU/Docling/VLM variables
+are not independent configuration inputs.
 
 DlightRAG does not expose MinerU-side image/chart analysis as a product setting;
 LightRAG 1.5.4 defaults that parser-time path off, while LightRAG's separate
@@ -446,6 +463,7 @@ needs different parallelism:
 max_parallel_insert: 3        # insert workers (code/LightRAG default 3)
 max_parallel_parse_native: 5  # native + legacy parser workers (default 5)
 max_parallel_parse_mineru: 2  # MinerU parser workers (default 2)
+max_parallel_parse_docling: 2 # Docling parser workers (default 2)
 max_parallel_analyze: 5       # VLM analysis workers (default 5)
 ```
 

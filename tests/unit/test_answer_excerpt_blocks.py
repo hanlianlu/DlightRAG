@@ -23,7 +23,7 @@ class TestFormatChunkMetadata:
             "image_data": "base64...",
             "file_path": "/docs/x.pdf",
             "metadata": {"doc_title": "T"},
-            "page_idx": 3,
+            "page_number": 3,
             "image_mime_type": "image/png",
             "image_url": "/images/default/c1?size=full",
             "thumbnail_url": "/images/default/c1?size=thumb",
@@ -33,7 +33,6 @@ class TestFormatChunkMetadata:
             "distance": 0.78,
             "bm25_profile": "english",
             "full_doc_id": "doc-abc123",
-            "bbox": {"page_index": 2, "range": [1, 2, 3, 4]},
             "_workspace": "default",
             "_answer_image_sent": True,
             "sidecar": {"type": "drawing", "id": "im-hash-1"},
@@ -53,7 +52,6 @@ class TestFormatChunkMetadata:
         assert "score" not in result
         assert "distance" not in result
         assert "bm25_profile" not in result
-        assert "bbox" not in result
         assert "_workspace" not in result
         assert "full_doc_id" not in result
         assert "sidecar" not in result
@@ -117,13 +115,13 @@ class TestFormatChunkMetadata:
 
 class TestBuildImageLabel:
     def test_basic_label_with_citation_and_page(self) -> None:
-        chunk = {"page_idx": 7, "metadata": {"doc_title": "My Report"}}
+        chunk = {"page_number": 7, "metadata": {"doc_title": "My Report"}}
         result = _build_image_label(cite_tag="[1-2]", chunk=chunk, filename="report.pdf")
         assert '[1-2] "My Report" Page 7' == result
 
     def test_label_with_vlm_drawing_sidecar(self) -> None:
         chunk = {
-            "page_idx": 3,
+            "page_number": 3,
             "metadata": {},
             "sidecar": {"type": "drawing", "id": "im-hash-abc123def456"},
         }

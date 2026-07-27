@@ -551,21 +551,21 @@ def test_storage_backends_are_postgres_only() -> None:
 def test_parser_defaults_export_lightrag_env() -> None:
     cfg = _default_test_config()
 
-    assert cfg.parser.rules == "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
+    assert cfg.parser_rules == "*:mineru-iteP"
+    assert "rules" not in type(cfg.parser).model_fields
     assert cfg.extraction.use_json is True
     assert cfg.extraction.language == "English"
     assert cfg.parser_sidecars.vlm.enabled is True
     assert cfg.parser_sidecars.vlm.max_image_bytes == 5_242_880
     assert cfg.parser_sidecars.vlm.surrounding_leading_max_tokens == 256
     assert cfg.parser_sidecars.vlm.surrounding_trailing_max_tokens == 256
+    assert cfg.parser_sidecars.mineru is not None
     assert cfg.parser_sidecars.mineru.api_mode == "local"
-    assert cfg.parser_sidecars.mineru.local_endpoint == "http://127.0.0.1:8210"
+    assert cfg.parser_sidecars.mineru.local_endpoint == "http://host.docker.internal:8210"
     assert cfg.parser_sidecars.mineru.language == "ch"
     assert cfg.parser_sidecars.mineru.auxiliary_block_policy == "conservative"
-    assert (
-        os.environ["LIGHTRAG_PARSER"]
-        == "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
-    )
+    assert cfg.parser_sidecars.docling is None
+    assert os.environ["LIGHTRAG_PARSER"] == "*:mineru-iteP"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "conservative"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
@@ -617,6 +617,7 @@ def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
         "max_parallel_insert": 3,
         "max_parallel_parse_native": 5,
         "max_parallel_parse_mineru": 2,
+        "max_parallel_parse_docling": 2,
         "max_parallel_analyze": 5,
         "queue_size_parse": 20,
         "queue_size_analyze": 100,
@@ -921,18 +922,16 @@ def test_pg_connection_kwargs_builds_verify_ssl_context() -> None:
     assert ssl_value.check_hostname is False
 
 
-def test_dotenv_allows_upstream_lightrag_parser_env(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dotenv_ignores_raw_upstream_parser_env(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
             [
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
-                "VLM_PROCESS_ENABLE=true",
-                "VLM_MAX_IMAGE_BYTES=5242880",
-                "MINERU_API_MODE=local",
-                "MINERU_LOCAL_ENDPOINT=http://127.0.0.1:8210",
+                "VLM_PROCESS_ENABLE=false",
+                "VLM_MIN_IMAGE_PIXEL=32",
+                "MINERU_API_MODE=official",
+                "MINERU_LOCAL_ENDPOINT=http://stale-mineru:8210",
                 "MINERU_LOCAL_BACKEND=hybrid-auto-engine",
                 "MINERU_LOCAL_PARSE_METHOD=auto",
                 "MINERU_LOCAL_IMAGE_ANALYSIS=true",
@@ -966,11 +965,13 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
     assert cfg.llm.default.api_key == "sk-env"
     assert "vlm_process_enable" not in cfg.model_fields_set
     assert os.environ["VLM_PROCESS_ENABLE"] == "true"
+    assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
     assert os.environ["SURROUNDING_LEADING_MAX_TOKENS"] == "256"
     assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "256"
     assert os.environ["MINERU_API_MODE"] == "local"
-    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
-    assert os.environ["MINERU_LANGUAGE"] == "arabic"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
+    assert os.environ["MINERU_LANGUAGE"] == "ch"
+    assert "MINERU_LOCAL_BACKEND" not in os.environ
     assert "MINERU_LOCAL_IMAGE_ANALYSIS" not in os.environ
 
 
@@ -1027,6 +1028,78 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://shared-mineru.local:8210"
     assert os.environ["MINERU_LANGUAGE"] == "cyrillic"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "extended"
+
+
+def test_docling_parser_exports_only_docling_and_shared_vlm_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MINERU_API_MODE", "official")
+    monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", "http://stale-mineru:8210")
+    monkeypatch.setenv("DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY", "extended")
+
+    cfg = _settings_config(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        parser_sidecars={
+            "mineru": None,
+            "docling": {"endpoint": "http://docling.internal:5001"},
+        },
+    )
+
+    assert cfg.parser_rules == "*:docling-iteP"
+    assert cfg.parser_sidecars.docling is not None
+    assert cfg.parser_sidecars.docling.endpoint == "http://docling.internal:5001"
+    assert os.environ["DOCLING_ENDPOINT"] == "http://docling.internal:5001"
+    assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
+    assert "MINERU_API_MODE" not in os.environ
+    assert "MINERU_LOCAL_ENDPOINT" not in os.environ
+    assert "DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY" not in os.environ
+
+
+def test_mineru_parser_clears_stale_docling_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOCLING_ENDPOINT", "http://stale-docling:5001")
+
+    _default_test_config()
+
+    assert os.environ["MINERU_API_MODE"] == "local"
+    assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
+    assert "DOCLING_ENDPOINT" not in os.environ
+
+
+def test_vlm_min_image_pixel_rejects_none() -> None:
+    with pytest.raises(ValidationError):
+        _settings_config(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+            parser_sidecars={"vlm": {"min_image_pixel": None}},
+        )
+
+
+def test_mineru_takes_priority_when_both_parser_sidecars_are_configured() -> None:
+    cfg = _settings_config(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        parser_sidecars={
+            "mineru": {"local_endpoint": "http://mineru.internal:8210"},
+            "docling": {"endpoint": "http://docling.internal:5001"},
+        },
+    )
+
+    assert cfg.parser_rules == "*:mineru-iteP"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://mineru.internal:8210"
+    assert "DOCLING_ENDPOINT" not in os.environ
 
 
 def test_mineru_backend_maps_to_env_and_defers_when_unset(
@@ -1183,7 +1256,7 @@ def test_url_ingest_private_host_allowlist_defaults_empty() -> None:
     assert cfg.url_ingest_private_host_allowlist == []
 
 
-def test_lightrag_parser_env_follows_dlightrag_parser_rules(
+def test_lightrag_parser_env_follows_active_sidecar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """LightRAG parser routing must share DlightRAG's product-level policy."""
@@ -1196,10 +1269,13 @@ def test_lightrag_parser_env_follows_dlightrag_parser_rules(
             api_key="sk-test",
             startup_probe=False,
         ),
-        parser={"rules": "docx:native-iteP,pdf:mineru-iteP,*:mineru-iteP"},
+        parser_sidecars={
+            "mineru": None,
+            "docling": {"endpoint": "http://docling.internal:5001"},
+        },
     )
 
-    assert os.environ["LIGHTRAG_PARSER"] == cfg.parser.rules
+    assert os.environ["LIGHTRAG_PARSER"] == cfg.parser_rules == "*:docling-iteP"
 
 
 def test_stalled_doc_timeout_allows_disable_but_rejects_too_small_values() -> None:
@@ -1308,7 +1384,7 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
     assert cfg.api_port == 9900
     assert cfg.llm.default.api_key == "sk-explicit"
     assert os.environ["MINERU_API_MODE"] == "local"
-    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
 
 
 def test_config_repr_redacts_api_keys():
@@ -1361,4 +1437,4 @@ def test_blank_sidecar_values_do_not_override_typed_defaults(
     )
 
     assert os.environ["MINERU_API_MODE"] == "local"
-    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"

@@ -117,10 +117,8 @@ class LightRAGMixBackend:
             }
             if c.get("full_doc_id"):
                 context_chunk["full_doc_id"] = c["full_doc_id"]
-            if c.get("page_idx") is not None:
-                context_chunk["page_idx"] = c["page_idx"]
-            if c.get("bbox") is not None:
-                context_chunk["bbox"] = c["bbox"]
+            if c.get("page_number") is not None:
+                context_chunk["page_number"] = c["page_number"]
             if c.get("sidecar") is not None:
                 context_chunk["sidecar"] = c["sidecar"]
             if c.get("sidecar_location") is not None:
@@ -154,7 +152,7 @@ class LightRAGMixBackend:
                     raw.get("score") if raw.get("score") is not None else raw.get("distance")
                 ),
             }
-            for key in ("full_doc_id", "sidecar", "sidecar_location", "page_idx"):
+            for key in ("full_doc_id", "sidecar", "sidecar_location", "page_number"):
                 if raw.get(key) is not None:
                     chunk[key] = raw[key]
             chunks.append(chunk)

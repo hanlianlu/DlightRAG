@@ -46,8 +46,8 @@ def answer_images_from_sources(
             source_ref = f"{source_id}-{chunk_idx}" if chunk_idx else source_id
             # Anchor each gallery image to its real cited page so the caption
             # cannot drift from the page the answer text references.
-            page_idx = getattr(chunk, "page_idx", None)
-            label = f"{base_label} · Page {page_idx}" if page_idx else base_label
+            page_number = getattr(chunk, "page_number", None)
+            label = f"{base_label} · Page {page_number}" if page_number else base_label
             images.append(
                 {
                     "id": image_id if chunk_counts[chunk_id] > 1 else chunk_id,

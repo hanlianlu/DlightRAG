@@ -61,7 +61,7 @@ async def test_backend_always_queries_lightrag_mix() -> None:
     assert result.contexts["entities"] == [{"entity_name": "Alpha"}]
     assert result.contexts["chunks"][0]["chunk_id"] == "txt1"
     assert result.contexts["chunks"][0]["reference_id"] == "3"
-    assert result.contexts["chunks"][0].get("page_idx") is None
+    assert result.contexts["chunks"][0].get("page_number") is None
 
 
 async def test_backend_forwards_chunk_top_k_to_lightrag_query_param() -> None:
@@ -120,7 +120,7 @@ async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path:
                 "id": "img1",
                 "content": "visual",
                 "file_path": str(image_path),
-                "sidecar": {"page_index": 2},
+                "sidecar": {"page_number": 3},
             }
         ]
     )
@@ -131,7 +131,7 @@ async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path:
     chunk = result.contexts["chunks"][0]
     assert chunk["chunk_id"] == "img1"
     assert chunk["image_data"]
-    assert chunk["page_idx"] == 3
+    assert chunk["page_number"] == 3
 
 
 async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
@@ -145,7 +145,7 @@ async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
                 "type": "content",
                 "blockid": "block-1",
                 "content": "body",
-                "positions": [{"type": "bbox", "anchor": 4, "range": [1, 2, 3, 4]}],
+                "positions": [{"type": "bbox", "anchor": 1, "range": [1, 2, 3, 4]}],
             }
         )
         + "\n",
@@ -182,7 +182,9 @@ async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
     backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
     result = await backend.aretrieve("question")
 
-    assert result.contexts["chunks"][0]["page_idx"] == 5
+    assert result.contexts["chunks"][0]["page_number"] == 1
+    assert "page_idx" not in result.contexts["chunks"][0]
+    assert "bbox" not in result.contexts["chunks"][0]
     assert result.contexts["chunks"][0]["full_doc_id"] == "doc-1"
 
 
@@ -199,7 +201,7 @@ async def test_backend_hydrates_multimodal_chunk_page_from_sidecar_item(
                 "type": "content",
                 "blockid": "block-9",
                 "content": "<table>…</table>",
-                "positions": [{"type": "bbox", "anchor": 4, "range": [1, 2, 3, 4]}],
+                "positions": [{"type": "bbox", "anchor": "1", "range": [1, 2, 3, 4]}],
             }
         )
         + "\n",
@@ -243,8 +245,9 @@ async def test_backend_hydrates_multimodal_chunk_page_from_sidecar_item(
     result = await backend.aretrieve("question")
 
     chunk = result.contexts["chunks"][0]
-    assert chunk["page_idx"] == 5
-    assert chunk["bbox"] == {"page_index": 4, "range": [1, 2, 3, 4]}
+    assert chunk["page_number"] == 1
+    assert "page_idx" not in chunk
+    assert "bbox" not in chunk
 
 
 async def test_backend_hydrates_v150_drawing_sidecar_from_drawings_json(

@@ -4,7 +4,6 @@
 import asyncio
 import hashlib
 import logging
-import os
 import posixpath
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -102,17 +101,16 @@ class ComposerAnalysisSettings:
 
     @classmethod
     def resolve(cls, config: DlightragConfig) -> ComposerAnalysisSettings:
-        """Resolve limits with the same env defaults and clamps as LightRAG."""
+        """Resolve typed VLM limits plus the upstream extract-token budget."""
         from lightrag import multimodal_context
         from lightrag.constants import (
             DEFAULT_MAX_EXTRACT_INPUT_TOKENS,
-            DEFAULT_MM_IMAGE_MIN_PIXEL,
         )
         from lightrag.utils import get_env_value
 
         leading_tokens, trailing_tokens = multimodal_context._resolve_surrounding_budget(  # pyright: ignore[reportPrivateUsage]
-            None,
-            None,
+            config.parser_sidecars.vlm.surrounding_leading_max_tokens,
+            config.parser_sidecars.vlm.surrounding_trailing_max_tokens,
         )
         max_extract_input_tokens = get_env_value(
             "MAX_EXTRACT_INPUT_TOKENS",
@@ -120,24 +118,12 @@ class ComposerAnalysisSettings:
             int,
         )
         return cls(
-            enabled=get_env_value(
-                "VLM_PROCESS_ENABLE",
-                bool(config.parser_sidecars.vlm.enabled),
-                bool,
-            ),
+            enabled=config.parser_sidecars.vlm.enabled,
             vlm_max_image_bytes=max(
                 256 * 1024,
-                int(os.getenv("VLM_MAX_IMAGE_BYTES", str(5 * 1024 * 1024))),
+                config.parser_sidecars.vlm.max_image_bytes,
             ),
-            vlm_min_image_pixel=max(
-                1,
-                int(
-                    os.getenv(
-                        "VLM_MIN_IMAGE_PIXEL",
-                        str(DEFAULT_MM_IMAGE_MIN_PIXEL),
-                    )
-                ),
-            ),
+            vlm_min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
             surrounding_leading_max_tokens=leading_tokens,
             surrounding_trailing_max_tokens=trailing_tokens,
             max_extract_input_tokens=max_extract_input_tokens,

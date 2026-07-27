@@ -1509,10 +1509,6 @@ async def test_cache_hit_trace_uses_persisted_analysis_and_rendered_markers(
     sidecar_type: str,
     expected_count: int,
 ) -> None:
-    monkeypatch.setenv(
-        "VLM_PROCESS_ENABLE",
-        "true" if outcome == "success" else "false",
-    )
     cache_key = attachments.AttachmentCacheKey(
         "content-v1",
         "legacy:",
@@ -1566,7 +1562,7 @@ async def test_cache_hit_trace_uses_persisted_analysis_and_rendered_markers(
                 "parser_sidecars": test_config.parser_sidecars.model_copy(
                     update={
                         "vlm": test_config.parser_sidecars.vlm.model_copy(
-                            update={"enabled": outcome != "success"}
+                            update={"enabled": outcome == "success"}
                         )
                     }
                 )

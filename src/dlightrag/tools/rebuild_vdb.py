@@ -136,7 +136,7 @@ class DlightRAGRebuildTool(RebuildTool):
         self.workspace = self.config.workspace
         self.config.apply_lightrag_backend_env(force=True)
         self.config.apply_lightrag_runtime_env(force=True)
-        self.config.apply_lightrag_sidecar_env(force=True)
+        self.config.apply_lightrag_sidecar_env()
 
         print("\nChecking configuration...")
         for storage_name in set(self.storage_names.values()):
@@ -246,7 +246,7 @@ async def restore_sidecar_image_vectors(
         metadata_index=None,
         document_embedder=document_embedder,
         workspace=config.workspace,
-        parser_rules=config.parser.rules,
+        parser_rules=config.parser_rules,
         chunk_options={},
     )
 

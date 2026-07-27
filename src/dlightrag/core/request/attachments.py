@@ -213,8 +213,7 @@ class AttachmentContextChunk:
     chunk_index: int
     content: str
     token_estimate: int = 0
-    page_idx: int | None = None
-    bbox: Any = None
+    page_number: int | None = None
     sidecar_type: str | None = None
     image_bytes: bytes | None = None
     image_mime_type: str | None = None
@@ -249,8 +248,7 @@ class AttachmentContextChunk:
             "full_doc_id": self.attachment_id,
             "file_path": self.filename,
             "content": self.content,
-            "page_idx": self.page_idx,
-            "bbox": self.bbox,
+            "page_number": self.page_number,
             "_workspace": _ATTACHMENT_WORKSPACE,
             "metadata": metadata,
         }
@@ -413,8 +411,7 @@ def build_text_attachment_chunk(
     chunk_id: str,
     chunk_index: int,
     content: str,
-    page_idx: int | None = None,
-    bbox: dict[str, Any] | None = None,
+    page_number: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> AttachmentContextChunk:
     return AttachmentContextChunk(
@@ -424,8 +421,7 @@ def build_text_attachment_chunk(
         chunk_index=chunk_index,
         content=content,
         token_estimate=estimate_tokens(content),
-        page_idx=page_idx,
-        bbox=bbox,
+        page_number=page_number,
         metadata=dict(metadata or {}),
     )
 
@@ -744,8 +740,7 @@ async def build_attachment_bundle_from_parse_result(
                 chunk_index=index,
                 content=content,
                 token_estimate=estimate_tokens(content),
-                page_idx=payload.get("page_idx"),
-                bbox=payload.get("bbox"),
+                page_number=payload.get("page_number"),
                 sidecar_type=str(sidecar.get("type")) if sidecar else None,
                 image_bytes=image_bytes,
                 image_mime_type=image_mime,

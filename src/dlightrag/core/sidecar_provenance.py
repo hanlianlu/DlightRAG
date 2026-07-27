@@ -12,8 +12,7 @@ from urllib.parse import unquote, urlparse
 class BlockProvenance:
     """Page-level provenance for one LightRAG sidecar block."""
 
-    page_index: int | None = None
-    bbox: dict[str, Any] | None = None
+    page_number: int | None = None
 
 
 def sidecar_dir_from_location(location: str | None) -> Path | None:
@@ -63,7 +62,7 @@ def load_block_provenance_index(artifact_dir: Path) -> dict[str, BlockProvenance
             if not isinstance(block_id, str) or not block_id:
                 continue
             provenance = _provenance_from_positions(row.get("positions"))
-            if provenance.page_index is not None:
+            if provenance.page_number is not None:
                 index[block_id] = provenance
     return index
 
@@ -91,7 +90,7 @@ def block_ids_from_sidecar(sidecar: dict[str, Any]) -> list[str]:
 # Multimodal chunks (table / drawing / equation) carry a ``{type, id, refs}``
 # sidecar that references their own modality item id (``tb-``/``im-``/``eq-``)
 # rather than a source block. Each modality file records the originating
-# ``blockid``, so page/bbox provenance is recoverable by an id lookup.
+# ``blockid``, so page provenance is recoverable by an id lookup.
 _MULTIMODAL_ITEM_FILES: dict[str, tuple[str, str]] = {
     "table": ("*.tables.json", "tables"),
     "drawing": ("*.drawings.json", "drawings"),
@@ -139,51 +138,32 @@ def first_provenance_for_blocks(
     """Return the first available provenance for ordered block refs."""
     for block_id in block_ids:
         provenance = index.get(block_id)
-        if provenance and (provenance.page_index is not None or provenance.bbox is not None):
+        if provenance and provenance.page_number is not None:
             return provenance
     return None
 
 
-def explicit_item_page_index(item: dict[str, Any]) -> int | None:
-    """Read explicit page fields from a sidecar item into zero-based page_index."""
-    for key in ("page_index", "page_idx"):
-        page_index = coerce_non_negative_int(item.get(key))
-        if page_index is not None:
-            return page_index
-
+def explicit_item_page_number(item: dict[str, Any]) -> int | None:
+    """Read an explicit 1-based page number from a sidecar item."""
     for key in ("page", "page_number"):
-        page_number = coerce_non_negative_int(item.get(key))
+        page_number = coerce_positive_int(item.get(key))
         if page_number is not None:
-            return max(page_number - 1, 0)
+            return page_number
     return None
 
 
-def explicit_item_bbox(item: dict[str, Any]) -> dict[str, Any] | None:
-    """Read an explicit bbox-like payload from a LightRAG sidecar item."""
-    raw = item.get("bbox") or item.get("bounding_box")
-    if isinstance(raw, dict):
-        return dict(raw)
-    if isinstance(raw, list):
-        page_index = explicit_item_page_index(item)
-        payload: dict[str, Any] = {"range": list(raw)}
-        if page_index is not None:
-            payload["page_index"] = page_index
-        return payload
-    return None
-
-
-def coerce_non_negative_int(value: Any) -> int | None:
-    """Coerce parser numeric values while rejecting bools and negatives."""
+def coerce_positive_int(value: Any) -> int | None:
+    """Coerce page numbers while rejecting bools and non-positive values."""
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int):
-        return value if value >= 0 else None
+        return value if value >= 1 else None
     if isinstance(value, str) and value.strip():
         try:
             parsed = int(value)
         except ValueError:
             return None
-        return parsed if parsed >= 0 else None
+        return parsed if parsed >= 1 else None
     return None
 
 
@@ -193,15 +173,8 @@ def _provenance_from_positions(raw_positions: Any) -> BlockProvenance:
     for position in raw_positions:
         if not isinstance(position, dict):
             continue
-        page_index = coerce_non_negative_int(position.get("anchor"))
-        if page_index is None:
+        page_number = coerce_positive_int(position.get("anchor"))
+        if page_number is None:
             continue
-        bbox = None
-        raw_range = position.get("range")
-        if isinstance(raw_range, list):
-            bbox = {"page_index": page_index, "range": list(raw_range)}
-            origin = position.get("origin")
-            if isinstance(origin, str) and origin:
-                bbox["origin"] = origin
-        return BlockProvenance(page_index=page_index, bbox=bbox)
+        return BlockProvenance(page_number=page_number)
     return BlockProvenance()

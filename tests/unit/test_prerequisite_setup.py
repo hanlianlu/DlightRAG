@@ -200,6 +200,49 @@ def test_write_config_replaces_stale_role_blocks_when_roles_are_explicit(wiz, tm
     assert "stale-vlm" not in text
 
 
+def test_write_config_selects_docling_and_removes_mineru(wiz, tmp_path):
+    src = tmp_path / "config.yaml"
+    src.write_text(
+        "# parser comment\n"
+        'parser:\n  rules: "*:mineru-iteP"\n'
+        "parser_sidecars:\n"
+        "  mineru:\n    api_mode: local\n    language: ch\n",
+        encoding="utf-8",
+    )
+
+    wiz.write_config_yaml(
+        src,
+        parser_kind="docling",
+        docling_endpoint="https://docling.example.com",
+    )
+
+    data = wiz._yaml().load(src)
+    assert "parser" not in data
+    assert data["parser_sidecars"] == {"docling": {"endpoint": "https://docling.example.com"}}
+    assert "# parser comment" in src.read_text(encoding="utf-8")
+
+
+def test_write_config_selects_mineru_and_removes_docling(wiz, tmp_path):
+    src = tmp_path / "config.yaml"
+    src.write_text(
+        'parser:\n  rules: "*:docling-iteP"\n'
+        "parser_sidecars:\n  docling:\n    endpoint: http://docling:5001\n",
+        encoding="utf-8",
+    )
+
+    wiz.write_config_yaml(src, parser_kind="mineru", mineru_api_mode="local")
+
+    data = wiz._yaml().load(src)
+    assert "parser" not in data
+    assert data["parser_sidecars"] == {
+        "mineru": {
+            "api_mode": "local",
+            "local_endpoint": "http://host.docker.internal:8210",
+            "language": "ch",
+        }
+    }
+
+
 # --- Task 4: .env upsert ---------------------------------------------------
 def test_upsert_env_preserves_and_updates(wiz, tmp_path):
     env = tmp_path / ".env"
@@ -459,6 +502,7 @@ def test_configure_mineru_local_env_writes_extras_and_title_aided(wiz, tmp_path,
     cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
     mineru_env = tmp_path / ".env.mineru"
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(wiz, "MINERU_ENV_PATH", mineru_env)
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
     wiz.configure_mineru_local_env(
@@ -492,6 +536,7 @@ def test_configure_mineru_local_env_disables_and_scrubs_stale_title_aided(
         encoding="utf-8",
     )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(wiz, "MINERU_ENV_PATH", mineru_env)
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
 
@@ -531,38 +576,94 @@ def test_build_mineru_local_commands(wiz, service_model, expected):
     assert wiz.build_mineru_local_commands(service_model) == expected
 
 
-# --- Plan 2 Task 2: run_mineru_step fork ----------------------------------
-def test_run_mineru_step_official(wiz, tmp_path, monkeypatch):
+# --- Plan 2 Task 2: parser step --------------------------------------------
+def test_run_parser_step_mineru_official(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: local\n", encoding="utf-8")
     env = tmp_path / ".env"
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(wiz, "ENV_PATH", env)
     ran: list = []
     info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
-    prompter = _ScriptedPrompter(["Official cloud API", "", "tok-xyz"])
-    wiz.run_mineru_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
+    prompter = _ScriptedPrompter(["MinerU official cloud API", "", "tok-xyz"])
+    wiz.run_parser_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
     assert "api_mode: official" in cfg.read_text(encoding="utf-8")
     assert ran == []
 
 
-def test_run_mineru_step_local_runs_commands(wiz, tmp_path, monkeypatch):
+def test_run_parser_step_mineru_local_runs_commands(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
     monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
     monkeypatch.setattr(wiz, "systemd_user_available", lambda: False)
     ran: list = []
     info = wiz.PlatformInfo(os="macos", arch="arm64", is_wsl=False)
-    prompter = _ScriptedPrompter(["Local (recommended)", False])
-    wiz.run_mineru_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
+    prompter = _ScriptedPrompter(["MinerU local (recommended)", False])
+    wiz.run_parser_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
     assert ["make", "mineru-install"] in ran
     assert ["make", "mineru-title-aided"] in ran
     assert ["make", "mineru-service-install"] in ran
     assert "MINERU_INSTALL_EXTRAS=core,mlx" in (tmp_path / ".env.mineru").read_text(
         encoding="utf-8"
     )
+
+
+def test_run_parser_step_configures_bundled_docling(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        'parser:\n  rules: "*:mineru-iteP"\nparser_sidecars:\n  mineru:\n    api_mode: local\n',
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN=stale\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
+
+    mode = wiz.run_parser_step(
+        _ScriptedPrompter(["Docling bundled (Compose)"]),
+        info,
+        has_gpu=False,
+    )
+
+    assert mode == "docling"
+    assert wiz._yaml().load(cfg)["parser_sidecars"] == {
+        "docling": {"endpoint": "http://docling:5001"}
+    }
+    env_text = env.read_text(encoding="utf-8")
+    assert "MINERU__API_TOKEN" not in env_text
+    assert "COMPOSE_PROFILES=docling" in env_text
+
+
+def test_run_parser_step_configures_external_docling(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        'parser:\n  rules: "*:mineru-iteP"\nparser_sidecars:\n  mineru:\n    api_mode: local\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
+    env = tmp_path / ".env"
+    env.write_text("COMPOSE_PROFILES=docling\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
+
+    mode = wiz.run_parser_step(
+        _ScriptedPrompter(["Docling external endpoint", "https://docling.example.com"]),
+        info,
+        has_gpu=False,
+    )
+
+    assert mode == "external"
+    assert wiz._yaml().load(cfg)["parser_sidecars"]["docling"]["endpoint"] == (
+        "https://docling.example.com"
+    )
+    assert "COMPOSE_PROFILES" not in env.read_text(encoding="utf-8")
 
 
 # --- Plan 3: creds return, title-aided reuse, docker bring-up --------------
@@ -641,7 +742,7 @@ def test_models_step_reprompts_for_reranker_key(wiz, tmp_path, monkeypatch):
     assert "DLIGHTRAG_RERANK__API_KEY=sk-rerank" in env.read_text(encoding="utf-8")
 
 
-def test_run_mineru_step_local_title_aided(wiz, tmp_path, monkeypatch):
+def test_run_parser_step_mineru_local_title_aided(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
@@ -650,13 +751,13 @@ def test_run_mineru_step_local_title_aided(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "systemd_user_available", lambda: True)
     ran: list = []
     info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
-    prompter = _ScriptedPrompter(["Local (recommended)", True])
+    prompter = _ScriptedPrompter(["MinerU local (recommended)", True])
     creds = {
         "api_key": "sk",
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-v4-flash",
     }
-    wiz.run_mineru_step(
+    wiz.run_parser_step(
         prompter, info, has_gpu=False, llm_title_aided=creds, runner=lambda cmd: ran.append(cmd)
     )
     assert ["make", "mineru-title-aided"] in ran
@@ -667,6 +768,14 @@ def test_run_mineru_step_local_title_aided(wiz, tmp_path, monkeypatch):
 
 def test_docker_up_command(wiz):
     assert wiz.docker_up_command() == ["docker", "compose", "up", "-d"]
+    assert wiz.docker_up_command(profile="docling") == [
+        "docker",
+        "compose",
+        "--profile",
+        "docling",
+        "up",
+        "-d",
+    ]
 
 
 def test_wait_for_readiness_success(wiz):
@@ -842,6 +951,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "  base_url: https://api.voyageai.com/v1\n"
         "rerank:\n  enabled: true\n  strategy: voyage_reranker\n  model: rerank-2.5-lite\n"
         "parser_sidecars:\n  mineru:\n    api_mode: local\n"
+        "  docling:\n    endpoint: http://docling:5001\n"
         "workspace: default\n",
         encoding="utf-8",
     )
@@ -865,7 +975,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "model": "rerank-2.5-lite",
         "base_url": None,
     }
-    assert s["mineru_mode"] == "local"
+    assert s["parser"] == {"name": "MinerU", "detail": "local"}
     assert s["workspace"] == "default"
     assert s["keys_set"] == {"LLM": True, "Embedding": True, "Rerank": False}
     assert "sk-a" not in repr(s) and "sk-b" not in repr(s)
@@ -944,20 +1054,20 @@ def test_change_models_only(wiz, monkeypatch):
         wiz, "run_models_step", lambda p, **k: {"llm": {"base_url": "u"}, "config_backup": None}
     )
     monkeypatch.setattr(wiz, "validate_config", lambda: None)
-    mineru: list = []
-    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
+    parser: list = []
+    monkeypatch.setattr(wiz, "run_parser_step", lambda *a, **k: parser.append(True) or "mineru")
     wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_MODELS]), _info(wiz))
-    assert mineru == []
+    assert parser == []
 
 
-def test_change_mineru_only(wiz, monkeypatch):
+def test_change_parser_only(wiz, monkeypatch):
     models: list = []
     monkeypatch.setattr(wiz, "run_models_step", lambda p, **k: models.append(True))
-    mineru: list = []
-    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
-    wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_MINERU]), _info(wiz))
+    parser: list = []
+    monkeypatch.setattr(wiz, "run_parser_step", lambda *a, **k: parser.append(True) or "mineru")
+    wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_PARSER]), _info(wiz))
     assert models == []
-    assert mineru == [True]
+    assert parser == [True]
 
 
 def test_change_everything_runs_both(wiz, monkeypatch):
@@ -965,26 +1075,26 @@ def test_change_everything_runs_both(wiz, monkeypatch):
         wiz, "run_models_step", lambda p, **k: {"llm": {"base_url": "u"}, "config_backup": None}
     )
     monkeypatch.setattr(wiz, "validate_config", lambda: None)
-    mineru: list = []
-    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
+    parser: list = []
+    monkeypatch.setattr(wiz, "run_parser_step", lambda *a, **k: parser.append(True) or "mineru")
     wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_ALL]), _info(wiz))
-    assert mineru == [True]
+    assert parser == [True]
 
 
 def test_change_back_does_nothing(wiz, monkeypatch):
     touched: list = []
     monkeypatch.setattr(wiz, "run_models_step", lambda p, **k: touched.append("models"))
-    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: touched.append("mineru"))
+    monkeypatch.setattr(wiz, "run_parser_step", lambda *a, **k: touched.append("parser"))
     wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_BACK]), _info(wiz))
     assert touched == []
 
 
 def test_change_models_declined_makes_no_change(wiz, monkeypatch):
     monkeypatch.setattr(wiz, "run_models_step", lambda p, **k: None)
-    mineru: list = []
-    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
+    parser: list = []
+    monkeypatch.setattr(wiz, "run_parser_step", lambda *a, **k: parser.append(True) or "mineru")
     wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_MODELS]), _info(wiz))
-    assert mineru == []
+    assert parser == []
 
 
 _MODELS_ANSWERS = [
@@ -1034,7 +1144,7 @@ def test_models_step_confirm_accepted_writes(wiz, tmp_path, monkeypatch):
     assert list(cfg.parent.glob(f"{cfg.name}.bak-*"))
 
 
-def test_mineru_step_confirm_declined_skips_write(wiz, tmp_path, monkeypatch):
+def test_parser_step_confirm_declined_skips_write(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
@@ -1042,10 +1152,10 @@ def test_mineru_step_confirm_declined_skips_write(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
     ran: list = []
     info = wiz.PlatformInfo(os="macos", arch="arm64", is_wsl=False)
-    prompter = _ScriptedPrompter(["Local (recommended)", False])  # decline overwrite
-    applied = wiz.run_mineru_step(
+    prompter = _ScriptedPrompter(["MinerU local (recommended)", False])
+    applied = wiz.run_parser_step(
         prompter, info, has_gpu=False, runner=lambda c: ran.append(c), require_confirm=True
     )
-    assert applied is False
+    assert applied is None
     assert ran == []
     assert "api_mode: official" in cfg.read_text(encoding="utf-8")

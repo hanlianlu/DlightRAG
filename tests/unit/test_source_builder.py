@@ -19,7 +19,7 @@ def _chunk(
     file_path: str = "/data/report.pdf",
     content: str = "text",
     image_data: str | None = None,
-    page_idx: int | None = None,
+    page_number: int | None = None,
 ) -> dict[str, Any]:
     file_name = file_path.rsplit("/", 1)[-1]
     return {
@@ -29,7 +29,7 @@ def _chunk(
         "file_path": file_path,
         "content": content,
         "image_data": image_data,
-        "page_idx": page_idx,
+        "page_number": page_number,
         "metadata": {
             "file_name": file_name,
             "source_uri": f"local://default/{file_name}",
@@ -64,8 +64,8 @@ class TestBuildSources:
     def test_groups_by_reference_id(self) -> None:
         contexts = {
             "chunks": [
-                _chunk("c1", "ref-1", page_idx=1),
-                _chunk("c2", "ref-1", page_idx=2),
+                _chunk("c1", "ref-1", page_number=1),
+                _chunk("c2", "ref-1", page_number=2),
                 _chunk("c3", "ref-2", file_path="/data/chart.xlsx"),
             ],
             "entities": [],
@@ -82,9 +82,9 @@ class TestBuildSources:
     def test_chunks_keep_citation_index_order(self) -> None:
         contexts = {
             "chunks": [
-                _chunk("c2", "ref-1", page_idx=3),
-                _chunk("c1", "ref-1", page_idx=1),
-                _chunk("c3", "ref-1", page_idx=2),
+                _chunk("c2", "ref-1", page_number=3),
+                _chunk("c1", "ref-1", page_number=1),
+                _chunk("c3", "ref-1", page_number=2),
             ],
         }
         sources = build_sources(contexts)
@@ -100,7 +100,7 @@ class TestBuildSources:
         assert sources[0].source_uri == "local://default/report.pdf"
 
     def test_projects_image_urls_without_exposing_image_data(self) -> None:
-        chunk = _chunk("c1", "ref-1", image_data="base64data", page_idx=1)
+        chunk = _chunk("c1", "ref-1", image_data="base64data", page_number=1)
         chunk["_workspace"] = "default"
         contexts = {"chunks": [chunk]}
         sources = build_sources(contexts)
@@ -109,7 +109,7 @@ class TestBuildSources:
         assert _chunks(sources[0])[0].thumbnail_url == "/images/default/c1?size=thumb"
 
     def test_projects_visual_chunk_urls_without_inline_image_data(self) -> None:
-        chunk = _chunk("doc-1-mm-drawing-001", "ref-1", image_data=None, page_idx=1)
+        chunk = _chunk("doc-1-mm-drawing-001", "ref-1", image_data=None, page_number=1)
         chunk["_workspace"] = "default"
         chunk["sidecar"] = {"type": "drawing"}
         contexts = {"chunks": [chunk]}
@@ -141,8 +141,8 @@ class TestBuildSources:
     def test_chunk_idx_assigned_sequentially(self) -> None:
         contexts = {
             "chunks": [
-                _chunk("c1", "ref-1", page_idx=1),
-                _chunk("c2", "ref-1", page_idx=2),
+                _chunk("c1", "ref-1", page_number=1),
+                _chunk("c2", "ref-1", page_number=2),
             ],
         }
         sources = build_sources(contexts)
@@ -150,11 +150,11 @@ class TestBuildSources:
         assert _chunks(sources[0])[0].chunk_idx == 1
         assert _chunks(sources[0])[1].chunk_idx == 2
 
-    def test_none_page_idx_does_not_reorder_citation_index(self) -> None:
+    def test_missing_page_number_does_not_reorder_citation_index(self) -> None:
         contexts = {
             "chunks": [
-                _chunk("c1", "ref-1", page_idx=None),
-                _chunk("c2", "ref-1", page_idx=1),
+                _chunk("c1", "ref-1", page_number=None),
+                _chunk("c2", "ref-1", page_number=1),
             ],
         }
         sources = build_sources(contexts)
@@ -162,12 +162,12 @@ class TestBuildSources:
         assert [c.chunk_id for c in _chunks(sources[0])] == ["c1", "c2"]
         assert [c.chunk_idx for c in _chunks(sources[0])] == [1, 2]
 
-    def test_page_idx_falls_back_to_metadata(self) -> None:
-        chunk = _chunk("c1", "ref-1", page_idx=None)
-        chunk["metadata"]["page_idx"] = 7
+    def test_page_number_falls_back_to_metadata(self) -> None:
+        chunk = _chunk("c1", "ref-1", page_number=None)
+        chunk["metadata"]["page_number"] = 7
         sources = build_sources({"chunks": [chunk]})
 
-        assert _chunks(sources[0])[0].page_idx == 7
+        assert _chunks(sources[0])[0].page_number == 7
 
     def test_cited_subset_preserves_source_catalog_fields(self) -> None:
         chunks = [

@@ -697,7 +697,7 @@ class AnswerEngine:
             for chunk in doc_chunks:
                 content = chunk.get("content", "").strip()
                 chunk_id = chunk.get("chunk_id", "")
-                page_idx = chunk.get("page_idx")
+                page_number = chunk.get("page_number")
                 img_data = chunk.get("image_data")
 
                 # Build citation tag
@@ -734,13 +734,13 @@ class AnswerEngine:
                 # Text excerpt
                 if content:
                     if cite_tag:
-                        if page_idx:
-                            label_line = f"{cite_tag} {filename}, Page {page_idx}"
+                        if page_number:
+                            label_line = f"{cite_tag} {filename}, Page {page_number}"
                         else:
                             label_line = f"{cite_tag} {filename}"
                     else:
-                        if page_idx:
-                            label_line = f"[{filename}, Page {page_idx}]"
+                        if page_number:
+                            label_line = f"[{filename}, Page {page_number}]"
                         else:
                             label_line = f"[{filename}]"
                     blocks.append({"type": "text", "text": f"{label_line}\n{content}"})
@@ -840,7 +840,6 @@ _INTERNAL_KEYS: frozenset[str] = frozenset(
         "chunk_id",
         "chunk_idx",
         "content",
-        "bbox",
         "bm25_profile",
         "distance",
         "file_path",
@@ -849,7 +848,7 @@ _INTERNAL_KEYS: frozenset[str] = frozenset(
         "image_mime_type",
         "image_url",
         "metadata",
-        "page_idx",
+        "page_number",
         "pipeline_stage",
         "reference_id",
         "relevance_score",
@@ -933,7 +932,7 @@ def _build_image_label(
     """
     meta = chunk.get("metadata") or {}
     title = meta.get("doc_title", "")
-    page_idx = chunk.get("page_idx")
+    page_number = chunk.get("page_number")
     sidecar = chunk.get("sidecar")
 
     label_parts: list[str] = []
@@ -941,8 +940,8 @@ def _build_image_label(
         label_parts.append(cite_tag)
     if title:
         label_parts.append(f'"{title}"')
-    if page_idx is not None:
-        label_parts.append(f"Page {page_idx}")
+    if page_number is not None:
+        label_parts.append(f"Page {page_number}")
     elif filename:
         label_parts.append(filename)
     else:

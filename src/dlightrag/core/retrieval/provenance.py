@@ -13,8 +13,7 @@ from dlightrag.core.sidecar_provenance import (
     BlockProvenance,
     block_ids_from_multimodal_item,
     block_ids_from_sidecar,
-    explicit_item_bbox,
-    explicit_item_page_index,
+    explicit_item_page_number,
     first_provenance_for_blocks,
     is_multimodal_sidecar,
     load_block_provenance_index,
@@ -31,10 +30,10 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 async def hydrate_lightrag_chunk_provenance(
     stores: Any, chunks: list[dict[str, Any]], *, include_image_data: bool = True
 ) -> None:
-    """Hydrate page labels and, when ``include_image_data``, image bytes.
+    """Hydrate page numbers and, when ``include_image_data``, image bytes.
 
-    ``include_image_data=False`` resolves the cheap provenance metadata (page
-    index, bbox) but skips the expensive base64 image read, so a caller can defer
+    ``include_image_data=False`` resolves the cheap page metadata but skips the
+    expensive base64 image read, so a caller can defer
     image hydration until after rerank truncation for a text-only reranker.
     """
     if not chunks:
@@ -50,9 +49,8 @@ async def hydrate_lightrag_chunk_provenance(
         _merge_raw_chunk_fields(chunk, raw_chunk)
 
         sidecar = _chunk_sidecar(chunk, raw_chunk)
-        _hydrate_page_index_direct(chunk, sidecar)
-        _hydrate_bbox_direct(chunk, sidecar)
-        if chunk.get("page_idx") is None:
+        _hydrate_page_number_direct(chunk, sidecar)
+        if chunk.get("page_number") is None:
             provenance = await _provenance_from_block_sidecar(
                 stores,
                 sidecar=sidecar,
@@ -62,10 +60,8 @@ async def hydrate_lightrag_chunk_provenance(
                 block_index_cache=block_index_cache,
             )
             if provenance is not None:
-                if provenance.page_index is not None:
-                    chunk["page_idx"] = provenance.page_index + 1
-                if provenance.bbox is not None and chunk.get("bbox") is None:
-                    chunk["bbox"] = provenance.bbox
+                if provenance.page_number is not None:
+                    chunk["page_number"] = provenance.page_number
 
         if include_image_data:
             await _hydrate_image_data(
@@ -114,16 +110,10 @@ def _chunk_sidecar(chunk: dict[str, Any], raw_chunk: dict[str, Any]) -> dict[str
     return chunk_sidecar if isinstance(chunk_sidecar, dict) else {}
 
 
-def _hydrate_page_index_direct(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
-    page_index = explicit_item_page_index(sidecar)
-    if page_index is not None:
-        chunk["page_idx"] = page_index + 1
-
-
-def _hydrate_bbox_direct(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
-    bbox = explicit_item_bbox(sidecar)
-    if bbox is not None:
-        chunk["bbox"] = bbox
+def _hydrate_page_number_direct(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
+    page_number = explicit_item_page_number(sidecar)
+    if page_number is not None:
+        chunk["page_number"] = page_number
 
 
 async def _provenance_from_block_sidecar(
@@ -213,8 +203,8 @@ def _is_sidecar_asset_path(file_path: str) -> bool:
     return _SIDECAR_ASSETS_MARKER in file_path
 
 
-def _page_index_from_filename(stem: str) -> int | None:
-    """Extract zero-based page index from a parser-generated filename stem.
+def _page_number_from_filename(stem: str) -> int | None:
+    """Extract a 1-based page number from a parser-generated filename stem.
 
     Handles patterns like ``page_1``, ``page-01``, ``p2``, ``page3_drawings``.
     """
@@ -223,21 +213,22 @@ def _page_index_from_filename(stem: str) -> int | None:
     m = re.search(r"(?:^|[_-])p(?:age)?[_-]?(\d+)", stem, re.IGNORECASE)
     if m is None:
         return None
-    return max(int(m.group(1)) - 1, 0)
+    page_number = int(m.group(1))
+    return page_number if page_number >= 1 else None
 
 
 def _load_sidecar_drawing_path(
-    artifact_dir: Path, drawing_id: str, *, page_idx: int | None = None
+    artifact_dir: Path, drawing_id: str, *, page_number: int | None = None
 ) -> str | None:
     """Resolve a sidecar drawing's image path from ``*.drawings.json``.
 
-    When *page_idx* is given, prefers the candidate whose page matches the
+    When *page_number* is given, prefers the candidate whose page matches the
     chunk's page.  Parser-generated drawing IDs are often page-local
     (``im-0``, ``im-1``, …), so the same ID can appear in every page's
     drawings file.  First-match would return the wrong image for any page
     after the first.
     """
-    candidates: list[tuple[int | None, str]] = []  # (item_page_idx, path)
+    candidates: list[tuple[int | None, str]] = []
     for drawings_path in sorted(artifact_dir.glob("*.drawings.json")):
         try:
             data = json.loads(drawings_path.read_text(encoding="utf-8"))
@@ -254,15 +245,15 @@ def _load_sidecar_drawing_path(
             if isinstance(rel_path, str):
                 candidate = resolve_sidecar_asset_path(artifact_dir, rel_path)
                 if candidate is not None:
-                    item_page = explicit_item_page_index(item)
+                    item_page = explicit_item_page_number(item)
                     if item_page is None:
-                        item_page = _page_index_from_filename(drawings_path.stem)
+                        item_page = _page_number_from_filename(drawings_path.stem)
                     candidates.append((item_page, str(candidate)))
     if not candidates:
         return None
-    if page_idx is not None:
+    if page_number is not None:
         for item_page, path in candidates:
-            if item_page == page_idx:
+            if item_page == page_number:
                 return path
     return candidates[0][1]
 
@@ -301,7 +292,7 @@ async def _hydrate_image_data(
                     _load_sidecar_drawing_path,
                     artifact_dir,
                     drawing_id,
-                    page_idx=chunk.get("page_idx"),
+                    page_number=chunk.get("page_number"),
                 )
 
     if not isinstance(image_path, str):

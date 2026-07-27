@@ -27,14 +27,14 @@
     <div class="source-chunk" data-ref="{{ src.id }}" data-chunk="{{ chunk.chunk_idx }}">
       <div class="source-chunk-header">
         <span class="source-chunk-page">
-          {% if chunk.page_idx is not none %}p.{{ chunk.page_idx }}{% else %}#{{ chunk.chunk_idx }}{% endif %}
+          {% if chunk.page_number is not none %}p.{{ chunk.page_number }}{% else %}#{{ chunk.chunk_idx }}{% endif %}
         </span>
       </div>
       {% if chunk.thumbnail_url or chunk.image_url %}
       <div class="source-chunk-image">
         <img src="{{ chunk.thumbnail_url or chunk.image_url }}"
              data-full-src="{{ chunk.image_url or chunk.thumbnail_url }}"
-             alt="Page {{ chunk.page_idx or '' }}" loading="lazy"
+             alt="Page {{ chunk.page_number or '' }}" loading="lazy"
              data-action="open-lightbox"
              role="button" tabindex="0" aria-label="Open page image">
       </div>

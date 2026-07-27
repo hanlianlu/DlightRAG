@@ -767,8 +767,7 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
   "reference_id": "1",
   "file_path": "report.pdf",
   "content": "Page text content...",
-  "page_idx": 2,
-  "bbox": {"x0": 0.1, "y0": 0.2, "x1": 0.8, "y1": 0.6},
+  "page_number": 2,
   "image_url": "/images/default/abc123?size=full",
   "thumbnail_url": "/images/default/abc123?size=thumb",
   "image_mime_type": "image/png",
@@ -782,8 +781,7 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
 | `reference_id` | string | yes | Document-level ID (groups chunks from the same file) |
 | `file_path` | string | yes | Display-only source basename; never use it as provenance or a download locator |
 | `content` | string | yes | Chunk text content |
-| `page_idx` | int \| null | no | **1-based** page number |
-| `bbox` | object \| null | no | Visual block bounding box when LightRAG/MinerU sidecar provenance provides one |
+| `page_number` | int \| null | no | Optional **1-based** display page number |
 | `image_url` | string \| null | no | Full image route for visual chunks in public REST/Web responses |
 | `thumbnail_url` | string \| null | no | Thumbnail route for source-panel rendering |
 | `image_mime_type` | string \| null | no | MIME type for the visual asset |
@@ -855,8 +853,7 @@ REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
     {
       "chunk_id": "abc123",
       "chunk_idx": 1,
-      "page_idx": 2,
-      "bbox": null,
+      "page_number": 2,
       "content": "First 200 characters of content...",
       "image_url": null,
       "thumbnail_url": null
@@ -864,8 +861,7 @@ REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
     {
       "chunk_id": "def456",
       "chunk_idx": 2,
-      "page_idx": 5,
-      "bbox": {"x0": 0.2, "y0": 0.1, "x1": 0.7, "y1": 0.5},
+      "page_number": 5,
       "content": "Another chunk...",
       "image_url": "/images/default/def456?size=full",
       "thumbnail_url": "/images/default/def456?size=thumb"
@@ -890,8 +886,7 @@ Each **chunk snippet** within a source:
 |---|---|---|
 | `chunk_id` | string | Unique chunk identifier |
 | `chunk_idx` | int | 1-based position within this source; matches `[ref_id-chunk_idx]` citations |
-| `page_idx` | int \| null | 1-based page number |
-| `bbox` | object \| null | Visual block bounding box when available |
+| `page_number` | int \| null | Optional 1-based display page number |
 | `content` | string | Filtered display content |
 | `image_url` | string \| null | Full visual asset route |
 | `thumbnail_url` | string \| null | Thumbnail visual asset route |
@@ -946,9 +941,9 @@ To trace `[1-2]` back to source material:
 1. Find chunks where `reference_id == "1"` — these are all chunks from that document
 2. The 2nd chunk (1-based) in that group is the cited chunk
 3. Use `chunk_id` to look up the source in `sources` (by matching `id`)
-4. Use `page_idx` on the chunk for the page number
-5. Use `page_idx` and `bbox` when present for page/block localization
-6. Use the source's `download_url` for the original file; use
+4. Use `page_number` when present for human page navigation; it does not
+  participate in citation validity or semantic highlight grounding
+5. Use the source's `download_url` for the original file; use
    `image_url`/`thumbnail_url` for retrieved visual chunks
 
 
