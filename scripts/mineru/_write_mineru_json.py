@@ -13,17 +13,16 @@ import sys
 
 
 def main() -> None:
-    if len(sys.argv) != 6:
+    disable = len(sys.argv) == 3 and sys.argv[2] == "--disable"
+    if not disable and len(sys.argv) != 6:
         print(
-            f"Usage: {sys.argv[0]} TARGET API_KEY BASE_URL MODEL ENABLE_THINKING", file=sys.stderr
+            f"Usage: {sys.argv[0]} TARGET --disable | "
+            "TARGET API_KEY BASE_URL MODEL ENABLE_THINKING",
+            file=sys.stderr,
         )
         sys.exit(2)
 
     target = sys.argv[1]
-    api_key = sys.argv[2]
-    base_url = sys.argv[3]
-    model = sys.argv[4]
-    enable_thinking = sys.argv[5].lower() == "true"
 
     existing: dict = {}
     if os.path.isfile(target):
@@ -35,13 +34,20 @@ def main() -> None:
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: could not parse {target} — starting fresh ({exc})")
 
-    title_aided = {
-        "api_key": api_key,
-        "base_url": base_url,
-        "model": model,
-        "enable_thinking": enable_thinking,
-        "enable": True,
-    }
+    if disable:
+        title_aided = {"enable": False}
+    else:
+        api_key = sys.argv[2]
+        base_url = sys.argv[3]
+        model = sys.argv[4]
+        enable_thinking = sys.argv[5].lower() == "true"
+        title_aided = {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "enable_thinking": enable_thinking,
+            "enable": True,
+        }
 
     existing.setdefault("llm-aided-config", {})
     existing["llm-aided-config"]["title_aided"] = title_aided
@@ -49,6 +55,10 @@ def main() -> None:
     with open(target, "w") as fh:
         json.dump(existing, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
+
+    if disable:
+        print(f"==> Disabled title-aided config in {target}")
+        return
 
     # Never echo key material (even partially): report only presence + length.
     key_status = f"set ({len(api_key)} chars)" if api_key else "MISSING"

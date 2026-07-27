@@ -87,6 +87,52 @@ def test_rerank_reuse_llm_needs_no_key(wiz):
     assert env_key is None
 
 
+def test_ask_model_reprompts_for_required_values(wiz):
+    prompter = _ScriptedPrompter(
+        [
+            "DeepSeek",
+            "",
+            "deepseek-v4-flash",
+            "",
+            "",
+            "sk-valid",
+        ]
+    )
+
+    assert wiz._ask_model(prompter, wiz.PROVIDERS_LLM, "LLM") == (
+        "DeepSeek",
+        "deepseek-v4-flash",
+        "https://api.deepseek.com",
+        "sk-valid",
+    )
+
+
+def test_ask_model_reprompts_for_required_custom_url(wiz):
+    prompter = _ScriptedPrompter(
+        ["Azure OpenAI", "gpt-4o", "", "https://example.openai.azure.com/v1", "sk-azure"]
+    )
+
+    assert wiz._ask_model(prompter, wiz.PROVIDERS_LLM, "LLM") == (
+        "Azure OpenAI",
+        "gpt-4o",
+        "https://example.openai.azure.com/v1",
+        "sk-azure",
+    )
+
+
+def test_ask_model_uses_placeholder_key_for_unauthenticated_local_provider(wiz):
+    prompter = _ScriptedPrompter(
+        ["Other (OpenAI-compatible)", "local-model", "http://localhost:8000/v1", ""]
+    )
+
+    assert wiz._ask_model(prompter, wiz.PROVIDERS_LLM, "LLM") == (
+        "Other (OpenAI-compatible)",
+        "local-model",
+        "http://localhost:8000/v1",
+        "not-needed",
+    )
+
+
 # --- Task 3: config.yaml writer -------------------------------------------
 def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
     src = tmp_path / "config.yaml"
@@ -167,6 +213,15 @@ def test_upsert_env_preserves_and_updates(wiz, tmp_path):
     assert "DLIGHTRAG_LLM__DEFAULT__API_KEY=new" in lines
     assert "DLIGHTRAG_EMBEDDING__API_KEY=e" in lines
     assert sum(line.startswith("DLIGHTRAG_LLM__DEFAULT__API_KEY=") for line in lines) == 1
+
+
+def test_upsert_env_collapses_duplicate_keys(wiz, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("K=stale-first\nK=stale-last\n", encoding="utf-8")
+
+    wiz.upsert_env(env, {"K": "current"})
+
+    assert env.read_text(encoding="utf-8").splitlines() == ["K=current"]
 
 
 def test_upsert_env_creates_from_missing(wiz, tmp_path):
@@ -421,24 +476,59 @@ def test_configure_mineru_local_env_writes_extras_and_title_aided(wiz, tmp_path,
     assert "api_mode: local" in cfg.read_text(encoding="utf-8")
 
 
+def test_configure_mineru_local_env_disables_and_scrubs_stale_title_aided(
+    wiz, tmp_path, monkeypatch
+):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: local\n", encoding="utf-8")
+    mineru_env = tmp_path / ".env.mineru"
+    mineru_env.write_text(
+        "MINERU_INSTALL_EXTRAS=core\n"
+        "MINERU_TITLE_AIDED_ENABLE=true\n"
+        "MINERU_TITLE_AIDED_API_KEY=stale-secret\n"
+        "MINERU_TITLE_AIDED_BASE_URL=https://stale.example\n"
+        "MINERU_TITLE_AIDED_MODEL=stale-model\n"
+        "MINERU_TITLE_AIDED_ENABLE_THINKING=true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "MINERU_ENV_PATH", mineru_env)
+    monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
+
+    wiz.configure_mineru_local_env("core,mlx")
+
+    text = mineru_env.read_text(encoding="utf-8")
+    assert "MINERU_TITLE_AIDED_ENABLE=false" in text
+    assert "stale-secret" not in text
+    assert "stale.example" not in text
+    assert "stale-model" not in text
+    assert "MINERU_TITLE_AIDED_ENABLE_THINKING" not in text
+
+
 @pytest.mark.parametrize(
-    "service_model,title_aided,expected",
+    "service_model,expected",
     [
-        ("launchd", False, [["make", "mineru-install"], ["make", "mineru-service-install"]]),
         (
-            "systemd-user",
-            True,
+            "launchd",
             [
                 ["make", "mineru-install"],
                 ["make", "mineru-title-aided"],
                 ["make", "mineru-service-install"],
             ],
         ),
-        ("foreground", False, [["make", "mineru-install"]]),
+        (
+            "systemd-user",
+            [
+                ["make", "mineru-install"],
+                ["make", "mineru-title-aided"],
+                ["make", "mineru-service-install"],
+            ],
+        ),
+        ("foreground", [["make", "mineru-install"], ["make", "mineru-title-aided"]]),
     ],
 )
-def test_build_mineru_local_commands(wiz, service_model, title_aided, expected):
-    assert wiz.build_mineru_local_commands(service_model, title_aided=title_aided) == expected
+def test_build_mineru_local_commands(wiz, service_model, expected):
+    assert wiz.build_mineru_local_commands(service_model) == expected
 
 
 # --- Plan 2 Task 2: run_mineru_step fork ----------------------------------
@@ -450,7 +540,7 @@ def test_run_mineru_step_official(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "ENV_PATH", env)
     ran: list = []
     info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
-    prompter = _ScriptedPrompter(["Official cloud API", "tok-xyz"])
+    prompter = _ScriptedPrompter(["Official cloud API", "", "tok-xyz"])
     wiz.run_mineru_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
     assert "api_mode: official" in cfg.read_text(encoding="utf-8")
     assert ran == []
@@ -468,6 +558,7 @@ def test_run_mineru_step_local_runs_commands(wiz, tmp_path, monkeypatch):
     prompter = _ScriptedPrompter(["Local (recommended)", False])
     wiz.run_mineru_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
     assert ["make", "mineru-install"] in ran
+    assert ["make", "mineru-title-aided"] in ran
     assert ["make", "mineru-service-install"] in ran
     assert "MINERU_INSTALL_EXTRAS=core,mlx" in (tmp_path / ".env.mineru").read_text(
         encoding="utf-8"
@@ -508,6 +599,48 @@ def test_models_step_returns_llm_creds(wiz, tmp_path, monkeypatch):
     }
 
 
+def test_models_step_reprompts_for_reranker_key(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n  default:\n    provider: openai\n    model: x\n"
+        "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
+        "rerank:\n  strategy: chat_llm_reranker\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    prompter = _ScriptedPrompter(
+        [
+            wiz.MODEL_MODE_CUSTOM,
+            "DeepSeek",
+            "default-model",
+            "",
+            "sk-default",
+            "DeepSeek",
+            "extract-model",
+            "",
+            "sk-extract",
+            "DeepSeek",
+            "keyword-model",
+            "",
+            "sk-keyword",
+            "Voyage",
+            "voyage-multimodal-3.5",
+            "",
+            "sk-embed",
+            "Voyage",
+            "",
+            "sk-rerank",
+        ]
+    )
+
+    wiz.run_models_step(prompter)
+
+    assert "DLIGHTRAG_RERANK__API_KEY=sk-rerank" in env.read_text(encoding="utf-8")
+
+
 def test_run_mineru_step_local_title_aided(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
@@ -536,21 +669,34 @@ def test_docker_up_command(wiz):
     assert wiz.docker_up_command() == ["docker", "compose", "up", "-d"]
 
 
-def test_wait_for_health_success(wiz):
+def test_wait_for_readiness_success(wiz):
     calls = {"n": 0}
 
     def probe(url):
         calls["n"] += 1
         return calls["n"] >= 2
 
-    assert wiz.wait_for_health("u", attempts=5, delay=0, probe=probe, sleep=lambda _: None) is True
-
-
-def test_wait_for_health_gives_up(wiz):
     assert (
-        wiz.wait_for_health("u", attempts=3, delay=0, probe=lambda url: False, sleep=lambda _: None)
+        wiz.wait_for_readiness("u", attempts=5, delay=0, probe=probe, sleep=lambda _: None) is True
+    )
+
+
+def test_wait_for_readiness_gives_up(wiz):
+    assert (
+        wiz.wait_for_readiness(
+            "u", attempts=3, delay=0, probe=lambda url: False, sleep=lambda _: None
+        )
         is False
     )
+
+
+def test_bring_up_stack_waits_for_strict_readiness(wiz, monkeypatch):
+    urls: list[str] = []
+    monkeypatch.setattr(wiz, "_default_runner", lambda command: None)
+    monkeypatch.setattr(wiz, "wait_for_readiness", lambda url: urls.append(url) or True)
+
+    assert wiz._bring_up_stack(_NullConsole()) == 0
+    assert urls == ["http://localhost:8100/ready"]
 
 
 def test_with_quit_appends_sentinel(wiz):
@@ -591,6 +737,18 @@ def test_main_cancel_exits_cleanly(wiz, tmp_path, monkeypatch, kind):
             raise exc
 
     assert wiz.main(prompter=_Cancel()) == 130
+
+
+def test_main_without_tty_exits_without_opening_questionary(wiz, monkeypatch):
+    monkeypatch.setattr(wiz, "run_preflight", lambda: [])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(
+        wiz,
+        "_questionary_prompter",
+        lambda: pytest.fail("questionary must not open without an interactive terminal"),
+    )
+
+    assert wiz.main() == 2
 
 
 # --- §11 re-run menu: detection / summary / dispatch ----------------------
@@ -716,7 +874,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
 def test_home_start_brings_up_stack(wiz, monkeypatch):
     ups: list = []
     monkeypatch.setattr(wiz, "_default_runner", lambda cmd: ups.append(cmd))
-    monkeypatch.setattr(wiz, "wait_for_health", lambda url, **k: True)
+    monkeypatch.setattr(wiz, "wait_for_readiness", lambda url, **k: True)
     prompter = _ScriptedPrompter([wiz.MENU_START])
     rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
     assert rc == 0

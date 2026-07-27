@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for local MinerU service management helpers."""
 
+import json
 import os
 import plistlib
 import stat
@@ -47,6 +48,56 @@ def test_mineru_helper_defaults_to_separate_env_file() -> None:
     env_script = (MINERU_SCRIPTS / "env.sh").read_text(encoding="utf-8")
 
     assert 'mineru_env_file="${MINERU_ENV_FILE:-$mineru_repo_root/.env.mineru}"' in env_script
+
+
+def test_title_aided_script_disables_and_scrubs_existing_config(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    config_path = home / "mineru.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model-source": "huggingface",
+                "llm-aided-config": {
+                    "other": {"keep": True},
+                    "title_aided": {
+                        "api_key": "stale-secret",
+                        "base_url": "https://stale.example",
+                        "model": "stale-model",
+                        "enable_thinking": True,
+                        "enable": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env.mineru"
+    env_file.write_text("MINERU_TITLE_AIDED_ENABLE=false\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["MINERU_ENV_FILE"] = str(env_file)
+    env["MINERU_SERVICE_VENV"] = str(tmp_path / "missing-venv")
+    for key in (
+        "MINERU_TITLE_AIDED_ENABLE",
+        "MINERU_TITLE_AIDED_API_KEY",
+        "MINERU_TITLE_AIDED_BASE_URL",
+        "MINERU_TITLE_AIDED_MODEL",
+        "MINERU_TITLE_AIDED_ENABLE_THINKING",
+    ):
+        env.pop(key, None)
+
+    subprocess.run(
+        [str(MINERU_SCRIPTS / "title_aided.sh")],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config["model-source"] == "huggingface"
+    assert config["llm-aided-config"]["other"] == {"keep": True}
+    assert config["llm-aided-config"]["title_aided"] == {"enable": False}
 
 
 def test_makefile_dispatches_mineru_service_targets() -> None:

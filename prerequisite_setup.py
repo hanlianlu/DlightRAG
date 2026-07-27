@@ -19,7 +19,9 @@ import datetime as _dt
 import platform
 import shutil
 import subprocess
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,7 +31,7 @@ ENV_PATH = REPO_ROOT / ".env"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
 MINERU_ENV_PATH = REPO_ROOT / ".env.mineru"
 MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / ".env.mineru.example"
-API_HEALTH_URL = "http://localhost:8100/health"
+API_READY_URL = "http://localhost:8100/ready"
 WEB_URL = "http://localhost:8100/web/"
 
 
@@ -43,6 +45,7 @@ class ProviderSpec:
     provider: str  # DlightRAG provider enum value
     base_url: str | None  # canonical default; None => native (no base_url)
     requires_url: bool = False  # user MUST supply (Azure / Other, tenant-specific)
+    requires_key: bool = True
 
 
 # LLM roles: openai-compatible => provider "openai" + base_url; else native.
@@ -53,7 +56,9 @@ PROVIDERS_LLM: dict[str, ProviderSpec] = {
     "Anthropic": ProviderSpec("anthropic", None),
     "Gemini": ProviderSpec("gemini", None),
     "Azure OpenAI": ProviderSpec("openai", None, requires_url=True),
-    "Other (OpenAI-compatible)": ProviderSpec("openai", None, requires_url=True),
+    "Other (OpenAI-compatible)": ProviderSpec(
+        "openai", None, requires_url=True, requires_key=False
+    ),
 }
 
 # Embedding providers.
@@ -63,8 +68,10 @@ PROVIDERS_EMBED: dict[str, ProviderSpec] = {
     "Gemini": ProviderSpec("gemini", None),
     "Jina": ProviderSpec("jina", "https://api.jina.ai/v1"),
     "Azure OpenAI": ProviderSpec("openai_compatible", None, requires_url=True),
-    "Ollama (local)": ProviderSpec("ollama", "http://localhost:11434"),
-    "Other (OpenAI-compatible)": ProviderSpec("openai_compatible", None, requires_url=True),
+    "Ollama (local)": ProviderSpec("ollama", "http://localhost:11434", requires_key=False),
+    "Other (OpenAI-compatible)": ProviderSpec(
+        "openai_compatible", None, requires_url=True, requires_key=False
+    ),
 }
 
 # Known embedding model -> vector dim (pre-fill; asked otherwise).
@@ -188,6 +195,8 @@ def upsert_env(path: Path, values: dict[str, str], *, remove_keys: tuple[str, ..
                 continue
             if key in remaining:
                 lines.append(f"{key}={remaining.pop(key)}")
+            elif key in values:
+                continue
             else:
                 lines.append(raw)
     for key, value in remaining.items():
@@ -331,19 +340,26 @@ def configure_mineru_local_env(extras: str, *, title_aided: dict | None = None) 
     if not MINERU_ENV_PATH.exists() and MINERU_ENV_EXAMPLE_PATH.exists():
         MINERU_ENV_PATH.write_bytes(MINERU_ENV_EXAMPLE_PATH.read_bytes())
     values = {"MINERU_INSTALL_EXTRAS": extras}
+    remove_keys = ()
     if title_aided:
         values["MINERU_TITLE_AIDED_ENABLE"] = "true"
         values["MINERU_TITLE_AIDED_API_KEY"] = title_aided["api_key"]
         values["MINERU_TITLE_AIDED_BASE_URL"] = title_aided["base_url"]
         values["MINERU_TITLE_AIDED_MODEL"] = title_aided["model"]
-    upsert_env(MINERU_ENV_PATH, values)
+    else:
+        values["MINERU_TITLE_AIDED_ENABLE"] = "false"
+        remove_keys = (
+            "MINERU_TITLE_AIDED_API_KEY",
+            "MINERU_TITLE_AIDED_BASE_URL",
+            "MINERU_TITLE_AIDED_MODEL",
+            "MINERU_TITLE_AIDED_ENABLE_THINKING",
+        )
+    upsert_env(MINERU_ENV_PATH, values, remove_keys=remove_keys)
     write_config_yaml(CONFIG_PATH, mineru_api_mode="local")
 
 
-def build_mineru_local_commands(service_model: str, *, title_aided: bool) -> list[list[str]]:
-    cmds: list[list[str]] = [["make", "mineru-install"]]
-    if title_aided:
-        cmds.append(["make", "mineru-title-aided"])
+def build_mineru_local_commands(service_model: str) -> list[list[str]]:
+    cmds: list[list[str]] = [["make", "mineru-install"], ["make", "mineru-title-aided"]]
     if service_model in ("launchd", "systemd-user"):
         cmds.append(["make", "mineru-service-install"])
     return cmds
@@ -376,7 +392,7 @@ def run_mineru_step(
         ["Local (recommended)", "Official cloud API"],
     )
     if choice == "Official cloud API":
-        token = prompter.password("MinerU API token")
+        token = _ask_required(lambda: prompter.password("MinerU API token (required)"))
         if require_confirm and not prompter.confirm(MINERU_OVERWRITE_CONFIRM, default=False):
             return False
         configure_mineru_official(token)
@@ -396,7 +412,7 @@ def run_mineru_step(
     configure_mineru_local_env(extras, title_aided=title_aided)
 
     service_model = resolve_service_model(info, systemd_available=systemd_user_available())
-    for cmd in build_mineru_local_commands(service_model, title_aided=bool(title_aided)):
+    for cmd in build_mineru_local_commands(service_model):
         runner(cmd)
     if service_model == "foreground":
         _note_foreground_mineru()
@@ -422,17 +438,29 @@ class Prompter:
         raise NotImplementedError
 
 
+def _ask_required(ask: Callable[[], str]) -> str:
+    while True:
+        value = ask().strip()
+        if value:
+            return value
+
+
 def _ask_model(
     prompter: Prompter, providers: dict[str, ProviderSpec], role_label: str
 ) -> tuple[str, str, str | None, str]:
     name = prompter.select(f"{role_label} provider", list(providers))
     spec = providers[name]
-    model = prompter.text(f"{role_label} model name", default="")
+    model = _ask_required(lambda: prompter.text(f"{role_label} model name (required)"))
     if spec.requires_url:
-        base_url = prompter.text(f"{role_label} base URL (required for {name})", default="")
+        base_url = _ask_required(
+            lambda: prompter.text(f"{role_label} base URL (required for {name})")
+        )
     else:
         base_url = prompter.text(f"{role_label} base URL", default=spec.base_url or "")
-    key = prompter.password(f"{role_label} API key")
+    if spec.requires_key:
+        key = _ask_required(lambda: prompter.password(f"{role_label} API key (required)"))
+    else:
+        key = prompter.password(f"{role_label} API key (optional)").strip() or "not-needed"
     return name, model, (base_url or None), key
 
 
@@ -476,7 +504,9 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         rerank_choice = prompter.select("Reranker", list(RERANK_CHOICES))
     rerank_block, rerank_env = resolve_rerank_choice(rerank_choice)
     if rerank_env is not None:
-        env_values[rerank_env] = prompter.password("Reranker API key")
+        env_values[rerank_env] = _ask_required(
+            lambda: prompter.password("Reranker API key (required)")
+        )
 
     # Confirm AFTER collecting answers, right before overwriting existing settings.
     if require_confirm and not prompter.confirm(MODELS_OVERWRITE_CONFIRM, default=False):
@@ -596,13 +626,13 @@ def _questionary_prompter() -> Prompter:
 
 
 # ---------------------------------------------------------------------------
-# Docker bring-up + health poll
+# Docker bring-up + readiness poll
 # ---------------------------------------------------------------------------
 def docker_up_command() -> list[str]:
     return ["docker", "compose", "up", "-d"]
 
 
-def probe_health(url: str, *, opener=None) -> bool:
+def probe_readiness(url: str, *, opener=None) -> bool:
     import urllib.request
 
     opener = opener or urllib.request.urlopen
@@ -613,7 +643,9 @@ def probe_health(url: str, *, opener=None) -> bool:
         return False
 
 
-def wait_for_health(url: str, *, attempts=60, delay=2.0, probe=probe_health, sleep=None) -> bool:
+def wait_for_readiness(
+    url: str, *, attempts=60, delay=2.0, probe=probe_readiness, sleep=None
+) -> bool:
     sleep = sleep or time.sleep
     for i in range(attempts):
         if probe(url):
@@ -730,11 +762,11 @@ def _bring_up_stack(console) -> int:
     except Exception as exc:
         console.print(f"[red]docker compose up failed:[/red] {exc}")
         return 1
-    if wait_for_health(API_HEALTH_URL):
+    if wait_for_readiness(API_READY_URL):
         console.print(f"[green]Ready![/green] Open [link={WEB_URL}]{WEB_URL}[/link] · 已就绪")
     else:
         console.print(
-            f"[yellow]Not healthy yet — check `docker compose ps`, then open[/yellow] {WEB_URL}"
+            f"[yellow]Not ready yet — check `docker compose ps`, then open[/yellow] {WEB_URL}"
         )
     return 0
 
@@ -861,6 +893,12 @@ def main(prompter: Prompter | None = None) -> int:
     console = Console()
     console.rule("[bold]DlightRAG setup")
     console.print("[dim]Pick '✕ Quit · 退出' in any menu, or press Ctrl+C, to cancel.[/dim]")
+    if prompter is None and not sys.stdin.isatty():
+        console.print(
+            "[red]Interactive terminal required.[/red] Run "
+            "[bold]uv run prerequisite_setup.py[/bold] from a terminal."
+        )
+        return 2
     failed = [c for c in run_preflight() if not c.ok]
     for c in failed:
         console.print(f"[red]missing[/red] {c.name} — {c.hint}")

@@ -22,6 +22,7 @@ load_mineru_env_key MINERU_TITLE_AIDED_API_KEY
 load_mineru_env_key MINERU_TITLE_AIDED_BASE_URL
 load_mineru_env_key MINERU_TITLE_AIDED_MODEL
 load_mineru_env_key MINERU_TITLE_AIDED_ENABLE_THINKING
+load_mineru_env_key MINERU_SERVICE_VENV
 
 ENABLE="${MINERU_TITLE_AIDED_ENABLE:-true}"
 API_KEY="${MINERU_TITLE_AIDED_API_KEY:-}"
@@ -29,10 +30,18 @@ BASE_URL="${MINERU_TITLE_AIDED_BASE_URL:-}"
 MODEL="${MINERU_TITLE_AIDED_MODEL:-}"
 ENABLE_THINKING="${MINERU_TITLE_AIDED_ENABLE_THINKING:-false}"
 
+# ── resolve target + Python ────────────────────────────────────────────
+TARGET="${HOME}/mineru.json"
+venv="${MINERU_SERVICE_VENV:-.venv-mineru}"
+PYTHON_BIN="$venv/bin/python3"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="$(command -v python3 || echo python3)"
+fi
+
 # ── validate ──────────────────────────────────────────────────────────
 if [[ "$ENABLE" != "true" ]]; then
-  echo "==> MinerU title-aided is disabled (MINERU_TITLE_AIDED_ENABLE != true)."
-  echo "    Set MINERU_TITLE_AIDED_ENABLE=true in .env.mineru and re-run to enable."
+  "$PYTHON_BIN" -u "$SCRIPTS_DIR/_write_mineru_json.py" "$TARGET" --disable
   exit 0
 fi
 
@@ -52,14 +61,6 @@ if [[ -z "$MODEL" ]]; then
   echo "ERROR: MINERU_TITLE_AIDED_MODEL is not set."
   echo "Add it to .env.mineru or export it before running this script."
   exit 1
-fi
-
-# ── generate ~/mineru.json via Python (merges with any existing config) ──
-TARGET="${HOME}/mineru.json"
-PYTHON_BIN="${mineru_repo_root}/.venv-mineru/bin/python3"
-
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  PYTHON_BIN="$(command -v python3 || echo python3)"
 fi
 
 "$PYTHON_BIN" -u "$SCRIPTS_DIR/_write_mineru_json.py" \
