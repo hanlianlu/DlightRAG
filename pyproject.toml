@@ -60,6 +60,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+eval = [
+    "lightrag-hku[evaluation]>=1.5.4",
+]
 dev = [
     "import-linter>=2.11",
     "pre-commit>=4.6.0",

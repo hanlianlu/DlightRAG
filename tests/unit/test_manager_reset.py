@@ -219,8 +219,9 @@ class TestManagerAresetErrorHandling:
         svc.areset = AsyncMock(
             return_value={
                 "workspace": "ws1",
-                "storages_dropped": 0,
-                "dlightrag_cleared": [],
+                "lightrag_storages_dropped": 0,
+                "domain_stores_dropped": [],
+                "graphs_dropped": [],
                 "orphan_tables_cleaned": 0,
                 "local_files_removed": 0,
                 "errors": ["Phase 1 (full_docs): boom"],

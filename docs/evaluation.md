@@ -15,13 +15,10 @@ the evaluation pipeline — metrics, concurrency, progress bars, CSV/JSON export
 
 ```bash
 # 1. Install eval dependencies (not in DlightRAG's runtime deps)
-uv pip install ragas
+uv sync --group eval
 
 # 2. Run with your test dataset — API URL and creds auto-resolve
 uv run python scripts/ragas_eval.py --dataset my_questions.json
-
-# Or via the unified CLI
-uv run python scripts/cli.py ragas_eval --dataset my_questions.json
 ```
 
 When running from outside the repo or against a remote instance, pass `--api`:
@@ -30,9 +27,9 @@ When running from outside the repo or against a remote instance, pass `--api`:
 uv run python scripts/ragas_eval.py --api https://dlightrag.example.com --dataset my_questions.json
 ```
 
-No-auth and simple-auth setups auto-resolve from DlightRAG's config — no
-manual token setup needed. JWT setups must pass an externally issued bearer
-token with `--api-key` or `$DLIGHTRAG_API_TOKEN`.
+No-auth and simple-auth API connection settings auto-resolve from DlightRAG's
+config. JWT setups must pass an externally issued bearer token with
+`--api-key` or `$DLIGHTRAG_API_TOKEN`.
 
 ## Metrics
 
@@ -112,14 +109,15 @@ from LightRAG.
 
 ### Zero-config default
 
-When ``EVAL_LLM_BINDING_API_KEY`` is **not** set, the adapter auto-resolves
-eval credentials from DlightRAG's own config:
+When ``EVAL_LLM_BINDING_API_KEY`` is **not** set and DlightRAG's query role uses
+the OpenAI-compatible provider, the adapter auto-resolves eval credentials from
+DlightRAG's own config:
 
 | Eval setting | Auto-resolved from |
 |---|---|
-| ``EVAL_LLM_BINDING_API_KEY`` | ``config.llm.roles.query.api_key`` → ``config.llm.default.api_key`` |
-| ``EVAL_LLM_MODEL`` | ``config.llm.roles.query.model`` → ``config.llm.default.model`` |
-| ``EVAL_LLM_BINDING_HOST`` | ``config.llm.roles.query.base_url`` → ``config.llm.default.base_url`` |
+| ``EVAL_LLM_BINDING_API_KEY`` | OpenAI-compatible ``config.llm.roles.query.api_key`` → ``config.llm.default.api_key`` |
+| ``EVAL_LLM_MODEL`` | OpenAI-compatible ``config.llm.roles.query.model`` → ``config.llm.default.model`` |
+| ``EVAL_LLM_BINDING_HOST`` | OpenAI-compatible ``config.llm.roles.query.base_url`` → ``config.llm.default.base_url`` |
 | ``EVAL_EMBEDDING_BINDING_API_KEY`` | ``EVAL_LLM_BINDING_API_KEY`` → DlightRAG embedding key (if OpenAI-compatible provider) |
 | ``EVAL_EMBEDDING_BINDING_HOST`` | ``EVAL_LLM_BINDING_HOST`` → DlightRAG embedding base_url (if OpenAI-compatible) |
 | ``DLIGHTRAG_API_URL`` | ``config.api_host``:``config.api_port`` |
@@ -127,8 +125,8 @@ eval credentials from DlightRAG's own config:
 
 JWT deployments must provide an externally issued bearer token via
 ``DLIGHTRAG_API_TOKEN``. Native-SDK-only LLM providers (Anthropic, Gemini) need
-an explicit ``EVAL_LLM_BINDING_API_KEY`` because RAGAS requires an
-OpenAI-compatible API.
+explicit ``EVAL_LLM_BINDING_API_KEY`` and ``EVAL_LLM_MODEL`` values because
+LightRAG's RAGAS evaluator uses an OpenAI-compatible client.
 
 ### Explicit overrides
 
@@ -212,7 +210,7 @@ evaluation:
   steps:
     - uses: actions/checkout@v6
     - run: docker compose up -d
-    - run: uv pip install ragas
+    - run: uv sync --group eval
     - run: uv run python scripts/ragas_eval.py --api http://localhost:8100 --dataset tests/eval/regression.json
       env:
         DLIGHTRAG_API_URL: http://localhost:8100
@@ -242,6 +240,6 @@ are ingested (`GET /files`) and that `top_k` is reasonable.
 `OPENAI_API_KEY`). NaN scores often mean the eval LLM call failed silently.
 
 **"ImportError: ragas not installed"**
-: Run `uv pip install ragas`. Ragas is an eval-only dependency,
-intentionally separate from DlightRAG's runtime. Pip will pull in
-`datasets`, `langchain-openai`, and other transitive deps automatically.
+: Run `uv sync --group eval`. Ragas is an eval-only dependency,
+intentionally separate from DlightRAG's runtime and locked through
+LightRAG's official `evaluation` extra.

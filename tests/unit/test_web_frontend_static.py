@@ -5,6 +5,7 @@ These tests protect public browser behavior and served asset boundaries. They
 avoid pinning exact visual token values or module decomposition details.
 """
 
+import importlib.util
 import re
 from pathlib import Path
 from typing import get_type_hints
@@ -338,6 +339,17 @@ def test_pygments_css_contains_dual_color_mode_roots_and_style_provenance() -> N
     assert "GitHub Dark" in css
     assert "#7D6622" in css and "#836C28" not in css
     assert "#858D98" in css and "#6E7681" not in css
+
+
+def test_pygments_css_matches_generator() -> None:
+    generator_path = ROOT / "scripts" / "generate_pygments_css.py"
+    spec = importlib.util.spec_from_file_location("generate_pygments_css", generator_path)
+    assert spec is not None and spec.loader is not None
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+
+    css = (ROOT / "src/dlightrag/web/static/pygments.css").read_text(encoding="utf-8")
+    assert generator.generate_css() == css
 
 
 def test_web_static_js_build_has_no_orphan_chunks() -> None:

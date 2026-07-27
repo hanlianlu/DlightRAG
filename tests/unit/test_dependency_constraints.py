@@ -11,6 +11,12 @@ def _dependencies() -> list[str]:
     return pyproject["project"]["dependencies"]
 
 
+def test_eval_dependency_group_uses_lightrag_evaluation_extra() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["dependency-groups"]["eval"] == ["lightrag-hku[evaluation]>=1.5.4"]
+
+
 def test_langfuse_dependency_has_no_upper_bound() -> None:
     """Langfuse should require the v4 SDK API without an upper cap."""
     dependencies = _dependencies()

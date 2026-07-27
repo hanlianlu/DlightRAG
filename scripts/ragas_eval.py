@@ -10,13 +10,13 @@ Only :meth:`generate_rag_response` is overridden to call DlightRAG's
 ``/answer`` instead of LightRAG's ``/query``.
 
 When ``EVAL_LLM_BINDING_API_KEY`` is not set, the adapter auto-resolves
-eval credentials from DlightRAG's own config (query role → default LLM,
-cascading down to the embedding config when provider-compatible).
+eval credentials from DlightRAG's own OpenAI-compatible query config,
+cascading down to the embedding config when provider-compatible.
 No extra ``.env`` entries needed in the common case.
 
 Usage::
 
-    uv pip install ragas
+    uv sync --group eval
     uv run python scripts/ragas_eval.py --dataset my_questions.json
 
 See `docs/evaluation.md <../docs/evaluation.md>`_ for full guide.
@@ -47,6 +47,7 @@ class EvalError(RuntimeError):
 # with langchain's OpenAIEmbeddings. Native transports (voyage, gemini,
 # jina, ollama) are excluded because they do not expose
 # that OpenAI embeddings contract.
+_OPENAI_COMPATIBLE_LLM_PROVIDERS = frozenset({"openai"})
 _OPENAI_COMPATIBLE_EMBED_PROVIDERS = frozenset({"openai_compatible"})
 DEFAULT_RESULTS_DIR = Path("ragas_eval_results")
 
@@ -101,9 +102,10 @@ def _resolve_eval_env() -> None:
         )
         return
     query_cfg = config.llm.roles.query or config.llm.default
+    query_is_openai_compatible = query_cfg.provider in _OPENAI_COMPATIBLE_LLM_PROVIDERS
 
     # -- Eval LLM --
-    if not llm_key_set:
+    if not llm_key_set and query_is_openai_compatible:
         if query_cfg.api_key:
             os.environ["EVAL_LLM_BINDING_API_KEY"] = query_cfg.api_key
             logger.info("Eval LLM key: auto-resolved from DlightRAG query/default role")
@@ -114,12 +116,18 @@ def _resolve_eval_env() -> None:
                 "No eval LLM key found — set EVAL_LLM_BINDING_API_KEY, "
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY, or OPENAI_API_KEY"
             )
+    elif not eval_llm_available:
+        logger.warning(
+            "DlightRAG query provider '%s' is not OpenAI-compatible — set "
+            "EVAL_LLM_BINDING_API_KEY or OPENAI_API_KEY for RAGAS evaluation",
+            query_cfg.provider,
+        )
 
-    if not os.getenv("EVAL_LLM_MODEL"):
+    if query_is_openai_compatible and not os.getenv("EVAL_LLM_MODEL"):
         os.environ["EVAL_LLM_MODEL"] = query_cfg.model
         logger.info("Eval LLM model: %s (from DlightRAG config)", query_cfg.model)
 
-    if not os.getenv("EVAL_LLM_BINDING_HOST") and query_cfg.base_url:
+    if query_is_openai_compatible and not os.getenv("EVAL_LLM_BINDING_HOST") and query_cfg.base_url:
         os.environ["EVAL_LLM_BINDING_HOST"] = query_cfg.base_url
         logger.info("Eval LLM host: %s (from DlightRAG config)", query_cfg.base_url)
 

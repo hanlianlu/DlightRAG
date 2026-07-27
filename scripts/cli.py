@@ -30,9 +30,6 @@ Usage:
     uv run scripts/cli.py chat
     uv run scripts/cli.py chat --workspaces project-a project-b
 
-    # RAGAS evaluation
-    uv run scripts/cli.py ragas_eval --dataset my_tests.json
-    uv run scripts/cli.py ragas_eval --api http://localhost:8100 --dataset my_tests.json
 """
 
 import argparse
@@ -48,15 +45,14 @@ from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_ima
 
 DEFAULT_API_URL = "http://localhost:8100"
 DEFAULT_QUERY_TIMEOUT = 120
-DEFAULT_INGEST_TIMEOUT = 600
 METADATA_POLICY_VALUES = ("validate", "reject_unknown", "store_only")
 
 
-def _get_timeout(for_ingest: bool = False) -> int:
+def _get_timeout() -> int:
     env_val = os.environ.get("DLIGHTRAG_REQUEST_TIMEOUT")
     if env_val:
         return int(env_val)
-    return DEFAULT_INGEST_TIMEOUT if for_ingest else DEFAULT_QUERY_TIMEOUT
+    return DEFAULT_QUERY_TIMEOUT
 
 
 def _get_api_url() -> str:
@@ -416,36 +412,6 @@ def cmd_chat(args: argparse.Namespace) -> None:
         print()
 
 
-# ═══════════════════════════════════════════════════════════════════
-# ragas_eval
-# ═══════════════════════════════════════════════════════════════════
-
-
-def cmd_ragas_eval(args: argparse.Namespace) -> None:
-    """Delegate to ragas_eval.py with the given args."""
-    import subprocess
-
-    eval_script = os.path.join(os.path.dirname(__file__), "ragas_eval.py")
-    cmd: list[str] = [
-        sys.executable,
-        eval_script,
-    ]
-    if args.api:
-        cmd.extend(["--api", args.api])
-    if args.dataset:
-        cmd.extend(["--dataset", args.dataset])
-    if args.api_key:
-        cmd.extend(["--api-key", args.api_key])
-    if args.output_dir:
-        cmd.extend(["--output-dir", args.output_dir])
-
-    display_cmd = [
-        "***" if i > 0 and cmd[i - 1] == "--api-key" else part for i, part in enumerate(cmd)
-    ]
-    print(f"Running: {' '.join(display_cmd)}\n")
-    raise SystemExit(subprocess.run(cmd, check=False).returncode)  # noqa: S603 - fixed script argv
-
-
 def _add_filter_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--filters-json",
@@ -613,31 +579,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_chat = sub.add_parser("chat", help="Interactive multi-turn conversation")
     _add_retrieval_options(p_chat, include_answer_limits=True, include_chunk_top_k=True)
 
-    # -- ragas_eval --
-    p_eval = sub.add_parser("ragas_eval", help="Run RAGAS evaluation against a DlightRAG API")
-    p_eval.add_argument(
-        "--api",
-        default=None,
-        help="DlightRAG API base URL (default: $DLIGHTRAG_API_URL or DlightRAG config)",
-    )
-    p_eval.add_argument(
-        "--dataset",
-        "-d",
-        required=True,
-        help="Required test dataset JSON",
-    )
-    p_eval.add_argument(
-        "--api-key",
-        default=None,
-        help="Bearer token when auth_mode is 'simple' or 'jwt'",
-    )
-    p_eval.add_argument(
-        "--output-dir",
-        "-o",
-        default=None,
-        help="Results directory (default: ./ragas_eval_results/)",
-    )
-
     return parser
 
 
@@ -650,7 +591,6 @@ def main() -> None:
         "query": cmd_query,
         "answer": cmd_answer,
         "chat": cmd_chat,
-        "ragas_eval": cmd_ragas_eval,
     }
 
     try:
