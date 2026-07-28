@@ -620,9 +620,11 @@ def test_parser_defaults_export_lightrag_env() -> None:
     assert cfg.parser_sidecars.mineru.api_mode == "local"
     assert cfg.parser_sidecars.mineru.local_endpoint == "http://host.docker.internal:8210"
     assert cfg.parser_sidecars.mineru.language == "ch"
+    assert cfg.parser_sidecars.mineru.backend == "hybrid-engine"
     assert cfg.parser_sidecars.mineru.auxiliary_block_policy == "conservative"
     assert cfg.parser_sidecars.docling is None
     assert os.environ["LIGHTRAG_PARSER"] == "*:mineru-iteP"
+    assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "conservative"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
@@ -965,7 +967,7 @@ def test_dotenv_ignores_raw_upstream_parser_env(tmp_path, monkeypatch: pytest.Mo
                 "VLM_MIN_IMAGE_PIXEL=32",
                 "MINERU_API_MODE=official",
                 "MINERU_LOCAL_ENDPOINT=http://stale-mineru:8210",
-                "MINERU_LOCAL_BACKEND=hybrid-auto-engine",
+                "MINERU_LOCAL_BACKEND=pipeline",
                 "MINERU_LOCAL_PARSE_METHOD=auto",
                 "MINERU_LOCAL_IMAGE_ANALYSIS=true",
                 "MINERU_LANGUAGE=arabic",
@@ -1003,7 +1005,7 @@ def test_dotenv_ignores_raw_upstream_parser_env(tmp_path, monkeypatch: pytest.Mo
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
     assert os.environ["MINERU_LANGUAGE"] == "ch"
-    assert "MINERU_LOCAL_BACKEND" not in os.environ
+    assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
     assert "MINERU_LOCAL_IMAGE_ANALYSIS" not in os.environ
 
 
@@ -1134,7 +1136,7 @@ def test_mineru_takes_priority_when_both_parser_sidecars_are_configured() -> Non
     assert "DOCLING_ENDPOINT" not in os.environ
 
 
-def test_mineru_backend_maps_to_env_and_defers_when_unset(
+def test_mineru_backend_maps_to_env_and_uses_canonical_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("MINERU_LOCAL_BACKEND", raising=False)
@@ -1151,7 +1153,7 @@ def test_mineru_backend_maps_to_env_and_defers_when_unset(
     )
     assert os.environ["MINERU_LOCAL_BACKEND"] == "pipeline"
 
-    # Unset backend defers to LightRAG's own default: env is not emitted.
+    # Unset backend exports DlightRAG's canonical default instead of inheriting upstream.
     monkeypatch.delenv("MINERU_LOCAL_BACKEND", raising=False)
     _settings_config(
         embedding=EmbeddingConfig(
@@ -1162,12 +1164,18 @@ def test_mineru_backend_maps_to_env_and_defers_when_unset(
         ),
         parser_sidecars={"mineru": {"language": "ch"}},
     )
-    assert "MINERU_LOCAL_BACKEND" not in os.environ
+    assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
 
 
 def test_mineru_backend_rejects_unknown_value() -> None:
     with pytest.raises(ValidationError):
         cast(Any, MinerUSidecarConfig)(backend="paddle")
+
+
+@pytest.mark.parametrize("legacy_backend", ["vlm-auto-engine", "hybrid-auto-engine"])
+def test_mineru_backend_rejects_legacy_aliases(legacy_backend: str) -> None:
+    with pytest.raises(ValidationError):
+        cast(Any, MinerUSidecarConfig)(backend=legacy_backend)
 
 
 def test_sidecar_env_loader_does_not_export_service_helper_keys(

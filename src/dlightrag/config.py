@@ -68,8 +68,6 @@ MinerULocalBackend = Literal[
     "pipeline",
     "vlm-engine",
     "hybrid-engine",
-    "vlm-auto-engine",
-    "hybrid-auto-engine",
 ]
 
 
@@ -275,17 +273,15 @@ class MinerUSidecarConfig(BaseModel):
     official_endpoint: str = "https://mineru.net"
     local_endpoint: str = "http://127.0.0.1:8210"
     language: MinerULanguage = "ch"
-    # None (default) defers to LightRAG's built-in MinerU engine
-    # (``hybrid-auto-engine``, VLM-assisted): when unset, MINERU_LOCAL_BACKEND is
-    # not emitted, so LightRAG's own default governs. Set an explicit engine to
-    # override — e.g. ``pipeline`` for MinerU's non-VLM OCR path.
-    backend: MinerULocalBackend | None = None
+    # Pin MinerU's canonical default instead of inheriting LightRAG's legacy alias.
+    # Set ``pipeline`` explicitly for MinerU's non-VLM OCR path.
+    backend: MinerULocalBackend = "hybrid-engine"
     force_reparse: bool = False
 
     # macOS MinerU hard-codes max_concurrent_requests=1 (see mineru/cli/fast_api.py).
     # Two large PDFs submitted in parallel serialize, and the second one's poll clock
     # counts from submit time — not from when it actually starts processing. An
-    # image-dense 600-page textbook can take ~1h under the VLM (hybrid-auto-engine),
+    # image-dense 600-page textbook can take ~1h under the VLM (hybrid-engine),
     # so 3600 polls × 2s = 2h covers two such PDFs stacked in serial.
     max_polls: int = Field(default=3600, ge=1)
 

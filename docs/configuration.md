@@ -80,7 +80,7 @@ parser_sidecars:
     api_mode: local
     local_endpoint: http://host.docker.internal:8210
     language: ch
-    # backend:            # unset ⇒ LightRAG default (hybrid-auto-engine)
+    backend: hybrid-engine
     max_polls: 3600
     auxiliary_block_policy: conservative
 ```
@@ -104,14 +104,14 @@ deployment supplies its own reachable endpoint. Native DlightRAG processes use
 image-based documents. It is separate from `extraction.language`, which controls
 LightRAG's KG extraction prompt language.
 
-`parser_sidecars.mineru.backend` selects MinerU's parse engine. Leave it unset to
-inherit LightRAG's default (`hybrid-auto-engine`, VLM-assisted). Accepted values:
-`pipeline`, `vlm-engine`, `hybrid-engine`, `vlm-auto-engine`, `hybrid-auto-engine`.
-Use `pipeline` (MinerU's non-VLM OCR engine) to avoid VLM transcription artifacts
-on difficult scans, at the cost of weaker complex-layout and chart handling. It
-maps privately to `MINERU_LOCAL_BACKEND`. Public environment overrides use the
-typed `DLIGHTRAG_PARSER_SIDECARS__...` form; raw MinerU/Docling/VLM variables
-are not independent configuration inputs.
+`parser_sidecars.mineru.backend` selects MinerU's parse engine and defaults to
+`hybrid-engine`, MinerU's current VLM-assisted default. Accepted values are
+`pipeline`, `vlm-engine`, and `hybrid-engine`. Use `pipeline` (MinerU's non-VLM
+OCR engine) to avoid VLM transcription artifacts on difficult scans, at the cost
+of weaker complex-layout and chart handling. DlightRAG always maps the selected
+value privately to `MINERU_LOCAL_BACKEND`, avoiding LightRAG's legacy default.
+Public environment overrides use the typed `DLIGHTRAG_PARSER_SIDECARS__...`
+form; raw MinerU/Docling/VLM variables are not independent configuration inputs.
 
 DlightRAG does not expose MinerU-side image/chart analysis as a product setting;
 LightRAG 1.5.4 defaults that parser-time path off, while LightRAG's separate

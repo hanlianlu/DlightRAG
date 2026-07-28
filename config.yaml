@@ -105,11 +105,11 @@ parser_sidecars:
     api_mode: local
     local_endpoint: http://host.docker.internal:8210
     language: ch
-    ## MinerU parse engine. Unset = LightRAG default (hybrid-auto-engine, VLM-assisted).
-    ## Set backend: pipeline for MinerU's non-VLM OCR engine (avoids VLM transcription
+    ## MinerU parse engine. DlightRAG defaults explicitly to hybrid-engine.
+    backend: hybrid-engine
+    ## Set pipeline for MinerU's non-VLM OCR engine (avoids VLM transcription
     ## artifacts on hard scans; weaker on complex layout/charts).
-    ## Options: pipeline | vlm-engine | hybrid-engine | vlm-auto-engine | hybrid-auto-engine
-    # backend: pipeline
+    ## Options: pipeline | vlm-engine | hybrid-engine
     # api_mode: official
     # official_endpoint: https://mineru.net
     ## Put DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN in .env.
