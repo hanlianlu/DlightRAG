@@ -341,10 +341,27 @@
     font: inherit;
     font-size: var(--font-size-detail);
     padding: var(--space-tight) var(--space-component);
+    transition: background 150ms, border-color 150ms, color 150ms;
+}
+
+:global(.conversation-dialog-actions button:hover) {
+    background: var(--color-bg-hover);
+    border-color: var(--color-control-border-hover);
+    color: var(--color-text-primary);
 }
 
 :global(.conversation-dialog-actions .conversation-dialog-danger) {
     background: var(--color-danger-bg);
+    border-color: transparent;
+    color: var(--color-on-danger);
+}
+
+:global(.conversation-dialog-actions .conversation-dialog-danger:hover) {
+    background: color-mix(
+        in srgb,
+        var(--color-danger-bg) 90%,
+        var(--color-text-primary)
+    );
     border-color: transparent;
     color: var(--color-on-danger);
 }

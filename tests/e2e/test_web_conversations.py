@@ -424,6 +424,9 @@ def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page:
     trigger.click()
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     danger = dialog.get_by_role("button", name="Delete all")
+    page.add_style_tag(
+        content=".conversation-dialog-actions button { transition: none !important; }"
+    )
     for color_mode in ("light", "dark"):
         page.locator("html").evaluate(
             "(element, mode) => { element.dataset.colorMode = mode; }",
