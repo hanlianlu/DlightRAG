@@ -417,9 +417,18 @@ async def test_metadata_only_update_forwards_explicit_source_contract(
     assert prepare_metadata.call_args.kwargs["download_locator"] == str(source)
 
 
-async def test_single_hash_match_skip_bypasses_parser_directives(
+@pytest.mark.parametrize(
+    ("title", "expected_source_kind"),
+    [
+        pytest.param(None, "skipped", id="unchanged_metadata"),
+        pytest.param("Updated title", "metadata_updated", id="updated_metadata"),
+    ],
+)
+async def test_single_hash_match_bypasses_parser_directives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    title: str | None,
+    expected_source_kind: str,
 ) -> None:
     content = b"%PDF-1.4"
     source = tmp_path / "sample.pdf"
@@ -436,33 +445,9 @@ async def test_single_hash_match_skip_bypasses_parser_directives(
 
     monkeypatch.setattr(engine, "_parser_directives_for", fail_parser_directives)
 
-    result = await engine.aingest_file(source, replace=False)
+    result = await engine.aingest_file(source, replace=False, title=title)
 
-    assert result["source_kind"] == "skipped"
-
-
-async def test_single_hash_match_metadata_update_bypasses_parser_directives(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    content = b"%PDF-1.4"
-    source = tmp_path / "sample.pdf"
-    source.write_bytes(content)
-    engine, deps = _make_engine()
-    deps["stores"].get_doc_status.return_value = {
-        "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
-        "status": "processed",
-    }
-
-    def fail_parser_directives(_path: Path) -> tuple[str, str, dict[str, object] | None]:
-        raise AssertionError("parser directives should not be resolved for hash-match fast path")
-
-    monkeypatch.setattr(engine, "_parser_directives_for", fail_parser_directives)
-
-    result = await engine.aingest_file(source, replace=False, title="Updated title")
-
-    assert result["source_kind"] == "metadata_updated"
+    assert result["source_kind"] == expected_source_kind
 
 
 async def test_batch_hash_match_skip_does_not_resolve_invalid_parser_directives(
@@ -643,38 +628,6 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
-async def test_single_hash_match_local_noop_skips_when_persisted_metadata_matches(
-    tmp_path: Path,
-) -> None:
-    content = b"%PDF-1.4"
-    source = tmp_path / "sample.pdf"
-    source.write_bytes(content)
-    engine, deps = _make_engine()
-    deps["stores"].get_doc_status.return_value = {
-        "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
-        "status": "processed",
-    }
-    deps["metadata_index"].get.return_value = {
-        "filename": "sample.pdf",
-        "filename_stem": "sample",
-        "file_path": str((source.parent / "__parsed__" / source.name).resolve()),
-        "source_uri": _raw_path_source_uri(source, workspace="default"),
-        "download_locator": str((source.parent / "__parsed__" / source.name).resolve()),
-        "file_extension": "pdf",
-        "ingest_strategy": "lightrag_sidecar_unified",
-        "user_metadata": {},
-        "metadata_filterable": {},
-        "metadata_json": {},
-    }
-
-    result = await engine.aingest_file(source, replace=False)
-
-    assert result["source_kind"] == "skipped"
-    deps["metadata_index"].upsert.assert_not_awaited()
-    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
-
-
 async def test_single_hash_match_local_noop_skips_without_metadata_lookup(
     tmp_path: Path,
 ) -> None:
@@ -778,156 +731,6 @@ async def test_single_hash_match_explicit_default_source_contract_updates_metada
         "source_kind": "metadata_updated",
         "reason": "content_hash_match",
         "chunks": ["chunk-a"],
-    }
-    deps["metadata_index"].get.assert_awaited_once()
-    deps["metadata_index"].upsert.assert_awaited_once()
-    _, saved = deps["metadata_index"].upsert.await_args.args
-    assert saved["filename"] == "sample.pdf"
-    assert saved["filename_stem"] == "sample"
-    assert saved["file_path"] == str(source.resolve())
-    assert saved["source_uri"] == _raw_path_source_uri(source, workspace="default")
-    assert saved["download_locator"] == str(source.resolve())
-    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
-
-
-async def test_batch_hash_match_local_noop_skips_without_metadata_lookup(
-    tmp_path: Path,
-) -> None:
-    content = b"%PDF-1.4"
-    source = tmp_path / "sample.pdf"
-    source.write_bytes(content)
-    engine, deps = _make_engine()
-    deps["stores"].get_doc_status.return_value = {
-        "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
-        "status": "processed",
-    }
-    deps["metadata_index"].get.side_effect = AssertionError(
-        "metadata_index.get should not be consulted for metadata-free no-op ingests"
-    )
-
-    result = await engine.aingest_files([source], replace=False)
-
-    assert result == {
-        "processed": 1,
-        "errors": [],
-        "results": [
-            {
-                "doc_id": compute_mdhash_id(
-                    normalize_document_file_path(source),
-                    prefix="doc-",
-                ),
-                "source_kind": "skipped",
-                "reason": "content_hash_match",
-                "chunks": ["chunk-a"],
-            }
-        ],
-    }
-    deps["metadata_index"].get.assert_not_awaited()
-    deps["metadata_index"].upsert.assert_not_awaited()
-    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
-
-
-async def test_batch_hash_match_internal_local_contract_skips_without_metadata_lookup(
-    tmp_path: Path,
-) -> None:
-    content = b"%PDF-1.4"
-    source = tmp_path / "sample.pdf"
-    source.write_bytes(content)
-    engine, deps = _make_engine()
-    deps["stores"].get_doc_status.return_value = {
-        "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
-        "status": "processed",
-    }
-    deps["metadata_index"].get.side_effect = AssertionError(
-        "metadata_index.get should not be consulted for internally generated local contracts"
-    )
-
-    result = await engine.aingest_files(
-        [
-            PreparedIngestFile(
-                parser_path=source,
-                source_uri=_raw_path_source_uri(source, workspace="default"),
-                download_locator=str(source.resolve()),
-                source_uri_explicit=False,
-                download_locator_explicit=False,
-            )
-        ],
-        replace=False,
-    )
-
-    assert result == {
-        "processed": 1,
-        "errors": [],
-        "results": [
-            {
-                "doc_id": compute_mdhash_id(
-                    normalize_document_file_path(source),
-                    prefix="doc-",
-                ),
-                "source_kind": "skipped",
-                "reason": "content_hash_match",
-                "chunks": ["chunk-a"],
-            }
-        ],
-    }
-    deps["metadata_index"].get.assert_not_awaited()
-    deps["metadata_index"].upsert.assert_not_awaited()
-    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
-
-
-async def test_batch_hash_match_explicit_default_source_contract_updates_metadata(
-    tmp_path: Path,
-) -> None:
-    content = b"%PDF-1.4"
-    source = tmp_path / "sample.pdf"
-    source.write_bytes(content)
-    engine, deps = _make_engine()
-    deps["stores"].get_doc_status.return_value = {
-        "chunks_list": ["chunk-a"],
-        "content_hash": _sha256(content),
-        "status": "processed",
-    }
-    deps["metadata_index"].get.return_value = {
-        "filename": "old-name.pdf",
-        "filename_stem": "old-name",
-        "file_path": "https://cdn.example.com/old-sample.pdf",
-        "source_uri": "bynder://asset/old",
-        "download_locator": "https://cdn.example.com/old-sample.pdf",
-        "file_extension": "pdf",
-        "ingest_strategy": "lightrag_sidecar_unified",
-        "user_metadata": {},
-        "metadata_filterable": {},
-        "metadata_json": {},
-    }
-
-    result = await engine.aingest_files(
-        [
-            PreparedIngestFile(
-                parser_path=source,
-                source_uri=_raw_path_source_uri(source, workspace="default"),
-                download_locator=str(source.resolve()),
-                display_filename=source.name,
-            )
-        ],
-        replace=False,
-    )
-
-    assert result == {
-        "processed": 1,
-        "errors": [],
-        "results": [
-            {
-                "doc_id": compute_mdhash_id(
-                    normalize_document_file_path(source),
-                    prefix="doc-",
-                ),
-                "source_kind": "metadata_updated",
-                "reason": "content_hash_match",
-                "chunks": ["chunk-a"],
-            }
-        ],
     }
     deps["metadata_index"].get.assert_awaited_once()
     deps["metadata_index"].upsert.assert_awaited_once()

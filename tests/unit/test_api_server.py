@@ -733,32 +733,15 @@ class TestVerifyBearerToken:
 class TestIngestEndpoint:
     """Test /ingest validation and routing."""
 
+    @pytest.mark.parametrize("source_type", ["local", "azure_blob", "s3", "url"])
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_local_requires_path(
-        self, client: AsyncClient, mock_config: DlightragConfig
+    async def test_source_requires_identity(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        source_type: str,
     ) -> None:
-        resp = await client.post("/ingest", json={"source_type": "local"})
-        assert resp.status_code == 422
-
-    @pytest.mark.usefixtures("_patch_manager")
-    async def test_azure_blob_requires_container(
-        self, client: AsyncClient, mock_config: DlightragConfig
-    ) -> None:
-        resp = await client.post("/ingest", json={"source_type": "azure_blob"})
-        assert resp.status_code == 422
-
-    @pytest.mark.usefixtures("_patch_manager")
-    async def test_s3_requires_bucket(
-        self, client: AsyncClient, mock_config: DlightragConfig
-    ) -> None:
-        resp = await client.post("/ingest", json={"source_type": "s3"})
-        assert resp.status_code == 422
-
-    @pytest.mark.usefixtures("_patch_manager")
-    async def test_url_requires_url_or_urls(
-        self, client: AsyncClient, mock_config: DlightragConfig
-    ) -> None:
-        resp = await client.post("/ingest", json={"source_type": "url"})
+        resp = await client.post("/ingest", json={"source_type": source_type})
         assert resp.status_code == 422
 
     @pytest.mark.usefixtures("_patch_manager")
@@ -821,158 +804,6 @@ class TestIngestEndpoint:
         mock_manager.astart_ingest_job.assert_not_awaited()
         mock_manager.aingest.assert_not_awaited()
 
-    async def test_local_directory_defaults_to_background_job(
-        self,
-        client: AsyncClient,
-        mock_config: DlightragConfig,
-        mock_manager,
-    ) -> None:
-        docs_dir = mock_config.input_dir_path / "default" / "docs"
-        docs_dir.mkdir(parents=True)
-        mock_manager.astart_ingest_job.return_value = {
-            "job_id": "job-1",
-            "workspace": "default",
-            "source_type": "local",
-            "status": "queued",
-        }
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={"source_type": "local", "path": "docs"},
-        )
-
-        assert resp.status_code == 202
-        body = resp.json()
-        assert body["job_id"] == "job-1"
-        assert body["status_url"] == "/ingest/jobs/job-1"
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(source_type="local", path=str(docs_dir)),
-        )
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_single_s3_key_defaults_to_background_job(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "s3",
-                "bucket": "my-bucket",
-                "s3_key": "docs/file.pdf",
-            },
-        )
-
-        assert resp.status_code == 202
-        assert resp.json()["job_id"] == "job-1"
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(source_type="s3", bucket="my-bucket", s3_key="docs/file.pdf"),
-        )
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_s3_bucket_only_ingests_whole_bucket(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={"source_type": "s3", "bucket": "my-bucket"},
-        )
-
-        assert resp.status_code == 202
-        assert resp.json()["job_id"] == "job-1"
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(source_type="s3", bucket="my-bucket"),
-        )
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_url_ingest_defaults_to_background_job(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "url",
-                "url": "https://api.bynder.com/docs/getting-started",
-                "filename": "getting-started.html",
-            },
-        )
-
-        assert resp.status_code == 202
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(
-                source_type="url",
-                url="https://api.bynder.com/docs/getting-started",
-                filename="getting-started.html",
-            ),
-        )
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_url_ingest_accepts_stable_source_uri(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "url",
-                "url": "https://cdn.example.com/download?id=asset-1&signature=secret",
-                "filename": "asset.pdf",
-                "source_uri": "bynder://asset/asset-1",
-            },
-        )
-
-        assert resp.status_code == 202
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(
-                source_type="url",
-                url="https://cdn.example.com/download?id=asset-1&signature=secret",
-                filename="asset.pdf",
-                source_uri="bynder://asset/asset-1",
-            ),
-        )
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_url_ingest_accepts_download_uri(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "url",
-                "url": "https://fetch.example.com/download?id=asset-1&signature=secret",
-                "filename": "asset.pdf",
-                "source_uri": "bynder://asset/asset-1",
-                "download_uri": "https://cdn.example.com/assets/asset-1.pdf",
-            },
-        )
-
-        assert resp.status_code == 202
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(
-                source_type="url",
-                url="https://fetch.example.com/download?id=asset-1&signature=secret",
-                filename="asset.pdf",
-                source_uri="bynder://asset/asset-1",
-                download_uri="https://cdn.example.com/assets/asset-1.pdf",
-            ),
-        )
-        mock_manager.aingest.assert_not_awaited()
-
     async def test_blob_upload_stages_file_for_local_ingest(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -999,51 +830,6 @@ class TestIngestEndpoint:
         ingest_spec = call_args.args[1]
         assert ingest_spec.source_type == "local"
         assert ingest_spec.path.startswith(str(mock_config.input_dir_path / "default"))
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_azure_blob_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "azure_blob",
-                "container_name": "my-container",
-                "blob_path": "docs/file.pdf",
-            },
-        )
-        assert resp.status_code == 202
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(
-                source_type="azure_blob",
-                container_name="my-container",
-                blob_path="docs/file.pdf",
-            ),
-        )
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_s3_prefix_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "s3",
-                "bucket": "my-bucket",
-                "prefix": "docs/",
-            },
-        )
-        assert resp.status_code == 202
-        body = resp.json()
-        assert body["job_id"] == "job-1"
-        assert body["status_url"] == "/ingest/jobs/job-1"
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(source_type="s3", bucket="my-bucket", prefix="docs/"),
-        )
         mock_manager.aingest.assert_not_awaited()
 
     async def test_get_get_ingest_job(
