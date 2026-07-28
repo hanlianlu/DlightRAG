@@ -9,8 +9,10 @@ PYTHON ?= python3
 LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(LANGFUSE_PROJECT) -f "$(LANGFUSE_LOCAL_DIR)/docker-compose.yml"
 LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
 LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env"
+PYTHON_LINT_PATHS = src/ tests/ scripts/ prerequisite_setup.py
+PYTHON_SECURITY_PATHS = src/ scripts/ prerequisite_setup.py
 
-.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-build frontend-audit frontend-ci test-unit ci ci-full test-e2e ci-e2e
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -87,32 +89,56 @@ langfuse-health:
 # ─────────────────────────────────────────────────────────────────
 # CI targets — local dev matrix
 # ─────────────────────────────────────────────────────────────────
-# Fast path: what GitHub Actions runs on every PR/push (~2 min)
 # One-time setup for new clones / new developers
-.PHONY: hooks
 hooks:
 	uv run pre-commit install
 	@echo "Pre-commit hooks installed — will run on every git commit."
 
-ci:
+sync-dev:
 	uv sync --group dev
-	uv run ruff check src/ tests/ scripts/ prerequisite_setup.py
-	uv run ruff check src/ scripts/ prerequisite_setup.py --select S
-	uv run ruff format --check src/ tests/ scripts/ prerequisite_setup.py
-	uv run pyright
-	uv run lint-imports
-	uv run shellcheck $$(git ls-files '*.sh')
-	$(MAKE) frontend-ci
-	uv run pytest tests/unit -v --tb=short
-	@echo "CI (fast) passed."
 
-frontend-ci:
+lint:
+	uv run ruff check $(PYTHON_LINT_PATHS)
+
+lint-security:
+	uv run ruff check $(PYTHON_SECURITY_PATHS) --select S
+
+format-check:
+	uv run ruff format --check $(PYTHON_LINT_PATHS)
+
+typecheck:
+	uv run pyright
+
+architecture-check:
+	uv run lint-imports
+
+shellcheck-all:
+	uv run shellcheck $$(git ls-files '*.sh')
+
+frontend-install:
 	npm --prefix frontend ci
+
+frontend-typecheck:
 	npm --prefix frontend run typecheck
+
+frontend-lint:
 	npm --prefix frontend run lint:css
+
+frontend-build:
 	npm --prefix frontend run build
+
+frontend-audit:
 	npm --prefix frontend audit --omit=dev
+
+frontend-ci: frontend-install frontend-typecheck frontend-lint frontend-build frontend-audit
 	@echo "Frontend CI passed."
+
+test-unit:
+	uv run pytest tests/unit -q --tb=short
+
+# Fast path: what GitHub Actions runs on every PR/push (~2 min)
+ci: sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-ci test-unit
+	@echo "CI (fast) passed."
 
 # Full local: includes integration tests (needs PostgreSQL + pgvector)
 ci-full: ci
@@ -121,8 +147,6 @@ ci-full: ci
 
 # ─────────────────────────────────────────────────────────────────
 # Playwright E2E UI tests (headless)
-.PHONY: test-e2e
-
 test-e2e:
 	uv run pytest tests/e2e/ -v -m e2e --tb=short
 

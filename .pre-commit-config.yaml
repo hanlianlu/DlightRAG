@@ -21,8 +21,8 @@ repos:
   - repo: local
     hooks:
       - id: ruff-security
-        name: ruff (security / bandit, src + scripts)
-        entry: uv run ruff check src/ scripts/ --select S
+        name: ruff (security / bandit)
+        entry: make lint-security
         language: system
         types: [python]
         pass_filenames: false
