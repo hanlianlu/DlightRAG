@@ -338,31 +338,46 @@ class TestDlightragConfigNested:
         assert cfg.api_host == "127.0.0.1"
         assert cfg.auth_mode == "none"
 
-    def test_public_api_host_without_auth_is_refused(self):
+    @pytest.mark.parametrize(
+        "listener",
+        ["rest", "mcp"],
+    )
+    def test_public_http_listener_without_auth_is_refused(self, listener: str):
+        listener_config = (
+            {"api_host": "0.0.0.0"}
+            if listener == "rest"
+            else {"mcp_transport": "streamable-http", "mcp_host": "0.0.0.0"}
+        )
         with pytest.raises(ValueError, match="non-loopback"):
-            DlightragConfig(
+            _settings_config(
                 embedding=EmbeddingConfig(
                     provider="voyage",
                     model="voyage-multimodal-3.5",
                     api_key="sk-test",
                     startup_probe=False,
                 ),
-                api_host="0.0.0.0",
                 auth_mode="none",
+                **listener_config,
             )
 
-    def test_public_api_host_without_auth_allows_explicit_override(self):
+    @pytest.mark.parametrize("listener", ["rest", "mcp"])
+    def test_public_http_listener_without_auth_allows_explicit_override(self, listener: str):
+        listener_config = (
+            {"api_host": "0.0.0.0"}
+            if listener == "rest"
+            else {"mcp_transport": "streamable-http", "mcp_host": "0.0.0.0"}
+        )
         with pytest.warns(UserWarning, match="allow_insecure_no_auth"):
-            cfg = DlightragConfig(
+            cfg = _settings_config(
                 embedding=EmbeddingConfig(
                     provider="voyage",
                     model="voyage-multimodal-3.5",
                     api_key="sk-test",
                     startup_probe=False,
                 ),
-                api_host="0.0.0.0",
                 auth_mode="none",
                 allow_insecure_no_auth=True,
+                **listener_config,
             )
         assert cfg.allow_insecure_no_auth is True
 
@@ -470,6 +485,63 @@ class TestDlightragConfigNested:
         )
 
         assert cfg.jwt_jwks_url == "https://login.example.com/discovery/keys"
+
+    def test_mcp_oauth_resource_server_config(self) -> None:
+        cfg = _settings_config(
+            auth_mode="jwt",
+            jwt_verification_key="test-jwt-verification-key",
+            jwt_issuer="https://auth.example.com",
+            jwt_audience="https://rag.example.com",
+            mcp_transport="streamable-http",
+            mcp_resource_server_url="https://rag.example.com",
+            cors_allow_origins=["https://app.example.com"],
+            embedding=_default_test_config().embedding,
+        )
+
+        assert cfg.mcp_resource_server_url == "https://rag.example.com"
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"jwt_issuer": None}, "requires jwt_issuer"),
+            (
+                {"auth_mode": "simple", "api_auth_token": "test-token"},
+                "requires auth_mode='jwt' and mcp_transport='streamable-http'",
+            ),
+            (
+                {"mcp_resource_server_url": "http://rag.example.com/mcp"},
+                "must use HTTPS except on loopback",
+            ),
+            (
+                {"jwt_issuer": "https://user:secret@auth.example.com"},
+                "must not include credentials",
+            ),
+            (
+                {"mcp_resource_server_url": "https://rag.example.com/mcp?tenant=x"},
+                "must not include query or fragment",
+            ),
+        ],
+    )
+    def test_mcp_oauth_rejects_incomplete_mode(
+        self,
+        overrides: dict[str, Any],
+        message: str,
+    ) -> None:
+        values = {
+            "auth_mode": "jwt",
+            "jwt_verification_key": "test-jwt-verification-key",
+            "jwt_issuer": "https://auth.example.com",
+            "jwt_audience": "https://rag.example.com/mcp",
+            "mcp_transport": "streamable-http",
+            "mcp_resource_server_url": "https://rag.example.com/mcp",
+        }
+        values.update(overrides)
+        with pytest.raises(ValidationError, match=message):
+            _settings_config(
+                cors_allow_origins=["https://app.example.com"],
+                embedding=_default_test_config().embedding,
+                **values,
+            )
 
     def test_jwt_mode_requires_verification_key_or_jwks_url(self) -> None:
         with pytest.raises(ValidationError, match="jwt_verification_key or jwt_jwks_url"):

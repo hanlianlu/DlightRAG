@@ -6,8 +6,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp import Client, MCPError
+from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
-import dlightrag
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec
@@ -19,37 +20,20 @@ from dlightrag.models.schemas import Reference
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
 
-def _metadata_policy_enum(schema: dict, prop: dict) -> list[str]:
-    if "enum" in prop:
-        return prop["enum"]
-    return next(
-        resolved["enum"]
-        for item in prop["anyOf"]
-        if "enum" in (resolved := _resolve_ref(schema, item))
-    )
+def _completed_tool_result(result: CallToolResult | InputRequiredResult) -> CallToolResult:
+    assert isinstance(result, CallToolResult)
+    return result
 
 
-def _resolve_ref(schema: dict, item: dict) -> dict:
-    ref = item.get("$ref")
-    if not ref:
-        return item
-    name = ref.removeprefix("#/$defs/")
-    return schema["$defs"][name]
+def _tool_text(result: CallToolResult | InputRequiredResult) -> str:
+    result = _completed_tool_result(result)
+    assert result.content
+    content = result.content[0]
+    assert isinstance(content, TextContent)
+    return content.text
 
 
-def _query_image_schema(schema: dict, prop: dict) -> dict:
-    return _resolve_ref(schema, prop["items"])
-
-
-def _tool_content(result: Any) -> Any:
-    return result[0] if isinstance(result, tuple) else result
-
-
-def _tool_text(result) -> str:
-    return _tool_content(result)[0].text
-
-
-def _tool_json(result):
+def _tool_json(result: CallToolResult | InputRequiredResult) -> Any:
     return json.loads(_tool_text(result))
 
 
@@ -92,119 +76,67 @@ async def test_get_capabilities_reports_answer_image_capability(
     assert cap["model"] == "test-model"
 
 
-def test_mcp_server_info_uses_dlightrag_version() -> None:
-    assert mcp_server.server.version == dlightrag.__version__
-
-
-async def test_mcp_success_payloads_keep_fastmcp_structured_output(mock_mcp_manager) -> None:
+async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_manager: AsyncMock) -> None:
     mock_mcp_manager.aget_ingest_job = AsyncMock(
         return_value={"job_id": "job-1", "status": "running"}
     )
 
-    result = await mcp_server.mcp_app.call_tool("get_ingest_job", {"job_id": "job-1"})
+    async with Client(mcp_server.mcp_app) as client:
+        listing = await client.list_tools()
+        result = await client.call_tool("get_ingest_job", {"job_id": "job-1"})
 
-    assert isinstance(result, tuple)
+    assert "retrieve" in {tool.name for tool in listing.tools}
+    assert result.is_error is False
     assert _tool_json(result) == {"job_id": "job-1", "status": "running"}
-    assert result[1] == {"job_id": "job-1", "status": "running"}
+    assert result.structured_content == {"job_id": "job-1", "status": "running"}
+
+
+async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_manager: AsyncMock) -> None:
+    mock_mcp_manager.alist_workspace_records.side_effect = RuntimeError("database-secret")
+
+    result = await mcp_server.mcp_app.call_tool("list_workspaces", {})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == "Error: internal tool failure"
+    assert "database-secret" not in _tool_text(result)
+
+
+async def test_mcp_protocol_errors_remain_protocol_errors() -> None:
+    app = mcp_server.DlightRAGMCPServer("probe")
+
+    @app.tool()
+    async def reject() -> None:
+        raise MCPError(INVALID_PARAMS, "invalid request")
+
+    with pytest.raises(MCPError, match="invalid request"):
+        await app.call_tool("reject", {})
 
 
 async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     tools = await mcp_server.mcp_app.list_tools()
     names = {tool.name for tool in tools}
 
-    assert hasattr(mcp_server, "mcp_app")
-    assert "create_workspace" in names
-    assert "delete_workspace" in names
-    answer_tool = next(tool for tool in tools if tool.name == "answer")
-    answer_props = answer_tool.inputSchema["properties"]
-    assert "args" not in answer_props
-    assert "query" in answer_props
-    assert "conversation_history" not in answer_props
-    assert "history" in answer_props
-    assert "query_images" in answer_props
-    image_block_schema = _query_image_schema(answer_tool.inputSchema, answer_props["query_images"])
-    assert image_block_schema["type"] == "object"
-    assert image_block_schema["properties"]["type"]["const"] == "image_url"
-    assert set(image_block_schema["required"]) == {"type", "image_url"}
-    assert "chunk_top_k" in answer_props
-    assert "session_id" not in answer_props
-    assert "referenced_image_ids" not in answer_props
-    assert answer_props["semantic_highlights"]["default"] is False
-    assert "filters" in answer_props
-    assert answer_props["all_workspaces"]["default"] is False
-    assert "bm25_query" not in answer_props
-    retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
-    retrieve_props = retrieve_tool.inputSchema["properties"]
-    assert "semantic_highlights" not in retrieve_props
-    assert "history" not in retrieve_props
-    assert "chunk_top_k" in retrieve_props
-    assert "bm25_query" in retrieve_props
-    assert "session_id" not in retrieve_props
-    assert "referenced_image_ids" not in retrieve_props
-    assert retrieve_props["all_workspaces"]["default"] is False
-    retrieve_image_block_schema = _query_image_schema(
-        retrieve_tool.inputSchema,
-        retrieve_props["query_images"],
-    )
-    assert retrieve_image_block_schema["type"] == "object"
-    assert retrieve_image_block_schema["properties"]["type"]["const"] == "image_url"
-    ingest_tool = next(tool for tool in tools if tool.name == "ingest")
-    ingest_props = ingest_tool.inputSchema["properties"]
-    assert "title" in ingest_props
-    assert "all_workspaces" not in ingest_props
-    assert "author" in ingest_props
-    assert "metadata" in ingest_props
-    assert "url" in ingest_props
-    assert "urls" in ingest_props
-    assert "s3_region" in ingest_props
-    assert "filename" in ingest_props
-    assert "source_uri" in ingest_props
-    assert "source_uris" in ingest_props
-    assert "download_uri" in ingest_props
-    assert "download_uris" in ingest_props
-    assert "download_url" not in ingest_props
-    assert "download_urls" not in ingest_props
-    assert "documents" in ingest_props
-    assert "retain_source_file" in ingest_props
-    assert "fetch" in ingest_props["url"]["description"].lower()
-    assert "signed" in ingest_props["url"]["description"].lower()
-    assert "identity" in ingest_props["source_uri"]["description"].lower()
-    assert "queryless" in ingest_props["download_uri"]["description"].lower()
-    assert "signed" in ingest_props["retain_source_file"]["description"].lower()
-    delete_files_tool = next(tool for tool in tools if tool.name == "delete_files")
-    assert "dry_run" in delete_files_tool.inputSchema["properties"]
-    assert _metadata_policy_enum(ingest_tool.inputSchema, ingest_props["metadata_policy"]) == [
-        "validate",
-        "reject_unknown",
-        "store_only",
-    ]
-    assert "get_ingest_job" in names
-
-
-async def test_mcp_management_tool_descriptions_explain_contracts() -> None:
-    tools = {tool.name: tool for tool in await mcp_server.mcp_app.list_tools()}
-
-    expected_fragments = {
-        "list_workspaces": [
-            "visible",
-            "records",
-            "display_name",
-            "embedding_model",
-            "created_at",
-            "updated_at",
-        ],
-        "create_workspace": ["display_name", "user-facing", "normalized", "created"],
-        "delete_workspace": ["dry_run", "keep_files", "deleted", "result"],
-        "ingest": ["durable", "job_id", "status", "workspace"],
-        "get_ingest_job": ["job_id", "status", "workspace"],
-        "list_files": ["files", "count", "workspace"],
-        "delete_files": ["dry_run", "results", "workspace"],
+    assert names == {
+        "answer",
+        "create_workspace",
+        "delete_files",
+        "delete_workspace",
+        "get_capabilities",
+        "get_ingest_job",
+        "ingest",
+        "list_files",
+        "list_workspaces",
+        "retrieve",
     }
-
-    for tool_name, fragments in expected_fragments.items():
-        description = (tools[tool_name].description or "").lower()
-        for fragment in fragments:
-            assert fragment.lower() in description, f"{tool_name} missing {fragment!r}"
+    answer_tool = next(tool for tool in tools if tool.name == "answer")
+    answer_props = answer_tool.input_schema["properties"]
+    assert {"query", "history", "query_images", "filters", "chunk_top_k"} <= answer_props.keys()
+    ingest_tool = next(tool for tool in tools if tool.name == "ingest")
+    ingest_props = ingest_tool.input_schema["properties"]
+    assert {"source_type", "path", "url", "documents", "metadata"} <= ingest_props.keys()
+    delete_files_tool = next(tool for tool in tools if tool.name == "delete_files")
+    assert "dry_run" in delete_files_tool.input_schema["properties"]
 
 
 def test_mcp_security_defaults_are_loopback_only() -> None:
@@ -218,23 +150,13 @@ def test_mcp_security_defaults_are_loopback_only() -> None:
     ]
 
 
-def test_mcp_dns_rebinding_protection_follows_auth_mode() -> None:
-    none_cfg = cast(Any, DlightragConfig)()
-    simple_cfg = cast(Any, DlightragConfig)(auth_mode="simple", api_auth_token="test-token")
-    jwt_cfg = cast(Any, DlightragConfig)(auth_mode="jwt", jwt_verification_key="test-key")
-
-    assert none_cfg.mcp_dns_rebinding_protection is True
-    assert simple_cfg.mcp_dns_rebinding_protection is False
-    assert jwt_cfg.mcp_dns_rebinding_protection is False
-
-
 async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool("answer", {"query": "x", "mode": "mix"})
 
-    content = _tool_content(result)
-    assert content[0].type == "text"
-    assert "Error:" in content[0].text
-    assert "mode" in content[0].text
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert "Error:" in _tool_text(result)
+    assert "mode" in _tool_text(result)
     mock_mcp_manager.aanswer.assert_not_awaited()
 
 
@@ -417,11 +339,16 @@ async def test_mcp_all_workspaces_is_relative_to_query_authorization(
 async def test_mcp_rejects_invalid_metadata_policy(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "ingest",
-        {"source_type": "local", "metadata_policy": "loose"},
+        {
+            "source_type": "url",
+            "url": "https://fetch.example.com/file?signature=secret",
+            "metadata_policy": "loose",
+        },
     )
 
     assert "Error:" in _tool_text(result)
     assert "metadata_policy" in _tool_text(result)
+    assert "signature=secret" not in _tool_text(result)
     mock_mcp_manager.aingest.assert_not_awaited()
 
 

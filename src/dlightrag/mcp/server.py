@@ -8,17 +8,24 @@ retrieve() + lightweight ingest().
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.stdio import stdio_server
-from mcp.types import ContentBlock, TextContent, ToolAnnotations
+from mcp import MCPError
+from mcp.server import MCPServer
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.settings import AuthSettings
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
+from mcp.server.mcpserver import Context
+from mcp.types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
 from pydantic import Field
+from starlette.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 
 import dlightrag
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
-from dlightrag.config import DlightragConfig, get_config, load_config, set_config
+from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
@@ -41,6 +48,7 @@ from dlightrag.core.request.workspaces import (
 )
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
+from dlightrag.mcp.auth import DlightRAGTokenVerifier
 from dlightrag.mcp.contracts import (
     AnswerInput,
     ConversationMessage,
@@ -77,45 +85,69 @@ HistoryParam = Annotated[
 ]
 
 
-class DlightRAGFastMCP(FastMCP):
-    """FastMCP with DlightRAG's strict input and text-error contract."""
+class DlightRAGMCPServer(MCPServer):
+    """MCPServer with DlightRAG's strict input and text-error contract."""
 
     async def call_tool(
         self,
         name: str,
         arguments: dict[str, Any],
-    ) -> Sequence[ContentBlock] | dict[str, Any]:
+        context: Context | None = None,
+    ) -> CallToolResult | InputRequiredResult:
         try:
-            self._reject_unknown_arguments(name, arguments or {})
-            return await super().call_tool(name, arguments or {})
+            await self._reject_unknown_arguments(name, arguments or {})
+            return await super().call_tool(name, arguments or {}, context=context)
+        except MCPError:
+            raise
         except Exception as exc:
-            # FastMCP wraps tool-body errors as ToolError(...) from the original, so
+            # MCPServer wraps tool-body errors as ToolError(...) from the original, so
             # inspect __cause__ as well. Surface user-facing validation/authorization
             # messages; hide unexpected internals behind a generic message.
             user_error = exc if isinstance(exc, ValueError | PermissionError) else exc.__cause__
             if isinstance(user_error, ValueError | PermissionError):
                 logger.warning("MCP tool '%s' rejected: %s", name, user_error)
-                return [TextContent(type="text", text=f"Error: {user_error}")]
+                return CallToolResult(
+                    content=[TextContent(type="text", text=f"Error: {user_error}")],
+                    is_error=True,
+                )
             logger.exception("MCP tool '%s' failed", name)
-            return [TextContent(type="text", text="Error: internal tool failure")]
+            return CallToolResult(
+                content=[TextContent(type="text", text="Error: internal tool failure")],
+                is_error=True,
+            )
 
-    def _reject_unknown_arguments(self, name: str, arguments: Mapping[str, Any]) -> None:
-        tool = self._tool_manager._tools.get(name)
+    async def _reject_unknown_arguments(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        tool = next((tool for tool in await self.list_tools() if tool.name == name), None)
         if tool is None:
             raise ValueError(f"Unknown tool: {name}")
-        allowed = set(tool.parameters.get("properties", {}))
+        allowed = set(tool.input_schema.get("properties", {}))
         unknown = sorted(set(arguments) - allowed)
         if unknown:
             raise ValueError(f"Unexpected argument(s) for {name}: {', '.join(unknown)}")
 
 
-mcp_app = DlightRAGFastMCP(
-    "dlightrag",
-    log_level="INFO",
-    warn_on_duplicate_tools=True,
-)
-server = mcp_app._mcp_server
-server.version = dlightrag.__version__
+class DlightRAGRequestScopeMiddleware:
+    """Project an MCP OAuth principal into DlightRAG's request scope."""
+
+    async def __call__(
+        self,
+        ctx: ServerRequestContext[Any, Any],
+        call_next: CallNext,
+    ) -> HandlerResult:
+        access_token = get_access_token()
+        scope = current_request_scope()
+        if access_token is not None:
+            scope = RequestScope(
+                user_id=access_token.subject or access_token.client_id,
+                auth_mode=_get_config().auth_mode,
+                claims=dict(access_token.claims or {}),
+            )
+        with request_scope_context(scope):
+            return await call_next(ctx)
 
 
 def _get_config() -> DlightragConfig:
@@ -130,6 +162,50 @@ async def _ensure_manager() -> RAGServiceManager:
     if _manager is None:
         _manager = await RAGServiceManager.acreate()
     return _manager
+
+
+async def _close_manager() -> None:
+    global _manager
+    manager, _manager = _manager, None
+    if manager is not None:
+        await manager.aclose()
+
+
+@asynccontextmanager
+async def _mcp_lifespan(_: MCPServer[Any]) -> AsyncIterator[None]:
+    await _ensure_manager()
+    try:
+        yield
+    finally:
+        await _close_manager()
+
+
+def _http_auth(
+    config: DlightragConfig,
+) -> tuple[AuthSettings | None, DlightRAGTokenVerifier | None]:
+    if config.mcp_transport != "streamable-http" or config.auth_mode == "none":
+        return None, None
+    resource = config.mcp_resource_server_url
+    auth = AuthSettings.model_validate(
+        {
+            "issuer_url": config.jwt_issuer or "http://localhost",
+            "resource_server_url": resource,
+        }
+    )
+    return auth, DlightRAGTokenVerifier(config, resource=resource)
+
+
+_auth, _token_verifier = _http_auth(_get_config())
+mcp_app = DlightRAGMCPServer(
+    "dlightrag",
+    version=dlightrag.__version__,
+    log_level="INFO",
+    warn_on_duplicate_tools=True,
+    lifespan=_mcp_lifespan,
+    middleware=[DlightRAGRequestScopeMiddleware()],
+    auth=_auth,
+    token_verifier=_token_verifier,
+)
 
 
 def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]:
@@ -188,7 +264,7 @@ async def _resolve_authorized_query_workspaces(
         "Query the RAG knowledge base for relevant information. Supports structured "
         "metadata filters and default or selected workspaces for precise document lookups."
     ),
-    annotations=ToolAnnotations(readOnlyHint=True),
+    annotations=ToolAnnotations(read_only_hint=True),
 )
 async def retrieve_tool(
     query: Annotated[str, Field(description="The search query")],
@@ -250,7 +326,7 @@ async def retrieve_tool(
         "Ask a question and get an LLM-generated answer backed by retrieved context "
         "from the default or selected workspaces in the knowledge base."
     ),
-    annotations=ToolAnnotations(readOnlyHint=True),
+    annotations=ToolAnnotations(read_only_hint=True),
 )
 async def answer_tool(
     query: Annotated[str, Field(description="The question to answer")],
@@ -312,7 +388,7 @@ async def answer_tool(
         "records containing workspace, display_name, embedding_model, created_at, "
         "and updated_at. Use display_name as the user-facing workspace label."
     ),
-    annotations=ToolAnnotations(readOnlyHint=True),
+    annotations=ToolAnnotations(read_only_hint=True),
 )
 async def list_workspaces_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
@@ -335,7 +411,7 @@ async def list_workspaces_tool() -> dict[str, Any]:
         "with their types and filter_ops, plus allow_ad_hoc_json) so callers can build "
         "valid retrieve/answer filters without guessing field names."
     ),
-    annotations=ToolAnnotations(readOnlyHint=True),
+    annotations=ToolAnnotations(read_only_hint=True),
 )
 async def get_capabilities_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
@@ -359,7 +435,11 @@ async def get_capabilities_tool() -> dict[str, Any]:
         "the user-facing label; response returns normalized workspace id, display_name, "
         "and created."
     ),
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+    ),
 )
 async def create_workspace_tool(
     workspace: Annotated[str, Field(description="Workspace name to create.")],
@@ -390,7 +470,7 @@ async def create_workspace_tool(
         "dry_run and keep_files; response returns normalized workspace id, deleted, "
         "and result."
     ),
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True),
 )
 async def delete_workspace_tool(
     workspace: Annotated[str, Field(description="Workspace name to delete.")],
@@ -430,7 +510,11 @@ async def delete_workspace_tool(
         "locators are separate; signed fetches require retention or a queryless locator. "
         "Response includes job_id, status, and workspace."
     ),
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+    ),
 )
 async def ingest_tool(
     source_type: Annotated[SourceTypeParam, Field(description="Type of data source")],
@@ -593,7 +677,7 @@ async def ingest_tool(
         "Return status for an ingest job_id returned by ingest, including the job workspace "
         "when available."
     ),
-    annotations=ToolAnnotations(readOnlyHint=True),
+    annotations=ToolAnnotations(read_only_hint=True),
 )
 async def get_ingest_job_tool(
     job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
@@ -615,7 +699,7 @@ async def get_ingest_job_tool(
     description=(
         "List documents ingested in one workspace. Response returns files, count, and workspace."
     ),
-    annotations=ToolAnnotations(readOnlyHint=True),
+    annotations=ToolAnnotations(read_only_hint=True),
 )
 async def list_files_tool(
     workspace: Annotated[
@@ -637,7 +721,7 @@ async def list_files_tool(
         "Delete or dry_run matching documents from one workspace by filename or file_path. "
         "Response returns results and workspace."
     ),
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
+    annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True),
 )
 async def delete_files_tool(
     filenames: Annotated[
@@ -675,177 +759,71 @@ async def delete_files_tool(
 # ═══════════════════════════════════════════════════════════════════
 
 
+def create_mcp_http_app() -> ASGIApp:
+    """Create the production Streamable HTTP ASGI app."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    config = _get_config()
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=config.mcp_allowed_hosts,
+        allowed_origins=config.mcp_allowed_origins,
+    )
+    http_app: ASGIApp = mcp_app.streamable_http_app(
+        streamable_http_path="/mcp",
+        json_response=True,
+        stateless_http=True,
+        transport_security=transport_security,
+        host=config.mcp_host,
+    )
+    return CORSMiddleware(
+        http_app,
+        allow_origins=config.cors_allow_origins,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Mcp-Method",
+            "Mcp-Name",
+            "Mcp-Protocol-Version",
+        ],
+    )
+
+
 async def run_stdio() -> None:
     """Run MCP server over stdio transport."""
-    await _ensure_manager()
-    try:
-        async with stdio_server() as (read_stream, write_stream):
-            await server.run(
-                read_stream,
-                write_stream,
-                server.create_initialization_options(),
-            )
-    finally:
-        if _manager is not None:
-            await _manager.aclose()
+    await mcp_app.run_stdio_async()
 
 
-async def run_streamable_http(host: str, port: int) -> None:
-    """Run MCP server over streamable-http transport.
-
-    Bearer auth is enforced when ``auth_mode`` is not ``"none"``.
-    Both simple (``DLIGHTRAG_API_AUTH_TOKEN``) and JWT
-    (``DLIGHTRAG_JWT_VERIFICATION_KEY``) modes are supported via the shared
-    ``verify_bearer_token`` dispatcher.
-    Without auth, the server runs open — caller is responsible for binding
-    to loopback or trusted network only. We log a loud warning in that case.
-    """
-    from contextlib import asynccontextmanager
-
+async def run_streamable_http() -> None:
+    """Run the MCP 2.0 Streamable HTTP server."""
     import uvicorn
-    from fastapi import HTTPException
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.server.transport_security import TransportSecuritySettings
-    from starlette.applications import Starlette
-    from starlette.middleware import Middleware
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.responses import JSONResponse
-    from starlette.routing import Mount
 
-    cfg = _get_config()
-    has_auth = cfg.auth_mode != "none"
-
-    if not has_auth:
-        if host not in ("127.0.0.1", "localhost", "::1"):
-            logger.warning(
-                "=" * 72 + "\nMCP streamable-http on host=%s:%d WITHOUT auth (auth_mode='none').\n"
-                "If this bind reaches a non-loopback network, ANY client can call\n"
-                "ingest, delete_files, retrieve, answer against EVERY workspace.\n"
-                "Safe configurations:\n"
-                "  (a) Set DLIGHTRAG_AUTH_MODE=simple + DLIGHTRAG_API_AUTH_TOKEN\n"
-                "      — bearer token guards MCP and REST (single secret).\n"
-                "  (b) Set DLIGHTRAG_AUTH_MODE=jwt + DLIGHTRAG_JWT_VERIFICATION_KEY\n"
-                "      — JWT bearer auth guards MCP and REST (external issuer).\n"
-                "  (c) Bind to 127.0.0.1 (loopback only).\n"
-                "  (d) Map host port to 127.0.0.1 only (compose: '127.0.0.1:8101:8101')\n"
-                "      — safe even with container-internal 0.0.0.0.\n" + "=" * 72,
-                host,
-                port,
-            )
-    else:
-        logger.info("MCP streamable-http on %s:%d with bearer auth enabled", host, port)
-
-    class MCPPathMiddleware:
-        """Normalize the public MCP endpoint before Starlette's mount redirect."""
-
-        def __init__(self, app):
-            self.app = app
-
-        async def __call__(self, scope, receive, send):
-            if scope.get("type") == "http" and scope.get("path") == "/mcp":
-                scope = dict(scope)
-                scope["path"] = "/mcp/"
-                if scope.get("raw_path") == b"/mcp":
-                    scope["raw_path"] = b"/mcp/"
-            await self.app(scope, receive, send)
-
-    class BearerAuthMiddleware(BaseHTTPMiddleware):
-        """Enforce Bearer auth on every request to the MCP transport.
-
-        Delegates to ``verify_bearer_token`` for auth-mode dispatch.
-        No-op when ``auth_mode='none'`` (operator opted out).
-        """
-
-        async def dispatch(self, request, call_next):
-            if not has_auth:
-                with request_scope_context(RequestScope.anonymous()):
-                    return await call_next(request)
-            header = request.headers.get("Authorization", "")
-            if not header.startswith("Bearer "):
-                return JSONResponse(
-                    {"error": "Missing or invalid Authorization header"}, status_code=401
-                )
-            try:
-                from dlightrag.api.auth import verify_bearer_token
-
-                user = verify_bearer_token(
-                    header[7:],
-                    cfg,
-                    default_user_id=request.headers.get("X-User-Id", "anonymous"),
-                )
-            except HTTPException as exc:
-                return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
-            with request_scope_context(RequestScope.from_user(user)):
-                return await call_next(request)
-
-    await _ensure_manager()
-
-    transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=cfg.mcp_dns_rebinding_protection,
-        allowed_hosts=cfg.mcp_allowed_hosts,
-        allowed_origins=cfg.mcp_allowed_origins,
-    )
-    session_manager = StreamableHTTPSessionManager(
-        app=server,
-        json_response=True,
-        stateless=True,
-        security_settings=transport_security,
-    )
-
-    @asynccontextmanager
-    async def lifespan(app):
-        async with session_manager.run():
-            yield
-
-    starlette_app = Starlette(
-        routes=[Mount("/mcp", app=session_manager.handle_request)],
-        middleware=[
-            Middleware(MCPPathMiddleware),
-            Middleware(BearerAuthMiddleware),
-        ],
-        lifespan=lifespan,
-    )
-
-    config = uvicorn.Config(
-        starlette_app,
-        host=host,
-        port=port,
+    config = _get_config()
+    uvicorn_config = uvicorn.Config(
+        create_mcp_http_app(),
+        host=config.mcp_host,
+        port=config.mcp_port,
         log_level="info",
     )
-    uv_server = uvicorn.Server(config)
-
-    try:
-        await uv_server.serve()
-    finally:
-        if _manager is not None:
-            await _manager.aclose()
+    await uvicorn.Server(uvicorn_config).serve()
 
 
-def main() -> None:
-    """Entry point for dlightrag-mcp."""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="dlightrag MCP server",
-        suggest_on_error=True,
-    )
-    parser.add_argument("--env-file", help="Path to .env configuration file")
-    args = parser.parse_args()
-
-    if args.env_file:
-        config = load_config(args.env_file)
-        set_config(config)
-    else:
-        config = _get_config()
-
+def run() -> None:
+    """Run the configured MCP transport."""
+    config = _get_config()
     logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
 
     if config.mcp_transport == "streamable-http":
-        logger.info(f"Starting MCP server (streamable-http) on {config.mcp_host}:{config.mcp_port}")
-        asyncio.run(run_streamable_http(config.mcp_host, config.mcp_port))
+        logger.info(
+            "Starting MCP server (streamable-http) on %s:%d",
+            config.mcp_host,
+            config.mcp_port,
+        )
+        asyncio.run(run_streamable_http())
     else:
         logger.info("Starting MCP server (stdio)")
         asyncio.run(run_stdio())
 
 
-__all__ = ["main", "mcp_app", "server"]
+__all__ = ["create_mcp_http_app", "mcp_app", "run"]

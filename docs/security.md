@@ -24,8 +24,9 @@ verified claims to workspace permissions when access control is enabled.
 | `simple` | One shared bearer token for trusted internal deployments |
 | `jwt` | User-scoped deployments with externally issued signed tokens |
 
-`auth_mode: none` returns an anonymous user context. If the API binds to a
-non-loopback host while auth is off, config validation emits a warning.
+`auth_mode: none` returns an anonymous user context. Non-loopback REST or MCP
+HTTP listeners are refused unless `allow_insecure_no_auth: true` explicitly
+accepts that risk.
 
 When auth is enabled, replace wildcard CORS origins with explicit origins.
 Browsers reject credentialed cross-origin requests with `["*"]`.
@@ -46,9 +47,9 @@ Clients send:
 Authorization: Bearer <generated>
 ```
 
-REST can receive `X-User-Id` in simple mode and uses it as the user id for
-request scoping. MCP simple-mode requests use the default anonymous user id.
-`simple` mode is admission control, not per-user authorization.
+REST can receive `X-User-Id` in simple mode for request scoping. MCP treats the
+shared token as one anonymous principal; it does not accept caller-selected
+identity. `simple` is admission control, not per-user authorization.
 
 ## Static JWT
 
@@ -87,6 +88,37 @@ jwt_audience: api://dlightrag
 `jwt_audience` may be a single value or a list; a token passes when its `aud`
 matches any entry, so one deployment can trust tokens minted for different
 audiences (for example a browser front door and direct API clients).
+
+## MCP OAuth Discovery
+
+MCP 2.0 can expose the HTTP listener as an OAuth 2.1 resource server. DlightRAG
+still does not issue tokens: the configured issuer signs users in and issues an
+access token, while DlightRAG verifies it through the existing JWT/JWKS settings.
+
+Enable standards-based MCP client discovery by adding the externally reachable
+MCP endpoint:
+
+```yaml
+auth_mode: jwt
+jwt_issuer: https://auth.example.com
+jwt_audience: https://rag.example.com/mcp
+mcp_transport: streamable-http
+mcp_resource_server_url: https://rag.example.com/mcp
+```
+
+The MCP server then publishes RFC 9728 Protected Resource Metadata and returns a
+standard `WWW-Authenticate` challenge that points clients to it. The public URL
+cannot be inferred from `mcp_host`: a bind such as `0.0.0.0:8101` does not reveal
+the reverse-proxy URL clients use.
+
+For native MCP OAuth, this public URL is also the exact expected JWT audience.
+REST may keep its own `jwt_audience`; the MCP verifier narrows validation to the
+resource URL instead of accepting a broader REST audience list.
+
+Omit `mcp_resource_server_url` when clients already hold a directly supplied
+static-key JWT. JWT verification and claim-based access control continue to work,
+but clients do not receive OAuth discovery metadata. TLS keys and JWT signing
+keys remain separate.
 
 ## Azure Entra ID (MSAL + JWKS)
 
@@ -306,6 +338,8 @@ access_control:
 MCP streamable HTTP binds to loopback (`127.0.0.1`) by default, reachable only
 from the local machine. To make it reachable from other hosts, set a
 non-loopback `mcp_host` and enable auth -- an unauthenticated non-loopback MCP
-would let any client call ingest/delete. The Host/Origin DNS-rebinding allowlist
-needs no tuning: it applies only under `auth_mode: none` and auto-disables once
-auth is on.
+would let any client call ingest/delete. Host/Origin DNS-rebinding protection is
+always enabled, including when bearer auth is active. Public deployments must
+add the externally visible host and browser origins to `mcp_allowed_hosts` and
+`mcp_allowed_origins`; browser clients must also be allowed by
+`cors_allow_origins`. Authentication does not replace Host validation.

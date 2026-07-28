@@ -19,7 +19,7 @@ MAX_QUERY_IMAGES = 3
 class ClientContractModel(BaseModel):
     """Base model for public client contracts."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class ConversationMessage(ClientContractModel):

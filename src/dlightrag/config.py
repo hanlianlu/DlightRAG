@@ -19,7 +19,7 @@ import ssl
 import warnings
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -36,6 +36,20 @@ _LOCAL_MCP_ALLOWED_ORIGINS = [
 ]
 _LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
+
+
+def _validate_oauth_endpoint_url(value: str, field_name: str) -> None:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        raise ValueError(f"{field_name} must be an absolute HTTP(S) URL")
+    if parsed.username or parsed.password:
+        raise ValueError(f"{field_name} must not include credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{field_name} must not include query or fragment components")
+    if parsed.scheme != "https" and parsed.hostname not in _LOCAL_API_HOSTS:
+        raise ValueError(f"{field_name} must use HTTPS except on loopback")
+
+
 MinerULanguage = Literal[
     "ch",
     "ch_server",
@@ -983,26 +997,30 @@ class DlightragConfig(BaseSettings):
     mcp_host: str = Field(
         default="127.0.0.1",
         description="MCP streamable-http bind address. Default 127.0.0.1 (loopback only) "
-        "because MCP exposes ingest/answer/delete_files with no native auth — exposing "
-        "to a network without auth would let any reachable client wipe data. Use "
-        "0.0.0.0 only behind a loopback host-port mapping/trusted network, or when "
-        "api_auth_token is set with an explicit auth_mode so bearer-token middleware "
-        "guards the transport.",
+        "because MCP exposes ingest/answer/delete_files. Use 0.0.0.0 only with explicit "
+        "bearer authentication and matching mcp_allowed_hosts/mcp_allowed_origins.",
     )
     mcp_port: int = Field(default=8101, ge=1, le=65535)
     mcp_allowed_hosts: list[str] = Field(
         default_factory=lambda: list(_LOCAL_MCP_ALLOWED_HOSTS),
         description=(
             "Allowed Host header values for MCP streamable-http DNS rebinding protection. "
-            "Only enforced when auth_mode='none' (see mcp_dns_rebinding_protection); with "
-            "auth enabled the bearer check supersedes this list."
+            "Public deployments must explicitly allow their externally visible host."
         ),
     )
     mcp_allowed_origins: list[str] = Field(
         default_factory=lambda: list(_LOCAL_MCP_ALLOWED_ORIGINS),
         description=(
             "Allowed Origin header values for MCP streamable-http DNS rebinding protection. "
-            "Only enforced when auth_mode='none'. Origin may be absent for non-browser clients."
+            "Origin may be absent for non-browser clients."
+        ),
+    )
+    mcp_resource_server_url: str | None = Field(
+        default=None,
+        description=(
+            "Public MCP endpoint URL used as the OAuth resource identifier and RFC 9728 "
+            "Protected Resource Metadata URL. Set it to enable native MCP OAuth discovery; "
+            "omit it to keep direct bearer-token authentication."
         ),
     )
 
@@ -1023,9 +1041,8 @@ class DlightragConfig(BaseSettings):
     allow_insecure_no_auth: bool = Field(
         default=False,
         description=(
-            "Permit binding to a non-loopback api_host with auth_mode='none'. Off by "
-            "default: the server refuses to start in that unsafe combination unless "
-            "explicitly enabled (e.g. a trusted private network)."
+            "Permit non-loopback REST or MCP HTTP listeners with auth_mode='none'. Off "
+            "by default: DlightRAG refuses unsafe unauthenticated network listeners."
         ),
     )
     jwt_verification_key: str | None = Field(
@@ -1232,16 +1249,33 @@ class DlightragConfig(BaseSettings):
             raise ValueError("auth_mode='jwt' requires jwt_verification_key or jwt_jwks_url")
         if self.jwt_jwks_url and not (self.jwt_issuer and self.jwt_audience):
             raise ValueError("jwt_jwks_url requires jwt_issuer and jwt_audience")
-        if self.auth_mode == "none" and self.api_host not in _LOCAL_API_HOSTS:
+        if self.mcp_resource_server_url:
+            if self.auth_mode != "jwt" or self.mcp_transport != "streamable-http":
+                raise ValueError(
+                    "mcp_resource_server_url requires auth_mode='jwt' and "
+                    "mcp_transport='streamable-http'"
+                )
+            if not self.jwt_issuer:
+                raise ValueError("mcp_resource_server_url requires jwt_issuer")
+            _validate_oauth_endpoint_url(
+                str(self.mcp_resource_server_url), "mcp_resource_server_url"
+            )
+            _validate_oauth_endpoint_url(self.jwt_issuer, "jwt_issuer")
+        insecure_listeners: list[str] = []
+        if self.api_host not in _LOCAL_API_HOSTS:
+            insecure_listeners.append(f"REST api_host={self.api_host}")
+        if self.mcp_transport == "streamable-http" and self.mcp_host not in _LOCAL_API_HOSTS:
+            insecure_listeners.append(f"MCP mcp_host={self.mcp_host}")
+        if self.auth_mode == "none" and insecure_listeners:
+            listeners = ", ".join(insecure_listeners)
             if not self.allow_insecure_no_auth:
                 raise ValueError(
-                    "auth_mode='none' with a non-loopback api_host is refused: any client "
-                    "could read, ingest, and delete every workspace. Enable authentication "
-                    "(auth_mode='simple' or 'jwt'), bind DLIGHTRAG_API_HOST to 127.0.0.1, or "
-                    "set allow_insecure_no_auth=true to override on a trusted network."
+                    f"auth_mode='none' with non-loopback {listeners} is refused. Enable "
+                    "authentication, bind the listener to loopback, or set "
+                    "allow_insecure_no_auth=true for an explicitly trusted network."
                 )
             warnings.warn(
-                "auth_mode='none' on a non-loopback api_host (allow_insecure_no_auth=true).",
+                f"auth_mode='none' on non-loopback {listeners} (allow_insecure_no_auth=true).",
                 stacklevel=2,
             )
         # Browsers reject allow_origins=['*'] with credentials. When auth is
@@ -1293,18 +1327,6 @@ class DlightragConfig(BaseSettings):
                 f"{operation} is not available on a read-only reader instance; "
                 "route writes to a writer instance connected to the primary endpoint."
             )
-
-    @property
-    def mcp_dns_rebinding_protection(self) -> bool:
-        """Enable MCP Host/Origin allowlist checks only when auth is off.
-
-        Follows ``auth_mode``: with auth on (simple/jwt) the bearer check already
-        rejects unauthorized DNS-rebinding requests, so the allowlist is redundant
-        and would only risk locking out legitimate networked clients. With
-        ``auth_mode='none'`` (the local default) the allowlist is the sole
-        defense, so it stays on.
-        """
-        return self.auth_mode == "none"
 
     def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
         """Return asyncpg's ssl argument matching LightRAG's SSL mode semantics."""

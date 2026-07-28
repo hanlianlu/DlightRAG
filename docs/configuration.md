@@ -738,8 +738,19 @@ mcp_host: 127.0.0.1
 mcp_port: 8101
 ```
 
-To expose MCP beyond loopback, set `mcp_host` and enable `auth_mode`. See
-[security.md](security.md).
+To expose MCP beyond loopback, set `mcp_host`, explicitly allow the public Host
+and Origin with `mcp_allowed_hosts` / `mcp_allowed_origins`, and enable
+`auth_mode`. Browser clients must also be allowed by `cors_allow_origins`. JWT
+mode continues to accept direct bearer tokens. To additionally enable MCP 2.0
+OAuth discovery, set the public endpoint URL:
+
+```yaml
+mcp_resource_server_url: https://rag.example.com/mcp
+```
+
+This one optional field makes the MCP server publish RFC 9728 Protected Resource
+Metadata using the existing `jwt_issuer`. It is not needed for stdio, simple
+bearer auth, or directly supplied static-key JWTs. See [security.md](security.md).
 
 ## Citations
 
