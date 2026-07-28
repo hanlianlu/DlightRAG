@@ -622,12 +622,11 @@ class RAGServiceManager:
 
         ceiling = int(self._config.answer.max_images)
         cfg = model_for_role(self._config, "query")
-        default = self._config.llm.default
         provider: Any = None
         try:
             provider = get_provider(
                 cfg.provider,
-                api_key=cfg.api_key or default.api_key,
+                api_key=cfg.api_key,
                 base_url=cfg.base_url,
                 timeout=cfg.timeout,
                 max_retries=cfg.max_retries,
@@ -676,13 +675,12 @@ class RAGServiceManager:
         from dlightrag.models.llm import get_chat_rerank_scoring_config
         from dlightrag.models.providers import get_provider
 
-        default = self._config.llm.default
         rerank_model = get_chat_rerank_scoring_config(self._config)
         provider: Any = None
         try:
             provider = get_provider(
                 rerank_model.provider,
-                api_key=rerank_model.api_key or default.api_key,
+                api_key=rerank_model.api_key,
                 base_url=rerank_model.base_url,
                 timeout=rerank_model.timeout,
                 max_retries=rerank_model.max_retries,

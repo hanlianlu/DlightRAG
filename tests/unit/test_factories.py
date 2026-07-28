@@ -136,6 +136,26 @@ class TestMakeCompletionFunc:
         assert resolved.api_key == "default-key"
         assert resolved.base_url == "https://default.example/v1"
 
+    @pytest.mark.parametrize("api_key", ["", "   "])
+    def test_role_with_blank_key_falls_back_to_complete_default_config(self, api_key: str):
+        from dlightrag.models.llm_roles import model_for_role
+
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(model="default-model", api_key="default-key"),
+                roles=LLMRolesConfig(
+                    query=ModelConfig(
+                        model="incomplete-query",
+                        api_key=api_key,
+                        base_url="http://host.docker.internal:8888/v1",
+                    )
+                ),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        assert model_for_role(cfg, "query") is cfg.llm.default
+
     def test_planner_model_func_prefers_keyword_role_direct(self, monkeypatch):
         from dlightrag.models import llm
 
@@ -222,6 +242,27 @@ class TestMakeCompletionFunc:
         llm.get_default_model_func(cfg)  # handed to LightRAG → root
         llm.build_role_llm_configs(cfg)  # handed to LightRAG → root
         assert roots and all(roots)
+
+    def test_lightrag_role_overrides_ignore_blank_keys(self, monkeypatch):
+        from dlightrag.models import llm
+
+        built_models: list[str] = []
+
+        def fake_make_completion_func(cfg, *, root=False):
+            built_models.append(cfg.model)
+            return f"completion:{cfg.model}"
+
+        monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(model="default-model", api_key="default-key"),
+                roles=LLMRolesConfig(keyword=ModelConfig(model="incomplete-keyword", api_key="")),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        assert llm.build_role_llm_configs(cfg) is None
+        assert built_models == []
 
     def test_owned_funcs_are_not_root(self, monkeypatch):
         from dlightrag.models import llm
@@ -567,6 +608,28 @@ class TestGetRerankFunc:
         assert result == "rerank-func"
         assert captured["ingest_func"] == "completion:rerank-model"
         assert seen_models == ["rerank-model"]
+
+    def test_chat_llm_reranker_blank_key_falls_back_to_default(self, monkeypatch):
+        llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
+
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(model="chat-model", api_key="default-key"),
+            ),
+            rerank=RerankConfig(
+                strategy="chat_llm_reranker",
+                provider="openai",
+                model="incomplete-reranker",
+                api_key="",
+            ),
+            embedding=_embedding_config(),
+        )
+
+        result = llm.get_rerank_func(config)
+
+        assert result == "rerank-func"
+        assert captured["ingest_func"] == "completion:chat-model"
+        assert seen_models == ["chat-model"]
 
     def test_provider_reranker_missing_key_fails_fast_without_chat_fallback(self, monkeypatch):
         from dlightrag.models import llm

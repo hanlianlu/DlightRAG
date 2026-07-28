@@ -120,7 +120,7 @@ def test_ask_model_reprompts_for_required_custom_url(wiz):
     )
 
 
-def test_ask_model_uses_placeholder_key_for_unauthenticated_local_provider(wiz):
+def test_ask_model_returns_none_for_unauthenticated_local_provider(wiz):
     prompter = _ScriptedPrompter(
         ["Other (OpenAI-compatible)", "local-model", "http://localhost:8000/v1", ""]
     )
@@ -129,7 +129,7 @@ def test_ask_model_uses_placeholder_key_for_unauthenticated_local_provider(wiz):
         "Other (OpenAI-compatible)",
         "local-model",
         "http://localhost:8000/v1",
-        "not-needed",
+        None,
     )
 
 
@@ -198,6 +198,33 @@ def test_write_config_replaces_stale_role_blocks_when_roles_are_explicit(wiz, tm
     assert "cheap-keyword" in text
     assert "stale-extract" not in text
     assert "stale-vlm" not in text
+
+
+def test_write_config_keyed_role_removes_stale_keyless_yaml(wiz, tmp_path):
+    src = tmp_path / "config.yaml"
+    src.write_text(
+        "llm:\n"
+        "  default:\n    provider: openai\n    model: default\n"
+        "  roles:\n"
+        "    extract:\n      provider: openai\n      model: local\n      api_key: null\n"
+        "embedding:\n  provider: voyage\n  model: embed\n  dim: 1024\n",
+        encoding="utf-8",
+    )
+
+    wiz.write_config_yaml(
+        src,
+        llm_roles={
+            "extract": {
+                "provider": "openai",
+                "model": "keyed-extract",
+                "base_url": "https://api.deepseek.com",
+            }
+        },
+    )
+
+    role = wiz._yaml().load(src)["llm"]["roles"]["extract"]
+    assert role["model"] == "keyed-extract"
+    assert "api_key" not in role
 
 
 def test_write_config_selects_docling_and_removes_mineru(wiz, tmp_path):
@@ -483,6 +510,55 @@ def test_models_step_custom_replaces_roles_and_writes_role_env(wiz, tmp_path, mo
     assert "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY" not in env_text
     assert "DLIGHTRAG_LLM__ROLES__VLM__API_KEY" not in env_text
     assert "DLIGHTRAG_RERANK__API_KEY" not in env_text
+
+
+def test_models_step_writes_keyless_role_to_yaml_and_removes_stale_env(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n  default:\n    provider: openai\n    model: old\n"
+        "  roles:\n    extract:\n      provider: openai\n      model: old\n"
+        "embedding:\n  provider: voyage\n  model: old\n  dim: 1024\n"
+        "rerank:\n  strategy: chat_llm_reranker\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text(
+        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=stale-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing.env.example")
+    prompter = _ScriptedPrompter(
+        [
+            "Custom · separate extraction/keyword models",
+            "DeepSeek",
+            "default-model",
+            "",
+            "sk-default",
+            "Other (OpenAI-compatible)",
+            "local-extract",
+            "http://localhost:8000/v1",
+            "",
+            "DeepSeek",
+            "keyword-model",
+            "",
+            "sk-keyword",
+            "Voyage",
+            "voyage-multimodal-3.5",
+            "",
+            "sk-embed",
+            "Reuse my LLM",
+        ]
+    )
+
+    wiz.run_models_step(prompter)
+
+    config = wiz._yaml().load(cfg)
+    assert config["llm"]["roles"]["extract"]["api_key"] is None
+    env_text = env.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY" not in env_text
+    assert "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=sk-keyword" in env_text
 
 
 # --- Plan 2 Task 1: MinerU config helpers ---------------------------------

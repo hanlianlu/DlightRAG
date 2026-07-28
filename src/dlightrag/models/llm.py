@@ -19,7 +19,11 @@ from dlightrag.models.composer import (
     ComposerImageTransportSettings,
     normalized_endpoint_fingerprint,
 )
-from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
+from dlightrag.models.llm_roles import (
+    LIGHTRAG_ROLE_NAMES,
+    has_complete_api_key_setting,
+    model_for_role,
+)
 from dlightrag.models.providers import get_provider
 from dlightrag.models.structured import StructuredOutput
 
@@ -368,7 +372,7 @@ def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
     overrides: dict[str, Any] = {}
     for role in LIGHTRAG_ROLE_NAMES:
         configured_role: ModelConfig | None = getattr(config.llm.roles, role)
-        if configured_role is None or "api_key" not in configured_role.model_fields_set:
+        if configured_role is None or not has_complete_api_key_setting(configured_role):
             continue
         completion = _make_completion_func(configured_role, root=True)
         overrides[role] = RoleLLMConfig(
@@ -434,7 +438,7 @@ def get_multimodal_embedder(config: DlightragConfig) -> Any:
 def get_chat_rerank_scoring_config(config: DlightragConfig) -> ModelConfig:
     """Return the messages-first model config used by chat_llm_reranker."""
     rc = config.rerank
-    if rc.provider and rc.model and "api_key" in rc.model_fields_set:
+    if rc.provider and rc.model and has_complete_api_key_setting(rc):
         return ModelConfig(
             provider=rc.provider,
             model=rc.model,

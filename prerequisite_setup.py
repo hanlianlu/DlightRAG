@@ -140,12 +140,12 @@ def _yaml():
 
 
 def _apply_model_block(node, block: dict) -> None:
-    """Set provider/model/base_url/dim on a mapping; drop base_url when absent."""
-    for key in ("provider", "model", "base_url", "dim"):
+    """Replace one model block without retaining stale endpoints or credentials."""
+    for key in ("provider", "model", "base_url", "api_key", "dim"):
         if key in block:
             node[key] = block[key]
-        elif key == "base_url" and key in node:
-            del node[key]  # native provider: remove stale base_url
+        elif key in {"base_url", "api_key"} and key in node:
+            del node[key]
 
 
 def write_config_yaml(
@@ -516,7 +516,7 @@ def _ask_required(ask: Callable[[], str]) -> str:
 
 def _ask_model(
     prompter: Prompter, providers: dict[str, ProviderSpec], role_label: str
-) -> tuple[str, str, str | None, str]:
+) -> tuple[str, str, str | None, str | None]:
     name = prompter.select(f"{role_label} provider", list(providers))
     spec = providers[name]
     model = _ask_required(lambda: prompter.text(f"{role_label} model name (required)"))
@@ -529,12 +529,13 @@ def _ask_model(
     if spec.requires_key:
         key = _ask_required(lambda: prompter.password(f"{role_label} API key (required)"))
     else:
-        key = prompter.password(f"{role_label} API key (optional)").strip() or "not-needed"
+        key = prompter.password(f"{role_label} API key (optional)").strip() or None
     return name, model, (base_url or None), key
 
 
 def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dict | None:
     env_values: dict[str, str] = {}
+    remove_env_keys: list[str] = []
 
     from rich.console import Console
 
@@ -552,21 +553,33 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
 
     name, model, base_url, key = _ask_model(prompter, PROVIDERS_LLM, "LLM")
     llm_block, llm_env = resolve_llm_choice(name, model=model, base_url=base_url)
-    env_values[llm_env] = key
+    if key is None:
+        llm_block["api_key"] = None
+        remove_env_keys.append(llm_env)
+    else:
+        env_values[llm_env] = key
 
     llm_roles: dict[str, dict] = {}
     if mode == MODEL_MODE_CUSTOM:
         for role in ("extract", "keyword"):
             rn, rm, rurl, rk = _ask_model(prompter, PROVIDERS_LLM, f"{role} LLM")
             block, _ = resolve_llm_choice(rn, model=rm, base_url=rurl)
+            if rk is None:
+                block["api_key"] = None
+                remove_env_keys.append(LLM_ROLE_ENV_KEYS[role])
+            else:
+                env_values[LLM_ROLE_ENV_KEYS[role]] = rk
             llm_roles[role] = block
-            env_values[LLM_ROLE_ENV_KEYS[role]] = rk
 
     ename, emodel, ebase, ekey = _ask_model(prompter, PROVIDERS_EMBED, "Embedding")
     embed_block, embed_env = resolve_embedding_choice(ename, model=emodel, base_url=ebase)
     if embed_block["dim"] == 0:
         embed_block["dim"] = int(prompter.text("Embedding dimension (dim)", default="1024"))
-    env_values[embed_env] = ekey
+    if ekey is None:
+        embed_block["api_key"] = None
+        remove_env_keys.append(embed_env)
+    else:
+        env_values[embed_env] = ekey
 
     rerank_choice = "Reuse my LLM"
     if mode == MODEL_MODE_CUSTOM:
@@ -596,14 +609,16 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         embedding=embed_block,
         rerank=rerank_block,
     )
-    selected_role_keys = {LLM_ROLE_ENV_KEYS[role] for role in llm_roles}
+    selected_role_keys = {
+        LLM_ROLE_ENV_KEYS[role] for role in llm_roles if LLM_ROLE_ENV_KEYS[role] in env_values
+    }
     stale_role_keys = tuple(
         key for key in LLM_ROLE_ENV_KEYS.values() if key not in selected_role_keys
     )
-    remove_env_keys = stale_role_keys
+    remove_env_keys.extend(stale_role_keys)
     if rerank_env is None:
-        remove_env_keys = (*remove_env_keys, "DLIGHTRAG_RERANK__API_KEY")
-    upsert_env(ENV_PATH, env_values, remove_keys=remove_env_keys)
+        remove_env_keys.append("DLIGHTRAG_RERANK__API_KEY")
+    upsert_env(ENV_PATH, env_values, remove_keys=tuple(dict.fromkeys(remove_env_keys)))
     return {
         "llm": {"api_key": key, "base_url": llm_block.get("base_url"), "model": model},
         "config_backup": config_backup,

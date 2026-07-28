@@ -5,7 +5,13 @@ import dataclasses
 
 import pytest
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig
+from dlightrag.config import (
+    DlightragConfig,
+    EmbeddingConfig,
+    LLMConfig,
+    LLMRolesConfig,
+    ModelConfig,
+)
 from dlightrag.core.answer.capability import (
     AnswerImageCapability,
     CapabilityStatus,
@@ -47,10 +53,22 @@ def test_capability_snapshot_is_frozen() -> None:
         cap.effective_max_images = 0  # type: ignore[misc]
 
 
-async def test_capability_probe_targets_query_role(monkeypatch) -> None:
+async def test_capability_probe_targets_resolved_query_role_without_borrowing_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     manager = RAGServiceManager.__new__(RAGServiceManager)
     manager._answer_image_capability = None
     manager._config = DlightragConfig(
+        llm=LLMConfig(
+            default=ModelConfig(model="default-model", api_key="default-key"),
+            roles=LLMRolesConfig(
+                query=ModelConfig(
+                    model="local-query",
+                    api_key=None,
+                    base_url="http://host.docker.internal:8888/v1",
+                )
+            ),
+        ),
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -69,7 +87,11 @@ async def test_capability_probe_targets_query_role(monkeypatch) -> None:
         async def aclose(self) -> None:
             pass
 
-    monkeypatch.setattr("dlightrag.models.providers.get_provider", lambda *a, **k: _StubProvider())
+    def fake_get_provider(*_args, **kwargs):
+        probed["api_key"] = kwargs["api_key"]
+        return _StubProvider()
+
+    monkeypatch.setattr("dlightrag.models.providers.get_provider", fake_get_provider)
     monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", fake_probe)
 
     await manager._probe_answer_image_capability()
@@ -81,6 +103,7 @@ async def test_capability_probe_targets_query_role(monkeypatch) -> None:
     assert cap.status == "supported"
     assert cap.effective_max_images == ceiling
     assert probed["model"] == query_cfg.model
+    assert probed["api_key"] is None
     assert probed["ceiling"] == ceiling
 
 

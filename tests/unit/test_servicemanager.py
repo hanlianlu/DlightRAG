@@ -2019,6 +2019,45 @@ async def test_vision_probe_result_is_manager_scoped(
     )
 
 
+async def test_rerank_vision_probe_does_not_borrow_default_key(
+    monkeypatch: pytest.MonkeyPatch,
+    test_cfg: DlightragConfig,
+) -> None:
+    from dlightrag.core.vision_probe import ImageProbeOutcome
+
+    config = test_cfg.model_copy(
+        update={
+            "llm": LLMConfig(default=ModelConfig(model="default-model", api_key="default-key")),
+            "rerank": RerankConfig(
+                strategy="chat_llm_reranker",
+                provider="openai",
+                model="local-reranker",
+                api_key=None,
+                base_url="http://host.docker.internal:9999/v1",
+            ),
+        }
+    )
+    manager = RAGServiceManager(config=config)
+    provider = SimpleNamespace(aclose=AsyncMock())
+    provider_factory = MagicMock(return_value=provider)
+
+    monkeypatch.setattr("dlightrag.models.providers.get_provider", provider_factory)
+    monkeypatch.setattr(
+        "dlightrag.core.vision_probe.probe_image_capability",
+        AsyncMock(return_value=ImageProbeOutcome(status="supported")),
+    )
+
+    await manager._probe_vision_support()
+
+    provider_factory.assert_called_once_with(
+        "openai",
+        api_key=None,
+        base_url="http://host.docker.internal:9999/v1",
+        timeout=120.0,
+        max_retries=3,
+    )
+
+
 class TestDegradedMode:
     @pytest.fixture(autouse=True)
     def _isolate_workspace_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
