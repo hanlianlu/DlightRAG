@@ -81,7 +81,6 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
 
 def _make_completion_func(
     cfg: ModelConfig,
-    default_api_key: str | None = None,
     *,
     root: bool = False,
     owner_closers: list[Callable[[], Awaitable[Any]]] | None = None,
@@ -93,10 +92,9 @@ def _make_completion_func(
     stale context. DlightRAG-owned funcs keep ``root=False`` so they nest under
     the active request span.
     """
-    api_key = cfg.api_key or default_api_key
     provider = get_provider(
         cfg.provider,
-        api_key=api_key,
+        api_key=cfg.api_key,
         base_url=cfg.base_url,
         timeout=cfg.timeout,
         max_retries=cfg.max_retries,
@@ -185,10 +183,7 @@ def get_default_model_func(config: DlightragConfig) -> Callable:
 
 def get_keyword_model_func(config: DlightragConfig) -> Callable:
     """Messages-first keyword callable using role config or default LLM."""
-    return _make_completion_func(
-        model_for_role(config, "keyword"),
-        default_api_key=config.llm.default.api_key,
-    )
+    return _make_completion_func(model_for_role(config, "keyword"))
 
 
 def get_planner_model_func(config: DlightragConfig) -> Callable:
@@ -198,7 +193,7 @@ def get_planner_model_func(config: DlightragConfig) -> Callable:
     Concurrency is bounded by the caller's semaphore (RAGServiceManager).
     """
     cfg = model_for_role(config, "keyword")
-    return _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
+    return _make_completion_func(cfg)
 
 
 def get_query_model_func(config: DlightragConfig) -> Callable:
@@ -208,7 +203,7 @@ def get_query_model_func(config: DlightragConfig) -> Callable:
     Concurrency is bounded by ``RAGServiceManager._answer_stream_sem``.
     """
     cfg = model_for_role(config, "query")
-    return _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
+    return _make_completion_func(cfg)
 
 
 def get_vlm_model_func(config: DlightragConfig) -> Callable:
@@ -218,7 +213,7 @@ def get_vlm_model_func(config: DlightragConfig) -> Callable:
     Concurrency is bounded by the caller's semaphore (RAGServiceManager).
     """
     cfg = model_for_role(config, "vlm")
-    return _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
+    return _make_completion_func(cfg)
 
 
 def _sanitized_model_identity(cfg: ModelConfig) -> dict[str, str | None]:
@@ -277,7 +272,6 @@ def create_composer_analysis_adapter(
     owner_closers: list[Callable[[], Awaitable[Any]]] = []
     completion = _make_completion_func(
         cfg,
-        default_api_key=config.llm.default.api_key,
         owner_closers=owner_closers,
     )
 
@@ -373,15 +367,13 @@ def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
 
     overrides: dict[str, Any] = {}
     for role in LIGHTRAG_ROLE_NAMES:
-        role_cfg: ModelConfig | None = getattr(config.llm.roles, role)
-        if role_cfg is None:
+        configured_role: ModelConfig | None = getattr(config.llm.roles, role)
+        if configured_role is None or "api_key" not in configured_role.model_fields_set:
             continue
-        completion = _make_completion_func(
-            role_cfg, default_api_key=config.llm.default.api_key, root=True
-        )
+        completion = _make_completion_func(configured_role, root=True)
         overrides[role] = RoleLLMConfig(
             func=_adapt_for_lightrag(completion),
-            timeout=int(role_cfg.timeout),
+            timeout=int(configured_role.timeout),
         )
 
     return overrides or None
@@ -442,7 +434,7 @@ def get_multimodal_embedder(config: DlightragConfig) -> Any:
 def get_chat_rerank_scoring_config(config: DlightragConfig) -> ModelConfig:
     """Return the messages-first model config used by chat_llm_reranker."""
     rc = config.rerank
-    if rc.provider and rc.model:
+    if rc.provider and rc.model and "api_key" in rc.model_fields_set:
         return ModelConfig(
             provider=rc.provider,
             model=rc.model,
@@ -486,10 +478,7 @@ def get_rerank_func(
                     "model does not support image input"
                 )
 
-        scoring_func = _make_completion_func(
-            scoring_cfg,
-            default_api_key=config.llm.default.api_key,
-        )
+        scoring_func = _make_completion_func(scoring_cfg)
         return build_rerank_func(rc, ingest_func=scoring_func)
 
     return build_rerank_func(rc)

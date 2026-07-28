@@ -10,6 +10,10 @@ LIGHTRAG_ROLE_NAMES: tuple[RoleName, ...] = ("extract", "keyword", "query", "vlm
 
 
 def model_for_role(config: DlightragConfig, role: RoleName) -> ModelConfig:
-    """Return the configured role model or the default LLM model."""
+    """Return a complete role configuration, otherwise the complete default."""
     role_cfg = getattr(config.llm.roles, role)
-    return role_cfg or config.llm.default
+    return (
+        role_cfg
+        if role_cfg is not None and "api_key" in role_cfg.model_fields_set
+        else config.llm.default
+    )

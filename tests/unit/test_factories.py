@@ -77,6 +77,65 @@ def _embedding_config() -> EmbeddingConfig:
 
 
 class TestMakeCompletionFunc:
+    def test_role_with_explicit_null_key_keeps_complete_local_config(self):
+        from dlightrag.models.llm_roles import model_for_role
+
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(
+                    provider="openai",
+                    model="default-model",
+                    api_key="default-key",
+                    base_url="https://default.example/v1",
+                ),
+                roles=LLMRolesConfig(
+                    query=ModelConfig(
+                        provider="openai",
+                        model="local-query",
+                        api_key=None,
+                        base_url="http://host.docker.internal:8888/v1",
+                    )
+                ),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        resolved = model_for_role(cfg, "query")
+
+        assert resolved is cfg.llm.roles.query
+        assert resolved is not None
+        assert resolved.api_key is None
+        assert resolved.base_url == "http://host.docker.internal:8888/v1"
+
+    def test_role_without_own_key_falls_back_to_complete_default_config(self):
+        from dlightrag.models.llm_roles import model_for_role
+
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(
+                    provider="openai",
+                    model="default-model",
+                    api_key="default-key",
+                    base_url="https://default.example/v1",
+                ),
+                roles=LLMRolesConfig(
+                    query=ModelConfig(
+                        provider="openai",
+                        model="local-query",
+                        base_url="http://host.docker.internal:8888/v1",
+                    )
+                ),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        resolved = model_for_role(cfg, "query")
+
+        assert resolved is cfg.llm.default
+        assert resolved.model == "default-model"
+        assert resolved.api_key == "default-key"
+        assert resolved.base_url == "https://default.example/v1"
+
     def test_query_model_func_is_direct_not_queue_managed(self):
         from dlightrag.models import llm
 
@@ -96,9 +155,9 @@ class TestMakeCompletionFunc:
 
         captured: dict[str, Any] = {}
 
-        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
+        def fake_make_completion_func(cfg, *, root=False):
             captured["model"] = cfg.model
-            captured["default_api_key"] = default_api_key
+            captured["api_key"] = cfg.api_key
             captured["root"] = root
             return f"completion:{cfg.model}"
 
@@ -107,7 +166,11 @@ class TestMakeCompletionFunc:
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat"),
                 roles=LLMRolesConfig(
-                    keyword=ModelConfig(provider="openai", model="deepseek-v4-flash")
+                    keyword=ModelConfig(
+                        provider="openai",
+                        model="deepseek-v4-flash",
+                        api_key="sk-keyword",
+                    )
                 ),
             ),
             embedding=_embedding_config(),
@@ -120,7 +183,7 @@ class TestMakeCompletionFunc:
         assert func == "completion:deepseek-v4-flash"
         assert captured == {
             "model": "deepseek-v4-flash",
-            "default_api_key": "sk-chat",
+            "api_key": "sk-keyword",
             "root": False,
         }
 
@@ -129,9 +192,9 @@ class TestMakeCompletionFunc:
 
         captured: dict[str, Any] = {}
 
-        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
+        def fake_make_completion_func(cfg, *, root=False):
             captured["model"] = cfg.model
-            captured["default_api_key"] = default_api_key
+            captured["api_key"] = cfg.api_key
             captured["root"] = root
             return f"completion:{cfg.model}"
 
@@ -148,7 +211,7 @@ class TestMakeCompletionFunc:
         assert func == "completion:default-model"
         assert captured == {
             "model": "default-model",
-            "default_api_key": "sk-chat",
+            "api_key": "sk-chat",
             "root": False,
         }
 
@@ -171,7 +234,7 @@ class TestMakeCompletionFunc:
 
         roots: list[bool] = []
 
-        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
+        def fake_make_completion_func(cfg, *, root=False):
             roots.append(root)
             return f"completion:{cfg.model}"
 
@@ -193,7 +256,7 @@ class TestMakeCompletionFunc:
 
         roots: list[bool] = []
 
-        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
+        def fake_make_completion_func(cfg, *, root=False):
             roots.append(root)
             return f"completion:{cfg.model}"
 
@@ -375,7 +438,7 @@ class TestGetKeywordModelFunc:
 
         seen_models: list[str] = []
 
-        def fake_make_completion_func(cfg, default_api_key=None):
+        def fake_make_completion_func(cfg):
             seen_models.append(cfg.model)
             return f"completion:{cfg.model}"
 
@@ -384,7 +447,11 @@ class TestGetKeywordModelFunc:
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat"),
                 roles=LLMRolesConfig(
-                    keyword=ModelConfig(provider="openai", model="deepseek-v4-flash")
+                    keyword=ModelConfig(
+                        provider="openai",
+                        model="deepseek-v4-flash",
+                        api_key="sk-keyword",
+                    )
                 ),
             ),
             embedding=_embedding_config(),
@@ -404,7 +471,7 @@ class TestGetRerankFunc:
         seen_models: list[str] = []
         captured: dict[str, Any] = {}
 
-        def fake_make_completion_func(cfg, default_api_key=None):
+        def fake_make_completion_func(cfg):
             seen_models.append(cfg.model)
             return f"completion:{cfg.model}"
 
@@ -515,7 +582,10 @@ class TestGetRerankFunc:
                 roles=LLMRolesConfig(vlm=ModelConfig(provider="openai", model="vlm-model")),
             ),
             rerank=RerankConfig(
-                strategy="chat_llm_reranker", provider="openai", model="rerank-model"
+                strategy="chat_llm_reranker",
+                provider="openai",
+                model="rerank-model",
+                api_key="sk-rerank",
             ),
             embedding=_embedding_config(),
         )
