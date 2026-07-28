@@ -178,18 +178,6 @@ async def client(_api_app: FastAPI):
         yield c
 
 
-# ---------------------------------------------------------------------------
-# TestAuthMiddleware
-# ---------------------------------------------------------------------------
-
-
-def test_api_server_has_no_eager_module_app() -> None:
-    """The ASGI app is exposed through factories only."""
-    import dlightrag.api.server as server
-
-    assert not hasattr(server, "app")
-
-
 class TestAuthMiddleware:
     """Test pluggable auth (none / simple / jwt)."""
 

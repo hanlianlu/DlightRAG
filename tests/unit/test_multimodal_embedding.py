@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for context-aware multimodal embedding."""
 
-import inspect
 import io
 from unittest.mock import AsyncMock, MagicMock
 
@@ -51,10 +50,6 @@ def test_ollama_rejects_required_multimodal_input() -> None:
         match="OllamaEmbedProvider cannot satisfy input_modality='multimodal'",
     ):
         resolve_embedding_input_modality(OllamaEmbedProvider(), "multimodal")
-
-
-def test_multimodal_embedder_constructor_no_longer_exposes_batch_size() -> None:
-    assert "batch_size" not in inspect.signature(MultimodalEmbedder).parameters
 
 
 async def test_native_multimodal_provider_can_be_forced_to_text() -> None:

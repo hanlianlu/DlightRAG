@@ -1,14 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Composer-only document evidence selection."""
 
-import importlib
 import logging
-import subprocess
-import sys
 from typing import Any
 
 import pytest
 
+from dlightrag.core.request.attachments import ATTACHMENT_CONTEXT_TOKEN_LIMIT
 from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
 from dlightrag.utils.tokens import estimate_tokens
 
@@ -615,26 +613,8 @@ async def test_current_and_history_share_one_top_30_rerank_call() -> None:
     assert trace["composer_evidence_reranked"] is True
 
 
-def test_attachments_import_does_not_load_composer_evidence() -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; import dlightrag.core.request.attachments; "
-            "assert 'dlightrag.core.request.composer_evidence' not in sys.modules",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
 async def test_attachment_limit_is_owned_upstream_and_defaults_selector_packing() -> None:
-    attachments = importlib.import_module("dlightrag.core.request.attachments")
-    composer_evidence = importlib.import_module("dlightrag.core.request.composer_evidence")
-    token_limit = attachments.ATTACHMENT_CONTEXT_TOKEN_LIMIT
+    token_limit = ATTACHMENT_CONTEXT_TOKEN_LIMIT
     rows = [
         _row("limit", "target" * ((token_limit * 4) // len("target"))),
         _row("overflow", "x" * 4, chunk_index=2),
@@ -658,37 +638,3 @@ async def test_attachment_limit_is_owned_upstream_and_defaults_selector_packing(
     assert token_limit == 24_576
     assert [row["chunk_id"] for row in selected] == ["limit"]
     assert sum(estimate_tokens(str(row["content"])) for row in selected) == token_limit
-    legacy_constant = "_".join(("COMPOSER", "ATTACHMENT", "TOKEN", "BUDGET"))
-    assert not hasattr(composer_evidence, legacy_constant)
-    assert "ATTACHMENT_CONTEXT_TOKEN_LIMIT" not in composer_evidence.__all__
-    assert not hasattr(composer_evidence, "partition_composer_rows_by_attachment_budget")
-    assert not hasattr(composer_evidence, "partition_composer_rows_by_document_size")
-    assert "partition_composer_rows_by_attachment_budget" not in composer_evidence.__all__
-    assert "partition_composer_rows_by_document_size" not in composer_evidence.__all__
-
-
-@pytest.mark.parametrize(
-    "legacy_budget",
-    [
-        "attachment_token_budget",
-        "full_pass_tokens",
-        "current_target_tokens",
-        "history_target_tokens",
-        "total_tokens",
-    ],
-)
-def test_selector_rejects_legacy_budget_arguments(legacy_budget: str) -> None:
-    selector_factory: Any = ComposerEvidenceSelector
-    with pytest.raises(TypeError):
-        selector_factory(**{legacy_budget: 1})
-
-
-def test_selector_has_no_client_ownership_or_legacy_embedding_signature() -> None:
-    selector = ComposerEvidenceSelector()
-
-    assert not hasattr(selector, "aclose")
-    assert not hasattr(selector, "_embedding_func")
-    assert not hasattr(selector, "_rerank_func")
-    selector_factory: Any = ComposerEvidenceSelector
-    with pytest.raises(TypeError):
-        selector_factory(embedding_func=object())

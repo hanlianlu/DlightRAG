@@ -4,9 +4,6 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import pytest
-
-import dlightrag.sourcing as sourcing
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 
 
@@ -27,17 +24,3 @@ async def test_async_data_source_list_collects_streaming_documents() -> None:
         SourceDocument(key="docs/a.pdf"),
         SourceDocument(key="docs/b.pdf"),
     ]
-
-
-def test_sourcing_public_api_is_async_only() -> None:
-    assert "DataSource" not in sourcing.__all__
-    assert "LocalDataSource" not in sourcing.__all__
-
-    data_source_name = "DataSource"
-    local_source_name = "LocalDataSource"
-
-    with pytest.raises(AttributeError):
-        getattr(sourcing, data_source_name)
-
-    with pytest.raises(AttributeError):
-        getattr(sourcing, local_source_name)

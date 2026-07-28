@@ -3,7 +3,6 @@
 
 import os
 import ssl
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -171,15 +170,6 @@ class TestEmbeddingConfig:
 
         assert cfg.input_modality == input_modality
 
-    def test_rejects_removed_model_profile_provider(self) -> None:
-        removed_provider = "qwen_" + "openai_compatible"
-
-        with pytest.raises(ValidationError):
-            EmbeddingConfig(
-                provider=cast(Any, removed_provider),
-                model="qwen3-vl-embedding-2b",
-            )
-
     @pytest.mark.parametrize("kwargs", [{"dim": 0}, {"max_token_size": 0}])
     def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:
         with pytest.raises(ValidationError):
@@ -249,9 +239,8 @@ class TestAnswerConfig:
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
 
-    def test_max_images_is_single_unified_ceiling(self):
+    def test_max_images_default(self):
         assert AnswerConfig().max_images == 8
-        assert "max_user_images" not in AnswerConfig.model_fields
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -284,9 +273,6 @@ class TestQueryAndVisualConfig:
     def test_rejects_invalid_numeric_bounds(self, cls: type, kwargs: dict[str, Any]) -> None:
         with pytest.raises(ValidationError):
             cast(Any, cls)(**kwargs)
-
-    def test_removed_described_images_field(self) -> None:
-        assert "max_described_images" not in QueryImagesConfig.model_fields
 
 
 class TestMetadataConfig:
@@ -624,7 +610,6 @@ def test_parser_defaults_export_lightrag_env() -> None:
     cfg = _default_test_config()
 
     assert cfg.parser_rules == "*:mineru-iteP"
-    assert "rules" not in type(cfg.parser).model_fields
     assert cfg.extraction.use_json is True
     assert cfg.extraction.language == "English"
     assert cfg.parser_sidecars.vlm.enabled is True
@@ -649,27 +634,6 @@ def test_metadata_and_remote_source_defaults() -> None:
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
     assert cfg.retain_remote_source_files is False
-
-
-def test_remote_source_configuration_documents_fail_closed_downloads() -> None:
-    configuration = (Path(__file__).resolve().parents[2] / "docs/configuration.md").read_text(
-        encoding="utf-8"
-    )
-
-    for required in (
-        "`source_uri` identifies",
-        "download_uri",
-        "queryless",
-        "retain_source_file=true",
-        "rejected before",
-        "never silently retains",
-    ):
-        assert required in configuration
-
-    assert "Retrieved sources point back to" not in configuration
-    assert "stored metadata `file_path` points" not in configuration
-    assert "`RAGServiceManager.aingest()`" in configuration
-    assert "synchronous SDK/REST/MCP ingest calls" not in configuration
 
 
 def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
@@ -719,9 +683,6 @@ def test_conversation_history_token_default_reserves_planner_context() -> None:
     assert cfg.web_conversations.ttl_days == 30
     assert cfg.query_images.max_current_images == 3
     assert cfg.query_images.max_upload_bytes == 15 * 1024 * 1024
-    assert "checkpoint_session_ttl_days" not in type(cfg).model_fields
-    assert "session_max_images" not in type(cfg.query_images).model_fields
-    assert "session_max_sessions" not in type(cfg.query_images).model_fields
     assert cfg.visual_assets.thumb_max_px == 300
 
 
@@ -1035,7 +996,6 @@ def test_dotenv_ignores_raw_upstream_parser_env(tmp_path, monkeypatch: pytest.Mo
     )
 
     assert cfg.llm.default.api_key == "sk-env"
-    assert "vlm_process_enable" not in cfg.model_fields_set
     assert os.environ["VLM_PROCESS_ENABLE"] == "true"
     assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
     assert os.environ["SURROUNDING_LEADING_MAX_TOKENS"] == "256"

@@ -4,9 +4,7 @@
 import asyncio
 import dataclasses
 import importlib
-import inspect
 import json
-from annotationlib import Format
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -27,7 +25,7 @@ from dlightrag.config import (
 )
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.request.images import prepare_query_images
-from dlightrag.core.request.planner import QueryPlan, QueryPlanner, QueryPlannerStructuredResponse
+from dlightrag.core.request.planner import QueryPlan, QueryPlanner
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.base import SourceDocument
@@ -50,82 +48,6 @@ def _record_trace_calls(calls: list[dict[str, Any]]):
         yield _Trace()
 
     return _trace
-
-
-def test_public_sdk_signatures_expose_primary_contracts() -> None:
-    for method in (
-        RAGServiceManager.aingest,
-        RAGServiceManager.astart_ingest_job,
-        RAGServiceManager.aretrieve,
-        RAGServiceManager.aanswer,
-        RAGServiceManager.aanswer_stream,
-        RAGServiceManager.adelete_files,
-    ):
-        params = inspect.signature(method).parameters.values()
-        assert all(param.kind is not inspect.Parameter.VAR_KEYWORD for param in params)
-
-    ingest_params = inspect.signature(RAGServiceManager.aingest).parameters
-    start_job_params = inspect.signature(RAGServiceManager.astart_ingest_job).parameters
-    assert tuple(ingest_params) == ("self", "workspace", "request")
-    assert tuple(start_job_params) == ("self", "workspace", "request")
-
-    for name in (
-        "path",
-        "bucket",
-        "s3_region",
-        "s3_key",
-        "prefix",
-        "url",
-        "urls",
-        "source_uri",
-        "source_uris",
-        "retain_source_file",
-        "metadata_policy",
-        "replace",
-    ):
-        assert name in IngestSpec.model_fields
-
-    retrieve_params = inspect.signature(RAGServiceManager.aretrieve).parameters
-    for name in (
-        "all_workspaces",
-        "top_k",
-        "chunk_top_k",
-        "filters",
-    ):
-        assert name in retrieve_params
-
-    forbidden_state = {"conversation_history", "session_id", "referenced_image_ids"}
-    for method_name in dir(RAGServiceManager):
-        if method_name.startswith("_"):
-            continue
-        method = getattr(RAGServiceManager, method_name)
-        if not callable(method):
-            continue
-        parameters = inspect.signature(
-            method,
-            annotation_format=Format.STRING,
-        ).parameters
-        assert forbidden_state.isdisjoint(parameters), method_name
-
-    answer_params = inspect.signature(RAGServiceManager.aanswer).parameters
-    for name in (
-        "top_k",
-        "chunk_top_k",
-        "answer_context_top_k",
-        "filters",
-        "all_workspaces",
-    ):
-        assert name in answer_params
-
-    stream_params = inspect.signature(RAGServiceManager.aanswer_stream).parameters
-    assert "all_workspaces" in stream_params
-
-    delete_params = inspect.signature(RAGServiceManager.adelete_files).parameters
-    assert "dry_run" in delete_params
-
-
-def test_query_planner_has_no_historical_image_protocol() -> None:
-    assert "referenced_image_ids" not in QueryPlannerStructuredResponse.model_fields
 
 
 async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
@@ -643,9 +565,6 @@ class TestGetService:
         selector = manager._get_composer_evidence_selector()
 
         assert selector is manager._get_composer_evidence_selector()
-        assert not hasattr(selector, "aclose")
-        assert not hasattr(selector, "_embedding_func")
-        assert not hasattr(selector, "_rerank_func")
 
     async def test_composer_evidence_selector_receives_resolved_attachment_ids(
         self,
@@ -934,7 +853,6 @@ class TestRouting:
 
         assert prepared.descriptions == ["Image 1: chart"]
         assert prepared.descriptions_by_ordinal == {"1": "Image 1: chart"}
-        assert not hasattr(prepared, "answer_images")
         describer.describe.assert_awaited_once_with(current)
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)

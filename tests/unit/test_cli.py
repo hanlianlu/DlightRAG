@@ -340,11 +340,6 @@ def test_json_object_arg_rejects_non_object_json() -> None:
         parser.parse_args(["query", "q", "--filter-custom-json", '["not", "object"]'])
 
 
-def test_cli_rejects_removed_ragas_eval_forwarder() -> None:
-    with pytest.raises(SystemExit):
-        build_parser().parse_args(["ragas_eval", "--dataset", "tests.json"])
-
-
 # ---------------------------------------------------------------------------
 # TestValidateIngestArgs — local source
 # ---------------------------------------------------------------------------

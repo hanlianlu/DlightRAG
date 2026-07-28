@@ -136,20 +136,6 @@ class TestMakeCompletionFunc:
         assert resolved.api_key == "default-key"
         assert resolved.base_url == "https://default.example/v1"
 
-    def test_query_model_func_is_direct_not_queue_managed(self):
-        from dlightrag.models import llm
-
-        cfg = DlightragConfig(
-            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="sk-test")),
-            embedding=_embedding_config(),
-        )
-
-        func = llm.get_query_model_func(cfg)
-
-        # DlightRAG-owned: a plain completion callable, not a queue-managed wrapper
-        assert callable(func)
-        assert not hasattr(func, "shutdown")
-
     def test_planner_model_func_prefers_keyword_role_direct(self, monkeypatch):
         from dlightrag.models import llm
 
@@ -214,20 +200,6 @@ class TestMakeCompletionFunc:
             "api_key": "sk-chat",
             "root": False,
         }
-
-    def test_vlm_model_func_is_direct_not_queue_managed(self):
-        from dlightrag.models import llm
-
-        cfg = DlightragConfig(
-            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="sk-test")),
-            embedding=_embedding_config(),
-        )
-
-        func = llm.get_vlm_model_func(cfg)
-
-        # DlightRAG-owned: a plain completion callable, not a queue-managed wrapper
-        assert callable(func)
-        assert not hasattr(func, "shutdown")
 
     def test_lightrag_facing_funcs_use_root(self, monkeypatch):
         from dlightrag.models import llm

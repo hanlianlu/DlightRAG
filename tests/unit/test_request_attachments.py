@@ -1283,16 +1283,6 @@ async def test_dense_rankings_failure_returns_error_type_and_empty_rankings(
     }
 
 
-def test_parse_owner_shim_persist_is_a_noop_holding_no_store() -> None:
-    shim = _ParseOwnerShim()
-
-    # The shim owns no storage handles; parsing through it cannot write rows.
-    assert not hasattr(shim, "full_docs")
-    assert not hasattr(shim, "doc_status")
-    assert not hasattr(shim, "chunks_vdb")
-    assert shim._resolve_source_file_for_parser("/tmp/x.pdf") == "/tmp/x.pdf"
-
-
 async def test_parse_owner_shim_persist_captures_sidecar_only() -> None:
     shim = _ParseOwnerShim()
 

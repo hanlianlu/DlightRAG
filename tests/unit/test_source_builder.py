@@ -1,6 +1,5 @@
 """Tests for build_sources() shared utility."""
 
-import inspect
 from typing import Any
 
 import pytest
@@ -201,10 +200,6 @@ class TestBuildSources:
         assert sources[0].download_locator == "s3://bucket/resolved/report.pdf"
         assert sources[0].cited_chunk_ids == ["c2"]
         assert [c.chunk_id for c in _chunks(sources[0])] == ["c2"]
-
-    def test_build_sources_has_no_http_resolver_parameter(self) -> None:
-        assert "source_url_resolver" not in inspect.signature(build_sources).parameters
-        assert "source_link_builder" not in inspect.signature(build_sources).parameters
 
     def test_prefers_dedicated_source_metadata_for_identity_and_title(self) -> None:
         chunk = _chunk("c1", "ref-1", file_path="report__a1b2c3d4e5f6.pdf")

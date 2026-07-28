@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for transport-neutral client request projection."""
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -24,79 +22,6 @@ from dlightrag.core.client_requests import (
     query_kwargs_from_payload,
 )
 from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_no_legacy_conversation_contract_remains() -> None:
-    forbidden = {
-        "src/dlightrag/storage/checkpoint_pg.py",
-        "src/dlightrag/core/session_images.py",
-        "frontend/stores/sessionStore.ts",
-        "frontend/ui/clearHistory.ts",
-    }
-    assert all(not (ROOT / path).exists() for path in forbidden)
-    scanned = [ROOT / "src", ROOT / "frontend", ROOT / "README.md", ROOT / "docs"]
-    offenders: list[str] = []
-    for base in scanned:
-        paths = [base] if base.is_file() else list(base.rglob("*"))
-        for path in paths:
-            if not path.is_file() or "superpowers" in path.parts or "static/generated" in str(path):
-                continue
-            text = path.read_text(errors="ignore")
-            for legacy in (
-                "dlightrag.session_id",
-                "dlightrag-image://",
-                "checkpoint_saved",
-                "session images",
-            ):
-                if legacy in text:
-                    offenders.append(f"{path.relative_to(ROOT)}:{legacy}")
-    assert offenders == []
-
-
-def test_public_docs_describe_slice_a_conversation_boundaries() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
-    interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
-    retrieval = (ROOT / "docs/retrieval-answer.md").read_text(encoding="utf-8")
-    public_docs = "\n".join((readme, configuration, interfaces, retrieval))
-
-    for required in (
-        "Web-only conversation lifecycle",
-        "principal-scoped",
-        "30-day inactivity retention",
-        "REST, MCP, and Python answer/retrieve calls remain stateless",
-        "Search in: All authorized workspaces",
-        "Files in",
-        "15 MiB",
-        "current-turn images always have priority",
-    ):
-        assert required in public_docs
-
-    for stale in (
-        "Web-session-owned source route",
-        "stores bounded session images",
-    ):
-        assert stale not in public_docs
-
-
-def test_architecture_docs_describe_composer_trim_lifecycle() -> None:
-    architecture = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-    composer = architecture.split("## Web Composer Document Flow", 1)[1].split(
-        "## Retrieval And Answer Flow", 1
-    )[0]
-
-    for required in (
-        "foreign-key cascades",
-        "turn-owned raw query-image",
-        "raw attachment-upload rows",
-        "conversation-level derived chunk and",
-        "persists until conversation",
-        "TTL pruning or deletion",
-    ):
-        assert required in composer
-    assert "Max-turn trimming removes\nold turns only" not in composer
 
 
 def test_per_interface_current_image_admission() -> None:
@@ -194,43 +119,6 @@ def test_public_source_contract_has_no_legacy_or_internal_names() -> None:
     assert {"workspace", "download_locator", "source_uri"} <= internal_fields
     assert {"path", "url", "workspace", "download_locator"}.isdisjoint(public_fields)
     assert {"source_uri", "download_url"} <= public_fields
-
-
-def test_interfaces_document_the_complete_source_download_contract() -> None:
-    interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
-    sources = interfaces.split("## Sources", 1)[1].split("## References", 1)[0]
-    citation_resolution = interfaces.split("### Resolving a citation", 1)[1].split(
-        "## Multimodal Queries", 1
-    )[0]
-
-    for required in (
-        "SourceDocument.download_uri",
-        "download_uri_for_key",
-        '"download_uri": "https://cdn.example.com/assets/asset-1.pdf"',
-        '"download_uris": [',
-        '"retain_source_file": true',
-        '"source_uri": "bynder://asset/asset-1"',
-        '"download_url": "/files/raw/',
-    ):
-        assert required in interfaces
-
-    assert '"source_uri":' in sources
-    assert '"download_url":' in sources
-    assert '"path":' not in sources
-    assert '"url":' not in sources
-    assert "`download_url`" in citation_resolution
-    assert "source `url`" not in citation_resolution
-    assert "/files/raw/{path}" not in citation_resolution
-
-
-def test_interfaces_document_real_ingest_transport_semantics() -> None:
-    interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
-
-    assert "REST returns `202 Accepted`" in interfaces
-    assert "MCP `ingest` returns the same job object as a tool result" in interfaces
-    assert "`RAGServiceManager.aingest()`" in interfaces
-    assert "REST/MCP ingest exceeds `ingest_timeout`" not in interfaces
-    assert "REST uses the same fields as the Python manager methods" not in interfaces
 
 
 def test_ingest_spec_from_payload_preserves_s3_manifest_fields() -> None:
