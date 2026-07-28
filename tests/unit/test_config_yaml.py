@@ -105,12 +105,6 @@ class TestYamlConfigLoading:
 
         assert config["embedding"]["input_modality"] == "auto"
 
-    def test_repo_config_marks_local_unsloth_roles_keyless(self) -> None:
-        config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-
-        assert config["llm"]["roles"]["query"]["api_key"] is None
-        assert config["llm"]["roles"]["vlm"]["api_key"] is None
-
     def test_repo_config_documents_web_query_image_admission_policy(self) -> None:
         config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
 

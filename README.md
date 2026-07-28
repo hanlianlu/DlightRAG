@@ -104,16 +104,19 @@ DLIGHTRAG_LLM__DEFAULT__API_KEY=...
 DLIGHTRAG_EMBEDDING__API_KEY=...
 DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=...
 DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=...
+DLIGHTRAG_LLM__ROLES__QUERY__API_KEY=...
+DLIGHTRAG_LLM__ROLES__VLM__API_KEY=...
 DLIGHTRAG_RERANK__API_KEY=...
 ```
 
 These match the checked-in `config.yaml`, which configures DeepSeek extract and
 keyword roles, host-local Unsloth query and VLM roles, plus Voyage reranking.
-The Unsloth roles are explicitly unauthenticated with `api_key: null`, so they
-need no `.env` entries. Role overrides are atomic: an omitted or blank key falls
-back to the complete default model configuration instead of combining its
-endpoint with the default key. If you remove keyed role blocks or switch rerank
-back to `chat_llm_reranker`, the corresponding role/rerank keys can be omitted.
+The Unsloth roles use their own query/VLM API key entries. Role overrides are
+atomic: an omitted or blank key falls back to the complete default model
+configuration instead of combining its endpoint with the default key. If you
+remove role-specific model blocks or switch rerank back to `chat_llm_reranker`,
+the corresponding role/rerank keys can be omitted. Reserve `api_key: null` for
+a genuinely unauthenticated endpoint.
 
 Normal behavior lives in [config.yaml](config.yaml): model names, parser
 sidecar settings, metadata schema, retrieval breadth, auth mode, Langfuse

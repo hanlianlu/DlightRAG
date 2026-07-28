@@ -59,7 +59,6 @@ llm:
     query:
       provider: openai
       model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
-      api_key: null # Explicitly unauthenticated host-local Unsloth endpoint
       base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
       structured_output: json_object
       temperature: 0.4
@@ -69,7 +68,6 @@ llm:
     vlm:
       provider: openai
       model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
-      api_key: null # Explicitly unauthenticated host-local Unsloth endpoint
       base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
       structured_output: json_object
       temperature: 0.0
