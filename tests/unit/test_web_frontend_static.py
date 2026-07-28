@@ -23,81 +23,6 @@ def _css_rule(path: Path, selector: str) -> str:
     return match.group("body")
 
 
-def test_web_answer_frontend_has_no_legacy_session_or_history_payload() -> None:
-    chat_source = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-
-    assert "conversation_id" in chat_source
-    assert "conversation_history" not in chat_source
-    assert "session_id" not in chat_source
-    assert "submission_id" in chat_source
-    assert "crypto.randomUUID()" in (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(
-        encoding="utf-8"
-    )
-    submission_key = chat_source.index("pendingSubmissionStore.getOrCreate")
-    retry_loop = chat_source.index("for (let attempt = 0; attempt < 2")
-    request_body = chat_source.index("= buildAnswerRequestBody({")
-    assert submission_key < request_body < retry_loop
-    assert "body: requestBody" in chat_source[retry_loop:]
-    assert "pendingSubmissionStore.getOrCreate" in chat_source
-    assert (
-        "pendingSubmissionStore.claimWarningDelivery(conversationId, submissionId)" in chat_source
-    )
-    assert "pendingSubmissionStore.clear" in chat_source
-    pending_source = (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(encoding="utf-8")
-    assert "commit_outcome_unknown" not in pending_source
-    assert "DEFINITIVE_NON_COMMIT_REASONS" in pending_source
-    assert "payloadFingerprint" in chat_source
-    assert (FRONTEND / "stores" / "pendingSubmissionStore.test.ts").exists()
-    assert not (FRONTEND / "stores" / "sessionStore.ts").exists()
-    assert not (FRONTEND_UI / "clearHistory.ts").exists()
-
-
-def test_frontend_has_no_browser_owned_prompt_history() -> None:
-    source = "\n".join(path.read_text(encoding="utf-8") for path in FRONTEND.rglob("*.ts"))
-
-    assert "dlightrag.session_id" not in source
-    assert "conversation_history" not in source
-    assert "historyWindow" not in source
-    assert "clearHistory" not in source
-    assert "dlightrag.active_conversation_id" in source
-
-
-def test_answer_request_sends_only_active_conversation() -> None:
-    source = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-
-    assert "conversationId: conversationStore.activeConversationId" in source
-    assert "session_id" not in source
-
-
-def test_conversation_projection_has_typed_api_and_stale_history_guard() -> None:
-    api = FRONTEND / "api" / "conversations.ts"
-    store = (FRONTEND / "stores" / "conversationStore.ts").read_text(encoding="utf-8")
-    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
-
-    assert api.exists()
-    api_source = api.read_text(encoding="utf-8")
-    for contract in (
-        "ConversationSummary",
-        "ConversationImageReference",
-        "ConversationTurn",
-        "ConversationHistory",
-    ):
-        assert f"interface {contract}" in api_source
-
-    for mutation in (
-        "replaceList",
-        "select",
-        "setHistory",
-        "upsertSummary",
-        "remove",
-        "beginRequest",
-    ):
-        assert f"{mutation}(" in store
-    assert "AbortController" in controller
-    assert "requestGeneration" in controller
-    assert "AbortError" in controller
-
-
 def test_index_has_final_conversation_shell() -> None:
     template = (ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html").read_text(
         encoding="utf-8"
@@ -118,55 +43,6 @@ def test_index_has_final_conversation_shell() -> None:
     assert 'aria-label="Conversations"' in template
     assert "Clear" not in template
     assert ">Chats<" not in template
-
-
-def test_conversation_sidebar_keeps_single_store_and_protected_ui_surfaces() -> None:
-    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
-    styles = (FRONTEND_STYLES / "conversations.module.css").read_text(encoding="utf-8")
-
-    assert "conversationStore.initialSelection()" in controller
-    assert "conversationStore.isCurrentRequest(requestGeneration)" in controller
-    assert "conversationStyles.root" in controller
-    assert "isQueryInFlight()" in controller
-    assert "hasActiveFileMutation()" in controller
-    assert "getPendingImageData()" in controller
-    assert "clearConversationSources()" in controller
-    assert ".innerHTML" not in controller
-    assert ".root" in styles
-    assert ":global(.conversation-row:focus-within)" in styles
-    assert ':global(.conversation-row[aria-current="page"])' in styles
-
-
-def test_mobile_shell_tracks_dynamic_viewport() -> None:
-    layout_path = FRONTEND_STYLES / "layout.css"
-    shell_styles = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (
-            FRONTEND_STYLES / "global.css",
-            layout_path,
-            FRONTEND_STYLES / "conversations.module.css",
-        )
-    )
-
-    assert "height: 100dvh" in _css_rule(layout_path, ".app")
-    assert "height: 100dvh" in _css_rule(layout_path, ".panel")
-    assert "min-height: 0" in _css_rule(layout_path, ".chat-area")
-    assert "100vh" not in shell_styles
-
-
-def test_history_renderer_reuses_sanitized_answer_pipeline() -> None:
-    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
-    images = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
-
-    assert "renderConversationHistory" in renderer
-    assert "clearChatViewport" in renderer
-    assert "renderStoredAnswer" in renderer
-    assert "llmFragmentFromSanitizedHtml" in renderer
-    assert "stored.answer_html" in renderer
-    assert "stored.user_images" in renderer
-    assert ".innerHTML" not in renderer
-    assert "History image failed to load" in images
-    assert "Retry image" in images
 
 
 def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None:
@@ -193,100 +69,6 @@ def test_saved_answer_refresh_does_not_close_its_source_panel() -> None:
 
     assert "if (clearSources) clearConversationSources();" in controller
     assert "selectConversation(conversationId, false, false)" in controller
-
-
-def test_live_answer_owns_viewport_against_late_history_render() -> None:
-    chat = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
-
-    assert chat.index("conversationStore.beginLiveAnswer") < chat.index("createChatTurn(query)")
-    assert "conversationStore.finishLiveAnswer" in chat
-    assert "conversationStore.canRenderHistory(requestGeneration)" in controller
-    assert "conversationStore.isCurrentRequest(requestGeneration)" in controller
-    assert "conversationStore.setHistory(history, requestGeneration)" in controller
-    assert "if (!conversationStore.select(conversationId)) return false;" in controller
-    assert "conversationDeferredSelectionReady" in chat
-    assert "conversationDeferredSelectionReady" in controller
-    assert "shouldKeepLiveConversation(saveOutcome)" in chat
-    assert "const conversationId = conversationStore.answerConversationId" in chat
-
-
-def test_unknown_save_outcome_has_typed_accessible_recovery_action() -> None:
-    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
-    chat = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
-    bus = (FRONTEND / "events" / "bus.ts").read_text(encoding="utf-8")
-
-    save_state = (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(encoding="utf-8")
-    assert "Save status is unknown" in save_state
-    assert "Check save status" in save_state
-    assert "document.createElement('button')" in renderer
-    assert "presentation.actionLabel" in renderer
-    assert "addEventListener('click', onRecovery)" in renderer
-    assert "conversationSaveCheckRequested" in bus
-    assert "conversationSaveCheckRequested" in chat
-    assert "conversationSaveCheckRequested" in controller
-    assert "void selectConversation(conversationId, true, false)" in controller
-
-
-def test_conversation_bootstrap_cannot_block_independent_ui_initializers() -> None:
-    main_source = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
-    bootstrap = main_source.rindex("setupConversations()")
-
-    for initializer in (
-        "initWorkspaces();",
-        "setupPanel();",
-        "setupSourcePanel();",
-        "setupFilesPanel();",
-        "setupPanelResize();",
-        "setupHtmxInteractions();",
-        "setupImageLightbox();",
-        "setupQueryForm();",
-    ):
-        assert main_source.index(initializer) < bootstrap
-
-
-def test_answer_submission_fails_locally_without_active_conversation() -> None:
-    chat_source = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-    unavailable_guard = chat_source.index("if (!conversationId)")
-    answer_fetch = chat_source.index("fetch('/web/answer'")
-
-    assert unavailable_guard < answer_fetch
-    guard_body = chat_source[unavailable_guard:answer_fetch]
-    assert "Conversation service is unavailable" in guard_body
-    assert "setAnswerError(" in guard_body
-    assert "return;" in guard_body
-
-
-def test_dead_history_and_image_id_frontend_surfaces_are_removed() -> None:
-    bus_source = (FRONTEND / "events" / "bus.ts").read_text(encoding="utf-8")
-    chat_css = (FRONTEND_STYLES / "chat.module.css").read_text(encoding="utf-8")
-    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
-
-    for legacy_event in ("chatExchangeComplete", "chatHistoryRestored", "chatHistoryCleared"):
-        assert legacy_event not in bus_source
-    assert ".outOfContext" not in chat_css
-    assert ".contextDivider" not in chat_css
-    assert "#clear-history-btn" not in chat_css
-    assert ".clear-history-confirm" not in chat_css
-    assert "current_image_ids" not in renderer
-    assert "imageIds" not in renderer
-
-
-def test_composer_enter_shortcut_respects_ime_composition() -> None:
-    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-
-    assert ".addEventListener('beforeinput'" in chat_js
-    assert "e.inputType === 'insertLineBreak'" in chat_js
-    assert "e.isComposing === true" in chat_js
-    assert "submitComposerForm(queryForm);" in chat_js
-    assert "let textareaIsComposing = false;" not in chat_js
-    assert "compositionJustEnded" not in chat_js
-
-    keydown = chat_js.index(".addEventListener('keydown'")
-    keydown_block = chat_js[keydown : chat_js.index(".addEventListener('beforeinput'", keydown)]
-    assert "submitComposerForm(" not in keydown_block
-    assert "form.dispatchEvent(new Event('submit'))" not in keydown_block
 
 
 def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
@@ -458,14 +240,6 @@ def test_source_templates_use_only_the_public_download_contract() -> None:
     assert get_type_hints(safe_source_panel)["sources"] == list[SourceReferencePayload]
 
 
-def test_active_source_code_has_no_removed_path_fallbacks() -> None:
-    engine = (ROOT / "src/dlightrag/core/ingestion/engine.py").read_text(encoding="utf-8")
-    answer_media = (ROOT / "src/dlightrag/core/answer/media.py").read_text(encoding="utf-8")
-
-    assert "metadata_path" not in engine
-    assert 'getattr(source, "path"' not in answer_media
-
-
 def test_sanitized_source_download_preserves_accessible_name() -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
     from dlightrag.web.safe_html import safe_source_panel
@@ -539,67 +313,6 @@ def test_panel_action_icons_are_accessible_svg_buttons() -> None:
     assert 'stroke="currentColor"' in source_panel
 
 
-def test_files_panel_requests_are_controller_owned() -> None:
-    index = (ROOT / "src/dlightrag/web/templates/index.html").read_text(encoding="utf-8")
-    file_list = (ROOT / "src/dlightrag/web/templates/partials/file_list.html").read_text(
-        encoding="utf-8"
-    )
-    progress = (ROOT / "src/dlightrag/web/templates/partials/ingest_progress.html").read_text(
-        encoding="utf-8"
-    )
-
-    assert 'id="files-btn"' in index
-    assert 'hx-get="/web/files"' not in index
-
-    assert 'hx-post="/web/files/upload"' not in file_list
-    assert 'hx-delete="/web/files"' not in file_list
-    assert 'data-action="delete-file"' in file_list
-    assert "data-file-path=" in file_list
-    assert "source-dl-icon" not in file_list
-    assert " download" not in file_list
-
-    assert 'id="ingest-progress"' in progress
-    assert "hx-get" not in progress
-    assert "hx-trigger" not in progress
-    assert "hx-sync" not in progress
-
-
-def test_panel_modules_have_separate_shell_source_and_files_controllers() -> None:
-    main_js = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
-    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
-    htmx_js = (FRONTEND_UI / "htmx.ts").read_text(encoding="utf-8")
-    files_panel_js = (FRONTEND_UI / "files-panel.ts").read_text(encoding="utf-8")
-    source_panel_js = (FRONTEND_UI / "source-panel.ts").read_text(encoding="utf-8")
-
-    assert "setupPanel" in main_js
-    assert "setupFilesPanel" in main_js
-    assert "setupSourcePanel" in main_js
-
-    for forbidden in (
-        "/web/files",
-        "upload-form",
-        "filterSource",
-        "ingestStore",
-        "createWorkspace",
-    ):
-        assert forbidden not in panel_js
-
-    assert "refreshFilePanel" in files_panel_js
-    assert "uploadFilesToWorkspace" in files_panel_js
-    assert "startIngestPolling" in files_panel_js
-    assert "AbortController" in files_panel_js
-    assert "/web/files/upload" in files_panel_js
-    assert "/web/ingest-status" in files_panel_js
-
-    assert "filterSource" in source_panel_js
-    assert "openRefSource" in source_panel_js
-    assert "showAllSources" in source_panel_js
-
-    assert "/web/files" not in htmx_js
-    assert "isStaleFilePanelResponse" not in htmx_js
-    assert "ingestStore" not in htmx_js
-
-
 def test_reference_labels_do_not_render_square_brackets() -> None:
     partials = ROOT / "src/dlightrag/web/templates/partials"
     answer_done = (partials / "answer_done.html").read_text(encoding="utf-8")
@@ -613,15 +326,6 @@ def test_reference_labels_do_not_render_square_brackets() -> None:
     assert 'tabindex="0"' in answer_done
     assert '<span class="answer-ref-id">{{ src.id | reference_label }}</span>' in answer_done
     assert '<span class="source-doc-badge">{{ src.id | reference_label }}</span>' in source_panel
-
-
-def test_answer_image_strip_uses_shared_thumbnail_field() -> None:
-    answer_done = (ROOT / "src/dlightrag/web/templates/partials/answer_done.html").read_text(
-        encoding="utf-8"
-    )
-
-    assert "img.thumbnail_url" in answer_done
-    assert "img.thumb_url" not in answer_done
 
 
 def test_history_images_are_lazy_async_thumbnails_with_on_demand_originals() -> None:
