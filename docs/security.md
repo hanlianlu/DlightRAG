@@ -100,8 +100,10 @@ MCP endpoint:
 
 ```yaml
 auth_mode: jwt
+jwt_algorithm: RS256
+jwt_jwks_url: https://auth.example.com/.well-known/jwks.json
 jwt_issuer: https://auth.example.com
-jwt_audience: https://rag.example.com/mcp
+jwt_audience: api://dlightrag-rest
 mcp_transport: streamable-http
 mcp_resource_server_url: https://rag.example.com/mcp
 ```
@@ -184,7 +186,7 @@ request carries a bearer JWT that the single `auth_mode: jwt` can verify.
 | Surface | Port · path | Caller | Front door |
 |---|---|---|---|
 | Web UI | 8100 · `/web` | Browsers | oauth2-proxy injects `Authorization: Bearer` |
-| REST API | 8100 · `/api` | Programmatic | none -- client sends its own bearer |
+| REST API | 8100 · `/retrieve`, `/answer`, … | Programmatic | none -- client sends its own bearer |
 | MCP | 8101 · `/mcp` | Agents | none -- client sends its own bearer |
 
 Only browsers need an interactive redirect, so oauth2-proxy fronts `/web` alone;
@@ -214,13 +216,13 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: dlightrag-api            # API + MCP -- DlightRAG verifies the bearer itself
+  name: dlightrag-api            # REST + MCP -- DlightRAG verifies the bearer itself
 spec:
   rules:
     - host: rag.example.com
       http:
         paths:
-          - path: /api
+          - path: /
             pathType: Prefix
             backend:
               service: { name: dlightrag, port: { number: 8100 } }
@@ -230,14 +232,17 @@ spec:
               service: { name: dlightrag-mcp, port: { number: 8101 } }
 ```
 
-If oauth2-proxy forwards a token whose `aud` differs from the API/MCP clients',
-list both so one `auth_mode: jwt` accepts each:
+If oauth2-proxy forwards a token whose `aud` differs from direct REST clients,
+list both REST/Web audiences in `jwt_audience`:
 
 ```yaml
 jwt_audience:
-  - api://dlightrag             # direct API / MCP clients
+  - api://dlightrag             # direct REST clients
   - <oauth2-proxy-client-id>    # browser token forwarded by the proxy
 ```
+
+Native MCP OAuth remains separate: its token audience must exactly equal
+`mcp_resource_server_url`, regardless of the broader REST/Web audience list.
 
 ## Access Control
 

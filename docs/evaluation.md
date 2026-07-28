@@ -142,7 +142,6 @@ uv run python scripts/ragas_eval.py --api https://dlightrag.example.com --api-ke
 
 ```bash
 # Retrieval breadth sent to DlightRAG /answer as top_k.
-# chunk_top_k is derived as EVAL_QUERY_TOP_K * 3.
 export EVAL_QUERY_TOP_K=10
 
 # How many RAGAS evaluations run in parallel (RAGAS is LLM-heavy)

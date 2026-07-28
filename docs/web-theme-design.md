@@ -1,11 +1,11 @@
 # Web Theme Design
 
-**Status:** Approved for implementation  
+**Status:** Implemented
 **Date:** 2026-07-23
 
 ## Purpose
 
-Add a polished `System / Light / Dark` appearance preference to the DlightRAG Web UI. Keep the existing dark theme's identity, add the approved warm-neutral **Mineral Light** palette, and make the correct theme visible on the first painted frame.
+The DlightRAG Web UI provides a polished `System / Light / Dark` appearance preference. It keeps the dark theme's identity, adds the warm-neutral **Mineral Light** palette, and makes the correct theme visible on the first painted frame.
 
 This work is limited to appearance. It does not add internationalization, Mermaid, custom palettes, account-level preferences, or server-side preference storage.
 
@@ -20,15 +20,12 @@ This work is limited to appearance. It does not add internationalization, Mermai
 - The menu uses Lucide `Monitor`, `Sun`, and `Moon` icons for `System`, `Light`, and `Dark`.
 - The existing dark appearance remains visually stable except for correcting code-highlight contrast.
 
-## Engineering Constraints
+## Architecture Constraints
 
 - Keep the implementation small and dependency-free. Do not add a theme framework, state-management layer, or icon runtime for this feature.
 - Prefer semantic CSS tokens over component-specific light-mode overrides.
 - Reuse the existing popover dismissal and keyboard-navigation infrastructure.
 - Avoid unrelated layout, typography, or component refactors.
-- Direct frontend dependencies must use current stable release floors with caret ranges for compatible onward updates; major upgrades must stay compatible with the CI Node baseline and pass frontend gates.
-- Tests are evidence and regression records, not sources of product requirements. Update or remove tests that encode obsolete, overly granular, or low-value behavior instead of preserving that behavior in production code.
-- The final implementation must be developed in an isolated worktree, rebuilt, validated, merged to `main`, committed and pushed, then leave no temporary worktree or branch behind.
 
 ## State Model
 
@@ -91,7 +88,9 @@ Interaction behavior:
 - outside pointer click closes while preserving the clicked target's natural focus;
 - a choice applies immediately without reload or HTMX activity.
 
-The existing generic popover dismissal helper remains the lifecycle owner. The current listbox arrow-navigation helper may be renamed and generalized to a role-selector-based roving helper, with the workspace selector updated to the new name. No compatibility wrapper should remain if all callers migrate together.
+The generic popover dismissal helper owns the menu lifecycle. The shared
+`installRovingArrowNavigation` helper accepts a role selector and provides the
+same keyboard model to theme, workspace, and file menus.
 
 Lucide SVG geometry is embedded statically with `currentColor`, a 24px viewBox, 17px rendered size, round caps/joins, and a quieter DlightRAG stroke. The repository NOTICE records the applicable Lucide license; no package dependency is added.
 
@@ -112,9 +111,11 @@ Core palette:
 | Primary accent | `#d2b661` | `#806719` |
 | Danger | `#f87171` | `#b42318` |
 
-The implementation will define the complete light values needed by existing semantic roles, including hover, active, border, source surface, overlays, selection, shadow, and on-accent text.
+The token layer defines the complete light values needed by existing semantic roles, including hover, active, border, source surface, overlays, selection, shadow, and on-accent text.
 
-Components currently referencing `gold-100/200/...` directly will move to purpose-based aliases such as action accent, strong accent, muted accent, and on-accent text. Component-level raw colors that encode theme behavior will move to semantic tokens. Primitive palette values remain allowed inside the token file.
+Components consume purpose-based aliases such as action accent, strong accent,
+muted accent, and on-accent text. Primitive palette values remain internal to
+the token file.
 
 This is a color-boundary cleanup, not a general CSS rewrite. Existing spacing, typography, geometry, layout, and motion remain unchanged.
 
@@ -129,7 +130,8 @@ The checked-in `pygments.css` contains two generated, root-scoped palettes:
 
 Generated selectors are scoped to the effective color mode. Pygments-owned container backgrounds are removed so code blocks continue to use DlightRAG surface tokens. Two low-contrast upstream foregrounds are replaced with fixed accessible values. The file includes its deterministic regeneration command.
 
-This also fixes the current mismatch where default light-syntax colors are displayed on a dark code background.
+This prevents light-syntax colors from being displayed on a dark code
+background before or after an appearance change.
 
 ### MathJax
 
@@ -148,53 +150,3 @@ Lightbox scrims remain dark in both modes because their purpose is image isolati
 - System listeners are detached when an explicit preference is selected.
 - Runtime system changes update only the effective mode, not the stored preference.
 - HTMX partial replacement cannot reset the theme because the state lives on `<html>` outside all swap targets.
-
-## Verification Strategy
-
-Verification scales with behavior and risk. It does not preserve obsolete implementation details.
-
-### Focused unit evidence
-
-- valid, missing, and invalid preference parsing;
-- preference plus system state resolving to effective mode;
-- small pure helpers only, without a browser mock framework.
-
-### Browser behavior evidence
-
-Playwright verifies:
-
-- first visit follows simulated system light and dark preferences;
-- explicit selection overrides the system and persists across reload;
-- System responds to a runtime media-query change;
-- local storage failure still permits in-page switching;
-- menu keyboard navigation and radio semantics;
-- Escape dismissal restores trigger focus, while outside pointer dismissal preserves clicked-target focus;
-- theme survives representative HTMX partial updates;
-- desktop and mobile geometry remain stable.
-
-### Visual and accessibility evidence
-
-Inspect screenshots for both effective modes across the chat, Files, Sources, code, tables, MathJax, dialogs, toast, and lightbox surfaces. Check computed contrast for primary text, muted text, interactive gold, and danger states against their actual backgrounds. Verify the first screenshot frame already has the intended theme.
-
-### Repository gates
-
-- frontend unit tests, typecheck, stylelint, and Vite production build;
-- focused Python/static and Playwright tests;
-- repository `make ci` when feasible;
-- production image rebuild and local Web smoke test before completion.
-
-If an existing test conflicts solely because it asserts a superseded selector, bundle name, raw color, or implementation detail, revise or delete that assertion and retain only behaviorally meaningful coverage.
-
-## Completion State
-
-The feature is complete when:
-
-- all three preferences work with no incorrect first frame;
-- Mineral Light and the existing Dark theme are coherent across all owned surfaces;
-- syntax highlighting is readable in both modes;
-- the menu is keyboard and screen-reader operable;
-- no new runtime dependency or server-side preference path exists;
-- final build and CI evidence pass;
-- the rebuilt application is available for local inspection;
-- implementation is merged, committed, and pushed on `main`;
-- temporary worktree and feature branch are removed.

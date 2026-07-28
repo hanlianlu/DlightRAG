@@ -104,13 +104,18 @@ DLIGHTRAG_LLM__DEFAULT__API_KEY=...
 DLIGHTRAG_EMBEDDING__API_KEY=...
 DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=...
 DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=...
+DLIGHTRAG_LLM__ROLES__QUERY__API_KEY=...
+DLIGHTRAG_LLM__ROLES__VLM__API_KEY=...
 DLIGHTRAG_RERANK__API_KEY=...
 ```
 
 These match the checked-in `config.yaml`, which configures DeepSeek extract and
-keyword roles plus Voyage reranking. If you remove role-specific model blocks or
-switch rerank back to `chat_llm_reranker`, the corresponding role/rerank keys can
-be omitted.
+keyword roles, host-local Unsloth query and VLM roles, plus Voyage reranking.
+Role overrides are atomic: a role without its own `api_key` falls back to the
+complete default model configuration instead of combining its endpoint with the
+default key. A genuinely unauthenticated local endpoint can opt in explicitly
+with `api_key: null`. If you remove role-specific model blocks or switch rerank
+back to `chat_llm_reranker`, the corresponding role/rerank keys can be omitted.
 
 Normal behavior lives in [config.yaml](config.yaml): model names, parser
 sidecar settings, metadata schema, retrieval breadth, auth mode, Langfuse
@@ -312,7 +317,9 @@ dlightrag-mcp
 
 MCP tools include `retrieve`, `answer`, `ingest`, `get_ingest_job`,
 `list_files`, `delete_files`, `list_workspaces`, `create_workspace`, and
-`delete_workspace`.
+`delete_workspace`, plus `get_capabilities` for image and metadata-filter
+capability discovery. See [docs/interfaces.md](docs/interfaces.md#mcp-server)
+for the authoritative tool-result contract.
 
 ## Core Concepts
 
@@ -416,6 +423,7 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 - [docs/postgresql.md](docs/postgresql.md) - PostgreSQL requirements and tuning.
 - [docs/operations.md](docs/operations.md) - maintenance commands and recovery workflows.
 - [docs/evaluation.md](docs/evaluation.md) - RAGAS evaluation workflow.
+- [docs/web-theme-design.md](docs/web-theme-design.md) - current Web appearance state, tokens, interaction, and accessibility design.
 - [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and external parser contracts.
 - [MinerU Docker deployment docs](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/) - Linux/WSL2 Docker support and macOS warning.
 - [Docling Serve](https://github.com/docling-project/docling-serve) - official Docling HTTP service and container images.

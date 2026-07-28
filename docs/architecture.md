@@ -140,9 +140,12 @@ filtering, reranking, citation, and multimodal-answer behavior.
 
 ## PostgreSQL Topology
 
-DlightRAG has one application-level PostgreSQL endpoint. REST, Web, MCP, and
-SDK surfaces all use the same configured write-capable endpoint, and LightRAG's
-staged pipeline supports ingest and query in the same service process.
+DlightRAG uses one PostgreSQL endpoint per service process. A writer process
+(the default) serves REST, Web, MCP, and SDK operations against a write-capable
+endpoint. Optional reader processes serve stateless read/query APIs against an
+infrastructure-provided read endpoint; they disable Web conversations and reject
+mutations. LightRAG's staged pipeline supports ingest and query together in the
+writer process.
 
 Core storage is PostgreSQL 18:
 
@@ -154,9 +157,10 @@ Core storage is PostgreSQL 18:
 | Document status | `PGDocStatusStorage` |
 | BM25 | pg_textsearch |
 
-If production infrastructure uses managed read replicas, keep that routing in
-the PostgreSQL, proxy, or platform layer. DlightRAG does not expose separate
-query/runtime database roles or read-replica credentials.
+Replica routing, credentials, lag, and failover remain infrastructure concerns;
+DlightRAG exposes only the process-level `service_role: writer | reader`. See
+[postgresql.md](postgresql.md#reader-role-and-read-replicas) for the complete
+read-only attachment and deployment contract.
 
 ## Code Layering
 

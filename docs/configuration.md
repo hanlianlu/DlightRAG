@@ -799,11 +799,13 @@ capped at 8192 tokens; each prior document summary and image description is
 capped at 1024 and 512 tokens respectively. These are internal semantic limits
 rather than additional public settings.
 
-`max_upload_bytes` is the per-file document cap shared by every ingest path
-(REST multipart ingest, URL, Composer, and Web folder uploads): one document may
-not exceed it. `max_upload_size_mb` is the additional per-request total cap for
-multi-file Web uploads (a temp-directory guard). `ingest_timeout` limits how long
-the SDK convenience
+`max_upload_bytes` is the per-file cap for REST multipart ingest and Web
+workspace/folder uploads. URL ingestion has its own
+`url_ingest_max_bytes` download cap. Web Composer documents use the product
+constant `MAX_DOCUMENT_BYTES` (100 MiB), projected to the browser by the Web
+route rather than exposed as another deployment knob. `max_upload_size_mb` is
+the additional per-request total cap for multi-file Web workspace uploads (a
+temp-directory guard). `ingest_timeout` limits how long the SDK convenience
 method `RAGServiceManager.aingest()` waits for its durable job. When it expires,
 the job keeps running and the method returns its current row instead of
 cancelling it. REST, Web, and MCP start jobs immediately and are not governed by

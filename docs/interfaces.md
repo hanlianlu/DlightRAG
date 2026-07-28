@@ -706,7 +706,17 @@ emits a `highlights` SSE event with the updated source panel HTML.
 
 ### MCP Server
 
-MCP tools return JSON text with `sources` at top level:
+MCP 2 tools return a `CallToolResult`: `structuredContent` contains the typed
+JSON payload, while the first text content block carries equivalent formatted
+JSON for clients that consume text-only tool results. Expected validation or
+authorization failures set `isError: true`; protocol-level `MCPError` responses
+remain JSON-RPC errors. The server exposes these tools:
+
+`retrieve`, `answer`, `ingest`, `get_ingest_job`, `list_files`, `delete_files`,
+`list_workspaces`, `create_workspace`, `delete_workspace`, and
+`get_capabilities`.
+
+Answer payloads keep `sources` at top level:
 
 ```json
 {
