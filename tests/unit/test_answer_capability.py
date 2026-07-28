@@ -13,6 +13,7 @@ from dlightrag.core.answer.capability import (
 )
 from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.core.vision_probe import ImageProbeOutcome
+from dlightrag.models.llm_roles import model_for_role
 
 
 @pytest.mark.parametrize(
@@ -75,7 +76,7 @@ async def test_capability_probe_targets_query_role(monkeypatch) -> None:
 
     cap = manager.answer_image_capability
     ceiling = int(manager._config.answer.max_images)
-    query_cfg = manager._config.llm.roles.query or manager._config.llm.default
+    query_cfg = model_for_role(manager._config, "query")
     assert isinstance(cap, AnswerImageCapability)
     assert cap.status == "supported"
     assert cap.effective_max_images == ceiling
