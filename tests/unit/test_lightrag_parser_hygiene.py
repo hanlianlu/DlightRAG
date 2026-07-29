@@ -12,7 +12,7 @@ from dlightrag.core.ingestion.parser_hygiene import (
 )
 
 
-def test_mineru_auxiliary_filter_preserves_semantic_and_multimodal_items() -> None:
+def test_mineru_auxiliary_filter_preserves_semantic_and_upstream_owned_items() -> None:
     content_list = [
         {"type": "header", "text": "Running header"},
         {"type": "footer", "text": "Running footer"},
@@ -33,6 +33,7 @@ def test_mineru_auxiliary_filter_preserves_semantic_and_multimodal_items() -> No
     filtered = filter_mineru_auxiliary_blocks(content_list)
 
     assert [item["type"] for item in filtered] == [
+        "page_number",
         "aside_text",
         "margin_note",
         "page_footnote",

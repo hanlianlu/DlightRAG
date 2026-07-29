@@ -1,11 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for LightRAG AGE monkey-patches."""
+"""Tests for LightRAG runtime patches."""
 
+import asyncio
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg.exceptions
 import pytest
+from lightrag.base import DocStatus
 from lightrag.kg.postgres_impl import PostgreSQLDB
+from lightrag.pipeline import _PipelineMixin
 
 from dlightrag.core._lightrag_patches import required_patch_names
 
@@ -13,6 +18,41 @@ from dlightrag.core._lightrag_patches import required_patch_names
 def test_current_lightrag_main_requires_both_age_patches() -> None:
     """Pinned LightRAG main still lacks the AGE guards DlightRAG needs."""
     assert required_patch_names(PostgreSQLDB) == ("configure_age", "execute")
+
+
+async def test_apply_leaves_failed_documents_to_lightrag_retry_flow() -> None:
+    from dlightrag.core._lightrag_patches import apply
+
+    apply()
+    status_doc = SimpleNamespace(
+        status=DocStatus.FAILED,
+        content_summary="failed",
+        content_length=1,
+        chunks_count=0,
+        chunks_list=[],
+        created_at="2026-01-01T00:00:00+00:00",
+        file_path="document.pdf",
+        track_id="",
+        content_hash=None,
+        metadata={},
+    )
+    owner = SimpleNamespace(
+        full_docs=SimpleNamespace(
+            get_by_id=AsyncMock(return_value={"content": "x", "file_path": "document.pdf"})
+        ),
+        doc_status=SimpleNamespace(delete=AsyncMock(), upsert=AsyncMock()),
+    )
+    documents = {"doc-1": status_doc}
+
+    await _PipelineMixin._validate_and_fix_document_consistency(
+        cast(Any, owner),
+        cast(Any, documents),
+        {"history_messages": []},
+        asyncio.Lock(),
+    )
+
+    assert documents == {"doc-1": status_doc}
+    assert status_doc.status is DocStatus.PENDING
 
 
 class TestConfigureAgePatch:

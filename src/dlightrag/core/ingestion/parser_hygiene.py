@@ -13,11 +13,11 @@ second MinerU ingestion path; it narrows LightRAG's MinerU IR builder at the
    them to ``image`` so they flow through the existing IRDrawing / VLM sidecar
    path and stay retrievable.
 
-2. Auxiliary furniture — MinerU emits running headers, footers, and printed
-   page numbers in ``content_list``; indexing those as body text pollutes
-   chunks, KG extraction, BM25, and citations. Conservative mode drops only
-   discarded blocks, headers, footers, and printed page numbers; extended mode
-   also drops aside / margin / page-footnote blocks
+2. Auxiliary furniture — MinerU emits running headers and footers in
+    ``content_list``; indexing those as body text pollutes chunks, KG extraction,
+    BM25, and citations. Conservative mode drops only discarded blocks, headers,
+    and footers; LightRAG already drops printed page numbers. Extended mode also
+    drops aside / margin / page-footnote blocks
    (``DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY``).
 
 Each transform is applied only when a runtime behavior probe shows current
@@ -50,7 +50,6 @@ MINERU_AUXILIARY_BLOCK_TYPES = frozenset(
         "footer",
         "page_header",
         "page_footer",
-        "page_number",
     }
 )
 
