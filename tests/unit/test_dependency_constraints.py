@@ -5,6 +5,9 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
+import yaml
+
 
 def _dependencies() -> list[str]:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -108,6 +111,23 @@ def test_compose_binds_api_port_to_loopback_on_host() -> None:
 
     assert '"127.0.0.1:8100:8100"' in compose
     assert 'DLIGHTRAG_API_HOST: "0.0.0.0"' in compose
+
+
+def test_compose_mcp_local_listener_passes_security_validation() -> None:
+    from dlightrag.config import DlightragConfig
+
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    environment = compose["services"]["dlightrag-mcp"]["environment"]
+
+    with pytest.warns(UserWarning, match="allow_insecure_no_auth"):
+        config = DlightragConfig(
+            mcp_transport=environment["DLIGHTRAG_MCP_TRANSPORT"],
+            mcp_host=environment["DLIGHTRAG_MCP_HOST"],
+            mcp_port=environment["DLIGHTRAG_MCP_PORT"],
+            allow_insecure_no_auth=(environment.get("DLIGHTRAG_ALLOW_INSECURE_NO_AUTH") == "true"),
+        )
+
+    assert config.mcp_host == "0.0.0.0"
 
 
 def test_compose_api_healthcheck_uses_strict_readiness_endpoint() -> None:

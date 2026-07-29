@@ -64,6 +64,7 @@ services:
       DLIGHTRAG_MCP_TRANSPORT: streamable-http
       DLIGHTRAG_MCP_HOST: "0.0.0.0"
       DLIGHTRAG_MCP_PORT: "8101"
+      DLIGHTRAG_ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
