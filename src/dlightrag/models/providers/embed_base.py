@@ -7,7 +7,6 @@ from typing import Literal
 from dlightrag.models.embedding_inputs import EmbeddingInput
 
 EmbeddingContext = Literal["query", "document"]
-EmbedContext = EmbeddingContext
 ImageInputCapability = Literal["unsupported", "opt_in", "native"]
 
 

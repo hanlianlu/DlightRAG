@@ -14,12 +14,11 @@ from dlightrag.models.embedding_inputs import (
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag.models.providers.embed_base import EmbedProvider
+from dlightrag.models.providers.embed_base import EmbeddingContext, EmbedProvider
 from dlightrag.utils.images import bounded_embedding_image_data_uri
 
 logger = logging.getLogger(__name__)
 
-EmbeddingContext = Literal["query", "document"]
 AsymmetricMode = Literal["auto", "require", "disable"]
 EmbeddingInputModality = Literal["auto", "text", "multimodal"]
 ResolvedEmbeddingInputModality = Literal["text", "multimodal"]

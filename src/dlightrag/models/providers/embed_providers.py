@@ -10,7 +10,7 @@ from dlightrag.models.embedding_inputs import (
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag.models.providers.embed_base import EmbedContext, EmbedProvider
+from dlightrag.models.providers.embed_base import EmbeddingContext, EmbedProvider
 
 _DATA_URI_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
 
@@ -97,7 +97,7 @@ class OpenAICompatibleEmbedProvider(EmbedProvider):
         model: str,
         inputs: list[EmbeddingInput],
         *,
-        context: EmbedContext,
+        context: EmbeddingContext,
         asymmetric: bool = False,
         output_dimension: int | None = None,
     ) -> dict:
@@ -123,7 +123,7 @@ class VoyageEmbedProvider(EmbedProvider):
         model: str,
         inputs: list[EmbeddingInput],
         *,
-        context: EmbedContext,
+        context: EmbeddingContext,
         asymmetric: bool = False,
         output_dimension: int | None = None,
     ) -> dict:
@@ -150,7 +150,7 @@ class JinaEmbedProvider(EmbedProvider):
         model: str,
         inputs: list[EmbeddingInput],
         *,
-        context: EmbedContext,
+        context: EmbeddingContext,
         asymmetric: bool = False,
         output_dimension: int | None = None,
     ) -> dict:
@@ -182,7 +182,7 @@ class GeminiEmbedProvider(EmbedProvider):
         model: str,
         inputs: list[EmbeddingInput],
         *,
-        context: EmbedContext,
+        context: EmbeddingContext,
         asymmetric: bool = False,
         output_dimension: int | None = None,
     ) -> dict:
@@ -221,7 +221,7 @@ class OllamaEmbedProvider(EmbedProvider):
         model: str,
         inputs: list[EmbeddingInput],
         *,
-        context: EmbedContext,
+        context: EmbeddingContext,
         asymmetric: bool = False,
         output_dimension: int | None = None,
     ) -> dict:
