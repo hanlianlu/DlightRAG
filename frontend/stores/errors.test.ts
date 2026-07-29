@@ -10,8 +10,8 @@ import {
 } from '../lib/errors.ts';
 import type {WarningPayload} from '../lib/errors.ts';
 
-test('answer errors accept legacy string payloads', () => {
-  assert.equal(answerErrorMessage('Document parsing failed.'), 'Document parsing failed.');
+test('answer errors reject non-object payloads', () => {
+  assert.equal(answerErrorMessage('Document parsing failed.'), 'Service error. Please try again.');
 });
 
 test('answer errors accept structured message payloads', () => {

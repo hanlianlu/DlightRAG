@@ -26,11 +26,12 @@ from starlette.types import ASGIApp
 import dlightrag
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.contracts import MetadataPolicy
 from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
-    MetadataPolicy,
+    QueryImage,
     SourceType,
 )
 from dlightrag.core.client_execution import execute_answer, execute_retrieve
@@ -58,14 +59,11 @@ from dlightrag.mcp.contracts import (
     IngestInput,
     IngestJobStatusInput,
     ListFilesInput,
-    QueryImage,
     RetrieveInput,
 )
 
 logger = logging.getLogger(__name__)
 
-MetadataPolicyParam = MetadataPolicy
-SourceTypeParam = SourceType
 QueryImagesParam = Annotated[
     list[QueryImage],
     Field(
@@ -517,7 +515,7 @@ async def delete_workspace_tool(
     ),
 )
 async def ingest_tool(
-    source_type: Annotated[SourceTypeParam, Field(description="Type of data source")],
+    source_type: Annotated[SourceType, Field(description="Type of data source")],
     path: Annotated[
         str | None,
         Field(default=None, description="File or directory path for local source."),
@@ -632,7 +630,7 @@ async def ingest_tool(
         Field(default=None, description="User metadata to attach to ingested documents."),
     ] = None,
     metadata_policy: Annotated[
-        MetadataPolicyParam | None,
+        MetadataPolicy | None,
         Field(default=None, description="How undeclared user metadata fields are handled."),
     ] = None,
     retain_source_file: Annotated[

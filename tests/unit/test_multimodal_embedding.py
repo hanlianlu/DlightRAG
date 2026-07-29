@@ -7,10 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
+from dlightrag.contracts import InputModality, ResolvedInputModality
 from dlightrag.models.multimodal_embedding import (
-    EmbeddingInputModality,
     MultimodalEmbedder,
-    ResolvedEmbeddingInputModality,
     resolve_embedding_input_modality,
 )
 from dlightrag.models.providers.embed_base import EmbedProvider
@@ -38,8 +37,8 @@ from dlightrag.utils.images import decode_image_base64
 )
 def test_resolve_embedding_input_modality(
     provider: EmbedProvider,
-    configured: EmbeddingInputModality,
-    resolved: ResolvedEmbeddingInputModality,
+    configured: InputModality,
+    resolved: ResolvedInputModality,
 ) -> None:
     assert resolve_embedding_input_modality(provider, configured) == resolved
 

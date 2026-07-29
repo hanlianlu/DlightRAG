@@ -29,7 +29,7 @@ from dlightrag.core.answer.context import AnswerContextPacker
 from dlightrag.core.answer.errors import CurrentImagePayloadError
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.prompts import get_answer_system_prompt
+from dlightrag.prompts import ANSWER_CORE
 from dlightrag.utils.images import image_data_uri
 from dlightrag.utils.tokens import estimate_messages_tokens, truncate_conversation_history
 
@@ -284,7 +284,7 @@ class AnswerEngine:
         )
 
         def build(history: list[dict[str, Any]]) -> _PreparedModelCall:
-            system_prompt = get_answer_system_prompt()
+            system_prompt = ANSWER_CORE
             composer_budget = self._new_image_budget()
             rag_budget = (
                 self._new_image_budget() if separate_composer_visual_budget else composer_budget

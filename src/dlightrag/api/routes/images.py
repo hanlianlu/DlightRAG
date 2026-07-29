@@ -1,13 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Authenticated visual chunk image routes."""
 
-from typing import Literal
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
 from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
+from dlightrag.contracts import VisualAssetSize
 
 from .deps import enforce_access, get_manager, resolve_workspace
 
@@ -19,7 +18,7 @@ async def image(
     workspace: str,
     chunk_id: str,
     request: Request,
-    size: Literal["full", "thumb"] = "thumb",
+    size: VisualAssetSize = "thumb",
     user: UserContext = Depends(get_current_user),
 ) -> Response:
     """Serve a LightRAG sidecar-backed visual chunk asset."""

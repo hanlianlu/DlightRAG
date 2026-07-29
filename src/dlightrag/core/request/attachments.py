@@ -32,6 +32,7 @@ from numpy.typing import NDArray
 from dlightrag.core.document_embedding import (
     DocumentEmbeddingFallbackReason,
     DocumentEmbeddingInput,
+    DocumentEmbeddingMode,
     DocumentEmbeddingTrace,
     DocumentEmbeddingVector,
 )
@@ -527,7 +528,7 @@ def build_composer_embedding_signature(
     *,
     config: DlightragConfig,
     embedder: DocumentEmbedderProtocol,
-    mode: Literal["fused", "text"],
+    mode: DocumentEmbeddingMode,
     fallback_reason: DocumentEmbeddingFallbackReason | None = None,
 ) -> str:
     """Return a deterministic non-secret signature for one effective vector mode."""

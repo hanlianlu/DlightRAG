@@ -11,10 +11,8 @@ from dlightrag.core.client_contracts import (
     ClientContractModel,
     ConversationMessage,
     IngestPayload,
-    MetadataPolicy,
     QueryImage,
     RetrieveRequestContract,
-    SourceType,
 )
 from dlightrag.core.request.workspaces import QueryWorkspaceSelection
 
@@ -78,8 +76,5 @@ __all__ = [
     "IngestInput",
     "IngestJobStatusInput",
     "ListFilesInput",
-    "MetadataPolicy",
-    "QueryImage",
     "RetrieveInput",
-    "SourceType",
 ]

@@ -14,6 +14,8 @@ from dlightrag.config import DlightragConfig
 
 logger = logging.getLogger(__name__)
 
+type ComposerAnalysisRole = Literal["vlm", "extract"]
+
 
 class ComposerImagePayloadError(RuntimeError):
     """Composer analysis could not admit any supplied image payload."""
@@ -157,7 +159,7 @@ class ComposerAnalysisAdapterFactory(Protocol):
         self,
         config: DlightragConfig,
         *,
-        role: Literal["vlm", "extract"],
+        role: ComposerAnalysisRole,
     ) -> tuple[
         Callable[..., Awaitable[Any]],
         dict[str, Any],
@@ -274,6 +276,7 @@ async def _rollback_composer_closers(
 
 __all__ = [
     "ComposerAnalysisSettings",
+    "ComposerAnalysisRole",
     "ComposerImagePayloadError",
     "ComposerImageTransportSettings",
     "ComposerModelBundle",

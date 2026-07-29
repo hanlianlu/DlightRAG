@@ -3,8 +3,6 @@
 
 import re
 
-from dlightrag.utils.images import image_data_uri as image_data_uri
-
 _WORKSPACE_FORBIDDEN_RE = re.compile(r'[/\\<>"\']')
 
 

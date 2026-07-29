@@ -8,10 +8,9 @@ embedding side's :class:`~dlightrag.models.providers.embed_base.EmbedProvider`.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal
+from typing import Any
 
-InputModality = Literal["auto", "text", "multimodal"]
-ResolvedInputModality = Literal["text", "multimodal"]
+from dlightrag.contracts import InputModality, ResolvedInputModality
 
 # One prepared candidate: its text plus an optional bounded image data URI.
 PreparedDocument = tuple[str, str | None]

@@ -13,7 +13,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
+from dlightrag.contracts import MetadataPolicy, MetadataUpdateMode, VisualAssetSize
 from dlightrag.core.answer.capability import AnswerImageCapability, derive_effective_max_images
 from dlightrag.core.answer.engine import AnswerEngine
 from dlightrag.core.answer.errors import (
@@ -46,7 +47,6 @@ from dlightrag.core.request.workspaces import (
     resolve_query_workspaces,
     validate_query_workspace_selection,
 )
-from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.scope import RequestScope
@@ -503,7 +503,7 @@ class RAGServiceManager:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
         retain_source_file: bool | None = None,
     ) -> dict[str, Any]:
         """Ingest from an in-memory SDK data source without durable job recovery."""
@@ -826,7 +826,9 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.alist_failed_docs()
 
-    async def aget_visual_asset(self, workspace: str, chunk_id: str, *, size: str = "full") -> Any:
+    async def aget_visual_asset(
+        self, workspace: str, chunk_id: str, *, size: VisualAssetSize = "full"
+    ) -> Any:
         """Resolve a visual chunk asset for browser/API image routes."""
         svc = await self._get_service(workspace)
         return await svc.aget_visual_asset(chunk_id, size=size)
@@ -847,8 +849,8 @@ class RAGServiceManager:
         doc_id: str,
         data: dict[str, Any],
         *,
-        mode: Literal["merge", "replace"] = "merge",
-        metadata_policy: MetadataIngestPolicy | None = None,
+        mode: MetadataUpdateMode = "merge",
+        metadata_policy: MetadataPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
         svc = await self._get_service(workspace)

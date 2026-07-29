@@ -5,7 +5,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any
+
+from dlightrag.contracts import MetadataPolicy
 
 
 @dataclass(frozen=True)
@@ -27,9 +29,6 @@ class MetadataFieldDef:
     searchable: bool = False
     index_type: str | None = None
     filter_hint: str | None = None
-
-
-MetadataIngestPolicy = Literal["validate", "reject_unknown", "store_only"]
 
 
 @dataclass(frozen=True)
@@ -120,7 +119,7 @@ def normalize_user_metadata(
     metadata: Mapping[str, Any] | None,
     registry: MetadataFieldRegistry,
     *,
-    metadata_policy: MetadataIngestPolicy = "validate",
+    metadata_policy: MetadataPolicy = "validate",
     allow_ad_hoc_json: bool = True,
 ) -> NormalizedUserMetadata:
     """Normalize user metadata into filterable fields and JSON enrichment."""

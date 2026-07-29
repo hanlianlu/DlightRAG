@@ -5,16 +5,17 @@ from typing import Any, cast
 
 import pytest
 
-from dlightrag.core.answer.capability import AnswerImageCapability, CapabilityStatus
+from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
 )
 from dlightrag.core.servicemanager import _check_answer_image_capability
+from dlightrag.core.vision_probe import ImageCapabilityStatus
 
 
-def _capability(status: CapabilityStatus) -> AnswerImageCapability:
+def _capability(status: ImageCapabilityStatus) -> AnswerImageCapability:
     return AnswerImageCapability(
         status=status,
         configured_ceiling=8,

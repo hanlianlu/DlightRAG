@@ -3,11 +3,11 @@
 
 import logging
 import math
-from typing import Literal
 
 import httpx
 from PIL import Image
 
+from dlightrag.contracts import AsymmetricMode, InputModality, ResolvedInputModality
 from dlightrag.models.embedding_inputs import (
     EmbeddingInput,
     ImageEmbeddingInput,
@@ -18,10 +18,6 @@ from dlightrag.models.providers.embed_base import EmbeddingContext, EmbedProvide
 from dlightrag.utils.images import bounded_embedding_image_data_uri
 
 logger = logging.getLogger(__name__)
-
-AsymmetricMode = Literal["auto", "require", "disable"]
-EmbeddingInputModality = Literal["auto", "text", "multimodal"]
-ResolvedEmbeddingInputModality = Literal["text", "multimodal"]
 
 
 def resolve_asymmetric(provider: EmbedProvider, mode: AsymmetricMode) -> bool:
@@ -37,8 +33,8 @@ def resolve_asymmetric(provider: EmbedProvider, mode: AsymmetricMode) -> bool:
 
 def resolve_embedding_input_modality(
     provider: EmbedProvider,
-    mode: EmbeddingInputModality,
-) -> ResolvedEmbeddingInputModality:
+    mode: InputModality,
+) -> ResolvedInputModality:
     """Resolve configured input policy against one transport serializer."""
     if mode == "text":
         return "text"
@@ -62,7 +58,7 @@ class MultimodalEmbedder:
         api_key: str,
         dim: int,
         provider: EmbedProvider,
-        input_modality: EmbeddingInputModality = "auto",
+        input_modality: InputModality = "auto",
         asymmetric: AsymmetricMode = "auto",
         timeout: float = 120.0,
     ) -> None:

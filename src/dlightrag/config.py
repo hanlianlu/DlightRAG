@@ -24,6 +24,14 @@ from urllib.parse import urlencode, urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from dlightrag.contracts import (
+    AsymmetricMode,
+    ChatProvider,
+    InputModality,
+    MetadataPolicy,
+    ServiceRole,
+)
+
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
 _PG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -110,7 +118,7 @@ class ModelConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["openai", "anthropic", "gemini"] = "openai"
+    provider: ChatProvider = "openai"
     model: str
     api_key: str | None = None
     base_url: str | None = None
@@ -149,8 +157,8 @@ class EmbeddingConfig(BaseModel):
     base_url: str | None = "https://api.voyageai.com/v1"
     dim: int = Field(default=1024, ge=1)
     max_token_size: int = Field(default=8192, ge=1)
-    input_modality: Literal["auto", "text", "multimodal"] = "auto"
-    asymmetric: Literal["auto", "require", "disable"] = "auto"
+    input_modality: InputModality = "auto"
+    asymmetric: AsymmetricMode = "auto"
     startup_probe: bool = True
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -355,7 +363,7 @@ class MetadataConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allow_ad_hoc_json: bool = True
-    default_ingest_policy: Literal["validate", "reject_unknown", "store_only"] = "validate"
+    default_ingest_policy: MetadataPolicy = "validate"
     fields: dict[str, MetadataFieldConfig] = Field(default_factory=dict)
 
 
@@ -372,11 +380,11 @@ class RerankConfig(BaseModel):
         "cohere_reranker",
         "azure_cohere",
     ] = "chat_llm_reranker"
-    provider: Literal["openai", "anthropic", "gemini"] | None = None
+    provider: ChatProvider | None = None
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
-    input_modality: Literal["auto", "text", "multimodal"] = Field(
+    input_modality: InputModality = Field(
         default="auto",
         description=(
             "Reranker input selection. For chat_llm_reranker 'auto' follows the scoring "
@@ -659,7 +667,7 @@ class DlightragConfig(BaseSettings):
         return tuple(sources)
 
     # ===== PostgreSQL (Default Storage Backend) =====
-    service_role: Literal["writer", "reader"] = Field(
+    service_role: ServiceRole = Field(
         default="writer",
         description=(
             "Process role. 'writer' serves ingest plus all APIs against a "

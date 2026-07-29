@@ -42,22 +42,14 @@ class TestAdaptForLightrag:
         await adapted(
             "test",
             keyword_extraction=True,
-            token_tracker=MagicMock(),
-            use_azure=False,
             enable_cot=True,
             hashing_kv=MagicMock(),
-            azure_deployment="my-deploy",
-            api_version="2024-02",
             temperature=0.5,  # should be preserved
         )
         call_kwargs = inner.call_args.kwargs
         assert "keyword_extraction" not in call_kwargs
-        assert "token_tracker" not in call_kwargs
-        assert "use_azure" not in call_kwargs
         assert "enable_cot" not in call_kwargs
         assert "hashing_kv" not in call_kwargs
-        assert "azure_deployment" not in call_kwargs
-        assert "api_version" not in call_kwargs
         assert call_kwargs["temperature"] == 0.5
 
     @pytest.mark.asyncio

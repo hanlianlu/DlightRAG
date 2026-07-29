@@ -14,11 +14,10 @@ from dlightrag.config import (
 )
 from dlightrag.core.answer.capability import (
     AnswerImageCapability,
-    CapabilityStatus,
     derive_effective_max_images,
 )
 from dlightrag.core.servicemanager import RAGServiceManager
-from dlightrag.core.vision_probe import ImageProbeOutcome
+from dlightrag.core.vision_probe import ImageCapabilityStatus, ImageProbeOutcome
 from dlightrag.models.llm_roles import model_for_role
 
 
@@ -32,7 +31,7 @@ from dlightrag.models.llm_roles import model_for_role
     ],
 )
 def test_derive_effective_max_images(
-    status: CapabilityStatus, configured_ceiling: int, expected: int
+    status: ImageCapabilityStatus, configured_ceiling: int, expected: int
 ) -> None:
     assert derive_effective_max_images(status, configured_ceiling) == expected
 
@@ -118,7 +117,7 @@ def _reprobe_config() -> DlightragConfig:
     )
 
 
-def _capability(status: CapabilityStatus, effective: int) -> AnswerImageCapability:
+def _capability(status: ImageCapabilityStatus, effective: int) -> AnswerImageCapability:
     return AnswerImageCapability(
         status=status,
         configured_ceiling=8,
@@ -161,7 +160,7 @@ async def test_unknown_capability_lazily_reprobes_to_supported(
 )
 async def test_terminal_status_is_terminal_no_reprobe(
     monkeypatch: pytest.MonkeyPatch,
-    status: CapabilityStatus,
+    status: ImageCapabilityStatus,
     effective: int,
 ) -> None:
     manager = RAGServiceManager(config=_reprobe_config())

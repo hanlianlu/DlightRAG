@@ -4,7 +4,7 @@
 from unittest.mock import AsyncMock
 
 from dlightrag.api.models import MetadataFilterRequest, RetrieveRequest
-from dlightrag.core.client_contracts import ConversationMessage, ImageURLContentBlock
+from dlightrag.core.client_contracts import ConversationMessage, QueryImage
 from dlightrag.core.client_execution import execute_answer, execute_retrieve
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.scope import RequestScope
@@ -23,7 +23,7 @@ async def test_execute_retrieve_forwards_shared_query_kwargs_and_scope() -> None
         bm25_query="quarterly report",
         filters=MetadataFilterRequest(doc_author="Ada"),
         query_images=[
-            ImageURLContentBlock.model_validate(
+            QueryImage.model_validate(
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
             )
         ],
@@ -63,7 +63,7 @@ async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
         answer_context_top_k=2,
         filters={"doc_title": "Runbook"},
         query_images=[
-            ImageURLContentBlock.model_validate(
+            QueryImage.model_validate(
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
             )
         ],

@@ -17,7 +17,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, I
 from dataclasses import dataclass
 from inspect import isawaitable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from lightrag.constants import (
     DEFAULT_COSINE_THRESHOLD,
@@ -25,6 +25,7 @@ from lightrag.constants import (
 )
 
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.contracts import MetadataPolicy, MetadataUpdateMode, VisualAssetSize
 from dlightrag.core.client_contracts import IngestDocument, SourceType
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.ingestion.paths import (
@@ -37,7 +38,6 @@ from dlightrag.core.ingestion.paths import (
     workspace_input_root,
 )
 from dlightrag.core.lightrag_lifecycle import shutdown_lightrag_worker_pools
-from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import (
     SourceDownloadContractError,
@@ -292,9 +292,7 @@ class RAGService:
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
         self._metadata_registry: Any = None
         self._allow_ad_hoc_metadata = self.config.metadata.allow_ad_hoc_json
-        self._default_metadata_policy: MetadataIngestPolicy = (
-            self.config.metadata.default_ingest_policy
-        )
+        self._default_metadata_policy: MetadataPolicy = self.config.metadata.default_ingest_policy
         self._lightrag_stores: LightRAGStores | None = None
         self._ingestion_engine: UnifiedIngestionEngine | None = None
         self._bm25: BM25Retriever | None = None
@@ -1025,7 +1023,7 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest one local file through the unified LightRAG path."""
         if self._ingestion_engine is None:
@@ -1074,7 +1072,7 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest local files through one LightRAG staged batch."""
         if self._ingestion_engine is None:
@@ -1132,7 +1130,7 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest explicitly listed local files with per-document metadata."""
         if self._ingestion_engine is None:
@@ -1242,7 +1240,7 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
         progress_callback: RemoteIngestProgressCallback | None = None,
         resume_from_window: int = 0,
         retain_source_file: bool | None = None,
@@ -1478,7 +1476,7 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
         retain_source_file: bool | None = None,
         _progress_callback: RemoteIngestProgressCallback | None = None,
         _resume_from_window: int = 0,
@@ -1935,7 +1933,9 @@ class RAGService:
             top_score,
         )
 
-    async def aget_visual_asset(self, chunk_id: str, *, size: str = "full") -> Any | None:
+    async def aget_visual_asset(
+        self, chunk_id: str, *, size: VisualAssetSize = "full"
+    ) -> Any | None:
         """Resolve a chunk image asset for API/Web image routes."""
         self._ensure_initialized()
         if self._visual_asset_resolver is None:
@@ -2042,8 +2042,8 @@ class RAGService:
         doc_id: str,
         data: dict[str, Any],
         *,
-        mode: Literal["merge", "replace"] = "merge",
-        metadata_policy: MetadataIngestPolicy | None = None,
+        mode: MetadataUpdateMode = "merge",
+        metadata_policy: MetadataPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
         self.config.require_writer("metadata update")

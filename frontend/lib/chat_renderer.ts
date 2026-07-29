@@ -27,12 +27,10 @@ interface ChatTurn {
   contentDiv: HTMLDivElement;
 }
 
-type SSEData = string;
-
 export interface DonePayload {
-  html?: string;
-  answer?: string;
-  conversation_saved?: boolean;
+  html: string;
+  answer: string;
+  conversation_saved: boolean;
   conversation_save_reason?: string | null;
   conversation?: ConversationSummary | null;
 }
@@ -106,6 +104,16 @@ function answerBlocksFromHtml(html: string): HTMLElement[] {
 // typeset once and math-free blocks skip MathJax entirely.
 function typesetBlockMath(block: HTMLElement): void {
   if (MATH_DELIMITER.test(block.textContent || '')) renderMath(block);
+}
+
+function isDonePayload(value: unknown): value is DonePayload {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const payload = value as Record<string, unknown>;
+  return (
+    typeof payload.html === 'string' &&
+    typeof payload.answer === 'string' &&
+    typeof payload.conversation_saved === 'boolean'
+  );
 }
 
 
@@ -373,7 +381,7 @@ export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOpti
     tail.append(token);
   }
 
-  function handleToken(data: SSEData): void {
+  function handleToken(data: string): void {
     const text = parseData(data);
     const token = typeof text === 'string' ? text : String(text);
     startStreamViewport();
@@ -385,7 +393,7 @@ export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOpti
   // Server sends the whole accumulated answer HTML each preview. Rather than
   // wiping and re-rendering it all (which re-typesets every equation and drops
   // selection), freeze completed blocks and rebuild only the trailing one.
-  function handlePreview(data: SSEData): void {
+  function handlePreview(data: string): void {
     const previewHtml = parseData(data);
     const html = typeof previewHtml === 'string' ? previewHtml : '';
     startStreamViewport();
@@ -410,20 +418,22 @@ export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOpti
     scheduleAutoScroll();
   }
 
-  function handleDone(data: SSEData): void {
+  function handleDone(data: string): void {
     const payload = parseData(data);
-    const html = typeof payload === 'string' ? payload : (payload as DonePayload).html;
-    if (typeof payload !== 'string') {
-      fullAnswer = (payload as DonePayload).answer || fullAnswer;
-      saveOutcome = payload as DonePayload;
+    if (!isDonePayload(payload)) {
+      failed = true;
+      setAnswerError(turn, 'Service error. Please try again.');
+      return;
     }
+    fullAnswer = payload.answer;
+    saveOutcome = payload;
 
-    applyFinalAnswerHtml(turn, html || '');
+    applyFinalAnswerHtml(turn, payload.html);
     const live = turn.aiDiv.querySelector('.sr-only');
     if (live) live.textContent = 'Answer ready';
   }
 
-  function handleHighlights(data: SSEData): void {
+  function handleHighlights(data: string): void {
     const highlightsHtml = parseData(data);
     const sourceData = turn.aiDiv.querySelector('.source-data');
     if (sourceData) {
@@ -433,7 +443,7 @@ export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOpti
     }
   }
 
-  function handleProgress(data: SSEData): void {
+  function handleProgress(data: string): void {
     const info = parseData(data) as ProgressPayload;
     const label: string = PHASE_LABELS[info.phase as PhaseLabel] || info.phase;
     // Resolve the phase indicator, creating one when tokens have already
@@ -451,7 +461,7 @@ export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOpti
   }
 
   return {
-    handle(eventType: string, data: SSEData): void {
+    handle(eventType: string, data: string): void {
       if (eventType === 'token') handleToken(data);
       else if (eventType === 'preview') handlePreview(data);
       else if (eventType === 'done') handleDone(data);

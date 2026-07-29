@@ -11,6 +11,8 @@ Results are recorded on the owning ``RAGServiceManager`` (never on the provider)
 from dataclasses import dataclass
 from typing import Any, Literal
 
+type ImageCapabilityStatus = Literal["supported", "unsupported", "unknown"]
+
 # Minimal 16×16 gray PNG -- base64-encoded so no filesystem dependency. Kept at
 # 16px (not 1px) because some real vision providers reject sub-10px images (e.g.
 # Alibaba Qwen: "height/width must be larger than 10"), which the transport-only
@@ -23,7 +25,7 @@ _PROBE_IMAGE_DATA_URI = f"data:image/png;base64,{_PROBE_IMAGE_PNG_B64}"
 _VISION_PROBE_MAX_TOKENS = 512
 
 
-__all__ = ["probe_image_capability"]
+__all__ = ["ImageCapabilityStatus", "probe_image_capability"]
 
 
 _UNSUPPORTED_MARKERS = (
@@ -44,7 +46,7 @@ _UNSUPPORTED_MARKERS = (
 class ImageProbeOutcome:
     """Structured tri-state result of an answer-model image probe."""
 
-    status: Literal["supported", "unsupported", "unknown"]
+    status: ImageCapabilityStatus
     failure_kind: str | None = None
 
 

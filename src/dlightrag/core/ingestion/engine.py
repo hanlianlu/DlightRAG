@@ -22,12 +22,12 @@ from lightrag.parser.routing import (
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 
+from dlightrag.contracts import MetadataPolicy
 from dlightrag.core.document_embedding import DocumentEmbeddingInput, RobustDocumentEmbedder
 from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.core.ingestion.paths import lightrag_archived_source_path
 from dlightrag.core.retrieval.metadata_fields import (
     MetadataFieldRegistry,
-    MetadataIngestPolicy,
     extract_system_metadata,
     normalize_user_metadata,
 )
@@ -53,7 +53,7 @@ class PreparedIngestFile:
     title: str | None = None
     author: str | None = None
     metadata: Mapping[str, Any] | None = None
-    metadata_policy: MetadataIngestPolicy | None = None
+    metadata_policy: MetadataPolicy | None = None
     source_uri_explicit: bool = True
     download_locator_explicit: bool = True
     display_filename_explicit: bool = False
@@ -97,7 +97,7 @@ class UnifiedIngestionEngine:
         chunk_options: dict[str, Any] | None,
         metadata_registry: MetadataFieldRegistry | None = None,
         allow_ad_hoc_metadata: bool = True,
-        default_metadata_policy: MetadataIngestPolicy = "validate",
+        default_metadata_policy: MetadataPolicy = "validate",
         bm25_language_classifier: Any | None = None,
     ) -> None:
         self._lightrag = lightrag
@@ -109,7 +109,7 @@ class UnifiedIngestionEngine:
         self._chunk_options = chunk_options or {}
         self._metadata_registry = metadata_registry or MetadataFieldRegistry.from_config({})
         self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
-        self._default_metadata_policy: MetadataIngestPolicy = default_metadata_policy
+        self._default_metadata_policy: MetadataPolicy = default_metadata_policy
         self._bm25_language_classifier = bm25_language_classifier
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
@@ -127,7 +127,7 @@ class UnifiedIngestionEngine:
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest a local file through the unified path."""
         file_path = Path(path)
@@ -203,7 +203,7 @@ class UnifiedIngestionEngine:
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest local files as one LightRAG staged batch.
 
@@ -309,7 +309,7 @@ class UnifiedIngestionEngine:
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        metadata_policy: MetadataPolicy | None = None,
         resolve_parser_directives: bool = True,
     ) -> _PendingDocumentIngest:
         effective_title = item.title if item.title is not None else title
@@ -447,7 +447,7 @@ class UnifiedIngestionEngine:
         title: str | None,
         author: str | None,
         metadata: Mapping[str, Any] | None,
-        metadata_policy: MetadataIngestPolicy | None,
+        metadata_policy: MetadataPolicy | None,
     ) -> dict[str, Any]:
         if title is not None and metadata and "title" in metadata:
             raise ValueError("title supplied both as top-level field and metadata")

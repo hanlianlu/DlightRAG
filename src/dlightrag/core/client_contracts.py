@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from dlightrag.contracts import MetadataPolicy
+
 # Caller-supplied conversation history is stateless: the client owns persistence
 # and re-sends prior turns each request; DlightRAG never stores them. The message
 # ceiling bounds request size (~50 prior turns); the planner independently
@@ -52,16 +54,12 @@ class ImageURL(ClientContractModel):
     detail: Literal["auto", "low", "high"] | None = None
 
 
-class ImageURLContentBlock(ClientContractModel):
+class QueryImage(ClientContractModel):
     type: Literal["image_url"]
     image_url: ImageURL
 
 
-type QueryImage = ImageURLContentBlock
-
-
 type SourceType = Literal["local", "azure_blob", "s3", "url"]
-type MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
 
 
 class QueryRequestContract(ClientContractModel):
@@ -267,7 +265,6 @@ __all__ = [
     "ConversationMessage",
     "AnswerRequestContract",
     "ImageURL",
-    "ImageURLContentBlock",
     "IngestDocument",
     "IngestPayload",
     "IngestSpec",
@@ -275,7 +272,6 @@ __all__ = [
     "MAX_HISTORY_CONTENT_CHARS",
     "MAX_HISTORY_MESSAGES",
     "MAX_QUERY_IMAGES",
-    "MetadataPolicy",
     "QueryImage",
     "QueryRequestContract",
     "RetrieveRequestContract",

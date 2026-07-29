@@ -2,13 +2,13 @@
 """System status and health API routes."""
 
 import logging
-from typing import Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from dlightrag.api.models import HealthResponse, ReadinessResponse
 from dlightrag.app_state import request_config
+from dlightrag.contracts import ServiceRole
 from dlightrag.core.answer.capability import answer_image_capability_summary
 
 from .deps import get_manager
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _not_ready(*, service_role: Literal["writer", "reader"], detail: str) -> JSONResponse:
+def _not_ready(*, service_role: ServiceRole, detail: str) -> JSONResponse:
     payload = ReadinessResponse(
         status="not_ready",
         service_role=service_role,

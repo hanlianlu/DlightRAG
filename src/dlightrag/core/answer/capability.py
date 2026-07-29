@@ -10,13 +10,12 @@ re-validated every process start rather than cached in any store.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
-CapabilityStatus = Literal["supported", "unsupported", "unknown"]
+from dlightrag.core.vision_probe import ImageCapabilityStatus
 
 
 def derive_effective_max_images(
-    status: CapabilityStatus,
+    status: ImageCapabilityStatus,
     configured_ceiling: int,
 ) -> int:
     """Effective final image-block count for the answer transport budget.
@@ -34,7 +33,7 @@ def derive_effective_max_images(
 class AnswerImageCapability:
     """Request-independent answer-model image capability snapshot."""
 
-    status: CapabilityStatus
+    status: ImageCapabilityStatus
     configured_ceiling: int
     effective_max_images: int
     provider: str
@@ -70,7 +69,6 @@ def answer_image_capability_summary(
 
 __all__ = [
     "AnswerImageCapability",
-    "CapabilityStatus",
     "answer_image_capability_summary",
     "derive_effective_max_images",
 ]

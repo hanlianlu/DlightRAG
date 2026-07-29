@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.contracts import MetadataPolicy, MetadataUpdateMode, ServiceRole
 from dlightrag.core.client_contracts import (
     AnswerRequestContract,
     ClientContractModel,
@@ -76,8 +77,8 @@ class ResetRequest(ClientContractModel):
 
 class MetadataUpdateRequest(ClientContractModel):
     metadata: dict[str, Any]
-    mode: Literal["merge", "replace"] = "merge"
-    metadata_policy: Literal["validate", "reject_unknown", "store_only"] | None = None
+    mode: MetadataUpdateMode = "merge"
+    metadata_policy: MetadataPolicy | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -212,7 +213,7 @@ class AnswerImageCapabilityResponse(ClientContractModel):
 class HealthResponse(ClientContractModel):
     status: Literal["healthy", "degraded"]
     rag_initialized: bool
-    service_role: Literal["writer", "reader"]
+    service_role: ServiceRole
     crafted_by: str
     maintained_by: str
     storage: HealthStorageResponse
@@ -223,7 +224,7 @@ class HealthResponse(ClientContractModel):
 
 class ReadinessResponse(ClientContractModel):
     status: Literal["ready", "not_ready"]
-    service_role: Literal["writer", "reader"]
+    service_role: ServiceRole
     detail: str | None = None
 
 

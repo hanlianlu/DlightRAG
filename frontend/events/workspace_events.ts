@@ -16,9 +16,7 @@ export interface WorkspaceEventDetail {
 
 /** Unwrap an htmx `HX-Trigger` CustomEvent into its raw workspace detail. */
 export function readWorkspaceDetail(event: Event): WorkspaceEventDetail {
-  const detail = (event as CustomEvent<WorkspaceEventDetail & { value?: WorkspaceEventDetail }>)
-    .detail;
-  return detail?.value ?? detail ?? {};
+  return (event as CustomEvent<WorkspaceEventDetail>).detail ?? {};
 }
 
 /**

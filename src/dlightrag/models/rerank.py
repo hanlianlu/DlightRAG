@@ -24,10 +24,10 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from dlightrag.contracts import ResolvedInputModality
 from dlightrag.models.providers.rerank_base import (
     PreparedDocument,
     RerankProvider,
-    ResolvedInputModality,
     resolve_rerank_input_modality,
 )
 from dlightrag.models.providers.rerank_providers import RERANK_PROVIDERS

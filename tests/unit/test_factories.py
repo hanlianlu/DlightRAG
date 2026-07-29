@@ -854,7 +854,6 @@ class TestComposerAnalysisAdapter:
             "Describe the drawing",
             hashing_kv=object(),
             _priority=7,
-            token_tracker=object(),
             keyword_extraction=True,
             pipeline_status={"cancellation_requested": False},
             pipeline_status_lock=object(),

@@ -1,10 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Query Planning and Analysis prompts."""
 
-from .guidance import PLANNER_GUIDANCE
-
-PLANNER_SYSTEM_PROMPT = PLANNER_GUIDANCE
-
 PLANNER_IMAGE_CONTEXT_GUIDANCE = """\
 When `prior_images` is present, select only referenced ids in
 `selected_history_image_ids`, ordered by relevance and capped by

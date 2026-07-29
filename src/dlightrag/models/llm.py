@@ -9,11 +9,12 @@ import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import Any, Literal, cast
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.composer import (
+    ComposerAnalysisRole,
     ComposerAnalysisSettings,
     ComposerImagePayloadError,
     ComposerImageTransportSettings,
@@ -66,10 +67,6 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
         history_messages: list[dict[str, Any]] | None = None,
         keyword_extraction: bool = False,  # noqa: ARG001
         enable_cot: bool = False,  # noqa: ARG001
-        token_tracker: Any = None,  # noqa: ARG001
-        use_azure: bool = False,  # noqa: ARG001
-        azure_deployment: str | None = None,  # noqa: ARG001
-        api_version: str | None = None,  # noqa: ARG001
         **kwargs: Any,
     ) -> Any:
         messages: list[dict[str, Any]] = []
@@ -265,7 +262,7 @@ def _composer_image_blocks(
 def create_composer_analysis_adapter(
     config: DlightragConfig,
     *,
-    role: Literal["vlm", "extract"],
+    role: ComposerAnalysisRole,
 ) -> tuple[
     Callable[..., Awaitable[Any]],
     dict[str, str | None],
@@ -293,15 +290,11 @@ def create_composer_analysis_adapter(
         for control in (
             "_priority",
             "hashing_kv",
-            "token_tracker",
             "keyword_extraction",
             "enable_cot",
             "pipeline_status",
             "pipeline_status_lock",
             "cancellation_requested",
-            "use_azure",
-            "azure_deployment",
-            "api_version",
         ):
             kwargs.pop(control, None)
         if kwargs:
