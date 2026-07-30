@@ -2527,6 +2527,31 @@ class TestPlannerSchemaScope:
         assert recovered["custom_keys"] == ["department"]
         assert ("reports",) in manager._schema_cache
 
+    async def test_cold_workspace_schemas_are_fetched_concurrently(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        legal_started = asyncio.Event()
+
+        async def reports_schema() -> dict[str, object]:
+            await asyncio.sleep(0)
+            if not legal_started.is_set():
+                raise RuntimeError("schema lookups were serialized")
+            return {"columns": [], "custom_keys": ["department"]}
+
+        async def legal_schema() -> dict[str, object]:
+            legal_started.set()
+            return {"columns": [], "custom_keys": ["jurisdiction"]}
+
+        reports = AsyncMock()
+        reports._metadata_index.get_field_schema = AsyncMock(side_effect=reports_schema)
+        legal = AsyncMock()
+        legal._metadata_index.get_field_schema = AsyncMock(side_effect=legal_schema)
+        manager._services = {"reports": reports, "legal": legal}
+
+        schema = await manager._get_schema(["reports", "legal"])
+
+        assert schema["custom_keys"] == ["department", "jurisdiction"]
+        assert ("reports", "legal") in manager._schema_cache
+
     async def test_aplan_query_threads_image_catalog_to_web_variant(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
         reports = AsyncMock()

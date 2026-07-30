@@ -12,7 +12,6 @@ from PIL import Image
 from dlightrag.core.retrieval import canonicalize_reference_ids
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalResult
-from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 from dlightrag.utils.concurrency import bounded_map
 from dlightrag.utils.images import decode_image_base64, image_url_block
 
@@ -89,7 +88,6 @@ class LightRAGMixBackend:
             "lightrag_entity_count": len(data.get("entities", [])),
             "lightrag_relationship_count": len(data.get("relationships", [])),
             "direct_visual_chunk_count": 0,
-            "hydrated_chunk_count": 0,
         }
 
         direct_visual_chunks = await visual_task if visual_task is not None else []
@@ -97,11 +95,6 @@ class LightRAGMixBackend:
         if direct_visual_chunks:
             chunks = rrf_fuse([chunks, direct_visual_chunks])[:limit]
 
-        await self._hydrate_chunk_provenance(chunks)
-        trace["hydrated_chunk_count"] = len(chunks)
-        trace["provenance_hydrated_chunk_ids"] = [
-            str(chunk["chunk_id"]) for chunk in chunks if chunk.get("chunk_id")
-        ]
         chunks = canonicalize_reference_ids(chunks, references=data.get("references", []))
 
         context_chunks: list[ContextRow] = []
@@ -217,9 +210,6 @@ class LightRAGMixBackend:
                 c["relevance_score"] if c.get("relevance_score") is not None else float("inf")
             ),
         )[:top_k]
-
-    async def _hydrate_chunk_provenance(self, chunks: list[ContextRow]) -> None:
-        await hydrate_lightrag_chunk_provenance(self._stores, chunks)
 
 
 def _extract_images(blocks: list[dict[str, Any]] | None) -> list[Image.Image]:

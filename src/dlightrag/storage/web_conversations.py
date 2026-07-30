@@ -255,12 +255,6 @@ VALUES ($1, $2::text::uuid)
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
-_PRUNE_PRINCIPAL = """
-DELETE FROM web_conversations
-WHERE principal_id = $1
-  AND updated_at < NOW() - ($2 * INTERVAL '1 day')
-"""
-
 _LIST_CONVERSATIONS = f"""
 SELECT {_SUMMARY_COLUMNS}
 FROM web_conversations
@@ -1034,17 +1028,13 @@ class PGWebConversationStore:
         *,
         ttl_days: int,
     ) -> list[dict[str, Any]]:
-        """Prune and list one principal's unexpired conversations."""
+        """List one principal's unexpired conversations."""
         await self._ensure_initialized()
-
-        async def _prune(conn: Any) -> None:
-            await conn.execute(_PRUNE_PRINCIPAL, principal_id, ttl_days)
 
         async def _select(conn: Any) -> list[dict[str, Any]]:
             rows = await conn.fetch(_LIST_CONVERSATIONS, principal_id, ttl_days)
             return [_row_dict(row) for row in rows]
 
-        await self._run_write(_prune)
         return await self._run_read(_select)
 
     async def rename_conversation(

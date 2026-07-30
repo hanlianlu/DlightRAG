@@ -53,10 +53,12 @@ from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import ComposerProcessingResources, RAGService
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.utils import log_safe, normalize_workspace
+from dlightrag.utils.concurrency import bounded_map
 
 logger = logging.getLogger(__name__)
 
 _MAX_RETRY_INTERVAL: float = 300.0
+_SCHEMA_LOOKUP_MAX_CONCURRENCY = 8
 
 
 def _defer_cancellation(
@@ -1071,23 +1073,39 @@ class RAGServiceManager:
         if cached is not None and now - cached[0] < 300.0:
             return cached[1]
 
-        schemas: list[dict[str, Any]] = []
-        complete = True
-        for workspace in ws_key:
+        async def _fetch_schema(workspace: str) -> tuple[bool, dict[str, Any] | None]:
             try:
                 svc = await self._get_service(workspace)
                 metadata_index = getattr(svc, "_metadata_index", None)
                 if metadata_index is not None:
                     schema = await metadata_index.get_field_schema()
                     if isinstance(schema, dict):
-                        schemas.append(schema)
+                        return True, schema
             except Exception:
-                complete = False
                 logger.debug(
                     "Schema lookup failed for workspace %s",
                     log_safe(workspace),
                     exc_info=True,
                 )
+                return False, None
+            return True, None
+
+        schemas: list[dict[str, Any]] = []
+        complete = True
+        lookups = await bounded_map(
+            ws_key,
+            _fetch_schema,
+            max_concurrent=_SCHEMA_LOOKUP_MAX_CONCURRENCY,
+            task_name="workspace schema lookup",
+        )
+        for lookup in lookups:
+            if isinstance(lookup, Exception):
+                complete = False
+                continue
+            succeeded, schema = lookup
+            complete = complete and succeeded
+            if schema is not None:
+                schemas.append(schema)
         merged = _merge_schema_rows(schemas)
         if complete:
             self._schema_cache[ws_key] = (now, merged)

@@ -493,19 +493,18 @@ async def test_commit_reconciliation_lookup_uses_single_attempt_pool_path(monkey
     assert production_pool.retrying_calls == 0
 
 
-async def test_list_prunes_expired_rows_before_selecting() -> None:
+async def test_list_filters_expired_rows_without_request_path_write() -> None:
     conn = FakeConnection()
     conn.fetch_result = []
     store = make_store(conn)
 
     assert await store.list_conversations("principal-a", ttl_days=30) == []
 
-    statements = "\n".join(query for query, _ in conn.calls)
-    assert "DELETE FROM web_conversations" in statements
-    assert "updated_at < NOW()" in statements
-    assert "principal_id = $1" in statements
-    assert conn.calls[0][1] == ("principal-a", 30)
-    assert conn.calls[1][1] == ("principal-a", 30)
+    assert len(conn.calls) == 1
+    query, args = conn.calls[0]
+    assert query.lstrip().startswith("SELECT")
+    assert "updated_at >= NOW()" in query
+    assert args == ("principal-a", 30)
 
 
 async def test_global_expiry_prune_is_batched_and_skip_locked() -> None:

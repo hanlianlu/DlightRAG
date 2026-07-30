@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 from PIL import Image
 
 from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
+from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
 
 def _image_block() -> dict[str, Any]:
@@ -62,6 +63,7 @@ async def test_backend_always_queries_lightrag_mix() -> None:
     assert result.contexts["chunks"][0]["chunk_id"] == "txt1"
     assert result.contexts["chunks"][0]["reference_id"] == "3"
     assert result.contexts["chunks"][0].get("page_number") is None
+    stores.get_text_chunks.assert_not_awaited()
 
 
 async def test_backend_forwards_chunk_top_k_to_lightrag_query_param() -> None:
@@ -101,7 +103,7 @@ async def test_backend_forwards_query_token_caps_to_lightrag_query_param() -> No
     assert param.max_total_tokens == 333
 
 
-async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path: Path) -> None:
+async def test_provenance_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path: Path) -> None:
     image_path = tmp_path / "page.png"
     _write_image(image_path)
     lightrag = MagicMock()
@@ -127,6 +129,7 @@ async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path:
 
     backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
     result = await backend.aretrieve("question")
+    await hydrate_lightrag_chunk_provenance(stores, result.contexts["chunks"])
 
     chunk = result.contexts["chunks"][0]
     assert chunk["chunk_id"] == "img1"
@@ -134,7 +137,7 @@ async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path:
     assert chunk["page_number"] == 3
 
 
-async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
+async def test_provenance_hydrates_text_chunk_page_from_lightrag_block_sidecar(
     tmp_path: Path,
 ) -> None:
     parsed_dir = tmp_path / "sample.parsed"
@@ -181,6 +184,7 @@ async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
 
     backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
     result = await backend.aretrieve("question")
+    await hydrate_lightrag_chunk_provenance(stores, result.contexts["chunks"])
 
     assert result.contexts["chunks"][0]["page_number"] == 1
     assert "page_idx" not in result.contexts["chunks"][0]
@@ -188,7 +192,7 @@ async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
     assert result.contexts["chunks"][0]["full_doc_id"] == "doc-1"
 
 
-async def test_backend_hydrates_multimodal_chunk_page_from_sidecar_item(
+async def test_provenance_hydrates_multimodal_chunk_page_from_sidecar_item(
     tmp_path: Path,
 ) -> None:
     """Table/drawing/equation chunks reference a modality item id, not a block;
@@ -243,6 +247,7 @@ async def test_backend_hydrates_multimodal_chunk_page_from_sidecar_item(
 
     backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
     result = await backend.aretrieve("question")
+    await hydrate_lightrag_chunk_provenance(stores, result.contexts["chunks"])
 
     chunk = result.contexts["chunks"][0]
     assert chunk["page_number"] == 1
@@ -250,7 +255,7 @@ async def test_backend_hydrates_multimodal_chunk_page_from_sidecar_item(
     assert "bbox" not in chunk
 
 
-async def test_backend_hydrates_v150_drawing_sidecar_from_drawings_json(
+async def test_provenance_hydrates_v150_drawing_sidecar_from_drawings_json(
     tmp_path: Path,
 ) -> None:
     """LightRAG 1.5 visual chunks carry sidecar={type,id,refs} with no path field.
@@ -305,6 +310,7 @@ async def test_backend_hydrates_v150_drawing_sidecar_from_drawings_json(
 
     backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
     result = await backend.aretrieve("question")
+    await hydrate_lightrag_chunk_provenance(stores, result.contexts["chunks"])
 
     chunk = result.contexts["chunks"][0]
     assert chunk["chunk_id"] == "mm1"
@@ -427,7 +433,7 @@ async def test_backend_uses_dedicated_direct_visual_top_k() -> None:
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
 
 
-async def test_backend_rejects_drawing_sidecar_image_path_outside_artifact_dir(
+async def test_provenance_rejects_drawing_sidecar_image_path_outside_artifact_dir(
     tmp_path: Path,
 ) -> None:
     parsed_dir = tmp_path / "sample.parsed"
@@ -479,5 +485,6 @@ async def test_backend_rejects_drawing_sidecar_image_path_outside_artifact_dir(
 
     backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
     result = await backend.aretrieve("question")
+    await hydrate_lightrag_chunk_provenance(stores, result.contexts["chunks"])
 
     assert result.contexts["chunks"][0]["image_data"] is None

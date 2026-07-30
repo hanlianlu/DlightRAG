@@ -1818,33 +1818,20 @@ class RAGService:
             **kwargs,
         )
 
-        # --- Step 2.5: Hydrate image data for all retrieved chunks ---
-        # BM25 chunks and other post-fusion additions haven't been through
-        # hydration yet, so they lack image_data for visual chunks.
+        # --- Step 2.5: Hydrate provenance for the complete fused candidate set ---
         stores = self._lightrag_stores
         if stores is not None:
             from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
             chunks_to_hydrate = kg_result.contexts.get("chunks", [])
             if chunks_to_hydrate:
-                hydrated_ids = {
-                    str(chunk_id)
-                    for chunk_id in kg_result.trace.get("provenance_hydrated_chunk_ids", [])
-                }
-                pending_chunks = [
-                    chunk
-                    for chunk in chunks_to_hydrate
-                    if str(chunk.get("chunk_id") or "") not in hydrated_ids
-                ]
-                if pending_chunks:
-                    # Defer the expensive image base64 read past rerank truncation
-                    # for a text-only reranker, so chunks that rerank drops never
-                    # read their image bytes.
-                    await hydrate_lightrag_chunk_provenance(
-                        stores,
-                        pending_chunks,
-                        include_image_data=self._rerank_consumes_images,
-                    )
+                # Defer image bytes past rerank truncation for a text-only
+                # reranker; multimodal rerankers need them with the candidates.
+                await hydrate_lightrag_chunk_provenance(
+                    stores,
+                    chunks_to_hydrate,
+                    include_image_data=self._rerank_consumes_images,
+                )
 
         await self._rerank_retrieval_chunks(
             query,

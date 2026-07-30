@@ -323,6 +323,7 @@ class TestRAGServiceRetrieve:
         )
 
         async def hydrate(_stores, chunks, *, include_image_data=True):
+            assert include_image_data is True
             chunks[1]["image_data"] = "hydrated-image"
 
         async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]:
@@ -411,43 +412,6 @@ class TestRAGServiceRetrieve:
         ]
         assert result.trace["reranked_chunk_count"] == 3
         assert result.trace["rerank_error"] == "RuntimeError"
-
-    async def test_aretrieve_skips_chunks_hydrated_by_backend(
-        self, test_config, monkeypatch: pytest.MonkeyPatch
-    ):
-        from dlightrag.core.retrieval.protocols import RetrievalResult
-
-        service, orchestrator = self._make_retrieval_service(test_config)
-        orchestrator.aretrieve.return_value = RetrievalResult(
-            contexts={
-                "chunks": [
-                    {
-                        "chunk_id": "semantic-a",
-                        "content": "semantic",
-                        "full_doc_id": "doc-a",
-                    },
-                    {"chunk_id": "bm25-b", "content": "lexical", "full_doc_id": "doc-b"},
-                ],
-                "entities": [],
-                "relationships": [],
-            },
-            trace={"provenance_hydrated_chunk_ids": ["semantic-a"]},
-        )
-        seen: list[list[str]] = []
-
-        async def hydrate(_stores, chunks, *, include_image_data=True):
-            seen.append([chunk["chunk_id"] for chunk in chunks])
-            chunks[0]["page_number"] = 7
-
-        monkeypatch.setattr(
-            "dlightrag.core.retrieval.provenance.hydrate_lightrag_chunk_provenance",
-            hydrate,
-        )
-
-        result = await service.aretrieve("test query")
-
-        assert seen == [["bm25-b"]]
-        assert result.contexts["chunks"][1]["page_number"] == 7
 
     async def test_aretrieve_defers_image_hydration_for_text_reranker(
         self, test_config, monkeypatch: pytest.MonkeyPatch
