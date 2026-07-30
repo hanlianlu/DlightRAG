@@ -57,6 +57,7 @@ from dlightrag.utils import log_safe, normalize_workspace
 logger = logging.getLogger(__name__)
 
 _MAX_RETRY_INTERVAL: float = 300.0
+_QUERY_WORKSPACE_MAX_CONCURRENCY = 8
 
 
 def _defer_cancellation(
@@ -1111,40 +1112,43 @@ class RAGServiceManager:
         planner = self._get_query_planner()
         from dlightrag.observability import trace_observation
 
-        async with trace_observation(
-            "query_planning",
-            as_type="chain",
-            input={"query": query},
-            metadata={
-                "workspaces": list(workspaces or []),
-                "history_messages": len(text_history or []),
-                "history_image_catalog_count": len(image_catalog or []),
-                "history_attachment_catalog_count": len(attachment_catalog or []),
-                "current_attachment_count": len(current_attachment_catalog or []),
-            },
-        ) as trace:
-            schema = await self._get_schema(workspaces)
-            plan = await planner.plan_web_conversation(
-                query,
-                conversation_history=text_history,
-                image_catalog=image_catalog,
-                attachment_catalog=attachment_catalog,
-                current_attachment_catalog=current_attachment_catalog,
-                allowed_history_image_count=allowed_history_image_count,
-                allowed_history_attachment_count=allowed_history_attachment_count,
-                current_image_descriptions=current_image_descriptions,
-                max_turns=self._config.max_conversation_turns,
-                max_tokens=self._config.max_conversation_tokens,
-                schema=schema,
-            )
-            trace.update(
-                output={
-                    "standalone_query": plan.standalone_query,
-                    "has_metadata_filter": plan.metadata_filter is not None,
-                    "planner_outcome": plan.planner_outcome,
-                }
-            )
-            return plan
+        async def _plan() -> QueryPlan:
+            async with trace_observation(
+                "query_planning",
+                as_type="chain",
+                input={"query": query},
+                metadata={
+                    "workspaces": list(workspaces or []),
+                    "history_messages": len(text_history or []),
+                    "history_image_catalog_count": len(image_catalog or []),
+                    "history_attachment_catalog_count": len(attachment_catalog or []),
+                    "current_attachment_count": len(current_attachment_catalog or []),
+                },
+            ) as trace:
+                schema = await self._get_schema(workspaces)
+                plan = await planner.plan_web_conversation(
+                    query,
+                    conversation_history=text_history,
+                    image_catalog=image_catalog,
+                    attachment_catalog=attachment_catalog,
+                    current_attachment_catalog=current_attachment_catalog,
+                    allowed_history_image_count=allowed_history_image_count,
+                    allowed_history_attachment_count=allowed_history_attachment_count,
+                    current_image_descriptions=current_image_descriptions,
+                    max_turns=self._config.max_conversation_turns,
+                    max_tokens=self._config.max_conversation_tokens,
+                    schema=schema,
+                )
+                trace.update(
+                    output={
+                        "standalone_query": plan.standalone_query,
+                        "has_metadata_filter": plan.metadata_filter is not None,
+                        "planner_outcome": plan.planner_outcome,
+                    }
+                )
+                return plan
+
+        return await self._overlap_query_service_warmup(workspaces, _plan())
 
     async def aget_composer_processing_resources(
         self, workspaces: list[str] | tuple[str, ...] | None = None
@@ -1236,17 +1240,61 @@ class RAGServiceManager:
         run the planner (BM25 keyword extraction, metadata-filter inference, and
         image-aware query construction). Describing zero images is a no-op.
         """
-        prepared = await prepare_query_images(
-            query_images=list(query_images or []),
-            describer=await self._aget_query_image_describer(),
+
+        async def _plan() -> tuple[QueryPlan, PreparedQueryImages]:
+            prepared = await prepare_query_images(
+                query_images=list(query_images or []),
+                describer=await self._aget_query_image_describer(),
+            )
+            plan = await self._aplan_query_prepared(
+                query,
+                text_history=text_history,
+                current_image_descriptions=prepared.descriptions or None,
+                workspaces=ws_list,
+            )
+            return plan, prepared
+
+        return await self._overlap_query_service_warmup(ws_list, _plan())
+
+    async def _overlap_query_service_warmup[T](
+        self,
+        workspaces: list[str] | tuple[str, ...] | None,
+        operation: Awaitable[T],
+    ) -> T:
+        """Run planning work while selected workspace services initialize."""
+        warm_task = asyncio.create_task(self._warm_query_services(workspaces))
+        operation_task = asyncio.ensure_future(operation)
+        try:
+            await asyncio.gather(warm_task, operation_task)
+            return operation_task.result()
+        except BaseException:
+            warm_task.cancel()
+            operation_task.cancel()
+            await asyncio.gather(warm_task, operation_task, return_exceptions=True)
+            raise
+
+    async def _warm_query_services(
+        self,
+        workspaces: list[str] | tuple[str, ...] | None,
+    ) -> None:
+        """Initialize only the services selected for an imminent query."""
+        selected = _normalize_workspaces(workspaces) or (
+            normalize_workspace(self._config.workspace),
         )
-        plan = await self._aplan_query_prepared(
-            query,
-            text_history=text_history,
-            current_image_descriptions=prepared.descriptions or None,
-            workspaces=ws_list,
-        )
-        return plan, prepared
+        semaphore = asyncio.Semaphore(_QUERY_WORKSPACE_MAX_CONCURRENCY)
+
+        async def _warm(workspace: str) -> None:
+            async with semaphore:
+                await self._get_service(workspace)
+
+        tasks = [asyncio.create_task(_warm(workspace)) for workspace in selected]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def agenerate_stream_from_contexts(
         self,
@@ -1474,7 +1522,11 @@ class RAGServiceManager:
                         result = await svc.aretrieve(effective_query, **kwargs)
                     else:
                         result = await federated_retrieve(
-                            effective_query, ws_list, self._get_service, **kwargs
+                            effective_query,
+                            ws_list,
+                            self._get_service,
+                            max_concurrency=_QUERY_WORKSPACE_MAX_CONCURRENCY,
+                            **kwargs,
                         )
                     result.image_descriptions = descriptions
                     result.trace["query_image_description_count"] = len(descriptions)

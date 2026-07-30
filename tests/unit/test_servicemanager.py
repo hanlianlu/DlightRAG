@@ -311,6 +311,127 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
     assert planner.plan.await_args.kwargs["conversation_history"] == history
 
 
+@pytest.mark.parametrize("planner_kind", ["standard", "web"])
+async def test_query_planning_overlaps_workspace_warmup(test_cfg, planner_kind: str) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    warm_started = asyncio.Event()
+    release_warm = asyncio.Event()
+    plan_finished = asyncio.Event()
+
+    async def get_service(_workspace: str) -> AsyncMock:
+        warm_started.set()
+        await release_warm.wait()
+        return AsyncMock()
+
+    async def plan_query(*_args: object, **_kwargs: object) -> QueryPlan:
+        await warm_started.wait()
+        plan_finished.set()
+        return QueryPlan(original_query="query", standalone_query="planned")
+
+    manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
+    if planner_kind == "standard":
+        describer = AsyncMock()
+        describer.describe.return_value = {}
+        manager._aget_query_image_describer = AsyncMock(  # type: ignore[method-assign]
+            return_value=describer
+        )
+        manager._aplan_query_prepared = AsyncMock(  # type: ignore[method-assign]
+            side_effect=plan_query
+        )
+        operation = manager._describe_and_plan(
+            "query",
+            text_history=None,
+            query_images=None,
+            ws_list=["reports"],
+        )
+    else:
+        planner = AsyncMock()
+        planner.plan_web_conversation.side_effect = plan_query
+        manager._query_planner = planner
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
+        operation = manager.aplan_web_conversation_query("query", workspaces=["reports"])
+
+    task = asyncio.create_task(operation)
+    try:
+        await asyncio.wait_for(plan_finished.wait(), timeout=0.1)
+        assert not task.done()
+    finally:
+        release_warm.set()
+    result = await task
+    plan = result[0] if isinstance(result, tuple) else result
+
+    assert plan.standalone_query == "planned"
+    manager._get_service.assert_awaited_once_with("reports")
+
+
+@pytest.mark.parametrize("failed_side", ["warmup", "planner"])
+async def test_query_planning_failure_cancels_peer_and_preserves_error(
+    test_cfg, failed_side: str
+) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    warm_started = asyncio.Event()
+    operation_started = asyncio.Event()
+    warm_cancelled = asyncio.Event()
+    operation_cancelled = asyncio.Event()
+    expected = RuntimeError(f"{failed_side} failed")
+
+    async def warm_services(_workspaces: object) -> None:
+        warm_started.set()
+        if failed_side == "warmup":
+            await operation_started.wait()
+            raise expected
+        try:
+            await asyncio.Event().wait()
+        finally:
+            warm_cancelled.set()
+
+    async def operation() -> None:
+        operation_started.set()
+        if failed_side == "planner":
+            await warm_started.wait()
+            raise expected
+        try:
+            await asyncio.Event().wait()
+        finally:
+            operation_cancelled.set()
+
+    manager._warm_query_services = warm_services  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError) as raised:
+        await manager._overlap_query_service_warmup(
+            ["reports"],
+            operation(),
+        )
+
+    assert raised.value is expected
+    assert (operation_cancelled if failed_side == "warmup" else warm_cancelled).is_set()
+
+
+async def test_query_workspace_warmup_cancels_siblings_on_failure(test_cfg) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    sibling_started = asyncio.Event()
+    sibling_cancelled = asyncio.Event()
+    expected = RuntimeError("workspace failed")
+
+    async def get_service(workspace: str) -> None:
+        if workspace == "failed":
+            await sibling_started.wait()
+            raise expected
+        sibling_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            sibling_cancelled.set()
+
+    manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError) as raised:
+        await manager._warm_query_services(["failed", "sibling"])
+
+    assert raised.value is expected
+    assert sibling_cancelled.is_set()
+
+
 async def test_private_generation_helper_hands_prepared_history_to_engine(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     engine = AsyncMock()
@@ -885,10 +1006,19 @@ class TestAnswerViaEngine:
     """aanswer and aanswer_stream route through AnswerEngine."""
 
     @pytest.fixture(autouse=True)
-    def _stub_metadata_schema(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _stub_planning_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
             AsyncMock(return_value={"columns": [], "custom_keys": []}),
+        )
+
+        async def warm_query_services(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(
+            RAGServiceManager,
+            "_warm_query_services",
+            warm_query_services,
         )
 
     async def test_aplan_query_emits_query_planning_observation(

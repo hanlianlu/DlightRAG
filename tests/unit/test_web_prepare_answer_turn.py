@@ -64,8 +64,10 @@ class _FakeManager:
         self.plan_kwargs: dict[str, Any] = {}
         self.described_images: list[dict[str, Any]] = []
         self.processing_resources = object()
+        self.processing_resource_calls = 0
 
     async def aget_composer_processing_resources(self, workspaces: Any = None) -> object:
+        self.processing_resource_calls += 1
         return self.processing_resources
 
     async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
@@ -141,6 +143,7 @@ async def test_prepare_answer_turn_injects_plan_and_orders_current_first() -> No
     assert manager.described_images == current
     assert manager.plan_kwargs["current_image_descriptions"] == ["Image 1: revenue chart"]
     assert turn.current_image_descriptions == {"1": "Image 1: revenue chart"}
+    assert manager.processing_resource_calls == 0
 
 
 async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:

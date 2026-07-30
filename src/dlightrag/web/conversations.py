@@ -286,10 +286,19 @@ class WebConversationService:
         context rows that core merges into retrieval before generation.
         """
         documents = list(current_documents or [])
-        resources = await manager.aget_composer_processing_resources(workspaces)
-        document_service = (
-            self._get_composer_document_service(resources, prepared) if documents else None
-        )
+        resources: ComposerProcessingResources | None = None
+
+        async def processing_resources() -> ComposerProcessingResources:
+            nonlocal resources
+            if resources is None:
+                resources = await manager.aget_composer_processing_resources(workspaces)
+            return resources
+
+        document_service = None
+        if documents:
+            document_service = self._get_composer_document_service(
+                await processing_resources(), prepared
+            )
         capability = manager.answer_image_capability
         effective = capability.effective_max_images if capability is not None else 0
         remaining = max(0, effective - len(current_images))
@@ -438,7 +447,9 @@ class WebConversationService:
                 if attachment_id in history_docs_by_id
             ]
             if history_docs and document_service is None:
-                document_service = self._get_composer_document_service(resources, prepared)
+                document_service = self._get_composer_document_service(
+                    await processing_resources(), prepared
+                )
             (
                 history_chunks,
                 history_failures,
@@ -463,6 +474,7 @@ class WebConversationService:
         if current_chunks or history_chunks:
             if document_service is None:
                 raise RuntimeError("document service missing for parsed Composer chunks")
+            active_resources = await processing_resources()
             retrieval_attachment_ids = {
                 attachment_id
                 for attachment_id, bundle in [*current_bundles, *history_bundles]
@@ -492,7 +504,7 @@ class WebConversationService:
                 history_rows=history_rows,
                 dense_rankings=dense_rankings,
                 retrieval_attachment_ids=retrieval_attachment_ids,
-                rerank_func=resources.rerank_func,
+                rerank_func=active_resources.rerank_func,
             )
             composer_rows = _assign_composer_reference_ids(composer_rows)
             composer_trace = {**dense_trace, **composer_trace}
