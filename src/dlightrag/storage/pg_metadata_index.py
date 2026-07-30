@@ -165,6 +165,37 @@ def _build_upsert_params(
 
 _UPSERT = _build_upsert()
 
+_FIELD_SCHEMA = """
+SELECT row_type, name, data_type
+FROM (
+    SELECT
+        0 AS row_order,
+        ordinal_position::int AS item_order,
+        'column'::text AS row_type,
+        column_name::text AS name,
+        data_type::text AS data_type
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'dlightrag_doc_metadata'
+
+    UNION ALL
+
+    SELECT
+        1 AS row_order,
+        NULL::int AS item_order,
+        'custom'::text AS row_type,
+        key AS name,
+        NULL::text AS data_type
+    FROM (
+        SELECT DISTINCT jsonb_object_keys(custom_metadata) AS key
+        FROM dlightrag_doc_metadata
+        WHERE workspace = ANY($1::text[])
+          AND custom_metadata != '{}'
+    ) AS custom_keys
+) AS schema_rows
+ORDER BY row_order, item_order NULLS LAST, name
+"""
+
 
 class PGMetadataIndex:
     """PostgreSQL-backed document metadata index.
@@ -379,38 +410,32 @@ class PGMetadataIndex:
         }
     )
 
-    async def get_field_schema(self) -> dict[str, Any]:
+    async def get_field_schema(
+        self,
+        *,
+        workspaces: tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
         """Read table structure dynamically.
 
         - Column names/types from information_schema (table structure)
-        - JSONB keys from custom_metadata (JSONB-internal structure)
+        - JSONB keys from custom_metadata across the requested workspaces
+        - Falls back to the instance workspace when no workspace set is provided
 
         Used by QueryAnalyzer to build a context-aware LLM prompt.
         """
+        workspace_scope = list(dict.fromkeys(workspaces or (self._workspace,)))
 
-        async def _operation(conn: Any) -> tuple[list[Any], list[Any]]:
-            col_rows = await conn.fetch(
-                "SELECT column_name, data_type FROM information_schema.columns "
-                "WHERE table_schema = 'public' "
-                "AND table_name = 'dlightrag_doc_metadata' "
-                "ORDER BY ordinal_position"
-            )
-            key_rows = await conn.fetch(
-                "SELECT DISTINCT jsonb_object_keys(custom_metadata) AS k "
-                "FROM dlightrag_doc_metadata "
-                "WHERE workspace=$1 AND custom_metadata != '{}'",
-                self._workspace,
-            )
-            return col_rows, key_rows
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(_FIELD_SCHEMA, workspace_scope)
 
-        col_rows, key_rows = await self._run(_operation)
+        rows = await self._run(_operation)
 
         columns = [
-            {"name": r["column_name"], "type": r["data_type"]}
-            for r in col_rows
-            if r["column_name"] not in self._INTERNAL_COLS
+            {"name": row["name"], "type": row["data_type"]}
+            for row in rows
+            if row["row_type"] == "column" and row["name"] not in self._INTERNAL_COLS
         ]
-        custom_keys = [r["k"] for r in key_rows]
+        custom_keys = [row["name"] for row in rows if row["row_type"] == "custom"]
         return {"columns": columns, "custom_keys": custom_keys}
 
     async def find_by_filename(self, name: str) -> list[str]:

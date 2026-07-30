@@ -277,18 +277,18 @@ async def test_metadata_field_schema_hides_internal_source_columns() -> None:
     idx = pg_metadata_index.PGMetadataIndex(workspace="default")
 
     class Conn:
-        async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
-            if "information_schema.columns" in query:
-                return [
-                    {"column_name": "workspace", "data_type": "character varying"},
-                    {"column_name": "doc_id", "data_type": "character varying"},
-                    {"column_name": "file_path", "data_type": "text"},
-                    {"column_name": "source_uri", "data_type": "text"},
-                    {"column_name": "download_locator", "data_type": "text"},
-                    {"column_name": "filename", "data_type": "character varying"},
-                ]
-            assert args == ("default",)
-            return [{"k": "department"}]
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+            assert "workspace = ANY($1::text[])" in query
+            assert args == (["default"],)
+            return [
+                {"row_type": "column", "name": "workspace", "data_type": "character varying"},
+                {"row_type": "column", "name": "doc_id", "data_type": "character varying"},
+                {"row_type": "column", "name": "file_path", "data_type": "text"},
+                {"row_type": "column", "name": "source_uri", "data_type": "text"},
+                {"row_type": "column", "name": "download_locator", "data_type": "text"},
+                {"row_type": "column", "name": "filename", "data_type": "character varying"},
+                {"row_type": "custom", "name": "department", "data_type": None},
+            ]
 
     async def run(operation):  # noqa: ANN001, ANN202
         return await operation(Conn())
@@ -301,3 +301,29 @@ async def test_metadata_field_schema_hides_internal_source_columns() -> None:
         "columns": [{"name": "filename", "type": "character varying"}],
         "custom_keys": ["department"],
     }
+
+
+async def test_metadata_field_schema_reads_multiple_workspaces_in_one_operation() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+    seen: list[tuple[str, tuple[Any, ...]]] = []
+
+    class Conn:
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+            seen.append((query, args))
+            return [
+                {"row_type": "column", "name": "filename", "data_type": "character varying"},
+                {"row_type": "custom", "name": "department", "data_type": None},
+                {"row_type": "custom", "name": "jurisdiction", "data_type": None},
+            ]
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    schema = await idx.get_field_schema(workspaces=("reports", "legal"))
+
+    assert schema["custom_keys"] == ["department", "jurisdiction"]
+    assert len(seen) == 1
+    assert "workspace = ANY($1::text[])" in seen[0][0]
+    assert seen[0][1] == (["reports", "legal"],)

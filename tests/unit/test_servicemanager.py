@@ -884,6 +884,13 @@ class TestRouting:
 class TestAnswerViaEngine:
     """aanswer and aanswer_stream route through AnswerEngine."""
 
+    @pytest.fixture(autouse=True)
+    def _stub_metadata_schema(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            AsyncMock(return_value={"columns": [], "custom_keys": []}),
+        )
+
     async def test_aplan_query_emits_query_planning_observation(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2172,6 +2179,7 @@ class TestRequestTimeout:
         mock_create.return_value = mock_svc
         test_cfg_short = test_cfg.model_copy(update={"request_timeout": 1})
         manager = RAGServiceManager(config=test_cfg_short)
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
         with pytest.raises(RAGServiceUnavailableError, match="timed out"):
             await manager.aretrieve("test query", workspace="default")
 
@@ -2476,23 +2484,28 @@ class TestWorkspaceDiscovery:
 
 
 class TestPlannerSchemaScope:
-    async def test_aplan_query_uses_schema_for_requested_workspace(self, test_cfg) -> None:
+    async def test_aplan_query_uses_schema_for_requested_workspace(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        reports = AsyncMock()
-        reports._metadata_index.get_field_schema = AsyncMock(
-            return_value={
+        schemas = {
+            ("reports",): {
                 "columns": [{"name": "filename", "type": "character varying"}],
                 "custom_keys": ["department"],
-            }
-        )
-        legal = AsyncMock()
-        legal._metadata_index.get_field_schema = AsyncMock(
-            return_value={
+            },
+            ("legal",): {
                 "columns": [{"name": "filename", "type": "character varying"}],
                 "custom_keys": ["jurisdiction"],
-            }
+            },
+        }
+
+        async def get_field_schema(_index, *, workspaces):  # noqa: ANN001, ANN202
+            return schemas[workspaces]
+
+        monkeypatch.setattr(
+            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            get_field_schema,
         )
-        manager._services = {"reports": reports, "legal": legal}
 
         llm = AsyncMock(return_value='{"standalone_query": "q", "filters": {}}')
         manager._query_planner = QueryPlanner(llm_func=llm)
@@ -2507,58 +2520,56 @@ class TestPlannerSchemaScope:
         assert "jurisdiction" in second_payload["metadata_schema"]
         assert "department" not in second_payload["metadata_schema"]
 
-    async def test_partial_schema_failure_does_not_poison_cache(self, test_cfg) -> None:
+    async def test_partial_schema_failure_does_not_poison_cache(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        reports = AsyncMock()
-        reports._metadata_index.get_field_schema = AsyncMock(
-            return_value={"columns": [], "custom_keys": ["department"]}
+        get_field_schema = AsyncMock(return_value={"columns": [], "custom_keys": ["department"]})
+        monkeypatch.setattr(
+            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            get_field_schema,
         )
-        manager._services = {"reports": reports}
 
         # A transient lookup failure must not be cached as a degraded schema.
-        reports._metadata_index.get_field_schema.side_effect = RuntimeError("db down")
+        get_field_schema.side_effect = RuntimeError("db down")
         degraded = await manager._get_schema(["reports"])
         assert degraded == {}
         assert manager._schema_cache == {}
 
         # The next call retries and caches the recovered schema.
-        reports._metadata_index.get_field_schema.side_effect = None
+        get_field_schema.side_effect = None
         recovered = await manager._get_schema(["reports"])
         assert recovered["custom_keys"] == ["department"]
         assert ("reports",) in manager._schema_cache
 
-    async def test_cold_workspace_schemas_are_fetched_concurrently(self, test_cfg) -> None:
+    async def test_cold_workspace_schema_uses_one_set_query_without_service_warmup(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        legal_started = asyncio.Event()
-
-        async def reports_schema() -> dict[str, object]:
-            await asyncio.sleep(0)
-            if not legal_started.is_set():
-                raise RuntimeError("schema lookups were serialized")
-            return {"columns": [], "custom_keys": ["department"]}
-
-        async def legal_schema() -> dict[str, object]:
-            legal_started.set()
-            return {"columns": [], "custom_keys": ["jurisdiction"]}
-
-        reports = AsyncMock()
-        reports._metadata_index.get_field_schema = AsyncMock(side_effect=reports_schema)
-        legal = AsyncMock()
-        legal._metadata_index.get_field_schema = AsyncMock(side_effect=legal_schema)
-        manager._services = {"reports": reports, "legal": legal}
+        manager._get_service = AsyncMock(side_effect=AssertionError("must not warm services"))
+        get_field_schema = AsyncMock(
+            return_value={"columns": [], "custom_keys": ["department", "jurisdiction"]}
+        )
+        monkeypatch.setattr(
+            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            get_field_schema,
+        )
 
         schema = await manager._get_schema(["reports", "legal"])
 
         assert schema["custom_keys"] == ["department", "jurisdiction"]
+        get_field_schema.assert_awaited_once_with(workspaces=("reports", "legal"))
+        manager._get_service.assert_not_awaited()
         assert ("reports", "legal") in manager._schema_cache
 
-    async def test_aplan_query_threads_image_catalog_to_web_variant(self, test_cfg) -> None:
+    async def test_aplan_query_threads_image_catalog_to_web_variant(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        reports = AsyncMock()
-        reports._metadata_index.get_field_schema = AsyncMock(
-            return_value={"columns": [], "custom_keys": []}
+        monkeypatch.setattr(
+            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            AsyncMock(return_value={"columns": [], "custom_keys": []}),
         )
-        manager._services = {"reports": reports}
 
         llm = AsyncMock(
             return_value=(

@@ -53,12 +53,10 @@ from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import ComposerProcessingResources, RAGService
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.utils import log_safe, normalize_workspace
-from dlightrag.utils.concurrency import bounded_map
 
 logger = logging.getLogger(__name__)
 
 _MAX_RETRY_INTERVAL: float = 300.0
-_SCHEMA_LOOKUP_MAX_CONCURRENCY = 8
 
 
 def _defer_cancellation(
@@ -194,29 +192,6 @@ def _cleanup_paths_for_local_ingest(*, source_type: SourceType, path: str | None
     if source_type != "local" or not path:
         return []
     return [path] if is_explicit_upload_batch_dir(Path(path)) else []
-
-
-def _merge_schema_rows(schemas: list[dict[str, Any]]) -> dict[str, Any]:
-    if not schemas:
-        return {}
-    if len(schemas) == 1:
-        return dict(schemas[0])
-
-    columns: dict[str, dict[str, Any]] = {}
-    custom_keys: set[str] = set()
-    for schema in schemas:
-        for column in schema.get("columns", []) or []:
-            if isinstance(column, dict):
-                name = str(column.get("name") or "")
-                if name and name not in columns:
-                    columns[name] = dict(column)
-        for key in schema.get("custom_keys", []) or []:
-            if key:
-                custom_keys.add(str(key))
-    return {
-        "columns": list(columns.values()),
-        "custom_keys": sorted(custom_keys),
-    }
 
 
 class RAGServiceUnavailableError(Exception):
@@ -1073,47 +1048,19 @@ class RAGServiceManager:
         if cached is not None and now - cached[0] < 300.0:
             return cached[1]
 
-        async def _fetch_schema(workspace: str) -> tuple[bool, dict[str, Any] | None]:
-            try:
-                svc = await self._get_service(workspace)
-                metadata_index = getattr(svc, "_metadata_index", None)
-                if metadata_index is not None:
-                    schema = await metadata_index.get_field_schema()
-                    if isinstance(schema, dict):
-                        return True, schema
-            except Exception:
-                logger.debug(
-                    "Schema lookup failed for workspace %s",
-                    log_safe(workspace),
-                    exc_info=True,
-                )
-                return False, None
-            return True, None
+        from dlightrag.storage.pg_metadata_index import PGMetadataIndex
 
-        schemas: list[dict[str, Any]] = []
-        complete = True
-        lookups = await bounded_map(
-            ws_key,
-            _fetch_schema,
-            max_concurrent=_SCHEMA_LOOKUP_MAX_CONCURRENCY,
-            task_name="workspace schema lookup",
-        )
-        for lookup in lookups:
-            if isinstance(lookup, Exception):
-                complete = False
-                continue
-            succeeded, schema = lookup
-            complete = complete and succeeded
-            if schema is not None:
-                schemas.append(schema)
-        merged = _merge_schema_rows(schemas)
-        if complete:
-            self._schema_cache[ws_key] = (now, merged)
-            return merged
-        # A lookup failed: never cache the degraded schema. Prefer the
-        # last-known-good entry (even if stale) over a partial merge, and
-        # otherwise return best-effort so the next call retries.
-        return cached[1] if cached is not None else merged
+        try:
+            schema = await PGMetadataIndex(
+                workspace=normalize_workspace(self._config.workspace)
+            ).get_field_schema(workspaces=ws_key)
+        except Exception:
+            logger.debug("Schema lookup failed for workspaces %s", ws_key, exc_info=True)
+            # Never cache a failed lookup. Prefer the last-known-good entry
+            # even when stale, and otherwise retry on the next request.
+            return cached[1] if cached is not None else {}
+        self._schema_cache[ws_key] = (now, schema)
+        return schema
 
     async def aplan_query(
         self,
