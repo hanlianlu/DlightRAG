@@ -375,6 +375,7 @@ class RAGServiceManager:
         return msg
 
     async def _get_ingest_service(self, workspace: str) -> RAGService:
+        # Resolved through self so the coordinator sees the current service lookup.
         return await self._get_service(workspace)
 
     async def _get_service(self, workspace: str) -> RAGService:
@@ -1013,32 +1014,6 @@ class RAGServiceManager:
         self._schema_cache[ws_key] = (now, schema)
         return schema
 
-    async def aplan_query(
-        self,
-        query: str,
-        *,
-        text_history: list[dict[str, Any]] | None = None,
-        image_catalog: list[dict[str, Any]] | None = None,
-        allowed_history_image_count: int = 0,
-        current_image_descriptions: list[str] | None = None,
-        workspaces: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryPlan:
-        """Plan one query using the manager-owned planner.
-
-        Stateless callers pass no history/catalog. The web prepare step passes
-        request-local ``text_history`` and, when the answer model supports
-        images, an ``image_catalog`` so the planner also selects scoped history
-        images in the same call.
-        """
-        return await self._aplan_query_prepared(
-            query,
-            text_history=text_history,
-            image_catalog=image_catalog,
-            allowed_history_image_count=allowed_history_image_count,
-            current_image_descriptions=current_image_descriptions,
-            workspaces=workspaces,
-        )
-
     async def aplan_web_conversation_query(
         self,
         query: str,
@@ -1137,8 +1112,6 @@ class RAGServiceManager:
         query: str,
         *,
         text_history: list[dict[str, Any]] | None,
-        image_catalog: list[dict[str, Any]] | None = None,
-        allowed_history_image_count: int = 0,
         current_image_descriptions: list[str] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
@@ -1153,7 +1126,6 @@ class RAGServiceManager:
             metadata={
                 "workspaces": list(workspaces or []),
                 "history_messages": len(text_history or []),
-                "history_image_catalog_count": len(image_catalog or []),
             },
         ) as trace:
             schema = await self._get_schema(workspaces)
@@ -1163,8 +1135,6 @@ class RAGServiceManager:
                 max_turns=self._config.max_conversation_turns,
                 max_tokens=self._config.max_conversation_tokens,
                 schema=schema,
-                image_catalog=image_catalog,
-                allowed_history_image_count=allowed_history_image_count,
                 current_image_descriptions=current_image_descriptions,
             )
             trace.update(
@@ -1245,23 +1215,6 @@ class RAGServiceManager:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
-
-    async def agenerate_stream_from_contexts(
-        self,
-        query: str,
-        contexts: RetrievalContexts,
-        *,
-        query_images: list[dict[str, Any]] | None = None,
-        context_top_k: int | None = None,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Generate a stateless streaming answer from retrieved contexts."""
-        return await self._agenerate_stream_from_contexts_prepared(
-            query,
-            contexts,
-            query_images=query_images,
-            text_history=None,
-            context_top_k=context_top_k,
-        )
 
     async def _agenerate_stream_from_contexts_prepared(
         self,

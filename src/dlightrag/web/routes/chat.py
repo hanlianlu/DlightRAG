@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.access_control import AccessAction
+from dlightrag.core.access import workspace_names
 from dlightrag.utils import normalize_workspace
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.attachment_models import (
@@ -35,7 +36,6 @@ router = APIRouter()
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request, workspace: str = Depends(get_workspace)):
     """Main page."""
-    from dlightrag.utils import normalize_workspace
 
     manager = get_manager(request)
     try:
@@ -136,9 +136,7 @@ async def answer_stream(
         AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
         [{"workspace": ws} for ws in target_workspaces],
     )
-    downloadable_workspaces = {
-        normalize_workspace(str(record["workspace"])) for record in downloadable_records
-    }
+    downloadable_workspaces = workspace_names(downloadable_records)
     scope = get_request_scope(request, target_workspaces)
 
     try:

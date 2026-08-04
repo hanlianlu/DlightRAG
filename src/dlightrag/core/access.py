@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from dlightrag.access_control import AccessAction, AccessControl
 from dlightrag.core.request.workspaces import resolve_query_workspaces
+from dlightrag.utils import normalize_workspace
 
 
 class WorkspaceRecordLister(Protocol):
@@ -32,6 +33,11 @@ async def filter_workspace_records(
     workspaces = [str(row["workspace"]) for row in records]
     allowed = set(await access_control.filter_workspaces(subject, action, workspaces))
     return [row for row in records if str(row["workspace"]) in allowed]
+
+
+def workspace_names(records: list[dict[str, Any]]) -> set[str]:
+    """Normalized workspace names, matching how sources stamp their workspace."""
+    return {normalize_workspace(str(record["workspace"])) for record in records}
 
 
 async def resolve_authorized_query_workspaces(

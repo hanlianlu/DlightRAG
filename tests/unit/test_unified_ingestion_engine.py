@@ -1599,42 +1599,22 @@ async def test_sidecar_unreadable_image_falls_back_to_text(tmp_path: Path) -> No
     }
 
 
-def test_sidecar_dir_from_location_handles_file_scheme() -> None:
+def test_resolve_sidecar_uri_handles_file_scheme() -> None:
     from pathlib import Path
 
-    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
+    from lightrag.utils_pipeline import resolve_sidecar_uri
 
-    result = sidecar_dir_from_location("file:///tmp/sample.parsed/")
-    assert result == Path("/tmp/sample.parsed/")
-
-
-def test_sidecar_dir_from_location_handles_file_scheme_with_encoding() -> None:
-    from pathlib import Path
-
-    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
-
-    result = sidecar_dir_from_location("file:///tmp/path%20with%20spaces/")
-    assert result == Path("/tmp/path with spaces/")
+    assert resolve_sidecar_uri("file:///tmp/sample.parsed/") == Path("/tmp/sample.parsed")
+    assert resolve_sidecar_uri("file:///tmp/path%20with%20spaces/") == Path("/tmp/path with spaces")
 
 
-def test_sidecar_dir_from_location_rejects_non_file_scheme() -> None:
-    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
+def test_resolve_sidecar_uri_rejects_everything_that_is_not_a_local_sidecar() -> None:
+    """The unknown sentinel must never resolve: engine cleanup rmtree's the result."""
+    from lightrag.utils_pipeline import SIDECAR_LOCATION_UNKNOWN, resolve_sidecar_uri
 
-    assert sidecar_dir_from_location("s3://bucket/key/parsed/") is None
-    assert sidecar_dir_from_location("azure://container/path/") is None
-
-
-def test_sidecar_dir_from_location_handles_bare_path() -> None:
-    from pathlib import Path
-
-    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
-
-    result = sidecar_dir_from_location("/tmp/local/path")
-    assert result == Path("/tmp/local/path")
-
-
-def test_sidecar_dir_from_location_handles_none() -> None:
-    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
-
-    assert sidecar_dir_from_location(None) is None
-    assert sidecar_dir_from_location("") is None
+    assert resolve_sidecar_uri(SIDECAR_LOCATION_UNKNOWN) is None
+    assert resolve_sidecar_uri("s3://bucket/key/parsed/") is None
+    assert resolve_sidecar_uri("azure://container/path/") is None
+    assert resolve_sidecar_uri("/tmp/local/path") is None
+    assert resolve_sidecar_uri(None) is None
+    assert resolve_sidecar_uri("") is None

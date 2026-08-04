@@ -20,7 +20,7 @@ from lightrag.parser.routing import (
     resolve_parser_directives,
 )
 from lightrag.utils import compute_mdhash_id
-from lightrag.utils_pipeline import normalize_document_file_path
+from lightrag.utils_pipeline import normalize_document_file_path, resolve_sidecar_uri
 
 from dlightrag.contracts import MetadataPolicy
 from dlightrag.core.document_embedding import DocumentEmbeddingInput, RobustDocumentEmbedder
@@ -31,7 +31,6 @@ from dlightrag.core.retrieval.metadata_fields import (
     extract_system_metadata,
     normalize_user_metadata,
 )
-from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 from dlightrag.sourcing.source_contract import local_source_uri, safe_source_filename
 
 logger = logging.getLogger(__name__)
@@ -499,7 +498,7 @@ class UnifiedIngestionEngine:
 
         await self._metadata_index.delete(doc_id)
 
-        artifact_dir = sidecar_dir_from_location(sidecar_uri)
+        artifact_dir = resolve_sidecar_uri(sidecar_uri)
         if artifact_dir is not None and artifact_dir.exists():
             shutil.rmtree(artifact_dir, ignore_errors=True)
 
@@ -611,7 +610,7 @@ class UnifiedIngestionEngine:
         # A unified multimodal embedder (image support probed at startup) fuses the
         # VLM description with the image into one vector, keeping the visual chunk
         # reachable by text queries.
-        artifact_dir = sidecar_dir_from_location(sidecar_location)
+        artifact_dir = resolve_sidecar_uri(sidecar_location)
         if artifact_dir is None or not artifact_dir.exists():
             return
 

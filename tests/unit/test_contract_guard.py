@@ -33,12 +33,9 @@ def _fake_lightrag(*, graph_storage: object | None = None) -> SimpleNamespace:
 def _stub_runtime_checks(monkeypatch: pytest.MonkeyPatch, guard: LightRAGContractGuard) -> None:
     monkeypatch.setattr(guard, "_check_chunks_table_schema", AsyncMock())
     monkeypatch.setattr(guard, "_check_bm25_table", AsyncMock())
-    monkeypatch.setattr(guard, "_check_embedding_func_attr", lambda errors: None)
-    monkeypatch.setattr(guard, "_check_pool_access", lambda errors: None)
-    monkeypatch.setattr(guard, "_check_patch_signatures", lambda errors: None)
 
 
-async def test_verify_all_excludes_reader_attach_contract_by_default(
+async def test_verify_all_excludes_reader_attach_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import lightrag.kg.postgres_impl as postgres_impl

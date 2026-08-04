@@ -6,10 +6,17 @@ from pathlib import Path
 from dlightrag.core.ingestion.parser_hygiene import (
     apply_mineru_content_list_hygiene,
     filter_mineru_auxiliary_blocks,
-    mineru_ir_builder_needs_auxiliary_filter,
-    mineru_ir_builder_needs_drawing_alias_normalization,
     normalize_mineru_drawing_aliases,
 )
+
+
+def _unpatched_normalize_content_list():
+    from lightrag.parser.external.mineru.ir_builder import MinerUIRBuilder
+
+    apply_mineru_content_list_hygiene()
+    original = getattr(MinerUIRBuilder._normalize_content_list, "_dlightrag_original", None)
+    assert original is not None, "MinerU hygiene patch did not install"
+    return MinerUIRBuilder, original
 
 
 def test_mineru_auxiliary_filter_preserves_semantic_and_upstream_owned_items() -> None:
@@ -65,7 +72,6 @@ def test_mineru_ir_builder_patch_drops_auxiliary_page_furniture(tmp_path: Path) 
     from lightrag.parser.external.mineru.ir_builder import MinerUIRBuilder
 
     apply_mineru_content_list_hygiene()
-    assert mineru_ir_builder_needs_auxiliary_filter(MinerUIRBuilder) is False
 
     doc = MinerUIRBuilder()._normalize_content_list(
         [
@@ -149,25 +155,30 @@ def test_normalize_drawing_aliases_leaves_non_alias_items_unchanged() -> None:
     assert normalize_mineru_drawing_aliases(content_list) == content_list
 
 
-def test_drawing_alias_probe_detects_dropped_vs_handled_charts() -> None:
-    class _Block:
-        def __init__(self, content_template: str) -> None:
-            self.content_template = content_template
+def test_upstream_still_drops_charts_and_keeps_page_furniture(tmp_path: Path) -> None:
+    """Drift alarm: drop the matching transform once this starts failing."""
+    builder_cls, upstream = _unpatched_normalize_content_list()
 
-    class _Doc:
-        def __init__(self, blocks: list[_Block]) -> None:
-            self.blocks = blocks
+    chart_doc = upstream(
+        builder_cls(),
+        [{"type": "chart", "img_path": "images/fig1.jpg", "chart_caption": ["Figure 1"]}],
+        tmp_path,
+        document_name="sample.pdf",
+    )
+    assert "{{IMG:" not in "\n".join(block.content_template for block in chart_doc.blocks)
 
-    class _DropsChartBuilder:
-        def _normalize_content_list(self, content_list, raw_dir, *, document_name):
-            return _Doc([_Block("plain text, chart dropped")])
-
-    class _HandlesChartBuilder:
-        def _normalize_content_list(self, content_list, raw_dir, *, document_name):
-            return _Doc([_Block("{{IMG:im0}}")])
-
-    assert mineru_ir_builder_needs_drawing_alias_normalization(_DropsChartBuilder) is True
-    assert mineru_ir_builder_needs_drawing_alias_normalization(_HandlesChartBuilder) is False
+    furniture_doc = upstream(
+        builder_cls(),
+        [
+            {"type": "header", "text": "Journal header"},
+            {"type": "text", "text": "Main body"},
+        ],
+        tmp_path,
+        document_name="sample.pdf",
+    )
+    content = "\n".join(block.content_template for block in furniture_doc.blocks)
+    assert "Journal header" in content
+    assert "Main body" in content
 
 
 def test_mineru_hygiene_routes_chart_through_drawing(tmp_path: Path) -> None:

@@ -31,6 +31,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from dlightrag.core.document_embedding import (
+    DOCUMENT_EMBEDDING_FALLBACK_REASONS,
     DocumentEmbeddingFallbackReason,
     DocumentEmbeddingInput,
     DocumentEmbeddingMode,
@@ -53,6 +54,8 @@ logger = logging.getLogger(__name__)
 
 _ATTACHMENT_WORKSPACE = "__web_attachment__"
 _COMPOSER_EMBEDDING_CONTRACT_VERSION = 2
+# Fallbacks that will recur for the same bytes, so their cached vector is final.
+_TERMINAL_EMBEDDING_FALLBACKS: tuple[DocumentEmbeddingFallbackReason, ...] = ("image_rejected",)
 _COMPOSER_PARSER_CONTRACT_VERSION = 2
 _COMPOSER_ANALYSIS_OUTCOME_METADATA_KEY = "_composer_analysis_outcome"
 _COMPOSER_MM_RENDERED_METADATA_KEY = "_composer_mm_rendered"
@@ -91,12 +94,6 @@ class DocumentEmbedderProtocol(Protocol):
     ) -> tuple[list[DocumentEmbeddingVector], DocumentEmbeddingTrace]: ...
 
     async def aembed_query(self, query: str) -> list[float] | None: ...
-
-
-class _TemporaryDirectoryProtocol(Protocol):
-    name: str
-
-    def cleanup(self) -> None: ...
 
 
 async def _await_thread_call[Result](operation: Callable[[], Result]) -> Result:
@@ -607,9 +604,7 @@ async def parse_attachment_document(
     if parser is None:
         raise ValueError(f"no parser registered for engine {parser_resolution.engine!r}")
 
-    temporary_directory: _TemporaryDirectoryProtocol = tempfile.TemporaryDirectory(
-        prefix="dlightrag-attach-"
-    )
+    temporary_directory = tempfile.TemporaryDirectory(prefix="dlightrag-attach-")
     try:
         source = Path(temporary_directory.name) / Path(filename).name
         await _await_thread_call(lambda: source.write_bytes(document_bytes))
@@ -633,32 +628,6 @@ async def parse_attachment_document(
         yield parsed, parser_resolution.process_options, parser_resolution.parser_signature
     finally:
         await _await_thread_call(temporary_directory.cleanup)
-
-
-async def parse_attachment_to_bundle(
-    *,
-    lightrag: Any,
-    attachment_id: str,
-    filename: str,
-    document_bytes: bytes,
-    parser_rules: str,
-    config: DlightragConfig,
-) -> ParsedAttachmentBundle:
-    """Parse and chunk one Composer document while all parser sidecars remain alive."""
-    parser_resolution = _resolve_attachment_parser(filename, parser_rules, config=config)
-    async with parse_attachment_document(
-        attachment_id=attachment_id,
-        filename=filename,
-        document_bytes=document_bytes,
-        parser_resolution=parser_resolution,
-    ) as (parsed, process_options, _parser_signature):
-        return await build_attachment_bundle_from_parse_result(
-            lightrag=lightrag,
-            attachment_id=attachment_id,
-            filename=filename,
-            parsed=parsed,
-            process_options=process_options,
-        )
 
 
 async def build_attachment_bundle_from_parse_result(
@@ -933,38 +902,15 @@ class ComposerDocumentService:
             cache_key = row.get("_cache_key")
             if not isinstance(cache_key, AttachmentCacheKey):
                 continue
-            prefers_fused = (
-                row.get("image_data") is not None
-                and self._direct_image_embedding_enabled
-                and self._document_embedder.image_enabled
-            )
-            signatures = {
-                build_composer_embedding_signature(
-                    config=self._config,
-                    embedder=self._document_embedder,
-                    mode="fused" if prefers_fused else "text",
-                )
-            }
-            if prefers_fused:
-                signatures.update(
-                    build_composer_embedding_signature(
-                        config=self._config,
-                        embedder=self._document_embedder,
-                        mode="text",
-                        fallback_reason=fallback_reason,
-                    )
-                    for fallback_reason in ("image_rejected", "fused_provider_failed")
-                )
-                signatures.add(
-                    build_composer_embedding_signature(
-                        config=self._config,
-                        embedder=self._document_embedder,
-                        mode="text",
-                        fallback_reason="analysis_degraded",
-                    )
-                )
             references.append((global_order, cache_key))
-            expected_by_order[global_order] = (cache_key, frozenset(signatures))
+            expected_by_order[global_order] = (
+                cache_key,
+                # Ranking reads whatever was stored, including retryable fallbacks.
+                self._accepted_embedding_signatures(
+                    prefers_fused=row.get("image_data") is not None,
+                    fallback_reasons=DOCUMENT_EMBEDDING_FALLBACK_REASONS,
+                ),
+            )
 
         scored: list[tuple[np.float32, int]] = []
         processed_orders: set[int] = set()
@@ -1238,35 +1184,50 @@ class ComposerDocumentService:
             )
             return None
 
+    def _accepted_embedding_signatures(
+        self,
+        *,
+        prefers_fused: bool,
+        fallback_reasons: tuple[DocumentEmbeddingFallbackReason, ...],
+    ) -> frozenset[str]:
+        """Signatures a cached vector may carry for a fused-capable chunk."""
+        fused = (
+            prefers_fused
+            and self._direct_image_embedding_enabled
+            and self._document_embedder.image_enabled
+        )
+        signatures = {
+            build_composer_embedding_signature(
+                config=self._config,
+                embedder=self._document_embedder,
+                mode="fused" if fused else "text",
+            )
+        }
+        if fused:
+            signatures.update(
+                build_composer_embedding_signature(
+                    config=self._config,
+                    embedder=self._document_embedder,
+                    mode="text",
+                    fallback_reason=reason,
+                )
+                for reason in fallback_reasons
+            )
+        return frozenset(signatures)
+
     def _expected_vector_signatures(
         self,
         chunks: Sequence[AttachmentContextChunk],
     ) -> list[frozenset[str]]:
-        expected: list[frozenset[str]] = []
-        for chunk in chunks:
-            prefers_fused = (
-                chunk.image_bytes is not None
-                and self._direct_image_embedding_enabled
-                and self._document_embedder.image_enabled
+        # Refresh only settles for a fallback that will deterministically recur;
+        # a transient fusion failure stays a cache miss so fusion is retried.
+        return [
+            self._accepted_embedding_signatures(
+                prefers_fused=chunk.image_bytes is not None,
+                fallback_reasons=_TERMINAL_EMBEDDING_FALLBACKS,
             )
-            signatures = {
-                build_composer_embedding_signature(
-                    config=self._config,
-                    embedder=self._document_embedder,
-                    mode="fused" if prefers_fused else "text",
-                )
-            }
-            if prefers_fused:
-                signatures.add(
-                    build_composer_embedding_signature(
-                        config=self._config,
-                        embedder=self._document_embedder,
-                        mode="text",
-                        fallback_reason="image_rejected",
-                    )
-                )
-            expected.append(frozenset(signatures))
-        return expected
+            for chunk in chunks
+        ]
 
     @staticmethod
     def _restore_cached_trace(
@@ -1681,7 +1642,6 @@ __all__ = [
     "build_composer_embedding_signature",
     "build_attachment_bundle_from_parse_result",
     "build_text_attachment_chunk",
-    "parse_attachment_to_bundle",
     "parse_attachment_document",
     "validate_attachment_vector",
 ]

@@ -5,7 +5,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
 
 
 @dataclass(frozen=True)
@@ -13,19 +12,6 @@ class BlockProvenance:
     """Page-level provenance for one LightRAG sidecar block."""
 
     page_number: int | None = None
-
-
-def sidecar_dir_from_location(location: str | None) -> Path | None:
-    """Resolve a LightRAG full_doc sidecar_location into a local parsed dir."""
-    if not location or not str(location).strip():
-        return None
-    raw = str(location).strip()
-    parsed = urlparse(raw)
-    if parsed.scheme == "file":
-        return Path(unquote(parsed.path))
-    if parsed.scheme:
-        return None
-    return Path(raw)
 
 
 def resolve_sidecar_asset_path(artifact_dir: Path, raw_path: str) -> Path | None:

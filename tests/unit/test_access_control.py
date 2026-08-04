@@ -108,3 +108,13 @@ async def test_admin_preset_allows_every_action(test_config: DlightragConfig) ->
         "job.read",
     ):
         await access_control.check(user, action, workspace="finance")
+
+
+def test_workspace_names_normalizes_so_download_gate_matches_source_workspace() -> None:
+    """Sources carry a normalized workspace, so the allow-set must too."""
+    from dlightrag.core.access import workspace_names
+
+    assert workspace_names([{"workspace": "Finance Reports"}, {"workspace": "legal"}]) == {
+        "finance_reports",
+        "legal",
+    }

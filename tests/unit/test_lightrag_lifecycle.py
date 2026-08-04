@@ -22,12 +22,10 @@ class TestShutdownLightRagWorkerPools:
         ignored = SimpleNamespace()
         lightrag = SimpleNamespace(
             embedding_func=SimpleNamespace(func=shared),
-            llm_model_func=SimpleNamespace(func=shared),
-            rerank_model_func=rerank,
-            role_llm_funcs={
-                "query": SimpleNamespace(func=shared),
-                "answer": SimpleNamespace(func=rerank),
-                "extract": SimpleNamespace(func=ignored),
+            _role_llm_states={
+                "query": SimpleNamespace(wrapped=SimpleNamespace(func=shared)),
+                "answer": SimpleNamespace(wrapped=SimpleNamespace(func=rerank)),
+                "extract": SimpleNamespace(wrapped=SimpleNamespace(func=ignored)),
             },
         )
 
@@ -46,11 +44,9 @@ class TestShutdownLightRagWorkerPools:
         llm = _shutdown_target()
         lightrag = SimpleNamespace(
             embedding_func=SimpleNamespace(func=embedding),
-            llm_model_func=llm,
-            rerank_model_func=SimpleNamespace(),
-            role_llm_funcs={
-                "query": SimpleNamespace(func=embedding),
-                "answer": SimpleNamespace(func=llm),
+            _role_llm_states={
+                "query": SimpleNamespace(wrapped=SimpleNamespace(func=embedding)),
+                "answer": SimpleNamespace(wrapped=SimpleNamespace(func=llm)),
             },
         )
 
@@ -70,9 +66,7 @@ class TestShutdownLightRagWorkerPools:
         healthy = _shutdown_target()
         lightrag = SimpleNamespace(
             embedding_func=SimpleNamespace(func=broken),
-            llm_model_func=None,
-            rerank_model_func=healthy,
-            role_llm_funcs={},
+            _role_llm_states={"query": SimpleNamespace(wrapped=healthy)},
         )
 
         async def _shutdown(func: object) -> None:
@@ -99,9 +93,7 @@ class TestShutdownLightRagWorkerPools:
         target = _shutdown_target()
         lightrag = SimpleNamespace(
             embedding_func=SimpleNamespace(func=target),
-            llm_model_func=None,
-            rerank_model_func=None,
-            role_llm_funcs={},
+            _role_llm_states={},
         )
 
         with patch(

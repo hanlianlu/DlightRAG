@@ -33,7 +33,7 @@ from dlightrag.storage.sql_identifiers import pg_qualified_identifier
 
 logger = logging.getLogger(__name__)
 
-_READ_ONLY_STORAGE_ATTRS = (
+READ_ONLY_STORAGE_ATTRS = (
     "full_docs",
     "text_chunks",
     "full_entities",
@@ -132,7 +132,7 @@ class ReadOnlyPostgreSQLDB(PostgreSQLDB):
 def _active_lightrag_storages(lightrag: Any) -> list[Any]:
     return [
         storage
-        for name in _READ_ONLY_STORAGE_ATTRS
+        for name in READ_ONLY_STORAGE_ATTRS
         if (storage := getattr(lightrag, name, None)) is not None
     ]
 

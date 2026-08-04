@@ -98,9 +98,8 @@ class TestAresetPhase0:
         embedding_func = SimpleNamespace(func=inner_func)
         lr = SimpleNamespace()
         lr.embedding_func = embedding_func
-        lr.llm_model_func = SimpleNamespace()
         role_func = SimpleNamespace(shutdown=AsyncMock())
-        lr.role_llm_funcs = {"query": role_func}
+        lr._role_llm_states = {"query": SimpleNamespace(wrapped=role_func)}
         lr.chunks_vdb = SimpleNamespace(drop=AsyncMock())
         service._lightrag = lr
 

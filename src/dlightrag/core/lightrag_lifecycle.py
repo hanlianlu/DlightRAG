@@ -14,6 +14,24 @@ def _unwrap_worker_pool(value: Any) -> Any:
     return getattr(value, "func", value)
 
 
+def _collect_worker_pools(lightrag: Any) -> list[tuple[str, Any]]:
+    """Enumerate the callables LightRAG queue-wraps.
+
+    LightRAG wraps exactly two things: ``embedding_func.func`` and each role's
+    ``_role_llm_states[role].wrapped``. The base ``llm_model_func`` is
+    deliberately left unwrapped upstream, and DlightRAG never passes
+    ``rerank_model_func``, so neither ever owns a pool.
+    """
+    funcs: list[tuple[str, Any]] = [
+        ("embedding_func", _unwrap_worker_pool(getattr(lightrag, "embedding_func", None)))
+    ]
+    states = getattr(lightrag, "_role_llm_states", None)
+    items = states.items() if isinstance(states, Mapping) else ()
+    for role, state in items:
+        funcs.append((f"role_llm.{role}", _unwrap_worker_pool(getattr(state, "wrapped", None))))
+    return funcs
+
+
 async def shutdown_lightrag_worker_pools(lightrag: Any, *, dry_run: bool = False) -> int:
     """Best-effort shutdown of LightRAG worker pools.
 
@@ -23,22 +41,7 @@ async def shutdown_lightrag_worker_pools(lightrag: Any, *, dry_run: bool = False
     if lightrag is None:
         return 0
 
-    funcs: list[tuple[str, Any]] = []
-    for attr in ("embedding_func", "llm_model_func", "rerank_model_func"):
-        try:
-            funcs.append((attr, _unwrap_worker_pool(getattr(lightrag, attr, None))))
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to collect %s worker pool", attr, exc_info=True)
-
-    role_funcs = getattr(lightrag, "role_llm_funcs", None) or {}
-    items = role_funcs.items() if isinstance(role_funcs, Mapping) else ()
-    for role, func in items:
-        label = f"role_llm_funcs.{role}"
-        try:
-            funcs.append((label, _unwrap_worker_pool(func)))
-        except Exception:  # noqa: BLE001
-            logger.debug("Failed to collect %s worker pool", label, exc_info=True)
-
+    funcs = _collect_worker_pools(lightrag)
     shutdown_count = 0
     seen: set[int] = set()
     for label, func in funcs:

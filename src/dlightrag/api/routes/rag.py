@@ -36,6 +36,7 @@ from dlightrag.api.models import (
 from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
+from dlightrag.core.access import workspace_names
 from dlightrag.core.answer.errors import ANSWER_STREAM_FAILED, classify_answer_error
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
 from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
@@ -85,7 +86,7 @@ async def _downloadable_workspaces(
         AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
         [{"workspace": workspace} for workspace in workspaces],
     )
-    return {str(record["workspace"]) for record in records}
+    return workspace_names(records)
 
 
 def _job_response(job: dict[str, Any]) -> JSONResponse:

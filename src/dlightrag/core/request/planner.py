@@ -160,22 +160,6 @@ QUERY_PLAN_STRUCTURED_OUTPUT = StructuredOutput(
 )
 
 
-class WebQueryPlannerStructuredResponse(QueryPlannerStructuredResponse):
-    """Web-variant planner schema: adds scoped history-image selection.
-
-    Used only when a conversation image catalog is supplied.  The public schema
-    stays byte-identical, so REST/MCP/Python planning is provably unchanged.
-    """
-
-    selected_history_image_ids: list[str] = Field(default_factory=list)
-
-
-QUERY_PLAN_WEB_STRUCTURED_OUTPUT = StructuredOutput(
-    name="query_plan",
-    schema=WebQueryPlannerStructuredResponse,
-)
-
-
 class WebConversationPlannerStructuredResponse(QueryPlannerStructuredResponse):
     """Web conversation planner schema: adds scoped document/image selection.
 
@@ -428,8 +412,6 @@ class QueryPlanner:
         max_turns: int = 25,
         max_tokens: int = 65536,
         schema: dict[str, Any] | None = None,
-        image_catalog: list[dict[str, Any]] | None = None,
-        allowed_history_image_count: int = 0,
         current_image_descriptions: list[str] | None = None,
     ) -> QueryPlan:
         """Produce a full QueryPlan from one LLM call.
@@ -448,24 +430,16 @@ class QueryPlanner:
         schema_context = _build_schema_context(schema)
         system_prompt = PLANNER_SYSTEM_PROMPT
 
-        # Web-variant: append the image catalog + selection guidance and switch to
-        # the schema that carries selected_history_image_ids. The public prompt and
-        # schema stay byte-identical when no catalog is supplied.
         structured_output = QUERY_PLAN_STRUCTURED_OUTPUT
-        if image_catalog:
-            structured_output = QUERY_PLAN_WEB_STRUCTURED_OUTPUT
-        if image_catalog or current_image_descriptions:
+        if current_image_descriptions:
             system_prompt += "\n\n" + PLANNER_IMAGE_CONTEXT_GUIDANCE
-        prior_images, _ = _prepare_history_catalogs(image_catalog, None)
 
         def render_input() -> str:
             return _planner_user_payload(
                 query,
                 metadata_schema=schema_context,
                 history=history,
-                prior_images=prior_images,
                 current_images=current_image_descriptions,
-                history_image_limit=allowed_history_image_count if image_catalog else None,
             )
 
         planner_input = render_input()
@@ -476,15 +450,12 @@ class QueryPlanner:
         ):
             schema_context = ""
             planner_input = render_input()
-        evict_history = True
-        while (history or prior_images) and _planner_request_tokens(
-            system_prompt, planner_input
-        ) > (_PLANNER_INPUT_TOKEN_ENVELOPE):
-            if history and (evict_history or not prior_images):
-                history = _drop_oldest_history_turn(history)
-            else:
-                prior_images = prior_images[:-1]
-            evict_history = not evict_history
+        while (
+            history
+            and _planner_request_tokens(system_prompt, planner_input)
+            > _PLANNER_INPUT_TOKEN_ENVELOPE
+        ):
+            history = _drop_oldest_history_turn(history)
             planner_input = render_input()
         if _planner_request_tokens(system_prompt, planner_input) > _PLANNER_INPUT_TOKEN_ENVELOPE:
             return QueryPlan.fallback(query, "fallback_input_overflow")
@@ -501,15 +472,6 @@ class QueryPlanner:
         plan = self._parse_response(response, query, structured_output=structured_output)
         if plan is None:
             return QueryPlan.fallback(query, "fallback_invalid_response")
-
-        # LLM output is not authorization: keep only ids present in the scoped
-        # catalog, deduped and truncated to the allowed count.
-        if image_catalog:
-            plan.selected_history_image_ids = _scope_ids(
-                plan.selected_history_image_ids,
-                {str(row["image_id"]) for row in prior_images},
-                allowed_history_image_count,
-            )
 
         # Merge explicit filter (explicit wins)
         if explicit_filter is not None and not _is_empty_filter(explicit_filter):

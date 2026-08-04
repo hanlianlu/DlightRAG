@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from lightrag.utils_pipeline import resolve_sidecar_uri
+
 from dlightrag.core.sidecar_provenance import (
     BlockProvenance,
     block_ids_from_multimodal_item,
@@ -18,7 +20,6 @@ from dlightrag.core.sidecar_provenance import (
     is_multimodal_sidecar,
     load_block_provenance_index,
     resolve_sidecar_asset_path,
-    sidecar_dir_from_location,
 )
 from dlightrag.utils.images import detect_image_mime_type
 
@@ -163,7 +164,7 @@ async def _artifact_dir_for_chunk(
 ) -> Path | None:
     location = raw_chunk.get("sidecar_location") or chunk.get("sidecar_location")
     if isinstance(location, str):
-        return sidecar_dir_from_location(location)
+        return resolve_sidecar_uri(location)
 
     doc_id = raw_chunk.get("full_doc_id") or chunk.get("full_doc_id")
     if not isinstance(doc_id, str) or not doc_id:
@@ -173,7 +174,7 @@ async def _artifact_dir_for_chunk(
     if not isinstance(full_doc, dict):
         return None
     location = full_doc.get("sidecar_location")
-    return sidecar_dir_from_location(location if isinstance(location, str) else None)
+    return resolve_sidecar_uri(location if isinstance(location, str) else None)
 
 
 async def _fetch_full_doc(

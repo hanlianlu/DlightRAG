@@ -88,63 +88,6 @@ def filter_mineru_auxiliary_blocks(content_list: list[Any]) -> list[Any]:
 
 
 # ---------------------------------------------------------------------------
-# Upstream behavior probes
-# ---------------------------------------------------------------------------
-
-
-def mineru_ir_builder_needs_drawing_alias_normalization(builder_cls: Any | None = None) -> bool:
-    """Return whether upstream drops MinerU drawing-alias figure blocks."""
-    builder_cls = _resolve_builder_cls(builder_cls)
-    if builder_cls is None or _already_patched(builder_cls):
-        return False
-
-    probe_type = next(iter(MINERU_DRAWING_ALIAS_TYPES), "chart")
-    try:
-        doc = builder_cls()._normalize_content_list(
-            [
-                {
-                    "type": probe_type,
-                    "img_path": "dlightrag-probe.jpg",
-                    f"{probe_type}_caption": ["DLIGHTRAG_DRAWING_PROBE"],
-                }
-            ],
-            Path.cwd(),
-            document_name="dlightrag-probe.pdf",
-        )
-    except Exception as exc:  # pragma: no cover - defensive upstream guard
-        logger.debug("Could not probe MinerU IR builder drawing aliases: %r", exc)
-        return True
-
-    content = "\n".join(str(getattr(block, "content_template", "")) for block in doc.blocks)
-    # A recognized drawing yields an ``{{IMG:...}}`` placeholder; its absence
-    # means upstream dropped the alias figure and we must normalize it.
-    return "{{IMG:" not in content
-
-
-def mineru_ir_builder_needs_auxiliary_filter(builder_cls: Any | None = None) -> bool:
-    """Return whether the LightRAG MinerU builder indexes page furniture."""
-    builder_cls = _resolve_builder_cls(builder_cls)
-    if builder_cls is None or _already_patched(builder_cls):
-        return False
-
-    try:
-        doc = builder_cls()._normalize_content_list(
-            [
-                {"type": "header", "text": "DLIGHTRAG_AUXILIARY_PROBE"},
-                {"type": "text", "text": "DLIGHTRAG_BODY_PROBE"},
-            ],
-            Path.cwd(),
-            document_name="dlightrag-probe.pdf",
-        )
-    except Exception as exc:  # pragma: no cover - defensive upstream guard
-        logger.debug("Could not probe MinerU IR builder hygiene: %r", exc)
-        return True
-
-    content = "\n".join(str(getattr(block, "content_template", "")) for block in doc.blocks)
-    return "DLIGHTRAG_AUXILIARY_PROBE" in content
-
-
-# ---------------------------------------------------------------------------
 # Patch installation
 # ---------------------------------------------------------------------------
 
@@ -161,14 +104,10 @@ def apply_mineru_content_list_hygiene() -> bool:
     if getattr(original, _PATCH_ATTR, False):
         return False
 
-    transforms: list[Callable[[list[Any]], list[Any]]] = []
-    if mineru_ir_builder_needs_drawing_alias_normalization(builder_cls):
-        transforms.append(normalize_mineru_drawing_aliases)
-    if mineru_ir_builder_needs_auxiliary_filter(builder_cls):
-        transforms.append(filter_mineru_auxiliary_blocks)
-    if not transforms:
-        logger.debug("LightRAG MinerU IR builder already normalizes content_list")
-        return False
+    transforms: tuple[Callable[[list[Any]], list[Any]], ...] = (
+        normalize_mineru_drawing_aliases,
+        filter_mineru_auxiliary_blocks,
+    )
 
     @wraps(original)
     def patched_normalize_content_list(
@@ -205,10 +144,6 @@ def _resolve_builder_cls(builder_cls: Any | None) -> Any | None:
     except Exception:  # pragma: no cover - defensive import guard
         return None
     return MinerUIRBuilder
-
-
-def _already_patched(builder_cls: Any) -> bool:
-    return bool(getattr(builder_cls._normalize_content_list, _PATCH_ATTR, False))
 
 
 def _is_drawing_alias(item: Any) -> bool:
@@ -255,7 +190,5 @@ __all__ = [
     "MINERU_EXTENDED_AUXILIARY_BLOCK_TYPES",
     "apply_mineru_content_list_hygiene",
     "filter_mineru_auxiliary_blocks",
-    "mineru_ir_builder_needs_auxiliary_filter",
-    "mineru_ir_builder_needs_drawing_alias_normalization",
     "normalize_mineru_drawing_aliases",
 ]

@@ -28,7 +28,6 @@ from dlightrag.core.request.attachments import (
     ComposerDocumentService,
     ParsedAttachmentBundle,
     _ParseOwnerShim,
-    parse_attachment_to_bundle,
 )
 from dlightrag.utils.tokens import estimate_tokens
 
@@ -1293,6 +1292,32 @@ async def test_parse_owner_shim_persist_is_storage_free() -> None:
     assert not hasattr(shim, "sidecar_location")
 
 
+async def _parse_to_bundle(
+    *,
+    lightrag: Any,
+    attachment_id: str,
+    filename: str,
+    document_bytes: bytes,
+    parser_rules: str,
+    config: Any,
+) -> Any:
+    """Compose the production parse + bundle steps the way the Composer does."""
+    resolution = attachments._resolve_attachment_parser(filename, parser_rules, config=config)
+    async with attachments.parse_attachment_document(
+        attachment_id=attachment_id,
+        filename=filename,
+        document_bytes=document_bytes,
+        parser_resolution=resolution,
+    ) as (parsed, process_options, _signature):
+        return await attachments.build_attachment_bundle_from_parse_result(
+            lightrag=lightrag,
+            attachment_id=attachment_id,
+            filename=filename,
+            parsed=parsed,
+            process_options=process_options,
+        )
+
+
 async def test_parse_attachment_to_bundle_native_path_writes_no_store(
     tmp_path: Path,
     test_config: Any,
@@ -1301,7 +1326,7 @@ async def test_parse_attachment_to_bundle_native_path_writes_no_store(
     lightrag = _FakeLightRAG()
     text = "First paragraph about ships.\n\nSecond paragraph about the sea."
 
-    bundle = await parse_attachment_to_bundle(
+    bundle = await _parse_to_bundle(
         lightrag=lightrag,
         attachment_id="att-1",
         filename="notes.txt",
@@ -1332,7 +1357,7 @@ async def test_parse_attachment_to_bundle_docx_native_path(
     path = tmp_path / "frac.docx"
     doc.save(str(path))
 
-    bundle = await parse_attachment_to_bundle(
+    bundle = await _parse_to_bundle(
         lightrag=_FakeLightRAG(),
         attachment_id="att-docx",
         filename="frac.docx",

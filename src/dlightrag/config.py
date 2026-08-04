@@ -377,6 +377,8 @@ class MetadataConfig(BaseModel):
 class RerankConfig(BaseModel):
     """Reranking configuration."""
 
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     strategy: Literal[
         "chat_llm_reranker",
