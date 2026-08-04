@@ -7,8 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
@@ -89,20 +88,19 @@ async def _downloadable_workspaces(
     return workspace_names(records)
 
 
-def _job_response(job: dict[str, Any]) -> JSONResponse:
+def _job_response(job: dict[str, Any]) -> dict[str, Any]:
     job["status_url"] = f"/ingest/jobs/{job['job_id']}"
-    return JSONResponse(status_code=202, content=jsonable_encoder(job))
+    return job
 
 
 @router.post(
     "/ingest",
-    response_model=None,
+    response_model=IngestJobStatusResponse,
     status_code=202,
-    responses={202: {"model": IngestJobStatusResponse, "description": "Ingestion job accepted."}},
 )
 async def ingest(
     body: IngestRequest, request: Request, user: UserContext = Depends(get_current_user)
-) -> JSONResponse:
+) -> dict[str, Any]:
     """Bulk document ingestion."""
     manager = get_manager(request)
     cfg = request_config(request)
@@ -312,11 +310,8 @@ async def answer(
 
 @router.post(
     "/ingest/blob",
-    response_model=None,
+    response_model=UploadIngestJobResponse,
     status_code=202,
-    responses={
-        202: {"model": UploadIngestJobResponse, "description": "Upload ingestion job accepted."}
-    },
 )
 async def ingest_blob(
     request: Request,
@@ -327,7 +322,7 @@ async def ingest_blob(
     metadata: str | None = Form(None),
     metadata_policy: str | None = Form(None),
     user: UserContext = Depends(get_current_user),
-) -> JSONResponse:
+) -> dict[str, Any]:
     """Direct file upload ingestion via multipart/form-data.
 
     File is persisted to input_dir/<workspace>/<filename> for citation

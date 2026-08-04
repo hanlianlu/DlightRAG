@@ -4,7 +4,7 @@
 import datetime
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.contracts import MetadataPolicy, MetadataUpdateMode, ServiceRole
@@ -106,6 +106,10 @@ class AnswerResponse(RetrievalResponse):
 
 
 class IngestJobStatusResponse(ClientContractModel):
+    # Job rows carry queue bookkeeping (lease_owner, lease_expires_at) that clients
+    # must not see; ignoring extras drops it instead of failing response validation.
+    model_config = ConfigDict(extra="ignore")
+
     job_id: str
     workspace: str | None = None
     source_type: str | None = None

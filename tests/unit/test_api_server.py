@@ -113,6 +113,8 @@ def mock_manager(mock_service, test_config):
             "workspace": "default",
             "source_type": "s3",
             "status": "queued",
+            "lease_owner": None,
+            "lease_expires_at": None,
         }
     )
     manager.aget_ingest_job = AsyncMock(
@@ -122,6 +124,8 @@ def mock_manager(mock_service, test_config):
             "source_type": "s3",
             "status": "running",
             "processed_items": 64,
+            "lease_owner": "worker-7",
+            "lease_expires_at": "2026-08-05T00:00:00+00:00",
         }
     )
     manager.aretrieve = mock_service.aretrieve
@@ -813,6 +817,8 @@ class TestIngestEndpoint:
             "workspace": "default",
             "source_type": "local",
             "status": "queued",
+            "lease_owner": None,
+            "lease_expires_at": None,
         }
         app.state.manager = mock_manager
 
@@ -825,6 +831,7 @@ class TestIngestEndpoint:
         body = resp.json()
         assert body["job_id"] == "job-1"
         assert body["filename"] == "report.pdf"
+        assert "lease_owner" not in body
         call_args = mock_manager.astart_ingest_job.call_args
         assert call_args.args[0] == "default"
         ingest_spec = call_args.args[1]
@@ -840,7 +847,11 @@ class TestIngestEndpoint:
         resp = await client.get("/ingest/jobs/job-1")
 
         assert resp.status_code == 200
-        assert resp.json()["processed_items"] == 64
+        body = resp.json()
+        assert body["processed_items"] == 64
+        # Queue bookkeeping stays server-side.
+        assert "lease_owner" not in body
+        assert "lease_expires_at" not in body
         mock_manager.aget_ingest_job.assert_awaited_once_with("job-1")
 
     @pytest.mark.usefixtures("_patch_manager")
