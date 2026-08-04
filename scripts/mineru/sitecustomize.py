@@ -16,8 +16,47 @@ imports this module automatically because ``scripts/mineru/api.sh`` puts this
 directory on ``PYTHONPATH`` — which MinerU's spawned worker processes inherit.
 A failure here cannot break the interpreter: ``site`` catches sitecustomize
 errors, warns on stderr, and continues startup with Pillow's default ceiling.
+
+It also repairs MinerU's title-leveling prompts. Both builders show the model an
+example dict with unquoted integer keys and then tell it not to format the
+output, so a model that obliges returns compact pseudo-JSON like ``{0:2,1:3}``.
+``json_repair`` mis-splits that into keys such as ``"3,2"`` and the following
+``int(k)`` raises, so every title group burns three streamed LLM calls and ends
+with no levels at all. Requesting strict JSON with quoted keys — matching the
+shape MinerU already sends — removes the ambiguity. The directive is inserted
+before the input block because the prompt ends on the model's answer cue.
+
+MinerU threads a ``prompt_builder`` through ``_request_title_levels`` but its
+public ``llm_aided_title`` entry point does not expose it, so there is no
+configuration path; the builders are read from module globals at call time,
+which makes rebinding them sufficient.
 """
+
+from functools import wraps
 
 from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 250_000_000
+
+import mineru.utils.llm_aided as _llm_aided  # noqa: E402  # type: ignore[import-not-found]
+
+_PROMPT_INPUT_ANCHOR = "Input title list:"
+_STRICT_JSON_DIRECTIVE = (
+    "严格要求：只返回合法 JSON。key 必须是带双引号的字符串，与输入字典的 key 完全一致；"
+    'value 必须是整数。例如：{"0": 1, "1": 2, "2": 2, "3": 3}\n\n'
+)
+
+
+def _request_strict_json(builder):
+    @wraps(builder)
+    def build(title_dict):
+        prompt = builder(title_dict)
+        return prompt.replace(
+            _PROMPT_INPUT_ANCHOR, _STRICT_JSON_DIRECTIVE + _PROMPT_INPUT_ANCHOR, 1
+        )
+
+    return build
+
+
+for _name in ("_build_title_optimize_prompt", "_build_relative_title_optimize_prompt"):
+    setattr(_llm_aided, _name, _request_strict_json(getattr(_llm_aided, _name)))
