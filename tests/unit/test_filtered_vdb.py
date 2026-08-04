@@ -4,6 +4,7 @@
 from unittest.mock import AsyncMock
 
 from dlightrag.core.retrieval.filtered_vdb import (
+    FilteredVectorStorage,
     _active_filter,
     metadata_filter_scope,
 )
@@ -55,6 +56,26 @@ async def test_empty_candidate_set_is_active_filter() -> None:
 async def test_none_candidate_set_is_no_filter() -> None:
     async with metadata_filter_scope(None):
         assert _active_filter.get() is None
+
+
+async def test_filtered_query_uses_query_embedding_context() -> None:
+    storage = type(
+        "PGVectorStorage",
+        (),
+        {
+            "table_name": "lightrag_vdb_chunks_test",
+            "workspace": "default",
+            "cosine_better_than_threshold": 0.3,
+            "db": _FakeDB(),
+        },
+    )()
+    embedding_func = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+    wrapper = FilteredVectorStorage(original=storage, embedding_func=embedding_func)
+
+    async with metadata_filter_scope({"chunk-1"}):
+        await wrapper.query("question", top_k=5)
+
+    embedding_func.assert_awaited_once_with(["question"], context="query")
 
 
 async def test_large_candidate_pg_search_places_distance_filter_outside_cte() -> None:

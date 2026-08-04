@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for RAGService facade (core/service.py)."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -205,6 +206,51 @@ class TestRAGServiceClose:
         kwargs = await_args.kwargs
         assert kwargs["param"].mode == "naive"
         assert kwargs["param"].enable_rerank is False
+
+    async def test_startup_pipeline_recovery_waits_for_current_owner_then_runs(
+        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        allow_lock = asyncio.Event()
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.unlock_calls = 0
+
+            async def execute(self, sql: str, lock_key: int) -> None:
+                assert isinstance(lock_key, int)
+                if sql == "SELECT pg_advisory_lock($1)":
+                    await allow_lock.wait()
+                    return
+                assert sql == "SELECT pg_advisory_unlock($1)"
+                self.unlock_calls += 1
+
+        connection = FakeConnection()
+
+        class FakeAcquire:
+            async def __aenter__(self) -> FakeConnection:
+                return connection
+
+            async def __aexit__(self, *_exc: object) -> bool:
+                return False
+
+        pool = SimpleNamespace(acquire=lambda **_kwargs: FakeAcquire())
+        monkeypatch.setattr(
+            "dlightrag.storage.pool.pg_pool.get",
+            AsyncMock(return_value=pool),
+        )
+        service = RAGService(config=test_config)
+        service._lightrag = MagicMock()
+        service._lightrag.apipeline_process_enqueue_documents = AsyncMock()
+
+        recovery = asyncio.create_task(service._resume_lightrag_pipeline())
+        await asyncio.sleep(0)
+        service._lightrag.apipeline_process_enqueue_documents.assert_not_awaited()
+
+        allow_lock.set()
+        await recovery
+
+        service._lightrag.apipeline_process_enqueue_documents.assert_awaited_once_with()
+        assert connection.unlock_calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -772,6 +818,26 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         service = RAGService(config=test_config)
         call_order: list[str] = []
+        resume_pipeline = AsyncMock()
+
+        class FakeRecoveryConnection:
+            def __init__(self) -> None:
+                self.unlock_calls = 0
+
+            async def execute(self, sql: str, lock_key: int) -> None:
+                if sql == "SELECT pg_advisory_unlock($1)":
+                    self.unlock_calls += 1
+
+        recovery_connection = FakeRecoveryConnection()
+
+        class FakeRecoveryAcquire:
+            async def __aenter__(self) -> FakeRecoveryConnection:
+                return recovery_connection
+
+            async def __aexit__(self, *_exc: object) -> bool:
+                return False
+
+        recovery_pool = SimpleNamespace(acquire=lambda **_kwargs: FakeRecoveryAcquire())
 
         class FakeGuard:
             def __init__(self, _lightrag: object) -> None:
@@ -792,6 +858,7 @@ class TestRAGServiceLightRAGMainPath:
                     table_name="LIGHTRAG_DOC_CHUNKS",
                 )
                 self.initialize_storages = AsyncMock()
+                self.apipeline_process_enqueue_documents = resume_pipeline
                 self.text_chunks = object()
                 self.full_docs = object()
                 self.doc_status = object()
@@ -825,6 +892,10 @@ class TestRAGServiceLightRAGMainPath:
             AsyncMock(side_effect=AssertionError("writer path must not attach read-only storages")),
         )
         monkeypatch.setattr("dlightrag.core.service.LightRAGContractGuard", FakeGuard)
+        monkeypatch.setattr(
+            "dlightrag.storage.pool.pg_pool.get",
+            AsyncMock(return_value=recovery_pool),
+        )
 
         with (
             patch("lightrag.LightRAG", FakeLightRAG),
@@ -848,8 +919,11 @@ class TestRAGServiceLightRAGMainPath:
             patch("dlightrag.core.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             await service._do_initialize_unified()
+            await asyncio.sleep(0)
 
         assert call_order == ["verify_all"]
+        resume_pipeline.assert_awaited_once_with()
+        assert recovery_connection.unlock_calls == 1
 
     async def test_reader_initialization_raises_on_reader_attach_contract_drift(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch

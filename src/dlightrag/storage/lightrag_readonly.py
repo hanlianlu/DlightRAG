@@ -165,6 +165,47 @@ async def _acquire_read_only_db(
     return db
 
 
+async def _release_read_only_db(db: Any, *, reference_count: int) -> None:
+    async def _release() -> None:
+        close_db = None
+        async with ClientManager._lock:
+            if db is ClientManager._instances["db"]:
+                ClientManager._instances["ref_count"] -= reference_count
+                if ClientManager._instances["ref_count"] <= 0:
+                    ClientManager._instances["ref_count"] = 0
+                    close_db = db
+                    ClientManager._instances["db"] = None
+                    ClientManager._instances["vector_signature"] = None
+            else:
+                close_db = db
+
+        if close_db is not None and close_db.pool is not None:
+            await close_db.pool.close()
+
+    cleanup_task = asyncio.create_task(_release())
+    try:
+        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError as cancellation:
+        current = asyncio.current_task()
+        if current is not None:
+            while current.cancelling():
+                current.uncancel()
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                if current is not None:
+                    while current.cancelling():
+                        current.uncancel()
+        try:
+            cleanup_task.result()
+        except Exception:
+            logger.warning("Failed to roll back LightRAG read-only DB references", exc_info=True)
+        raise cancellation
+    except Exception:
+        logger.warning("Failed to roll back LightRAG read-only DB references", exc_info=True)
+
+
 def _bind_storage_db_workspace_and_graph(
     *,
     storages: list[Any],
@@ -280,16 +321,20 @@ async def attach_lightrag_storages_read_only(
         signature=signature,
         active_storage_count=len(active_storages),
     )
-    _bind_storage_db_workspace_and_graph(
-        storages=active_storages,
-        db=db,
-        fallback_workspace=config.workspace,
-    )
-    await verify_lightrag_read_only_schema(db=db, storages=active_storages)
-    lightrag._owning_loop = asyncio.get_running_loop()
-    _bind_default_workspace(lightrag)
-    await initialize_pipeline_status(workspace=lightrag.workspace)
-    lightrag._storages_status = StoragesStatus.INITIALIZED
+    try:
+        _bind_storage_db_workspace_and_graph(
+            storages=active_storages,
+            db=db,
+            fallback_workspace=config.workspace,
+        )
+        await verify_lightrag_read_only_schema(db=db, storages=active_storages)
+        lightrag._owning_loop = asyncio.get_running_loop()
+        _bind_default_workspace(lightrag)
+        await initialize_pipeline_status(workspace=lightrag.workspace)
+        lightrag._storages_status = StoragesStatus.INITIALIZED
+    except BaseException:
+        await _release_read_only_db(db, reference_count=len(active_storages))
+        raise
 
 
 __all__ = [

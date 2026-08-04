@@ -307,12 +307,7 @@ class RAGServiceManager:
 
         await manager._initialize_workspace_registry()
 
-        # Discover all known workspaces for recovery, but only instantiate the
-        # default service on startup. Other workspaces are lazy-loaded on demand.
-        all_ws = await manager._list_all_workspaces()
         default_ws = normalize_workspace(manager._config.workspace)
-        if default_ws not in all_ws:
-            all_ws.insert(0, default_ws)
 
         # Bind the planner LLM during startup; this does not make a model call.
         manager._get_query_planner()
@@ -329,11 +324,9 @@ class RAGServiceManager:
             default_err = exc
             logger.warning("Failed to warm up default workspace '%s'", default_ws, exc_info=True)
 
-        # Readers attach to a replica: no ingest-job recovery or stalled-doc
-        # resets, both of which write.
+        # Readers attach to a replica and do not recover ingest jobs.
         if not manager._config.is_reader:
             await manager._start_ingest_job_recovery()
-            await manager._recover_stalled_docs(all_ws)
         if default_ws in manager._services:
             manager._ready = True
         else:
@@ -508,49 +501,6 @@ class RAGServiceManager:
         except Exception:
             self._startup_warnings.append("Ingest job recovery unavailable")
             logger.warning("Ingest job recovery initialization failed", exc_info=True)
-
-    async def _recover_stalled_docs(self, workspaces: list[str]) -> None:
-        """Recover documents stalled in intermediate LightRAG pipeline states.
-
-        Scans ``LIGHTRAG_DOC_STATUS`` for documents stuck in PARSING/ANALYZING/
-        PROCESSING whose ``updated_at`` exceeds ``stalled_doc_timeout_seconds``,
-        and resets them to PENDING so the next pipeline run retries them.
-
-        Best-effort: failures are logged individually and never block startup.
-        """
-        timeout = self._config.stalled_doc_timeout_seconds
-        if timeout <= 0:
-            return  # disabled
-
-        from dlightrag.storage.stalled_doc_scanner import recover_stalled_docs
-
-        total = 0
-        for workspace in workspaces:
-            try:
-                result = await recover_stalled_docs(
-                    workspace=workspace,
-                    timeout_seconds=timeout,
-                    dry_run=False,
-                )
-                count: int = result.get("reset_count", 0)
-                if count:
-                    total += count
-                    ids: list[str] = result.get("stalled_ids", [])
-                    logger.warning(
-                        "Recovered %d stalled doc(s) in workspace '%s': %s",
-                        count,
-                        workspace,
-                        ids,
-                    )
-            except Exception:
-                logger.debug(
-                    "Stalled doc recovery skipped for workspace '%s'",
-                    workspace,
-                    exc_info=True,
-                )
-
-        if total:
-            logger.info("Total stalled docs recovered at startup: %d", total)
 
     @property
     def answer_image_capability(self) -> AnswerImageCapability | None:

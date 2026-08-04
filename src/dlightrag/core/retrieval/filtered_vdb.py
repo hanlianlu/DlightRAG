@@ -75,7 +75,7 @@ class FilteredVectorStorage:
         # Compute embedding if not provided
         if query_embedding is None:
             if isinstance(query, str):
-                embeddings = await self._embedding_func([query])
+                embeddings = await self._embedding_func([query], context="query")
                 emb = embeddings[0]
                 query_embedding = emb.tolist() if hasattr(emb, "tolist") else list(emb)
             else:

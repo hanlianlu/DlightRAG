@@ -59,6 +59,8 @@ async def test_backend_always_queries_lightrag_mix() -> None:
 
     param = lightrag.aquery_data.await_args.kwargs["param"]
     assert param.mode == "mix"
+    assert param.only_need_context is False
+    assert param.include_references is False
     assert result.contexts["entities"] == [{"entity_name": "Alpha"}]
     assert result.contexts["chunks"][0]["chunk_id"] == "txt1"
     assert result.contexts["chunks"][0]["reference_id"] == "3"

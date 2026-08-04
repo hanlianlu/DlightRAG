@@ -411,12 +411,10 @@ def wrap_chat_func(
     name: str = "llm",
     model: str | None = None,
     model_parameters: dict[str, Any] | None = None,
-    root: bool = False,
 ) -> Callable[..., Any]:
     """Wrap an async LLM completion callable with Langfuse generation tracking."""
     if _client is None:
         return fn
-    client = _client
 
     async def _traced(messages: Any, **kwargs: Any) -> Any:
         metadata = {k: v for k, v in kwargs.items() if k not in {"messages", "stream"}}
@@ -434,8 +432,6 @@ def wrap_chat_func(
         }
         if merged_model_parameters:
             observation_kwargs["model_parameters"] = merged_model_parameters
-        if root:
-            observation_kwargs["trace_context"] = {"trace_id": client.create_trace_id()}
 
         if kwargs.get("stream"):
             return _stream_with_observation(
@@ -455,13 +451,10 @@ def wrap_chat_func(
     return _traced
 
 
-def wrap_embedding_func(
-    fn: Callable[..., Any], *, name: str = "embedding", root: bool = False
-) -> Callable[..., Any]:
+def wrap_embedding_func(fn: Callable[..., Any], *, name: str = "embedding") -> Callable[..., Any]:
     """Wrap an async embedding callable."""
     if _client is None:
         return fn
-    client = _client
 
     async def _traced(inputs: Any, **kwargs: Any) -> Any:
         metadata = {**kwargs}
@@ -473,8 +466,6 @@ def wrap_embedding_func(
             "input": {"input_count": len(inputs)} if isinstance(inputs, list) else None,
             "metadata": metadata,
         }
-        if root:
-            observation_kwargs["trace_context"] = {"trace_id": client.create_trace_id()}
         return await _run_with_observation(
             fn,
             (inputs,),

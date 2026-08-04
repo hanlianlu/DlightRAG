@@ -2210,7 +2210,6 @@ class TestDegradedMode:
         )
         for name in (
             "_start_ingest_job_recovery",
-            "_recover_stalled_docs",
             "_probe_vision_support",
         ):
             monkeypatch.setattr(RAGServiceManager, name, AsyncMock())
@@ -2245,37 +2244,27 @@ class TestDegradedMode:
     ) -> None:
         cfg = test_cfg.model_copy(update={"max_async": 3})
         created: list[str] = []
-        recovered: list[str] = []
 
         async def fake_initialize_workspace_registry(self):  # noqa: ANN001, ANN202
             return None
-
-        async def fake_list_all_workspaces(self):  # noqa: ANN001, ANN202
-            return ["default", "alpha", "beta"]
 
         async def fake_get_service(self, workspace: str):  # noqa: ANN001, ANN202
             created.append(workspace)
             self._services[workspace] = workspace
             return workspace
 
-        async def fake_recover_stalled_docs(self, workspaces: list[str]):  # noqa: ANN001, ANN202
-            recovered.extend(workspaces)
-
         monkeypatch.setattr(
             RAGServiceManager,
             "_initialize_workspace_registry",
             fake_initialize_workspace_registry,
         )
-        monkeypatch.setattr(RAGServiceManager, "_list_all_workspaces", fake_list_all_workspaces)
         monkeypatch.setattr(RAGServiceManager, "_get_service", fake_get_service)
-        monkeypatch.setattr(RAGServiceManager, "_recover_stalled_docs", fake_recover_stalled_docs)
         monkeypatch.setattr("dlightrag.observability.init_tracing", lambda config: None)
 
         manager = await RAGServiceManager.acreate(config=cfg)
 
         assert manager.is_ready()
         assert created == ["default"]
-        assert recovered == ["default", "alpha", "beta"]
 
 
 class TestActionableErrors:

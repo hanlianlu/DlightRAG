@@ -83,16 +83,9 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
 def _make_completion_func(
     cfg: ModelConfig,
     *,
-    root: bool = False,
     owner_closers: list[Callable[[], Awaitable[Any]]] | None = None,
 ) -> partial:
-    """Build a messages-first completion callable from config.
-
-    ``root=True`` marks the generation as its own Langfuse root trace — used for
-    funcs handed to LightRAG, whose worker pool would otherwise run them in a
-    stale context. DlightRAG-owned funcs keep ``root=False`` so they nest under
-    the active request span.
-    """
+    """Build a messages-first completion callable from config."""
     provider = get_provider(
         cfg.provider,
         api_key=cfg.api_key,
@@ -171,7 +164,6 @@ def _make_completion_func(
         name=f"llm_{cfg.model}",
         model=cfg.model,
         model_parameters={"temperature": cfg.temperature} if cfg.temperature is not None else None,
-        root=root,
     )
 
     return partial(traced_func)
@@ -179,7 +171,7 @@ def _make_completion_func(
 
 def get_default_model_func(config: DlightragConfig) -> Callable:
     """Messages-first callable for the configured default LLM (handed to LightRAG)."""
-    return _make_completion_func(config.llm.default, root=True)
+    return _make_completion_func(config.llm.default)
 
 
 def get_keyword_model_func(config: DlightragConfig) -> Callable:
@@ -367,7 +359,7 @@ def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
         configured_role: ModelConfig | None = getattr(config.llm.roles, role)
         if configured_role is None or not has_complete_api_key_setting(configured_role):
             continue
-        completion = _make_completion_func(configured_role, root=True)
+        completion = _make_completion_func(configured_role)
         overrides[role] = RoleLLMConfig(
             func=_adapt_for_lightrag(completion),
             timeout=int(configured_role.timeout),
@@ -399,7 +391,7 @@ def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) 
 
     from dlightrag.observability import wrap_embedding_func
 
-    traced_embed_func = wrap_embedding_func(embed_func, name=f"embed_{cfg.model}", root=True)
+    traced_embed_func = wrap_embedding_func(embed_func, name=f"embed_{cfg.model}")
 
     return EmbeddingFunc(
         embedding_dim=cfg.dim,

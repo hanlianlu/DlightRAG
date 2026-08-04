@@ -409,7 +409,6 @@ def _lightrag_surface(tool: DlightRAGRebuildTool) -> Any:
         entity_chunks=object(),
         relation_chunks=object(),
         llm_response_cache=object(),
-        _build_global_config=lambda: tool.global_config,
     )
 
 

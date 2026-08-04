@@ -397,6 +397,117 @@ class TestReadOnlyAdapter:
         assert manager._instances["ref_count"] == 8
         assert seen_signatures == [{"database": "db"}]
 
+    async def test_attach_entry_point_releases_db_when_schema_verification_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.storage.lightrag_readonly as readonly
+
+        class FakeConn:
+            async def fetchval(self, sql: str, *args: Any) -> Any:
+                if sql == "SHOW transaction_read_only":
+                    return "off"
+                raise AssertionError(f"unexpected SQL after read-only failure: {sql}")
+
+        class FakeAcquire:
+            async def __aenter__(self) -> FakeConn:
+                return FakeConn()
+
+            async def __aexit__(self, *_exc: object) -> bool:
+                return False
+
+        existing_db = SimpleNamespace(
+            pool=SimpleNamespace(acquire=FakeAcquire),
+            workspace="",
+        )
+        instances = {
+            "db": existing_db,
+            "ref_count": 7,
+            "vector_signature": {"database": "db"},
+        }
+
+        async def release_client(db: object) -> None:
+            assert db is existing_db
+            instances["ref_count"] -= 1
+
+        manager = SimpleNamespace(
+            _lock=asyncio.Lock(),
+            _instances=instances,
+            get_config=lambda *, vector_storage=None: {"database": "db"},
+            _build_vector_signature=lambda config, vector_storage: {"database": config["database"]},
+            _assert_compatible_vector_signature=lambda signature: None,
+            release_client=AsyncMock(side_effect=release_client),
+        )
+        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+
+        lightrag = SimpleNamespace(
+            workspace="reader-workspace",
+            full_docs=SimpleNamespace(
+                db=None, workspace=None, namespace="full_docs", table_name="LIGHTRAG_DOC_FULL"
+            ),
+            text_chunks=None,
+            full_entities=None,
+            full_relations=None,
+            entity_chunks=None,
+            relation_chunks=None,
+            entities_vdb=None,
+            relationships_vdb=None,
+            chunks_vdb=None,
+            chunk_entity_relation_graph=None,
+            llm_response_cache=None,
+            doc_status=None,
+        )
+
+        with pytest.raises(RuntimeError, match="not read-only"):
+            await readonly.attach_lightrag_storages_read_only(
+                lightrag,
+                config=_config(service_role="reader"),
+            )
+
+        assert instances["ref_count"] == 7
+
+    async def test_read_only_db_rollback_finishes_before_propagating_cancellation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import dlightrag.storage.lightrag_readonly as readonly
+
+        close_started = asyncio.Event()
+        allow_close = asyncio.Event()
+
+        async def close_pool() -> None:
+            close_started.set()
+            await allow_close.wait()
+
+        pool = SimpleNamespace(close=AsyncMock(side_effect=close_pool))
+        db = SimpleNamespace(pool=pool)
+        instances = {"db": db, "ref_count": 3, "vector_signature": {"database": "db"}}
+
+        async def release_client(released_db: object) -> None:
+            assert released_db is db
+            async with manager._lock:
+                instances["ref_count"] -= 1
+                if instances["ref_count"] == 0:
+                    await pool.close()
+                    instances["db"] = None
+                    instances["vector_signature"] = None
+
+        manager = SimpleNamespace(
+            _lock=asyncio.Lock(),
+            _instances=instances,
+            release_client=AsyncMock(side_effect=release_client),
+        )
+        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+
+        rollback = asyncio.create_task(readonly._release_read_only_db(db, reference_count=3))
+        await close_started.wait()
+        rollback.cancel()
+        allow_close.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await rollback
+
+        assert instances == {"db": None, "ref_count": 0, "vector_signature": None}
+        pool.close.assert_awaited_once_with()
+
     async def test_attach_entry_point_signature_mismatch_keeps_refcount(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

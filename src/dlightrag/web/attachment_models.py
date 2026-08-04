@@ -23,11 +23,8 @@ MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
 COMPOSER_DOCUMENT_EXTENSIONS = frozenset(
     {
         "pdf",
-        "doc",
         "docx",
-        "ppt",
         "pptx",
-        "xls",
         "xlsx",
         "md",
         "textpack",

@@ -21,7 +21,6 @@ Storage internals (reached through storage attributes):
     ``chunks_vdb.db._run_with_retry()`` — PostgreSQL retry wrapper
 
 LightRAG API methods (public, but shape-dependent):
-    ``LightRAG._build_global_config()`` — returns config dict
     ``LightRAG.aquery_data()``          — returns {data: {...}, status: ...}
     ``apipeline_enqueue_documents()``   — enqueues for processing
     ``apipeline_process_enqueue_documents()`` — processes queue
@@ -59,7 +58,6 @@ class LightRAGStores:
             "text_chunks",
             "full_docs",
             "doc_status",
-            "_build_global_config",
         }
     )
 
@@ -68,12 +66,9 @@ class LightRAGStores:
         if missing:
             raise RuntimeError(f"LightRAGStores missing required surface(s): {missing}")
         self.raw = lightrag
-        for name in self._REQUIRED - {"_build_global_config"}:
+        for name in self._REQUIRED:
             setattr(self, name, getattr(lightrag, name))
         self._vector_write_lock = asyncio.Lock()
-
-    def build_global_config(self) -> dict[str, Any]:
-        return self.raw._build_global_config()
 
     async def get_doc_status(self, doc_id: str) -> dict[str, Any] | None:
         return await self.doc_status.get_by_id(doc_id)

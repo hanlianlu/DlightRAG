@@ -123,6 +123,14 @@ class ComposerLightRAGProxy:
             },
         }
 
+    async def _persist_llm_response_cache_best_effort(
+        self,
+        *,
+        stage_label: str,
+        doc_id: str,
+    ) -> None:
+        return None
+
     async def _raise_if_cancelled(
         self,
         pipeline_status: dict[str, Any],

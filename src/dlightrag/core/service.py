@@ -8,6 +8,7 @@ concurrent workers.
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import random
@@ -117,12 +118,21 @@ def _source_document_from_manifest(document: IngestDocument, *, key: str) -> Sou
 # locks. Advisory locks are session-scoped and not persisted, so the
 # specific number is irrelevant beyond uniqueness within DlightRAG.
 _PG_INIT_LOCK_KEY = 0x446C_6967_6874_0001  # "Dlight\x00\x01"
+_PIPELINE_RECOVERY_LOCK_NAMESPACE = "dlightrag_pipeline_recovery"
 
 _REMOTE_INGEST_BATCH_SIZE = 64
 _REMOTE_DOWNLOAD_CONCURRENCY = 8
 _PROCESS_COUNT_ENV_VARS = ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS")
 
 RemoteIngestProgressCallback = Callable[["RemoteIngestWindowProgress"], Awaitable[None]]
+
+
+def _pipeline_recovery_lock_key(workspace: str) -> int:
+    digest = hashlib.blake2b(
+        f"{_PIPELINE_RECOVERY_LOCK_NAMESPACE}:{workspace}".encode(),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, "big", signed=True)
 
 
 @dataclass(frozen=True)
@@ -280,6 +290,7 @@ class RAGService:
         self.enable_vlm = enable_vlm
         self._initialized: bool = False
         self._warmup_task: asyncio.Task[None] | None = None
+        self._pipeline_recovery_task: asyncio.Task[None] | None = None
 
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
@@ -761,6 +772,9 @@ class RAGService:
 
         logger.info("LightRAG main runtime path ready")
 
+        if not config.is_reader:
+            self._pipeline_recovery_task = asyncio.create_task(self._resume_lightrag_pipeline())
+
         # Pre-warm worker pools in background.  LightRAG lazily initializes
         # LLM keyword (~4 workers) and embedding (~8 workers) pools on first
         # use, which adds ~100 s to the first query after restart.  Trigger
@@ -769,6 +783,23 @@ class RAGService:
             self._warmup_task = asyncio.create_task(self._warmup_lightrag_workers())
         except RuntimeError:
             pass  # no event loop running (e.g. sync test setup)
+
+    async def _resume_lightrag_pipeline(self) -> None:
+        """Run LightRAG's native sweep for pending and interrupted documents."""
+        from dlightrag.storage.pool import pg_pool
+
+        try:
+            pool = await pg_pool.get()
+            async with pool.acquire(timeout=self.config.postgres_acquire_timeout) as conn:
+                lock_key = _pipeline_recovery_lock_key(self.config.workspace)
+                await conn.execute("SELECT pg_advisory_lock($1)", lock_key)
+                try:
+                    await self._lightrag.apipeline_process_enqueue_documents()
+                    logger.info("LightRAG startup pipeline recovery complete")
+                finally:
+                    await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
+        except Exception:
+            logger.warning("LightRAG startup pipeline recovery failed", exc_info=True)
 
     async def _warmup_lightrag_workers(self) -> None:
         """Pre-initialize LightRAG worker pools in the background."""
@@ -880,6 +911,15 @@ class RAGService:
 
     async def aclose(self) -> None:
         """Clean up storages and worker pools (best-effort)."""
+        if self._pipeline_recovery_task is not None:
+            self._pipeline_recovery_task.cancel()
+            try:
+                await self._pipeline_recovery_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.warning("Pipeline recovery task raised during shutdown", exc_info=True)
+            self._pipeline_recovery_task = None
         # Cancel the background warmup task so it cannot run against
         # half-closed resources during shutdown.
         if self._warmup_task is not None:

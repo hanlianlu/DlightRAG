@@ -16,16 +16,13 @@ class FakeLightRAG:
         self.full_docs = object()
         self.doc_status = object()
 
-    def _build_global_config(self):
-        return {"ok": True}
-
 
 def test_lightrag_stores_validates_required_surfaces() -> None:
     fake = FakeLightRAG()
     stores = LightRAGStores(fake)
 
     assert stores.text_chunks is fake.text_chunks
-    assert stores.build_global_config() == {"ok": True}
+    assert stores.full_docs is fake.full_docs
 
 
 def test_lightrag_stores_reports_missing_surfaces() -> None:

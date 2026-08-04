@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Langfuse observability wrappers."""
 
-import uuid
+import inspect
 from collections.abc import Generator
 from datetime import datetime
 from types import SimpleNamespace
@@ -42,9 +42,6 @@ class _RecordingLangfuse:
         obs = _RecordingObservation(self, kwargs)
         self.observations.append(obs)
         return obs
-
-    def create_trace_id(self, *, seed: str | None = None) -> str:
-        return uuid.uuid4().hex
 
     def flush(self) -> None:
         self.flushed = True
@@ -341,19 +338,8 @@ async def test_streaming_generation_records_time_to_first_token() -> None:
     assert ttft[0]["completion_start_time"].tzinfo is not None
 
 
-async def test_chat_func_root_starts_new_trace() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def complete(messages: Any, **kwargs: Any) -> str:
-        return "ok"
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_x", model="x", root=True)
-    await wrapped([{"role": "user", "content": "q"}])
-
-    tc = client.observations[0].kwargs.get("trace_context")
-    assert tc is not None
-    assert isinstance(tc["trace_id"], str) and len(tc["trace_id"]) == 32
+def test_chat_wrapper_has_no_detached_root_mode() -> None:
+    assert "root" not in inspect.signature(observability.wrap_chat_func).parameters
 
 
 async def test_chat_func_default_has_no_trace_context() -> None:
@@ -369,19 +355,8 @@ async def test_chat_func_default_has_no_trace_context() -> None:
     assert "trace_context" not in client.observations[0].kwargs
 
 
-async def test_embedding_func_root_starts_new_trace() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def embed(inputs: list[str], **kwargs: Any) -> list[list[float]]:
-        return [[0.1]]
-
-    wrapped = observability.wrap_embedding_func(embed, name="embed_x", root=True)
-    await wrapped(["hello"])
-
-    tc = client.observations[0].kwargs.get("trace_context")
-    assert tc is not None
-    assert isinstance(tc["trace_id"], str) and len(tc["trace_id"]) == 32
+def test_embedding_wrapper_has_no_detached_root_mode() -> None:
+    assert "root" not in inspect.signature(observability.wrap_embedding_func).parameters
 
 
 async def test_embedding_wrapper_uses_embedding_observation() -> None:

@@ -54,14 +54,12 @@ class LightRAGMixBackend:
         limit = chunk_top_k or top_k or 30
         param = QueryParam(
             mode="mix",
-            only_need_context=True,
             top_k=top_k or 60,
             chunk_top_k=limit,
             max_entity_tokens=self._max_entity_tokens,
             max_relation_tokens=self._max_relation_tokens,
             max_total_tokens=self._max_total_tokens,
             enable_rerank=False,
-            include_references=True,
         )
         # Run the image->image visual leg concurrently with LightRAG's mix query:
         # it embeds the raw query image (lossless visual signal) and searches the

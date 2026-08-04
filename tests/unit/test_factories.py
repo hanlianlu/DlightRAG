@@ -161,10 +161,9 @@ class TestMakeCompletionFunc:
 
         captured: dict[str, Any] = {}
 
-        def fake_make_completion_func(cfg, *, root=False):
+        def fake_make_completion_func(cfg):
             captured["model"] = cfg.model
             captured["api_key"] = cfg.api_key
-            captured["root"] = root
             return f"completion:{cfg.model}"
 
         monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
@@ -185,12 +184,11 @@ class TestMakeCompletionFunc:
 
         func = llm.get_planner_model_func(cfg)
 
-        # DlightRAG-owned planner: direct completion (no queue), nests (root=False)
+        # DlightRAG-owned planner runs inline and inherits the active trace context.
         assert func == "completion:deepseek-v4-flash"
         assert captured == {
             "model": "deepseek-v4-flash",
             "api_key": "sk-keyword",
-            "root": False,
         }
 
     def test_planner_model_func_uses_default_when_keyword_role_is_unset(self, monkeypatch):
@@ -198,10 +196,9 @@ class TestMakeCompletionFunc:
 
         captured: dict[str, Any] = {}
 
-        def fake_make_completion_func(cfg, *, root=False):
+        def fake_make_completion_func(cfg):
             captured["model"] = cfg.model
             captured["api_key"] = cfg.api_key
-            captured["root"] = root
             return f"completion:{cfg.model}"
 
         monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
@@ -218,37 +215,38 @@ class TestMakeCompletionFunc:
         assert captured == {
             "model": "default-model",
             "api_key": "sk-chat",
-            "root": False,
         }
 
-    def test_lightrag_facing_funcs_use_root(self, monkeypatch):
+    def test_lightrag_facing_funcs_use_natural_trace_context(self, monkeypatch):
         from dlightrag.models import llm
 
-        roots: list[bool] = []
+        models: list[str] = []
 
-        def fake_make_completion_func(cfg, *, root=False):
-            roots.append(root)
+        def fake_make_completion_func(cfg):
+            models.append(cfg.model)
             return f"completion:{cfg.model}"
 
         monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
         cfg = DlightragConfig(
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk"),
-                roles=LLMRolesConfig(keyword=ModelConfig(provider="openai", model="kw")),
+                roles=LLMRolesConfig(
+                    keyword=ModelConfig(provider="openai", model="kw", api_key="sk-kw")
+                ),
             ),
             embedding=_embedding_config(),
         )
 
-        llm.get_default_model_func(cfg)  # handed to LightRAG → root
-        llm.build_role_llm_configs(cfg)  # handed to LightRAG → root
-        assert roots and all(roots)
+        llm.get_default_model_func(cfg)
+        llm.build_role_llm_configs(cfg)
+        assert models == ["gpt-5.4-mini", "kw"]
 
     def test_lightrag_role_overrides_ignore_blank_keys(self, monkeypatch):
         from dlightrag.models import llm
 
         built_models: list[str] = []
 
-        def fake_make_completion_func(cfg, *, root=False):
+        def fake_make_completion_func(cfg):
             built_models.append(cfg.model)
             return f"completion:{cfg.model}"
 
@@ -264,13 +262,13 @@ class TestMakeCompletionFunc:
         assert llm.build_role_llm_configs(cfg) is None
         assert built_models == []
 
-    def test_owned_funcs_are_not_root(self, monkeypatch):
+    def test_owned_funcs_use_natural_trace_context(self, monkeypatch):
         from dlightrag.models import llm
 
-        roots: list[bool] = []
+        models: list[str] = []
 
-        def fake_make_completion_func(cfg, *, root=False):
-            roots.append(root)
+        def fake_make_completion_func(cfg):
+            models.append(cfg.model)
             return f"completion:{cfg.model}"
 
         monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
@@ -279,20 +277,20 @@ class TestMakeCompletionFunc:
             embedding=_embedding_config(),
         )
 
-        llm.get_query_model_func(cfg)  # answer → nests
-        llm.get_vlm_model_func(cfg)  # vlm → nests
-        llm.get_keyword_model_func(cfg)  # highlights → nests
-        assert roots == [False, False, False]
+        llm.get_query_model_func(cfg)
+        llm.get_vlm_model_func(cfg)
+        llm.get_keyword_model_func(cfg)
+        assert models == ["m", "m", "m"]
 
-    def test_embedding_func_is_root(self, monkeypatch):
+    def test_embedding_func_uses_natural_trace_context(self, monkeypatch):
         from types import SimpleNamespace
 
         from dlightrag.models import llm
 
-        captured: dict[str, Any] = {}
+        wrapped: list[str] = []
 
-        def fake_wrap_embedding_func(fn, *, name="embedding", root=False):
-            captured["root"] = root
+        def fake_wrap_embedding_func(fn, *, name="embedding"):
+            wrapped.append(name)
             return fn
 
         monkeypatch.setattr("dlightrag.observability.wrap_embedding_func", fake_wrap_embedding_func)
@@ -302,7 +300,7 @@ class TestMakeCompletionFunc:
         )
 
         llm.get_embedding_func(cfg, embedder=SimpleNamespace(supports_asymmetric=False))
-        assert captured["root"] is True
+        assert wrapped == [f"embed_{cfg.embedding.model}"]
 
     @pytest.mark.asyncio
     async def test_structured_output_uses_openai_json_schema(self, monkeypatch):
