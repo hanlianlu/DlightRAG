@@ -256,13 +256,16 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
             {"type": "text", "text": "## Knowledge-base evidence"},
             {"type": "text", "text": "### Document [1]: report.pdf"},
             {"type": "text", "text": "[1-1] report.pdf, Page 3\nEvidence text..."},
-            {"type": "text", "text": "[1-2] \"Doc Title\" Page 4"},
+            {"type": "text", "text": '[1-2] "Doc Title" Page 4'},
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
-            {"type": "text", "text": (
-                "## Knowledge Graph Context\n..."
-                "\n\n## Reference List\n..."
-                "\n\n## Question\nWhat are the key findings?"
-            )},
+            {
+                "type": "text",
+                "text": (
+                    "## Knowledge Graph Context\n..."
+                    "\n\n## Reference List\n..."
+                    "\n\n## Question\nWhat are the key findings?"
+                ),
+            },
         ],
     },
 ]

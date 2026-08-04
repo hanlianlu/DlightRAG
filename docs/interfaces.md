@@ -56,8 +56,8 @@ Once configured, the SDK runtime is a small create-once / call / close lifecycle
 ```python
 manager = await RAGServiceManager.acreate(config)  # start: warms the default workspace
 # per request:
-await manager.aingest(...)   # or aretrieve(...) / aanswer(...) / aanswer_stream(...)
-await manager.aclose()       # stop
+await manager.aingest(...)  # or aretrieve(...) / aanswer(...) / aanswer_stream(...)
+await manager.aclose()  # stop
 ```
 
 `DlightragConfig` ships a curated default model stack, but it still needs the
@@ -117,7 +117,7 @@ try:
         IngestSpec(
             source_type="azure_blob",
             container_name="documents",
-            prefix="reports/",       # or blob_path="reports/q1.pdf"
+            prefix="reports/",  # or blob_path="reports/q1.pdf"
         ),
     )
 
@@ -127,8 +127,8 @@ try:
         IngestSpec(
             source_type="s3",
             bucket="my-bucket",
-            s3_region="us-east-1",   # optional; credentials come from AWS env/config/IAM
-            s3_key="docs/q1.pdf",    # or prefix="docs/"
+            s3_region="us-east-1",  # optional; credentials come from AWS env/config/IAM
+            s3_key="docs/q1.pdf",  # or prefix="docs/"
         ),
     )
 
@@ -523,8 +523,8 @@ ingestion.
 ```python
 # Retrieve: contexts only, no LLM answer
 result = await manager.aretrieve(query="What are the key findings?")
-result.answer     # None
-result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
+result.answer  # None
+result.contexts  # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
 
 # Query every registered workspace from the trusted in-process SDK
 all_contexts = await manager.aretrieve(
@@ -537,8 +537,8 @@ result = await manager.aanswer(
     query="What are the key findings?",
     semantic_highlights=True,  # optional; default false outside Web
 )
-result.answer      # "The key findings are... [1-1] [2-3]"
-result.contexts    # same structure as retrieve, packed to what the answer model saw
+result.answer  # "The key findings are... [1-1] [2-3]"
+result.contexts  # same structure as retrieve, packed to what the answer model saw
 result.references  # validated cited documents, derived from inline citations
 result.answer_images  # cited visual assets available for rendering
 result.answer_blocks  # markdown/image_ref blocks for structured display
@@ -766,7 +766,12 @@ bounded before model use. Public answer/retrieve requests do not persist them or
 return durable image identifiers.
 
 ```python
-from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, EntityContext, RelationshipContext
+from dlightrag.core.retrieval.protocols import (
+    RetrievalContexts,
+    ChunkContext,
+    EntityContext,
+    RelationshipContext,
+)
 ```
 
 ### chunks
