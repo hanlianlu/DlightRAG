@@ -93,10 +93,26 @@ To use Docling instead, remove/comment the MinerU block and configure only:
 parser_sidecars:
   docling:
     endpoint: http://docling:5001
+    do_formula_enrichment: false
     force_reparse: false
     poll_interval_seconds: 5
     max_polls: 1440
 ```
+
+`parser_sidecars.docling.do_formula_enrichment` transcribes detected formula
+regions. Docling always detects them during layout, but leaves their text empty
+unless this is on, so a formula-heavy corpus loses its mathematics by default.
+It costs parse time and requires the deployment to have a code/formula model.
+
+Which model transcribes them is the docling-serve operator's choice, not a
+DlightRAG setting. DlightRAG sends the `default` preset alias, which
+docling-serve resolves through `DOCLING_SERVE_DEFAULT_CODE_FORMULA_PRESET`. Set
+that on the parser service to match its accelerator: the stock model has no MLX
+engine, so an Apple Silicon host must point the alias at an MLX-capable preset
+such as `granite_docling` (and list it in
+`DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS`) or the parse fails. Because the
+wire value is a constant, repointing the alias does not invalidate LightRAG's
+Docling bundle cache; re-parse with `force_reparse` after changing it.
 
 Both external parser clients poll every 5 seconds for at most 1440 attempts, a
 two-hour wait budget. `force_reparse` is an exceptional recovery switch: leave
@@ -626,7 +642,7 @@ rerank:
   image_min_quality: 76
 
 answer:
-  max_images: 8
+  max_images: 12
   image_max_bytes: 3000000
   image_max_total_bytes: 24000000
   image_max_px: 1536

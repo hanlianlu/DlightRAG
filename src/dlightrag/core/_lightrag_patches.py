@@ -58,6 +58,10 @@ def apply() -> None:
 
     if apply_mineru_content_list_hygiene():
         applied.append("mineru_content_list_hygiene")
+    from dlightrag.core.ingestion.docling_options import apply_docling_code_formula_preset
+
+    if apply_docling_code_formula_preset():
+        applied.append("docling_code_formula_preset")
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
     else:

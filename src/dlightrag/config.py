@@ -315,12 +315,16 @@ class DoclingSidecarConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     endpoint: str = "http://127.0.0.1:5001"
+    # Off by default, matching LightRAG: transcription needs a code/formula model
+    # the deployment must have, and it materially slows parsing.
+    do_formula_enrichment: bool = False
     force_reparse: bool = False
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
 
     _ENV_MAP: ClassVar[dict[str, str]] = {
         "endpoint": "DOCLING_ENDPOINT",
+        "do_formula_enrichment": "DOCLING_DO_FORMULA_ENRICHMENT",
         "force_reparse": "LIGHTRAG_FORCE_REPARSE_DOCLING",
         "poll_interval_seconds": "DOCLING_POLL_INTERVAL_SECONDS",
         "max_polls": "DOCLING_MAX_POLLS",
@@ -453,7 +457,7 @@ class AnswerConfig(BaseModel):
         description="Maximum chunks included in the final answer LLM prompt.",
     )
     max_images: int = Field(
-        default=8,
+        default=12,
         ge=0,
         description="Maximum image blocks sent to the answer LLM (current + history + RAG).",
     )

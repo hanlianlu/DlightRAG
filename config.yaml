@@ -121,8 +121,9 @@ parser_sidecars:
 
   ## To use Docling instead, comment/remove the MinerU block above and enable
   ## this block. If both are configured, MinerU takes priority.
+  ## Use http://docling:5001 instead when running the compose `docling` profile.
   # docling:
-  #   endpoint: http://docling:5001
+  #   endpoint: http://host.docker.internal:5001
   #   force_reparse: false
   #   poll_interval_seconds: 5
   #   max_polls: 1440

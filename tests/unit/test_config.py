@@ -240,7 +240,7 @@ class TestAnswerConfig:
         assert cfg.image_min_quality == 79
 
     def test_max_images_default(self):
-        assert AnswerConfig().max_images == 8
+        assert AnswerConfig().max_images == 12
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -667,7 +667,7 @@ def test_multimodal_retrieval_defaults() -> None:
     cfg = _default_test_config()
 
     assert cfg.citations.highlights.enabled is True
-    assert cfg.answer.max_images == 8
+    assert cfg.answer.max_images == 12
     assert cfg.answer.image_max_bytes == 3_000_000
     assert cfg.answer.image_max_total_bytes == 24_000_000
     assert cfg.answer.image_max_px == 1536
