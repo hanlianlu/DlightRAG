@@ -16,8 +16,23 @@ imports this module automatically because ``scripts/mineru/api.sh`` puts this
 directory on ``PYTHONPATH`` — which MinerU's spawned worker processes inherit.
 A failure here cannot break the interpreter: ``site`` catches sitecustomize
 errors, warns on stderr, and continues startup with Pillow's default ceiling.
+
+It also raises the hybrid parse effort. MinerU ships ``DEFAULT_HYBRID_EFFORT =
+"medium"``, which force-disables image/chart analysis
+(``_resolve_effective_image_analysis``) and feeds the VLM pipeline-YOLO layout
+boxes instead of letting it detect blocks itself. On dense multi-panel figures
+that loses most figure captions, so panels reach the knowledge base unlabelled.
+The effort is a hardcoded constant with no environment override, but the API's
+``effort`` form field defaults to it at function-definition time, so rebinding
+the constant before MinerU is imported changes the server default. This keeps
+the fix inside the MinerU sidecar: DlightRAG and LightRAG send nothing extra.
 """
 
 from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 250_000_000
+
+# Resolvable only under .venv-mineru; the workspace interpreter has no MinerU.
+import mineru.cli.backend_options as _mineru_backend_options  # noqa: E402  # type: ignore[import-not-found]
+
+_mineru_backend_options.DEFAULT_HYBRID_EFFORT = "high"
