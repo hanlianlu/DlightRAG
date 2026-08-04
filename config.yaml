@@ -107,6 +107,11 @@ parser_sidecars:
     language: ch
     ## MinerU parse engine. DlightRAG defaults explicitly to hybrid-engine.
     backend: hybrid-engine
+    ## Both external parsers poll every 5 seconds for at most 1440 attempts
+    ## (2 hours). force_reparse is an exceptional cache-repair switch.
+    # force_reparse: false
+    # poll_interval_seconds: 5
+    # max_polls: 1440
     ## Set pipeline for MinerU's non-VLM OCR engine (avoids VLM transcription
     ## artifacts on hard scans; weaker on complex layout/charts).
     ## Options: pipeline | vlm-engine | hybrid-engine
@@ -118,6 +123,9 @@ parser_sidecars:
   ## this block. If both are configured, MinerU takes priority.
   # docling:
   #   endpoint: http://docling:5001
+  #   force_reparse: false
+  #   poll_interval_seconds: 5
+  #   max_polls: 1440
 
 # ─────────────────────────────────────────────────────────────────
 # Product Schema

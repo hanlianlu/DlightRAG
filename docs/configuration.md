@@ -81,7 +81,9 @@ parser_sidecars:
     local_endpoint: http://host.docker.internal:8210
     language: ch
     backend: hybrid-engine
-    max_polls: 3600
+    force_reparse: false
+    poll_interval_seconds: 5
+    max_polls: 1440
     auxiliary_block_policy: conservative
 ```
 
@@ -91,11 +93,17 @@ To use Docling instead, remove/comment the MinerU block and configure only:
 parser_sidecars:
   docling:
     endpoint: http://docling:5001
+    force_reparse: false
+    poll_interval_seconds: 5
+    max_polls: 1440
 ```
 
-Docling has no DlightRAG tuning surface beyond its base endpoint. OCR, formula
-enrichment, polling, output formats, referenced images, raw-bundle cache, and
-retry semantics remain owned by LightRAG and Docling. The optional local
+Both external parser clients poll every 5 seconds for at most 1440 attempts, a
+two-hour wait budget. `force_reparse` is an exceptional recovery switch: leave
+it false during normal operation; enable it temporarily only when a parser fix
+or service upgrade must replace a structurally valid but semantically wrong raw
+bundle. OCR, formula enrichment, output formats, referenced images, raw-bundle
+validation, and retry semantics remain owned by LightRAG and the parser service. The optional local
 profile starts with `docker compose --profile docling up -d`; an external
 deployment supplies its own reachable endpoint. Native DlightRAG processes use
 `127.0.0.1` endpoints when their parser runs on the same host.
@@ -114,7 +122,7 @@ Public environment overrides use the typed `DLIGHTRAG_PARSER_SIDECARS__...`
 form; raw MinerU/Docling/VLM variables are not independent configuration inputs.
 
 DlightRAG does not expose MinerU-side image/chart analysis as a product setting;
-LightRAG 1.5.4 defaults that parser-time path off, while LightRAG's separate
+LightRAG 1.5.5 defaults that parser-time path off, while LightRAG's separate
 multimodal analyze stage handles images, tables, and equations after parse.
 
 ## Embeddings

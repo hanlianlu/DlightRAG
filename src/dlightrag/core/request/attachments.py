@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import tempfile
@@ -42,6 +43,7 @@ from dlightrag.core.request.composer_analysis import (
     aanalyze_composer_sidecars,
     build_composer_analysis_signature,
 )
+from dlightrag.models.composer import normalized_endpoint_fingerprint
 from dlightrag.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
@@ -51,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 _ATTACHMENT_WORKSPACE = "__web_attachment__"
 _COMPOSER_EMBEDDING_CONTRACT_VERSION = 2
+_COMPOSER_PARSER_CONTRACT_VERSION = 2
 _COMPOSER_ANALYSIS_OUTCOME_METADATA_KEY = "_composer_analysis_outcome"
 _COMPOSER_MM_RENDERED_METADATA_KEY = "_composer_mm_rendered"
 _COMPOSER_PRIVATE_METADATA_KEYS = frozenset(
@@ -352,9 +355,12 @@ class AttachmentProcessingTrace:
 
 @dataclass(frozen=True, slots=True)
 class _AttachmentResolution:
+    engine: str
+    parse_engine: str
     process_options: str
     parser_signature: str
-    chunk_signature: str
+    force_reparse: bool
+    chunk_signature: str = ""
 
 
 class AttachmentCacheStoreProtocol(Protocol):
@@ -452,14 +458,13 @@ class _ParseOwnerShim:
 
     * ``_resolve_source_file_for_parser`` — returns the temp source path.
     * ``_persist_parsed_full_docs`` — the single workspace-write call, here a
-      no-op that only records the sidecar location for later chunk building.
+            no-op because Composer keeps all parser output request-local.
 
     Signatures MUST stay call-compatible with LightRAG's owner contract; the
     parser-coupling contract test pins them so an upstream rename fails loudly.
     """
 
     def __init__(self) -> None:
-        self.sidecar_location: str | None = None
         self.workspace = ""
 
     def _resolve_source_file_for_parser(
@@ -472,13 +477,45 @@ class _ParseOwnerShim:
         return file_path
 
     async def _persist_parsed_full_docs(self, doc_id: str, record: dict[str, Any]) -> None:
-        # No workspace write: only remember where the parser stashed sidecars so
-        # the caller can materialise visual chunks before the temp dir is gone.
-        self.sidecar_location = record.get("sidecar_location")
+        return None
 
 
-def resolve_attachment_parser_signature(filename: str, parser_rules: str) -> str:
-    """Stable identity of the parser engine + process options for ``filename``."""
+def _parser_config_fingerprint(config: DlightragConfig, engine: str) -> tuple[str, bool]:
+    payload: dict[str, Any] = {
+        "contract_version": _COMPOSER_PARSER_CONTRACT_VERSION,
+        "engine": engine,
+    }
+    force_reparse = False
+    if engine == "mineru" and config.parser_sidecars.mineru is not None:
+        mineru = config.parser_sidecars.mineru
+        endpoint = (
+            mineru.official_endpoint if mineru.api_mode == "official" else mineru.local_endpoint
+        )
+        payload.update(
+            {
+                "api_mode": mineru.api_mode,
+                "endpoint": normalized_endpoint_fingerprint(endpoint),
+                "language": mineru.language,
+                "auxiliary_block_policy": mineru.auxiliary_block_policy,
+            }
+        )
+        if mineru.api_mode == "local":
+            payload["backend"] = mineru.backend
+        force_reparse = mineru.force_reparse
+    elif engine == "docling" and config.parser_sidecars.docling is not None:
+        docling = config.parser_sidecars.docling
+        payload["endpoint"] = normalized_endpoint_fingerprint(docling.endpoint)
+        force_reparse = docling.force_reparse
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode()).hexdigest(), force_reparse
+
+
+def _resolve_attachment_parser(
+    filename: str,
+    parser_rules: str,
+    *,
+    config: DlightragConfig,
+) -> _AttachmentResolution:
     from lightrag.parser.routing import (
         encode_parse_engine,
         resolve_parser_directives,
@@ -487,34 +524,34 @@ def resolve_attachment_parser_signature(filename: str, parser_rules: str) -> str
     directives = resolve_parser_directives(
         Path(filename), parser_rules=parser_rules, require_external_endpoint=False
     )
-    engine = encode_parse_engine(directives.engine, directives.engine_params)
-    return f"{engine}:{directives.process_options}"
+    parse_engine = encode_parse_engine(directives.engine, directives.engine_params)
+    config_fingerprint, force_reparse = _parser_config_fingerprint(config, directives.engine)
+    return _AttachmentResolution(
+        engine=directives.engine,
+        parse_engine=parse_engine,
+        process_options=directives.process_options,
+        parser_signature=(f"{parse_engine}:{directives.process_options}:cfg-{config_fingerprint}"),
+        force_reparse=force_reparse,
+    )
 
 
-def resolve_attachment_chunk_signature(
+def _build_attachment_chunk_signature(
     lightrag: Any,
-    filename: str,
-    parser_rules: str,
+    process_options: str,
     *,
     analysis_signature: str = "",
 ) -> str:
-    """Stable identity of the chunking configuration for ``filename``."""
-    from lightrag.parser.routing import (
-        resolve_chunk_options,
-        resolve_parser_directives,
-    )
+    """Stable identity of the chunking configuration for parser options."""
+    from lightrag.parser.routing import resolve_chunk_options
 
-    directives = resolve_parser_directives(
-        Path(filename), parser_rules=parser_rules, require_external_endpoint=False
-    )
     chunk_opts = resolve_chunk_options(
         getattr(lightrag, "addon_params", None),
-        process_options=directives.process_options,
+        process_options=process_options,
     )
     tokenizer_name = type(getattr(lightrag, "tokenizer", object())).__name__
     return json.dumps(
         {
-            "process_options": directives.process_options,
+            "process_options": process_options,
             "chunk_opts": chunk_opts,
             "tokenizer": tokenizer_name,
             "analysis_signature": analysis_signature,
@@ -560,26 +597,15 @@ async def parse_attachment_document(
     attachment_id: str,
     filename: str,
     document_bytes: bytes,
-    parser_rules: str,
+    parser_resolution: _AttachmentResolution,
 ) -> AsyncIterator[tuple[ParsedAttachmentDocument, str, str]]:
     """Yield parser output while its temporary source and sidecars remain alive."""
     from lightrag.parser.base import ParseContext
     from lightrag.parser.registry import get_parser
-    from lightrag.parser.routing import (
-        encode_parse_engine,
-        resolve_parser_directives,
-    )
 
-    directives = resolve_parser_directives(
-        Path(filename), parser_rules=parser_rules, require_external_endpoint=False
-    )
-    engine = directives.engine
-    parse_engine = encode_parse_engine(engine, directives.engine_params)
-    parser_signature = f"{parse_engine}:{directives.process_options}"
-
-    parser = get_parser(engine)
+    parser = get_parser(parser_resolution.engine)
     if parser is None:
-        raise ValueError(f"no parser registered for engine {engine!r}")
+        raise ValueError(f"no parser registered for engine {parser_resolution.engine!r}")
 
     temporary_directory: _TemporaryDirectoryProtocol = tempfile.TemporaryDirectory(
         prefix="dlightrag-attach-"
@@ -594,17 +620,17 @@ async def parse_attachment_document(
             file_path=str(source),
             content_data={
                 "source_file": Path(filename).name,
-                "parse_engine": parse_engine,
-                "process_options": directives.process_options,
+                "parse_engine": parser_resolution.parse_engine,
+                "process_options": parser_resolution.process_options,
             },
         )
         result = await parser.parse(ctx)
         parsed = ParsedAttachmentDocument(
             content=result.content,
             blocks_path=result.blocks_path,
-            parser_signature=parser_signature,
+            parser_signature=parser_resolution.parser_signature,
         )
-        yield parsed, directives.process_options, parser_signature
+        yield parsed, parser_resolution.process_options, parser_resolution.parser_signature
     finally:
         await _await_thread_call(temporary_directory.cleanup)
 
@@ -616,13 +642,15 @@ async def parse_attachment_to_bundle(
     filename: str,
     document_bytes: bytes,
     parser_rules: str,
+    config: DlightragConfig,
 ) -> ParsedAttachmentBundle:
     """Parse and chunk one Composer document while all parser sidecars remain alive."""
+    parser_resolution = _resolve_attachment_parser(filename, parser_rules, config=config)
     async with parse_attachment_document(
         attachment_id=attachment_id,
         filename=filename,
         document_bytes=document_bytes,
-        parser_rules=parser_rules,
+        parser_resolution=parser_resolution,
     ) as (parsed, process_options, _parser_signature):
         return await build_attachment_bundle_from_parse_result(
             lightrag=lightrag,
@@ -1147,25 +1175,21 @@ class ComposerDocumentService:
         filename: str,
         trace: AttachmentProcessingTrace,
     ) -> _AttachmentResolution | None:
-        from lightrag.parser.routing import resolve_parser_directives
-
         try:
-            directives = resolve_parser_directives(
-                Path(filename),
-                parser_rules=self._parser_rules,
-                require_external_endpoint=False,
+            parser = _resolve_attachment_parser(
+                filename,
+                self._parser_rules,
+                config=self._config,
             )
-            parser_signature = resolve_attachment_parser_signature(filename, self._parser_rules)
             analysis_signature = build_composer_analysis_signature(
                 lightrag=self._lightrag,
                 model_bundle=self._model_bundle,
                 config=self._config,
-                process_options=directives.process_options,
+                process_options=parser.process_options,
             )
-            chunk_signature = resolve_attachment_chunk_signature(
+            chunk_signature = _build_attachment_chunk_signature(
                 self._lightrag,
-                filename,
-                self._parser_rules,
+                parser.process_options,
                 analysis_signature=analysis_signature,
             )
         except Exception as exc:
@@ -1178,11 +1202,7 @@ class ComposerDocumentService:
                 exc_info=True,
             )
             return None
-        return _AttachmentResolution(
-            process_options=directives.process_options,
-            parser_signature=parser_signature,
-            chunk_signature=chunk_signature,
-        )
+        return replace(parser, chunk_signature=chunk_signature)
 
     async def _aload_cached_bundle(
         self,
@@ -1415,8 +1435,8 @@ class ComposerDocumentService:
                 attachment_id=attachment_id,
                 filename=filename,
                 document_bytes=document_bytes,
-                parser_rules=self._parser_rules,
-            ) as (parsed, process_options, actual_parser_signature):
+                parser_resolution=resolution,
+            ) as (parsed, process_options, _parser_signature):
                 try:
                     analysis = await aanalyze_composer_sidecars(
                         lightrag=self._lightrag,
@@ -1499,7 +1519,7 @@ class ComposerDocumentService:
         bundle = self._with_cache_keys(
             bundle,
             content_sha256=content_sha256,
-            parser_signature=actual_parser_signature,
+            parser_signature=resolution.parser_signature,
             chunk_signature=resolution.chunk_signature,
         )
         return (
@@ -1588,15 +1608,17 @@ class ComposerDocumentService:
         resolution = self._resolve_attachment(filename, trace)
         if resolution is None:
             return ParsedAttachmentBundle(chunks=[], evidence_mode="full"), trace.as_dict()
-        cached = await self._aload_cached_bundle(
-            principal_id=principal_id,
-            conversation_id=conversation_id,
-            attachment_id=attachment_id,
-            filename=filename,
-            content_sha256=content_sha256,
-            resolution=resolution,
-            trace=trace,
-        )
+        cached = None
+        if not resolution.force_reparse:
+            cached = await self._aload_cached_bundle(
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                attachment_id=attachment_id,
+                filename=filename,
+                content_sha256=content_sha256,
+                resolution=resolution,
+                trace=trace,
+            )
         if cached is not None:
             self._restore_cached_trace(cached, trace)
             bundle = cached
@@ -1661,7 +1683,5 @@ __all__ = [
     "build_text_attachment_chunk",
     "parse_attachment_to_bundle",
     "parse_attachment_document",
-    "resolve_attachment_chunk_signature",
-    "resolve_attachment_parser_signature",
     "validate_attachment_vector",
 ]

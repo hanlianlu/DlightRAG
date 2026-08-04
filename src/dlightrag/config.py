@@ -286,12 +286,10 @@ class MinerUSidecarConfig(BaseModel):
     backend: MinerULocalBackend = "hybrid-engine"
     force_reparse: bool = False
 
-    # macOS MinerU hard-codes max_concurrent_requests=1 (see mineru/cli/fast_api.py).
-    # Two large PDFs submitted in parallel serialize, and the second one's poll clock
-    # counts from submit time — not from when it actually starts processing. An
-    # image-dense 600-page textbook can take ~1h under the VLM (hybrid-engine),
-    # so 3600 polls × 2s = 2h covers two such PDFs stacked in serial.
-    max_polls: int = Field(default=3600, ge=1)
+    # Both parser clients use a five-second interval and a two-hour wait budget.
+    # This covers serialized, image-dense documents without high-frequency polling.
+    poll_interval_seconds: int = Field(default=5, ge=1)
+    max_polls: int = Field(default=1440, ge=1)
 
     # DlightRAG-only: filter header/footer blocks that pollute chunk text.
     auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
@@ -306,18 +304,27 @@ class MinerUSidecarConfig(BaseModel):
         "language": "MINERU_LANGUAGE",
         "backend": "MINERU_LOCAL_BACKEND",
         "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
+        "poll_interval_seconds": "MINERU_POLL_INTERVAL_SECONDS",
         "max_polls": "MINERU_MAX_POLLS",
     }
 
 
 class DoclingSidecarConfig(BaseModel):
-    """LightRAG Docling parser endpoint."""
+    """LightRAG Docling parser endpoint and operational recovery controls."""
 
     model_config = ConfigDict(extra="forbid")
 
     endpoint: str = "http://127.0.0.1:5001"
+    force_reparse: bool = False
+    poll_interval_seconds: int = Field(default=5, ge=1)
+    max_polls: int = Field(default=1440, ge=1)
 
-    _ENV_MAP: ClassVar[dict[str, str]] = {"endpoint": "DOCLING_ENDPOINT"}
+    _ENV_MAP: ClassVar[dict[str, str]] = {
+        "endpoint": "DOCLING_ENDPOINT",
+        "force_reparse": "LIGHTRAG_FORCE_REPARSE_DOCLING",
+        "poll_interval_seconds": "DOCLING_POLL_INTERVAL_SECONDS",
+        "max_polls": "DOCLING_MAX_POLLS",
+    }
 
 
 class ParserSidecarsConfig(BaseModel):

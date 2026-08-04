@@ -1061,6 +1061,8 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://shared-mineru.local:8210"
     assert os.environ["MINERU_LANGUAGE"] == "cyrillic"
+    assert os.environ["MINERU_POLL_INTERVAL_SECONDS"] == "5"
+    assert os.environ["MINERU_MAX_POLLS"] == "1440"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "extended"
 
 
@@ -1080,14 +1082,21 @@ def test_docling_parser_exports_only_docling_and_shared_vlm_env(
         ),
         parser_sidecars={
             "mineru": None,
-            "docling": {"endpoint": "http://docling.internal:5001"},
+            "docling": {
+                "endpoint": "http://docling.internal:5001",
+                "force_reparse": True,
+            },
         },
     )
 
     assert cfg.parser_rules == "*:docling-iteP"
     assert cfg.parser_sidecars.docling is not None
     assert cfg.parser_sidecars.docling.endpoint == "http://docling.internal:5001"
+    assert cfg.parser_sidecars.docling.max_polls == 1440
     assert os.environ["DOCLING_ENDPOINT"] == "http://docling.internal:5001"
+    assert os.environ["DOCLING_POLL_INTERVAL_SECONDS"] == "5"
+    assert os.environ["DOCLING_MAX_POLLS"] == "1440"
+    assert os.environ["LIGHTRAG_FORCE_REPARSE_DOCLING"] == "true"
     assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
     assert "MINERU_API_MODE" not in os.environ
     assert "MINERU_LOCAL_ENDPOINT" not in os.environ
@@ -1102,6 +1111,18 @@ def test_mineru_parser_clears_stale_docling_env(monkeypatch: pytest.MonkeyPatch)
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
     assert "DOCLING_ENDPOINT" not in os.environ
+
+
+def test_disabled_force_reparse_clears_stale_parser_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIGHTRAG_FORCE_REPARSE_MINERU", "true")
+    monkeypatch.setenv("LIGHTRAG_FORCE_REPARSE_DOCLING", "true")
+
+    _default_test_config()
+
+    assert "LIGHTRAG_FORCE_REPARSE_MINERU" not in os.environ
+    assert "LIGHTRAG_FORCE_REPARSE_DOCLING" not in os.environ
 
 
 def test_vlm_min_image_pixel_rejects_none() -> None:

@@ -813,6 +813,46 @@ class TestDirectImageEmbeddingCapability:
 class TestRAGServiceLightRAGMainPath:
     """Test LightRAG-main path behavior in RAGService."""
 
+    async def test_initialize_syncs_and_validates_parser_config(
+        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = RAGService(config=test_config)
+        events: list[str] = []
+        monkeypatch.setattr(
+            DlightragConfig,
+            "apply_lightrag_backend_env",
+            lambda self, *, force=False: events.append("backend"),
+        )
+        monkeypatch.setattr(
+            DlightragConfig,
+            "apply_lightrag_sidecar_env",
+            lambda self: events.append("sidecar"),
+        )
+        monkeypatch.setattr(
+            DlightragConfig,
+            "apply_lightrag_runtime_env",
+            lambda self, *, force=False: events.append("runtime"),
+        )
+        monkeypatch.setattr(
+            "dlightrag.core._lightrag_patches.apply",
+            lambda: events.append("patches"),
+        )
+        monkeypatch.setattr(
+            "lightrag.parser.routing.validate_parser_routing_config",
+            lambda rules: events.append(f"validate:{rules}"),
+        )
+        monkeypatch.setattr(service, "_do_initialize_unified", AsyncMock())
+
+        await service._do_initialize()
+
+        assert events == [
+            "backend",
+            "sidecar",
+            "runtime",
+            "validate:*:mineru-iteP",
+            "patches",
+        ]
+
     async def test_writer_initialization_ignores_reader_attach_contract_drift(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:

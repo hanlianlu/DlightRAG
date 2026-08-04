@@ -126,7 +126,7 @@ through the migration but do not receive a guessed historical page number.
 ## LightRAG AGE Contract Patches
 
 DlightRAG keeps two narrowly scoped patches around LightRAG PostgreSQL AGE
-graph initialization. They remain required with LightRAG 1.5.4 because upstream still lacks the guards
+graph initialization. They remain required with LightRAG 1.5.5 because upstream still lacks the guards
 below.
 They self-disable through source inspection if upstream adds equivalent
 handling, and should be deleted once `required_patch_names(PostgreSQLDB)`
@@ -231,7 +231,8 @@ Infrastructure requirements:
 | Date | LightRAG Baseline | Patches Needed | Notes |
 |---|---|---|---|
 | 2026-06-03 | `lightrag-hku==1.5.0` | `configure_age`, `execute` | Initial guarded baseline |
-| 2026-07-29 | `lightrag-hku==1.5.4` | `configure_age`, `execute` | Current `uv.lock`; remove this patch module when upstream covers both |
+| 2026-07-29 | `lightrag-hku==1.5.4` | `configure_age`, `execute` | Previous guarded baseline |
+| 2026-08-04 | `lightrag-hku==1.5.5` | `configure_age`, `execute` | Current `uv.lock`; remove this patch module when upstream covers both |
 
 Check upstream by running:
 

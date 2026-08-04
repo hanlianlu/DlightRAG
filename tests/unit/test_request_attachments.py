@@ -17,6 +17,7 @@ import pytest
 from lightrag.utils import TiktokenTokenizer
 from PIL import Image
 
+from dlightrag.config import DoclingSidecarConfig
 from dlightrag.core.request import attachment_digest, attachments
 from dlightrag.core.request.attachment_digest import (
     ATTACHMENT_PLANNER_DIGEST_MAX_TOKENS,
@@ -28,8 +29,6 @@ from dlightrag.core.request.attachments import (
     ParsedAttachmentBundle,
     _ParseOwnerShim,
     parse_attachment_to_bundle,
-    resolve_attachment_chunk_signature,
-    resolve_attachment_parser_signature,
 )
 from dlightrag.utils.tokens import estimate_tokens
 
@@ -1283,20 +1282,20 @@ async def test_dense_rankings_failure_returns_error_type_and_empty_rankings(
     }
 
 
-async def test_parse_owner_shim_persist_captures_sidecar_only() -> None:
+async def test_parse_owner_shim_persist_is_storage_free() -> None:
     shim = _ParseOwnerShim()
 
     result = await shim._persist_parsed_full_docs(
         "att-doc", {"content": "body", "sidecar_location": "loc://x"}
     )
 
-    # No-op returns nothing and only remembers the sidecar location.
     assert result is None
-    assert shim.sidecar_location == "loc://x"
+    assert not hasattr(shim, "sidecar_location")
 
 
 async def test_parse_attachment_to_bundle_native_path_writes_no_store(
     tmp_path: Path,
+    test_config: Any,
 ) -> None:
     # A .txt routes to the local legacy engine: no MinerU, no network.
     lightrag = _FakeLightRAG()
@@ -1308,6 +1307,7 @@ async def test_parse_attachment_to_bundle_native_path_writes_no_store(
         filename="notes.txt",
         document_bytes=text.encode("utf-8"),
         parser_rules="",
+        config=test_config,
     )
 
     assert bundle.chunks, "native parse produced no chunks"
@@ -1316,7 +1316,10 @@ async def test_parse_attachment_to_bundle_native_path_writes_no_store(
     assert bundle.parser_signature.startswith("legacy:")
 
 
-async def test_parse_attachment_to_bundle_docx_native_path(tmp_path: Path) -> None:
+async def test_parse_attachment_to_bundle_docx_native_path(
+    tmp_path: Path,
+    test_config: Any,
+) -> None:
     # A .docx routes to the native engine, which imports python-docx AND
     # defusedxml. Pin that path end-to-end: a missing parser dependency used to
     # be swallowed as an attachment_parse_error (0 chunks, document silently
@@ -1335,6 +1338,7 @@ async def test_parse_attachment_to_bundle_docx_native_path(tmp_path: Path) -> No
         filename="frac.docx",
         document_bytes=path.read_bytes(),
         parser_rules="docx:native-iteP,*:mineru-iteP",
+        config=test_config,
     )
 
     assert bundle.chunks, "native docx parse produced no chunks"
@@ -3349,6 +3353,7 @@ async def test_parser_cancellation_reraises_cancelled_error_releases_tempdir_and
 
 async def test_parse_source_write_and_tempdir_cleanup_run_off_event_loop(
     monkeypatch: Any,
+    test_config: Any,
 ) -> None:
     from lightrag.parser import registry
 
@@ -3384,12 +3389,13 @@ async def test_parse_source_write_and_tempdir_cleanup_run_off_event_loop(
     monkeypatch.setattr(Path, "write_bytes", _tracked_write_bytes)
     monkeypatch.setattr(attachments.tempfile, "TemporaryDirectory", _TrackedTemporaryDirectory)
     monkeypatch.setattr(registry, "get_parser", lambda _engine: _Parser())
+    parser_resolution = attachments._resolve_attachment_parser("report.txt", "", config=test_config)
 
     async with attachments.parse_attachment_document(
         attachment_id="att-1",
         filename="report.txt",
         document_bytes=b"body",
-        parser_rules="",
+        parser_resolution=parser_resolution,
     ):
         pass
 
@@ -3397,7 +3403,10 @@ async def test_parse_source_write_and_tempdir_cleanup_run_off_event_loop(
     assert cleanup_threads and all(thread != event_loop_thread for thread in cleanup_threads)
 
 
-async def test_real_parse_cancellation_waits_for_tempdir_cleanup(monkeypatch: Any) -> None:
+async def test_real_parse_cancellation_waits_for_tempdir_cleanup(
+    monkeypatch: Any,
+    test_config: Any,
+) -> None:
     from lightrag.parser import registry
 
     parser_started = asyncio.Event()
@@ -3411,13 +3420,14 @@ async def test_real_parse_cancellation_waits_for_tempdir_cleanup(monkeypatch: An
             await asyncio.Event().wait()
 
     monkeypatch.setattr(registry, "get_parser", lambda _engine: _Parser())
+    parser_resolution = attachments._resolve_attachment_parser("report.txt", "", config=test_config)
 
     async def _parse() -> None:
         async with attachments.parse_attachment_document(
             attachment_id="att-1",
             filename="report.txt",
             document_bytes=b"body",
-            parser_rules="",
+            parser_resolution=parser_resolution,
         ):
             pass
 
@@ -4010,15 +4020,161 @@ async def test_invalid_parser_hint_is_attachment_scoped(test_config: Any) -> Non
     assert store.materialized == []
 
 
-def test_parser_and_chunk_signatures_are_stable_strings() -> None:
-    lightrag = _FakeLightRAG()
-    parser_sig = resolve_attachment_parser_signature("report.txt", "")
-    chunk_sig = resolve_attachment_chunk_signature(lightrag, "report.txt", "")
+def test_mineru_parser_signature_tracks_effective_parser_config(test_config: Any) -> None:
+    mineru = test_config.parser_sidecars.mineru
+    assert mineru is not None
+    changed = test_config.model_copy(
+        update={
+            "parser_sidecars": test_config.parser_sidecars.model_copy(
+                update={
+                    "mineru": mineru.model_copy(
+                        update={
+                            "local_endpoint": "http://other-mineru:8210",
+                            "language": "arabic",
+                            "backend": "pipeline",
+                            "auxiliary_block_policy": "extended",
+                        }
+                    )
+                }
+            )
+        }
+    )
 
-    assert parser_sig == resolve_attachment_parser_signature("report.txt", "")
-    assert chunk_sig == resolve_attachment_chunk_signature(lightrag, "report.txt", "")
-    assert parser_sig.startswith("legacy:")
-    assert "tokenizer" in chunk_sig
+    original = attachments._resolve_attachment_parser(
+        "report.pdf", "*:mineru-iteP", config=test_config
+    ).parser_signature
+    updated = attachments._resolve_attachment_parser(
+        "report.pdf", "*:mineru-iteP", config=changed
+    ).parser_signature
+
+    assert original != updated
+    assert "other-mineru" not in updated
+
+
+def test_mineru_auxiliary_policy_invalidates_parser_cache(test_config: Any) -> None:
+    mineru = test_config.parser_sidecars.mineru
+    assert mineru is not None
+    changed = test_config.model_copy(
+        update={
+            "parser_sidecars": test_config.parser_sidecars.model_copy(
+                update={"mineru": mineru.model_copy(update={"auxiliary_block_policy": "extended"})}
+            )
+        }
+    )
+
+    original = attachments._resolve_attachment_parser(
+        "report.pdf", "*:mineru-iteP", config=test_config
+    ).parser_signature
+    updated = attachments._resolve_attachment_parser(
+        "report.pdf", "*:mineru-iteP", config=changed
+    ).parser_signature
+
+    assert original != updated
+
+
+def test_docling_parser_resolution_tracks_endpoint_and_force_reparse(test_config: Any) -> None:
+    docling = test_config.parser_sidecars.model_copy(
+        update={
+            "mineru": None,
+            "docling": DoclingSidecarConfig(
+                endpoint="http://docling-a:5001",
+            ),
+        }
+    )
+    first_config = test_config.model_copy(update={"parser_sidecars": docling})
+    second_config = test_config.model_copy(
+        update={
+            "parser_sidecars": docling.model_copy(
+                update={
+                    "docling": docling.docling.model_copy(
+                        update={
+                            "endpoint": "http://docling-b:5001",
+                            "force_reparse": True,
+                        }
+                    )
+                }
+            )
+        }
+    )
+
+    first = attachments._resolve_attachment_parser(
+        "report.pdf", "*:docling-iteP", config=first_config
+    )
+    second = attachments._resolve_attachment_parser(
+        "report.pdf", "*:docling-iteP", config=second_config
+    )
+
+    assert first.parser_signature != second.parser_signature
+    assert first.force_reparse is False
+    assert second.force_reparse is True
+
+
+async def test_force_reparse_bypasses_composer_parse_cache(
+    monkeypatch: Any,
+    test_config: Any,
+) -> None:
+    mineru = test_config.parser_sidecars.mineru
+    assert mineru is not None
+    config = test_config.model_copy(
+        update={
+            "parser_sidecars": test_config.parser_sidecars.model_copy(
+                update={"mineru": mineru.model_copy(update={"force_reparse": True})}
+            )
+        }
+    )
+    store = _SpyStore(ParsedAttachmentBundle(chunks=[text_chunk("cached")]))
+
+    @asynccontextmanager
+    async def parsed(**_kwargs: Any):
+        yield (
+            attachments.ParsedAttachmentDocument(
+                content="fresh",
+                blocks_path="",
+                parser_signature="mineru-iteP:fresh",
+            ),
+            "iteP",
+            "mineru-iteP:fresh",
+        )
+
+    monkeypatch.setattr(attachments, "parse_attachment_document", parsed)
+    monkeypatch.setattr(
+        attachments,
+        "aanalyze_composer_sidecars",
+        AsyncMock(
+            return_value=attachments.ComposerAnalysisResult(
+                attachments.ComposerAnalysisOutcome.INTENTIONALLY_DISABLED,
+                0,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        attachments,
+        "build_attachment_bundle_from_parse_result",
+        AsyncMock(return_value=ParsedAttachmentBundle(chunks=[text_chunk("fresh")])),
+    )
+    service = ComposerDocumentService(
+        lightrag=_FakeLightRAG(),
+        store=store,
+        parser_rules="*:mineru-iteP",
+        ttl_days=30,
+        robust_document_embedder=_dense_embedder(query_vector=[1.0, 0.0]),
+        direct_image_embedding_enabled=False,
+        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
+        config=config,
+    )
+
+    bundle, trace = await service.achunks_for_attachment(
+        principal_id="p1",
+        conversation_id="c1",
+        attachment_id="att-1",
+        filename="report.pdf",
+        document_bytes=b"pdf",
+        content_sha256="content-v1",
+    )
+
+    assert store.load_calls == []
+    assert trace["attachment_parse_cache_hit"] is False
+    assert [chunk.chunk_id for chunk in bundle.chunks] == ["fresh"]
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -589,10 +589,14 @@ class RAGService:
 
     async def _do_initialize(self) -> None:
         """Create one LightRAG-backed unified pipeline."""
+        from lightrag.parser.routing import validate_parser_routing_config
+
         from dlightrag.core._lightrag_patches import apply as apply_lightrag_patches
 
         self.config.apply_lightrag_backend_env(force=True)
+        self.config.apply_lightrag_sidecar_env()
         self.config.apply_lightrag_runtime_env(force=True)
+        validate_parser_routing_config(self.config.parser_rules)
         apply_lightrag_patches()
         await self._do_initialize_unified()
 
