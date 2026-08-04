@@ -14,19 +14,15 @@ second MinerU ingestion path; it narrows LightRAG's MinerU IR builder at the
    path and stay retrievable.
 
 2. Auxiliary furniture — MinerU emits running headers and footers in
-    ``content_list``; indexing those as body text pollutes chunks, KG extraction,
-    BM25, and citations. Conservative mode drops only discarded blocks, headers,
-    and footers; LightRAG already drops printed page numbers. Extended mode also
-    drops aside / margin / page-footnote blocks
-   (``DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY``).
+   ``content_list``; indexing those as body text pollutes chunks, KG extraction,
+   BM25, and citations. We drop discarded blocks, headers, and footers;
+   LightRAG already drops printed page numbers. Footnotes are deliberately
+   kept: in papers they carry derivations and definitions, not furniture.
 
-Each transform is applied only when a runtime behavior probe shows current
-upstream still needs it, so the patch self-disables as LightRAG catches up.
 Keep this module small and delete transforms as upstream covers them.
 """
 
 import logging
-import os
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
@@ -50,16 +46,6 @@ MINERU_AUXILIARY_BLOCK_TYPES = frozenset(
         "footer",
         "page_header",
         "page_footer",
-    }
-)
-
-MINERU_EXTENDED_AUXILIARY_BLOCK_TYPES = frozenset(
-    {
-        "aside_text",
-        "page_aside_text",
-        "margin_note",
-        "page_margin_note",
-        "page_footnote",
     }
 )
 
@@ -167,17 +153,7 @@ def _alias_drawing_item(item: dict[str, Any]) -> dict[str, Any]:
 def _is_mineru_auxiliary_block(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
-    block_type = _block_type(item)
-    if block_type in MINERU_AUXILIARY_BLOCK_TYPES:
-        return True
-    if _auxiliary_block_policy() == "extended":
-        return block_type in MINERU_EXTENDED_AUXILIARY_BLOCK_TYPES
-    return False
-
-
-def _auxiliary_block_policy() -> str:
-    policy = os.getenv("DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY", "conservative")
-    return policy.strip().lower()
+    return _block_type(item) in MINERU_AUXILIARY_BLOCK_TYPES
 
 
 def _block_type(item: dict[str, Any]) -> str:
@@ -187,7 +163,6 @@ def _block_type(item: dict[str, Any]) -> str:
 __all__ = [
     "MINERU_AUXILIARY_BLOCK_TYPES",
     "MINERU_DRAWING_ALIAS_TYPES",
-    "MINERU_EXTENDED_AUXILIARY_BLOCK_TYPES",
     "apply_mineru_content_list_hygiene",
     "filter_mineru_auxiliary_blocks",
     "normalize_mineru_drawing_aliases",

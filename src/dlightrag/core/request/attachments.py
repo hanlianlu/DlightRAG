@@ -491,7 +491,6 @@ def _parser_config_fingerprint(config: DlightragConfig, engine: str) -> str:
                 "api_mode": mineru.api_mode,
                 "endpoint": normalized_endpoint_fingerprint(endpoint),
                 "language": mineru.language,
-                "auxiliary_block_policy": mineru.auxiliary_block_policy,
             }
         )
         if mineru.api_mode == "local":

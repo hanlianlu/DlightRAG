@@ -81,7 +81,6 @@ parser_sidecars:
     local_endpoint: http://host.docker.internal:8210
     language: ch
     backend: hybrid-engine
-    auxiliary_block_policy: conservative
 ```
 
 To use Docling instead, remove/comment the MinerU block and configure only:

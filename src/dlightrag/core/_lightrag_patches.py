@@ -18,18 +18,17 @@ upstream surfaces still need local guards.
 
 MinerU parser hygiene: current LightRAG MinerU IR builder serializes unknown
 content-list item types as body text. Two consequences are patched at the parser
-boundary, each gated by a runtime behavior probe: (1) figure blocks MinerU emits
-as ``chart`` are aliased to ``image`` so they reach the drawing/VLM sidecar path
-instead of being dropped; (2) headers and footers are removed so they do not
-pollute chunks, KG extraction, BM25, and citations. LightRAG already removes
-printed page-number items. More ambiguous page notes are controlled by
-``DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY``.
+boundary: (1) figure blocks MinerU emits as ``chart`` are aliased to ``image``
+so they reach the drawing/VLM sidecar path instead of being dropped;
+(2) headers and footers are removed so they do not pollute chunks, KG
+extraction, BM25, and citations. LightRAG already removes printed page-number
+items.
 
 Keep this module small and delete patches as upstream covers them.
 
 Patches are:
 - Idempotent (safe to call multiple times)
-- Guarded (source-inspected for AGE, behavior-probed for parser hygiene)
+- Guarded (source-inspected for AGE)
 - Preserves PostgreSQLDB.execute keyword arguments via **kwargs
 - Defensive-wrapped: if a patched method's signature changes upstream, the
   wrapper logs a warning and falls back to the original behaviour

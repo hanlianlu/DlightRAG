@@ -621,11 +621,9 @@ def test_parser_defaults_export_lightrag_env() -> None:
     assert cfg.parser_sidecars.mineru.local_endpoint == "http://host.docker.internal:8210"
     assert cfg.parser_sidecars.mineru.language == "ch"
     assert cfg.parser_sidecars.mineru.backend == "hybrid-engine"
-    assert cfg.parser_sidecars.mineru.auxiliary_block_policy == "conservative"
     assert cfg.parser_sidecars.docling is None
     assert os.environ["LIGHTRAG_PARSER"] == "*:mineru-iteP"
     assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
-    assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "conservative"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
 
@@ -1027,7 +1025,6 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
         "MINERU_LANGUAGE",
         "MINERU_POLL_INTERVAL_SECONDS",
         "MINERU_MAX_POLLS",
-        "DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -1049,7 +1046,6 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
                 "api_mode": "local",
                 "local_endpoint": "http://shared-mineru.local:8210",
                 "language": "cyrillic",
-                "auxiliary_block_policy": "extended",
             },
         },
     )
@@ -1063,7 +1059,6 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     assert os.environ["MINERU_LANGUAGE"] == "cyrillic"
     assert os.environ["MINERU_POLL_INTERVAL_SECONDS"] == "5"
     assert os.environ["MINERU_MAX_POLLS"] == "1440"
-    assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "extended"
 
 
 def test_docling_parser_exports_only_docling_and_shared_vlm_env(
@@ -1071,7 +1066,6 @@ def test_docling_parser_exports_only_docling_and_shared_vlm_env(
 ) -> None:
     monkeypatch.setenv("MINERU_API_MODE", "official")
     monkeypatch.setenv("MINERU_LOCAL_ENDPOINT", "http://stale-mineru:8210")
-    monkeypatch.setenv("DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY", "extended")
 
     cfg = _settings_config(
         embedding=EmbeddingConfig(
@@ -1098,7 +1092,6 @@ def test_docling_parser_exports_only_docling_and_shared_vlm_env(
     assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
     assert "MINERU_API_MODE" not in os.environ
     assert "MINERU_LOCAL_ENDPOINT" not in os.environ
-    assert "DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY" not in os.environ
 
 
 def test_mineru_parser_clears_stale_docling_env(monkeypatch: pytest.MonkeyPatch) -> None:

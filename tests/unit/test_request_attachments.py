@@ -4057,7 +4057,6 @@ def test_mineru_parser_signature_tracks_effective_parser_config(test_config: Any
                             "local_endpoint": "http://other-mineru:8210",
                             "language": "arabic",
                             "backend": "pipeline",
-                            "auxiliary_block_policy": "extended",
                         }
                     )
                 }
@@ -4074,27 +4073,6 @@ def test_mineru_parser_signature_tracks_effective_parser_config(test_config: Any
 
     assert original != updated
     assert "other-mineru" not in updated
-
-
-def test_mineru_auxiliary_policy_invalidates_parser_cache(test_config: Any) -> None:
-    mineru = test_config.parser_sidecars.mineru
-    assert mineru is not None
-    changed = test_config.model_copy(
-        update={
-            "parser_sidecars": test_config.parser_sidecars.model_copy(
-                update={"mineru": mineru.model_copy(update={"auxiliary_block_policy": "extended"})}
-            )
-        }
-    )
-
-    original = attachments._resolve_attachment_parser(
-        "report.pdf", "*:mineru-iteP", config=test_config
-    ).parser_signature
-    updated = attachments._resolve_attachment_parser(
-        "report.pdf", "*:mineru-iteP", config=changed
-    ).parser_signature
-
-    assert original != updated
 
 
 def test_docling_parser_resolution_tracks_endpoint(test_config: Any) -> None:

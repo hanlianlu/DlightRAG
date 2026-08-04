@@ -292,11 +292,7 @@ class MinerUSidecarConfig(BaseModel):
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
 
-    # DlightRAG-only: filter header/footer blocks that pollute chunk text.
-    auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
-
-    # Pydantic field → LightRAG/MinerU env var. auxiliary_block_policy is
-    # intentionally absent — it's a DlightRAG post-processing step.
+    # Pydantic field → LightRAG/MinerU env var.
     _ENV_MAP: ClassVar[dict[str, str]] = {
         "api_mode": "MINERU_API_MODE",
         "api_token": "MINERU_API_TOKEN",
@@ -1515,11 +1511,6 @@ class DlightragConfig(BaseSettings):
             os.environ["LIGHTRAG_PARSER"] = self.parser_rules
         if force or "INPUT_DIR" not in os.environ:
             os.environ["INPUT_DIR"] = str(self.input_dir_path)
-        mineru = self.parser_sidecars.mineru
-        if mineru is not None:
-            os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] = mineru.auxiliary_block_policy
-        else:
-            os.environ.pop("DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY", None)
 
     def model_post_init(self, _context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
