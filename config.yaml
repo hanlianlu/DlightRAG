@@ -199,7 +199,7 @@ direct_visual_top_k: 20  # DlightRAG: image->image query-vector retrieval breadt
 
 answer:
   context_top_k: 30
-  max_images: 8
+  max_images: 12
 
 query_images:
   max_current_images: 3
