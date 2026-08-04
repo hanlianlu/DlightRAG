@@ -291,3 +291,71 @@ def test_highlight_content_markdown_formatting():
 
     result = str(_highlight_content("**bold** text"))
     assert "<strong>bold</strong>" in result
+
+
+def test_highlight_content_phrase_with_quotes():
+    """Apostrophes and double quotes must not defeat phrase matching."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("The company's revenue rose.", ["company's revenue"]))
+    assert '<span class="highlight">company\'s revenue</span>' in result
+
+
+def test_highlight_content_phrase_with_escaped_entity():
+    """Phrases containing characters that render as entities still match."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("Total was 5 < 10 always", ["5 < 10"]))
+    assert '<span class="highlight">5 &lt; 10</span>' in result
+
+
+def test_highlight_content_overlapping_phrases_not_nested():
+    """Overlapping phrases must not produce nested highlight spans."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("Revenue grew 15% last year", ["Revenue grew", "grew 15%"]))
+    assert result.count('<span class="highlight">') == 1
+
+
+def test_highlight_content_phrase_carrying_markdown_syntax():
+    """Phrases quoted verbatim from raw Markdown still match the rendered text."""
+    from dlightrag.web.deps import _highlight_content
+
+    emphasis = str(_highlight_content("**Revenue** grew 15% in 2024", ["**Revenue** grew 15%"]))
+    assert '<strong><span class="highlight">Revenue</span></strong>' in emphasis
+    assert '<span class="highlight"> grew 15%</span>' in emphasis
+
+    heading = str(_highlight_content("## Key findings\nBody.", ["## Key findings"]))
+    assert '<h2><span class="highlight">Key findings</span></h2>' in heading
+
+    table = str(
+        _highlight_content("| Region | Sales |\n| --- | --- |\n| EMEA | 12% |", ["| EMEA | 12% |"])
+    )
+    assert '<td><span class="highlight">EMEA</span></td>' in table
+    assert '<td><span class="highlight">12%</span></td>' in table
+    # No stray span in the whitespace between cells.
+    assert "</td>\n<span" not in table
+
+
+def test_highlight_content_phrase_inside_code_span():
+    """A phrase crossing a code span keeps the identifier intact."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("Use the `render_chunk` helper", ["`render_chunk` helper"]))
+    assert '<code><span class="highlight">render_chunk</span></code>' in result
+
+
+def test_highlight_content_anchors_the_cited_occurrence():
+    """Positional anchoring highlights the occurrence the phrase came from."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("cost 5%. Later the cost 5% again.", ["cost 5%"]))
+    assert result.startswith('<p><span class="highlight">cost 5%</span>. Later')
+
+
+def test_highlight_content_ignores_phrase_only_present_in_markup():
+    """A phrase that resolves to non-visible source text must not be highlighted."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("See [report](https://example.com/q3) now", ["example.com"]))
+    assert 'class="highlight"' not in result

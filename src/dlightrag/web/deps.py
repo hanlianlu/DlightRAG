@@ -15,7 +15,7 @@ from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.core import access as core_access
 from dlightrag.core.scope import RequestScope
-from dlightrag.web.markdown import render_chunk_content, render_markdown
+from dlightrag.web.markdown import inject_highlights, render_chunk_content, render_markdown
 
 if TYPE_CHECKING:
     from dlightrag.core.servicemanager import RAGServiceManager
@@ -194,17 +194,7 @@ def _highlight_content(text: str, phrases: list[str] | None = None) -> Markup:
     html = nh3.clean(html, tags=_CHUNK_ALLOWED_TAGS, attributes=_CHUNK_ALLOWED_ATTRS)
 
     if phrases:
-        for phrase in phrases:
-            # HTML-escape the phrase to match entity-encoded text in rendered output
-            # (e.g., "&" in phrase matches "&amp;" in HTML)
-            safe_phrase = re.escape(str(Markup.escape(phrase)))
-            html = re.sub(
-                f"(?<=>)([^<]*?)({safe_phrase})",
-                r'\1<span class="highlight">\2</span>',
-                html,
-                flags=re.IGNORECASE,
-                count=1,
-            )
+        html = inject_highlights(html, text, phrases)
 
     return Markup(html)  # noqa: S704 - chunk HTML is nh3-cleaned before marking safe
 

@@ -13,6 +13,8 @@ Two renderers are provided:
 """
 
 import html as _html
+import re
+from collections.abc import Sequence
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_inline import StateInline
@@ -207,3 +209,136 @@ def render_markdown(text: str) -> str:
 def render_chunk_content(text: str) -> str:
     """Render chunk content to HTML, allowing HTML passthrough for tables etc."""
     return _md_chunk.render(text)
+
+
+# ---------------------------------------------------------------------------
+# Semantic highlight injection
+# ---------------------------------------------------------------------------
+
+_TAG_RE = re.compile(r"<[^>]*>")
+_ENTITY_RE = re.compile(r"&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);")
+# Source spans that never reach the rendered text: passthrough HTML tags and
+# Markdown link destinations. Skipping them stops the alignment walk from
+# anchoring on markup that happens to share a prefix with the visible text.
+_SOURCE_MARKUP_RE = re.compile(r"<[^<>]*>|\]\([^()]*\)")
+_HIGHLIGHT_OPEN = '<span class="highlight">'
+_HIGHLIGHT_CLOSE = "</span>"
+
+
+def _visible_text(html: str) -> tuple[str, list[tuple[int, int]]]:
+    """Return the visible text of ``html`` and the HTML slice backing each char."""
+    chars: list[str] = []
+    spans: list[tuple[int, int]] = []
+
+    def scan(start: int, end: int) -> None:
+        pos = start
+        while pos < end:
+            entity = _ENTITY_RE.match(html, pos, end)
+            if entity is None:
+                chars.append(html[pos])
+                spans.append((pos, pos + 1))
+                pos += 1
+                continue
+            decoded = _html.unescape(entity.group(0))
+            chars.extend(decoded)
+            spans.extend([(pos, entity.end())] * len(decoded))
+            pos = entity.end()
+
+    cursor = 0
+    for tag in _TAG_RE.finditer(html):
+        scan(cursor, tag.start())
+        cursor = tag.end()
+    scan(cursor, len(html))
+    return "".join(chars), spans
+
+
+def _align_source_to_visible(source: str, visible: str) -> list[int | None]:
+    """Map each source character to its index in the rendered visible text.
+
+    Rendering only deletes source characters (Markdown syntax, tags, link
+    targets) and inserts layout whitespace, so a single monotone walk recovers
+    the correspondence; deleted characters map to ``None``.
+    """
+    markup = bytearray(len(source))
+    for match in _SOURCE_MARKUP_RE.finditer(source):
+        markup[match.start() : match.end()] = b"\x01" * (match.end() - match.start())
+
+    mapping: list[int | None] = [None] * len(source)
+    i = j = 0
+    while i < len(source) and j < len(visible):
+        if markup[i]:
+            i += 1
+        elif source[i] == visible[j] or (source[i].isspace() and visible[j].isspace()):
+            mapping[i] = j
+            i += 1
+            j += 1
+        elif visible[j].isspace():
+            j += 1
+        else:
+            i += 1
+    return mapping
+
+
+def _text_runs(spans: list[tuple[int, int]], start: int, end: int) -> list[tuple[int, int]]:
+    """Split a visible-text range into contiguous HTML slices (one per text node)."""
+    runs: list[tuple[int, int]] = []
+    current: tuple[int, int] | None = None
+    previous: tuple[int, int] | None = None
+    for index in range(start, end):
+        span = spans[index]
+        if span == previous:
+            continue
+        if current is not None and span[0] == current[1]:
+            current = (current[0], span[1])
+        else:
+            if current is not None:
+                runs.append(current)
+            current = span
+        previous = span
+    if current is not None:
+        runs.append(current)
+    return runs
+
+
+def inject_highlights(html: str, source: str, phrases: Sequence[str]) -> str:
+    """Wrap each phrase of ``source`` in ``<span class="highlight">`` inside ``html``.
+
+    Phrases are verbatim substrings of ``source`` (guaranteed by highlight
+    validation), so they are anchored by position rather than re-matched against
+    the rendered text.
+    """
+    visible, spans = _visible_text(html)
+    if not visible:
+        return html
+    mapping = _align_source_to_visible(source, visible)
+
+    matched: list[tuple[int, int]] = []
+    for phrase in phrases:
+        found = source.find(str(phrase))
+        if found < 0:
+            continue
+        indices = [v for v in mapping[found : found + len(str(phrase))] if v is not None]
+        if not indices:
+            continue
+        start, end = indices[0], indices[-1] + 1
+        if any(start < other_end and other_start < end for other_start, other_end in matched):
+            continue
+        matched.append((start, end))
+
+    runs = [run for start, end in matched for run in _text_runs(spans, start, end)]
+    # Whitespace-only runs are the gaps between block tags (table cells, list
+    # items); wrapping them would place a span where no text node exists.
+    runs = sorted(run for run in runs if html[run[0] : run[1]].strip())
+    if not runs:
+        return html
+
+    out: list[str] = []
+    cursor = 0
+    for start, end in runs:
+        out.append(html[cursor:start])
+        out.append(_HIGHLIGHT_OPEN)
+        out.append(html[start:end])
+        out.append(_HIGHLIGHT_CLOSE)
+        cursor = end
+    out.append(html[cursor:])
+    return "".join(out)
