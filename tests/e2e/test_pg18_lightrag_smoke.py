@@ -12,7 +12,7 @@ import pytest
 from dlightrag.config import set_config
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
-from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.core.retrieval.models import MetadataFilter, MetadataScope
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
     e2e_enabled,
@@ -112,17 +112,18 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
 
         assert service._metadata_index is not None
         assert service._lightrag_stores is not None
-        candidate_chunks = await metadata_retrieve(
+        scope = await metadata_retrieve(
             metadata_index=service._metadata_index,
             stores=service._lightrag_stores,
             filters=MetadataFilter(custom={"e2e_case": "pg18"}),
         )
-        assert candidate_chunks == [chunk_id]
+        assert scope.doc_ids == frozenset({doc_id})
+        assert scope.chunk_count >= 1
 
         assert service._bm25 is not None
         bm25_rows = await service._bm25.search(
             "PG18 native smoke document",
-            candidate_ids=set(candidate_chunks),
+            scope=scope,
             top_k=5,
         )
         assert any(row["chunk_id"] == chunk_id for row in bm25_rows)
@@ -131,7 +132,8 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         raw_chunks = await service._lightrag_stores.get_text_chunks([chunk_id])
         indexed_text = str(raw_chunks[0]["content"])
         query_embedding = stable_vector(f"document:{indexed_text}", dim=cfg.embedding.dim)
-        async with metadata_filter_scope({"missing-chunk"}):
+        missing_scope = MetadataScope(doc_ids=frozenset({"missing-doc"}), chunk_count=1)
+        async with metadata_filter_scope(missing_scope):
             assert (
                 await service._lightrag.chunks_vdb.query(
                     "",
@@ -140,7 +142,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
                 )
             ) == []
 
-        async with metadata_filter_scope(set(candidate_chunks)):
+        async with metadata_filter_scope(scope):
             vector_rows = await service._lightrag.chunks_vdb.query(
                 "",
                 top_k=5,

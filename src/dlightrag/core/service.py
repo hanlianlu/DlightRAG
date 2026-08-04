@@ -687,11 +687,14 @@ class RAGService:
 
             from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
 
-            lightrag.chunks_vdb = FilteredVectorStorage(  # type: ignore[assignment]
+            filtered_vdb = FilteredVectorStorage(
                 original=lightrag.chunks_vdb,
                 embedding_func=embedding_func,
                 exact_threshold=config.metadata_filter_exact_vector_threshold,
             )
+            if not config.is_reader:
+                await filtered_vdb.ensure_doc_scope_index()
+            lightrag.chunks_vdb = filtered_vdb  # type: ignore[assignment]
 
         from dlightrag.core.lightrag_stores import LightRAGStores
 

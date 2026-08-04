@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Data models for multi-path retrieval."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -47,3 +48,24 @@ class MetadataFilter(BaseModel):
     def is_empty(self) -> bool:
         """Return True if no filter criteria are set."""
         return all(v is None for v in self.model_dump().values())
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataScope:
+    """Documents a metadata filter selected, plus their chunk fan-out.
+
+    Retrieval filters by ``full_doc_id`` rather than by chunk id: the filter is
+    a document-level predicate, and one document can own thousands of chunks, so
+    expanding it client-side would ship that fan-out to PostgreSQL and back on
+    every vector and BM25 query. ``chunk_count`` is only what the exact-scan
+    branch needs to bound its brute-force cost.
+    """
+
+    doc_ids: frozenset[str]
+    chunk_count: int
+
+    def __bool__(self) -> bool:
+        return bool(self.doc_ids)
+
+    def as_list(self) -> list[str]:
+        return list(self.doc_ids)

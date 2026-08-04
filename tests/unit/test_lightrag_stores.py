@@ -108,7 +108,7 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
     assert [batch[0][1] for batch in db.batches] == ["img-1", "img-2"]
 
 
-async def test_chunk_ids_for_docs_reads_lightrag_text_chunks() -> None:
+async def test_count_chunks_for_docs_counts_without_reading_ids() -> None:
     class FakeTextChunksDB:
         def __init__(self) -> None:
             self.fetch_args: tuple | None = None
@@ -117,19 +117,20 @@ async def test_chunk_ids_for_docs_reads_lightrag_text_chunks() -> None:
             assert timing_label is None or isinstance(timing_label, str)
             return await operation(self)
 
-        async def fetch(self, *args):  # noqa: ANN002, ANN202
+        async def fetchval(self, *args):  # noqa: ANN002, ANN202
             self.fetch_args = args
-            return [{"id": "chunk-a"}, {"id": "chunk-b"}]
+            return 1470
 
     fake = FakeLightRAG()
     db = FakeTextChunksDB()
     fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
     stores = LightRAGStores(fake)
 
-    result = await stores.chunk_ids_for_docs(["doc-1", "doc-2"])
+    result = await stores.count_chunks_for_docs(["doc-1", "doc-2"])
 
-    assert result == ["chunk-a", "chunk-b"]
+    assert result == 1470
     assert db.fetch_args is not None
+    assert "count(*)" in db.fetch_args[0]
     assert db.fetch_args[1] == "ws"
     assert db.fetch_args[2] == ["doc-1", "doc-2"]
 

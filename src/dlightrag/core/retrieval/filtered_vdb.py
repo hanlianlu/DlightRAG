@@ -10,34 +10,37 @@ a hard in-filter constraint, not a post-filter hint.
 """
 
 import contextvars
+import hashlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from dlightrag.storage.sql_identifiers import pg_qualified_identifier
+from dlightrag.core.retrieval.models import MetadataScope
+from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
 logger = logging.getLogger(__name__)
 
+# Max chunks the exact branch will brute-force before falling back to HNSW.
 EXACT_FILTER_THRESHOLD = 8192
 
 # Per-request filter state (async-safe: each coroutine gets its own value)
-_active_filter: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar(
+_active_filter: contextvars.ContextVar[MetadataScope | None] = contextvars.ContextVar(
     "_active_filter", default=None
 )
 
 
 @asynccontextmanager
-async def metadata_filter_scope(candidate_ids: set[str] | None) -> AsyncIterator[None]:
+async def metadata_filter_scope(scope: MetadataScope | None) -> AsyncIterator[None]:
     """Set metadata filter for the duration of a retrieval request.
 
     All chunks_vdb.query() calls within this scope will be filtered to only
-    return chunks whose IDs are in candidate_ids.
+    return chunks belonging to the scope's documents.
     """
-    if candidate_ids is None:
+    if scope is None:
         yield
         return
-    token = _active_filter.set(candidate_ids)
+    token = _active_filter.set(scope)
     try:
         yield
     finally:
@@ -68,8 +71,8 @@ class FilteredVectorStorage:
         self, query: str | Any, top_k: int, query_embedding: list[float] | None = None
     ) -> list[dict[str, Any]]:
         """Query with optional in-filtering via contextvar."""
-        candidates = _active_filter.get()
-        if candidates is None:
+        scope = _active_filter.get()
+        if scope is None:
             return await self._original.query(query, top_k, query_embedding)
 
         # Compute embedding if not provided
@@ -84,23 +87,23 @@ class FilteredVectorStorage:
         if query_embedding is None:
             raise RuntimeError("Filtered vector search requires a query embedding")
         if self._backend == "PGVectorStorage":
-            return await self._pg_filtered_search(query_embedding, candidates, top_k)
+            return await self._pg_filtered_search(query_embedding, scope, top_k)
         raise RuntimeError(f"Filtered vector search requires PGVectorStorage, got {self._backend}")
 
     async def _pg_filtered_search(
         self,
         embedding: list[float],
-        candidate_ids: set[str],
+        scope: MetadataScope,
         top_k: int,
     ) -> list[dict[str, Any]]:
         """pgvector SQL with strict metadata in-filtering.
 
-        Small fragmented candidate sets use exact candidate scans to avoid the
-        HNSW post-filter recall trap. Large sets use pgvector iterative scans.
+        Scopes with a small chunk fan-out use exact scans to avoid the HNSW
+        post-filter recall trap. Large ones use pgvector iterative scans.
         """
         import numpy as np
 
-        if not candidate_ids:
+        if not scope:
             return []
 
         table_name = pg_qualified_identifier(self._original.table_name)
@@ -113,16 +116,15 @@ class FilteredVectorStorage:
         )
 
         embedding_vec = np.array(embedding, dtype=np.float32)
+        doc_ids = scope.as_list()
 
-        if len(candidate_ids) <= self._exact_threshold:
+        if scope.chunk_count <= self._exact_threshold:
             rows = await self._run_pg_operation(
                 lambda conn: conn.fetch(
-                    f"WITH candidate_ids(id) AS (SELECT unnest($3::text[])), "  # noqa: S608
-                    f"candidate_rows AS MATERIALIZED ("
+                    f"WITH candidate_rows AS MATERIALIZED ("  # noqa: S608
                     f"  SELECT v.id, v.content, v.file_path, v.full_doc_id, v.content_vector "
                     f"  FROM {table_name} v "
-                    f"  JOIN candidate_ids c ON c.id = v.id "
-                    f"  WHERE v.workspace = $2"
+                    f"  WHERE v.workspace = $2 AND v.full_doc_id = ANY($3::text[])"
                     f") "
                     f"SELECT id, content, file_path, full_doc_id, "
                     f"1 - (content_vector <=> $1::{vector_cast}) AS score "
@@ -132,15 +134,16 @@ class FilteredVectorStorage:
                     f"LIMIT $5",
                     embedding_vec,
                     workspace,
-                    list(candidate_ids),
+                    doc_ids,
                     cosine_threshold,
                     top_k,
                 )
             )
             logger.info(
-                "Exact in-filtered PG search: %d results from %d candidates",
+                "Exact in-filtered PG search: %d results from %d doc(s)/%d chunk(s)",
                 len(rows),
-                len(candidate_ids),
+                len(doc_ids),
+                scope.chunk_count,
             )
             return self._format_rows(rows)
 
@@ -155,7 +158,7 @@ class FilteredVectorStorage:
                     f"  content_vector <=> $1::{vector_cast} AS distance "
                     f"  FROM {table_name} "
                     f"  WHERE workspace = $2 "
-                    f"  AND id = ANY($3::text[]) "
+                    f"  AND full_doc_id = ANY($3::text[]) "
                     f"  ORDER BY content_vector <=> $1::{vector_cast} "
                     f"  LIMIT $5"
                     f") "
@@ -165,7 +168,7 @@ class FilteredVectorStorage:
                     f"ORDER BY distance + 0",
                     embedding_vec,
                     workspace,
-                    list(candidate_ids),
+                    doc_ids,
                     cosine_threshold,
                     top_k,
                 )
@@ -173,11 +176,41 @@ class FilteredVectorStorage:
         rows = await self._run_pg_operation(_iterative_search)
 
         logger.info(
-            "HNSW in-filtered PG search: %d results from %d candidates",
+            "HNSW in-filtered PG search: %d results from %d doc(s)/%d chunk(s)",
             len(rows),
-            len(candidate_ids),
+            len(doc_ids),
+            scope.chunk_count,
         )
         return self._format_rows(rows)
+
+    async def ensure_doc_scope_index(self) -> None:
+        """Index full_doc_id so document-scoped exact scans avoid a seq scan.
+
+        LightRAG only indexes (workspace, id) on the vector table; metadata
+        filtering looks rows up by document instead. Writer-only — a reader
+        attaches to a replica and must never issue DDL.
+        """
+        table = self._original.table_name
+        table_name = pg_qualified_identifier(table)
+        # Hash the table name: it embeds the embedding model, so a plain suffix
+        # would overflow PostgreSQL's 63-char identifier limit and two models
+        # sharing a long prefix would silently share one index.
+        digest = hashlib.md5(table.encode(), usedforsecurity=False).hexdigest()[:12]
+        index_name = pg_identifier(f"idx_dlightrag_full_doc_id_{digest}")
+        try:
+            await self._run_pg_operation(
+                lambda conn: conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} "
+                    f"ON {table_name}(workspace, full_doc_id)"
+                )
+            )
+        except Exception:
+            logger.warning(
+                "Could not create %s on %s; document-scoped vector filters will scan sequentially",
+                index_name,
+                table,
+                exc_info=True,
+            )
 
     async def _run_pg_operation(self, operation: Callable[[Any], Awaitable[Any]]) -> Any:
         db = self._original.db

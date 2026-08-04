@@ -896,6 +896,7 @@ class TestRAGServiceLightRAGMainPath:
                     db=SimpleNamespace(pool=object()),
                     embedding_func=None,
                     table_name="LIGHTRAG_DOC_CHUNKS",
+                    ensure_doc_scope_index=AsyncMock(),
                 )
                 self.initialize_storages = AsyncMock()
                 self.apipeline_process_enqueue_documents = resume_pipeline
@@ -988,6 +989,7 @@ class TestRAGServiceLightRAGMainPath:
                     db=SimpleNamespace(pool=object()),
                     embedding_func=None,
                     table_name="LIGHTRAG_DOC_CHUNKS",
+                    ensure_doc_scope_index=AsyncMock(),
                 )
                 self.text_chunks = object()
                 self.full_docs = object()
@@ -1067,6 +1069,7 @@ class TestRAGServiceLightRAGMainPath:
                     db=SimpleNamespace(pool=object()),
                     embedding_func=None,
                     table_name="LIGHTRAG_DOC_CHUNKS",
+                    ensure_doc_scope_index=AsyncMock(),
                 )
                 self.text_chunks = object()
                 self.full_docs = object()

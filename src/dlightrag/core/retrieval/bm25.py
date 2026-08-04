@@ -16,11 +16,13 @@ from dlightrag.core.retrieval.bm25_language import (
     normalize_language_code,
 )
 from dlightrag.core.retrieval.fusion import format_bm25_top, rrf_fuse
+from dlightrag.core.retrieval.models import MetadataScope
 from dlightrag.core.retrieval.protocols import ContextRow
 from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
 BM25_LANGUAGE_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_bm25_language")
+BM25_DOC_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_full_doc_id")
 BM25_TABLE = pg_identifier("LIGHTRAG_DOC_CHUNKS")
 logger = logging.getLogger(__name__)
 
@@ -159,20 +161,20 @@ class BM25IndexOptions:
 def build_bm25_sql(
     *,
     index_name: str,
-    candidate_ids: set[str] | None,
+    scoped: bool,
     limit: int,
     language: str | None = None,
 ) -> str:
-    """Build a pg_textsearch BM25 query with optional hard candidate filter."""
+    """Build a pg_textsearch BM25 query with an optional hard document filter."""
     safe_index = pg_identifier(index_name)
     limit_value = int(limit)
     if limit_value < 1:
         raise ValueError("BM25 limit must be positive")
-    candidate_clause = "AND id = ANY($3::text[])" if candidate_ids is not None else ""
+    candidate_clause = "AND full_doc_id = ANY($3::text[])" if scoped else ""
     language_clause = (
         f"AND {BM25_LANGUAGE_COLUMN} = '{_sql_language_literal(language)}'" if language else ""
     )
-    limit_placeholder = "$4" if candidate_ids is not None else "$3"
+    limit_placeholder = "$4" if scoped else "$3"
     return (
         f"SELECT id, content, file_path, full_doc_id, "  # noqa: S608
         f"-(content <@> to_bm25query($1, '{safe_index}')) AS score "
@@ -343,6 +345,11 @@ class PostgresBM25:
             f"CREATE INDEX IF NOT EXISTS {BM25_LANGUAGE_INDEX} "
             f"ON {BM25_TABLE}(workspace, {BM25_LANGUAGE_COLUMN})"
         )
+        # Metadata filters scope retrieval by document, so full_doc_id is the
+        # lookup key for both the chunk count and the BM25 candidate filter.
+        await conn.execute(
+            f"CREATE INDEX IF NOT EXISTS {BM25_DOC_INDEX} ON {BM25_TABLE}(workspace, full_doc_id)"
+        )
 
     @staticmethod
     async def _verify_text_config(conn: Any, text_config: str) -> None:
@@ -396,10 +403,10 @@ class PostgresBM25:
         self,
         query: str,
         *,
-        candidate_ids: set[str] | None,
+        scope: MetadataScope | None,
         top_k: int | None = None,
     ) -> list[ContextRow]:
-        if candidate_ids is not None and len(candidate_ids) == 0:
+        if scope is not None and not scope:
             logger.info(
                 "[BM25] search: workspace=%s query=%r profiles=none candidate_scope=0 "
                 "top_k=%s returned=0 top=none",
@@ -410,24 +417,25 @@ class PostgresBM25:
             return []
         limit = self._top_k if top_k is None else top_k
         profiles = self._profiles_for_query(query)
+        doc_ids = scope.as_list() if scope is not None else None
 
         async def _operation(conn: Any) -> list[list[ContextRow]]:
             rankings: list[list[ContextRow]] = []
             for profile in profiles:
                 sql = build_bm25_sql(
                     index_name=profile.index_name,
-                    candidate_ids=candidate_ids,
+                    scoped=doc_ids is not None,
                     limit=limit,
                     language=profile.language_bucket,
                 )
-                if candidate_ids is None:
+                if doc_ids is None:
                     rows = await conn.fetch(sql, query, self._workspace, int(limit))
                 else:
                     rows = await conn.fetch(
                         sql,
                         query,
                         self._workspace,
-                        list(candidate_ids),
+                        doc_ids,
                         int(limit),
                     )
                 rankings.append([self._row_to_chunk(row, profile=profile) for row in rows])
@@ -444,7 +452,7 @@ class PostgresBM25:
             self._workspace,
             query,
             ",".join(profile.name for profile in profiles) or "none",
-            len(candidate_ids) if candidate_ids is not None else "all",
+            f"{len(doc_ids)}doc" if doc_ids is not None else "all",
             int(limit),
             len(result),
             format_bm25_top(result),

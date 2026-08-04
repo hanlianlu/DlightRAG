@@ -150,31 +150,30 @@ class LightRAGStores:
                 timing_label=f"{chunks_vdb.workspace} chunk_vector_overwrite",
             )
 
-    async def chunk_ids_for_docs(self, doc_ids: list[str]) -> list[str]:
-        """Resolve full_doc ids to LightRAG text chunk ids."""
+    async def count_chunks_for_docs(self, doc_ids: list[str]) -> int:
+        """Count LightRAG text chunks owned by the given full_doc ids."""
         if not doc_ids:
-            return []
+            return 0
         text_chunks = self.text_chunks
         db = getattr(text_chunks, "db", None)
         if db is None:
             raise RuntimeError("LightRAG text_chunks storage does not expose a PostgreSQL db")
         workspace = getattr(text_chunks, "workspace", "default")
         sql = """
-            SELECT id
+            SELECT count(*) AS chunk_count
             FROM LIGHTRAG_DOC_CHUNKS
             WHERE workspace = $1
               AND full_doc_id = ANY($2::text[])
-            ORDER BY full_doc_id, chunk_order_index, id
         """
 
-        async def _execute(connection: Any) -> list[Any]:
-            return await connection.fetch(sql, workspace, list(doc_ids))
+        async def _execute(connection: Any) -> Any:
+            return await connection.fetchval(sql, workspace, list(doc_ids))
 
-        rows = await db._run_with_retry(
+        count = await db._run_with_retry(
             _execute,
-            timing_label=f"{workspace} text_chunk_ids_for_docs",
+            timing_label=f"{workspace} text_chunk_count_for_docs",
         )
-        return [str(row["id"]) for row in rows]
+        return int(count or 0)
 
     async def fetch_chunk_contents(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
         """Fetch LightRAG chunk content for BM25 language labeling."""

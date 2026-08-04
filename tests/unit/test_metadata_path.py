@@ -7,19 +7,22 @@ from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 
 
-async def test_metadata_retrieve_uses_lightrag_text_chunks() -> None:
+async def test_metadata_retrieve_returns_doc_scope_without_expanding_chunks() -> None:
     metadata_index = AsyncMock()
-    metadata_index.query.return_value = ["doc-1"]
+    metadata_index.query.return_value = ["doc-1", "doc-2"]
     stores = AsyncMock()
-    stores.chunk_ids_for_docs.return_value = ["chunk-a", "chunk-b"]
+    stores.count_chunks_for_docs.return_value = 1470
 
-    result = await metadata_retrieve(
+    scope = await metadata_retrieve(
         metadata_index=metadata_index,
         stores=stores,
         filters=MetadataFilter(filename="x.pdf"),
     )
 
-    assert result == ["chunk-a", "chunk-b"]
+    # The chunk fan-out is counted, never materialized.
+    assert scope.doc_ids == frozenset({"doc-1", "doc-2"})
+    assert scope.chunk_count == 1470
+    stores.count_chunks_for_docs.assert_awaited_once_with(["doc-1", "doc-2"])
 
 
 async def test_metadata_retrieve_empty_docs_short_circuits() -> None:
@@ -27,11 +30,12 @@ async def test_metadata_retrieve_empty_docs_short_circuits() -> None:
     metadata_index.query.return_value = []
     stores = AsyncMock()
 
-    result = await metadata_retrieve(
+    scope = await metadata_retrieve(
         metadata_index=metadata_index,
         stores=stores,
         filters=MetadataFilter(filename="missing.pdf"),
     )
 
-    assert result == []
-    stores.chunk_ids_for_docs.assert_not_called()
+    assert not scope
+    assert scope.chunk_count == 0
+    stores.count_chunks_for_docs.assert_not_called()

@@ -20,17 +20,22 @@ from dlightrag.core.retrieval.bm25 import (
     rebuild_postgres_bm25,
     required_postgres_extensions,
 )
+from dlightrag.core.retrieval.models import MetadataScope
+
+
+def _scope(*doc_ids: str, chunk_count: int = 12) -> MetadataScope:
+    return MetadataScope(doc_ids=frozenset(doc_ids), chunk_count=chunk_count)
 
 
 def test_bm25_sql_filters_candidates() -> None:
     sql = build_bm25_sql(
         index_name="idx_lightrag_doc_chunks_bm25_en",
-        candidate_ids={"chunk-a"},
+        scoped=True,
         limit=20,
         language="en",
     )
 
-    assert "id = ANY" in sql
+    assert "full_doc_id = ANY" in sql
     assert "LIMIT $4" in sql
     assert "to_bm25query" in sql
     assert "idx_lightrag_doc_chunks_bm25_en" in sql
@@ -40,12 +45,12 @@ def test_bm25_sql_filters_candidates() -> None:
 def test_bm25_sql_has_no_candidate_clause_when_unfiltered() -> None:
     sql = build_bm25_sql(
         index_name="idx_lightrag_doc_chunks_bm25_simple",
-        candidate_ids=None,
+        scoped=False,
         limit=20,
         language=None,
     )
 
-    assert "id = ANY" not in sql
+    assert "full_doc_id = ANY" not in sql
     assert "LIMIT $3" in sql
 
 
@@ -53,7 +58,7 @@ def test_bm25_sql_rejects_non_positive_limit() -> None:
     with pytest.raises(ValueError, match="limit must be positive"):
         build_bm25_sql(
             index_name="idx_lightrag_doc_chunks_bm25_simple",
-            candidate_ids=None,
+            scoped=False,
             limit=0,
         )
 
@@ -233,7 +238,7 @@ def test_bm25_index_options_keeps_simple_fallback_full_table() -> None:
 async def test_bm25_search_empty_candidate_set_short_circuits() -> None:
     bm25 = PostgresBM25(pool=AsyncMock(), workspace="default", profiles=[BM25_PROFILE_FALLBACK])
 
-    assert await bm25.search("query", candidate_ids=set()) == []
+    assert await bm25.search("query", scope=MetadataScope(doc_ids=frozenset(), chunk_count=0)) == []
 
 
 async def test_bm25_search_maps_rows() -> None:
@@ -256,12 +261,12 @@ async def test_bm25_search_maps_rows() -> None:
         profiles=[BM25Profile(name="en", text_config="english", fallback=True)],
     )
 
-    rows = await bm25.search("hello", candidate_ids={"chunk-a"})
+    rows = await bm25.search("hello", scope=_scope("doc-a"))
 
     args = conn.fetch.await_args.args
     assert args[1] == "hello"
     assert args[2] == "default"
-    assert args[3] == ["chunk-a"]
+    assert args[3] == ["doc-a"]
     assert args[4] == 3
     assert rows == [
         {
@@ -340,7 +345,7 @@ async def test_bm25_search_logs_profile_routing_and_results(
     )
 
     with caplog.at_level(logging.INFO, logger="dlightrag.core.retrieval.bm25"):
-        await bm25.search("hello", candidate_ids={"chunk-a"})
+        await bm25.search("hello", scope=_scope("doc-a"))
 
     assert "[BM25] search" in caplog.text
     assert "workspace=default" in caplog.text
@@ -410,10 +415,13 @@ async def test_bm25_ensure_index_keeps_matching_index() -> None:
     await bm25.ensure_indexes(k1=1.4, b=0.65)
 
     executed = [call.args[0] for call in conn.execute.await_args_list]
-    assert len(executed) == 2
+    assert len(executed) == 3
     assert executed[0].startswith("ALTER TABLE LIGHTRAG_DOC_CHUNKS ADD COLUMN IF NOT EXISTS")
     assert executed[1].startswith(
         "CREATE INDEX IF NOT EXISTS idx_lightrag_doc_chunks_dlightrag_bm25_language"
+    )
+    assert executed[2].startswith(
+        "CREATE INDEX IF NOT EXISTS idx_lightrag_doc_chunks_dlightrag_full_doc_id"
     )
 
 
@@ -455,7 +463,7 @@ async def test_bm25_routes_chinese_query_to_jieba_profile_only() -> None:
         ],
     )
 
-    rows = await bm25.search("现金流", candidate_ids=None, top_k=5)
+    rows = await bm25.search("现金流", scope=None, top_k=5)
 
     fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
     assert "idx_lightrag_doc_chunks_bm25_zh" in fetched_sql[0]
@@ -481,7 +489,7 @@ async def test_bm25_routes_configured_language_to_matching_profile_only() -> Non
         ],
     )
 
-    rows = await bm25.search("Wie hoch ist der Umsatz im letzten Quartal?", candidate_ids=None)
+    rows = await bm25.search("Wie hoch ist der Umsatz im letzten Quartal?", scope=None)
 
     fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
     assert "idx_lightrag_doc_chunks_bm25_de" in fetched_sql[0]
@@ -507,7 +515,7 @@ async def test_bm25_routes_region_language_tag_to_profile_only() -> None:
         ],
     )
 
-    rows = await bm25.search("Wie hoch ist der Umsatz im letzten Quartal?", candidate_ids=None)
+    rows = await bm25.search("Wie hoch ist der Umsatz im letzten Quartal?", scope=None)
 
     fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
     assert "idx_lightrag_doc_chunks_bm25_de" in fetched_sql[0]
@@ -539,7 +547,7 @@ async def test_bm25_routes_unknown_language_to_simple_fallback(
         lambda *_args, **_kwargs: "simple",
     )
 
-    rows = await bm25.search("unsupported", candidate_ids=None)
+    rows = await bm25.search("unsupported", scope=None)
 
     fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
     assert "idx_lightrag_doc_chunks_bm25_simple" in fetched_sql[0]

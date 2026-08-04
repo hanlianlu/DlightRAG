@@ -8,6 +8,7 @@ from dlightrag.models.schemas import Reference
 
 if TYPE_CHECKING:
     from dlightrag.citations.schemas import SourceReference
+    from dlightrag.core.retrieval.models import MetadataScope
 
 # ── Structured context types ──────────────────────────────────────
 
@@ -107,16 +108,16 @@ class BM25Retriever(Protocol):
         self,
         query: str,
         *,
-        candidate_ids: set[str] | None,
+        scope: MetadataScope | None,
         top_k: int | None = None,
     ) -> list[ContextRow]:
         raise NotImplementedError
 
 
 class MetadataChunkStore(Protocol):
-    """Store methods needed to resolve metadata hits into chunk ids."""
+    """Store methods needed to size a metadata hit's chunk fan-out."""
 
-    async def chunk_ids_for_docs(self, doc_ids: list[str]) -> list[str]:
+    async def count_chunks_for_docs(self, doc_ids: list[str]) -> int:
         raise NotImplementedError
 
 

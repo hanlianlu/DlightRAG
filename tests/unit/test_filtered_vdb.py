@@ -8,6 +8,7 @@ from dlightrag.core.retrieval.filtered_vdb import (
     _active_filter,
     metadata_filter_scope,
 )
+from dlightrag.core.retrieval.models import MetadataScope
 
 
 class _FakeDB:
@@ -48,12 +49,13 @@ class _FakePGVectorStorage:
         self.db = _FakeDB()
 
 
-async def test_empty_candidate_set_is_active_filter() -> None:
-    async with metadata_filter_scope(set()):
-        assert _active_filter.get() == set()
+async def test_empty_scope_is_active_filter() -> None:
+    empty = MetadataScope(doc_ids=frozenset(), chunk_count=0)
+    async with metadata_filter_scope(empty):
+        assert _active_filter.get() == empty
 
 
-async def test_none_candidate_set_is_no_filter() -> None:
+async def test_none_scope_is_no_filter() -> None:
     async with metadata_filter_scope(None):
         assert _active_filter.get() is None
 
@@ -72,7 +74,7 @@ async def test_filtered_query_uses_query_embedding_context() -> None:
     embedding_func = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
     wrapper = FilteredVectorStorage(original=storage, embedding_func=embedding_func)
 
-    async with metadata_filter_scope({"chunk-1"}):
+    async with metadata_filter_scope(MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=3)):
         await wrapper.query("question", top_k=5)
 
     embedding_func.assert_awaited_once_with(["question"], context="query")
@@ -89,7 +91,11 @@ async def test_large_candidate_pg_search_places_distance_filter_outside_cte() ->
         exact_threshold=1,
     )
 
-    await wrapper._pg_filtered_search([0.1, 0.2, 0.3], {"c1", "c2"}, top_k=5)
+    await wrapper._pg_filtered_search(
+        [0.1, 0.2, 0.3],
+        MetadataScope(doc_ids=frozenset({"doc-1", "doc-2"}), chunk_count=9_000),
+        top_k=5,
+    )
 
     assert storage.db.local_settings == [
         "SET LOCAL hnsw.iterative_scan = 'relaxed_order'",

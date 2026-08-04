@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Metadata retrieval path: resolve hard filters to LightRAG chunk IDs."""
+"""Metadata retrieval path: resolve hard filters to a document scope."""
 
 import logging
 
-from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.core.retrieval.models import MetadataFilter, MetadataScope
 from dlightrag.core.retrieval.protocols import MetadataChunkStore
 from dlightrag.storage.protocols import MetadataIndexProtocol
 
@@ -15,17 +15,21 @@ async def metadata_retrieve(
     metadata_index: MetadataIndexProtocol,
     stores: MetadataChunkStore,
     filters: MetadataFilter,
-) -> list[str]:
-    """Resolve metadata filters to chunk IDs through LightRAG text_chunks."""
+) -> MetadataScope:
+    """Resolve metadata filters to the documents they select.
+
+    Only the chunk *count* is read back — the ids stay in PostgreSQL, where the
+    vector and BM25 queries filter on ``full_doc_id`` directly.
+    """
     doc_ids = await metadata_index.query(filters)
     if not doc_ids:
         logger.info("[MetadataPath] filters matched 0 documents")
-        return []
+        return MetadataScope(doc_ids=frozenset(), chunk_count=0)
 
-    chunk_ids = await stores.chunk_ids_for_docs(doc_ids)
+    chunk_count = await stores.count_chunks_for_docs(doc_ids)
     logger.info(
-        "[MetadataPath] filters matched %d doc(s), resolved %d chunk(s)",
+        "[MetadataPath] filters matched %d doc(s) covering %d chunk(s)",
         len(doc_ids),
-        len(chunk_ids),
+        chunk_count,
     )
-    return list(chunk_ids)
+    return MetadataScope(doc_ids=frozenset(doc_ids), chunk_count=chunk_count)

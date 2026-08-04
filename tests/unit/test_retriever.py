@@ -58,7 +58,7 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
     assert result.contexts["chunks"] == [{"chunk_id": "semantic-a"}]
     backend.aretrieve.assert_awaited_once()
     bm25.search.assert_awaited_once()
-    assert bm25.search.await_args.kwargs["candidate_ids"] is None
+    assert bm25.search.await_args.kwargs["scope"] is None
 
 
 async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> None:
@@ -67,7 +67,7 @@ async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> N
     metadata_index = AsyncMock()
     metadata_index.query.return_value = ["doc-1"]
     stores = AsyncMock()
-    stores.chunk_ids_for_docs.return_value = ["filtered-chunk"]
+    stores.count_chunks_for_docs.return_value = 12
     backend = AsyncMock()
     backend.aretrieve.side_effect = [
         RetrievalResult(contexts={"chunks": [], "entities": [], "relationships": []}),
@@ -92,10 +92,11 @@ async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> N
 
     assert result.contexts["chunks"] == [{"chunk_id": "semantic-a"}]
     assert result.trace["metadata_filter_relaxed"] is True
-    assert result.trace["metadata_candidate_count"] == 1
+    assert result.trace["metadata_doc_count"] == 1
+    assert result.trace["metadata_candidate_count"] == 12
     assert backend.aretrieve.await_count == 2
-    assert bm25.search.await_args_list[0].kwargs["candidate_ids"] == {"filtered-chunk"}
-    assert bm25.search.await_args_list[1].kwargs["candidate_ids"] is None
+    assert bm25.search.await_args_list[0].kwargs["scope"].doc_ids == frozenset({"doc-1"})
+    assert bm25.search.await_args_list[1].kwargs["scope"] is None
 
 
 async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> None:
@@ -104,7 +105,7 @@ async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> Non
     metadata_index = AsyncMock()
     metadata_index.query.return_value = ["doc-1"]
     stores = AsyncMock()
-    stores.chunk_ids_for_docs.return_value = ["filtered-chunk"]
+    stores.count_chunks_for_docs.return_value = 12
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
         contexts={"chunks": [], "entities": [], "relationships": []}

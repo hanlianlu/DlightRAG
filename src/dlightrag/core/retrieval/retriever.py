@@ -8,7 +8,7 @@ from typing import Any
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
 from dlightrag.core.retrieval.fusion import format_bm25_top, rrf_fuse
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
-from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.core.retrieval.models import MetadataFilter, MetadataScope
 from dlightrag.core.retrieval.protocols import (
     BM25Retriever,
     ContextRow,
@@ -78,15 +78,16 @@ class UnifiedRetriever:
         chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
-        candidate_ids = await self._resolve_candidates(metadata_filter)
+        scope = await self._resolve_candidates(metadata_filter)
         trace: dict[str, Any] = {
             "metadata_filter_source": metadata_filter_source,
-            "metadata_candidate_count": len(candidate_ids) if candidate_ids is not None else None,
+            "metadata_doc_count": len(scope.doc_ids) if scope is not None else None,
+            "metadata_candidate_count": scope.chunk_count if scope is not None else None,
             "metadata_filter_relaxed": False,
         }
-        if candidate_ids is not None and not candidate_ids:
+        if scope is not None and not scope:
             if metadata_filter_source == "llm_inferred":
-                candidate_ids = None
+                scope = None
                 trace["metadata_filter_relaxed"] = True
             else:
                 trace["strict_filter_empty"] = True
@@ -94,7 +95,7 @@ class UnifiedRetriever:
 
         chunk_candidate_limit = chunk_top_k or top_k
         lexical_query = bm25_query or query
-        async with metadata_filter_scope(candidate_ids):
+        async with metadata_filter_scope(scope):
             lightrag_task = asyncio.create_task(
                 self._backend.aretrieve(
                     query,
@@ -108,7 +109,7 @@ class UnifiedRetriever:
                 asyncio.create_task(
                     self._bm25.search(
                         lexical_query,
-                        candidate_ids=candidate_ids,
+                        scope=scope,
                         top_k=chunk_candidate_limit,
                     )
                 )
@@ -166,7 +167,7 @@ class UnifiedRetriever:
             fused = list(semantic_chunks)
         lightrag_result.contexts["chunks"] = fused
         trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
-        if candidate_ids is not None and metadata_filter_source == "llm_inferred" and not fused:
+        if scope is not None and metadata_filter_source == "llm_inferred" and not fused:
             relaxed = await self.aretrieve(
                 query,
                 metadata_filter=None,
@@ -177,7 +178,8 @@ class UnifiedRetriever:
                 **kwargs,
             )
             relaxed.trace["metadata_filter_source"] = metadata_filter_source
-            relaxed.trace["metadata_candidate_count"] = len(candidate_ids)
+            relaxed.trace["metadata_doc_count"] = len(scope.doc_ids)
+            relaxed.trace["metadata_candidate_count"] = scope.chunk_count
             relaxed.trace["metadata_filter_relaxed"] = True
             return relaxed
         fused_source_counts = _count_fused_sources(
@@ -188,12 +190,12 @@ class UnifiedRetriever:
         trace["fused_source_counts"] = fused_source_counts
         logger.info(
             "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
-            "metadata_candidates=%s filter_relaxed=%s semantic_chunks=%d bm25_chunks=%d "
+            "metadata_scope=%s filter_relaxed=%s semantic_chunks=%d bm25_chunks=%d "
             "fused_chunks=%d fused_sources=semantic_only=%d bm25_only=%d both=%d bm25_top=%s",
             self._bm25 is not None,
             lexical_query if self._bm25 is not None else None,
             metadata_filter_source,
-            len(candidate_ids) if candidate_ids is not None else "all",
+            f"{len(scope.doc_ids)}doc/{scope.chunk_count}chunk" if scope is not None else "all",
             trace.get("metadata_filter_relaxed", False),
             trace["semantic_chunk_count"],
             trace["bm25_chunk_count"],
@@ -206,12 +208,13 @@ class UnifiedRetriever:
         lightrag_result.trace = trace
         return lightrag_result
 
-    async def _resolve_candidates(self, metadata_filter: MetadataFilter | None) -> set[str] | None:
+    async def _resolve_candidates(
+        self, metadata_filter: MetadataFilter | None
+    ) -> MetadataScope | None:
         if metadata_filter is None or metadata_filter.is_empty():
             return None
-        chunk_ids = await metadata_retrieve(
+        return await metadata_retrieve(
             metadata_index=self._metadata_index,
             stores=self._stores,
             filters=metadata_filter,
         )
-        return set(chunk_ids)
