@@ -316,8 +316,8 @@ def _prepare_history_catalogs(
     return prepared_images, prepared_attachments
 
 
-def _planner_request_tokens(system_prompt: str, user_payload: str) -> int:
-    return estimate_tokens(system_prompt) + estimate_tokens(user_payload)
+def _planner_request_tokens(system_tokens: int, user_payload: str) -> int:
+    return system_tokens + estimate_tokens(user_payload)
 
 
 def _drop_oldest_history_turn(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -434,30 +434,38 @@ class QueryPlanner:
         if current_image_descriptions:
             system_prompt += "\n\n" + PLANNER_IMAGE_CONTEXT_GUIDANCE
 
-        def render_input() -> str:
+        def render_input(messages: list[dict[str, Any]], metadata_schema: str) -> str:
             return _planner_user_payload(
                 query,
-                metadata_schema=schema_context,
-                history=history,
+                metadata_schema=metadata_schema,
+                history=messages,
                 current_images=current_image_descriptions,
             )
 
-        planner_input = render_input()
-        if (
-            schema_context
-            and _planner_request_tokens(system_prompt, planner_input)
-            > _PLANNER_INPUT_TOKEN_ENVELOPE
-        ):
-            schema_context = ""
-            planner_input = render_input()
-        while (
-            history
-            and _planner_request_tokens(system_prompt, planner_input)
-            > _PLANNER_INPUT_TOKEN_ENVELOPE
-        ):
-            history = _drop_oldest_history_turn(history)
-            planner_input = render_input()
-        if _planner_request_tokens(system_prompt, planner_input) > _PLANNER_INPUT_TOKEN_ENVELOPE:
+        system_tokens = estimate_tokens(system_prompt)
+
+        def fit_to_envelope() -> tuple[str, bool]:
+            """Drop the schema, then the oldest turns, until the request fits."""
+            messages = history
+            metadata_schema = schema_context
+            payload = render_input(messages, metadata_schema)
+            if (
+                metadata_schema
+                and _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE
+            ):
+                metadata_schema = ""
+                payload = render_input(messages, metadata_schema)
+            while (
+                messages
+                and _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE
+            ):
+                messages = _drop_oldest_history_turn(messages)
+                payload = render_input(messages, metadata_schema)
+            fits = _planner_request_tokens(system_tokens, payload) <= _PLANNER_INPUT_TOKEN_ENVELOPE
+            return payload, fits
+
+        planner_input, fits_envelope = await asyncio.to_thread(fit_to_envelope)
+        if not fits_envelope:
             return QueryPlan.fallback(query, "fallback_input_overflow")
 
         llm_start = time.monotonic()
@@ -578,44 +586,61 @@ class QueryPlanner:
 
         system_prompt = WEB_PLANNER_SYSTEM_PROMPT
 
-        def render_input(messages: list[dict[str, Any]]) -> str:
+        def render_input(
+            messages: list[dict[str, Any]],
+            metadata_schema: str,
+            images: list[dict[str, Any]],
+            documents: list[dict[str, Any]],
+        ) -> str:
             return _planner_user_payload(
                 planner_query,
-                metadata_schema=schema_context,
+                metadata_schema=metadata_schema,
                 history=messages,
-                prior_images=planned_image_catalog,
-                prior_documents=planned_attachment_catalog,
+                prior_images=images,
+                prior_documents=documents,
                 current_images=planned_image_descriptions,
                 current_documents=current_attachment_rows,
                 history_image_limit=allowed_history_image_count,
                 history_document_limit=allowed_history_attachment_count,
             )
 
-        planner_input = render_input(history)
-        if (
-            schema_context
-            and _planner_request_tokens(system_prompt, planner_input)
-            > _PLANNER_INPUT_TOKEN_ENVELOPE
-        ):
-            schema_context = ""
-            planner_input = render_input(history)
-        evict_history = True
-        while _planner_request_tokens(system_prompt, planner_input) > (
-            _PLANNER_INPUT_TOKEN_ENVELOPE
-        ):
-            has_catalog = bool(planned_image_catalog or planned_attachment_catalog)
-            if history and (evict_history or not has_catalog):
-                history = _drop_oldest_history_turn(history)
-            elif has_catalog:
-                planned_image_catalog, planned_attachment_catalog = _drop_oldest_catalog_entry(
-                    planned_image_catalog,
-                    planned_attachment_catalog,
-                )
-            else:
-                break
-            evict_history = not evict_history
-            planner_input = render_input(history)
-        planner_input_tokens = _planner_request_tokens(system_prompt, planner_input)
+        system_tokens = estimate_tokens(system_prompt)
+
+        def fit_to_envelope() -> tuple[
+            str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
+        ]:
+            """Drop the schema, then alternate oldest turn / oldest catalog entry."""
+            messages = history
+            metadata_schema = schema_context
+            images = planned_image_catalog
+            documents = planned_attachment_catalog
+            payload = render_input(messages, metadata_schema, images, documents)
+            if (
+                metadata_schema
+                and _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE
+            ):
+                metadata_schema = ""
+                payload = render_input(messages, metadata_schema, images, documents)
+            evict_history = True
+            while _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE:
+                has_catalog = bool(images or documents)
+                if messages and (evict_history or not has_catalog):
+                    messages = _drop_oldest_history_turn(messages)
+                elif has_catalog:
+                    images, documents = _drop_oldest_catalog_entry(images, documents)
+                else:
+                    break
+                evict_history = not evict_history
+                payload = render_input(messages, metadata_schema, images, documents)
+            return payload, messages, images, documents
+
+        (
+            planner_input,
+            history,
+            planned_image_catalog,
+            planned_attachment_catalog,
+        ) = await asyncio.to_thread(fit_to_envelope)
+        planner_input_tokens = _planner_request_tokens(system_tokens, planner_input)
         if planner_input_tokens > _PLANNER_INPUT_TOKEN_ENVELOPE:
             logger.error(
                 "[Planner] refusing Web plan above the %d-token envelope: %d tokens",

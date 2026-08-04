@@ -49,6 +49,10 @@ class FakeConnection:
             return "SELECT 1"
         return "OK"
 
+    async def executemany(self, query: str, args_seq: Any) -> None:
+        for args in args_seq:
+            self.calls.append((query, tuple(args)))
+
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
         self.calls.append((query, args))
         if "dlightrag_schema_migrations" in query and "version" in query:
@@ -256,19 +260,19 @@ async def test_vector_refresh_uses_the_complete_scoped_cache_key() -> None:
     assert await store.aupdate_attachment_chunk_vectors("p1", "c1", [chunk], ttl_days=30) is True
 
     update_query, update_args = conn.calls[-1]
-    assert "principal_id = $1" in update_query
-    assert "conversation_id = $2::text::uuid" in update_query
-    assert "content_sha256 = $3" in update_query
-    assert "parser_signature = $4" in update_query
-    assert "chunk_signature = $5" in update_query
-    assert "chunk_id = $6" in update_query
+    assert "target.principal_id = $1" in update_query
+    assert "target.conversation_id = $2::text::uuid" in update_query
+    assert "target.content_sha256 = incoming.content_sha256" in update_query
+    assert "target.parser_signature = incoming.parser_signature" in update_query
+    assert "target.chunk_signature = incoming.chunk_signature" in update_query
+    assert "target.chunk_id = incoming.chunk_id" in update_query
     assert update_args[:6] == (
         "p1",
         "c1",
-        "content-v1",
-        "parser-current",
-        "chunker-current",
-        "same-id",
+        ["content-v1"],
+        ["parser-current"],
+        ["chunker-current"],
+        ["same-id"],
     )
 
 

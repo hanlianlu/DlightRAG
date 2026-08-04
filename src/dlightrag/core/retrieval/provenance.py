@@ -6,6 +6,7 @@ import base64
 import inspect
 import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,26 +29,50 @@ logger = logging.getLogger(__name__)
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
+@dataclass(slots=True)
+class ProvenanceCache:
+    """Lookups shared across hydration passes over the same candidate set."""
+
+    full_docs: dict[str, dict[str, Any] | None] = field(default_factory=dict)
+    block_indexes: dict[Path, dict[str, BlockProvenance]] = field(default_factory=dict)
+    drawings: dict[Path, list[tuple[Path, dict[str, Any]]]] = field(default_factory=dict)
+    merged_chunk_ids: set[str] = field(default_factory=set)
+
+
 async def hydrate_lightrag_chunk_provenance(
-    stores: Any, chunks: list[dict[str, Any]], *, include_image_data: bool = True
+    stores: Any,
+    chunks: list[dict[str, Any]],
+    *,
+    include_image_data: bool = True,
+    cache: ProvenanceCache | None = None,
 ) -> None:
     """Hydrate page numbers and, when ``include_image_data``, image bytes.
 
     ``include_image_data=False`` resolves the cheap page metadata but skips the
     expensive base64 image read, so a caller can defer
     image hydration until after rerank truncation for a text-only reranker.
+    Passing the same *cache* to both passes skips the second chunk-row fetch,
+    since the first pass already merged those fields onto the chunks.
     """
     if not chunks:
         return
 
+    cache = cache if cache is not None else ProvenanceCache()
     chunk_ids = [c["chunk_id"] for c in chunks]
-    raw_chunks = await _fetch_raw_chunks(stores, chunk_ids)
-    full_doc_cache: dict[str, dict[str, Any] | None] = {}
-    block_index_cache: dict[Path, dict[str, BlockProvenance]] = {}
+    pending = [cid for cid in chunk_ids if cid not in cache.merged_chunk_ids]
+    fetched = (
+        dict(zip(pending, await _fetch_raw_chunks(stores, pending), strict=False))
+        if pending
+        else {}
+    )
+    full_doc_cache = cache.full_docs
+    block_index_cache = cache.block_indexes
 
-    for chunk, raw in zip(chunks, raw_chunks, strict=False):
+    for chunk in chunks:
+        raw = fetched.get(chunk["chunk_id"])
         raw_chunk = raw if isinstance(raw, dict) else {}
         _merge_raw_chunk_fields(chunk, raw_chunk)
+        cache.merged_chunk_ids.add(chunk["chunk_id"])
 
         sidecar = _chunk_sidecar(chunk, raw_chunk)
         _hydrate_page_number_direct(chunk, sidecar)
@@ -71,6 +96,7 @@ async def hydrate_lightrag_chunk_provenance(
                 stores=stores,
                 raw_chunk=raw_chunk,
                 full_doc_cache=full_doc_cache,
+                drawings_cache=cache.drawings,
             )
 
         # Sidecar image chunks have asset paths as file_path (e.g., .blocks.assets/hash.jpg).
@@ -218,8 +244,27 @@ def _page_number_from_filename(stem: str) -> int | None:
     return page_number if page_number >= 1 else None
 
 
+def _load_drawings_files(artifact_dir: Path) -> list[tuple[Path, dict[str, Any]]]:
+    files: list[tuple[Path, dict[str, Any]]] = []
+    for drawings_path in sorted(artifact_dir.glob("*.drawings.json")):
+        try:
+            data = json.loads(drawings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError, OSError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        drawings = data.get("drawings")
+        if isinstance(drawings, dict):
+            files.append((drawings_path, drawings))
+    return files
+
+
 def _load_sidecar_drawing_path(
-    artifact_dir: Path, drawing_id: str, *, page_number: int | None = None
+    artifact_dir: Path,
+    drawing_id: str,
+    *,
+    page_number: int | None = None,
+    drawings_cache: dict[Path, list[tuple[Path, dict[str, Any]]]],
 ) -> str | None:
     """Resolve a sidecar drawing's image path from ``*.drawings.json``.
 
@@ -229,17 +274,12 @@ def _load_sidecar_drawing_path(
     drawings file.  First-match would return the wrong image for any page
     after the first.
     """
+    cache_key = artifact_dir.resolve()
+    if cache_key not in drawings_cache:
+        drawings_cache[cache_key] = _load_drawings_files(artifact_dir)
+
     candidates: list[tuple[int | None, str]] = []
-    for drawings_path in sorted(artifact_dir.glob("*.drawings.json")):
-        try:
-            data = json.loads(drawings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError, OSError:
-            continue
-        if not isinstance(data, dict):
-            continue
-        drawings = data.get("drawings")
-        if not isinstance(drawings, dict):
-            continue
+    for drawings_path, drawings in drawings_cache[cache_key]:
         item = drawings.get(drawing_id)
         if isinstance(item, dict):
             rel_path = _drawing_asset_path(item)
@@ -271,6 +311,7 @@ async def _hydrate_image_data(
     stores: Any,
     raw_chunk: dict[str, Any],
     full_doc_cache: dict[str, dict[str, Any] | None],
+    drawings_cache: dict[Path, list[tuple[Path, dict[str, Any]]]],
 ) -> None:
     if chunk.get("image_data"):
         return  # Already hydrated
@@ -294,6 +335,7 @@ async def _hydrate_image_data(
                     artifact_dir,
                     drawing_id,
                     page_number=chunk.get("page_number"),
+                    drawings_cache=drawings_cache,
                 )
 
     if not isinstance(image_path, str):

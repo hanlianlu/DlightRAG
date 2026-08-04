@@ -11,7 +11,17 @@ Three density buckets:
 """
 
 import math
+import re
 from typing import Any
+
+# Dense-bucket class and its complement. The CJK range already contains kana and
+# the katakana extensions, so those need no separate clause.
+_DENSE = r"\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f"
+_DENSE_RE = re.compile(f"[{_DENSE}]")
+_NON_DENSE_RE = re.compile(f"[^{_DENSE}]")
+
+# Loosest bucket is 4 chars per token, so a budget can never span more chars.
+_MAX_CHARS_PER_TOKEN = 4
 
 
 def estimate_tokens(text: str) -> int:
@@ -19,28 +29,24 @@ def estimate_tokens(text: str) -> int:
 
     Uses character-class heuristics — no tokenizer dependency.
     """
-    ascii_chars = 0
-    dense_chars = 0  # CJK + kana + hangul
-    latin_ext_chars = 0  # everything else non-ASCII
+    total = len(text)
+    if not total:
+        return 0
+    if text.isascii():
+        return math.ceil(total / 4)
 
-    for ch in text:
-        code = ord(ch)
-        if code <= 0x7F:
-            ascii_chars += 1
-        elif (
-            (0x2E80 <= code <= 0x9FFF)  # CJK radicals, ideographs
-            or (0xF900 <= code <= 0xFAFF)  # CJK compatibility ideographs
-            or (0xFE30 <= code <= 0xFE4F)  # CJK compatibility forms
-            or (0x3040 <= code <= 0x30FF)  # Japanese hiragana + katakana
-            or (0x31F0 <= code <= 0x31FF)  # Katakana phonetic extensions
-            or (0xAC00 <= code <= 0xD7AF)  # Korean hangul syllables
-        ):
-            dense_chars += 1
-        else:
-            latin_ext_chars += 1
+    ascii_chars = len(text.encode("ascii", "ignore"))
+    non_ascii = total - ascii_chars
+    # A substitution costs what it deletes, so strip whichever class is smaller.
+    if non_ascii * 2 < total:
+        dense_chars = total - len(_DENSE_RE.sub("", text))
+    else:
+        dense_chars = len(_NON_DENSE_RE.sub("", text))
 
     return (
-        math.ceil(ascii_chars / 4) + math.ceil(dense_chars / 1.5) + math.ceil(latin_ext_chars / 3)
+        math.ceil(ascii_chars / 4)
+        + math.ceil(dense_chars / 1.5)
+        + math.ceil((non_ascii - dense_chars) / 3)
     )
 
 
@@ -51,7 +57,7 @@ def truncate_to_estimated_tokens(text: str, token_budget: int) -> str:
     if estimate_tokens(text) <= token_budget:
         return text.strip()
     low = 0
-    high = len(text)
+    high = min(len(text), token_budget * _MAX_CHARS_PER_TOKEN)
     while low < high:
         midpoint = (low + high + 1) // 2
         if estimate_tokens(text[:midpoint]) <= token_budget:

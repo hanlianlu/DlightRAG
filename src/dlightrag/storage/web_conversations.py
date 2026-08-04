@@ -714,16 +714,22 @@ VALUES (
 )
 """
 
-_UPDATE_ATTACHMENT_CHUNK_VECTOR = """
-UPDATE web_conversation_attachment_chunks
-SET embedding_signature = $7,
-    embedding_vector = $8::jsonb
-WHERE principal_id = $1
-  AND conversation_id = $2::text::uuid
-  AND content_sha256 = $3
-  AND parser_signature = $4
-  AND chunk_signature = $5
-  AND chunk_id = $6
+_UPDATE_ATTACHMENT_CHUNK_VECTORS = """
+UPDATE web_conversation_attachment_chunks AS target
+SET embedding_signature = incoming.embedding_signature,
+    embedding_vector = incoming.embedding_vector::jsonb
+FROM unnest(
+    $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[]
+) AS incoming(
+    content_sha256, parser_signature, chunk_signature,
+    chunk_id, embedding_signature, embedding_vector
+)
+WHERE target.principal_id = $1
+  AND target.conversation_id = $2::text::uuid
+  AND target.content_sha256 = incoming.content_sha256
+  AND target.parser_signature = incoming.parser_signature
+  AND target.chunk_signature = incoming.chunk_signature
+  AND target.chunk_id = incoming.chunk_id
 """
 
 _LOAD_ATTACHMENT_VECTOR_PAGE = """
@@ -1332,20 +1338,16 @@ class PGWebConversationStore:
                     parser_signature,
                     chunk_signature,
                 )
-                for chunk in bundle.chunks:
-                    cache_chunk_id = (
-                        chunk.cache_key.cache_chunk_id
-                        if chunk.cache_key is not None
-                        else chunk.chunk_id
-                    )
-                    await conn.execute(
-                        _INSERT_ATTACHMENT_CHUNK,
+                rows = [
+                    (
                         principal_id,
                         conversation_id,
                         content_sha256,
                         parser_signature,
                         chunk_signature,
-                        cache_chunk_id,
+                        chunk.cache_key.cache_chunk_id
+                        if chunk.cache_key is not None
+                        else chunk.chunk_id,
                         chunk.chunk_index,
                         chunk.content,
                         chunk.page_number,
@@ -1359,6 +1361,10 @@ class PGWebConversationStore:
                         if chunk.embedding_vector is not None
                         else None,
                     )
+                    for chunk in bundle.chunks
+                ]
+                if rows:
+                    await conn.executemany(_INSERT_ATTACHMENT_CHUNK, rows)
                 return True
 
         return await self._run_write(_operation)
@@ -1384,28 +1390,27 @@ class PGWebConversationStore:
                 )
                 if unexpired is None:
                     return False
-                updated = False
-                for chunk in chunks:
-                    key = chunk.cache_key
-                    if (
-                        key is None
-                        or chunk.embedding_signature is None
-                        or chunk.embedding_vector is None
-                    ):
-                        continue
-                    status = await conn.execute(
-                        _UPDATE_ATTACHMENT_CHUNK_VECTOR,
-                        principal_id,
-                        conversation_id,
-                        key.content_sha256,
-                        key.parser_signature,
-                        key.chunk_signature,
-                        key.cache_chunk_id,
-                        chunk.embedding_signature,
-                        json.dumps(chunk.embedding_vector),
-                    )
-                    updated = status.rsplit(" ", 1)[-1] == "1" or updated
-                return updated
+                updatable = [
+                    (chunk.cache_key, chunk.embedding_signature, chunk.embedding_vector)
+                    for chunk in chunks
+                    if chunk.cache_key is not None
+                    and chunk.embedding_signature is not None
+                    and chunk.embedding_vector is not None
+                ]
+                if not updatable:
+                    return False
+                status = await conn.execute(
+                    _UPDATE_ATTACHMENT_CHUNK_VECTORS,
+                    principal_id,
+                    conversation_id,
+                    [key.content_sha256 for key, _, _ in updatable],
+                    [key.parser_signature for key, _, _ in updatable],
+                    [key.chunk_signature for key, _, _ in updatable],
+                    [key.cache_chunk_id for key, _, _ in updatable],
+                    [signature for _, signature, _ in updatable],
+                    [json.dumps(vector) for _, _, vector in updatable],
+                )
+                return status.rsplit(" ", 1)[-1] != "0"
 
         return await self._run_write(_operation)
 

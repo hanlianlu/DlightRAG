@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL BM25 search over LightRAG document chunks."""
 
+import asyncio
 import inspect
 import logging
 import re
@@ -286,9 +287,14 @@ class PostgresBM25:
                     break
 
                 chunk_ids = [str(row["id"]) for row in rows]
-                languages = [
-                    self._language_classifier.detect(str(row["content"] or "")) for row in rows
-                ]
+                contents = [str(row["content"] or "") for row in rows]
+                # Detection is CPU-bound; keep it off the loop while this holds
+                # a pooled connection for the whole workspace relabel.
+                languages = await asyncio.to_thread(
+                    lambda texts=contents: [
+                        self._language_classifier.detect(text) for text in texts
+                    ]
+                )
                 await conn.execute(
                     (
                         f"UPDATE {BM25_TABLE} AS chunks "  # noqa: S608 - internal constants.

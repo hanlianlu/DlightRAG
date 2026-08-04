@@ -661,14 +661,21 @@ class UnifiedIngestionEngine:
         return {str(row["id"]): str(row.get("content") or "") for row in rows if row.get("id")}
 
     async def _label_bm25_languages(self, chunk_ids: list[str]) -> None:
-        if self._bm25_language_classifier is None or not chunk_ids:
+        classifier = self._bm25_language_classifier
+        if classifier is None or not chunk_ids:
             return
         rows = await self._stores.fetch_chunk_contents(chunk_ids)
-        labels = {
-            str(row["id"]): self._bm25_language_classifier.detect(str(row.get("content") or ""))
-            for row in rows
-            if row.get("id")
-        }
+
+        # lingua n-gram detection is CPU-bound and runs over every chunk of the
+        # document, so keep it off the loop serving concurrent queries.
+        def _detect() -> dict[str, str]:
+            return {
+                str(row["id"]): classifier.detect(str(row.get("content") or ""))
+                for row in rows
+                if row.get("id")
+            }
+
+        labels = await asyncio.to_thread(_detect)
         if labels:
             await self._stores.update_chunk_bm25_languages(labels)
 

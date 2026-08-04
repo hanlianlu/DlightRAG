@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from dlightrag.core.lightrag_stores import LightRAGStores
     from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
     from dlightrag.core.retrieval.protocols import BM25Retriever, RetrievalBackend
+    from dlightrag.core.retrieval.provenance import ProvenanceCache
     from dlightrag.core.retrieval.retriever import UnifiedRetriever
     from dlightrag.core.visual_assets import VisualAssetResolver
     from dlightrag.models.composer import ComposerModelBundle
@@ -1864,17 +1865,23 @@ class RAGService:
 
         # --- Step 2.5: Hydrate provenance for the complete fused candidate set ---
         stores = self._lightrag_stores
+        provenance_cache: ProvenanceCache | None = None
         if stores is not None:
-            from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
+            from dlightrag.core.retrieval.provenance import (
+                ProvenanceCache,
+                hydrate_lightrag_chunk_provenance,
+            )
 
             chunks_to_hydrate = kg_result.contexts.get("chunks", [])
             if chunks_to_hydrate:
                 # Defer image bytes past rerank truncation for a text-only
                 # reranker; multimodal rerankers need them with the candidates.
+                provenance_cache = ProvenanceCache()
                 await hydrate_lightrag_chunk_provenance(
                     stores,
                     chunks_to_hydrate,
                     include_image_data=self._rerank_consumes_images,
+                    cache=provenance_cache,
                 )
 
         await self._rerank_retrieval_chunks(
@@ -1893,7 +1900,7 @@ class RAGService:
                     hydrate_lightrag_chunk_provenance,
                 )
 
-                await hydrate_lightrag_chunk_provenance(stores, survivors)
+                await hydrate_lightrag_chunk_provenance(stores, survivors, cache=provenance_cache)
 
         # --- Step 3: Enrich chunks with document metadata ---
         await self._enrich_chunks_with_metadata(kg_result)

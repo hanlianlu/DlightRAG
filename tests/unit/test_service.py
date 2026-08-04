@@ -368,7 +368,7 @@ class TestRAGServiceRetrieve:
             }
         )
 
-        async def hydrate(_stores, chunks, *, include_image_data=True):
+        async def hydrate(_stores, chunks, *, include_image_data=True, cache=None):
             assert include_image_data is True
             chunks[1]["image_data"] = "hydrated-image"
 
@@ -403,7 +403,7 @@ class TestRAGServiceRetrieve:
             }
         )
 
-        async def hydrate(_stores, chunks, *, include_image_data=True):
+        async def hydrate(_stores, chunks, *, include_image_data=True, cache=None):
             return None
 
         service._rerank_func = None  # reranker disabled
@@ -433,7 +433,7 @@ class TestRAGServiceRetrieve:
             }
         )
 
-        async def hydrate(_stores, chunks, *, include_image_data=True):
+        async def hydrate(_stores, chunks, *, include_image_data=True, cache=None):
             for chunk in chunks:
                 chunk["page_number"] = 7
 
@@ -480,7 +480,7 @@ class TestRAGServiceRetrieve:
 
         calls: list[tuple[list[str], bool]] = []
 
-        async def hydrate(_stores, chunks, *, include_image_data=True):
+        async def hydrate(_stores, chunks, *, include_image_data=True, cache=None):
             calls.append(([c["chunk_id"] for c in chunks], include_image_data))
             if include_image_data:
                 for c in chunks:
