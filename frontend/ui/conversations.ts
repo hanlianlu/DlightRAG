@@ -26,6 +26,7 @@ import {getPendingImageData} from './images.ts';
 import {closePanel} from './panel.ts';
 import {syncPanelEffectiveWidth} from './resize.ts';
 import {showToast} from './toast.ts';
+import {syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
 const DESKTOP_MEDIA = '(min-width: 1200px)';
@@ -434,13 +435,6 @@ function closeCompactDrawer(restoreFocus = false): void {
     drawerReturnFocus = null;
 }
 
-function setBackgroundInert(inert: boolean): void {
-    for (const selector of ['.topbar', '.chat-area', '.composer']) {
-        const element = document.querySelector<HTMLElement>(selector);
-        if (element) element.inert = inert;
-    }
-}
-
 function applySidebarState(): void {
     const desktop = isDesktop();
     const sidebar = document.getElementById('chat-sidebar');
@@ -470,9 +464,7 @@ function applySidebarState(): void {
         }
     }
     if (backdrop) backdrop.hidden = desktop || !drawerOpen;
-    setBackgroundInert(
-        (!desktop && drawerOpen) || document.body.classList.contains('panel-drawer-open'),
-    );
+    syncShellInert();
 }
 
 function openSidebar(trigger: HTMLElement | null): void {
@@ -515,16 +507,7 @@ function focusTrap(event: KeyboardEvent): void {
     const focusable = Array.from(sidebar?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     ) || []).filter((element) => !element.hidden);
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-    }
+    wrapTabFocus(focusable, event);
 }
 
 async function loadConversation(

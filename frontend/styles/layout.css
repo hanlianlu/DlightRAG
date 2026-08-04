@@ -144,14 +144,6 @@ body.files-panel-open #files-btn {
     display: none;
 }
 
-.topbar-btn,
-.upload-btn {
-    font-size: var(--font-size-caption);
-    font-weight: 600;
-    letter-spacing: 0;
-    text-transform: uppercase;
-}
-
 .topbar-btn {
     background: transparent;
     border: none;
@@ -160,6 +152,7 @@ body.files-panel-open #files-btn {
     font-size: var(--font-size-detail);
     font-weight: 500;
     height: var(--size-button);
+    letter-spacing: 0;
     padding: 0 var(--space-component);
     border-radius: var(--radius-sm);
     cursor: pointer;

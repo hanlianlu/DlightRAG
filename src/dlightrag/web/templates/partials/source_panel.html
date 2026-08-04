@@ -1,7 +1,7 @@
 {% for src in sources %}
 <div class="source-doc" data-ref="{{ src.id }}">
   <div class="source-doc-header">
-    <button class="source-doc-toggle" type="button" data-action="toggle-doc">
+    <button class="source-doc-toggle" type="button" data-action="toggle-doc" aria-expanded="false">
       <span class="collapse-icon">▶</span>
       <span class="source-doc-title">{{ src.title or "Source" }}</span>
       <span class="source-doc-badge">{{ src.id | reference_label }}</span>

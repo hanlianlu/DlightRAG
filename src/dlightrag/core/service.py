@@ -1647,6 +1647,52 @@ class RAGService:
             return self._single_file_result(result)
         return result
 
+    async def _aingest_object_store(
+        self,
+        *,
+        source_type: str,
+        source: Any,
+        locator_for_key: Callable[[str], str],
+        single_key: str | None,
+        replace: bool,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Shared manifest/single-key/prefix routing for blob-style sources."""
+        common_kwargs = {
+            "source_type": source_type,
+            "source_uri_for_key": locator_for_key,
+            "download_uri_for_key": locator_for_key,
+            "replace": replace,
+            "title": kwargs.get("title"),
+            "author": kwargs.get("author"),
+            "metadata": kwargs.get("metadata"),
+            "metadata_policy": kwargs.get("metadata_policy"),
+            "retain_source_file": kwargs.get("retain_source_file"),
+            "_progress_callback": kwargs.get("_progress_callback"),
+            "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
+            "_parser_filename_override": kwargs.get("_parser_filename_override"),
+        }
+        documents = _ingest_documents(kwargs.get("documents"))
+        if documents is not None:
+            return await self.aingest_source(
+                source,
+                documents=[
+                    _source_document_from_manifest(document, key=cast(str, document.key))
+                    for document in documents
+                ],
+                **common_kwargs,
+            )
+        if single_key:
+            return self._single_file_result(
+                await self.aingest_source(
+                    source,
+                    documents=[SourceDocument(key=single_key)],
+                    **common_kwargs,
+                )
+            )
+        prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
+        return await self.aingest_source(source, prefix=prefix, **common_kwargs)
+
     async def _aingest_azure_blob(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         container_name = kwargs.get("container_name")
         source = kwargs.get("source")
@@ -1659,43 +1705,15 @@ class RAGService:
                 connection_string=self.config.blob_connection_string,
                 container_name=container_name,
             )
-
-        locator_for_key = lambda key: f"azure://{container_name}/{key}"  # noqa: E731
-        common_kwargs = {
-            "source_type": "azure_blob",
-            "source_uri_for_key": locator_for_key,
-            "download_uri_for_key": locator_for_key,
-            "replace": replace,
-            "title": kwargs.get("title"),
-            "author": kwargs.get("author"),
-            "metadata": kwargs.get("metadata"),
-            "metadata_policy": kwargs.get("metadata_policy"),
-            "retain_source_file": kwargs.get("retain_source_file"),
-            "_progress_callback": kwargs.get("_progress_callback"),
-            "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
-            "_parser_filename_override": kwargs.get("_parser_filename_override"),
-        }
-        documents = _ingest_documents(kwargs.get("documents"))
-        if documents is not None:
-            return await self.aingest_source(
-                source,
-                documents=[
-                    _source_document_from_manifest(document, key=cast(str, document.key))
-                    for document in documents
-                ],
-                **common_kwargs,
-            )
-        if kwargs.get("blob_path"):
-            return self._single_file_result(
-                await self.aingest_source(
-                    source,
-                    documents=[SourceDocument(key=str(kwargs["blob_path"]))],
-                    **common_kwargs,
-                )
-            )
-
-        prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
-        return await self.aingest_source(source, prefix=prefix, **common_kwargs)
+        blob_path = kwargs.get("blob_path")
+        return await self._aingest_object_store(
+            source_type="azure_blob",
+            source=source,
+            locator_for_key=lambda key: f"azure://{container_name}/{key}",
+            single_key=str(blob_path) if blob_path else None,
+            replace=replace,
+            kwargs=kwargs,
+        )
 
     async def _aingest_s3(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         bucket = kwargs.get("bucket")
@@ -1708,44 +1726,16 @@ class RAGService:
             source = S3DataSource(
                 bucket=str(bucket), region=kwargs.get("s3_region") or self.config.s3_region
             )
-
-        locator_for_key = lambda key: f"s3://{bucket}/{key}"  # noqa: E731
-        common_kwargs = {
-            "source_type": "s3",
-            "source_uri_for_key": locator_for_key,
-            "download_uri_for_key": locator_for_key,
-            "replace": replace,
-            "title": kwargs.get("title"),
-            "author": kwargs.get("author"),
-            "metadata": kwargs.get("metadata"),
-            "metadata_policy": kwargs.get("metadata_policy"),
-            "retain_source_file": kwargs.get("retain_source_file"),
-            "_progress_callback": kwargs.get("_progress_callback"),
-            "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
-            "_parser_filename_override": kwargs.get("_parser_filename_override"),
-        }
-        documents = _ingest_documents(kwargs.get("documents"))
-        if documents is not None:
-            return await self.aingest_source(
-                source,
-                documents=[
-                    _source_document_from_manifest(document, key=cast(str, document.key))
-                    for document in documents
-                ],
-                **common_kwargs,
-            )
+        # The MCP contract accepts either name for the single-object case.
         key = kwargs.get("s3_key") or kwargs.get("blob_path")
-        if key:
-            return self._single_file_result(
-                await self.aingest_source(
-                    source,
-                    documents=[SourceDocument(key=str(key))],
-                    **common_kwargs,
-                )
-            )
-
-        prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
-        return await self.aingest_source(source, prefix=prefix, **common_kwargs)
+        return await self._aingest_object_store(
+            source_type="s3",
+            source=source,
+            locator_for_key=lambda key: f"s3://{bucket}/{key}",
+            single_key=str(key) if key else None,
+            replace=replace,
+            kwargs=kwargs,
+        )
 
     async def aingest(
         self,

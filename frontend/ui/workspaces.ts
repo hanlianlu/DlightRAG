@@ -7,6 +7,7 @@ import {showToast} from './toast.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
 import {installRovingArrowNavigation} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
+import {closestElement} from '../lib/dom.ts';
 
 let popoverEl: HTMLElement | null = null;
 
@@ -26,10 +27,6 @@ function normalizeRecord(record: string | WorkspaceEventDetail): WorkspaceRecord
 function workspaceName(workspace: string): string {
     const match = workspaceStore.records.find((item) => item.workspace === workspace);
     return match ? match.displayName : workspace;
-}
-
-function eventElement(event: Event): Element | null {
-    return event.target instanceof Element ? event.target : null;
 }
 
 export function initWorkspaces(): void {
@@ -57,15 +54,6 @@ export function initWorkspaces(): void {
 
 export function toggleWorkspace(workspace: string): void {
     workspaceStore.toggle(workspace);
-}
-
-export function selectWorkspace(workspace: string): void {
-    if (!workspace) return;
-    workspaceStore.select(workspace);
-}
-
-export function removeWorkspace(workspace: string, nextWorkspace?: string): void {
-    workspaceStore.remove(workspace, nextWorkspace || '');
 }
 
 function renderWorkspaceSelector(): void {
@@ -283,24 +271,12 @@ function showDeleteWorkspaceDialog(workspace: string): void {
     dialog.showModal();
 }
 
-function syncDataAllAttribute(): void {
-    const selector = document.getElementById('workspace-selector');
-    if (selector) {
-        const data = workspaceStore.records.map(r => ({
-            workspace: r.workspace,
-            display_name: r.displayName,
-            embedding_model: r.embeddingModel,
-        }));
-        selector.setAttribute('data-all', JSON.stringify(data));
-    }
-}
-
 function setupWorkspaceEvents(): void {
     const selector = document.getElementById('workspace-selector');
     if (selector && !selector.dataset.bound) {
         selector.dataset.bound = 'true';
         selector.addEventListener('click', (event) => {
-            if (eventElement(event)?.closest('.ui-popover')) return;
+            if (closestElement(event.target, '.ui-popover')) return;
             openWorkspacePopover();
         });
         selector.addEventListener('keydown', (event) => {
@@ -311,7 +287,7 @@ function setupWorkspaceEvents(): void {
     }
 
     document.addEventListener('click', (event) => {
-        const closeButton = eventElement(event)?.closest('[data-action="close-delete-workspace-dialog"]');
+        const closeButton = closestElement(event.target, '[data-action="close-delete-workspace-dialog"]');
         if (!closeButton) return;
         event.preventDefault();
         closeButton.closest('dialog')?.close();
@@ -332,12 +308,10 @@ function setupWorkspaceEvents(): void {
     bus.on('workspaceCreated', ({workspace}) => {
         renderWorkspaceSelector();
         closeWorkspacePopover();
-        syncDataAllAttribute();
         showToast(`Workspace ${workspaceName(workspace)} created.`);
     });
     bus.on('workspaceDeleted', ({workspace}) => {
         renderWorkspaceSelector();
-        syncDataAllAttribute();
         const dialog = document.getElementById('delete-workspace-dialog') as HTMLDialogElement | null;
         if (dialog && dialog.open) dialog.close();
         showToast(`Workspace ${workspace} deleted.`);

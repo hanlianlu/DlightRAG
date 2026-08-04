@@ -6,35 +6,22 @@ import '../styles/layout.css';
 import '../styles/files.css';
 import '../styles/sources.css';
 
-document.addEventListener('DOMContentLoaded', async function() {
-    const [
-        {setupQueryForm},
-        {setupHtmxInteractions},
-        {setupImageLightbox},
-        {setupAttachmentInputs},
-        {setupMathRendering},
-        {setupPanel},
-        {setupSourcePanel},
-        {setupFilesPanel},
-        {setupPanelResize},
-        {initWorkspaces},
-        {setupTheme},
-        {setupConversations},
-    ] = await Promise.all([
-        import('./chat.ts'),
-        import('./htmx.ts'),
-        import('./images.ts'),
-        import('./attachments.ts'),
-        import('./mathjax.ts'),
-        import('./panel.ts'),
-        import('./source-panel.ts'),
-        import('./files-panel.ts'),
-        import('./resize.ts'),
-        import('./workspaces.ts'),
-        import('./theme.ts'),
-        import('./conversations.ts'),
-    ]);
+import {setupAttachmentInputs} from './attachments.ts';
+import {setupQueryForm} from './chat.ts';
+import {setupConversations} from './conversations.ts';
+import {setupFilesPanel} from './files-panel.ts';
+import {setupHtmxInteractions} from './htmx.ts';
+import {setupImageLightbox} from './images.ts';
+import {setupMathRendering} from './mathjax.ts';
+import {setupPanel} from './panel.ts';
+import {setupPanelResize} from './resize.ts';
+import {setupSourcePanel} from './source-panel.ts';
+import {setupTheme} from './theme.ts';
+import {initWorkspaces} from './workspaces.ts';
 
+// Every module below is needed on first paint, so splitting them into dynamic
+// imports only added round-trips and blocked cross-module tree-shaking.
+document.addEventListener('DOMContentLoaded', function() {
     setupTheme();
     initWorkspaces();
     setupPanel();
@@ -47,5 +34,4 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupQueryForm();
     setupMathRendering();
     setupConversations();
-
 });

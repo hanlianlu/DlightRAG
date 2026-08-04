@@ -1,4 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+import {closestElement, syncShellInert, wrapTabFocus} from '../lib/dom.ts';
+
 
 const PANEL_DISMISS_EXEMPT_SELECTOR = [
     '.panel',
@@ -18,13 +20,6 @@ function isDrawer(): boolean {
     return window.matchMedia(DRAWER_MEDIA).matches;
 }
 
-function setPanelBackgroundInert(inert: boolean): void {
-    for (const selector of ['.topbar', '.chat-area', '.composer']) {
-        const element = document.querySelector<HTMLElement>(selector);
-        if (element) element.inert = inert;
-    }
-}
-
 function applyPanelModality(): void {
     const panel = document.getElementById('panel');
     const backdrop = document.getElementById('panel-backdrop');
@@ -32,7 +27,7 @@ function applyPanelModality(): void {
     const modal = open && isDrawer();
     document.body.classList.toggle('panel-drawer-open', modal);
     if (backdrop) backdrop.hidden = !modal;
-    setPanelBackgroundInert(modal);
+    syncShellInert();
     if (!panel) return;
     panel.inert = !open;
     if (open) panel.removeAttribute('aria-hidden');
@@ -56,25 +51,7 @@ function trapPanelFocus(event: KeyboardEvent): void {
     if (event.key !== 'Tab' || !isDrawer()) return;
     const panel = document.getElementById('panel');
     if (!panel?.classList.contains('open')) return;
-    const focusable = focusablePanelElements(panel);
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-    }
-}
-
-export function closestElement<T extends Element = Element>(
-    target: EventTarget | null,
-    selector: string,
-): T | null {
-    if (!(target instanceof Element)) return null;
-    return target.closest(selector) as T | null;
+    wrapTabFocus(focusablePanelElements(panel), event);
 }
 
 function shouldDismissPanelOnOutsideClick(target: EventTarget | null): boolean {

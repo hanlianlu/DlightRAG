@@ -108,37 +108,6 @@
   /* Modifier for streamingDot — standalone for classList use */
 }
 
-/* === Composer Plus Button === */
-
-.composerPlus {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--size-button);
-  height: var(--size-button);
-  background: transparent;
-  border: none;
-  color: var(--color-accent-text);
-  /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-  border-radius: 50%;
-  transition: color 0.15s, background 0.15s;
-}
-
-.composerPlusIcon {
-  height: var(--size-icon-md);
-  pointer-events: none;
-  stroke-width: var(--stroke-composer-plus-icon);
-  width: var(--size-icon-md);
-}
-
-.composerPlus:hover {
-  color: var(--color-accent-action);
-  background: var(--color-bg-elevated);
-}
-
 /* === Thumbnail Strip === */
 
 /* The strip container is server-rendered in the composer; its flex layout lives
@@ -489,45 +458,3 @@
 
 /* === Answer Image Gallery === */
 
-.answerImageStrip {
-  display: flex;
-  gap: var(--space-tight);
-  padding: var(--space-tight) 0 var(--space-inline);
-  overflow-x: auto;
-  scroll-behavior: smooth;
-  border-top: 1px solid var(--color-divider);
-  margin-top: var(--space-tight);
-}
-
-.answerImageItem {
-  flex-shrink: 0;
-  height: clamp(100px, 10vw, 140px);
-  width: clamp(130px, 13vw, 180px);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  overflow: hidden;
-  position: relative;
-  border: 1px solid var(--color-border-subtle);
-  transition: border-color 0.15s;
-}
-
-.answerImageItem:hover {
-  border-color: var(--color-accent-border-strong);
-}
-
-.answerImageItem img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.answerImageLabel {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: linear-gradient(transparent, var(--color-scrim-gradient));
-  color: var(--color-image-caption);
-  font-size: var(--font-size-caption);
-  padding: var(--space-tight) var(--space-inline) var(--space-inline);
-}

@@ -1,8 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import chatStyles from '../styles/chat.module.css';
-import {renderMath} from './mathjax.ts';
-import {closestElement, openPanel} from './panel.ts';
+import {renderMath} from '../lib/math.ts';
+import {closestElement} from '../lib/dom.ts';
+import {openPanel} from './panel.ts';
 
 const AI_MESSAGE_SELECTOR = '.' + chatStyles.aiMessage;
 
@@ -78,21 +79,29 @@ function copySourcePanelFromAnswer(answerEl: Element): boolean {
     return true;
 }
 
+function setDocExpanded(doc: HTMLElement, expanded: boolean, onlyChunk?: string): void {
+    doc.classList.toggle('expanded', expanded);
+    doc.querySelector('.source-doc-toggle')
+        ?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    const chunks = doc.querySelector<HTMLElement>('.source-doc-chunks');
+    if (!chunks) return;
+    chunks.hidden = !expanded;
+    if (!expanded) return;
+    chunks.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
+        c.hidden = onlyChunk ? c.dataset.chunk !== onlyChunk : false;
+    });
+}
+
+function forEachDoc(root: ParentNode, fn: (doc: HTMLElement) => void): void {
+    root.querySelectorAll<HTMLElement>('.source-doc').forEach(fn);
+}
+
 function setExpandedSource(ref?: string, chunk?: string): void {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
 
-    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
-        const isActiveDoc = doc.dataset.ref === ref;
-        const chunksContainer = doc.querySelector<HTMLElement>('.source-doc-chunks');
-        doc.classList.toggle('expanded', isActiveDoc);
-        if (chunksContainer) chunksContainer.hidden = !isActiveDoc;
-
-        if (isActiveDoc) {
-            doc.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
-                c.hidden = chunk ? c.dataset.chunk !== chunk : false;
-            });
-        }
+    forEachDoc(panelContent, function(doc) {
+        setDocExpanded(doc, doc.dataset.ref === ref, chunk);
     });
 
     applyActiveHighlight(panelContent);
@@ -132,25 +141,14 @@ function toggleDoc(header: Element): void {
     if (!doc) return;
     const panelContent = doc.closest('#panel-content') || doc.parentElement;
     if (!panelContent) return;
-    panelContent.querySelectorAll('.source-doc').forEach(function(d) {
-        if (d !== doc) {
-            d.classList.remove('expanded');
-            const chunks = d.querySelector<HTMLElement>('.source-doc-chunks');
-            if (chunks) chunks.hidden = true;
-        }
+    const expand = !doc.classList.contains('expanded');
+    forEachDoc(panelContent, function(d) {
+        if (d !== doc) setDocExpanded(d, false);
     });
-    const wasOpen = doc.classList.contains('expanded');
-    doc.classList.toggle('expanded', !wasOpen);
-    const chunksContainer = doc.querySelector<HTMLElement>('.source-doc-chunks');
-    if (chunksContainer) {
-        chunksContainer.hidden = wasOpen;
-        if (!wasOpen) {
-            chunksContainer.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
-                c.hidden = false;
-            });
-            applyActiveHighlight(doc);
-            renderExpandedSourceMath(doc);
-        }
+    setDocExpanded(doc, expand);
+    if (expand) {
+        applyActiveHighlight(doc);
+        renderExpandedSourceMath(doc);
     }
     updateToggleAllButton();
 }
@@ -158,15 +156,8 @@ function toggleDoc(header: Element): void {
 function showAllSources(): void {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
-    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
-        doc.classList.add('expanded');
-        const chunks = doc.querySelector<HTMLElement>('.source-doc-chunks');
-        if (chunks) {
-            chunks.hidden = false;
-            chunks.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
-                c.hidden = false;
-            });
-        }
+    forEachDoc(panelContent, function(doc) {
+        setDocExpanded(doc, true);
     });
     applyActiveHighlight(panelContent);
     updateToggleAllButton();
@@ -176,10 +167,8 @@ function showAllSources(): void {
 function collapseAllSources(): void {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
-    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
-        doc.classList.remove('expanded');
-        const chunks = doc.querySelector<HTMLElement>('.source-doc-chunks');
-        if (chunks) chunks.hidden = true;
+    forEachDoc(panelContent, function(doc) {
+        setDocExpanded(doc, false);
     });
     updateToggleAllButton();
 }

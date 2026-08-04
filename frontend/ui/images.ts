@@ -4,6 +4,7 @@ import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
 import type {ConversationImageReference} from '../api/conversations.ts';
 import {getImageAdmissionPolicy, ImageReadAdmissionController} from './image_policy.ts';
+import {closestElement, wrapTabFocus} from '../lib/dom.ts';
 
 const SAFE_DATA_IMAGE_SRC_RE = /^data:image\/(?:avif|bmp|gif|jpeg|jpg|png|webp);base64,[a-z0-9+/=]+$/i;
 const pendingImages: PendingImage[] = [];
@@ -38,10 +39,6 @@ type LightboxElement = HTMLDivElement & {
     __lightboxNext?: HTMLButtonElement;
     __lightboxImg?: HTMLImageElement;
 };
-
-function eventElement(event: Event): Element | null {
-    return event.target instanceof Element ? event.target : null;
-}
 
 export function addImage(file: File): void {
     imageAdmission.admit(file);
@@ -235,19 +232,11 @@ function _collectGalleryImages(): string[] {
     return srcs;
 }
 
-function _currentGalleryIndex(currentSrc: string): number {
-    const images = _collectGalleryImages();
-    for (let i = 0; i < images.length; i++) {
-        if (images[i] === currentSrc) return i;
-    }
-    return -1;
-}
-
 function _updateNavButtons(box: LightboxElement): void {
     if (!box || !box.classList.contains(lightboxStyles.open)) return;
     const currentSrc = box.getAttribute('data-current-src') || '';
     const images = _collectGalleryImages();
-    const idx = _currentGalleryIndex(currentSrc);
+    const idx = images.indexOf(currentSrc);
     const prev = box.__lightboxPrev;
     const next = box.__lightboxNext;
     if (images.length <= 1) {
@@ -279,7 +268,7 @@ function _navigateLightbox(direction: number): void {
     const currentSrc = box.getAttribute('data-current-src') || '';
     const images = _collectGalleryImages();
     if (images.length <= 1) return;
-    const idx = _currentGalleryIndex(currentSrc);
+    const idx = images.indexOf(currentSrc);
     if (idx < 0) return;
     let newIdx = idx + direction;
     if (newIdx < 0) newIdx = images.length - 1;
@@ -337,7 +326,7 @@ function ensureLightbox(): LightboxElement {
             closeLightbox();
             return;
         }
-        const target = eventElement(e);
+        const target = e.target instanceof Element ? e.target : null;
         if (target?.closest('.' + lightboxStyles.imageLightboxPrev)) {
             _navigateLightbox(-1);
             return;
@@ -382,7 +371,7 @@ export function closeLightbox(): void {
 
 export function setupImageLightbox(): void {
     document.addEventListener('click', function(e) {
-        const item = eventElement(e)?.closest('[data-action="open-lightbox"]');
+        const item = closestElement(e.target, '[data-action="open-lightbox"]');
         if (!item) return;
         const src = _getLightboxImageSrc(item);
         if (!src) return;
@@ -391,7 +380,7 @@ export function setupImageLightbox(): void {
     });
     document.addEventListener('keydown', function(e) {
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const item = eventElement(e)?.closest('[data-action="open-lightbox"]');
+        const item = closestElement(e.target, '[data-action="open-lightbox"]');
         if (!item) return;
         e.preventDefault();
         const src = _getLightboxImageSrc(item);
@@ -416,18 +405,9 @@ export function setupImageLightbox(): void {
                 box.focus();
                 return;
             }
-            const first = focusables[0];
-            const last = focusables[focusables.length - 1];
-            const active = document.activeElement;
-            if (e.shiftKey && active === first) {
+            if (!wrapTabFocus(focusables, e) && !box.contains(document.activeElement)) {
                 e.preventDefault();
-                last.focus();
-            } else if (!e.shiftKey && active === last) {
-                e.preventDefault();
-                first.focus();
-            } else if (!box.contains(active)) {
-                e.preventDefault();
-                first.focus();
+                focusables[0].focus();
             }
         }
     }, true);

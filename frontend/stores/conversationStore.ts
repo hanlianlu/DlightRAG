@@ -125,7 +125,6 @@ export class ConversationStore extends Store {
     this.#history = history;
     this.#answerReady = true;
     this.upsertSummary(history.conversation);
-    this.emit('conversationHistoryChanged', {history});
     return true;
   }
 

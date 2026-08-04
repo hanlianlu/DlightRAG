@@ -50,24 +50,6 @@ body.conversation-drawer-open {
     --conversation-top-row-height: calc(var(--size-button) + (2 * var(--space-tight)));
 }
 
-/* === Context Window Indicator === */
-
-.out-of-context {
-    opacity: 0.4;
-    transition: opacity 0.3s ease;
-}
-
-.context-divider {
-    text-align: center;
-    font-size: var(--font-size-caption);
-    color: var(--color-text-subtle);
-    padding: var(--space-tight) 0;
-    margin: var(--space-component) 0;
-    border-top: 1px dashed var(--color-text-subtle);
-    letter-spacing: 0;
-    opacity: 0.7;
-}
-
 /* === Panel Resize Handle === */
 
 .panel-resize-handle {
@@ -248,43 +230,8 @@ body.conversation-drawer-open {
     50% { opacity: 1; }
 }
 
-.streaming-dot {
-    display: inline-block;
-    width: var(--space-tight);
-    height: var(--space-tight);
-    background: var(--color-progress-fill);
-    border-radius: 50%;
-    animation: pulse 1.2s ease-in-out infinite;
-}
-
 mjx-container {
     color: inherit;
-}
-
-.streaming-dot.progress-phase {
-    width: auto;
-    height: auto;
-    background: none;
-    border-radius: 0;
-    animation: none;
-    font-size: 0.85rem;
-    color: var(--color-text-muted);
-}
-
-.streaming-dot.progress-phase::before {
-    content: attr(data-phase);
-}
-
-.streaming-dot.progress-phase::after {
-    content: '';
-    display: inline-block;
-    width: 5px;
-    height: 5px;
-    background: var(--color-progress-fill);
-    border-radius: 50%;
-    margin-left: var(--space-tight);
-    vertical-align: middle;
-    animation: pulse 1.2s ease-in-out infinite;
 }
 
 /* === Toast === */

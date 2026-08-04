@@ -13,13 +13,6 @@ const MATHJAX_SRC = MATHJAX_ROOT + '/tex-mml-svg.js';
 
 let loading = false;
 
-export function renderMath(container: Element): void {
-    if (!window.MathJax || !window.MathJax.typesetPromise) return;
-    window.MathJax.typesetPromise([container]).catch(function () {
-        // MathJax may fail on genuinely malformed input; ignore.
-    });
-}
-
 function configureMathJax(): void {
     if (window.MathJax) return;
     window.MathJax = {

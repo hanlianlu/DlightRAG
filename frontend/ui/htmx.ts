@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {sanitizeHtml} from '../lib/safe_html.ts';
-import {renderMath} from './mathjax.ts';
+import {renderMath} from '../lib/math.ts';
 
 function htmxEvent(event: Event): HTMXEvent {
     return event as HTMXEvent;

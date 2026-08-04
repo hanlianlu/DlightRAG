@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {renderMessageImages} from '../ui/images.ts';
-import {renderMath} from '../ui/mathjax.ts';
+import {renderMath} from './math.ts';
 import {renderDiagrams} from '../ui/mermaid.ts';
 import {createDocumentChip} from './document_chip.ts';
 import {answerErrorMessage, notifyAnswerWarning} from './errors.ts';
