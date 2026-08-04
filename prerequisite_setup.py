@@ -46,27 +46,36 @@ class ProviderSpec:
     base_url: str | None  # canonical default; None => native (no base_url)
     requires_url: bool = False  # user MUST supply (Azure / Other, tenant-specific)
     requires_key: bool = True
+    default_model: str = ""  # "" => no safe default; the user must name the model
 
 
 # LLM roles: openai-compatible => provider "openai" + base_url; else native.
+# Azure and "Other" get no default model: the name is the caller's own deployment.
 PROVIDERS_LLM: dict[str, ProviderSpec] = {
-    "OpenAI": ProviderSpec("openai", "https://api.openai.com/v1"),
-    "DeepSeek": ProviderSpec("openai", "https://api.deepseek.com"),
-    "OpenRouter": ProviderSpec("openai", "https://openrouter.ai/api/v1"),
-    "Anthropic": ProviderSpec("anthropic", None),
-    "Gemini": ProviderSpec("gemini", None),
+    "OpenAI": ProviderSpec("openai", "https://api.openai.com/v1", default_model="gpt-5.6-terra"),
+    "DeepSeek": ProviderSpec(
+        "openai", "https://api.deepseek.com", default_model="deepseek-v4-flash"
+    ),
+    "OpenRouter": ProviderSpec(
+        "openai", "https://openrouter.ai/api/v1", default_model="z-ai/glm-5.2"
+    ),
+    "Anthropic": ProviderSpec("anthropic", None, default_model="claude-sonnet-5"),
+    "Gemini": ProviderSpec("gemini", None, default_model="gemini-3.6-flash"),
     "Azure OpenAI": ProviderSpec("openai", None, requires_url=True),
     "Other (OpenAI-compatible)": ProviderSpec(
         "openai", None, requires_url=True, requires_key=False
     ),
 }
 
-# Embedding providers.
+# Embedding providers. Only multimodal models get a default: a text-only default
+# would silently switch off fused visual retrieval (see EMBEDDING_MODALITY_NOTE).
 PROVIDERS_EMBED: dict[str, ProviderSpec] = {
-    "Voyage": ProviderSpec("voyage", "https://api.voyageai.com/v1"),
+    "Voyage": ProviderSpec(
+        "voyage", "https://api.voyageai.com/v1", default_model="voyage-multimodal-3.5"
+    ),
     "OpenAI": ProviderSpec("openai_compatible", "https://api.openai.com/v1"),
     "Gemini": ProviderSpec("gemini", None),
-    "Jina": ProviderSpec("jina", "https://api.jina.ai/v1"),
+    "Jina": ProviderSpec("jina", "https://api.jina.ai/v1", default_model="jina-embeddings-v4"),
     "Azure OpenAI": ProviderSpec("openai_compatible", None, requires_url=True),
     "Ollama (local)": ProviderSpec("ollama", "http://localhost:11434", requires_key=False),
     "Other (OpenAI-compatible)": ProviderSpec(
@@ -80,16 +89,17 @@ EMBED_DIMS: dict[str, int] = {
     "voyage-3.5": 1024,
     "text-embedding-3-large": 3072,
     "text-embedding-3-small": 1536,
+    "jina-embeddings-v4": 2048,
     "jina-embeddings-v3": 1024,
 }
 
-# Rerank menu label -> (strategy, needs its own API key).
-RERANK_CHOICES: dict[str, tuple[str, bool]] = {
-    "Reuse my LLM": ("chat_llm_reranker", False),
-    "Voyage": ("voyage_reranker", True),
-    "Jina": ("jina_reranker", True),
-    "Cohere": ("cohere_reranker", True),
-    "Azure Cohere": ("azure_cohere", True),
+# Rerank menu label -> (strategy, needs its own API key, default model).
+RERANK_CHOICES: dict[str, tuple[str, bool, str]] = {
+    "Reuse my LLM": ("chat_llm_reranker", False, ""),
+    "Voyage": ("voyage_reranker", True, "rerank-2.5-lite"),
+    "Jina": ("jina_reranker", True, ""),
+    "Cohere": ("cohere_reranker", True, ""),
+    "Azure Cohere": ("azure_cohere", True, ""),
 }
 
 LLM_ROLE_ENV_KEYS: dict[str, str] = {
@@ -123,8 +133,11 @@ def resolve_embedding_choice(
 
 
 def resolve_rerank_choice(choice: str) -> tuple[dict, str | None]:
-    strategy, needs_key = RERANK_CHOICES[choice]
-    return {"strategy": strategy}, ("DLIGHTRAG_RERANK__API_KEY" if needs_key else None)
+    strategy, needs_key, model = RERANK_CHOICES[choice]
+    block: dict = {"strategy": strategy}
+    if model:
+        block["model"] = model
+    return block, ("DLIGHTRAG_RERANK__API_KEY" if needs_key else None)
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +532,9 @@ def _ask_model(
 ) -> tuple[str, str, str | None, str | None]:
     name = prompter.select(f"{role_label} provider", list(providers))
     spec = providers[name]
-    model = _ask_required(lambda: prompter.text(f"{role_label} model name (required)"))
+    model = _ask_required(
+        lambda: prompter.text(f"{role_label} model name (required)", default=spec.default_model)
+    )
     if spec.requires_url:
         base_url = _ask_required(
             lambda: prompter.text(f"{role_label} base URL (required for {name})")
@@ -571,6 +586,7 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
                 env_values[LLM_ROLE_ENV_KEYS[role]] = rk
             llm_roles[role] = block
 
+    console.print(EMBEDDING_MODALITY_NOTE)
     ename, emodel, ebase, ekey = _ask_model(prompter, PROVIDERS_EMBED, "Embedding")
     embed_block, embed_env = resolve_embedding_choice(ename, model=emodel, base_url=ebase)
     if embed_block["dim"] == 0:
@@ -654,6 +670,15 @@ MODEL_MODE_MINIMUM = "Minimum · one LLM + one embedding"
 MODEL_MODE_CUSTOM = "Custom · separate extraction/keyword models"
 MODEL_MODE_CHOICES = [MODEL_MODE_MINIMUM, MODEL_MODE_CUSTOM]
 MODEL_MODE_PROMPT = "Model setup mode · 模型配置模式"
+
+# Shown before the embedding provider list: the choice silently decides whether
+# fused visual retrieval is available at all.
+EMBEDDING_MODALITY_NOTE = (
+    "[dim]A multimodal embedding model (e.g. Voyage voyage-multimodal-3.5, "
+    "Jina jina-embeddings-v4) lets DlightRAG embed charts and diagrams as fused "
+    "text+image vectors. A text-only model still works, but visual evidence is then "
+    "retrieved through its VLM description alone.[/dim]"
+)
 
 MODELS_OVERWRITE_CONFIRM = (
     "Overwrite your current model settings and API keys with these answers? · "

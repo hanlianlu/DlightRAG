@@ -88,16 +88,30 @@ def test_rerank_reuse_llm_needs_no_key(wiz):
 
 
 def test_ask_model_reprompts_for_required_values(wiz):
+    # Azure has no default model and demands its own URL, so every answer is required.
     prompter = _ScriptedPrompter(
         [
-            "DeepSeek",
+            "Azure OpenAI",
             "",
-            "deepseek-v4-flash",
+            "gpt-4o",
             "",
+            "https://x.openai.azure.com/v1",
             "",
             "sk-valid",
         ]
     )
+
+    assert wiz._ask_model(prompter, wiz.PROVIDERS_LLM, "LLM") == (
+        "Azure OpenAI",
+        "gpt-4o",
+        "https://x.openai.azure.com/v1",
+        "sk-valid",
+    )
+
+
+def test_ask_model_accepts_provider_default_model_and_url(wiz):
+    # Empty answers mean "keep what you were shown" for a known vendor.
+    prompter = _ScriptedPrompter(["DeepSeek", "", "", "sk-valid"])
 
     assert wiz._ask_model(prompter, wiz.PROVIDERS_LLM, "LLM") == (
         "DeepSeek",
@@ -105,6 +119,26 @@ def test_ask_model_reprompts_for_required_values(wiz):
         "https://api.deepseek.com",
         "sk-valid",
     )
+
+
+def test_embedding_defaults_are_multimodal_only(wiz):
+    """A text-only default would silently disable fused visual retrieval."""
+    defaults = {
+        name: spec.default_model for name, spec in wiz.PROVIDERS_EMBED.items() if spec.default_model
+    }
+    assert defaults == {
+        "Voyage": "voyage-multimodal-3.5",
+        "Jina": "jina-embeddings-v4",
+    }
+    # Every embedding default must carry a known dim, or the wizard still asks for it.
+    assert all(wiz.EMBED_DIMS.get(model) for model in defaults.values())
+
+
+def test_tenant_specific_providers_have_no_default_model(wiz):
+    for providers in (wiz.PROVIDERS_LLM, wiz.PROVIDERS_EMBED):
+        for name, spec in providers.items():
+            if spec.requires_url:
+                assert spec.default_model == "", name
 
 
 def test_ask_model_reprompts_for_required_custom_url(wiz):
