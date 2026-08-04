@@ -498,6 +498,7 @@ def _parser_config_fingerprint(config: DlightragConfig, engine: str) -> str:
     elif engine == "docling" and config.parser_sidecars.docling is not None:
         docling = config.parser_sidecars.docling
         payload["endpoint"] = normalized_endpoint_fingerprint(docling.endpoint)
+        payload["code_formula_preset"] = docling.code_formula_preset
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode()).hexdigest()
 

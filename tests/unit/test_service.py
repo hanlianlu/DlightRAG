@@ -835,7 +835,7 @@ class TestRAGServiceLightRAGMainPath:
         )
         monkeypatch.setattr(
             "dlightrag.core._lightrag_patches.apply",
-            lambda: events.append("patches"),
+            lambda **_kwargs: events.append("patches"),
         )
         monkeypatch.setattr(
             "lightrag.parser.routing.validate_parser_routing_config",

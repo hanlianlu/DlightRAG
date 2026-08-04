@@ -314,6 +314,9 @@ class DoclingSidecarConfig(BaseModel):
     # Off by default, matching LightRAG: transcription needs a code/formula model
     # the deployment must have, and it materially slows parsing.
     do_formula_enrichment: bool = False
+    # Unset sends no preset, leaving LightRAG's request untouched. Setting it also
+    # requires the matching docling-serve setting; see docs/configuration.md.
+    code_formula_preset: str | None = None
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
 

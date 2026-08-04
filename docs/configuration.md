@@ -90,6 +90,7 @@ parser_sidecars:
   docling:
     endpoint: http://docling:5001
     do_formula_enrichment: false
+    # code_formula_preset: granite_docling
 ```
 
 `parser_sidecars.docling.do_formula_enrichment` transcribes detected formula
@@ -97,16 +98,27 @@ regions. Docling always detects them during layout, but leaves their text empty
 unless this is on, so a formula-heavy corpus loses its mathematics by default.
 It costs parse time and requires the deployment to have a code/formula model.
 
-Which model transcribes them is the docling-serve operator's choice, not a
-DlightRAG setting. DlightRAG sends the `default` preset alias, which
-docling-serve resolves through `DOCLING_SERVE_DEFAULT_CODE_FORMULA_PRESET`. Set
-that on the parser service to match its accelerator: the stock model has no MLX
-engine, so an Apple Silicon host must point the alias at an MLX-capable preset
-such as `granite_docling` (and list it in
-`DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS`) or the parse fails. Because the
-wire value is a constant, repointing the alias does not invalidate LightRAG's
-Docling bundle cache; delete and re-ingest the affected documents after changing
-it.
+Which model transcribes them is a joint decision with the parser service, and
+`parser_sidecars.docling.code_formula_preset` is how DlightRAG states its half.
+Leaving it unset sends no preset field, exactly like LightRAG, so a deployment
+that never sets it cannot be broken by this setting. Setting it requires one
+matching setting on docling-serve, in one of two styles:
+
+| `code_formula_preset` | docling-serve setting | Use when |
+| --- | --- | --- |
+| `default` | `DOCLING_SERVE_DEFAULT_CODE_FORMULA_PRESET=<real id>` | One DlightRAG config serves hosts with different accelerators |
+| `granite_docling` | `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS=["default","granite_docling"]` | The model should be named in DlightRAG config |
+
+The server setting is not optional in either style. docling-serve ships
+`default_code_formula_preset="default"` while docling registers only
+`codeformulav2` and `granite_docling`, so the stock alias resolves to a preset
+that does not exist and the request fails with a `KeyError`; a concrete id that
+is not allow-listed is rejected as not allowed. The value must also suit the
+accelerator: `codeformulav2` carries only a Transformers engine, so an Apple
+Silicon host needs `granite_docling`, which carries both MLX and Transformers.
+Because the wire value is a constant, repointing it does not invalidate
+LightRAG's Docling bundle cache; delete and re-ingest the affected documents
+after changing it.
 
 Both external parser clients poll every 5 seconds for at most 1440 attempts, a
 two-hour wait budget. **The parser service's HTTP keep-alive must exceed that

@@ -119,6 +119,10 @@ parser_sidecars:
   ## Use http://docling:5001 instead when running the compose `docling` profile.
   # docling:
   #   endpoint: http://host.docker.internal:5001
+  #   ## Transcribe formulas. Needs code_formula_preset plus the matching
+  #   ## docling-serve setting; see docs/configuration.md.
+  #   do_formula_enrichment: true
+  #   code_formula_preset: granite_docling
 
 # ─────────────────────────────────────────────────────────────────
 # Product Schema

@@ -6,10 +6,10 @@ from typing import Any
 from dlightrag.core.ingestion.docling_options import apply_docling_code_formula_preset
 
 
-def _client(*, do_formula_enrichment: bool) -> Any:
+def _client(*, do_formula_enrichment: bool, preset: str | None = "granite_docling") -> Any:
     from lightrag.parser.external.docling.client import DoclingRawClient
 
-    apply_docling_code_formula_preset()
+    apply_docling_code_formula_preset(preset)
     client = DoclingRawClient.__new__(DoclingRawClient)
     client.do_ocr = True
     client.force_ocr = False
@@ -20,19 +20,23 @@ def _client(*, do_formula_enrichment: bool) -> Any:
     return client
 
 
-def test_preset_alias_sent_only_when_enrichment_is_on() -> None:
+def test_configured_preset_sent_only_when_enrichment_is_on() -> None:
     on = _client(do_formula_enrichment=True)._build_multipart_data()
     off = _client(do_formula_enrichment=False)._build_multipart_data()
 
-    assert on["code_formula_preset"] == "default"
+    assert on["code_formula_preset"] == "granite_docling"
     assert "code_formula_preset" not in off
+
+
+def test_no_configured_preset_installs_no_patch() -> None:
+    assert apply_docling_code_formula_preset(None) is False
 
 
 def test_patch_adds_one_field_and_is_idempotent() -> None:
     from lightrag.parser.external.docling.client import DoclingRawClient
 
     client = _client(do_formula_enrichment=True)
-    assert apply_docling_code_formula_preset() is False
+    assert apply_docling_code_formula_preset("granite_docling") is False
 
     original = getattr(DoclingRawClient._build_multipart_data, "_dlightrag_original", None)
     assert original is not None, "Docling preset patch did not install"

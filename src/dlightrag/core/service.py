@@ -598,7 +598,10 @@ class RAGService:
         self.config.apply_lightrag_sidecar_env()
         self.config.apply_lightrag_runtime_env(force=True)
         validate_parser_routing_config(self.config.parser_rules)
-        apply_lightrag_patches()
+        docling = self.config.parser_sidecars.docling
+        apply_lightrag_patches(
+            docling_code_formula_preset=docling.code_formula_preset if docling else None
+        )
         await self._do_initialize_unified()
 
     async def _do_initialize_unified(self) -> None:

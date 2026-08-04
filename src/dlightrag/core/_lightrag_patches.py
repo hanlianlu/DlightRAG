@@ -24,6 +24,10 @@ so they reach the drawing/VLM sidecar path instead of being dropped;
 extraction, BM25, and citations. LightRAG already removes printed page-number
 items.
 
+Docling code/formula preset: LightRAG sends no preset field, so the parser
+service cannot be told which model transcribes formulas. The patch forwards the
+configured preset and is installed only when one is configured.
+
 Keep this module small and delete patches as upstream covers them.
 
 Patches are:
@@ -46,7 +50,7 @@ logger = logging.getLogger(__name__)
 PatchName = Literal["configure_age", "execute"]
 
 
-def apply() -> None:
+def apply(*, docling_code_formula_preset: str | None = None) -> None:
     """Apply all LightRAG patches. Idempotent."""
     applied = []
     if _patch_configure_age():
@@ -59,7 +63,7 @@ def apply() -> None:
         applied.append("mineru_content_list_hygiene")
     from dlightrag.core.ingestion.docling_options import apply_docling_code_formula_preset
 
-    if apply_docling_code_formula_preset():
+    if apply_docling_code_formula_preset(docling_code_formula_preset):
         applied.append("docling_code_formula_preset")
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
