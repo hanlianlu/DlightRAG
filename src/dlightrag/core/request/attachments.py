@@ -356,7 +356,6 @@ class _AttachmentResolution:
     parse_engine: str
     process_options: str
     parser_signature: str
-    force_reparse: bool
     chunk_signature: str = ""
 
 
@@ -477,12 +476,11 @@ class _ParseOwnerShim:
         return None
 
 
-def _parser_config_fingerprint(config: DlightragConfig, engine: str) -> tuple[str, bool]:
+def _parser_config_fingerprint(config: DlightragConfig, engine: str) -> str:
     payload: dict[str, Any] = {
         "contract_version": _COMPOSER_PARSER_CONTRACT_VERSION,
         "engine": engine,
     }
-    force_reparse = False
     if engine == "mineru" and config.parser_sidecars.mineru is not None:
         mineru = config.parser_sidecars.mineru
         endpoint = (
@@ -498,13 +496,11 @@ def _parser_config_fingerprint(config: DlightragConfig, engine: str) -> tuple[st
         )
         if mineru.api_mode == "local":
             payload["backend"] = mineru.backend
-        force_reparse = mineru.force_reparse
     elif engine == "docling" and config.parser_sidecars.docling is not None:
         docling = config.parser_sidecars.docling
         payload["endpoint"] = normalized_endpoint_fingerprint(docling.endpoint)
-        force_reparse = docling.force_reparse
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode()).hexdigest(), force_reparse
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _resolve_attachment_parser(
@@ -522,13 +518,12 @@ def _resolve_attachment_parser(
         Path(filename), parser_rules=parser_rules, require_external_endpoint=False
     )
     parse_engine = encode_parse_engine(directives.engine, directives.engine_params)
-    config_fingerprint, force_reparse = _parser_config_fingerprint(config, directives.engine)
+    config_fingerprint = _parser_config_fingerprint(config, directives.engine)
     return _AttachmentResolution(
         engine=directives.engine,
         parse_engine=parse_engine,
         process_options=directives.process_options,
         parser_signature=(f"{parse_engine}:{directives.process_options}:cfg-{config_fingerprint}"),
-        force_reparse=force_reparse,
     )
 
 
@@ -1569,17 +1564,15 @@ class ComposerDocumentService:
         resolution = self._resolve_attachment(filename, trace)
         if resolution is None:
             return ParsedAttachmentBundle(chunks=[], evidence_mode="full"), trace.as_dict()
-        cached = None
-        if not resolution.force_reparse:
-            cached = await self._aload_cached_bundle(
-                principal_id=principal_id,
-                conversation_id=conversation_id,
-                attachment_id=attachment_id,
-                filename=filename,
-                content_sha256=content_sha256,
-                resolution=resolution,
-                trace=trace,
-            )
+        cached = await self._aload_cached_bundle(
+            principal_id=principal_id,
+            conversation_id=conversation_id,
+            attachment_id=attachment_id,
+            filename=filename,
+            content_sha256=content_sha256,
+            resolution=resolution,
+            trace=trace,
+        )
         if cached is not None:
             self._restore_cached_trace(cached, trace)
             bundle = cached

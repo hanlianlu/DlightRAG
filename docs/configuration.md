@@ -81,9 +81,6 @@ parser_sidecars:
     local_endpoint: http://host.docker.internal:8210
     language: ch
     backend: hybrid-engine
-    force_reparse: false
-    poll_interval_seconds: 5
-    max_polls: 1440
     auxiliary_block_policy: conservative
 ```
 
@@ -94,9 +91,6 @@ parser_sidecars:
   docling:
     endpoint: http://docling:5001
     do_formula_enrichment: false
-    force_reparse: false
-    poll_interval_seconds: 5
-    max_polls: 1440
 ```
 
 `parser_sidecars.docling.do_formula_enrichment` transcribes detected formula
@@ -112,13 +106,19 @@ engine, so an Apple Silicon host must point the alias at an MLX-capable preset
 such as `granite_docling` (and list it in
 `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS`) or the parse fails. Because the
 wire value is a constant, repointing the alias does not invalidate LightRAG's
-Docling bundle cache; re-parse with `force_reparse` after changing it.
+Docling bundle cache; delete and re-ingest the affected documents after changing
+it.
 
 Both external parser clients poll every 5 seconds for at most 1440 attempts, a
-two-hour wait budget. `force_reparse` is an exceptional recovery switch: leave
-it false during normal operation; enable it temporarily only when a parser fix
-or service upgrade must replace a structurally valid but semantically wrong raw
-bundle. OCR, formula enrichment, output formats, referenced images, raw-bundle
+two-hour wait budget. **The parser service's HTTP keep-alive must exceed that
+interval.** Both clients reuse a pooled connection, so when the server's idle
+timeout equals the poll interval every poll races the server's connection close
+and a long parse eventually dies with `Server disconnected without sending a
+response` — while the parser keeps working, unaware. Uvicorn defaults to 5
+seconds, exactly the poll interval; `scripts/mineru/sitecustomize.py` widens the
+local MinerU sidecar to 9. A parser service DlightRAG does not launch must be
+configured the same way (docling-serve: `--timeout-keep-alive`). OCR, formula
+enrichment, output formats, referenced images, raw-bundle
 validation, and retry semantics remain owned by LightRAG and the parser service. The optional local
 profile starts with `docker compose --profile docling up -d`; an external
 deployment supplies its own reachable endpoint. Native DlightRAG processes use

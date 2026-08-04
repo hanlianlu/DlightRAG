@@ -284,10 +284,11 @@ class MinerUSidecarConfig(BaseModel):
     # Pin MinerU's canonical default instead of inheriting LightRAG's legacy alias.
     # Set ``pipeline`` explicitly for MinerU's non-VLM OCR path.
     backend: MinerULocalBackend = "hybrid-engine"
-    force_reparse: bool = False
 
     # Both parser clients use a five-second interval and a two-hour wait budget.
-    # This covers serialized, image-dense documents without high-frequency polling.
+    # The sidecar's HTTP keep-alive must exceed this interval, or an idle pooled
+    # connection is closed exactly as the next poll reuses it. See
+    # scripts/mineru/sitecustomize.py.
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
 
@@ -303,7 +304,6 @@ class MinerUSidecarConfig(BaseModel):
         "local_endpoint": "MINERU_LOCAL_ENDPOINT",
         "language": "MINERU_LANGUAGE",
         "backend": "MINERU_LOCAL_BACKEND",
-        "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
         "poll_interval_seconds": "MINERU_POLL_INTERVAL_SECONDS",
         "max_polls": "MINERU_MAX_POLLS",
     }
@@ -318,14 +318,12 @@ class DoclingSidecarConfig(BaseModel):
     # Off by default, matching LightRAG: transcription needs a code/formula model
     # the deployment must have, and it materially slows parsing.
     do_formula_enrichment: bool = False
-    force_reparse: bool = False
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
 
     _ENV_MAP: ClassVar[dict[str, str]] = {
         "endpoint": "DOCLING_ENDPOINT",
         "do_formula_enrichment": "DOCLING_DO_FORMULA_ENRICHMENT",
-        "force_reparse": "LIGHTRAG_FORCE_REPARSE_DOCLING",
         "poll_interval_seconds": "DOCLING_POLL_INTERVAL_SECONDS",
         "max_polls": "DOCLING_MAX_POLLS",
     }
@@ -1448,12 +1446,7 @@ class DlightragConfig(BaseSettings):
             config_objects.append(docling)
         for config_obj in config_objects:
             for field_name, env_name in config_obj._ENV_MAP.items():
-                value = getattr(config_obj, field_name)
-                # force_reparse=False → don't emit the LightRAG env var
-                # (LightRAG defaults to not force-reparsing on its own)
-                if field_name == "force_reparse":
-                    value = True if value else None
-                raw[env_name] = value
+                raw[env_name] = getattr(config_obj, field_name)
         rendered: dict[str, str] = {}
         for key, value in raw.items():
             text = self._env_value(value)

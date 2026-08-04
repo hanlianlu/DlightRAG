@@ -42,13 +42,38 @@ leaves empty — at roughly five times the parse time. The effort is a hardcoded
 constant with no environment override, but the API's ``effort`` form field
 binds it as a default at function-definition time, so rebinding the constant
 before MinerU is imported changes the server default.
+
+It also widens the HTTP keep-alive. Uvicorn closes idle connections after 5s and
+MinerU exposes no flag for it, while LightRAG's MinerU client polls a *pooled*
+connection every ``poll_interval_seconds`` (DlightRAG default: 5). The two
+deadlines coincide, so each poll is a coin flip on whether the server tears the
+connection down just as the client reuses it; httpx then raises
+``RemoteProtocolError: Server disconnected without sending a response`` and the
+whole ingest fails while MinerU keeps parsing, unaware. Longer parses poll more
+often and so fail more reliably — a ~470s hybrid/high parse gets ~94 chances.
+Holding idle connections a few seconds past the client's interval removes the
+overlap; the cost is one idle socket per client held marginally longer.
 """
 
 from functools import wraps
 
+import uvicorn.config
 from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 250_000_000
+
+# Must exceed parser_sidecars.mineru.poll_interval_seconds (DlightRAG default: 5).
+_KEEP_ALIVE_SECONDS = 9
+_uvicorn_config_init = uvicorn.config.Config.__init__
+
+
+@wraps(_uvicorn_config_init)
+def _config_with_keep_alive(self, *args, **kwargs):
+    kwargs.setdefault("timeout_keep_alive", _KEEP_ALIVE_SECONDS)
+    _uvicorn_config_init(self, *args, **kwargs)
+
+
+uvicorn.config.Config.__init__ = _config_with_keep_alive
 
 import mineru.cli.backend_options as _backend_options  # noqa: E402  # type: ignore[import-not-found]
 import mineru.utils.llm_aided as _llm_aided  # noqa: E402  # type: ignore[import-not-found]

@@ -4097,7 +4097,7 @@ def test_mineru_auxiliary_policy_invalidates_parser_cache(test_config: Any) -> N
     assert original != updated
 
 
-def test_docling_parser_resolution_tracks_endpoint_and_force_reparse(test_config: Any) -> None:
+def test_docling_parser_resolution_tracks_endpoint(test_config: Any) -> None:
     docling = test_config.parser_sidecars.model_copy(
         update={
             "mineru": None,
@@ -4114,7 +4114,6 @@ def test_docling_parser_resolution_tracks_endpoint_and_force_reparse(test_config
                     "docling": docling.docling.model_copy(
                         update={
                             "endpoint": "http://docling-b:5001",
-                            "force_reparse": True,
                         }
                     )
                 }
@@ -4130,76 +4129,6 @@ def test_docling_parser_resolution_tracks_endpoint_and_force_reparse(test_config
     )
 
     assert first.parser_signature != second.parser_signature
-    assert first.force_reparse is False
-    assert second.force_reparse is True
-
-
-async def test_force_reparse_bypasses_composer_parse_cache(
-    monkeypatch: Any,
-    test_config: Any,
-) -> None:
-    mineru = test_config.parser_sidecars.mineru
-    assert mineru is not None
-    config = test_config.model_copy(
-        update={
-            "parser_sidecars": test_config.parser_sidecars.model_copy(
-                update={"mineru": mineru.model_copy(update={"force_reparse": True})}
-            )
-        }
-    )
-    store = _SpyStore(ParsedAttachmentBundle(chunks=[text_chunk("cached")]))
-
-    @asynccontextmanager
-    async def parsed(**_kwargs: Any):
-        yield (
-            attachments.ParsedAttachmentDocument(
-                content="fresh",
-                blocks_path="",
-                parser_signature="mineru-iteP:fresh",
-            ),
-            "iteP",
-            "mineru-iteP:fresh",
-        )
-
-    monkeypatch.setattr(attachments, "parse_attachment_document", parsed)
-    monkeypatch.setattr(
-        attachments,
-        "aanalyze_composer_sidecars",
-        AsyncMock(
-            return_value=attachments.ComposerAnalysisResult(
-                attachments.ComposerAnalysisOutcome.INTENTIONALLY_DISABLED,
-                0,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        attachments,
-        "build_attachment_bundle_from_parse_result",
-        AsyncMock(return_value=ParsedAttachmentBundle(chunks=[text_chunk("fresh")])),
-    )
-    service = ComposerDocumentService(
-        lightrag=_FakeLightRAG(),
-        store=store,
-        parser_rules="*:mineru-iteP",
-        ttl_days=30,
-        robust_document_embedder=_dense_embedder(query_vector=[1.0, 0.0]),
-        direct_image_embedding_enabled=False,
-        model_bundle=SimpleNamespace(vlm_identity={}, extract_identity={}),
-        config=config,
-    )
-
-    bundle, trace = await service.achunks_for_attachment(
-        principal_id="p1",
-        conversation_id="c1",
-        attachment_id="att-1",
-        filename="report.pdf",
-        document_bytes=b"pdf",
-        content_sha256="content-v1",
-    )
-
-    assert store.load_calls == []
-    assert trace["attachment_parse_cache_hit"] is False
-    assert [chunk.chunk_id for chunk in bundle.chunks] == ["fresh"]
 
 
 if __name__ == "__main__":  # pragma: no cover

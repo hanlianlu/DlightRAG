@@ -18,8 +18,8 @@ change. The alias is only sent when enrichment is on, so deployments that leave
 it off never load a code/formula model.
 
 Caveat: because the wire value is a constant, LightRAG's Docling bundle cache
-cannot see a server-side preset change. Re-parse with ``force_reparse`` after
-repointing the alias.
+cannot see a server-side preset change. Delete and re-ingest the affected
+documents after repointing the alias.
 
 Delete this module once LightRAG forwards the preset itself.
 """
