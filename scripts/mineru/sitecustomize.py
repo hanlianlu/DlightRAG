@@ -30,6 +30,18 @@ MinerU threads a ``prompt_builder`` through ``_request_title_levels`` but its
 public ``llm_aided_title`` entry point does not expose it, so there is no
 configuration path; the builders are read from module globals at call time,
 which makes rebinding them sufficient.
+
+Finally it raises the hybrid parse effort. MinerU ships ``DEFAULT_HYBRID_EFFORT
+= "medium"``, which force-disables image/chart analysis
+(``_resolve_effective_image_analysis``) and feeds the VLM pipeline-YOLO layout
+boxes instead of letting it detect blocks itself. On dense multi-panel figures
+that leaves most figures split into per-panel crops with missing or misbound
+captions. At ``high`` the same paper yields whole figures with every caption
+correct, more extracted text overall, and chart/image content that ``medium``
+leaves empty — at roughly five times the parse time. The effort is a hardcoded
+constant with no environment override, but the API's ``effort`` form field
+binds it as a default at function-definition time, so rebinding the constant
+before MinerU is imported changes the server default.
 """
 
 from functools import wraps
@@ -38,7 +50,10 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 250_000_000
 
+import mineru.cli.backend_options as _backend_options  # noqa: E402  # type: ignore[import-not-found]
 import mineru.utils.llm_aided as _llm_aided  # noqa: E402  # type: ignore[import-not-found]
+
+_backend_options.DEFAULT_HYBRID_EFFORT = "high"
 
 _PROMPT_INPUT_ANCHOR = "Input title list:"
 _STRICT_JSON_DIRECTIVE = (
