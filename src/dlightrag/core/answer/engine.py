@@ -758,11 +758,12 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
     ) -> tuple[str, CitationIndexer]:
-        """Combine KG context + reference list + question.
+        """Combine KG context + question.
 
         Document excerpts are NOT included in the text prompt because
         they are now rendered as interleaved content blocks (with images)
-        by :meth:`_build_excerpt_blocks`.
+        by :meth:`_build_excerpt_blocks`, which is also where every
+        ``[n]`` and ``[n-m]`` marker is defined.
 
         Returns the prompt string **and** the indexer so that
         :meth:`_build_excerpt_blocks` can label inline images with their
@@ -772,11 +773,9 @@ class AnswerEngine:
         if indexer is None:
             indexer = self._build_citation_indexer(contexts)
         kg_context = self._format_kg_context(contexts, indexer=indexer)
-        ref_list = indexer.format_reference_list()
 
         prompt_parts = [
             f"## Knowledge Graph Context\n{kg_context}",
-            f"## Reference List\n{ref_list}",
             f"## Question\n{query}",
         ]
         return "\n\n".join(prompt_parts), indexer

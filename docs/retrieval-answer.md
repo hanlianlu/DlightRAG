@@ -262,7 +262,6 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
                 "type": "text",
                 "text": (
                     "## Knowledge Graph Context\n..."
-                    "\n\n## Reference List\n..."
                     "\n\n## Question\nWhat are the key findings?"
                 ),
             },
@@ -286,8 +285,12 @@ The sections are intentional:
 - Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
 - Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the answer image budget.
 - `## Knowledge Graph Context` gives entity/relationship facts, with source document tags when available.
-- `## Reference List` maps citation IDs to documents.
 - `## Question` is the actual user task and is placed last.
+
+Every citation marker is defined exactly once, on the evidence it labels: `[n]`
+on the `### Document [n]` heading and `[n-m]` on the excerpt label line. There
+is no separate reference list, so the model cannot pick a marker from a
+content-free menu without reading the excerpt it points at.
 
 Composer `att-N` labels are answer-scoped citation identities, not durable
 attachment IDs. New answer contexts and stored snapshots use these compact
@@ -327,7 +330,7 @@ budget. Pure visual chunks whose image cannot be sent are removed from the
 answer context and the packer backfills from later candidates; mixed text+image
 chunks keep their text even if the image is skipped. KG entities and
 relationships are filtered to the packed chunk ids, so citation indexes,
-reference lists, streamed contexts, and returned sources describe the material
+streamed contexts, and returned sources describe the material
 the answer model actually saw. Use `retrieve` when callers need the broader
 pre-answer retrieval set.
 
@@ -339,8 +342,12 @@ seed, then validates inline `[n]` and `[n-m]` citations against the final
 post-fusion context. The system prompt tells the model not to generate a
 reference section; the output boundary still normalizes provider drift by
 discarding generated bibliography tails and deriving `sources` deterministically
-from validated inline markers. Returned `sources` contain only cited documents
-and chunks.
+from validated inline markers. Validation has two outcomes: a marker that
+resolves to no chunk is dropped, and a `[n-m]` marker that resolves to an excerpt
+holding nothing but Markdown headings is degraded to its document marker `[n]` —
+such an excerpt states no fact, so the claim is credited to the document rather
+than to a passage the model only guessed at. Returned `sources` contain only
+cited documents and chunks.
 Answer generation also derives `answer_images` and `answer_blocks` from those
 validated cited sources before transport projection, so SDK, REST, MCP, and Web
 expose the same image registry and insertion hints without trusting

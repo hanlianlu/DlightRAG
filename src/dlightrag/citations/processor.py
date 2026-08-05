@@ -6,6 +6,7 @@ from typing import Any
 
 from .indexer import CitationIndexer
 from .parser import (
+    claimless_chunk_ids,
     clean_invalid_citations,
     extract_cited_chunks,
     strip_generated_references_section,
@@ -46,11 +47,14 @@ class CitationProcessor:
             if enriched_contexts is not None
             else self._indexer.inject_chunk_idx(contexts)
         )
+        self._claimless_chunks = claimless_chunk_ids(contexts)
 
     def process(self, answer_text: str) -> CitationResult:
         """Clean citations, extract chunks, build source references."""
         answer_body = strip_generated_references_section(answer_text)
-        cleaned = clean_invalid_citations(self._indexer, answer_body)
+        cleaned = clean_invalid_citations(
+            self._indexer, answer_body, claimless_chunks=self._claimless_chunks
+        )
         cited_chunks = extract_cited_chunks(self._indexer, cleaned)
         sources = self._filter_cited_sources(cited_chunks)
 

@@ -71,7 +71,7 @@ def test_get_max_chunk_idx():
     assert indexer.get_max_chunk_idx("999") == 0
 
 
-def test_reference_list_exposes_workspace_provenance_without_breaking_legacy_contexts():
+def test_doc_workspace_provenance_is_rebuilt_without_leaking_prior_index_state():
     indexer = CitationIndexer()
     indexer.build_index(
         [
@@ -91,12 +91,8 @@ def test_reference_list_exposes_workspace_provenance_without_breaking_legacy_con
         ]
     )
 
-    references = indexer.format_reference_list()
-
     assert indexer.get_doc_workspace("1") == "personnel"
     assert indexer.get_doc_workspace("2") is None
-    assert "[1] [workspace: personnel] report.pdf" in references
-    assert "[2] legacy.pdf" in references
 
     indexer.build_index(
         [
@@ -112,7 +108,7 @@ def test_reference_list_exposes_workspace_provenance_without_breaking_legacy_con
 
     assert indexer.get_doc_workspace("1") == "research"
     assert indexer.get_doc_workspace("2") is None
-    assert "[1] [workspace: research] rebuilt.pdf" in indexer.format_reference_list()
+    assert indexer.get_chunk_id("2", 1) is None
 
     indexer.build_index(
         [
@@ -126,10 +122,9 @@ def test_reference_list_exposes_workspace_provenance_without_breaking_legacy_con
     )
 
     assert indexer.get_doc_workspace("1") is None
-    assert "[1] rebuilt-legacy.pdf" in indexer.format_reference_list()
 
 
-def test_reference_list_keeps_page_metadata_reference_local_for_same_chunk_id() -> None:
+def test_same_chunk_id_in_two_workspaces_resolves_reference_locally() -> None:
     indexer = CitationIndexer()
     indexer.build_index(
         [
@@ -152,7 +147,7 @@ def test_reference_list_keeps_page_metadata_reference_local_for_same_chunk_id() 
         ]
     )
 
-    references = indexer.format_reference_list()
-
-    assert "[1-1] Page 3" in references
-    assert "[2-1] Page 9" in references
+    assert indexer.get_chunk_id("1", 1) == "shared-hash"
+    assert indexer.get_chunk_id("2", 1) == "shared-hash"
+    assert indexer.get_doc_workspace("1") == "legal"
+    assert indexer.get_doc_workspace("2") == "finance"

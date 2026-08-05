@@ -1,7 +1,6 @@
 """Citation index — maps [ref_id-chunk_idx] to actual chunk_ids."""
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from .utils import context_chunk_key, split_source_ids
@@ -12,10 +11,8 @@ logger = logging.getLogger(__name__)
 class CitationIndexer:
     """Bidirectional index: (ref_id, chunk_idx) <-> chunk_id.
 
-    Also stores per-chunk metadata (file_path, page_number) so that
-    :meth:`format_reference_list` can render the hierarchical reference
-    list for VLM prompts — ensuring a single source of truth for the
-    ``[ref_id-chunk_idx]`` mapping.
+    The answer prompt defines every ``[ref_id-chunk_idx]`` marker inline on the
+    excerpt it labels, so this index only has to resolve markers back to chunks.
     """
 
     def __init__(self) -> None:
@@ -23,20 +20,14 @@ class CitationIndexer:
         self._reverse: dict[str, dict[int, str]] = {}
         # chunk_id -> (ref_id, chunk_idx) for source_id lookups
         self._chunk_to_ref: dict[str, tuple[str, int]] = {}
-        # Per-ref doc metadata: ref_id -> file_name
-        self._doc_names: dict[str, str] = {}
         # Per-ref normalized workspace provenance: ref_id -> workspace ID
         self._doc_workspaces: dict[str, str] = {}
-        # Per-reference chunk metadata: (ref_id, chunk_id) -> fields.
-        self._chunk_meta: dict[tuple[str, str], dict[str, Any]] = {}
 
     def build_index(self, contexts: list[dict[str, Any]]) -> None:
         self._index.clear()
         self._reverse.clear()
         self._chunk_to_ref.clear()
-        self._doc_names.clear()
         self._doc_workspaces.clear()
-        self._chunk_meta.clear()
 
         valid_chunk_ids: set[str] = set()
         for ctx in contexts:
@@ -63,14 +54,6 @@ class CitationIndexer:
                 if chunk_id not in seen:
                     seen.add(chunk_id)
                     ordered.append(chunk_id)
-                    # Store metadata on first encounter
-                    self._chunk_meta[(ref_id, str(chunk_id))] = {
-                        "page_number": ctx.get("page_number"),
-                    }
-                # Store doc-level metadata (first chunk wins)
-                if ref_id not in self._doc_names:
-                    fp = ctx.get("file_path", "")
-                    self._doc_names[ref_id] = Path(fp).name if fp else f"Source {ref_id}"
                 workspace = str(ctx.get("_workspace") or "").strip()
                 if workspace and ref_id not in self._doc_workspaces:
                     self._doc_workspaces[ref_id] = workspace
@@ -156,41 +139,6 @@ class CitationIndexer:
                     ctx["chunk_idxs"] = idxs
             enriched.append(ctx)
         return enriched
-
-    def format_reference_list(self) -> str:
-        """Render a hierarchical reference list for VLM prompts.
-
-        Uses the same index built by :meth:`build_index`, guaranteeing
-        that ``[n-m]`` markers in the prompt map to the same chunk_ids
-        that :meth:`get_chunk_id` resolves during citation processing.
-
-        Example output::
-
-            [1] quarterly_report.pdf
-              [1-1] Page 3
-              [1-2] Page 7
-            [2] spec.pdf
-              [2-1] Page 1
-        """
-        if not self._reverse:
-            return "No reference documents available."
-
-        lines: list[str] = []
-        for ref_id in self._reverse:
-            name = self._doc_names.get(ref_id, f"Source {ref_id}")
-            workspace = self.get_doc_workspace(ref_id)
-            workspace_label = f" [workspace: {workspace}]" if workspace else ""
-            lines.append(f"[{ref_id}]{workspace_label} {name}")
-            max_idx = max(self._reverse[ref_id])
-            for idx in range(1, max_idx + 1):
-                cid = self._reverse[ref_id].get(idx)
-                if cid is None:
-                    continue
-                meta = self._chunk_meta.get((ref_id, cid), {})
-                page_number = meta.get("page_number")
-                page_label = f"Page {page_number}" if page_number else f"Chunk {idx}"
-                lines.append(f"  [{ref_id}-{idx}] {page_label}")
-        return "\n".join(lines)
 
 
 def build_citation_index(

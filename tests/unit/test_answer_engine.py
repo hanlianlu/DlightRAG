@@ -1082,15 +1082,13 @@ class TestAnswerEngineHelpers:
         prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
         assert "Knowledge Graph Context" in prompt
-        assert "Reference List" in prompt
         assert "Question" in prompt
         assert "What is revenue?" in prompt
 
     def test_build_citation_indexer(self) -> None:
         contexts = _text_contexts()
         indexer = AnswerEngine._build_citation_indexer(contexts)
-        ref_list = indexer.format_reference_list()
-        assert "report.pdf" in ref_list
+        assert indexer.get_max_chunk_idx("1") > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1261,24 +1259,18 @@ class TestBuildExcerptBlocks:
 
 
 class TestBuildUserPrompt:
-    """_build_user_prompt() excludes Document Excerpts (now in content blocks)."""
+    """_build_user_prompt() carries only KG context and the question."""
 
-    def test_prompt_excludes_excerpts_section(self) -> None:
-        """Excerpts are rendered as content blocks, not in the text prompt."""
+    def test_prompt_defers_all_evidence_and_markers_to_content_blocks(self) -> None:
         engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
         contexts = _text_contexts()
         prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
-        # Excerpts should NOT be in the text prompt (they are in content blocks now)
-        assert "Document Excerpts:" not in prompt
-        # But KG context and reference list should be present
         assert "Knowledge Graph Context" in prompt
-        assert "Reference List" in prompt
         assert "Question" in prompt
         assert "What is revenue?" in prompt
-
-    def test_prompt_contains_reference_list(self) -> None:
-        engine = AnswerEngine(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
-        contexts = _text_contexts()
-        prompt, _indexer = engine._build_user_prompt("query", contexts)
-        assert "report.pdf" in prompt
+        # Excerpts and their [n]/[n-m] markers live in content blocks only, so
+        # the model cannot pick a marker without reading the evidence.
+        assert "Document Excerpts:" not in prompt
+        assert "Reference List" not in prompt
+        assert "report.pdf" not in prompt

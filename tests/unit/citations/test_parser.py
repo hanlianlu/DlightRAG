@@ -2,6 +2,7 @@ from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.parser import (
     CITATION_PATTERN,
     DOC_CITATION_PATTERN,
+    claimless_chunk_ids,
     clean_invalid_citations,
     extract_citation_keys,
     extract_cited_chunks,
@@ -76,6 +77,36 @@ def test_clean_invalid_citations():
     assert "[1-1]" in cleaned
     assert "[1-99]" not in cleaned
     assert "[2-1]" not in cleaned
+
+
+def test_claimless_chunk_ids_spots_heading_only_excerpts():
+    contexts = [
+        {"chunk_id": "title", "content": "# Growing Like China"},
+        {"chunk_id": "nested", "content": "## A\n### B"},
+        {"chunk_id": "prose", "content": "## Key Term\nforeign-exchange reserves, 409"},
+        {"chunk_id": "hashtag", "content": "#hashtag not a heading"},
+        {"chunk_id": "figure", "content": "### Figure 1", "image_data": "iVBOR"},
+    ]
+
+    assert claimless_chunk_ids(contexts) == frozenset({"title", "nested"})
+
+
+def test_claimless_citation_is_degraded_to_its_document():
+    indexer = CitationIndexer()
+    indexer.build_index(
+        [
+            {"chunk_id": "title", "reference_id": "1", "content": "# Growing Like China"},
+            {"chunk_id": "abstract", "reference_id": "1", "content": "Firms self-finance."},
+        ]
+    )
+
+    cleaned = clean_invalid_citations(
+        indexer,
+        "China grew fast [1-1][1-2].",
+        claimless_chunks=frozenset({"title"}),
+    )
+
+    assert cleaned == "China grew fast [1][1-2]."
 
 
 def test_huge_chunk_index_stays_text_without_raising():
