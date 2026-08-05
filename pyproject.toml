@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.8.0"
+version = "1.8.1"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -30,7 +30,7 @@ dependencies = [
     # Request-local lexical retrieval for Web Composer documents.
     "bm25s>=0.3.10",
     # JSON repair for LLM output
-    "json-repair>=0.61.7",
+    "json-repair>=0.62.0",
     # LightRAG paragraph_semantic chunker fallback
     "langchain-text-splitters",
     # LightRAG GUI (graph browsing via lightrag-server)
