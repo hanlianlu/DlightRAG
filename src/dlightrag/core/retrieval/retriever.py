@@ -95,7 +95,7 @@ class UnifiedRetriever:
 
         chunk_candidate_limit = chunk_top_k or top_k
         lexical_query = bm25_query or query
-        async with metadata_filter_scope(scope):
+        async with metadata_filter_scope(scope) as filter_stats:
             lightrag_task = asyncio.create_task(
                 self._backend.aretrieve(
                     query,
@@ -156,6 +156,7 @@ class UnifiedRetriever:
         trace.update(getattr(lightrag_result, "trace", {}) or {})
         trace["bm25_enabled"] = self._bm25 is not None
         trace["bm25_query"] = lexical_query if self._bm25 is not None else None
+        trace["metadata_kg_chunks_dropped"] = filter_stats.kg_chunks_dropped
         if bm25_error is not None:
             trace["bm25_error_type"] = type(bm25_error).__name__
         trace["bm25_chunk_count"] = len(bm25_chunks)
@@ -190,13 +191,15 @@ class UnifiedRetriever:
         trace["fused_source_counts"] = fused_source_counts
         logger.info(
             "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
-            "metadata_scope=%s filter_relaxed=%s semantic_chunks=%d bm25_chunks=%d "
-            "fused_chunks=%d fused_sources=semantic_only=%d bm25_only=%d both=%d bm25_top=%s",
+            "metadata_scope=%s filter_relaxed=%s kg_chunks_dropped=%d semantic_chunks=%d "
+            "bm25_chunks=%d fused_chunks=%d "
+            "fused_sources=semantic_only=%d bm25_only=%d both=%d bm25_top=%s",
             self._bm25 is not None,
             lexical_query if self._bm25 is not None else None,
             metadata_filter_source,
             f"{len(scope.doc_ids)}doc/{scope.chunk_count}chunk" if scope is not None else "all",
             trace.get("metadata_filter_relaxed", False),
+            filter_stats.kg_chunks_dropped,
             trace["semantic_chunk_count"],
             trace["bm25_chunk_count"],
             trace["fused_chunk_count"],

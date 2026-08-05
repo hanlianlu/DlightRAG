@@ -699,6 +699,15 @@ class RAGService:
                 await filtered_vdb.ensure_doc_scope_index()
             lightrag.chunks_vdb = filtered_vdb  # type: ignore[assignment]
 
+        # Wrap text_chunks so the same scope reaches the entity/relation legs,
+        # which resolve chunks by id and never pass through chunks_vdb.
+        if lightrag.text_chunks is not None:
+            from dlightrag.core.retrieval.filtered_vdb import FilteredChunkStore
+
+            lightrag.text_chunks = FilteredChunkStore(  # type: ignore[assignment]
+                original=lightrag.text_chunks
+            )
+
         from dlightrag.core.lightrag_stores import LightRAGStores
 
         self._lightrag_stores = LightRAGStores(lightrag)

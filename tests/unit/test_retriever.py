@@ -366,3 +366,48 @@ async def test_unified_retriever_raises_semantic_error_when_bm25_is_disabled(
     assert exc_info.value is semantic_error
     assert "BM25 is disabled" in caplog.text
     assert "falling back to BM25-only" not in caplog.text
+
+
+async def test_unified_retriever_traces_kg_chunks_dropped_by_scope() -> None:
+    """The KG legs run inside the scope, so their drops must reach the trace."""
+    from dlightrag.core.retrieval.filtered_vdb import FilteredChunkStore
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    chunk_store = FilteredChunkStore(
+        original=AsyncMock(
+            get_by_ids=AsyncMock(
+                return_value=[
+                    {"id": "in", "full_doc_id": "doc-1"},
+                    {"id": "out", "full_doc_id": "doc-9"},
+                ]
+            )
+        )
+    )
+
+    async def _backend_retrieve(*args: object, **kwargs: object) -> RetrievalResult:
+        # Stands in for LightRAG's entity/relation legs resolving chunks by id.
+        await chunk_store.get_by_ids(["in", "out"])
+        return RetrievalResult(contexts={"chunks": [], "entities": [], "relationships": []})
+
+    metadata_index = AsyncMock()
+    metadata_index.query.return_value = ["doc-1"]
+    stores = AsyncMock()
+    stores.count_chunks_for_docs.return_value = 5
+    backend = AsyncMock()
+    backend.aretrieve.side_effect = _backend_retrieve
+    bm25 = AsyncMock()
+    bm25.search.return_value = []
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=metadata_index,
+        stores=stores,
+    )
+
+    result = await retriever.aretrieve(
+        "query",
+        metadata_filter=MetadataFilter(filename="x.pdf"),
+        metadata_filter_source="explicit",
+    )
+
+    assert result.trace["metadata_kg_chunks_dropped"] == 1

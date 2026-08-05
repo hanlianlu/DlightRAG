@@ -4,6 +4,7 @@
 from unittest.mock import AsyncMock
 
 from dlightrag.core.retrieval.filtered_vdb import (
+    FilteredChunkStore,
     FilteredVectorStorage,
     _active_filter,
     metadata_filter_scope,
@@ -107,3 +108,78 @@ async def test_large_candidate_pg_search_places_distance_filter_outside_cte() ->
     cte_sql, outer_sql = storage.db.sql.split("FROM nearest_results", maxsplit=1)
     assert "score > $4" not in cte_sql
     assert "score > $4" in outer_sql
+
+
+class _FakeChunkKV:
+    """Mimics PGKVStorage.get_by_ids: caller ordering preserved, None for misses."""
+
+    workspace = "default"
+
+    def __init__(self, rows: dict[str, dict[str, object]]) -> None:
+        self._rows = rows
+        self.requested: list[list[str]] = []
+
+    async def get_by_ids(self, ids: list[str]) -> list[dict[str, object] | None]:
+        self.requested.append(list(ids))
+        return [self._rows.get(chunk_id) for chunk_id in ids]
+
+
+def _chunk(chunk_id: str, doc_id: str | None) -> dict[str, object]:
+    return {"id": chunk_id, "content": chunk_id, "full_doc_id": doc_id}
+
+
+async def test_chunk_store_passes_through_without_scope() -> None:
+    kv = _FakeChunkKV({"c1": _chunk("c1", "doc-1"), "c2": _chunk("c2", "doc-2")})
+    store = FilteredChunkStore(original=kv)
+
+    rows = await store.get_by_ids(["c1", "c2"])
+
+    assert [r["id"] for r in rows if r is not None] == ["c1", "c2"]
+
+
+async def test_chunk_store_nulls_out_of_scope_rows() -> None:
+    kv = _FakeChunkKV({"c1": _chunk("c1", "doc-1"), "c2": _chunk("c2", "doc-2")})
+    store = FilteredChunkStore(original=kv)
+    scope = MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=1)
+
+    async with metadata_filter_scope(scope) as stats:
+        rows = await store.get_by_ids(["c1", "c2"])
+
+    # Positional alignment is the storage contract both KG legs zip against.
+    assert rows[0] is not None and rows[0]["id"] == "c1"
+    assert rows[1] is None
+    assert stats.kg_chunks_dropped == 1
+
+
+async def test_chunk_store_drops_rows_without_document_attribution() -> None:
+    kv = _FakeChunkKV({"c1": _chunk("c1", None)})
+    store = FilteredChunkStore(original=kv)
+
+    async with metadata_filter_scope(MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=1)):
+        rows = await store.get_by_ids(["c1"])
+
+    assert rows == [None]
+
+
+async def test_chunk_store_still_requests_every_id() -> None:
+    """Filtering must not shorten the request: callers zip results against their ids."""
+    kv = _FakeChunkKV({"c1": _chunk("c1", "doc-1"), "c2": _chunk("c2", "doc-2")})
+    store = FilteredChunkStore(original=kv)
+
+    async with metadata_filter_scope(MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=1)):
+        rows = await store.get_by_ids(["c1", "c2"])
+
+    assert kv.requested == [["c1", "c2"]]
+    assert len(rows) == 2
+
+
+async def test_chunk_store_proxies_unknown_attributes() -> None:
+    kv = _FakeChunkKV({})
+    store = FilteredChunkStore(original=kv)
+
+    assert store.workspace == "default"
+
+
+async def test_stats_stay_zero_without_scope() -> None:
+    async with metadata_filter_scope(None) as stats:
+        assert stats.kg_chunks_dropped == 0

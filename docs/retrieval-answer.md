@@ -146,10 +146,24 @@ Metadata filtering is explicit-schema first:
 - Non-empty inferred candidate sets constrain semantic search and BM25 unless
   that inferred-filter retry path is needed.
 
-For semantic search, `FilteredVectorDB` applies the candidate set before
-ranking. Empty strict candidates return immediately. Small candidate sets use
-exact vector scoring in a materialized candidate CTE; larger candidate sets
-use pgvector HNSW with iterative scan settings.
+A document scope has to reach every leg that contributes chunks, and LightRAG
+`mix` has three. The semantic leg goes through `FilteredVectorStorage`, which
+applies the candidate set before ranking: empty strict candidates return
+immediately, small candidate sets use exact vector scoring in a materialized
+candidate CTE, and larger ones use pgvector HNSW with iterative scan settings.
+The entity and relation legs never vector-search for their chunks — they resolve
+the chunk ids baked into graph nodes at ingest time by primary key — so
+`FilteredChunkStore` scopes them at the `text_chunks` lookup instead, returning
+the same `None` the storage already returns for ids it cannot resolve. Both
+wrappers read one contextvar, so ingest and delete paths run unscoped and pass
+through untouched. `metadata_kg_chunks_dropped` in the retrieval trace counts
+what the graph legs asked for and did not get.
+
+Filtering the vector lookup that *selects* those graph-referenced ids is not an
+option: LightRAG reads a short result from `chunks_vdb.get_vectors_by_ids` as
+storage corruption and falls back to an unfiltered ranking method. Scoping after
+the fact costs recall — the selection budget is still spent on out-of-scope
+chunks — but that budget is internal to LightRAG.
 
 ## Multimodal Queries
 

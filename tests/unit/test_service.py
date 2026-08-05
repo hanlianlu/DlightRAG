@@ -963,6 +963,9 @@ class TestRAGServiceLightRAGMainPath:
             await asyncio.sleep(0)
 
         assert call_order == ["verify_all"]
+        # The KG legs resolve chunks through text_chunks, so a document scope
+        # only reaches them while this wrapper is installed.
+        assert type(service._lightrag.text_chunks).__name__ == "FilteredChunkStore"
         resume_pipeline.assert_awaited_once_with()
         assert recovery_connection.unlock_calls == 1
 
