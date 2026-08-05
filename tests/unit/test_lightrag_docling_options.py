@@ -47,6 +47,22 @@ def test_patch_adds_one_field_and_is_idempotent() -> None:
     assert all(patched[key] == value for key, value in upstream.items())
 
 
+def test_preset_joins_the_bundle_cache_signature() -> None:
+    from lightrag.parser.external.docling.client import FIXED_CONSTANTS
+
+    apply_docling_code_formula_preset("granite_docling")
+
+    assert FIXED_CONSTANTS["code_formula_preset"] == "granite_docling"
+
+
+def test_do_formula_enrichment_defaults_on_like_mineru() -> None:
+    from lightrag.parser.external.mineru.cache import DEFAULT_MINERU_ENABLE_FORMULA
+
+    from dlightrag.config import DoclingSidecarConfig
+
+    assert DoclingSidecarConfig().do_formula_enrichment is DEFAULT_MINERU_ENABLE_FORMULA
+
+
 def test_do_formula_enrichment_reaches_lightrag_env() -> None:
     from dlightrag.config import DlightragConfig, DoclingSidecarConfig, ParserSidecarsConfig
 

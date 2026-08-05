@@ -312,9 +312,9 @@ class DoclingSidecarConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     endpoint: str = "http://127.0.0.1:5001"
-    # Off by default, matching LightRAG: transcription needs a code/formula model
-    # the deployment must have, and it materially slows parsing.
-    do_formula_enrichment: bool = False
+    # On to match MinerU's enable_formula, so the parser choice does not decide
+    # whether a corpus keeps its mathematics. Apple Silicon also needs a preset.
+    do_formula_enrichment: bool = True
     # Unset sends no preset, leaving LightRAG's request untouched. Setting it also
     # requires the matching docling-serve setting; see docs/configuration.md.
     code_formula_preset: str | None = None

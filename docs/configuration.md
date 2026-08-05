@@ -105,14 +105,15 @@ To use Docling instead, remove/comment the MinerU block and configure only:
 parser_sidecars:
   docling:
     endpoint: http://docling:5001
-    do_formula_enrichment: false
     # code_formula_preset: granite_docling
 ```
 
 `parser_sidecars.docling.do_formula_enrichment` transcribes detected formula
-regions. Docling always detects them during layout, but leaves their text empty
-unless this is on, so a formula-heavy corpus loses its mathematics by default.
-It costs parse time and requires the deployment to have a code/formula model.
+regions and defaults on, matching MinerU's `enable_formula`, so the parser
+choice does not decide whether a corpus keeps its mathematics. Docling detects
+formulas during layout either way but leaves their text empty when this is off,
+and LightRAG then drops the empty formula silently. Turn it off only to save
+parse time on a corpus without mathematics.
 
 `parser_sidecars.docling.code_formula_preset` names the model that transcribes
 them. Leave it unset unless the parser service runs on Apple Silicon:
@@ -123,11 +124,11 @@ them. Leave it unset unless the parser service runs on Apple Silicon:
 | MPS | `granite_docling` |
 
 `codeformulav2` ships only a Transformers engine, whose supported devices
-exclude MPS; `granite_docling` also ships an MLX engine. Naming any preset
-requires the server to allow it — the bundled `docling-serve-mps` already does,
-a stock docling-serve needs `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS`.
-Repointing the preset does not invalidate LightRAG's Docling bundle cache;
-delete and re-ingest affected documents after changing it.
+exclude MPS, so enrichment fails there without a preset. `granite_docling` also
+ships an MLX engine. Naming any preset requires the server to allow it — the
+bundled `docling-serve-mps` already does, a stock docling-serve needs
+`DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS`. Repointing it invalidates the
+Docling bundle cache, so affected documents re-parse on their own.
 
 Both external parser clients poll every 5 seconds for at most 1440 attempts, a
 two-hour wait budget. **The parser service's HTTP keep-alive must exceed that

@@ -119,9 +119,7 @@ parser_sidecars:
   ## Use http://docling:5001 instead when running the compose `docling` profile.
   # docling:
   #   endpoint: http://host.docker.internal:5001
-  #   ## Transcribe formulas. code_formula_preset is only needed on Apple
-  #   ## Silicon; see docs/configuration.md.
-  #   do_formula_enrichment: true
+  #   ## Only needed on Apple Silicon; see docs/configuration.md.
   #   # code_formula_preset: granite_docling
 
 # ─────────────────────────────────────────────────────────────────

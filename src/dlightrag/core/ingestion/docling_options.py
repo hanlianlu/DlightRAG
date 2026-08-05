@@ -13,6 +13,12 @@ Leaving the setting unset installs no patch, so the request stays exactly what
 upstream sends. Naming a preset also requires the service to allow it; see
 docs/configuration.md.
 
+The preset also joins LightRAG's fixed pipeline constants, which exist so that a
+change to the request shape invalidates every cached bundle on its own. Without
+that, a repointed preset would re-parse Web Composer attachments -- whose
+signature already covers it -- but leave workspace documents on stale
+transcriptions.
+
 Delete this module once LightRAG forwards the preset itself.
 """
 
@@ -34,7 +40,10 @@ def apply_docling_code_formula_preset(preset: str | None) -> bool:
     if not preset:
         return False
     try:
-        from lightrag.parser.external.docling.client import DoclingRawClient
+        from lightrag.parser.external.docling.client import (
+            FIXED_CONSTANTS,
+            DoclingRawClient,
+        )
     except Exception:  # pragma: no cover - defensive import guard
         return False
 
@@ -52,6 +61,9 @@ def apply_docling_code_formula_preset(preset: str | None) -> bool:
     setattr(patched_build_multipart_data, _PATCH_ATTR, True)
     patched_build_multipart_data._dlightrag_original = original  # type: ignore[attr-defined]
     DoclingRawClient._build_multipart_data = patched_build_multipart_data
+    # Both cache-signature call sites read this dict by reference; setdefault
+    # mirrors the body patch so an upstream value always wins.
+    FIXED_CONSTANTS.setdefault("code_formula_preset", preset)
     logger.info("Applied LightRAG Docling code/formula preset forwarding: %s", preset)
     return True
 
