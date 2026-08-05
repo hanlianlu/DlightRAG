@@ -83,6 +83,22 @@ parser_sidecars:
     backend: hybrid-engine
 ```
 
+`parser_sidecars.vlm` owns figure understanding, and MinerU's own image
+analysis is deliberately left off. LightRAG defaults `MINERU_LOCAL_IMAGE_ANALYSIS`
+to false and DlightRAG never sets it, so MinerU extracts each figure as a crop
+but does not analyse it; the VLM sidecar then describes that crop together with
+the surrounding text. Enabling MinerU's analysis would run a second VLM over the
+same image for roughly 58% more parse time and largely duplicate content, so
+there is no setting for it.
+
+A parse therefore emits zero `chart` blocks by design — the figures arrive as
+`image` blocks and become `drawing` chunks carrying the sidecar's description.
+That is the expected shape, not a missing feature. It does mean the whole-figure
+segmentation MinerU produces is what the sidecar sees, which is why the parse
+engine matters: the `hybrid-engine` backend at its `high` effort lets the VLM
+detect blocks itself instead of consuming precomputed layout boxes, yielding
+whole figures with correctly bound captions rather than per-panel fragments.
+
 To use Docling instead, remove/comment the MinerU block and configure only:
 
 ```yaml
