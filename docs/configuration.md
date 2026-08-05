@@ -135,10 +135,11 @@ two-hour wait budget. **The parser service's HTTP keep-alive must exceed that
 interval.** Both clients reuse a pooled connection, so when the server's idle
 timeout equals the poll interval every poll races the server's connection close
 and a long parse eventually dies with `Server disconnected without sending a
-response` — while the parser keeps working, unaware. Uvicorn defaults to 5
-seconds, exactly the poll interval; `scripts/mineru/sitecustomize.py` widens the
-local MinerU sidecar to 9. A parser service DlightRAG does not launch must be
-configured the same way (docling-serve: `--timeout-keep-alive`). OCR, formula
+response` — while the parser keeps working, unaware. docling-serve already ships
+60 seconds; MinerU inherits Uvicorn's 5, exactly the poll interval, so
+`scripts/mineru/sitecustomize.py` widens the local sidecar to the same 60. A
+parser service DlightRAG does not launch must be configured the same way
+(docling-serve: `--timeout-keep-alive`). OCR, formula
 enrichment, output formats, referenced images, raw-bundle
 validation, and retry semantics remain owned by LightRAG and the parser service. The optional local
 profile starts with `docker compose --profile docling up -d`; an external

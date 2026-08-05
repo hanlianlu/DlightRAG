@@ -51,8 +51,11 @@ connection down just as the client reuses it; httpx then raises
 ``RemoteProtocolError: Server disconnected without sending a response`` and the
 whole ingest fails while MinerU keeps parsing, unaware. Longer parses poll more
 often and so fail more reliably — a ~470s hybrid/high parse gets ~94 chances.
-Holding idle connections a few seconds past the client's interval removes the
-overlap; the cost is one idle socket per client held marginally longer.
+The value matches docling-serve, which ships ``timeout_keep_alive = 60``: both
+sidecars then behave alike, and the margin covers any sane poll interval instead
+of breaking again the moment an operator raises a knob that has no upper bound.
+The cost is one idle socket per client held longer, which a loopback sidecar
+with a single client does not notice.
 """
 
 from functools import wraps
@@ -62,8 +65,8 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 250_000_000
 
-# Must exceed parser_sidecars.mineru.poll_interval_seconds (DlightRAG default: 5).
-_KEEP_ALIVE_SECONDS = 9
+# docling-serve's own default; must exceed parser_sidecars.mineru.poll_interval_seconds.
+_KEEP_ALIVE_SECONDS = 60
 _uvicorn_config_init = uvicorn.config.Config.__init__
 
 
