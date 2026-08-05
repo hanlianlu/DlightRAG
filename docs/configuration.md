@@ -874,7 +874,7 @@ LightRAG's document status pipeline.
 ## LightRAG KG Internals
 
 ```yaml
-chunk_p_token_size: 1024
+chunk_p_token_size: 2000
 kg_chunk_pick_method: VECTOR
 max_entity_tokens: 6000
 max_relation_tokens: 8000

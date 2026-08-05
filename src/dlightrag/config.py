@@ -833,7 +833,9 @@ class DlightragConfig(BaseSettings):
 
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")
-    chunk_p_token_size: int = Field(default=1024, ge=1)
+    # LightRAG's DEFAULT_CHUNK_P_SIZE. Heading-aligned paragraph merging needs the
+    # headroom; below ~1200 the strategy degrades into premature splits.
+    chunk_p_token_size: int = Field(default=2000, ge=1)
 
     # ===== Ingestion Performance =====
     # Advanced (env-only; keep out of curated config.yaml —

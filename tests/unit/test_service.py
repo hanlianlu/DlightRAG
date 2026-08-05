@@ -671,7 +671,7 @@ class TestBuildAddonParams:
         assert result == {
             "language": "Chinese",
             "entity_type_prompt_file": "domain-entities.yaml",
-            "chunker": {"paragraph_semantic": {"chunk_token_size": 1024}},
+            "chunker": {"paragraph_semantic": {"chunk_token_size": 2000}},
         }
 
 
