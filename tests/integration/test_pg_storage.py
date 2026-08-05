@@ -123,10 +123,15 @@ class TestPGWorkspaceDiscovery:
             set_config(cfg)
 
             manager = RAGServiceManager(config=cfg)
-            workspaces = await manager.alist_workspaces()
+            try:
+                workspaces = await manager.alist_workspaces()
 
-            assert _TEST_WORKSPACE_ALPHA in workspaces
-            assert _TEST_WORKSPACE_BETA in workspaces
+                assert _TEST_WORKSPACE_ALPHA in workspaces
+                assert _TEST_WORKSPACE_BETA in workspaces
+            finally:
+                # Releases the process-global pg_pool, which is otherwise left
+                # bound to this test's event loop and dies with it.
+                await manager.aclose()
         finally:
             await _delete_test_workspaces(registry)
             await pool.close()
@@ -152,13 +157,16 @@ class TestPGWorkspaceDiscovery:
             set_config(cfg)
 
             manager = RAGServiceManager(config=cfg)
-            workspaces = await manager.alist_workspaces()
+            try:
+                workspaces = await manager.alist_workspaces()
 
-            # Should at least contain the default workspace
-            # (may contain more if table has data from other tests)
-            assert isinstance(workspaces, list)
-            assert len(workspaces) >= 1
-            assert "test_fallback_ws" in workspaces
+                # Should at least contain the default workspace
+                # (may contain more if table has data from other tests)
+                assert isinstance(workspaces, list)
+                assert len(workspaces) >= 1
+                assert "test_fallback_ws" in workspaces
+            finally:
+                await manager.aclose()
         finally:
             await _delete_test_workspaces(registry, "test-fallback-ws")
             await pool.close()
