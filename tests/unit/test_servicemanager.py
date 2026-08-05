@@ -2195,7 +2195,7 @@ async def test_rerank_vision_probe_does_not_borrow_default_key(
         "openai",
         api_key=None,
         base_url="http://host.docker.internal:9999/v1",
-        timeout=120.0,
+        timeout=240.0,
         max_retries=3,
     )
 

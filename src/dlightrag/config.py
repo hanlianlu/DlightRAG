@@ -124,7 +124,9 @@ class ModelConfig(BaseModel):
     base_url: str | None = None
     structured_output: Literal["auto", "json_schema", "json_object"] = "auto"
     temperature: float | None = Field(default=None, ge=0)
-    timeout: float = Field(default=120.0, gt=0)
+    # LightRAG's DEFAULT_LLM_TIMEOUT; the default role's value becomes its
+    # default_llm_timeout, so a lower ceiling would cut extraction calls short.
+    timeout: float = Field(default=240.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -186,7 +188,6 @@ class LLMConfig(BaseModel):
             base_url="https://openrouter.ai/api/v1",
             structured_output="json_schema",
             temperature=0.5,
-            timeout=120.0,
         )
     )
     roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)

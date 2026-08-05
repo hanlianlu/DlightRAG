@@ -89,7 +89,7 @@ class TestModelConfig:
         assert cfg.api_key is None
         assert cfg.base_url is None
         assert cfg.temperature is None
-        assert cfg.timeout == 120.0
+        assert cfg.timeout == 240.0
         assert cfg.max_retries == 3
         assert cfg.structured_output == "auto"
         assert cfg.model_kwargs == {}
@@ -296,7 +296,7 @@ class TestDlightragConfigNested:
             base_url="https://openrouter.ai/api/v1",
             structured_output="json_schema",
             temperature=0.5,
-            timeout=120.0,
+            timeout=240.0,
         )
         assert cfg.llm.roles.extract is None
         assert model_for_role(cfg, "extract") == cfg.llm.default
