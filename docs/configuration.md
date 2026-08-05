@@ -114,27 +114,20 @@ regions. Docling always detects them during layout, but leaves their text empty
 unless this is on, so a formula-heavy corpus loses its mathematics by default.
 It costs parse time and requires the deployment to have a code/formula model.
 
-Which model transcribes them is a joint decision with the parser service, and
-`parser_sidecars.docling.code_formula_preset` is how DlightRAG states its half.
-Leaving it unset sends no preset field, exactly like LightRAG, so a deployment
-that never sets it cannot be broken by this setting. Setting it requires one
-matching setting on docling-serve, in one of two styles:
+`parser_sidecars.docling.code_formula_preset` names the model that transcribes
+them. Leave it unset unless the parser service runs on Apple Silicon:
 
-| `code_formula_preset` | docling-serve setting | Use when |
-| --- | --- | --- |
-| `default` | `DOCLING_SERVE_DEFAULT_CODE_FORMULA_PRESET=<real id>` | One DlightRAG config serves hosts with different accelerators |
-| `granite_docling` | `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS=["default","granite_docling"]` | The model should be named in DlightRAG config |
+| Parser service device | `code_formula_preset` |
+| --- | --- |
+| CUDA, XPU, or CPU | Unset — Docling's built-in `codeformulav2` is used |
+| MPS | `granite_docling` |
 
-The server setting is not optional in either style. docling-serve ships
-`default_code_formula_preset="default"` while docling registers only
-`codeformulav2` and `granite_docling`, so the stock alias resolves to a preset
-that does not exist and the request fails with a `KeyError`; a concrete id that
-is not allow-listed is rejected as not allowed. The value must also suit the
-accelerator: `codeformulav2` carries only a Transformers engine, so an Apple
-Silicon host needs `granite_docling`, which carries both MLX and Transformers.
-Because the wire value is a constant, repointing it does not invalidate
-LightRAG's Docling bundle cache; delete and re-ingest the affected documents
-after changing it.
+`codeformulav2` ships only a Transformers engine, whose supported devices
+exclude MPS; `granite_docling` also ships an MLX engine. Naming any preset
+requires the server to allow it — the bundled `docling-serve-mps` already does,
+a stock docling-serve needs `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS`.
+Repointing the preset does not invalidate LightRAG's Docling bundle cache;
+delete and re-ingest affected documents after changing it.
 
 Both external parser clients poll every 5 seconds for at most 1440 attempts, a
 two-hour wait budget. **The parser service's HTTP keep-alive must exceed that
