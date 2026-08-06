@@ -130,6 +130,12 @@ ships an MLX engine. A stock docling-serve allows every preset — the
 operator has narrowed it. Repointing the preset invalidates the Docling bundle
 cache, so affected documents re-parse on their own.
 
+OCR needs no configuration. Docling's `auto` engine skips Nemotron on anything
+without CUDA and x86_64, so the CPU image always lands on RapidOCR, whose
+`PP-OCRv6_rec_small` reads Han and Latin from one 18708-character table. There
+is no second engine to route between, and `ocr_lang` never reaches the engine
+that `auto` picks.
+
 Both external parser clients poll every 5 seconds for at most 1440 attempts, a
 two-hour wait budget. **The parser service's HTTP keep-alive must exceed that
 interval.** Both clients reuse a pooled connection, so when the server's idle
