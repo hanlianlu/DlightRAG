@@ -314,6 +314,14 @@ class DoclingSidecarConfig(BaseModel):
     # On to match MinerU's enable_formula, so the parser choice does not decide
     # whether a corpus keeps its mathematics. Apple Silicon also needs a preset.
     do_formula_enrichment: bool = True
+    ocr_lang: list[str] = Field(
+        default_factory=list,
+        description=(
+            "OCR languages passed to the parser service, e.g. ['ch', 'en']. Empty defers "
+            "to the engine's own default, which is Latin-only for EasyOCR and Chinese-only "
+            "for RapidOCR — name your corpus languages when it is mixed."
+        ),
+    )
     # Unset sends no preset, leaving LightRAG's request untouched. Setting it also
     # requires the matching docling-serve setting; see docs/configuration.md.
     code_formula_preset: str | None = None
@@ -323,6 +331,7 @@ class DoclingSidecarConfig(BaseModel):
     _ENV_MAP: ClassVar[dict[str, str]] = {
         "endpoint": "DOCLING_ENDPOINT",
         "do_formula_enrichment": "DOCLING_DO_FORMULA_ENRICHMENT",
+        "ocr_lang": "DOCLING_OCR_LANG",
         "poll_interval_seconds": "DOCLING_POLL_INTERVAL_SECONDS",
         "max_polls": "DOCLING_MAX_POLLS",
     }
@@ -1362,11 +1371,13 @@ class DlightragConfig(BaseSettings):
         return kwargs
 
     @staticmethod
-    def _env_value(value: str | int | float | bool | None) -> str | None:
+    def _env_value(value: str | int | float | bool | list[str] | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, bool):
             return "true" if value else "false"
+        if isinstance(value, list):
+            return ",".join(str(item).strip() for item in value if str(item).strip()) or None
         text = str(value).strip()
         return text or None
 
@@ -1412,7 +1423,7 @@ class DlightragConfig(BaseSettings):
 
     def _lightrag_sidecar_env_map(self) -> dict[str, str]:
         """Derive shared and active-parser LightRAG env vars from typed config."""
-        raw: dict[str, str | int | float | bool | None] = {}
+        raw: dict[str, str | int | float | bool | list[str] | None] = {}
         config_objects: list[VLMSidecarConfig | MinerUSidecarConfig | DoclingSidecarConfig] = [
             self.parser_sidecars.vlm
         ]
