@@ -109,6 +109,17 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
+    migrations.append(
+        Migration(
+            "creation_date_naive_utc",
+            "Hold creation_date as UTC without a session-dependent rendering",
+            (
+                "ALTER TABLE dlightrag_doc_metadata "
+                "ALTER COLUMN creation_date TYPE TIMESTAMP "
+                "USING creation_date AT TIME ZONE 'UTC'",
+            ),
+        )
+    )
     for f in METADATA_FIELDS:
         idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
         if idx_clause is None:

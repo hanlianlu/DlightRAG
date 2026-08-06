@@ -2,7 +2,7 @@
 """Data models for multi-path retrieval."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, field_validator
@@ -40,6 +40,22 @@ class MetadataFilter(BaseModel):
         if value is None:
             return None
         return value.lstrip(".").lower()
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def _as_utc(cls, value: datetime | None) -> datetime | None:
+        """Store one instant regardless of how the caller wrote it.
+
+        Offsets are accepted for compatibility and converted; a bare timestamp
+        is read as UTC rather than as the server's local time. The column is
+        naive so PostgreSQL cannot reinterpret the result against a session
+        timezone.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(UTC).replace(tzinfo=None)
 
     def is_empty(self) -> bool:
         """Return True if no filter criteria are set."""

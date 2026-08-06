@@ -200,8 +200,10 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         index_type="btree",
     ),
     MetadataFieldDef(
+        # Naive on purpose: values are normalized to UTC before they are bound,
+        # so no session timezone can reinterpret them on the way back out.
         "creation_date",
-        "TIMESTAMPTZ",
+        "TIMESTAMP",
         index_type="btree",
     ),
     MetadataFieldDef("parse_engine", "VARCHAR(64)"),
