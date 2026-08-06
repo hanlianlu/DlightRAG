@@ -37,10 +37,9 @@ def _canonical(expr: str) -> str:
     return f"LOWER(TRIM({expr}))"
 
 
-def _index_clause(field_id: str, pg_type: str, index_type: str | None) -> str | None:
-    if index_type != "btree":
+def _index_clause(field_id: str, pg_type: str, indexed: bool) -> str | None:
+    if not indexed:
         return None
-
     if _is_string_pg_type(pg_type):
         return f" ({_canonical(field_id)})"
     return f" ({field_id})"
@@ -49,10 +48,6 @@ def _index_clause(field_id: str, pg_type: str, index_type: str | None) -> str | 
 def _is_string_pg_type(pg_type: str) -> bool:
     normalized = pg_type.upper()
     return normalized.startswith(("TEXT", "VARCHAR", "CHAR", "CHARACTER"))
-
-
-def _json_param(value: Any) -> str | None:
-    return json.dumps(value) if value is not None else None
 
 
 def _build_schema_migrations() -> tuple[Migration, ...]:
@@ -93,7 +88,7 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
         )
     )
     for f in METADATA_FIELDS:
-        idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
+        idx_clause = _index_clause(f.field_id, f.pg_type, f.indexed)
         if idx_clause is None:
             continue
         # Versioned by the expression: an index only serves a match whose
@@ -114,17 +109,16 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
 
 _SCHEMA_MIGRATIONS = _build_schema_migrations()
 
-_JSONB_MERGE_FIELDS = frozenset({"custom_metadata"})
-_UPSERT_FIELDS = tuple(f for f in METADATA_FIELDS if f.field_id != "ingested_at")
-_UPSERT_FIELD_IDS = tuple(f.field_id for f in _UPSERT_FIELDS)
+_CUSTOM = "custom_metadata"
+_UPSERT_FIELD_IDS = tuple(f.field_id for f in METADATA_FIELDS if f.field_id != "ingested_at")
 
 
 def _field_assignment(field_id: str, placeholder: str, table_qualified: str) -> str:
-    if field_id in _JSONB_MERGE_FIELDS:
+    if field_id == _CUSTOM:
         # `||` yields NULL if either side is: a merge must never erase the column.
         return (
             f"{field_id} = COALESCE({table_qualified}, '{{}}'::jsonb) "
-            f"|| COALESCE({placeholder}, '{{}}'::jsonb)"
+            f"|| COALESCE({placeholder}::jsonb, '{{}}'::jsonb)"
         )
     return f"{field_id} = COALESCE({placeholder}, {table_qualified})"
 
@@ -149,9 +143,7 @@ def _build_upsert() -> str:
 def _build_update() -> str:
     """Same assignments as the upsert, but a missing document stays missing."""
     assignments = [
-        "    " + _field_assignment(field_id, f"${idx}::jsonb", field_id)
-        if field_id in _JSONB_MERGE_FIELDS
-        else "    " + _field_assignment(field_id, f"${idx}", field_id)
+        "    " + _field_assignment(field_id, f"${idx}", field_id)
         for idx, field_id in enumerate(_UPSERT_FIELD_IDS, start=3)
     ]
     return (
@@ -161,20 +153,18 @@ def _build_update() -> str:
     )
 
 
-def _build_upsert_params(
-    *,
-    workspace: str,
-    doc_id: str,
-    system: dict[str, Any],
-    custom: dict[str, Any],
-) -> list[Any]:
-    values: list[Any] = [workspace, doc_id]
-    for field_id in _UPSERT_FIELD_IDS:
-        if field_id == "custom_metadata":
-            values.append(json.dumps(custom))
-        else:
-            values.append(system.get(field_id))
-    return values
+def _build_params(workspace: str, doc_id: str, metadata: dict[str, Any]) -> list[Any]:
+    custom = metadata.get(_CUSTOM)
+    return [
+        workspace,
+        doc_id,
+        *(
+            json.dumps(custom if isinstance(custom, dict) else {})
+            if field_id == _CUSTOM
+            else metadata.get(field_id)
+            for field_id in _UPSERT_FIELD_IDS
+        ),
+    ]
 
 
 _UPSERT = _build_upsert()
@@ -244,7 +234,6 @@ class PGMetadataIndex:
     """PostgreSQL-backed document metadata index.
 
     Stores system-extracted and user-defined metadata per document.
-    Supports exact match, explicit pattern, range, and JSONB queries.
     """
 
     def __init__(self, workspace: str = "default") -> None:
@@ -285,49 +274,24 @@ class PGMetadataIndex:
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""
-        system = {k: metadata.get(k) for k in _UPSERT_FIELD_IDS}
-        custom = metadata.get("custom_metadata")
+        params = _build_params(self._workspace, doc_id, metadata)
 
         async def _operation(conn: Any) -> None:
-            await conn.execute(
-                _UPSERT,
-                *_build_upsert_params(
-                    workspace=self._workspace,
-                    doc_id=doc_id,
-                    system=system,
-                    custom=custom if isinstance(custom, dict) else {},
-                ),
-            )
+            await conn.execute(_UPSERT, *params)
 
         await self._run(_operation)
 
     async def merge_custom_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
         """Update an existing document, reporting whether one was there to update."""
-        system = {k: metadata.get(k) for k in _UPSERT_FIELD_IDS}
-        custom = metadata.get("custom_metadata")
+        params = _build_params(self._workspace, doc_id, metadata)
 
         async def _operation(conn: Any) -> str:
-            return await conn.execute(
-                _UPDATE,
-                *_build_upsert_params(
-                    workspace=self._workspace,
-                    doc_id=doc_id,
-                    system=system,
-                    custom=custom if isinstance(custom, dict) else {},
-                ),
-            )
+            return await conn.execute(_UPDATE, *params)
 
         return (await self._run(_operation)) != "UPDATE 0"
 
     async def query(self, filters: MetadataFilter) -> list[str]:
-        """Query for doc_ids matching the given filters.
-
-        Match strategy per field:
-        - string fields: exact match (case-insensitive)
-        - date fields: range queries (from/to)
-        - custom metadata: case-insensitive match on the stored JSONB value
-        - filename: exact on name or stem, falling back to a contains match
-        """
+        """Query for doc_ids matching the given filters."""
         conditions: list[str] = ["workspace = $1"]
         params: list[Any] = [self._workspace]
         idx = 2

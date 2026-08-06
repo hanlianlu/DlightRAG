@@ -190,11 +190,8 @@ class TestMetadataSQL:
             "title": "Report",
             "author": "Ada",
         }
-        params = pg_metadata_index._build_upsert_params(
-            workspace="default",
-            doc_id="doc-1",
-            system=metadata,
-            custom={"department": "Finance"},
+        params = pg_metadata_index._build_params(
+            "default", "doc-1", {**metadata, "custom_metadata": {"department": "Finance"}}
         )
 
         assert params[:2] == ["default", "doc-1"]
@@ -211,7 +208,7 @@ class TestMetadataSQL:
         for field in METADATA_FIELDS:
             assert f"column_{field.field_id}" in versions
             assert f"ADD COLUMN IF NOT EXISTS {field.field_id}" in sql
-            if field.index_type is not None:
+            if field.indexed:
                 assert f"index_{field.field_id}_canonical" in versions
 
     def test_migrations_are_derived_not_recorded_history(self) -> None:

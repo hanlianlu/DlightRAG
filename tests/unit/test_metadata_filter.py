@@ -28,9 +28,10 @@ class TestMetadataFilter:
         f = MetadataFilter(file_extension=".png")
         assert not f.is_empty()
 
-    def test_file_extension_is_normalized(self) -> None:
+    def test_file_extension_drops_the_leading_dot(self) -> None:
+        # Case is folded by the SQL comparison, so the model must not own it too.
         f = MetadataFilter(file_extension=" .PDF ")
-        assert f.file_extension == "pdf"
+        assert f.file_extension == "PDF"
 
     def test_text_filters_are_trimmed(self) -> None:
         f = MetadataFilter(

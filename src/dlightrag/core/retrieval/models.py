@@ -41,9 +41,8 @@ class MetadataFilter(BaseModel):
     @field_validator("file_extension")
     @classmethod
     def _normalize_file_extension(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return value.lstrip(".").lower()
+        # Only the leading dot: case and padding are folded by the comparison.
+        return value.lstrip(".") if value is not None else None
 
     @field_validator("creation_date_from", "creation_date_to")
     @classmethod

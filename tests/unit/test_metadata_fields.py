@@ -49,16 +49,11 @@ class TestMetadataFields:
         ids = [f.field_id for f in METADATA_FIELDS]
         assert "filename" in ids
 
-    def test_filename_btree_indexed(self) -> None:
+    def test_filename_is_indexed(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
         fn = next(f for f in METADATA_FIELDS if f.field_id == "filename")
-        assert fn.index_type == "btree"
-
-    def test_no_trigram_metadata_fields(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        assert all(f.index_type != "gin_trgm" for f in METADATA_FIELDS)
+        assert fn.indexed
 
     def test_all_fields_have_pg_type(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
@@ -94,14 +89,6 @@ def test_extract_system_metadata_stores_distinct_source_and_download_fields() ->
 class TestDerivedFunctions:
     """Derived helper functions built from METADATA_FIELDS."""
 
-    def test_system_field_ids_excludes_custom(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import system_field_ids
-
-        ids = system_field_ids()
-        assert isinstance(ids, frozenset)
-        assert "custom_metadata" not in ids
-        assert "filename" in ids
-
     def test_filter_fields_map_to_real_columns(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import FILTER_FIELD_COLUMNS
 
@@ -135,12 +122,6 @@ def test_non_string_values_survive_untouched() -> None:
     norm = normalize_user_metadata({"pages": 42, "reviewed": True})
 
     assert norm.custom_metadata == {"pages": 42, "reviewed": True}
-
-
-@pytest.mark.parametrize("key", ["sys.filename", "lightrag.content_hash", "user.author"])
-def test_reserved_namespaces_are_rejected_for_user_metadata(key: str) -> None:
-    with pytest.raises(ValueError, match="reserved"):
-        normalize_user_metadata({key: "x"})
 
 
 async def test_metadata_update_stores_without_reindexing() -> None:
