@@ -51,12 +51,10 @@ class TestMetadataFields:
         ids = [f.field_id for f in METADATA_FIELDS]
         assert "filename" in ids
 
-    def test_filename_filterable_btree(self) -> None:
+    def test_filename_btree_indexed(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
         fn = next(f for f in METADATA_FIELDS if f.field_id == "filename")
-        assert fn.filterable is True
-        assert fn.searchable is True
         assert fn.index_type == "btree"
 
     def test_no_trigram_metadata_fields(self) -> None:
@@ -68,7 +66,6 @@ class TestMetadataFields:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
         cm = next(f for f in METADATA_FIELDS if f.field_id == "custom_metadata")
-        assert cm.filterable is True
         assert cm.index_type == "gin"
 
     def test_all_fields_have_pg_type(self) -> None:
@@ -113,36 +110,6 @@ class TestDerivedFunctions:
         assert "custom_metadata" not in ids
         assert "filename" in ids
 
-    def test_searchable_field_ids(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import searchable_field_ids
-
-        ids = searchable_field_ids()
-        assert isinstance(ids, frozenset)
-        assert "filename" in ids
-        assert "filename_stem" in ids
-        assert "doc_title" in ids
-        # page_count is not searchable
-        assert "page_count" not in ids
-
-    def test_metadata_filter_fields_resolve_to_searchable_columns(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import searchable_field_ids
-
-        # `filename` is deliberately not 1:1 with a column: it resolves against
-        # both the stored name and its stem so callers need not know which.
-        value_fields = {"filename", "date_from", "date_to", "custom"}
-        assert set(MetadataFilter.model_fields) - value_fields <= searchable_field_ids()
-        assert {"filename", "filename_stem"} <= searchable_field_ids()
-
-    def test_filterable_field_ids(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import filterable_field_ids
-
-        ids = filterable_field_ids()
-        assert isinstance(ids, frozenset)
-        assert "filename" in ids
-        assert "custom_metadata" in ids
-        # page_count is not filterable
-        assert "page_count" not in ids
-
     def test_field_by_id_found(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import field_by_id
 
@@ -156,13 +123,13 @@ class TestDerivedFunctions:
         assert field_by_id("nonexistent") is None
 
     def test_filter_fields_map_to_real_columns(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import (
-            FILTER_FIELD_COLUMNS,
-            filterable_field_ids,
-        )
+        from dlightrag.core.retrieval.metadata_fields import FILTER_FIELD_COLUMNS
 
-        backing = {column for columns in FILTER_FIELD_COLUMNS.values() for column in columns}
-        assert backing <= filterable_field_ids()
+        columns = {f.field_id for f in METADATA_FIELDS}
+        backing = {column for cols in FILTER_FIELD_COLUMNS.values() for column in cols}
+        assert backing <= columns
+        # Every filter the planner may emit resolves to a column.
+        assert set(MetadataFilter.model_fields) - {"custom"} == set(FILTER_FIELD_COLUMNS)
         # A named file is matched against the stored name and its stem.
         assert FILTER_FIELD_COLUMNS["filename"] == ("filename", "filename_stem")
         # One column backs both ends of the range the planner emits.

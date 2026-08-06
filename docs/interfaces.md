@@ -286,7 +286,7 @@ There is no separate `indexed` flag: declaring a field with filter operations
 is the product signal that it is filterable.
 
 System metadata such as `filename`, `filename_stem`, `file_extension`,
-`doc_title`, `doc_author`, parser details, and ingest strategy is extracted or
+`doc_title`, `doc_author`, and parser details is extracted or
 mapped by DlightRAG. User metadata follows the configured policy:
 
 | Policy | Behavior |
@@ -310,7 +310,6 @@ LightRAG path:
   "doc_id": "file-doc-abc123",
   "source_kind": "document",
   "chunks": ["chunk-a", "chunk-b"],
-  "ingest_strategy": "lightrag_sidecar_unified",
   "parse_engine": "mineru",
   "process_options": "iteP"
 }
@@ -328,7 +327,6 @@ wrap the per-file results:
       "doc_id": "file-doc-abc123",
       "source_kind": "document",
       "chunks": ["chunk-a", "chunk-b"],
-      "ingest_strategy": "lightrag_sidecar_unified",
       "parse_engine": "mineru",
       "process_options": "iteP"
     },
@@ -336,7 +334,6 @@ wrap the per-file results:
       "doc_id": "file-doc-def456",
       "source_kind": "document",
       "chunks": ["chunk-c"],
-      "ingest_strategy": "lightrag_sidecar_unified",
       "parse_engine": "mineru",
       "process_options": "iteP"
     }
@@ -351,7 +348,6 @@ wrap the per-file results:
 | `status` | `string` | Present for unsupported-format skips (`skipped`) |
 | `reason` | `string` | Skip reason when a file is not ingested |
 | `chunks` | `list[string]` | LightRAG chunk IDs created or reused |
-| `ingest_strategy` | `string` | Ingestion path used for successful files |
 | `parse_engine` | `string` | Parser selected for document files |
 | `process_options` | `string` | LightRAG parser process options, for example `iteP` |
 | `processed` | `int` | Files represented in a directory/upload/prefix batch result |

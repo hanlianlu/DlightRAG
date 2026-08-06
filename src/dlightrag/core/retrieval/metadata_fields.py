@@ -18,15 +18,11 @@ class MetadataFieldDef:
     Attributes:
         field_id: Column name in the metadata table.
         pg_type: PostgreSQL column type (e.g. ``VARCHAR(512)``, ``JSONB DEFAULT '{}'``).
-        filterable: Whether this field can be used in query filters.
-        searchable: Whether this field is eligible for query-time text matching.
         index_type: PostgreSQL index type (``btree``, ``gin``, or None).
     """
 
     field_id: str
     pg_type: str
-    filterable: bool = False
-    searchable: bool = False
     index_type: str | None = None
 
 
@@ -180,15 +176,11 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
     MetadataFieldDef(
         "filename",
         "VARCHAR(512)",
-        filterable=True,
-        searchable=True,
         index_type="btree",
     ),
     MetadataFieldDef(
         "filename_stem",
         "VARCHAR(512)",
-        filterable=True,
-        searchable=True,
         index_type="btree",
     ),
     MetadataFieldDef("file_path", "TEXT"),
@@ -197,28 +189,21 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
     MetadataFieldDef(
         "file_extension",
         "VARCHAR(32)",
-        filterable=True,
-        searchable=True,
         index_type="btree",
     ),
     MetadataFieldDef(
         "doc_title",
         "TEXT",
-        filterable=True,
-        searchable=True,
         index_type="btree",
     ),
     MetadataFieldDef(
         "doc_author",
         "VARCHAR(255)",
-        filterable=True,
-        searchable=True,
         index_type="btree",
     ),
     MetadataFieldDef(
         "creation_date",
         "TIMESTAMPTZ",
-        filterable=True,
         index_type="btree",
     ),
     MetadataFieldDef("parse_engine", "VARCHAR(64)"),
@@ -227,7 +212,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
     MetadataFieldDef(
         "custom_metadata",
         "JSONB DEFAULT '{}'",
-        filterable=True,
         index_type="gin",
     ),
     MetadataFieldDef(
@@ -247,18 +231,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
 def system_field_ids() -> frozenset[str]:
     """System field names (everything except ``custom_metadata``)."""
     return frozenset(f.field_id for f in METADATA_FIELDS if f.field_id != "custom_metadata")
-
-
-@lru_cache(maxsize=1)
-def searchable_field_ids() -> frozenset[str]:
-    """Field IDs eligible for query-time text matching."""
-    return frozenset(f.field_id for f in METADATA_FIELDS if f.searchable)
-
-
-@lru_cache(maxsize=1)
-def filterable_field_ids() -> frozenset[str]:
-    """Field IDs that support query filters."""
-    return frozenset(f.field_id for f in METADATA_FIELDS if f.filterable)
 
 
 def field_by_id(field_id: str) -> MetadataFieldDef | None:
