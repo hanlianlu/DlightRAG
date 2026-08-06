@@ -428,7 +428,7 @@ export async function uploadFilesToWorkspace(
     }
 }
 
-async function deleteFile(filePath: string): Promise<void> {
+async function deleteFile(filePath: string, trigger: HTMLButtonElement | null = null): Promise<void> {
     if (!filePath) return;
     const filename = filePath.split('/').pop() || filePath;
     if (!window.confirm('Delete ' + filename + '?')) return;
@@ -440,6 +440,9 @@ async function deleteFile(filePath: string): Promise<void> {
     url.searchParams.set('file_path', filePath);
 
     beginFileMutation();
+    // Removing a document unlinks its chunks, entities and vectors, so the row
+    // stays on screen long enough to invite a second click.
+    if (trigger) trigger.disabled = true;
     try {
         const response = await fetch(url.pathname + url.search, {
             method: 'DELETE',
@@ -453,6 +456,7 @@ async function deleteFile(filePath: string): Promise<void> {
         if (isAbortError(error)) return;
         showToast('Deletion failed.', 5000);
     } finally {
+        if (trigger?.isConnected) trigger.disabled = false;
         finishFileMutation();
         finishPanelRequest(request);
     }
@@ -559,7 +563,10 @@ export function setupFilesPanel(): void {
             const deleteButton = closestElement<HTMLElement>(e.target, '[data-action="delete-file"]');
             if (deleteButton) {
                 e.preventDefault();
-                void deleteFile(deleteButton.dataset.filePath || '');
+                void deleteFile(
+                    deleteButton.dataset.filePath || '',
+                    deleteButton instanceof HTMLButtonElement ? deleteButton : null,
+                );
                 return;
             }
 
