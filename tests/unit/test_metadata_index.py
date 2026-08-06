@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
+from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.storage import pg_metadata_index
 from dlightrag.storage.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
 
@@ -59,6 +60,80 @@ class _Conn:
 class TestUpsertSQL:
     def test_upsert_sql_uses_coalesce(self):
         assert "COALESCE" in _UPSERT
+
+
+class TestFilenameResolution:
+    """One `filename` field, resolved server-side against name, stem, then contains."""
+
+    @staticmethod
+    def _index(rows_by_sql: dict[str, list[dict[str, str]]]) -> Any:
+        index = pg_metadata_index.PGMetadataIndex.__new__(pg_metadata_index.PGMetadataIndex)
+        index._workspace = "default"  # type: ignore[attr-defined]
+        executed: list[tuple[str, tuple[Any, ...]]] = []
+
+        async def _run(operation: Any) -> Any:
+            class _Conn:
+                async def fetch(self, sql: str, *params: Any) -> list[dict[str, str]]:
+                    executed.append((sql, params))
+                    for fragment, rows in rows_by_sql.items():
+                        if fragment in sql:
+                            return rows
+                    return []
+
+            return await operation(_Conn())
+
+        index._run = _run  # type: ignore[attr-defined]
+        return index, executed
+
+    async def test_exact_hit_never_widens(self) -> None:
+        index, executed = self._index({"LOWER(filename)": [{"doc_id": "d1"}]})
+
+        result = await index.query(MetadataFilter(filename="report.pdf"))
+
+        assert result == ["d1"]
+        assert len(executed) == 1
+        assert "ILIKE" not in executed[0][0]
+
+    async def test_exact_clause_covers_name_and_stem(self) -> None:
+        index, executed = self._index({"LOWER(filename)": [{"doc_id": "d1"}]})
+
+        await index.query(MetadataFilter(filename="report"))
+
+        sql = executed[0][0]
+        assert "LOWER(filename) = LOWER($2)" in sql
+        assert "LOWER(filename_stem) = LOWER($2)" in sql
+
+    async def test_miss_widens_to_contains(self) -> None:
+        index, executed = self._index({"ILIKE": [{"doc_id": "d2"}]})
+
+        result = await index.query(MetadataFilter(filename="Linear Algebra"))
+
+        assert result == ["d2"]
+        assert len(executed) == 2
+        assert "ILIKE $2" in executed[1][0]
+        assert executed[1][1][1] == "%Linear Algebra%"
+
+    async def test_caller_wildcards_are_preserved(self) -> None:
+        index, executed = self._index({"ILIKE": [{"doc_id": "d3"}]})
+
+        await index.query(MetadataFilter(filename="%IMG%9551%"))
+
+        assert executed[1][1][1] == "%IMG%9551%"
+
+    async def test_widening_keeps_other_conditions(self) -> None:
+        index, executed = self._index({"ILIKE": [{"doc_id": "d4"}]})
+
+        await index.query(MetadataFilter(filename="report", file_extension="pdf"))
+
+        widened = executed[1][0]
+        assert "LOWER(file_extension) = LOWER($2)" in widened
+        assert "filename ILIKE $3" in widened
+
+    async def test_no_filename_never_runs_twice(self) -> None:
+        index, executed = self._index({})
+
+        assert await index.query(MetadataFilter(file_extension="pdf")) == []
+        assert len(executed) == 1
 
 
 class TestMetadataSQL:
@@ -273,22 +348,22 @@ async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:
     assert seen["args"] == ("default", ["doc-1", "doc-2"])
 
 
-async def test_metadata_field_schema_hides_internal_source_columns() -> None:
+async def test_metadata_field_schema_reports_only_populated_filters() -> None:
     idx = pg_metadata_index.PGMetadataIndex(workspace="default")
 
     class Conn:
-        async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
             assert "workspace = ANY($1::text[])" in query
             assert args == (["default"],)
-            return [
-                {"row_type": "column", "name": "workspace", "data_type": "character varying"},
-                {"row_type": "column", "name": "doc_id", "data_type": "character varying"},
-                {"row_type": "column", "name": "file_path", "data_type": "text"},
-                {"row_type": "column", "name": "source_uri", "data_type": "text"},
-                {"row_type": "column", "name": "download_locator", "data_type": "text"},
-                {"row_type": "column", "name": "filename", "data_type": "character varying"},
-                {"row_type": "custom", "name": "department", "data_type": None},
-            ]
+            return {
+                "filename": True,
+                "filename_stem": True,
+                "file_extension": True,
+                "doc_title": False,
+                "doc_author": False,
+                "creation_date": False,
+                "custom_keys": ["department"],
+            }
 
     async def run(operation):  # noqa: ANN001, ANN202
         return await operation(Conn())
@@ -297,10 +372,31 @@ async def test_metadata_field_schema_hides_internal_source_columns() -> None:
 
     schema = await idx.get_field_schema()
 
+    # An empty column would only invite the planner to filter on nothing.
     assert schema == {
-        "columns": [{"name": "filename", "type": "character varying"}],
+        "filters": ["filename", "file_extension"],
         "custom_keys": ["department"],
     }
+
+
+async def test_metadata_field_schema_offers_a_date_range_from_one_column() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+
+    class Conn:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
+            return dict.fromkeys(pg_metadata_index._FILTERABLE_COLUMNS, False) | {
+                "creation_date": True,
+                "custom_keys": None,
+            }
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    schema = await idx.get_field_schema()
+
+    assert schema == {"filters": ["date_from", "date_to"], "custom_keys": []}
 
 
 async def test_metadata_field_schema_reads_multiple_workspaces_in_one_operation() -> None:
@@ -308,13 +404,11 @@ async def test_metadata_field_schema_reads_multiple_workspaces_in_one_operation(
     seen: list[tuple[str, tuple[Any, ...]]] = []
 
     class Conn:
-        async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        async def fetchrow(self, query: str, *args: Any) -> dict[str, Any]:
             seen.append((query, args))
-            return [
-                {"row_type": "column", "name": "filename", "data_type": "character varying"},
-                {"row_type": "custom", "name": "department", "data_type": None},
-                {"row_type": "custom", "name": "jurisdiction", "data_type": None},
-            ]
+            return dict.fromkeys(pg_metadata_index._FILTERABLE_COLUMNS, False) | {
+                "custom_keys": ["department", "jurisdiction"],
+            }
 
     async def run(operation):  # noqa: ANN001, ANN202
         return await operation(Conn())

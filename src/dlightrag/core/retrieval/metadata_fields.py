@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any
 
 from dlightrag.contracts import MetadataPolicy
@@ -20,7 +21,6 @@ class MetadataFieldDef:
         filterable: Whether this field can be used in query filters.
         searchable: Whether this field is eligible for query-time text matching.
         index_type: PostgreSQL index type (``btree``, ``gin``, or None).
-        filter_hint: Human-readable hint describing how to filter on this field.
     """
 
     field_id: str
@@ -28,7 +28,6 @@ class MetadataFieldDef:
     filterable: bool = False
     searchable: bool = False
     index_type: str | None = None
-    filter_hint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -186,7 +185,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         filterable=True,
         searchable=True,
         index_type="btree",
-        filter_hint="Exact match on the original file name (e.g. 'report.pdf').",
     ),
     MetadataFieldDef(
         "filename_stem",
@@ -194,7 +192,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         filterable=True,
         searchable=True,
         index_type="btree",
-        filter_hint="Exact match on the file name without extension (e.g. 'report').",
     ),
     MetadataFieldDef("file_path", "TEXT"),
     MetadataFieldDef("source_uri", "TEXT"),
@@ -205,7 +202,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         filterable=True,
         searchable=True,
         index_type="btree",
-        filter_hint="Exact match on file extension (e.g. 'pdf', 'docx').",
     ),
     MetadataFieldDef(
         "doc_title",
@@ -213,7 +209,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         filterable=True,
         searchable=True,
         index_type="btree",
-        filter_hint="Exact match on the document title.",
     ),
     MetadataFieldDef(
         "doc_author",
@@ -221,14 +216,12 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         filterable=True,
         searchable=True,
         index_type="btree",
-        filter_hint="Exact match on the document author.",
     ),
     MetadataFieldDef(
         "creation_date",
         "TIMESTAMPTZ",
         filterable=True,
         index_type="btree",
-        filter_hint="Date range filter (date_from / date_to).",
     ),
     MetadataFieldDef("original_format", "VARCHAR(32)"),
     MetadataFieldDef("page_count", "INTEGER"),
@@ -241,7 +234,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         "JSONB DEFAULT '{}'",
         filterable=True,
         index_type="gin",
-        filter_hint="JSONB containment query on user-defined key-value pairs.",
     ),
     MetadataFieldDef(
         "metadata_json",
@@ -279,18 +271,19 @@ def field_by_id(field_id: str) -> MetadataFieldDef | None:
     return _FIELD_BY_ID.get(field_id)
 
 
-@lru_cache(maxsize=1)
-def build_filter_hints() -> dict[str, str]:
-    """Map filterable field_id -> human-readable hint string.
-
-    Used by QueryAnalyzer to build a context-aware LLM prompt.
-    Only includes fields that are both filterable and have a hint.
-    """
-    return {
-        f.field_id: f.filter_hint
-        for f in METADATA_FIELDS
-        if f.filterable and f.filter_hint is not None
+# Filter fields the planner may emit, mapped to the columns whose data backs
+# them. Neither side is 1:1: a named file is matched against two columns, and
+# one date column backs both ends of a range.
+FILTER_FIELD_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "filename": ("filename", "filename_stem"),
+        "file_extension": ("file_extension",),
+        "doc_title": ("doc_title",),
+        "doc_author": ("doc_author",),
+        "date_from": ("creation_date",),
+        "date_to": ("creation_date",),
     }
+)
 
 
 # Internal lookup table (private)

@@ -134,6 +134,13 @@ with the BM25 failure chained as its cause.
 Metadata filtering is explicit-schema first:
 
 - Declared fields are normalized and filterable.
+- A named file is one filter field, `filename`. Callers and the planner write the
+  name as it was said — complete or partial, with or without an extension — and
+  retrieval resolves it: exact match against the stored name or its stem first,
+  then a contains match if neither hits. Splitting that into separate exact,
+  stem, and pattern fields asked the planner to choose a match operator for a
+  corpus it cannot see, and the schema deliberately shows it column names rather
+  than values because a workspace's document count is unbounded.
 - Undeclared metadata can be stored as JSONB enrichment, but is not filterable
   by default.
 - User/API filters are strict. If they resolve to zero candidate documents or

@@ -131,10 +131,14 @@ class TestDerivedFunctions:
         # page_count is not searchable
         assert "page_count" not in ids
 
-    def test_metadata_filter_covers_searchable_fields(self) -> None:
+    def test_metadata_filter_fields_resolve_to_searchable_columns(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import searchable_field_ids
 
-        assert searchable_field_ids() <= set(MetadataFilter.model_fields)
+        # `filename` is deliberately not 1:1 with a column: it resolves against
+        # both the stored name and its stem so callers need not know which.
+        value_fields = {"filename", "date_from", "date_to", "custom"}
+        assert set(MetadataFilter.model_fields) - value_fields <= searchable_field_ids()
+        assert {"filename", "filename_stem"} <= searchable_field_ids()
 
     def test_filterable_field_ids(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import filterable_field_ids
@@ -158,16 +162,18 @@ class TestDerivedFunctions:
 
         assert field_by_id("nonexistent") is None
 
-    def test_build_filter_hints(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import build_filter_hints
+    def test_filter_fields_map_to_real_columns(self) -> None:
+        from dlightrag.core.retrieval.metadata_fields import (
+            FILTER_FIELD_COLUMNS,
+            filterable_field_ids,
+        )
 
-        hints = build_filter_hints()
-        assert isinstance(hints, dict)
-        # Only filterable fields should appear
-        assert "filename" in hints
-        assert "page_count" not in hints
-        # custom_metadata should be present
-        assert "custom_metadata" in hints
+        backing = {column for columns in FILTER_FIELD_COLUMNS.values() for column in columns}
+        assert backing <= filterable_field_ids()
+        # A named file is matched against the stored name and its stem.
+        assert FILTER_FIELD_COLUMNS["filename"] == ("filename", "filename_stem")
+        # One column backs both ends of the range the planner emits.
+        assert FILTER_FIELD_COLUMNS["date_from"] == FILTER_FIELD_COLUMNS["date_to"]
 
 
 def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:

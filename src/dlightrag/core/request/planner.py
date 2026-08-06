@@ -132,8 +132,6 @@ class QueryPlannerFilters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     filename: str | None = None
-    filename_stem: str | None = None
-    filename_pattern: str | None = None
     file_extension: str | None = None
     doc_title: str | None = None
     doc_author: str | None = None
@@ -178,23 +176,14 @@ QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT = StructuredOutput(
 )
 
 
-# PG data_type -> human-readable short form
-_TYPE_ALIASES: dict[str, str] = {
-    "character varying": "text",
-    "timestamp with time zone": "timestamp",
-    "jsonb": "json",
-    "integer": "int",
-}
-
-
 def _build_schema_section(schema: dict[str, Any] | None) -> str:
-    if not schema or not schema.get("columns"):
+    if not schema or not schema.get("filters"):
         return ""
-    col_lines = [
-        f"  {col['name']} ({_TYPE_ALIASES.get(col['type'], col['type'])})"
-        for col in schema["columns"]
-    ]
-    return "Available metadata columns:\n" + "\n".join(col_lines) + "\n\n"
+    available = ", ".join(schema["filters"])
+    return (
+        f"Only these filters hold data here: {available}. "
+        "Every other filter field must stay null.\n\n"
+    )
 
 
 def _build_custom_keys_hint(schema: dict[str, Any] | None) -> str:
@@ -798,8 +787,6 @@ class QueryPlanner:
         merged_kwargs: dict[str, Any] = {}
         filter_fields = [
             "filename",
-            "filename_stem",
-            "filename_pattern",
             "file_extension",
             "doc_title",
             "doc_author",

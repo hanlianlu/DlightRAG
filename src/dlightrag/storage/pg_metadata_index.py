@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from dlightrag.core.retrieval.metadata_fields import (
+    FILTER_FIELD_COLUMNS,
     METADATA_FIELDS,
     field_by_id,
     system_field_ids,
@@ -165,36 +166,52 @@ def _build_upsert_params(
 
 _UPSERT = _build_upsert()
 
-_FIELD_SCHEMA = """
-SELECT row_type, name, data_type
-FROM (
-    SELECT
-        0 AS row_order,
-        ordinal_position::int AS item_order,
-        'column'::text AS row_type,
-        column_name::text AS name,
-        data_type::text AS data_type
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'dlightrag_doc_metadata'
+_FILTERABLE_COLUMNS: tuple[str, ...] = tuple(
+    dict.fromkeys(column for columns in FILTER_FIELD_COLUMNS.values() for column in columns)
+)
 
-    UNION ALL
 
-    SELECT
-        1 AS row_order,
-        NULL::int AS item_order,
-        'custom'::text AS row_type,
-        key AS name,
-        NULL::text AS data_type
-    FROM (
-        SELECT DISTINCT jsonb_object_keys(custom_metadata) AS key
-        FROM dlightrag_doc_metadata
-        WHERE workspace = ANY($1::text[])
-          AND custom_metadata != '{}'
+def _build_field_schema() -> str:
+    """Report which filter columns hold data, plus the custom keys in use.
+
+    Deliberately reports populated columns rather than the table definition: the
+    planner cannot see the corpus, so naming a column it can never match is what
+    sends it down an empty filter. One row out regardless of document count.
+    """
+    populated = ",\n    ".join(
+        f"bool_or({column} IS NOT NULL) AS {column}" for column in _FILTERABLE_COLUMNS
+    )
+    return f"""
+SELECT
+    {populated},
+    (
+        SELECT array_agg(DISTINCT key)
+        FROM (
+            SELECT jsonb_object_keys(custom_metadata) AS key
+            FROM dlightrag_doc_metadata
+            WHERE workspace = ANY($1::text[])
+              AND custom_metadata != '{{}}'
+        ) AS keys
     ) AS custom_keys
-) AS schema_rows
-ORDER BY row_order, item_order NULLS LAST, name
-"""
+FROM dlightrag_doc_metadata
+WHERE workspace = ANY($1::text[])
+"""  # noqa: S608 - column names come from the field registry, never from input
+
+
+_FIELD_SCHEMA = _build_field_schema()
+
+
+# A named file is matched against both the full name and the stem, so a caller
+# who omits the extension still hits the functional lower() indexes on both.
+_FILENAME_EXACT_CONDITION = (
+    "(LOWER(filename) = LOWER(${idx}) OR LOWER(filename_stem) = LOWER(${idx}))"
+)
+_FILENAME_CONTAINS_CONDITION = "filename ILIKE ${idx}"
+
+
+def _as_ilike_pattern(value: str) -> str:
+    """Wrap a bare name in wildcards, leaving a caller's own pattern intact."""
+    return value if "%" in value or "_" in value else f"%{value}%"
 
 
 class PGMetadataIndex:
@@ -288,14 +305,14 @@ class PGMetadataIndex:
         - integer fields: exact match
         - date fields: range queries (from/to)
         - JSONB: containment (@>)
-        - filename_pattern: explicit ILIKE with user/LLM-provided wildcards
+        - filename: exact on name or stem, falling back to a contains match
         """
         conditions: list[str] = ["workspace = $1"]
         params: list[Any] = [self._workspace]
         idx = 2
 
         # Searchable fields — dispatch by field type
-        for attr in ("filename", "filename_stem", "file_extension", "doc_title", "doc_author"):
+        for attr in ("file_extension", "doc_title", "doc_author"):
             value = getattr(filters, attr, None)
             if value is None:
                 continue
@@ -311,10 +328,11 @@ class PGMetadataIndex:
                 params.append(value)
             idx += 1
 
-        # Filename pattern (ILIKE with user wildcards)
-        if filters.filename_pattern:
-            conditions.append(f"filename ILIKE ${idx}")
-            params.append(filters.filename_pattern)
+        filename_slot: tuple[int, int] | None = None
+        if filters.filename:
+            filename_slot = (len(conditions), len(params))
+            conditions.append(_FILENAME_EXACT_CONDITION.format(idx=idx))
+            params.append(filters.filename)
             idx += 1
 
         # Date range
@@ -333,6 +351,19 @@ class PGMetadataIndex:
             params.append(json.dumps(filters.custom))
             idx += 1
 
+        doc_ids = await self._select_doc_ids(conditions, params)
+        if doc_ids or filename_slot is None:
+            return doc_ids
+
+        # The caller named a file the corpus does not carry verbatim. A planner
+        # cannot know whether a name is complete, and a human rarely types one,
+        # so widen that single clause rather than returning nothing.
+        condition_slot, param_slot = filename_slot
+        conditions[condition_slot] = _FILENAME_CONTAINS_CONDITION.format(idx=param_slot + 1)
+        params[param_slot] = _as_ilike_pattern(str(filters.filename))
+        return await self._select_doc_ids(conditions, params)
+
+    async def _select_doc_ids(self, conditions: list[str], params: list[Any]) -> list[str]:
         where = " AND ".join(conditions)
         sql = f"SELECT doc_id FROM dlightrag_doc_metadata WHERE {where}"  # noqa: S608
 
@@ -398,45 +429,33 @@ class PGMetadataIndex:
         result = await self._run(_operation)
         logger.info("PGMetadataIndex cleared for workspace %s: %s", self._workspace, result)
 
-    # Internal columns excluded from schema hints — not user-filterable
-    _INTERNAL_COLS = frozenset(
-        {
-            "workspace",
-            "doc_id",
-            "ingested_at",
-            "file_path",
-            "source_uri",
-            "download_locator",
-        }
-    )
-
     async def get_field_schema(
         self,
         *,
         workspaces: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
-        """Read table structure dynamically.
+        """Report the filters this workspace can actually satisfy.
 
-        - Column names/types from information_schema (table structure)
-        - JSONB keys from custom_metadata across the requested workspaces
-        - Falls back to the instance workspace when no workspace set is provided
-
-        Used by QueryAnalyzer to build a context-aware LLM prompt.
+        Returns the planner-facing filter field names backed by at least one
+        populated column, plus the custom metadata keys in use. Formats and
+        meanings are static and live in the planner prompt; only availability
+        is workspace-dependent.
         """
         workspace_scope = list(dict.fromkeys(workspaces or (self._workspace,)))
 
-        async def _operation(conn: Any) -> list[Any]:
-            return await conn.fetch(_FIELD_SCHEMA, workspace_scope)
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchrow(_FIELD_SCHEMA, workspace_scope)
 
-        rows = await self._run(_operation)
+        row = await self._run(_operation)
+        if row is None:
+            return {"filters": [], "custom_keys": []}
 
-        columns = [
-            {"name": row["name"], "type": row["data_type"]}
-            for row in rows
-            if row["row_type"] == "column" and row["name"] not in self._INTERNAL_COLS
+        filters = [
+            field
+            for field, columns in FILTER_FIELD_COLUMNS.items()
+            if any(row[column] for column in columns)
         ]
-        custom_keys = [row["name"] for row in rows if row["row_type"] == "custom"]
-        return {"columns": columns, "custom_keys": custom_keys}
+        return {"filters": filters, "custom_keys": list(row["custom_keys"] or ())}
 
     async def find_by_filename(self, name: str) -> list[str]:
         """Find doc_ids by case-insensitive filename match."""

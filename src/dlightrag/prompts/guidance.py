@@ -49,10 +49,12 @@ keys:
   nouns, identifiers, quoted phrases, filenames, and visible terms. Keep it shorter than
   standalone_query. Use null when standalone_query is already short and keyword-oriented.
 - "filters": An object with applicable fields from the metadata schema below.
-  The user payload's `metadata_schema`, when present, lists the available fields.
-  Only include fields you are highly confident about. Leave out uncertain fields.
+  When the user payload carries `metadata_schema`, it is the exhaustive list of
+  filters that hold data here; anything absent from it must stay null however
+  well the query seems to match. Only include fields you are highly confident about.
 - "filter_confidence": "high" only when the query explicitly asks to constrain
   by metadata (filename, title, author, date, extension, declared custom field).
+  Naming a file counts even when the name is partial or carries no extension.
   Use "low" when metadata interpretation is plausible but ambiguous.
 - "filter_evidence": A list of objects for every filter you include. Each object
   must contain: field, value, evidence_span, intent_basis. evidence_span must be
@@ -60,9 +62,8 @@ keys:
   the value as a metadata constraint. Do not include filters without evidence.
 
 Filter fields (use null for unmentioned):
-- filename: exact normalized filename when the user gives a complete name with extension
-- filename_stem: exact normalized filename without extension only when explicitly requested
-- filename_pattern: SQL ILIKE pattern (% wildcards) only when the user explicitly gives a partial file identifier, wildcard-style pattern, camera/code identifier, or asks for a filename/title pattern rather than a broad topical search.
+- filename: the file the user named, exactly as they wrote it, with or without an
+  extension and whether partial or complete. Retrieval resolves it against the corpus.
 - file_extension: e.g. "pdf", "png" (lowercase, no dot)
 - doc_title: exact normalized document title only when highly confident
 - doc_author: exact normalized author name only when highly confident
@@ -78,7 +79,7 @@ Query: "what are the main revenue trends"
 {"standalone_query": "what are the main revenue trends", "bm25_query": "revenue trends", "filters": {}, "filter_confidence": "low", "filter_evidence": []}
 
 Query: "what is in IMG 9551?"
-{"standalone_query": "what is in IMG 9551?", "bm25_query": "IMG 9551", "filters": {"filename_pattern": "%IMG%9551%"}, "filter_confidence": "high", "filter_evidence": [{"field": "filename_pattern", "value": "%IMG%9551%", "evidence_span": "IMG 9551", "intent_basis": "filename_pattern_literal"}]}
+{"standalone_query": "what is in IMG 9551?", "bm25_query": "IMG 9551", "filters": {"filename": "IMG 9551"}, "filter_confidence": "high", "filter_evidence": [{"field": "filename", "value": "IMG 9551", "evidence_span": "IMG 9551", "intent_basis": "filename_literal"}]}
 
 Query: "张三写的2024年财报分析"
 {"standalone_query": "张三写的2024年财报分析", "bm25_query": "张三 2024 财报分析", "filters": {"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}, "filter_confidence": "high", "filter_evidence": [{"field": "doc_author", "value": "张三", "evidence_span": "张三写的", "intent_basis": "explicit_author_constraint"}, {"field": "date", "value": "2024", "evidence_span": "2024年", "intent_basis": "date_literal"}]}

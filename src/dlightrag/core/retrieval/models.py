@@ -12,8 +12,6 @@ class MetadataFilter(BaseModel):
     """Structured filter for document metadata queries."""
 
     filename: str | None = None
-    filename_stem: str | None = None
-    filename_pattern: str | None = None
     file_extension: str | None = None
     doc_title: str | None = None
     doc_author: str | None = None
@@ -23,8 +21,6 @@ class MetadataFilter(BaseModel):
 
     @field_validator(
         "filename",
-        "filename_stem",
-        "filename_pattern",
         "file_extension",
         "doc_title",
         "doc_author",
