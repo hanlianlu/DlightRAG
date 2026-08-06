@@ -17,6 +17,7 @@ import os
 import re
 import ssl
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode, urlsplit
@@ -362,8 +363,18 @@ class MetadataFieldConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: str = "string"
-    normalizer: str | None = None
+    normalizer: str = "identity"
     filterable: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_filterable_strings_to_casefold(cls, data: Any) -> Any:
+        """Custom filtering is JSONB containment, so both sides must normalize alike."""
+        if not isinstance(data, Mapping) or data.get("normalizer"):
+            return data
+        if data.get("type", "string") == "string" and data.get("filterable", False):
+            return {**data, "normalizer": "casefold_trim"}
+        return data
 
 
 class MetadataConfig(BaseModel):

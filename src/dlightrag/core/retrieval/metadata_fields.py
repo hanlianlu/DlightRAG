@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any
 
+from dlightrag.config import MetadataFieldConfig
 from dlightrag.contracts import MetadataPolicy
 
 
@@ -32,18 +33,6 @@ class MetadataFieldDef:
 
 
 @dataclass(frozen=True)
-class DeclaredMetadataField:
-    field_id: str
-    field_type: str = "string"
-    normalizer: str = "identity"
-    filterable: bool = False
-
-    @property
-    def type(self) -> str:
-        return self.field_type
-
-
-@dataclass(frozen=True)
 class NormalizedUserMetadata:
     filterable: dict[str, Any]
     raw_json: dict[str, Any]
@@ -53,28 +42,24 @@ class NormalizedUserMetadata:
 class MetadataFieldRegistry:
     """Runtime registry for user-declared metadata filter fields."""
 
-    def __init__(self, fields: Mapping[str, DeclaredMetadataField] | None = None) -> None:
+    def __init__(self, fields: Mapping[str, MetadataFieldConfig] | None = None) -> None:
         self._fields = dict(fields or {})
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None) -> MetadataFieldRegistry:
-        fields = {}
-        for field_id, raw in (config or {}).items():
-            field_type = str(_field_option(raw, "type", "string") or "string")
-            filterable = bool(_field_option(raw, "filterable", False))
-            normalizer = _field_option(raw, "normalizer", None)
-            fields[field_id] = DeclaredMetadataField(
-                field_id=field_id,
-                field_type=field_type,
-                normalizer=str(normalizer or _default_normalizer(field_type, filterable)),
-                filterable=filterable,
-            )
-        return cls(fields)
+        return cls(
+            {
+                field_id: raw
+                if isinstance(raw, MetadataFieldConfig)
+                else MetadataFieldConfig.model_validate(raw)
+                for field_id, raw in (config or {}).items()
+            }
+        )
 
-    def get(self, field_id: str) -> DeclaredMetadataField | None:
+    def get(self, field_id: str) -> MetadataFieldConfig | None:
         return self._fields.get(field_id)
 
-    def filter_spec(self, field_id: str) -> DeclaredMetadataField | None:
+    def filter_spec(self, field_id: str) -> MetadataFieldConfig | None:
         field_def = self._fields.get(field_id)
         if field_def is None or not field_def.filterable:
             return None
@@ -98,20 +83,6 @@ class MetadataFieldRegistry:
         if not changed:
             return filters
         return filters.model_copy(update={"custom": normalized_custom})
-
-
-def _field_option(raw: Any, key: str, default: Any) -> Any:
-    if isinstance(raw, Mapping):
-        return raw.get(key, default)
-    return getattr(raw, key, default)
-
-
-def _default_normalizer(field_type: str, filterable: bool) -> str:
-    # Custom filtering is JSONB containment, so a filterable string only matches
-    # when ingest and query normalize identically.
-    if field_type == "string" and filterable:
-        return "casefold_trim"
-    return "identity"
 
 
 def _coerce_creation_date(value: Any) -> datetime:
