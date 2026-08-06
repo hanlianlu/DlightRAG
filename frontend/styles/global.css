@@ -87,10 +87,6 @@ body.conversation-drawer-open {
 
 /* === Text Error === */
 
-.text-error {
-    color: var(--color-danger);
-}
-
 .file-error {
     color: var(--color-danger);
     font-size: var(--font-size-detail);

@@ -29,7 +29,7 @@ interface ImageReadAdmissionOptions {
     createReader?: () => FileReader;
 }
 
-function parseInteger(value: string | undefined, minimum: number): number | null {
+export function parseInteger(value: string | undefined, minimum: number): number | null {
     if (!value || !/^\d+$/.test(value)) return null;
     const parsed = Number(value);
     if (!Number.isSafeInteger(parsed) || parsed < minimum) return null;

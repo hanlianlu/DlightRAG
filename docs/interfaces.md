@@ -473,9 +473,8 @@ public calls accept no Composer documents.
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 `DELETE /workspaces/{workspace}`), while the `/web/*` surface uses htmx action
 endpoints that return HTML fragments (for example `POST /web/workspaces/create`,
-`POST /web/workspaces/delete`). This split is intentional: HTML forms cannot
-issue `DELETE`, and Web responses are markup rather than JSON. Prefer REST or the
-SDK for programmatic access.
+`POST /web/workspaces/delete`). This split is intentional: Web responses are markup
+rather than JSON. Prefer REST or the SDK for programmatic access.
 
 Image support is a deployment capability, not a per-request negotiation, so callers
 discover it up front. REST `GET /health` returns `answer_image_capability`
@@ -547,7 +546,7 @@ async for token in token_iter:
 | `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages for multi-turn follow-ups. Stateless: never persisted, so the caller re-sends the turns it wants each request. Folded into the planner's standalone-query rewrite and answer generation. Capped at 100 messages. |
-| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `title`, `author`, `creation_date_from`/`creation_date_to`, and declared `custom` fields |
+| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `title`, `author`, `creation_date_from`/`creation_date_to`, and any `custom` key |
 
 ### REST API
 
@@ -646,7 +645,7 @@ paths without deleting LightRAG rows, metadata, or local files.
 | `trace` | `{type, data}` | Retrieval trace counts and planner/filter decisions |
 | `image_meta` | `{type, image_descriptions}` | VLM descriptions for current-request images |
 | `done` | `{type, answer, answer_images, answer_blocks}` | Stream complete; `answer` is the final normalized answer body after citation validation |
-| `error` | `{type, message}` | Error mid-stream |
+| `error` | `{type, message, error_kind}` | Error mid-stream |
 
 ```
 data: {"type":"context","data":{"chunks":[...],"entities":[...],"relationships":[...]}}

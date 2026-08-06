@@ -31,9 +31,6 @@ class WorkspaceStore extends Store {
     return this.#primary || this.#fallbackPrimary();
   }
 
-  get defaultWorkspace(): string {
-    return this.#defaultWorkspace();
-  }
 
   init(records: WorkspaceRecord[], active: string[], primary = ''): void {
     this.#records = records;

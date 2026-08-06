@@ -29,7 +29,6 @@ interface MathJaxConfig {
 }
 
 interface Window {
-  __DLIGHTRAG_STATIC_VERSION__: string;
   htmx: HTMXGlobal;
   MathJax?: MathJaxConfig;
 }
@@ -41,11 +40,9 @@ declare const htmx: HTMXGlobal;
 interface HTMXGlobal {
   process(element: Element): void;
   ajax(method: string, url: string, options?: HTMXAjaxOptions): Promise<void>;
-  trigger(element: Element | null, event: string, detail?: unknown): void;
 }
 
 interface HTMXAjaxOptions {
-  target?: string;
   swap?: string;
   values?: Record<string, string>;
 }
@@ -53,15 +50,10 @@ interface HTMXAjaxOptions {
 // Custom events emitted by HTMX after swaps
 interface HTMXEvent extends Event {
   detail: {
-    elt?: Element;
     isError?: boolean;
-    parameters?: Record<string, string>;
-    pathInfo?: { requestPath: string };
     serverResponse?: string;
     shouldSwap?: boolean;
-    successful?: boolean;
     target?: Element;
-    value?: unknown;
     xhr: XMLHttpRequest;
   };
 }

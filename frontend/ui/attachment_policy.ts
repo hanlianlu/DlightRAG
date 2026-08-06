@@ -4,19 +4,14 @@
 // can be unit-tested in Node. Mirrors ui/image_policy.ts; ui/attachments.ts is
 // the browser/composer half that renders and wires these decisions.
 
+import {parseInteger} from './image_policy.ts';
+
 export type AttachmentKind = 'image' | 'document' | 'unsupported';
 
 export interface DocumentAdmissionPolicy {
     currentUploadLimit: number;
     maxUploadBytes: number;
     extensions: ReadonlySet<string>;
-}
-
-function parseInteger(value: string | undefined, minimum: number): number | null {
-    if (!value || !/^\d+$/.test(value)) return null;
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < minimum) return null;
-    return parsed;
 }
 
 function parseExtensions(value: string | undefined): ReadonlySet<string> | null {

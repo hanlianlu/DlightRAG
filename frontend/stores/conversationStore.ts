@@ -77,9 +77,6 @@ export class ConversationStore extends Store {
     return this.#history;
   }
 
-  get generation(): number {
-    return this.#generation;
-  }
 
   get answerConversationId(): string | null {
     return this.#answerReady ? this.#activeConversationId : null;

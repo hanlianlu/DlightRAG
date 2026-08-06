@@ -172,8 +172,10 @@ This starts:
 |---|---|---|
 | `dlightrag-api` | REST API + Web UI | `127.0.0.1:8100` |
 | `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
-| `lightrag-gui` | Upstream LightRAG graph browser | `127.0.0.1:9621` |
 | `postgres` | PG18 ecosystem | `5432` |
+
+The upstream LightRAG graph browser is opt-in: `docker compose --profile gui up -d`
+serves it on `127.0.0.1:9621`.
 
 4. Open the Web UI:
 
@@ -195,8 +197,9 @@ DLIGHTRAG_PARSER_SIDECARS__MINERU__LOCAL_ENDPOINT=http://127.0.0.1:8210 \
   uv run dlightrag-api
 ```
 
-Native runs can ingest host paths directly because the API process sees the
-same filesystem as your shell. The checked config is Docker-first, so the
+A native run's managed input root is the host `./dlightrag_storage/inputs/<workspace>`,
+so files dropped there are ingested by name; paths outside it are rejected on
+every surface. The checked config is Docker-first, so the
 command overrides its Docker host alias with the native loopback endpoint. A
 native Docling deployment likewise sets its active block endpoint to
 `http://127.0.0.1:5001`.
@@ -396,7 +399,7 @@ make hooks
 Verification:
 
 ```bash
-make ci          # lint + type-check + architecture + unit tests
+make ci          # the fast gate: lint, security, format, types, architecture, shell, frontend, unit tests
 make ci-full     # above + integration tests
 make ci-e2e      # above + E2E smoke
 ```

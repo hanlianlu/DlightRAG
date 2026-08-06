@@ -125,8 +125,7 @@ them. Leave it unset unless the parser service runs on Apple Silicon:
 
 `codeformulav2` ships only a Transformers engine, whose supported devices
 exclude MPS, so enrichment fails there without a preset. `granite_docling` also
-ships an MLX engine. Naming any preset requires the server to allow it — the
-bundled `docling-serve-mps` already does, a stock docling-serve needs
+ships an MLX engine. Naming any preset requires the server to allow it through
 `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS`. Repointing it invalidates the
 Docling bundle cache, so affected documents re-parse on their own.
 

@@ -121,8 +121,7 @@ versions in the ledger.
 
 Web Composer attachment chunks store only an optional 1-based `page_number` for
 display. Spatial bbox data and the ambiguous `page_idx` field are not part of
-the DlightRAG schema. Existing evidence rows keep their text/citation identity
-through the migration but do not receive a guessed historical page number.
+the DlightRAG schema.
 
 ## LightRAG AGE Contract Patches
 
@@ -229,13 +228,8 @@ Infrastructure requirements:
 
 ## Version Support Log
 
-| Date | LightRAG Baseline | Patches Needed | Notes |
-|---|---|---|---|
-| 2026-06-03 | `lightrag-hku==1.5.0` | `configure_age`, `execute` | Initial guarded baseline |
-| 2026-07-29 | `lightrag-hku==1.5.4` | `configure_age`, `execute` | Previous guarded baseline |
-| 2026-08-04 | `lightrag-hku==1.5.5` | `configure_age`, `execute` | Current `uv.lock`; remove this patch module when upstream covers both |
-
-Check upstream by running:
+`lightrag-hku==1.5.5` needs `configure_age` and `execute`. Remove the
+patch module when upstream covers both — check by running:
 
 ```bash
 uv run python -c "

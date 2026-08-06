@@ -131,8 +131,8 @@ docker compose run --rm dlightrag-api dlightrag-rebuild-vdb --target all --yes
 docker compose up -d dlightrag-api dlightrag-mcp
 ```
 
-If you do not run `lightrag-gui`, omit it from the stop command. If you do run
-it, restart it with the other services after the rebuild.
+`lightrag-gui` only runs under `--profile gui`; omit it from the stop
+command unless you started it, and restart it with the others afterward.
 
 ### DlightRAG Chunk Post-Rebuild Maintenance
 

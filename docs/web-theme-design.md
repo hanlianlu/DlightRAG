@@ -7,7 +7,7 @@
 
 The DlightRAG Web UI provides a polished `System / Light / Dark` appearance preference. It keeps the dark theme's identity, adds the warm-neutral **Mineral Light** palette, and makes the correct theme visible on the first painted frame.
 
-This work is limited to appearance. It does not add internationalization, Mermaid, custom palettes, account-level preferences, or server-side preference storage.
+This work is limited to appearance. It does not add internationalization, custom palettes, account-level preferences, or server-side preference storage.
 
 ## Product Decisions
 

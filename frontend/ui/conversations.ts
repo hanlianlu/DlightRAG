@@ -444,7 +444,6 @@ function applySidebarState(): void {
     const expanded = desktop ? !desktopCollapsed : drawerOpen;
 
     document.body.classList.toggle('conversation-sidebar-open', expanded);
-    document.body.classList.toggle('conversation-sidebar-collapsed', desktop && desktopCollapsed);
     document.body.classList.toggle('conversation-drawer-open', !desktop && drawerOpen);
     syncPanelEffectiveWidth();
     open?.setAttribute('aria-expanded', expanded ? 'true' : 'false');

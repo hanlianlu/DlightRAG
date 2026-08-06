@@ -244,9 +244,6 @@ function applyFinalAnswerHtml(turn: ChatTurn, html: string): void {
   fixExternalLinks(turn.contentDiv);
 }
 
-export function renderStoredAnswer(turn: ChatTurn, html: string): void {
-  applyFinalAnswerHtml(turn, html);
-}
 
 export function clearChatViewport(): void {
   const chatMessages = document.getElementById('chat-messages');
@@ -260,7 +257,7 @@ export function renderConversationHistory(history: ConversationHistory): void {
   clearChatViewport();
   for (const stored of history.turns) {
     const turn = createChatTurn(stored.user_text, stored.user_images, stored.user_documents);
-    renderStoredAnswer(turn, stored.answer_html);
+    applyFinalAnswerHtml(turn, stored.answer_html);
   }
 }
 

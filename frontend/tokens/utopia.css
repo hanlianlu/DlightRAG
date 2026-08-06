@@ -167,7 +167,6 @@
     --space-message-block: var(--space-component);
     --space-composer-y: calc(var(--space-tight) * 0.625);
     --space-composer-x: var(--space-tight);
-    --space-composer-leading: var(--space-inline);
     --space-composer-trailing: var(--space-composer-x);
 
     /* ── Space (semantic aliases to Utopia space scale) ── */
