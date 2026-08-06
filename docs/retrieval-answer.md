@@ -35,7 +35,7 @@ source file
        existing chunk vector with one fused vector interleaving the VLM
        description and the image, so text queries still retrieve the figure
   -> DlightRAG metadata/BM25 layer
-       declared metadata index, in-filter scope, pg_textsearch BM25
+       metadata index, in-filter scope, pg_textsearch BM25
 ```
 
 All source files that LightRAG can ingest, including native image files, go
@@ -71,7 +71,7 @@ startup error.
 RAGService.aretrieve / aanswer(query, query_images, filters)
   |
   |-- QueryPlanner
-  |     declared metadata fields only
+  |     built-in metadata fields plus custom_metadata keys
   |     explicit filters are strict
   |     LLM-inferred empty candidates fall back to unfiltered retrieval
   |
@@ -172,6 +172,15 @@ option: LightRAG reads a short result from `chunks_vdb.get_vectors_by_ids` as
 storage corruption and falls back to an unfiltered ranking method. Scoping after
 the fact costs recall — the selection budget is still spent on out-of-scope
 chunks — but that budget is internal to LightRAG.
+
+What a filter scopes is the evidence: every chunk the answer can quote comes
+from a filtered leg. It does not scope the entity and relationship *summaries*
+that `mix` also puts in the prompt. Those are LightRAG's own context sections,
+and their descriptions are corpus-level syntheses — one entity's description is
+merged across every document that mentioned it, so there is no per-document
+share of it to keep or drop. Restricting them would not narrow the answer, it
+would replace LightRAG's `mix` mode with a different retrieval semantic.
+DlightRAG keeps the native one.
 
 ## Multimodal Queries
 

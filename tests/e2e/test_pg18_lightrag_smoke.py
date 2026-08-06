@@ -87,7 +87,6 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
             replace=True,
             title="PG18 E2E Document",
             metadata={"e2e_case": " pg18 "},
-            metadata_policy="validate",
         )
         second = await service.aingest(
             source_type="local",
@@ -95,7 +94,6 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
             replace=True,
             title="PG18 E2E Document",
             metadata={"e2e_case": " pg18 "},
-            metadata_policy="validate",
         )
 
         doc_id = second["doc_id"]
@@ -199,7 +197,6 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
             replace=True,
             title="Reader Smoke",
             metadata={"e2e_case": "reader"},
-            metadata_policy="validate",
         )
         doc_id = result["doc_id"]
         chunk_id = result["chunks"][0]

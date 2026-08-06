@@ -155,9 +155,24 @@ async def test_metadata_update_stores_without_reindexing() -> None:
 
     await service.aupdate_metadata("doc-1", {"reviewer": " Ada Lovelace "})
 
-    _, saved = service._metadata_index.upsert.await_args.args
+    _, saved = service._metadata_index.merge_custom_metadata.await_args.args
     assert saved["custom_metadata"]["reviewer"] == " Ada Lovelace "
     service._lightrag.apipeline_enqueue_documents.assert_not_called()
+
+
+async def test_metadata_update_reports_an_unknown_document() -> None:
+    from unittest.mock import AsyncMock
+
+    from dlightrag.core.service import RAGService
+
+    service = object.__new__(RAGService)
+    service.config = _writer_config()
+    service._metadata_index = AsyncMock()
+    service._metadata_index.merge_custom_metadata.return_value = False
+
+    # Updating a document that was never ingested must not conjure one.
+    with pytest.raises(KeyError):
+        await service.aupdate_metadata("ghost", {"reviewer": "Ada"})
 
 
 class TestCallerSettableColumns:

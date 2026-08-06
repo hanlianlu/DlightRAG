@@ -275,9 +275,8 @@ filter would read it. Set `title` and `author` through their ingest parameters;
 For custom metadata, filter with `filters.custom`, for example
 `{"custom": {"department": "finance"}}`. Matching is case-insensitive, the same
 rule the named fields use, and it is applied to the comparison rather than to
-the stored value — so what you sent is what you read back.
-Undeclared JSON enrichment is retained for display/debugging, but is not part
-of the supported filter surface.
+the stored value — so what you sent is what you read back. Keys are matched by
+the same rule, so `Department` and `department` are one key.
 
 `creation_date` is the document's own date and is the one built-in column a
 caller sets through `metadata`, since `title` and `author` have their own ingest

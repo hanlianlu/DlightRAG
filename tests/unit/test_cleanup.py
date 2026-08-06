@@ -69,7 +69,7 @@ class TestCollectDeletionContext:
 
     async def test_metadata_index_fallback(self) -> None:
         metadata_index = MagicMock()
-        metadata_index.find_by_file_path = AsyncMock(return_value=[])
+        metadata_index.find_by_download_locator = AsyncMock(return_value=[])
         metadata_index.find_by_filename = AsyncMock(return_value=["doc-006"])
         ctx = await collect_deletion_context(
             identifier="report.pdf",
@@ -84,7 +84,7 @@ class TestCollectDeletionContext:
             {"doc-remote": "/inputs/default/__remote_ingest__/s3/b1/report__abc.pdf"}
         )
         metadata_index = MagicMock()
-        metadata_index.find_by_file_path = AsyncMock(return_value=["doc-remote"])
+        metadata_index.find_by_download_locator = AsyncMock(return_value=["doc-remote"])
         metadata_index.find_by_filename = AsyncMock(return_value=["doc-wrong"])
 
         ctx = await collect_deletion_context(
@@ -95,7 +95,9 @@ class TestCollectDeletionContext:
 
         assert ctx.doc_ids == {"doc-remote"}
         assert ctx.file_paths == {"/inputs/default/__remote_ingest__/s3/b1/report__abc.pdf"}
-        metadata_index.find_by_file_path.assert_awaited_once_with("s3://bucket/team-a/report.pdf")
+        metadata_index.find_by_download_locator.assert_awaited_once_with(
+            "s3://bucket/team-a/report.pdf"
+        )
         metadata_index.find_by_filename.assert_not_awaited()
 
     async def test_doc_status_exception_falls_back_to_metadata(self) -> None:
@@ -105,7 +107,7 @@ class TestCollectDeletionContext:
             side_effect=RuntimeError("connection lost")
         )
         metadata_index = MagicMock()
-        metadata_index.find_by_file_path = AsyncMock(return_value=[])
+        metadata_index.find_by_download_locator = AsyncMock(return_value=[])
         metadata_index.find_by_filename = AsyncMock(return_value=["doc-007"])
 
         ctx = await collect_deletion_context(

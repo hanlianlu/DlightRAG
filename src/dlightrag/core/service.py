@@ -240,6 +240,9 @@ from dlightrag.storage.postgres_version import (  # noqa: E402
     ensure_postgres_major,
 )
 
+# Identity and storage plumbing: never part of a caller-facing answer or payload.
+_INTERNAL_FIELDS = frozenset({"workspace", "doc_id", "download_locator"})
+
 
 class RAGService:
     """High-level RAG service facade.
@@ -1973,23 +1976,14 @@ class RAGService:
         dynamic: whatever the metadata index returns is included, minus
         internal/system fields that add no value to the LLM context.
         """
-        _SKIP = frozenset(
+        _SKIP = _INTERNAL_FIELDS | frozenset(
             {
-                "workspace",
-                "doc_id",
-                "file_path",
                 "source_uri",
-                "download_locator",
                 "file_extension",
                 "filename",
                 "filename_stem",
                 "ingested_at",
                 "custom_metadata",
-                "parse_engine",
-                "metadata_json",
-                "process_options",
-                "title",
-                "author",
             }
         )
 
@@ -2019,6 +2013,10 @@ class RAGService:
             fetched_meta = {
                 k: v for k, v in meta.items() if k not in _SKIP and v is not None and v != ""
             }
+            custom = meta.get("custom_metadata")
+            if isinstance(custom, dict):
+                # User metadata is the reason the column exists: the model sees it.
+                fetched_meta.update(custom)
             source_uri = meta.get("source_uri")
             download_locator = meta.get("download_locator")
             if isinstance(source_uri, str) and source_uri:
@@ -2047,8 +2045,7 @@ class RAGService:
         result = await self._metadata_index.get(doc_id)  # type: ignore[union-attr]
         if not result:
             return {}
-        internal_fields = frozenset({"workspace", "doc_id", "file_path", "download_locator"})
-        return {key: value for key, value in result.items() if key not in internal_fields}
+        return {key: value for key, value in result.items() if key not in _INTERNAL_FIELDS}
 
     async def aupdate_metadata(
         self,
@@ -2062,13 +2059,15 @@ class RAGService:
         if self._metadata_index is None:
             raise RuntimeError("Metadata index not initialized")
         normalized = normalize_user_metadata(data)
-        await self._metadata_index.upsert(
+        updated = await self._metadata_index.merge_custom_metadata(
             doc_id,
             {
                 **normalized.system,
                 "custom_metadata": normalized.custom_metadata,
             },
         )
+        if not updated:
+            raise KeyError(doc_id)
 
     async def asearch_metadata(self, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""

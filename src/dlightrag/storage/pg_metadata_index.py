@@ -8,7 +8,7 @@ from typing import Any
 from dlightrag.core.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     METADATA_FIELDS,
-    system_field_ids,
+    canonical_metadata_key,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.storage.migrations import Migration, apply_migrations
@@ -38,8 +38,6 @@ def _canonical(expr: str) -> str:
 
 
 def _index_clause(field_id: str, pg_type: str, index_type: str | None) -> str | None:
-    if index_type == "gin":
-        return f" USING gin ({field_id})"
     if index_type != "btree":
         return None
 
@@ -58,11 +56,13 @@ def _json_param(value: Any) -> str | None:
 
 
 def _build_schema_migrations() -> tuple[Migration, ...]:
-    """Converge the table on what METADATA_FIELDS declares.
+    """Add what METADATA_FIELDS declares; never remove what it no longer does.
 
     Every statement is derived from the registry rather than recorded as history,
     so a fresh database and an existing one reach the same shape and the list
-    does not grow with each schema change.
+    does not grow with each schema change. Indexes are derived, so they are
+    rebuilt in place. Columns hold data, so an undeclared one is left standing
+    for an operator to drop — a rollback must not be able to erase a column.
     """
     migrations = [
         Migration(
@@ -119,25 +119,45 @@ _UPSERT_FIELDS = tuple(f for f in METADATA_FIELDS if f.field_id != "ingested_at"
 _UPSERT_FIELD_IDS = tuple(f.field_id for f in _UPSERT_FIELDS)
 
 
+def _field_assignment(field_id: str, placeholder: str, table_qualified: str) -> str:
+    if field_id in _JSONB_MERGE_FIELDS:
+        # `||` yields NULL if either side is: a merge must never erase the column.
+        return (
+            f"{field_id} = COALESCE({table_qualified}, '{{}}'::jsonb) "
+            f"|| COALESCE({placeholder}, '{{}}'::jsonb)"
+        )
+    return f"{field_id} = COALESCE({placeholder}, {table_qualified})"
+
+
 def _build_upsert() -> str:
     columns = ("workspace", "doc_id", *_UPSERT_FIELD_IDS)
     insert_columns = ", ".join(columns)
     placeholders = ",".join(f"${idx}" for idx in range(1, len(columns) + 1))
-    updates = []
-    for field_id in _UPSERT_FIELD_IDS:
-        if field_id in _JSONB_MERGE_FIELDS:
-            updates.append(
-                f"    {field_id} = dlightrag_doc_metadata.{field_id} || EXCLUDED.{field_id}"
-            )
-        else:
-            updates.append(
-                f"    {field_id} = COALESCE(EXCLUDED.{field_id}, dlightrag_doc_metadata.{field_id})"
-            )
+    updates = [
+        "    "
+        + _field_assignment(field_id, f"EXCLUDED.{field_id}", f"dlightrag_doc_metadata.{field_id}")
+        for field_id in _UPSERT_FIELD_IDS
+    ]
     return (
         "INSERT INTO dlightrag_doc_metadata\n"
         f"    ({insert_columns})\n"
         f"VALUES ({placeholders})\n"
         "ON CONFLICT (workspace, doc_id) DO UPDATE SET\n" + ",\n".join(updates)
+    )
+
+
+def _build_update() -> str:
+    """Same assignments as the upsert, but a missing document stays missing."""
+    assignments = [
+        "    " + _field_assignment(field_id, f"${idx}::jsonb", field_id)
+        if field_id in _JSONB_MERGE_FIELDS
+        else "    " + _field_assignment(field_id, f"${idx}", field_id)
+        for idx, field_id in enumerate(_UPSERT_FIELD_IDS, start=3)
+    ]
+    return (
+        "UPDATE dlightrag_doc_metadata SET\n"
+        + ",\n".join(assignments)
+        + "\nWHERE workspace = $1 AND doc_id = $2"
     )
 
 
@@ -158,6 +178,7 @@ def _build_upsert_params(
 
 
 _UPSERT = _build_upsert()
+_UPDATE = _build_update()
 
 _FILTERABLE_COLUMNS: tuple[str, ...] = tuple(
     dict.fromkeys(column for columns in FILTER_FIELD_COLUMNS.values() for column in columns)
@@ -200,12 +221,15 @@ _FILENAME_EXACT_CONDITION = (
     "(LOWER(TRIM(filename)) = LOWER(TRIM(${idx})) "
     "OR LOWER(TRIM(filename_stem)) = LOWER(TRIM(${idx})))"
 )
-_FILENAME_CONTAINS_CONDITION = "filename ILIKE ${idx}"
+# A caller types a name, not a pattern, so the widened match is literal substring
+# search. ILIKE would mean escaping %, _ and \ back out of the pattern language.
+_FILENAME_CONTAINS_CONDITION = "STRPOS(LOWER(TRIM(filename)), LOWER(TRIM(${idx}))) > 0"
 
-
-def _as_ilike_pattern(value: str) -> str:
-    """Wrap a bare name in wildcards, leaving a caller's own pattern intact."""
-    return value if "%" in value or "_" in value else f"%{value}%"
+# Deletion resolves a name, so it matches the full name only, never the stem.
+_FIND_BY_FILENAME = (
+    "SELECT doc_id FROM dlightrag_doc_metadata "  # noqa: S608 - fixed text; only $-params
+    f"WHERE workspace=$1 AND {_canonical('filename')} = {_canonical('$2')}"
+)
 
 
 def _decoded_row(row: Any) -> dict[str, Any]:
@@ -261,7 +285,7 @@ class PGMetadataIndex:
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""
-        system = {k: metadata.get(k) for k in system_field_ids()}
+        system = {k: metadata.get(k) for k in _UPSERT_FIELD_IDS}
         custom = metadata.get("custom_metadata")
 
         async def _operation(conn: Any) -> None:
@@ -276,6 +300,24 @@ class PGMetadataIndex:
             )
 
         await self._run(_operation)
+
+    async def merge_custom_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        """Update an existing document, reporting whether one was there to update."""
+        system = {k: metadata.get(k) for k in _UPSERT_FIELD_IDS}
+        custom = metadata.get("custom_metadata")
+
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(
+                _UPDATE,
+                *_build_upsert_params(
+                    workspace=self._workspace,
+                    doc_id=doc_id,
+                    system=system,
+                    custom=custom if isinstance(custom, dict) else {},
+                ),
+            )
+
+        return (await self._run(_operation)) != "UPDATE 0"
 
     async def query(self, filters: MetadataFilter) -> list[str]:
         """Query for doc_ids matching the given filters.
@@ -316,12 +358,13 @@ class PGMetadataIndex:
             idx += 1
 
         # JSONB values are stored verbatim, so the canonical fold happens here
-        # rather than being baked into what was written.
+        # rather than being baked into what was written. Keys were folded on the
+        # way in, so the same fold applies to the key the caller filters on.
         for key, value in (filters.custom or {}).items():
             conditions.append(
                 f"{_canonical(f'custom_metadata ->> ${idx}')} = {_canonical(f'${idx + 1}')}"
             )
-            params.append(key)
+            params.append(canonical_metadata_key(key))
             params.append(value if isinstance(value, str) else json.dumps(value))
             idx += 2
 
@@ -334,7 +377,7 @@ class PGMetadataIndex:
         # so widen that single clause rather than returning nothing.
         condition_slot, param_slot = filename_slot
         conditions[condition_slot] = _FILENAME_CONTAINS_CONDITION.format(idx=param_slot + 1)
-        params[param_slot] = _as_ilike_pattern(str(filters.filename))
+        params[param_slot] = str(filters.filename)
         return await self._select_doc_ids(conditions, params)
 
     async def _select_doc_ids(self, conditions: list[str], params: list[Any]) -> list[str]:
@@ -429,29 +472,21 @@ class PGMetadataIndex:
             for field, columns in FILTER_FIELD_COLUMNS.items()
             if any(row[column] for column in columns)
         ]
-        return {"filters": filters, "custom_keys": list(row["custom_keys"] or ())}
+        custom_keys = list(row["custom_keys"] or ())
+        if custom_keys:
+            # The planner is told every other field must stay null, so a key it
+            # may filter on is useless unless `custom` is named as available.
+            filters.append("custom")
+        return {"filters": filters, "custom_keys": custom_keys}
 
     async def find_by_filename(self, name: str) -> list[str]:
         """Find doc_ids by case-insensitive filename match."""
 
         async def _operation(conn: Any) -> list[Any]:
             return await conn.fetch(
-                "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND LOWER(filename)=LOWER($2)",
+                _FIND_BY_FILENAME,
                 self._workspace,
                 name,
-            )
-
-        rows = await self._run(_operation)
-        return [r["doc_id"] for r in rows]
-
-    async def find_by_file_path(self, file_path: str) -> list[str]:
-        """Find doc_ids by exact stored file_path match."""
-
-        async def _operation(conn: Any) -> list[Any]:
-            return await conn.fetch(
-                "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND file_path=$2",
-                self._workspace,
-                file_path,
             )
 
         rows = await self._run(_operation)

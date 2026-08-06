@@ -92,7 +92,7 @@ class TestFilenameResolution:
 
         assert result == ["d1"]
         assert len(executed) == 1
-        assert "ILIKE" not in executed[0][0]
+        assert "STRPOS" not in executed[0][0]
 
     async def test_exact_clause_covers_name_and_stem(self) -> None:
         index, executed = self._index({"LOWER(TRIM(filename))": [{"doc_id": "d1"}]})
@@ -104,30 +104,31 @@ class TestFilenameResolution:
         assert "LOWER(TRIM(filename_stem)) = LOWER(TRIM($2))" in sql
 
     async def test_miss_widens_to_contains(self) -> None:
-        index, executed = self._index({"ILIKE": [{"doc_id": "d2"}]})
+        index, executed = self._index({"STRPOS": [{"doc_id": "d2"}]})
 
         result = await index.query(MetadataFilter(filename="Linear Algebra"))
 
         assert result == ["d2"]
         assert len(executed) == 2
-        assert "ILIKE $2" in executed[1][0]
-        assert executed[1][1][1] == "%Linear Algebra%"
+        assert "STRPOS(LOWER(TRIM(filename)), LOWER(TRIM($2))) > 0" in executed[1][0]
+        assert executed[1][1][1] == "Linear Algebra"
 
-    async def test_caller_wildcards_are_preserved(self) -> None:
-        index, executed = self._index({"ILIKE": [{"doc_id": "d3"}]})
+    async def test_caller_wildcards_are_literal_text(self) -> None:
+        index, executed = self._index({"STRPOS": [{"doc_id": "d3"}]})
 
         await index.query(MetadataFilter(filename="%IMG%9551%"))
 
+        # Substring search has no pattern language, so '%' is just a character.
         assert executed[1][1][1] == "%IMG%9551%"
 
     async def test_widening_keeps_other_conditions(self) -> None:
-        index, executed = self._index({"ILIKE": [{"doc_id": "d4"}]})
+        index, executed = self._index({"STRPOS": [{"doc_id": "d4"}]})
 
         await index.query(MetadataFilter(filename="report", file_extension="pdf"))
 
         widened = executed[1][0]
         assert "LOWER(TRIM(file_extension)) = LOWER(TRIM($2))" in widened
-        assert "filename ILIKE $3" in widened
+        assert "STRPOS(LOWER(TRIM(filename)), LOWER(TRIM($3))) > 0" in widened
 
     async def test_no_filename_never_runs_twice(self) -> None:
         index, executed = self._index({})
@@ -266,7 +267,7 @@ async def test_metadata_index_initialization_disables_prefix_only_validation() -
     assert seen["require_applied_prefix"] is False
 
 
-async def test_metadata_index_finds_by_exact_file_path() -> None:
+async def test_metadata_index_finds_by_exact_locator() -> None:
     idx = pg_metadata_index.PGMetadataIndex(workspace="default")
     seen: dict[str, Any] = {}
 
@@ -281,8 +282,8 @@ async def test_metadata_index_finds_by_exact_file_path() -> None:
 
     idx._run = run  # type: ignore[method-assign]
 
-    assert await idx.find_by_file_path("/inputs/default/a/report.pdf") == ["doc-1"]
-    assert "file_path=$2" in seen["query"]
+    assert await idx.find_by_download_locator("/inputs/default/a/report.pdf") == ["doc-1"]
+    assert "download_locator=$2" in seen["query"]
     assert seen["args"] == ("default", "/inputs/default/a/report.pdf")
 
 
@@ -387,7 +388,7 @@ async def test_metadata_field_schema_reports_only_populated_filters() -> None:
 
     # An empty column would only invite the planner to filter on nothing.
     assert schema == {
-        "filters": ["filename", "file_extension"],
+        "filters": ["filename", "file_extension", "custom"],
         "custom_keys": ["department"],
     }
 

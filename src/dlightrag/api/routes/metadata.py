@@ -18,8 +18,6 @@ from .deps import enforce_access, get_manager, resolve_workspace
 
 router = APIRouter()
 
-_INTERNAL_METADATA_FIELDS = frozenset({"workspace", "doc_id", "file_path", "download_locator"})
-
 
 @router.post("/metadata/search", response_model=SearchMetadataResponse)
 async def search_metadata(
@@ -62,10 +60,7 @@ async def get_metadata(
     data = await manager.aget_metadata(ws, doc_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
-    public_metadata = {
-        key: value for key, value in data.items() if key not in _INTERNAL_METADATA_FIELDS
-    }
-    return {"doc_id": doc_id, "metadata": public_metadata}
+    return {"doc_id": doc_id, "metadata": data}
 
 
 @router.post("/metadata/{doc_id}", response_model=MetadataUpdateResponse)
@@ -80,16 +75,11 @@ async def update_metadata(
     if not body.metadata:
         raise HTTPException(status_code=400, detail="Empty 'metadata' dictionary")
 
-    for k in body.metadata:
-        if k in ("id", "_id", "doc_id", "content", "source"):
-            raise HTTPException(status_code=400, detail=f"Cannot overwrite reserved key '{k}'")
-
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_UPDATE_METADATA, workspace=ws)
-    await manager.aupdate_metadata(
-        ws,
-        doc_id,
-        body.metadata,
-    )
+    try:
+        await manager.aupdate_metadata(ws, doc_id, body.metadata)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found") from None
     return {"status": "success", "doc_id": doc_id}

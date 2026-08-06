@@ -93,17 +93,10 @@ async def collect_deletion_context(
         except Exception as e:
             logger.warning(f"LightRAG doc_status lookup failed for {identifier}: {e}")
 
-    # Strategy 2: Metadata index lookup (PGMetadataIndex by filename)
+    # Strategy 2: Metadata index lookup, by exact location then by name
     if metadata_index and not ctx.doc_ids:
         try:
-            doc_ids: list[str] = []
-            find_by_file_path = getattr(metadata_index, "find_by_file_path", None)
-            if callable(find_by_file_path):
-                maybe_doc_ids = find_by_file_path(identifier)
-                if isawaitable(maybe_doc_ids):
-                    maybe_doc_ids = await maybe_doc_ids
-                if isinstance(maybe_doc_ids, list):
-                    doc_ids = [str(doc_id) for doc_id in maybe_doc_ids]
+            doc_ids = await metadata_index.find_by_download_locator(identifier)
             if not doc_ids:
                 doc_ids = await metadata_index.find_by_filename(basename)
             for d_id in doc_ids:

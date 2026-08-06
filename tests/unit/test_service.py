@@ -2416,11 +2416,8 @@ class TestRAGServiceLightRAGMainPath:
         service._metadata_index.get_many = AsyncMock(
             return_value={
                 "doc-right": {
-                    "department": "finance",
-                    "parse_engine": "mineru",
                     "filename": "report.pdf",
-                    "metadata_json": {"large": True},
-                    "process_options": {"ocr": True},
+                    "custom_metadata": {"department": "finance"},
                 }
             }
         )
@@ -2442,6 +2439,7 @@ class TestRAGServiceLightRAGMainPath:
 
         await service._enrich_chunks_with_metadata(result)
 
+        # Custom metadata is why the column exists: the answer context must see it.
         assert result.contexts["chunks"][0]["metadata"] == {
             "department": "finance",
             "source_file_name": "report.pdf",
@@ -2463,7 +2461,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value={
                 "doc-remote": {
                     "filename": "report.pdf",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "source_uri": "bynder://asset/1",
                     "download_locator": "https://cdn.example.com/assets/1.pdf",
                 }
@@ -2489,7 +2486,6 @@ class TestRAGServiceLightRAGMainPath:
             "source_download_locator": "https://cdn.example.com/assets/1.pdf",
             "source_file_name": "report.pdf",
         }
-        assert "source_file_path" not in meta
         assert "download_locator" not in meta
 
     async def test_get_metadata_hides_internal_paths_and_locator(
@@ -2501,7 +2497,6 @@ class TestRAGServiceLightRAGMainPath:
             "workspace": "finance",
             "doc_id": "doc-1",
             "filename": "report.pdf",
-            "file_path": "/srv/dlightrag/inputs/finance/report.pdf",
             "source_uri": "bynder://asset/1",
             "download_locator": "https://cdn.example.com/assets/1.pdf",
         }
@@ -2755,7 +2750,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value=[
                 {
                     "doc_id": "doc-failed",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
             ]
@@ -2795,7 +2789,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value=[
                 {
                     "doc_id": "doc-failed",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
             ]
@@ -2863,7 +2856,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value=[
                 {
                     "doc_id": "doc-failed",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
             ]
@@ -2895,7 +2887,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value=[
                 {
                     "doc_id": "doc-old",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
             ]
@@ -2950,7 +2941,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value=[
                 {
                     "doc_id": "doc-old",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
             ]
@@ -3001,7 +2991,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value=[
                 {
                     "doc_id": "doc-old",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
             ]
@@ -3056,7 +3045,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value=[
                 {
                     "doc_id": "doc-old",
-                    "file_path": "/deleted/__remote_ingest__/report.pdf",
                     "error": "parser failed",
                 }
             ]

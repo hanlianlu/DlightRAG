@@ -15,7 +15,8 @@ DlightRAG's supported core storage ecosystem is PostgreSQL 18 with:
 - `pg_jieba` for the Chinese `public.jiebacfg` BM25 profile
 
 No fuzzy-search or separate Chinese-parser extension is required. Metadata
-filtering is normalized exact/pattern matching over declared fields.
+filtering compares `LOWER(TRIM(...))` on both sides, over the built-in columns
+and over any key of the `custom_metadata` JSONB column.
 
 ## Required Version
 

@@ -63,15 +63,21 @@ _CALLER_SETTABLE_COLUMNS: Mapping[str, Callable[[Any], Any]] = MappingProxyType(
 )
 
 
+def canonical_metadata_key(key: str) -> str:
+    """Fold a metadata key the same way its value is matched, so both sides agree."""
+    return key.strip().casefold()
+
+
 def normalize_user_metadata(metadata: Mapping[str, Any] | None) -> NormalizedUserMetadata:
     """Route caller metadata to its own column, or verbatim into the JSONB column."""
     if not metadata:
         return NormalizedUserMetadata(custom_metadata={})
     custom: dict[str, Any] = {}
     system: dict[str, Any] = {}
-    for key, value in metadata.items():
-        if key.startswith(("sys.", "lightrag.", "user.")):
-            raise MetadataValidationError(f"Metadata key uses reserved namespace: {key}")
+    for raw_key, value in metadata.items():
+        if raw_key.startswith(("sys.", "lightrag.", "user.")):
+            raise MetadataValidationError(f"Metadata key uses reserved namespace: {raw_key}")
+        key = canonical_metadata_key(raw_key)
         coerce = _CALLER_SETTABLE_COLUMNS.get(key)
         if coerce is not None:
             # A typed column of its own, so it is neither JSONB nor re-declarable.
@@ -104,7 +110,6 @@ def extract_system_metadata(
     return {
         "filename": file_name.name,
         "filename_stem": file_name.stem,
-        "file_path": raw_path,
         "source_uri": source_uri,
         "download_locator": download_locator,
         "file_extension": file_name.suffix.lower().lstrip("."),
@@ -122,7 +127,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         "VARCHAR(512)",
         index_type="btree",
     ),
-    MetadataFieldDef("file_path", "TEXT"),
     MetadataFieldDef("source_uri", "TEXT"),
     MetadataFieldDef("download_locator", "TEXT"),
     MetadataFieldDef(
@@ -179,8 +183,11 @@ FILTER_FIELD_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 )
 
 
-# Names that already resolve to a column or a filter. Accepting them as user
-# metadata would store the value in JSONB where no filter ever reads it.
+# Names that already resolve to a column or a filter, plus the primary key that
+# the table declares outside the registry. Accepting one as user metadata would
+# store the value in JSONB where no filter ever reads it.
 _RESERVED_METADATA_KEYS: frozenset[str] = (
-    frozenset(FILTER_FIELD_COLUMNS) | {f.field_id for f in METADATA_FIELDS}
+    frozenset(FILTER_FIELD_COLUMNS)
+    | {f.field_id for f in METADATA_FIELDS}
+    | {"workspace", "doc_id"}
 ) - frozenset(_CALLER_SETTABLE_COLUMNS)

@@ -686,8 +686,6 @@ def _with_finalized_local_download_locator(
 
     resolved = str(archived_path.resolve())
     finalized["download_locator"] = resolved
-    if finalized.get("file_path") == locator:
-        finalized["file_path"] = resolved
     return finalized
 
 
@@ -695,7 +693,6 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
     comparable = {
         "filename": metadata_record.get("filename"),
         "filename_stem": metadata_record.get("filename_stem"),
-        "file_path": metadata_record.get("file_path"),
         "source_uri": metadata_record.get("source_uri"),
         "download_locator": metadata_record.get("download_locator"),
         "file_extension": metadata_record.get("file_extension"),
@@ -704,8 +701,9 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
         "creation_date": metadata_record.get("creation_date"),
         "custom_metadata": deepcopy(metadata_record.get("custom_metadata")) or {},
     }
-    for field in ("file_path", "download_locator"):
-        comparable[field] = _canonicalize_local_metadata_locator(comparable[field])
+    comparable["download_locator"] = _canonicalize_local_metadata_locator(
+        comparable["download_locator"]
+    )
     return comparable
 
 

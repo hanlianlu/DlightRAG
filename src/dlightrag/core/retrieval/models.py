@@ -63,7 +63,9 @@ class MetadataFilter(BaseModel):
 
     def is_empty(self) -> bool:
         """Return True if no filter criteria are set."""
-        return all(v is None for v in self.model_dump().values())
+        # An empty `custom` dict carries no criterion, and treating it as one
+        # would drop every condition and return the whole workspace.
+        return not any(self.model_dump().values())
 
 
 @dataclass(frozen=True, slots=True)

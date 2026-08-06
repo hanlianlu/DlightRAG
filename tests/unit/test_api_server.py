@@ -2083,32 +2083,3 @@ class TestMetadataAPI:
 
         assert resp.status_code == 422
         mock_manager.asearch_metadata.assert_not_awaited()
-
-    @pytest.mark.usefixtures("_patch_manager")
-    async def test_get_metadata_hides_internal_paths_and_download_locator(
-        self,
-        client: AsyncClient,
-        mock_config: DlightragConfig,
-        mock_manager,
-    ) -> None:
-        mock_manager.aget_metadata = AsyncMock(
-            return_value={
-                "workspace": "default",
-                "doc_id": "doc-1",
-                "filename": "report.pdf",
-                "file_path": "/srv/dlightrag/inputs/default/report.pdf",
-                "source_uri": "bynder://asset/1",
-                "download_locator": "https://cdn.example.com/assets/1.pdf",
-            }
-        )
-
-        response = await client.get("/metadata/doc-1")
-
-        assert response.status_code == 200
-        assert response.json() == {
-            "doc_id": "doc-1",
-            "metadata": {
-                "filename": "report.pdf",
-                "source_uri": "bynder://asset/1",
-            },
-        }

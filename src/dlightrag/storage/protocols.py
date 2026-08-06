@@ -18,6 +18,9 @@ class MetadataIndexProtocol(Protocol):
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         raise NotImplementedError
 
+    async def merge_custom_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        raise NotImplementedError
+
     async def get(self, doc_id: str) -> dict[str, Any] | None:
         raise NotImplementedError
 
@@ -34,9 +37,6 @@ class MetadataIndexProtocol(Protocol):
         raise NotImplementedError
 
     async def find_by_filename(self, name: str) -> list[str]:
-        raise NotImplementedError
-
-    async def find_by_file_path(self, file_path: str) -> list[str]:
         raise NotImplementedError
 
     async def find_by_download_locator(self, download_locator: str) -> list[str]:

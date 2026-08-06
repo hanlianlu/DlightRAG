@@ -156,7 +156,6 @@ async def test_document_ingest_persists_lightrag_archived_source_locator(
 
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["download_locator"] == str(archived.resolve())
-    assert saved["file_path"] == str(archived.resolve())
 
 
 async def test_document_ingest_raises_when_pipeline_finishes_failed(tmp_path: Path) -> None:
@@ -342,7 +341,6 @@ async def test_prepared_batch_uses_explicit_download_locator(tmp_path: Path) -> 
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["file_paths"] == [str(parser_source)]
     _, saved = deps["metadata_index"].upsert.await_args.args
-    assert saved["file_path"] == "s3://bucket/team-a/report.pdf"
     assert saved["source_uri"] == "s3://bucket/team-a/report.pdf"
     assert saved["download_locator"] == "s3://bucket/team-a/report.pdf"
     assert saved["filename"] == "report.pdf"
@@ -615,7 +613,6 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["filename"] == "renamed-sample.pdf"
     assert saved["filename_stem"] == "renamed-sample"
-    assert saved["file_path"] == "https://cdn.example.com/new-sample.pdf"
     assert saved["source_uri"] == "bynder://asset/new"
     assert saved["download_locator"] == "https://cdn.example.com/new-sample.pdf"
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
@@ -727,7 +724,6 @@ async def test_single_hash_match_explicit_default_source_contract_updates_metada
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["filename"] == "sample.pdf"
     assert saved["filename_stem"] == "sample"
-    assert saved["file_path"] == str(source.resolve())
     assert saved["source_uri"] == _raw_path_source_uri(source, workspace="default")
     assert saved["download_locator"] == str(source.resolve())
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
@@ -781,7 +777,6 @@ async def test_batch_metadata_only_update_preserves_source_contract_and_chunks(
         "https://cdn.example.com/assets/1.pdf"
     )
     _, saved = deps["metadata_index"].upsert.await_args.args
-    assert saved["file_path"] == "https://cdn.example.com/assets/1.pdf"
     assert saved["source_uri"] == "bynder://asset/1"
     assert saved["download_locator"] == "https://cdn.example.com/assets/1.pdf"
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
@@ -837,7 +832,6 @@ async def test_pending_metadata_is_persisted_before_parser_enqueue_failure(
         {
             "filename": "1.pdf",
             "filename_stem": "1",
-            "file_path": "https://cdn.example.com/assets/1.pdf",
             "source_uri": "bynder://asset/1",
             "download_locator": "https://cdn.example.com/assets/1.pdf",
             "file_extension": "pdf",

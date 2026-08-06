@@ -320,7 +320,6 @@ async def ingest_blob(
     title: str | None = Form(None),
     author: str | None = Form(None),
     metadata: str | None = Form(None),
-    metadata_policy: str | None = Form(None),
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Direct file upload ingestion via multipart/form-data.

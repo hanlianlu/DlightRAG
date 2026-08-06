@@ -336,18 +336,18 @@ async def test_mcp_all_workspaces_is_relative_to_query_authorization(
     assert mock_mcp_manager.aretrieve.await_args.kwargs["workspaces"] == allowed
 
 
-async def test_mcp_rejects_invalid_metadata_policy(mock_mcp_manager) -> None:
+async def test_mcp_rejects_unknown_argument_without_echoing_the_url(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "ingest",
         {
             "source_type": "url",
             "url": "https://fetch.example.com/file?signature=secret",
-            "metadata_policy": "loose",
+            "no_such_option": "loose",
         },
     )
 
     assert "Error:" in _tool_text(result)
-    assert "metadata_policy" in _tool_text(result)
+    # A rejected call must not replay the caller's signed URL back to the model.
     assert "signature=secret" not in _tool_text(result)
     mock_mcp_manager.aingest.assert_not_awaited()
 
