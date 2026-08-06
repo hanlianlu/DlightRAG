@@ -71,12 +71,6 @@ class TestMetadataFields:
         assert cm.filterable is True
         assert cm.index_type == "gin"
 
-    def test_page_count_not_filterable(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        pc = next(f for f in METADATA_FIELDS if f.field_id == "page_count")
-        assert pc.filterable is False
-
     def test_all_fields_have_pg_type(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
@@ -99,7 +93,6 @@ def test_metadata_registry_has_source_identity_and_download_locator() -> None:
 def test_extract_system_metadata_stores_distinct_source_and_download_fields() -> None:
     metadata = extract_system_metadata(
         "https://cdn.example.com/assets/1.pdf",
-        ingest_strategy="mineru",
         display_filename="report.pdf",
         source_uri="bynder://asset/1",
         download_locator="https://cdn.example.com/assets/1.pdf",

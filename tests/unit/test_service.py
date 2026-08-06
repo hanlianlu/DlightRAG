@@ -2463,7 +2463,6 @@ class TestRAGServiceLightRAGMainPath:
             return_value={
                 "doc-right": {
                     "department": "finance",
-                    "ingest_strategy": "lightrag_sidecar_unified",
                     "parse_engine": "mineru",
                     "filename": "report.pdf",
                     "metadata_json": {"large": True},

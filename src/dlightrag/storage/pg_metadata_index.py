@@ -97,6 +97,18 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
+    migrations.append(
+        Migration(
+            "drop_uninformative_columns",
+            "Drop metadata columns nothing ever wrote or varied",
+            (
+                "ALTER TABLE dlightrag_doc_metadata "
+                "DROP COLUMN IF EXISTS original_format, "
+                "DROP COLUMN IF EXISTS page_count, "
+                "DROP COLUMN IF EXISTS ingest_strategy",
+            ),
+        )
+    )
     for f in METADATA_FIELDS:
         idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
         if idx_clause is None:

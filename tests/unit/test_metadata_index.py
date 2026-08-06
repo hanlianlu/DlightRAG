@@ -166,7 +166,6 @@ class TestMetadataSQL:
         assert "ON dlightrag_doc_metadata (workspace, download_locator)" in sql
 
     def test_upsert_sql_has_lightrag_operational_fields(self):
-        assert "ingest_strategy" in _UPSERT
         assert "parse_engine" in _UPSERT
         assert "process_options" in _UPSERT
 
@@ -193,7 +192,6 @@ class TestMetadataSQL:
             "file_extension": "pdf",
             "doc_title": "Report",
             "doc_author": "Ada",
-            "ingest_strategy": "lightrag_sidecar_unified",
             "parse_engine": "mineru-iteP",
             "process_options": {"chunker": "recursive"},
         }

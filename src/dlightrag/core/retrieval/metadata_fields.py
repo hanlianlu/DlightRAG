@@ -145,7 +145,6 @@ def normalize_user_metadata(
 def extract_system_metadata(
     path: str | Path,
     *,
-    ingest_strategy: str,
     display_filename: str | None = None,
     source_uri: str,
     download_locator: str,
@@ -166,7 +165,6 @@ def extract_system_metadata(
         "source_uri": source_uri,
         "download_locator": download_locator,
         "file_extension": file_name.suffix.lower().lstrip("."),
-        "ingest_strategy": ingest_strategy,
     }
 
 
@@ -223,9 +221,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         filterable=True,
         index_type="btree",
     ),
-    MetadataFieldDef("original_format", "VARCHAR(32)"),
-    MetadataFieldDef("page_count", "INTEGER"),
-    MetadataFieldDef("ingest_strategy", "VARCHAR(64)"),
     MetadataFieldDef("parse_engine", "VARCHAR(64)"),
     MetadataFieldDef("process_options", "JSONB DEFAULT '{}'"),
     MetadataFieldDef("ingested_at", "TIMESTAMPTZ DEFAULT NOW()"),

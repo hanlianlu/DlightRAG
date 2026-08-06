@@ -461,7 +461,6 @@ class UnifiedIngestionEngine:
         )
         system_metadata = extract_system_metadata(
             download_locator,
-            ingest_strategy="lightrag_sidecar_unified",
             display_filename=display_filename,
             source_uri=source_uri,
             download_locator=download_locator,
@@ -524,7 +523,7 @@ class UnifiedIngestionEngine:
 
         full_doc = await self._stores.get_full_doc(doc_id)
         light_chunks = list((doc_status or {}).get("chunks_list") or [])
-        lightrag_record = self._lightrag_metadata(full_doc, doc_status)
+        lightrag_record = self._lightrag_metadata(full_doc)
         finalized_metadata = _with_finalized_local_download_locator(metadata_record)
         await self._metadata_index.upsert(doc_id, {**finalized_metadata, **lightrag_record})
 
@@ -539,7 +538,6 @@ class UnifiedIngestionEngine:
             "doc_id": doc_id,
             "source_kind": "document",
             "chunks": light_chunks,
-            "ingest_strategy": "lightrag_sidecar_unified",
             "parse_engine": parse_engine,
             "process_options": process_options,
         }
@@ -680,17 +678,11 @@ class UnifiedIngestionEngine:
             await self._stores.update_chunk_bm25_languages(labels)
 
     @staticmethod
-    def _lightrag_metadata(
-        full_doc: Mapping[str, Any] | None,
-        doc_status: Mapping[str, Any] | None,
-    ) -> dict[str, Any]:
+    def _lightrag_metadata(full_doc: Mapping[str, Any] | None) -> dict[str, Any]:
         full_doc = full_doc or {}
-        doc_status = doc_status or {}
         return {
             "lightrag.parse_engine": full_doc.get("parse_engine"),
             "lightrag.process_options": full_doc.get("process_options"),
-            "lightrag.chunk_options": full_doc.get("chunk_options") or {},
-            "lightrag.content_hash": doc_status.get("content_hash") or full_doc.get("content_hash"),
             "lightrag.sidecar_location": full_doc.get("sidecar_location"),
         }
 
@@ -747,7 +739,6 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
         "source_uri": metadata_record.get("source_uri"),
         "download_locator": metadata_record.get("download_locator"),
         "file_extension": metadata_record.get("file_extension"),
-        "ingest_strategy": metadata_record.get("ingest_strategy"),
         "doc_title": metadata_record.get("doc_title"),
         "doc_author": metadata_record.get("doc_author"),
         "user_metadata": deepcopy(metadata_record.get("user_metadata")),
