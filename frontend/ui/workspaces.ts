@@ -231,12 +231,18 @@ export function createWorkspace(input: HTMLInputElement): void {
     const name = input.value.trim();
     if (!name) return;
     input.disabled = true;
-    htmx.ajax('POST', '/web/workspaces/create', {
+    // htmx resolves its promise for 4xx/5xx too, so the outcome has to come
+    // from the event; .catch() alone leaves the input disabled forever.
+    document.body.addEventListener('htmx:afterRequest', function once(event) {
+        const detail = (event as HTMXEvent).detail;
+        if (!detail.xhr.responseURL.endsWith('/web/workspaces/create')) return;
+        document.body.removeEventListener('htmx:afterRequest', once);
+        input.disabled = false;
+        if (!detail.successful) showToast('Failed to create workspace', 5000);
+    });
+    void htmx.ajax('POST', '/web/workspaces/create', {
         values: {workspace_name: name},
         swap: 'none',
-    }).catch(() => {
-        input.disabled = false;
-        showToast('Failed to create workspace', 5000);
     });
 }
 
