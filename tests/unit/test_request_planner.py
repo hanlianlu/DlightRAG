@@ -34,9 +34,11 @@ class TestBuildSchemaSection:
         assert _build_schema_section(schema) == ""
 
     def test_lists_only_the_filters_that_hold_data(self):
-        result = _build_schema_section({"filters": ["filename", "date_from", "date_to"]})
+        result = _build_schema_section(
+            {"filters": ["filename", "creation_date_from", "creation_date_to"]}
+        )
 
-        assert "filename, date_from, date_to" in result
+        assert "filename, creation_date_from, creation_date_to" in result
 
 
 class TestBuildCustomKeysHint:
@@ -316,7 +318,10 @@ class TestPlanWithLLM:
             return_value=json.dumps(
                 {
                     "standalone_query": "2024 reports",
-                    "filters": {"date_from": "2024-01-01", "date_to": "2024-12-31"},
+                    "filters": {
+                        "creation_date_from": "2024-01-01",
+                        "creation_date_to": "2024-12-31",
+                    },
                     "filter_confidence": "high",
                     "filter_evidence": [
                         {
@@ -332,15 +337,15 @@ class TestPlanWithLLM:
         planner = QueryPlanner(llm_func=llm)
         plan = await planner.plan("2024 reports")
         assert plan.metadata_filter is not None
-        assert plan.metadata_filter.date_from is not None
-        assert plan.metadata_filter.date_to is not None
+        assert plan.metadata_filter.creation_date_from is not None
+        assert plan.metadata_filter.creation_date_to is not None
 
     async def test_invalid_date_ignored(self):
         llm = AsyncMock(
             return_value=json.dumps(
                 {
                     "standalone_query": "query",
-                    "filters": {"date_from": "not-a-date", "doc_author": "Auth"},
+                    "filters": {"creation_date_from": "not-a-date", "doc_author": "Auth"},
                     "filter_confidence": "high",
                     "filter_evidence": [
                         {
@@ -362,7 +367,7 @@ class TestPlanWithLLM:
         planner = QueryPlanner(llm_func=llm)
         plan = await planner.plan("query written by Auth not-a-date")
         assert plan.metadata_filter is not None
-        assert plan.metadata_filter.date_from is None
+        assert plan.metadata_filter.creation_date_from is None
         assert plan.metadata_filter.doc_author == "Auth"
 
     async def test_low_confidence_llm_filter_is_ignored(self):

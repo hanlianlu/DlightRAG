@@ -1,8 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Metadata field registry — single source of truth for document metadata columns."""
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -42,6 +43,7 @@ class DeclaredMetadataField:
 class NormalizedUserMetadata:
     filterable: dict[str, Any]
     raw_json: dict[str, Any]
+    system: dict[str, Any] = field(default_factory=dict)
 
 
 class MetadataFieldRegistry:
@@ -108,6 +110,34 @@ def _default_normalizer(field_type: str, filterable: bool) -> str:
     return "identity"
 
 
+def _coerce_creation_date(value: Any) -> datetime:
+    """Accept what a caller can serialize; store the instant the filter compares."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"creation_date must be an ISO 8601 date or timestamp, got {value!r}"
+            ) from exc
+    else:
+        raise ValueError(
+            f"creation_date must be an ISO 8601 date or timestamp, got {type(value).__name__}"
+        )
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(UTC).replace(tzinfo=None)
+
+
+# Built-in columns a caller may set through `metadata`. Everything else about a
+# document is derived from the file, and doc_title/doc_author have their own
+# ingest parameters, so this stays the one attribute with no other way in.
+_CALLER_SETTABLE_COLUMNS: Mapping[str, Callable[[Any], Any]] = MappingProxyType(
+    {"creation_date": _coerce_creation_date}
+)
+
+
 def normalize_user_metadata(
     metadata: Mapping[str, Any] | None,
     registry: MetadataFieldRegistry,
@@ -120,9 +150,15 @@ def normalize_user_metadata(
         return NormalizedUserMetadata(filterable={}, raw_json={})
     filterable: dict[str, Any] = {}
     raw_json: dict[str, Any] = {}
+    system: dict[str, Any] = {}
     for key, value in metadata.items():
         if key.startswith(("sys.", "lightrag.", "user.")):
             raise ValueError(f"Metadata key uses reserved namespace: {key}")
+        coerce = _CALLER_SETTABLE_COLUMNS.get(key)
+        if coerce is not None:
+            # A typed column of its own, so it is neither JSONB nor re-declarable.
+            system[key] = coerce(value)
+            continue
         field_def = registry.get(key)
         if field_def is None:
             if metadata_policy == "reject_unknown":
@@ -133,7 +169,7 @@ def normalize_user_metadata(
         if metadata_policy != "store_only" and field_def.filterable:
             filterable[key] = _normalize_value(value, field_def.normalizer)
         raw_json[key] = value
-    return NormalizedUserMetadata(filterable=filterable, raw_json=raw_json)
+    return NormalizedUserMetadata(filterable=filterable, raw_json=raw_json, system=system)
 
 
 def extract_system_metadata(
@@ -247,8 +283,8 @@ FILTER_FIELD_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "file_extension": ("file_extension",),
         "doc_title": ("doc_title",),
         "doc_author": ("doc_author",),
-        "date_from": ("creation_date",),
-        "date_to": ("creation_date",),
+        "creation_date_from": ("creation_date",),
+        "creation_date_to": ("creation_date",),
     }
 )
 

@@ -394,7 +394,7 @@ async def test_metadata_field_schema_offers_a_date_range_from_one_column() -> No
 
     schema = await idx.get_field_schema()
 
-    assert schema == {"filters": ["date_from", "date_to"], "custom_keys": []}
+    assert schema == {"filters": ["creation_date_from", "creation_date_to"], "custom_keys": []}
 
 
 async def test_metadata_field_schema_reads_multiple_workspaces_in_one_operation() -> None:

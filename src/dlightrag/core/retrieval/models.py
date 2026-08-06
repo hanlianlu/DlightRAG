@@ -15,8 +15,8 @@ class MetadataFilter(BaseModel):
     file_extension: str | None = None
     doc_title: str | None = None
     doc_author: str | None = None
-    date_from: datetime | None = None
-    date_to: datetime | None = None
+    creation_date_from: datetime | None = None
+    creation_date_to: datetime | None = None
     custom: dict[str, Any] | None = None
 
     @field_validator(
@@ -41,7 +41,7 @@ class MetadataFilter(BaseModel):
             return None
         return value.lstrip(".").lower()
 
-    @field_validator("date_from", "date_to")
+    @field_validator("creation_date_from", "creation_date_to")
     @classmethod
     def _as_utc(cls, value: datetime | None) -> datetime | None:
         """Store one instant regardless of how the caller wrote it.

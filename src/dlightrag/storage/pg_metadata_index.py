@@ -359,13 +359,13 @@ class PGMetadataIndex:
             idx += 1
 
         # Date range
-        if filters.date_from:
+        if filters.creation_date_from:
             conditions.append(f"creation_date >= ${idx}")
-            params.append(filters.date_from)
+            params.append(filters.creation_date_from)
             idx += 1
-        if filters.date_to:
+        if filters.creation_date_to:
             conditions.append(f"creation_date <= ${idx}")
-            params.append(filters.date_to)
+            params.append(filters.creation_date_to)
             idx += 1
 
         # JSONB containment

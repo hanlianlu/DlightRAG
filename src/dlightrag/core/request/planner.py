@@ -135,8 +135,8 @@ class QueryPlannerFilters(BaseModel):
     file_extension: str | None = None
     doc_title: str | None = None
     doc_author: str | None = None
-    date_from: str | None = None
-    date_to: str | None = None
+    creation_date_from: str | None = None
+    creation_date_to: str | None = None
     custom: dict[str, str | int | float | bool | None] | None = None
 
 
@@ -744,16 +744,16 @@ class QueryPlanner:
         # Handle date fields specially
         metadata_filter: MetadataFilter | None = None
         if clean:
-            date_from_str = clean.pop("date_from", None)
-            date_to_str = clean.pop("date_to", None)
+            creation_date_from_str = clean.pop("creation_date_from", None)
+            creation_date_to_str = clean.pop("creation_date_to", None)
             try:
                 mf = MetadataFilter(**clean)
-                if date_from_str:
+                if creation_date_from_str:
                     with suppress(ValueError, TypeError):
-                        mf.date_from = datetime.fromisoformat(date_from_str)
-                if date_to_str:
+                        mf.creation_date_from = datetime.fromisoformat(creation_date_from_str)
+                if creation_date_to_str:
                     with suppress(ValueError, TypeError):
-                        mf.date_to = datetime.fromisoformat(date_to_str)
+                        mf.creation_date_to = datetime.fromisoformat(creation_date_to_str)
                 metadata_filter = mf if not mf.is_empty() else None
             except Exception:
                 logger.warning(
@@ -790,8 +790,8 @@ class QueryPlanner:
             "file_extension",
             "doc_title",
             "doc_author",
-            "date_from",
-            "date_to",
+            "creation_date_from",
+            "creation_date_to",
             "custom",
         ]
         for field in filter_fields:

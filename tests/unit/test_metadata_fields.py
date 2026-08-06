@@ -1,11 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for storage.metadata_fields — field registry."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 from dlightrag.core.retrieval.metadata_fields import (
     METADATA_FIELDS,
     MetadataFieldRegistry,
+    NormalizedUserMetadata,
     extract_system_metadata,
     normalize_user_metadata,
 )
@@ -133,7 +136,9 @@ class TestDerivedFunctions:
         # A named file is matched against the stored name and its stem.
         assert FILTER_FIELD_COLUMNS["filename"] == ("filename", "filename_stem")
         # One column backs both ends of the range the planner emits.
-        assert FILTER_FIELD_COLUMNS["date_from"] == FILTER_FIELD_COLUMNS["date_to"]
+        assert (
+            FILTER_FIELD_COLUMNS["creation_date_from"] == FILTER_FIELD_COLUMNS["creation_date_to"]
+        )
 
 
 def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
@@ -309,3 +314,51 @@ async def test_metadata_update_revalidates_without_reindexing() -> None:
     _, saved = service._metadata_index.upsert.await_args.args
     assert saved["metadata_filterable"]["author"] == "ada lovelace"
     service._lightrag.apipeline_enqueue_documents.assert_not_called()
+
+
+class TestCallerSettableColumns:
+    """creation_date is the one filterable document attribute with no ingest parameter."""
+
+    @staticmethod
+    def _normalize(value: object) -> NormalizedUserMetadata:
+        return normalize_user_metadata(
+            {"creation_date": value}, MetadataFieldRegistry.from_config({})
+        )
+
+    def test_iso_date_reaches_the_column_not_jsonb(self) -> None:
+        norm = self._normalize("2024-03-05")
+
+        assert norm.system == {"creation_date": datetime(2024, 3, 5, 0, 0)}
+        assert norm.raw_json == {}
+        assert norm.filterable == {}
+
+    def test_offset_is_converted_to_the_same_instant_the_filter_uses(self) -> None:
+        norm = self._normalize("2024-01-01T08:00:00+08:00")
+
+        assert norm.system == {"creation_date": datetime(2024, 1, 1, 0, 0)}
+
+    def test_bare_timestamp_is_read_as_utc(self) -> None:
+        norm = self._normalize("2024-01-01T12:30:00")
+
+        assert norm.system == {"creation_date": datetime(2024, 1, 1, 12, 30)}
+
+    def test_datetime_object_is_accepted(self) -> None:
+        norm = self._normalize(datetime(2024, 1, 1, 9, 0, tzinfo=UTC))
+
+        assert norm.system == {"creation_date": datetime(2024, 1, 1, 9, 0)}
+
+    @pytest.mark.parametrize("value", ["2024/01/01", "not-a-date", 1704067200])
+    def test_unparseable_value_is_rejected_loudly(self, value: object) -> None:
+        with pytest.raises(ValueError, match="creation_date must be an ISO 8601"):
+            self._normalize(value)
+
+    def test_declaring_it_as_a_custom_field_does_not_divert_it(self) -> None:
+        registry = MetadataFieldRegistry.from_config(
+            {"creation_date": {"type": "string", "filterable": True}}
+        )
+
+        norm = normalize_user_metadata({"creation_date": "2024-03-05"}, registry)
+
+        # The built-in column wins; it must not also land in custom_metadata.
+        assert norm.system == {"creation_date": datetime(2024, 3, 5, 0, 0)}
+        assert norm.filterable == {}

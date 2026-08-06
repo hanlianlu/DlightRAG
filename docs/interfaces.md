@@ -287,7 +287,6 @@ identically at ingest and at query time so containment matches; set
 System metadata such as `filename`, `filename_stem`, `file_extension`,
 `doc_title`, `doc_author`, and parser details is extracted or
 mapped by DlightRAG. User metadata follows the configured policy:
-
 | Policy | Behavior |
 |---|---|
 | `validate` | Default. Declared filterable fields are normalized and promoted to `custom_metadata`; undeclared fields are stored as JSON enrichment when `allow_ad_hoc_json` is true. |
@@ -298,6 +297,13 @@ Query filters use the declared schema. For custom metadata, pass
 `filters.custom`, for example `{"custom": {"department": "finance"}}`.
 Undeclared JSON enrichment is retained for display/debugging, but is not part
 of the supported filter surface.
+
+`creation_date` is the document's own date and is the one built-in column a
+caller sets through `metadata`, since `title` and `author` have their own ingest
+parameters. Pass an ISO 8601 date or timestamp, with or without an offset; an
+offset is converted to UTC and a bare value is read as UTC. Anything else is
+rejected at ingest rather than stored unfiltered. Filter it with
+`creation_date_from` / `creation_date_to`.
 
 ### Ingestion Response
 
@@ -561,7 +567,7 @@ async for token in token_iter:
 | `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages for multi-turn follow-ups. Stateless: never persisted, so the caller re-sends the turns it wants each request. Folded into the planner's standalone-query rewrite and answer generation. Capped at 100 messages. |
-| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
+| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `doc_title`, `doc_author`, `creation_date_from`/`creation_date_to`, and declared `custom` fields |
 
 ### REST API
 

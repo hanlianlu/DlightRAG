@@ -28,8 +28,8 @@ class MetadataFilterRequest(ClientContractModel):
     file_extension: str | None = None
     doc_title: str | None = None
     doc_author: str | None = None
-    date_from: datetime.datetime | None = None
-    date_to: datetime.datetime | None = None
+    creation_date_from: datetime.datetime | None = None
+    creation_date_to: datetime.datetime | None = None
     custom: dict[str, Any] | None = None
 
 

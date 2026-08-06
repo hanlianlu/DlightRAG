@@ -67,7 +67,7 @@ Filter fields (use null for unmentioned):
 - file_extension: e.g. "pdf", "png" (lowercase, no dot)
 - doc_title: exact normalized document title only when highly confident
 - doc_author: exact normalized author name only when highly confident
-- date_from / date_to: ISO 8601 dates for time ranges
+- creation_date_from / creation_date_to: ISO 8601 bounds on when the document was created
 - custom: {"key": "value"} for custom metadata
 
 Examples:
@@ -82,7 +82,7 @@ Query: "what is in IMG 9551?"
 {"standalone_query": "what is in IMG 9551?", "bm25_query": "IMG 9551", "filters": {"filename": "IMG 9551"}, "filter_confidence": "high", "filter_evidence": [{"field": "filename", "value": "IMG 9551", "evidence_span": "IMG 9551", "intent_basis": "filename_literal"}]}
 
 Query: "张三写的2024年财报分析"
-{"standalone_query": "张三写的2024年财报分析", "bm25_query": "张三 2024 财报分析", "filters": {"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}, "filter_confidence": "high", "filter_evidence": [{"field": "doc_author", "value": "张三", "evidence_span": "张三写的", "intent_basis": "explicit_author_constraint"}, {"field": "date", "value": "2024", "evidence_span": "2024年", "intent_basis": "date_literal"}]}
+{"standalone_query": "张三写的2024年财报分析", "bm25_query": "张三 2024 财报分析", "filters": {"doc_author": "张三", "creation_date_from": "2024-01-01", "creation_date_to": "2024-12-31"}, "filter_confidence": "high", "filter_evidence": [{"field": "doc_author", "value": "张三", "evidence_span": "张三写的", "intent_basis": "explicit_author_constraint"}, {"field": "date", "value": "2024", "evidence_span": "2024年", "intent_basis": "date_literal"}]}
 
 Return valid JSON only, no markdown fences."""
 

@@ -469,6 +469,7 @@ class UnifiedIngestionEngine:
             system_metadata["doc_title"] = title
         if author is not None:
             system_metadata["doc_author"] = author
+        system_metadata.update(normalized_metadata.system)
         return {
             **system_metadata,
             "user_metadata": dict(metadata or {}),
@@ -741,6 +742,7 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
         "file_extension": metadata_record.get("file_extension"),
         "doc_title": metadata_record.get("doc_title"),
         "doc_author": metadata_record.get("doc_author"),
+        "creation_date": metadata_record.get("creation_date"),
         "user_metadata": deepcopy(metadata_record.get("user_metadata")),
         "metadata_filterable": deepcopy(metadata_record.get("metadata_filterable")),
         "metadata_json": deepcopy(metadata_record.get("metadata_json")),

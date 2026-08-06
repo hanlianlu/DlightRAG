@@ -2100,6 +2100,7 @@ class RAGService:
         await self._metadata_index.upsert(
             doc_id,
             {
+                **normalized.system,
                 "metadata_update_mode": mode,
                 "user_metadata": dict(data),
                 "metadata_filterable": normalized.filterable,
