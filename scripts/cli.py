@@ -24,7 +24,7 @@ Usage:
     # Query & answer (requires API server: docker compose up dlightrag-api)
     uv run scripts/cli.py query "What are the key findings?" --chunk-top-k 30
     uv run scripts/cli.py query "findings?" --workspaces project-a project-b
-    uv run scripts/cli.py query "findings?" --filter-doc-author Ada
+    uv run scripts/cli.py query "findings?" --filter-author Ada
     uv run scripts/cli.py answer "What are the key findings?"
     uv run scripts/cli.py answer "summarize chart" --query-image data:image/png;base64,... --answer-context-top-k 4
     uv run scripts/cli.py chat
@@ -157,13 +157,11 @@ def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
     filters = dict(getattr(args, "filters_json", None) or {})
     field_map = {
         "filter_filename": "filename",
-        "filter_filename_stem": "filename_stem",
-        "filter_filename_pattern": "filename_pattern",
         "filter_file_extension": "file_extension",
-        "filter_doc_title": "doc_title",
-        "filter_doc_author": "doc_author",
-        "filter_date_from": "date_from",
-        "filter_date_to": "date_to",
+        "filter_title": "title",
+        "filter_author": "author",
+        "filter_creation_date_from": "creation_date_from",
+        "filter_creation_date_to": "creation_date_to",
     }
     for attr, field in field_map.items():
         value = getattr(args, attr, None)
@@ -420,13 +418,11 @@ def _add_filter_options(parser: argparse.ArgumentParser) -> None:
         help="Full metadata filters JSON object sent to the API",
     )
     parser.add_argument("--filter-filename", dest="filter_filename")
-    parser.add_argument("--filter-filename-stem", dest="filter_filename_stem")
-    parser.add_argument("--filter-filename-pattern", dest="filter_filename_pattern")
     parser.add_argument("--filter-file-extension", dest="filter_file_extension")
-    parser.add_argument("--filter-doc-title", dest="filter_doc_title")
-    parser.add_argument("--filter-doc-author", dest="filter_doc_author")
-    parser.add_argument("--filter-date-from", dest="filter_date_from")
-    parser.add_argument("--filter-date-to", dest="filter_date_to")
+    parser.add_argument("--filter-title", dest="filter_title")
+    parser.add_argument("--filter-author", dest="filter_author")
+    parser.add_argument("--filter-creation-date-from", dest="filter_creation_date_from")
+    parser.add_argument("--filter-creation-date-to", dest="filter_creation_date_to")
     parser.add_argument(
         "--filter-custom-json",
         type=_json_object_arg,

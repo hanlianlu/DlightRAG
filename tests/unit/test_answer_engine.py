@@ -95,7 +95,7 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "_workspace": "default",
                 "metadata": _source_metadata(
                     "/docs/report.pdf",
-                    doc_title="2025 Annual Report",
+                    title="2025 Annual Report",
                 ),
             },
             {
@@ -1177,7 +1177,7 @@ class TestBuildExcerptBlocks:
         assert first_image_idx > doc1_header_idx
 
     def test_enriched_image_labels(self) -> None:
-        """Image labels include metadata like doc_title and page number."""
+        """Image labels include metadata like title and page number."""
         contexts = _multi_doc_contexts()
         from dlightrag.citations.indexer import CitationIndexer
 
@@ -1190,7 +1190,7 @@ class TestBuildExcerptBlocks:
         text_blocks = [b for b in blocks if b.get("type") == "text"]
         all_text = "\n".join(b["text"] for b in text_blocks)
 
-        # c1 has metadata doc_title="2025 Annual Report" and page_number=3
+        # c1 has metadata title="2025 Annual Report" and page_number=3
         assert '"2025 Annual Report"' in all_text
         assert "Page 3" in all_text
 

@@ -12,6 +12,10 @@ from typing import Any
 from dlightrag.contracts import MetadataPolicy
 
 
+class MetadataValidationError(ValueError):
+    """Caller-supplied metadata was rejected, as distinct from an internal ValueError."""
+
+
 @dataclass(frozen=True)
 class MetadataFieldDef:
     """Defines a metadata column in dlightrag_doc_metadata.
@@ -118,11 +122,11 @@ def _coerce_creation_date(value: Any) -> datetime:
         try:
             parsed = datetime.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError(
+            raise MetadataValidationError(
                 f"creation_date must be an ISO 8601 date or timestamp, got {value!r}"
             ) from exc
     else:
-        raise ValueError(
+        raise MetadataValidationError(
             f"creation_date must be an ISO 8601 date or timestamp, got {type(value).__name__}"
         )
     if parsed.tzinfo is None:
@@ -131,8 +135,8 @@ def _coerce_creation_date(value: Any) -> datetime:
 
 
 # Built-in columns a caller may set through `metadata`. Everything else about a
-# document is derived from the file, and doc_title/doc_author have their own
-# ingest parameters, so this stays the one attribute with no other way in.
+# document is derived from the file, and title/author have their own ingest
+# parameters, so this stays the one attribute with no other way in.
 _CALLER_SETTABLE_COLUMNS: Mapping[str, Callable[[Any], Any]] = MappingProxyType(
     {"creation_date": _coerce_creation_date}
 )
@@ -153,16 +157,20 @@ def normalize_user_metadata(
     system: dict[str, Any] = {}
     for key, value in metadata.items():
         if key.startswith(("sys.", "lightrag.", "user.")):
-            raise ValueError(f"Metadata key uses reserved namespace: {key}")
+            raise MetadataValidationError(f"Metadata key uses reserved namespace: {key}")
         coerce = _CALLER_SETTABLE_COLUMNS.get(key)
         if coerce is not None:
             # A typed column of its own, so it is neither JSONB nor re-declarable.
             system[key] = coerce(value)
             continue
+        if key in _RESERVED_METADATA_KEYS:
+            raise MetadataValidationError(
+                f"{key} is a built-in metadata field and cannot be set through metadata"
+            )
         field_def = registry.get(key)
         if field_def is None:
             if metadata_policy == "reject_unknown":
-                raise ValueError(f"undeclared metadata field: {key}")
+                raise MetadataValidationError(f"undeclared metadata field: {key}")
             if allow_ad_hoc_json:
                 raw_json[key] = value
             continue
@@ -226,12 +234,12 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         index_type="btree",
     ),
     MetadataFieldDef(
-        "doc_title",
+        "title",
         "TEXT",
         index_type="btree",
     ),
     MetadataFieldDef(
-        "doc_author",
+        "author",
         "VARCHAR(255)",
         index_type="btree",
     ),
@@ -269,11 +277,6 @@ def system_field_ids() -> frozenset[str]:
     return frozenset(f.field_id for f in METADATA_FIELDS if f.field_id != "custom_metadata")
 
 
-def field_by_id(field_id: str) -> MetadataFieldDef | None:
-    """Look up a field definition by its ``field_id``, or return None."""
-    return _FIELD_BY_ID.get(field_id)
-
-
 # Filter fields the planner may emit, mapped to the columns whose data backs
 # them. Neither side is 1:1: a named file is matched against two columns, and
 # one date column backs both ends of a range.
@@ -281,13 +284,16 @@ FILTER_FIELD_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "filename": ("filename", "filename_stem"),
         "file_extension": ("file_extension",),
-        "doc_title": ("doc_title",),
-        "doc_author": ("doc_author",),
+        "title": ("title",),
+        "author": ("author",),
         "creation_date_from": ("creation_date",),
         "creation_date_to": ("creation_date",),
     }
 )
 
 
-# Internal lookup table (private)
-_FIELD_BY_ID: dict[str, MetadataFieldDef] = {f.field_id: f for f in METADATA_FIELDS}
+# Names that already resolve to a column or a filter. Accepting them as user
+# metadata would store the value in JSONB where no filter ever reads it.
+_RESERVED_METADATA_KEYS: frozenset[str] = (
+    frozenset(FILTER_FIELD_COLUMNS) | {f.field_id for f in METADATA_FIELDS}
+) - frozenset(_CALLER_SETTABLE_COLUMNS)

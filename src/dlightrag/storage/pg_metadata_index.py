@@ -8,7 +8,6 @@ from typing import Any
 from dlightrag.core.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     METADATA_FIELDS,
-    field_by_id,
     system_field_ids,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
@@ -58,7 +57,26 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             "0001_base",
             "Create document metadata table",
             (_CREATE_TABLE,),
-        )
+        ),
+        # Must precede the ensure-column pass, which would otherwise add an
+        # empty column under the new name and leave the old one stranded.
+        Migration(
+            "title_author_single_name",
+            "Name the title and author columns exactly as callers and filters do",
+            (
+                "DO $$ BEGIN "
+                "IF EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'dlightrag_doc_metadata' AND column_name = 'doc_title') "
+                "THEN ALTER TABLE dlightrag_doc_metadata RENAME COLUMN doc_title TO title; "
+                "END IF; "
+                "IF EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'dlightrag_doc_metadata' AND column_name = 'doc_author') "
+                "THEN ALTER TABLE dlightrag_doc_metadata RENAME COLUMN doc_author TO author; "
+                "END IF; END $$",
+                "DROP INDEX IF EXISTS idx_dm_doc_title",
+                "DROP INDEX IF EXISTS idx_dm_doc_author",
+            ),
+        ),
     ]
     for f in METADATA_FIELDS:
         migrations.append(
@@ -323,9 +341,8 @@ class PGMetadataIndex:
     async def query(self, filters: MetadataFilter) -> list[str]:
         """Query for doc_ids matching the given filters.
 
-        Match strategy per field type:
+        Match strategy per field:
         - string fields: exact match (case-insensitive)
-        - integer fields: exact match
         - date fields: range queries (from/to)
         - JSONB: containment (@>)
         - filename: exact on name or stem, falling back to a contains match
@@ -334,21 +351,13 @@ class PGMetadataIndex:
         params: list[Any] = [self._workspace]
         idx = 2
 
-        # Searchable fields — dispatch by field type
-        for attr in ("file_extension", "doc_title", "doc_author"):
+        for attr in ("file_extension", "title", "author"):
             value = getattr(filters, attr, None)
             if value is None:
                 continue
-            fdef = field_by_id(attr)
-            if fdef is None:
-                continue
-            if fdef.pg_type.upper() in {"INTEGER", "BIGINT", "SMALLINT", "INT"}:
-                conditions.append(f"{attr} = ${idx}")
-                params.append(value)
-            else:
-                # Deterministic metadata matching: exact case-insensitive.
-                conditions.append(f"LOWER({attr}) = LOWER(${idx})")
-                params.append(value)
+            # Deterministic metadata matching: exact case-insensitive.
+            conditions.append(f"LOWER({attr}) = LOWER(${idx})")
+            params.append(value)
             idx += 1
 
         filename_slot: tuple[int, int] | None = None

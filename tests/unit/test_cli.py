@@ -62,7 +62,7 @@ def test_query_payload_supports_current_retrieval_options() -> None:
             "--workspaces",
             "finance",
             "legal",
-            "--filter-doc-title",
+            "--filter-title",
             "Manual",
             "--filter-custom-json",
             '{"department":"finance"}',
@@ -77,7 +77,7 @@ def test_query_payload_supports_current_retrieval_options() -> None:
         "chunk_top_k": 5,
         "workspaces": ["finance", "legal"],
         "filters": {
-            "doc_title": "Manual",
+            "title": "Manual",
             "custom": {"department": "finance"},
         },
         "query_images": [_image_block("data:image/png;base64,abc")],
@@ -92,7 +92,7 @@ def test_answer_payload_supports_current_answer_options() -> None:
             "9",
             "--answer-context-top-k",
             "4",
-            "--filter-doc-author",
+            "--filter-author",
             "Ada",
             "--query-image",
             "https://example.test/chart.png",
@@ -104,7 +104,7 @@ def test_answer_payload_supports_current_answer_options() -> None:
         "stream": False,
         "chunk_top_k": 9,
         "answer_context_top_k": 4,
-        "filters": {"doc_author": "Ada"},
+        "filters": {"author": "Ada"},
         "query_images": [_image_block("https://example.test/chart.png")],
     }
 

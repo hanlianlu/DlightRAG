@@ -7,7 +7,6 @@ type AsymmetricMode = Literal["auto", "require", "disable"]
 type ChatProvider = Literal["openai", "anthropic", "gemini"]
 type InputModality = Literal["auto", "text", "multimodal"]
 type MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
-type MetadataUpdateMode = Literal["merge", "replace"]
 type ResolvedInputModality = Literal["text", "multimodal"]
 type ServiceRole = Literal["writer", "reader"]
 type VisualAssetSize = Literal["full", "thumb"]
@@ -17,7 +16,6 @@ __all__ = [
     "ChatProvider",
     "InputModality",
     "MetadataPolicy",
-    "MetadataUpdateMode",
     "ResolvedInputModality",
     "ServiceRole",
     "VisualAssetSize",

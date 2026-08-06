@@ -152,8 +152,8 @@ class TestMetadataSQL:
         assert "ON dlightrag_doc_metadata (LOWER(filename))" in sql
         assert "ON dlightrag_doc_metadata (LOWER(filename_stem))" in sql
         assert "ON dlightrag_doc_metadata (LOWER(file_extension))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(doc_title))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(doc_author))" in sql
+        assert "ON dlightrag_doc_metadata (LOWER(title))" in sql
+        assert "ON dlightrag_doc_metadata (LOWER(author))" in sql
 
     def test_non_string_btree_indexes_remain_plain(self):
         sql = _index_sql()
@@ -190,8 +190,8 @@ class TestMetadataSQL:
             "filename_stem": "report",
             "file_path": "/tmp/report.pdf",
             "file_extension": "pdf",
-            "doc_title": "Report",
-            "doc_author": "Ada",
+            "title": "Report",
+            "author": "Ada",
             "parse_engine": "mineru-iteP",
             "process_options": {"chunker": "recursive"},
         }
@@ -357,8 +357,8 @@ async def test_metadata_field_schema_reports_only_populated_filters() -> None:
                 "filename": True,
                 "filename_stem": True,
                 "file_extension": True,
-                "doc_title": False,
-                "doc_author": False,
+                "title": False,
+                "author": False,
                 "creation_date": False,
                 "custom_keys": ["department"],
             }

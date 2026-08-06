@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field
 
 from dlightrag.citations.schemas import SourceReferencePayload
-from dlightrag.contracts import MetadataPolicy, MetadataUpdateMode, ServiceRole
+from dlightrag.contracts import MetadataPolicy, ServiceRole
 from dlightrag.core.client_contracts import (
     AnswerRequestContract,
     ClientContractModel,
@@ -26,8 +26,8 @@ class MetadataFilterRequest(ClientContractModel):
 
     filename: str | None = None
     file_extension: str | None = None
-    doc_title: str | None = None
-    doc_author: str | None = None
+    title: str | None = None
+    author: str | None = None
     creation_date_from: datetime.datetime | None = None
     creation_date_to: datetime.datetime | None = None
     custom: dict[str, Any] | None = None
@@ -75,7 +75,6 @@ class ResetRequest(ClientContractModel):
 
 class MetadataUpdateRequest(ClientContractModel):
     metadata: dict[str, Any]
-    mode: MetadataUpdateMode = "merge"
     metadata_policy: MetadataPolicy | None = None
 
 

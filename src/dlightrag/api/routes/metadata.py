@@ -64,7 +64,6 @@ async def update_metadata(
         ws,
         doc_id,
         body.metadata,
-        mode=body.mode,
         metadata_policy=body.metadata_policy,
     )
     return {"status": "success", "doc_id": doc_id}

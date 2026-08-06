@@ -518,7 +518,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "query_images": [
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
             ],
-            "filters": {"doc_title": "Manual"},
+            "filters": {"title": "Manual"},
             "semantic_highlights": True,
         },
     )
@@ -543,7 +543,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert "conversation_history" not in call_kwargs
     assert "session_id" not in call_kwargs
     assert "referenced_image_ids" not in call_kwargs
-    assert call_kwargs["filters"].doc_title == "Manual"
+    assert call_kwargs["filters"].title == "Manual"
     assert call_kwargs["semantic_highlights"] is True
 
 

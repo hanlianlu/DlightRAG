@@ -35,13 +35,13 @@ class TestMetadataFilter:
     def test_text_filters_are_trimmed(self) -> None:
         f = MetadataFilter(
             filename=" report.pdf ",
-            doc_title=" Annual Report ",
-            doc_author=" Zhang San ",
+            title=" Annual Report ",
+            author=" Zhang San ",
         )
 
         assert f.filename == "report.pdf"
-        assert f.doc_title == "Annual Report"
-        assert f.doc_author == "Zhang San"
+        assert f.title == "Annual Report"
+        assert f.author == "Zhang San"
 
     def test_date_range_makes_non_empty(self) -> None:
         f = MetadataFilter(creation_date_from=datetime(2024, 1, 1))
@@ -51,8 +51,8 @@ class TestMetadataFilter:
         f = MetadataFilter(
             filename=None,
             file_extension=None,
-            doc_title=None,
-            doc_author=None,
+            title=None,
+            author=None,
             creation_date_from=None,
             creation_date_to=None,
             custom=None,

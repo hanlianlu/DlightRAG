@@ -1373,12 +1373,12 @@ class TestAnswerEndpoint:
             json={
                 "query": "What did Ada write?",
                 "stream": False,
-                "filters": {"doc_author": "Ada"},
+                "filters": {"author": "Ada"},
             },
         )
         assert resp.status_code == 200
         filters = mock_manager.aanswer.call_args.kwargs["filters"]
-        assert filters.doc_author == "Ada"
+        assert filters.author == "Ada"
 
     async def test_answer_forwards_answer_context_limits(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1636,12 +1636,12 @@ class TestAnswerStreamMode:
             json={
                 "query": "Stream filtered",
                 "stream": True,
-                "filters": {"doc_title": "Manual"},
+                "filters": {"title": "Manual"},
             },
         )
         assert resp.status_code == 200
         filters = mock_manager.aanswer_stream.call_args.kwargs["filters"]
-        assert filters.doc_title == "Manual"
+        assert filters.title == "Manual"
 
     async def test_stream_forwards_answer_context_limits(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1941,6 +1941,20 @@ class TestAnswerStreamMode:
         body = resp.json()
         assert body["error_type"] == "validation"
         assert body["error_kind"] == CURRENT_IMAGES_UNSUPPORTED
+
+    async def test_rejected_metadata_is_a_client_error_not_a_500(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        """Metadata validation happens below the request model, so it needs its own mapping."""
+        from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
+
+        mock_manager.aupdate_metadata = AsyncMock(
+            side_effect=MetadataValidationError("title is a built-in metadata field")
+        )
+        app.state.manager = mock_manager
+        resp = await client.post("/metadata/doc-1", json={"metadata": {"title": "X"}})
+        assert resp.status_code == 400
+        assert resp.json()["error_type"] == "validation"
 
     async def test_stream_capability_error_becomes_structured_sse_error(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

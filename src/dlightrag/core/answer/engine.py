@@ -930,7 +930,7 @@ def _build_image_label(
     real document images from VLM-generated illustrations.
     """
     meta = chunk.get("metadata") or {}
-    title = meta.get("doc_title", "")
+    title = meta.get("title", "")
     page_number = chunk.get("page_number")
     sidecar = chunk.get("sidecar")
 

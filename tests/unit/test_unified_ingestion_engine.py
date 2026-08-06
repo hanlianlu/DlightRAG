@@ -529,7 +529,7 @@ async def test_batch_hash_match_metadata_update_waits_for_enqueue_validation(
         "source_uri": "local://default/first.pdf",
         "download_locator": str(first),
         "file_extension": "pdf",
-        "doc_title": "Old title",
+        "title": "Old title",
         "user_metadata": {},
         "metadata_filterable": {},
         "metadata_json": {},
@@ -984,7 +984,7 @@ async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) ->
     engine, deps = _make_engine(
         metadata_registry=MetadataFieldRegistry.from_config(
             {
-                "author": {
+                "reviewer": {
                     "type": "string",
                     "normalizer": "casefold_trim",
                     "filterable": True,
@@ -998,13 +998,13 @@ async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) ->
     await engine.aingest_file(
         source,
         replace=False,
-        metadata={"author": " Ada Lovelace ", "project": "Analytical Engine"},
+        metadata={"reviewer": " Ada Lovelace ", "project": "Analytical Engine"},
         metadata_policy="validate",
     )
 
     _, saved = deps["metadata_index"].upsert.await_args.args
-    assert saved["user_metadata"]["author"] == " Ada Lovelace "
-    assert saved["metadata_filterable"]["author"] == "ada lovelace"
+    assert saved["user_metadata"]["reviewer"] == " Ada Lovelace "
+    assert saved["metadata_filterable"]["reviewer"] == "ada lovelace"
     assert saved["metadata_json"]["project"] == "Analytical Engine"
 
 

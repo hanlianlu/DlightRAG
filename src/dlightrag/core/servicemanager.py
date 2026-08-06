@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
-from dlightrag.contracts import MetadataPolicy, MetadataUpdateMode, VisualAssetSize
+from dlightrag.contracts import MetadataPolicy, VisualAssetSize
 from dlightrag.core.answer.capability import AnswerImageCapability, derive_effective_max_images
 from dlightrag.core.answer.engine import AnswerEngine
 from dlightrag.core.answer.errors import (
@@ -778,12 +778,11 @@ class RAGServiceManager:
         doc_id: str,
         data: dict[str, Any],
         *,
-        mode: MetadataUpdateMode = "merge",
         metadata_policy: MetadataPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
         svc = await self._get_service(workspace)
-        await svc.aupdate_metadata(doc_id, data, mode=mode, metadata_policy=metadata_policy)
+        await svc.aupdate_metadata(doc_id, data, metadata_policy=metadata_policy)
 
     async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""

@@ -21,7 +21,7 @@ async def test_execute_retrieve_forwards_shared_query_kwargs_and_scope() -> None
         top_k=8,
         chunk_top_k=5,
         bm25_query="quarterly report",
-        filters=MetadataFilterRequest(doc_author="Ada"),
+        filters=MetadataFilterRequest(author="Ada"),
         query_images=[
             QueryImage.model_validate(
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
@@ -45,7 +45,7 @@ async def test_execute_retrieve_forwards_shared_query_kwargs_and_scope() -> None
     assert call_kwargs["chunk_top_k"] == 5
     assert call_kwargs["scope"] == scope
     assert call_kwargs["bm25_query"] == "quarterly report"
-    assert call_kwargs["filters"].doc_author == "Ada"
+    assert call_kwargs["filters"].author == "Ada"
     assert call_kwargs["query_images"] == [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
     ]
@@ -61,7 +61,7 @@ async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
         top_k=6,
         chunk_top_k=4,
         answer_context_top_k=2,
-        filters={"doc_title": "Runbook"},
+        filters={"title": "Runbook"},
         query_images=[
             QueryImage.model_validate(
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
@@ -95,7 +95,7 @@ async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
         {"role": "assistant", "content": "Earlier answer"},
     ]
     assert call_kwargs["scope"] == scope
-    assert call_kwargs["filters"].doc_title == "Runbook"
+    assert call_kwargs["filters"].title == "Runbook"
     assert call_kwargs["query_images"] == [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
     ]

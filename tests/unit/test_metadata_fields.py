@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from dlightrag.core.retrieval.metadata_fields import (
+    FILTER_FIELD_COLUMNS,
     METADATA_FIELDS,
     MetadataFieldRegistry,
     NormalizedUserMetadata,
@@ -113,18 +114,6 @@ class TestDerivedFunctions:
         assert "custom_metadata" not in ids
         assert "filename" in ids
 
-    def test_field_by_id_found(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import field_by_id
-
-        f = field_by_id("filename")
-        assert f is not None
-        assert f.field_id == "filename"
-
-    def test_field_by_id_not_found(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import field_by_id
-
-        assert field_by_id("nonexistent") is None
-
     def test_filter_fields_map_to_real_columns(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import FILTER_FIELD_COLUMNS
 
@@ -144,7 +133,7 @@ class TestDerivedFunctions:
 def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
     registry = MetadataFieldRegistry.from_config(
         {
-            "author": {
+            "reviewer": {
                 "type": "string",
                 "normalizer": "casefold_trim",
                 "filterable": True,
@@ -152,9 +141,9 @@ def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
         }
     )
 
-    normalized = normalize_user_metadata({"author": " Ada Lovelace "}, registry)
+    normalized = normalize_user_metadata({"reviewer": " Ada Lovelace "}, registry)
 
-    assert normalized.filterable["author"] == "ada lovelace"
+    assert normalized.filterable["reviewer"] == "ada lovelace"
 
 
 def test_string_exact_metadata_defaults_to_casefold_trim() -> None:
@@ -238,7 +227,7 @@ def test_reject_unknown_metadata_policy_blocks_undeclared_key() -> None:
 def test_store_only_metadata_policy_never_promotes_declared_fields() -> None:
     registry = MetadataFieldRegistry.from_config(
         {
-            "author": {
+            "reviewer": {
                 "type": "string",
                 "normalizer": "casefold_trim",
                 "filterable": True,
@@ -247,13 +236,13 @@ def test_store_only_metadata_policy_never_promotes_declared_fields() -> None:
     )
 
     normalized = normalize_user_metadata(
-        {"author": " Ada Lovelace "},
+        {"reviewer": " Ada Lovelace "},
         registry,
         metadata_policy="store_only",
         allow_ad_hoc_json=True,
     )
 
-    assert normalized.raw_json["author"] == " Ada Lovelace "
+    assert normalized.raw_json["reviewer"] == " Ada Lovelace "
     assert normalized.filterable == {}
 
 
@@ -273,10 +262,10 @@ def test_intent_detection_cannot_filter_unknown_metadata_field() -> None:
 
 def test_json_contains_requires_declared_metadata_json_field() -> None:
     registry = MetadataFieldRegistry.from_config(
-        {"metadata_json": {"type": "json", "filterable": True}}
+        {"review_notes": {"type": "json", "filterable": True}}
     )
 
-    spec = registry.filter_spec("metadata_json")
+    spec = registry.filter_spec("review_notes")
     assert spec is not None
     assert spec.type == "json"
     # Only string fields get case folding; JSON values must match as written.
@@ -293,7 +282,7 @@ async def test_metadata_update_revalidates_without_reindexing() -> None:
     service._metadata_index = AsyncMock()
     service._metadata_registry = MetadataFieldRegistry.from_config(
         {
-            "author": {
+            "reviewer": {
                 "type": "string",
                 "normalizer": "casefold_trim",
                 "filterable": True,
@@ -306,13 +295,12 @@ async def test_metadata_update_revalidates_without_reindexing() -> None:
 
     await service.aupdate_metadata(
         "doc-1",
-        {"author": " Ada Lovelace "},
-        mode="merge",
+        {"reviewer": " Ada Lovelace "},
         metadata_policy="validate",
     )
 
     _, saved = service._metadata_index.upsert.await_args.args
-    assert saved["metadata_filterable"]["author"] == "ada lovelace"
+    assert saved["metadata_filterable"]["reviewer"] == "ada lovelace"
     service._lightrag.apipeline_enqueue_documents.assert_not_called()
 
 
@@ -351,6 +339,23 @@ class TestCallerSettableColumns:
     def test_unparseable_value_is_rejected_loudly(self, value: object) -> None:
         with pytest.raises(ValueError, match="creation_date must be an ISO 8601"):
             self._normalize(value)
+
+
+class TestReservedMetadataKeys:
+    """A filter name in `metadata` would be stored where no filter ever reads it."""
+
+    @pytest.mark.parametrize("key", sorted(FILTER_FIELD_COLUMNS))
+    def test_filter_names_are_rejected_rather_than_stored_in_jsonb(self, key: str) -> None:
+        with pytest.raises(ValueError, match="built-in metadata field"):
+            normalize_user_metadata({key: "x"}, MetadataFieldRegistry.from_config({}))
+
+    def test_declaring_a_built_in_name_does_not_bypass_the_guard(self) -> None:
+        registry = MetadataFieldRegistry.from_config(
+            {"title": {"type": "string", "filterable": True}}
+        )
+
+        with pytest.raises(ValueError, match="built-in metadata field"):
+            normalize_user_metadata({"title": "x"}, registry)
 
     def test_declaring_it_as_a_custom_field_does_not_divert_it(self) -> None:
         registry = MetadataFieldRegistry.from_config(

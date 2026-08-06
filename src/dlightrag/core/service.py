@@ -26,7 +26,7 @@ from lightrag.constants import (
 )
 
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.contracts import MetadataPolicy, MetadataUpdateMode, VisualAssetSize
+from dlightrag.contracts import MetadataPolicy, VisualAssetSize
 from dlightrag.core.client_contracts import IngestDocument, SourceType
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.ingestion.paths import (
@@ -2015,8 +2015,8 @@ class RAGService:
                 "parse_engine",
                 "metadata_json",
                 "process_options",
-                "doc_title",
-                "doc_author",
+                "title",
+                "author",
             }
         )
 
@@ -2082,7 +2082,6 @@ class RAGService:
         doc_id: str,
         data: dict[str, Any],
         *,
-        mode: MetadataUpdateMode = "merge",
         metadata_policy: MetadataPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
@@ -2101,7 +2100,6 @@ class RAGService:
             doc_id,
             {
                 **normalized.system,
-                "metadata_update_mode": mode,
                 "user_metadata": dict(data),
                 "metadata_filterable": normalized.filterable,
                 "metadata_json": normalized.raw_json,

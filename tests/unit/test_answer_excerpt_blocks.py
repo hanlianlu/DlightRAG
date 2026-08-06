@@ -22,7 +22,7 @@ class TestFormatChunkMetadata:
             "content": "Hello",
             "image_data": "base64...",
             "file_path": "/docs/x.pdf",
-            "metadata": {"doc_title": "T"},
+            "metadata": {"title": "T"},
             "page_number": 3,
             "image_mime_type": "image/png",
             "image_url": "/images/default/c1?size=full",
@@ -115,7 +115,7 @@ class TestFormatChunkMetadata:
 
 class TestBuildImageLabel:
     def test_basic_label_with_citation_and_page(self) -> None:
-        chunk = {"page_number": 7, "metadata": {"doc_title": "My Report"}}
+        chunk = {"page_number": 7, "metadata": {"title": "My Report"}}
         result = _build_image_label(cite_tag="[1-2]", chunk=chunk, filename="report.pdf")
         assert '[1-2] "My Report" Page 7' == result
 

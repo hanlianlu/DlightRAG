@@ -133,8 +133,8 @@ class QueryPlannerFilters(BaseModel):
 
     filename: str | None = None
     file_extension: str | None = None
-    doc_title: str | None = None
-    doc_author: str | None = None
+    title: str | None = None
+    author: str | None = None
     creation_date_from: str | None = None
     creation_date_to: str | None = None
     custom: dict[str, str | int | float | bool | None] | None = None
@@ -788,8 +788,8 @@ class QueryPlanner:
         filter_fields = [
             "filename",
             "file_extension",
-            "doc_title",
-            "doc_author",
+            "title",
+            "author",
             "creation_date_from",
             "creation_date_to",
             "custom",

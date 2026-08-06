@@ -448,11 +448,6 @@ class UnifiedIngestionEngine:
         metadata: Mapping[str, Any] | None,
         metadata_policy: MetadataPolicy | None,
     ) -> dict[str, Any]:
-        if title is not None and metadata and "title" in metadata:
-            raise ValueError("title supplied both as top-level field and metadata")
-        if author is not None and metadata and "author" in metadata:
-            raise ValueError("author supplied both as top-level field and metadata")
-
         normalized_metadata = normalize_user_metadata(
             metadata,
             self._metadata_registry,
@@ -466,9 +461,9 @@ class UnifiedIngestionEngine:
             download_locator=download_locator,
         )
         if title is not None:
-            system_metadata["doc_title"] = title
+            system_metadata["title"] = title
         if author is not None:
-            system_metadata["doc_author"] = author
+            system_metadata["author"] = author
         system_metadata.update(normalized_metadata.system)
         return {
             **system_metadata,
@@ -740,8 +735,8 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
         "source_uri": metadata_record.get("source_uri"),
         "download_locator": metadata_record.get("download_locator"),
         "file_extension": metadata_record.get("file_extension"),
-        "doc_title": metadata_record.get("doc_title"),
-        "doc_author": metadata_record.get("doc_author"),
+        "title": metadata_record.get("title"),
+        "author": metadata_record.get("author"),
         "creation_date": metadata_record.get("creation_date"),
         "user_metadata": deepcopy(metadata_record.get("user_metadata")),
         "metadata_filterable": deepcopy(metadata_record.get("metadata_filterable")),

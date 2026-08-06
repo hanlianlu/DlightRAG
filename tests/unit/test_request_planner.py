@@ -69,10 +69,10 @@ class TestQueryPlan:
         assert plan.metadata_filter is None
 
     def test_with_filter(self):
-        mf = MetadataFilter(doc_author="Author")
+        mf = MetadataFilter(author="Author")
         plan = QueryPlan(original_query="q", standalone_query="q", metadata_filter=mf)
         assert plan.metadata_filter is not None
-        assert plan.metadata_filter.doc_author == "Author"
+        assert plan.metadata_filter.author == "Author"
 
 
 # ---------------------------------------------------------------------------
@@ -345,11 +345,11 @@ class TestPlanWithLLM:
             return_value=json.dumps(
                 {
                     "standalone_query": "query",
-                    "filters": {"creation_date_from": "not-a-date", "doc_author": "Auth"},
+                    "filters": {"creation_date_from": "not-a-date", "author": "Auth"},
                     "filter_confidence": "high",
                     "filter_evidence": [
                         {
-                            "field": "doc_author",
+                            "field": "author",
                             "value": "Auth",
                             "evidence_span": "written by Auth",
                             "intent_basis": "explicit_author_constraint",
@@ -368,14 +368,14 @@ class TestPlanWithLLM:
         plan = await planner.plan("query written by Auth not-a-date")
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.creation_date_from is None
-        assert plan.metadata_filter.doc_author == "Auth"
+        assert plan.metadata_filter.author == "Auth"
 
     async def test_low_confidence_llm_filter_is_ignored(self):
         llm = AsyncMock(
             return_value=json.dumps(
                 {
                     "standalone_query": "tell me about Ada's ideas",
-                    "filters": {"doc_author": "Ada"},
+                    "filters": {"author": "Ada"},
                     "filter_confidence": "low",
                 }
             )
@@ -390,7 +390,7 @@ class TestPlanWithLLM:
             return_value=json.dumps(
                 {
                     "standalone_query": "find Ada material",
-                    "filters": {"doc_author": "Ada"},
+                    "filters": {"author": "Ada"},
                     "filter_confidence": "high",
                     "filter_evidence": [],
                 }
@@ -401,7 +401,7 @@ class TestPlanWithLLM:
         plan = await planner.plan("find Ada material")
 
         assert plan.metadata_filter is not None
-        assert plan.metadata_filter.doc_author == "Ada"
+        assert plan.metadata_filter.author == "Ada"
         assert plan.metadata_filter_source == "llm_inferred"
 
 
@@ -494,11 +494,11 @@ class TestFilterMerge:
             return_value=json.dumps(
                 {
                     "standalone_query": "q",
-                    "filters": {"doc_author": "LLM", "file_extension": "pdf"},
+                    "filters": {"author": "LLM", "file_extension": "pdf"},
                     "filter_confidence": "high",
                     "filter_evidence": [
                         {
-                            "field": "doc_author",
+                            "field": "author",
                             "value": "LLM",
                             "evidence_span": "written by LLM",
                             "intent_basis": "explicit_author_constraint",
@@ -514,10 +514,10 @@ class TestFilterMerge:
             )
         )
         planner = QueryPlanner(llm_func=llm)
-        explicit = MetadataFilter(doc_author="Explicit")
+        explicit = MetadataFilter(author="Explicit")
         plan = await planner.plan("q pdf written by LLM", explicit_filter=explicit)
         assert plan.metadata_filter is not None
-        assert plan.metadata_filter.doc_author == "Explicit"
+        assert plan.metadata_filter.author == "Explicit"
         assert plan.metadata_filter.file_extension == "pdf"
 
     async def test_empty_explicit_ignored(self):
@@ -526,11 +526,11 @@ class TestFilterMerge:
             return_value=json.dumps(
                 {
                     "standalone_query": "q",
-                    "filters": {"doc_author": "LLM"},
+                    "filters": {"author": "LLM"},
                     "filter_confidence": "high",
                     "filter_evidence": [
                         {
-                            "field": "doc_author",
+                            "field": "author",
                             "value": "LLM",
                             "evidence_span": "written by LLM",
                             "intent_basis": "explicit_author_constraint",
@@ -543,18 +543,18 @@ class TestFilterMerge:
         explicit = MetadataFilter()  # all None
         plan = await planner.plan("q written by LLM", explicit_filter=explicit)
         assert plan.metadata_filter is not None
-        assert plan.metadata_filter.doc_author == "LLM"
+        assert plan.metadata_filter.author == "LLM"
 
     def test_merge_filters_static(self):
-        explicit = MetadataFilter(doc_author="Explicit", filename="f.pdf")
-        llm = MetadataFilter(doc_author="LLM", file_extension="pdf")
+        explicit = MetadataFilter(author="Explicit", filename="f.pdf")
+        llm = MetadataFilter(author="LLM", file_extension="pdf")
         merged = QueryPlanner._merge_filters(explicit, llm)
-        assert merged.doc_author == "Explicit"
+        assert merged.author == "Explicit"
         assert merged.filename == "f.pdf"
         assert merged.file_extension == "pdf"
 
     def test_merge_filters_llm_none(self):
-        explicit = MetadataFilter(doc_author="Explicit")
+        explicit = MetadataFilter(author="Explicit")
         merged = QueryPlanner._merge_filters(explicit, None)
         assert merged is explicit
 

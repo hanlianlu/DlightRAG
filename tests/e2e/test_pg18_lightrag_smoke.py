@@ -105,7 +105,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
 
         metadata = await service.aget_metadata(doc_id)
         assert metadata["filename"] == doc_path.name
-        assert metadata["doc_title"] == "PG18 E2E Document"
+        assert metadata["title"] == "PG18 E2E Document"
 
         doc_ids = await service.asearch_metadata(MetadataFilter(custom={"e2e_case": "pg18"}))
         assert doc_ids == [doc_id]
@@ -222,7 +222,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         assert chunk_id in chunk_ids
 
         metadata = await reader.aget_metadata(doc_id)
-        assert metadata["doc_title"] == "Reader Smoke"
+        assert metadata["title"] == "Reader Smoke"
 
         with pytest.raises(PermissionError):
             await reader.areset()

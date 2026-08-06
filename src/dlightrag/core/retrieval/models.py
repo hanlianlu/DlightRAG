@@ -13,8 +13,8 @@ class MetadataFilter(BaseModel):
 
     filename: str | None = None
     file_extension: str | None = None
-    doc_title: str | None = None
-    doc_author: str | None = None
+    title: str | None = None
+    author: str | None = None
     creation_date_from: datetime | None = None
     creation_date_to: datetime | None = None
     custom: dict[str, Any] | None = None
@@ -22,8 +22,8 @@ class MetadataFilter(BaseModel):
     @field_validator(
         "filename",
         "file_extension",
-        "doc_title",
-        "doc_author",
+        "title",
+        "author",
         mode="before",
     )
     @classmethod

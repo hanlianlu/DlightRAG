@@ -21,6 +21,7 @@ from dlightrag.app_state import request_config
 from dlightrag.core.answer.errors import (
     AnswerImageError,
 )
+from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,15 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     ) -> JSONResponse:
         """Answer-image capability/transport rejection -> 400 with a stable error_kind."""
         body = ErrorDetail(detail=str(exc), error_type="validation", error_kind=exc.error_kind)
+        return JSONResponse(status_code=400, content=body.model_dump())
+
+    @application.exception_handler(MetadataValidationError)
+    async def metadata_validation_error_handler(
+        request: Request,  # noqa: ARG001
+        exc: MetadataValidationError,
+    ) -> JSONResponse:
+        """Metadata is validated below the request model, so it needs its own mapping."""
+        body = ErrorDetail(detail=str(exc), error_type="validation")
         return JSONResponse(status_code=400, content=body.model_dump())
 
     # -- API routes --
