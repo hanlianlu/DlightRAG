@@ -43,33 +43,6 @@ DOC_CITATION_PATTERN = re.compile(
 )
 
 
-def extract_citation_keys(answer_text: str) -> list[str]:
-    """Extract unique citation keys in order of appearance.
-
-    Returns both doc-level ("1") and chunk-level ("1-2") keys.
-    """
-    seen: set[str] = set()
-    keys: list[str] = []
-
-    # Find all citation positions for ordered extraction
-    positions: list[tuple[int, str]] = []
-
-    for m in DOC_CITATION_PATTERN.finditer(answer_text):
-        key = m.group(1)
-        positions.append((m.start(), key))
-
-    for m in CITATION_PATTERN.finditer(answer_text):
-        key = f"{m.group(1)}-{m.group(2)}"
-        positions.append((m.start(), key))
-
-    positions.sort(key=lambda x: x[0])
-    for _, key in positions:
-        if key not in seen:
-            seen.add(key)
-            keys.append(key)
-    return keys
-
-
 def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str, list[str]]:
     """Extract cited chunk_ids grouped by ref_id.
 

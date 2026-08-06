@@ -5,9 +5,6 @@ from typing import Any
 
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import (
-    ChunkContext,
-    EntityContext,
-    RelationshipContext,
     RetrievalBackend,
     RetrievalContexts,
     RetrievalResult,
@@ -132,10 +129,7 @@ def _next_reference_id(used_refs: set[str]) -> int:
 
 
 __all__ = [
-    "ChunkContext",
-    "EntityContext",
     "MetadataFilter",
-    "RelationshipContext",
     "RetrievalBackend",
     "RetrievalContexts",
     "RetrievalResult",

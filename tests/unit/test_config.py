@@ -285,7 +285,7 @@ class TestDlightragConfigNested:
             model="z-ai/glm-5.2",
             base_url="https://openrouter.ai/api/v1",
             structured_output="json_schema",
-            temperature=0.5,
+            temperature=0.4,
             timeout=240.0,
         )
         assert cfg.llm.roles.extract is None
@@ -368,7 +368,7 @@ class TestDlightragConfigNested:
         monkeypatch.chdir(tmp_path)
         cfg = DlightragConfig()
         assert cfg.llm.default.model == "z-ai/glm-5.2"
-        assert cfg.llm.default.temperature == 0.5
+        assert cfg.llm.default.temperature == 0.4
 
     def test_langfuse_v4_observability_defaults(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)

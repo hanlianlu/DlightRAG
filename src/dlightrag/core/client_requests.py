@@ -100,9 +100,19 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
 
 
 def ingest_spec_from_payload(payload: Any) -> IngestSpec:
-    """Return an IngestSpec from REST, MCP, CLI, or SDK-shaped payload objects."""
-    source_type = _get(payload, "source_type")
-    return IngestSpec(source_type=source_type, **ingest_kwargs_from_payload(payload))
+    """Return an IngestSpec from REST, MCP, CLI, or SDK-shaped payload objects.
+
+    Reads every declared field rather than the per-source kwargs, so a field
+    aimed at the wrong source is rejected instead of silently dropped.
+    """
+    values: dict[str, Any] = {}
+    for name in IngestSpec.model_fields:
+        if name == "source_type":
+            continue
+        value = _get(payload, name)
+        if value is not None:
+            values[name] = dump_optional_list(value) if name == "documents" else value
+    return IngestSpec(source_type=_get(payload, "source_type"), **values)
 
 
 def managed_local_ingest_path(

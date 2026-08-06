@@ -105,19 +105,16 @@ async def areset(
                 errors.append(f"Phase 1 ({attr}): {exc}")
                 logger.warning("areset Phase 1 failed for %s: %s", attr, exc)
 
-    # Phase 2: DlightRAG domain stores -- registry
-    for name, store, method in (
-        ("metadata_index", getattr(service, "_metadata_index", None), "clear"),
-    ):
-        if store is None:
-            continue
+    # Phase 2: DlightRAG domain stores
+    metadata_index = getattr(service, "_metadata_index", None)
+    if metadata_index is not None:
         try:
             if not dry_run:
-                await getattr(store, method)()
-            stats["domain_stores_dropped"].append(name)
+                await metadata_index.clear()
+            stats["domain_stores_dropped"].append("metadata_index")
         except Exception as exc:
-            errors.append(f"Phase 2 ({name}): {exc}")
-            logger.warning("areset Phase 2 failed for %s: %s", name, exc)
+            errors.append(f"Phase 2 (metadata_index): {exc}")
+            logger.warning("areset Phase 2 failed for metadata_index: %s", exc)
 
     # Phase 3: Orphan PG table scan (safety net)
     try:

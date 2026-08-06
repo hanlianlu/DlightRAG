@@ -366,7 +366,7 @@ class RAGServiceManager:
         text = str(exc).lower()
         if "connection" in text and ("refused" in text or "reset" in text):
             return f"{msg}. Check DLIGHTRAG_POSTGRES_* or model server settings."
-        if "asyncpg" in type(exc).__module__ if hasattr(type(exc), "__module__") else False:
+        if "asyncpg" in type(exc).__module__:
             return f"{msg}. Check DLIGHTRAG_POSTGRES_HOST/PORT/USER/PASSWORD."
         if "timeout" in text or "timed out" in text:
             return f"{msg}. Service may be overloaded or unreachable."
@@ -1737,10 +1737,6 @@ class RAGServiceManager:
             "updated_at": _iso_or_none(row.get("updated_at")),
         }
 
-    async def _list_all_workspaces(self) -> list[str]:
-        """Internal: discover all workspaces."""
-        return await self.alist_workspaces()
-
     async def aclose(self) -> None:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
@@ -1806,15 +1802,6 @@ class RAGServiceManager:
 
     def get_warnings(self) -> list[str]:
         return list(self._startup_warnings)
-
-    def get_error_info(self) -> dict[str, Any]:
-        """Get per-workspace backoff state for health checks."""
-        return {
-            "backoff_workspaces": {
-                ws: {"retry_after": interval, "since": ts}
-                for ws, (ts, interval) in self._backoff.items()
-            },
-        }
 
 
 def _positive_int_or_none(value: Any) -> int | None:

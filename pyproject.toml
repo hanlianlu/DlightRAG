@@ -33,8 +33,7 @@ dependencies = [
     "json-repair>=0.62.0",
     # LightRAG paragraph_semantic chunker fallback
     "langchain-text-splitters",
-    # LightRAG GUI (graph browsing via lightrag-server)
-    # Runtime deps for lightrag-server when lightrag-hku is installed without the api extra.
+    # lightrag-server runtime dep when lightrag-hku is installed without the api extra.
     "bcrypt",
     "aiofiles",
     # Data sourcing
@@ -95,12 +94,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dlightrag"]
-
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.uv]
-constraint-dependencies = ["onnxruntime<1.24"]
 
 [tool.ruff]
 target-version = "py314"

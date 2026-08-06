@@ -77,7 +77,7 @@ async def test_url_data_source_maps_extensionless_url_to_html_filename(tmp_path:
         client=client,
     )
 
-    documents = await source.alist_documents()
+    documents = [d async for d in source.aiter_documents()]
     assert [document.key for document in documents] == ["getting-started.html"]
     assert source.source_uri_for_key("getting-started.html") == (
         "https://api.bynder.com/docs/getting-started"
@@ -95,7 +95,7 @@ async def test_url_data_source_uses_explicit_filename_for_opaque_single_url() ->
         client=_Client(),
     )
 
-    documents = await source.alist_documents()
+    documents = [d async for d in source.aiter_documents()]
     assert [document.key for document in documents] == ["asset.pdf"]
     assert source.source_uri_for_key("asset.pdf") == "https://cdn.example.com/download"
 
@@ -120,7 +120,7 @@ async def test_url_data_source_separates_fetch_identity_and_download_uri() -> No
         client=_Client(),
     )
 
-    document = (await source.alist_documents())[0]
+    document = ([d async for d in source.aiter_documents()])[0]
 
     assert document.source_uri == "bynder://asset/1"
     assert document.download_uri == "https://cdn.example.com/assets/1.pdf"
@@ -138,7 +138,7 @@ async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_ur
             client=_Client(),
         )
 
-    document = (await source.alist_documents())[0]
+    document = ([d async for d in source.aiter_documents()])[0]
 
     assert document.download_uri is None
     outcome = next(
@@ -159,7 +159,7 @@ async def test_url_data_source_derives_download_uri_from_queryless_fetch_url() -
         client=_Client(),
     )
 
-    document = (await source.alist_documents())[0]
+    document = ([d async for d in source.aiter_documents()])[0]
 
     assert document.download_uri == "https://fetch.example.com/assets/1.pdf"
     assert source.download_uri_for_key("1.pdf") == "https://fetch.example.com/assets/1.pdf"
@@ -178,7 +178,7 @@ async def test_url_data_source_uses_source_document_download_uri() -> None:
         client=_Client(),
     )
 
-    document = (await source.alist_documents())[0]
+    document = ([d async for d in source.aiter_documents()])[0]
 
     assert document.download_uri == "https://cdn.example.com/assets/1.pdf"
 
@@ -209,7 +209,7 @@ async def test_url_data_source_revalidates_final_response_url(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="public"):
         await source.amaterialize_document(
-            (await source.alist_documents())[0], tmp_path / "report.pdf"
+            ([d async for d in source.aiter_documents()])[0], tmp_path / "report.pdf"
         )
 
 
@@ -233,7 +233,7 @@ async def test_url_data_source_rejects_private_redirect_before_following(tmp_pat
 
     with pytest.raises(ValueError, match="public"):
         await source.amaterialize_document(
-            (await source.alist_documents())[0], tmp_path / "start.pdf"
+            ([d async for d in source.aiter_documents()])[0], tmp_path / "start.pdf"
         )
 
     assert client.urls == ["https://cdn.example.com/start.pdf"]
@@ -249,7 +249,7 @@ async def test_url_data_source_enforces_download_size_limit(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="maximum"):
         await source.amaterialize_document(
-            (await source.alist_documents())[0], tmp_path / "report.pdf"
+            ([d async for d in source.aiter_documents()])[0], tmp_path / "report.pdf"
         )
 
     assert not (tmp_path / "report.pdf").exists()
@@ -316,7 +316,7 @@ async def test_url_data_source_keeps_allowlisted_private_fetch_url_out_of_downlo
         client=_Client(),
     )
 
-    document = (await source.alist_documents())[0]
+    document = ([d async for d in source.aiter_documents()])[0]
 
     assert document.download_uri is None
 

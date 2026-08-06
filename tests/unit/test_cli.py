@@ -16,8 +16,8 @@ _spec.loader.exec_module(_cli)
 
 build_parser = _cli.build_parser
 _build_answer_payload = _cli._build_answer_payload
-_build_ingest_kwargs = _cli._build_ingest_kwargs
-_build_retrieve_payload = _cli._build_retrieve_payload
+_apply_query_options = _cli._apply_query_options
+ingest_kwargs_from_payload = _cli.ingest_kwargs_from_payload
 _validate_ingest_args = _cli._validate_ingest_args
 cmd_answer = _cli.cmd_answer
 
@@ -62,8 +62,8 @@ def test_query_payload_supports_current_retrieval_options() -> None:
             "--workspaces",
             "finance",
             "legal",
-            "--filter-title",
-            "Manual",
+            "--filters-json",
+            '{"title":"Manual"}',
             "--filter-custom-json",
             '{"department":"finance"}',
             "--query-image",
@@ -71,7 +71,7 @@ def test_query_payload_supports_current_retrieval_options() -> None:
         ]
     )
 
-    assert _build_retrieve_payload(args) == {
+    assert _apply_query_options({"query": args.query}, args) == {
         "query": "find diagrams",
         "top_k": 8,
         "chunk_top_k": 5,
@@ -92,8 +92,8 @@ def test_answer_payload_supports_current_answer_options() -> None:
             "9",
             "--answer-context-top-k",
             "4",
-            "--filter-author",
-            "Ada",
+            "--filters-json",
+            '{"author":"Ada"}',
             "--query-image",
             "https://example.test/chart.png",
         ]
@@ -188,7 +188,7 @@ def test_ingest_kwargs_support_document_metadata_options() -> None:
         ]
     )
 
-    assert _build_ingest_kwargs(args) == {
+    assert ingest_kwargs_from_payload(args) == {
         "path": "./docs/report.pdf",
         "replace": False,
         "title": "Quarterly Report",
@@ -212,7 +212,7 @@ def test_ingest_kwargs_support_s3_region_and_retention() -> None:
         ]
     )
 
-    assert _build_ingest_kwargs(args) == {
+    assert ingest_kwargs_from_payload(args) == {
         "bucket": "bucket",
         "s3_key": "docs/report.pdf",
         "s3_region": "eu-north-1",
@@ -235,7 +235,7 @@ def test_ingest_kwargs_support_url_source() -> None:
         ]
     )
 
-    assert _build_ingest_kwargs(args) == {
+    assert ingest_kwargs_from_payload(args) == {
         "url": "https://cdn.example.com/download?id=asset-1",
         "filename": "asset.pdf",
         "source_uri": "bynder://asset/asset-1",
@@ -259,7 +259,7 @@ def test_ingest_kwargs_support_url_download_uris() -> None:
 
     _validate_ingest_args(args)
 
-    assert _build_ingest_kwargs(args) == {
+    assert ingest_kwargs_from_payload(args) == {
         "urls": [
             "https://fetch.example.com/a.pdf",
             "https://fetch.example.com/b.pdf",

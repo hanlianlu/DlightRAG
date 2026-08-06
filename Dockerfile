@@ -11,7 +11,7 @@ FROM python:3.14-slim-bookworm AS builder
 
 WORKDIR /app
 ENV UV_LINK_MODE=copy
-COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/
+COPY --from=uv-bin /usr/local/bin/uv /bin/
 
 COPY pyproject.toml uv.lock ./
 # Deps only — binary-only (UV_NO_BUILD): never compile an sdist; the slim base has
@@ -36,8 +36,6 @@ RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 ENV PATH="/app/.venv/bin:$PATH"
-
-VOLUME /app/dlightrag_storage
 
 EXPOSE 8100 8101
 

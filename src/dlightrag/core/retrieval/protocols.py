@@ -2,7 +2,7 @@
 """Retrieval backend protocol and shared types."""
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol
 
 from dlightrag.models.schemas import Reference
 
@@ -10,57 +10,13 @@ if TYPE_CHECKING:
     from dlightrag.citations.schemas import SourceReference
     from dlightrag.core.retrieval.models import MetadataScope
 
-# ── Structured context types ──────────────────────────────────────
-
-
-class ChunkContext(TypedDict):
-    """A single text or image chunk from retrieval."""
-
-    chunk_id: str
-    reference_id: str
-    file_path: str
-    content: str
-    full_doc_id: NotRequired[str]
-    page_number: NotRequired[int | None]
-    image_data: NotRequired[str | None]
-    image_mime_type: NotRequired[str | None]
-    image_url: NotRequired[str | None]
-    thumbnail_url: NotRequired[str | None]
-    relevance_score: NotRequired[float | None]
-    metadata: NotRequired[dict[str, Any]]
-    _workspace: NotRequired[str]
-
-
-class EntityContext(TypedDict):
-    """A KG entity from retrieval."""
-
-    entity_name: str
-    entity_type: str
-    description: str
-    source_id: str
-    reference_id: NotRequired[str]
-    _workspace: NotRequired[str]
-
-
-class RelationshipContext(TypedDict):
-    """A KG relationship from retrieval."""
-
-    src_id: str
-    tgt_id: str
-    description: str
-    source_id: str
-    reference_id: NotRequired[str]
-    _workspace: NotRequired[str]
-
-
 ContextRow = dict[str, Any]
 
 
 # RetrievalContexts is intentionally a plain type alias rather than a TypedDict.
 # Contexts flow through JSON/DB boundaries as ``dict[str, Any]`` and are built
 # incrementally in federation merges, so a strict TypedDict creates invariance
-# errors throughout the codebase.  The per-field TypedDicts above (ChunkContext,
-# EntityContext, RelationshipContext) still document the expected shape.
+# errors throughout the codebase. docs/interfaces.md documents the row shapes.
 RetrievalContexts = dict[str, list[ContextRow]]
 
 
@@ -122,12 +78,9 @@ class MetadataChunkStore(Protocol):
 
 
 __all__ = [
-    "ChunkContext",
     "ContextRow",
     "BM25Retriever",
-    "EntityContext",
     "MetadataChunkStore",
-    "RelationshipContext",
     "RetrievalBackend",
     "RetrievalContexts",
     "RetrievalResult",

@@ -1259,14 +1259,11 @@ class TestRAGServiceLightRAGMainPath:
     async def test_aingest_s3_prefix_streams_keys_without_materializing_list(
         self, test_config: DlightragConfig
     ) -> None:
-        """S3 prefix ingest consumes streaming keys instead of alist_documents()."""
+        """S3 prefix ingest consumes keys as they stream."""
 
         class StreamingS3Source:
             def __init__(self) -> None:
                 self.loaded: list[str] = []
-
-            async def alist_documents(self, prefix: str | None = None) -> list[SourceDocument]:
-                raise AssertionError("prefix ingest should stream keys")
 
             async def aiter_documents(self, prefix: str | None = None):
                 assert prefix == "docs/"

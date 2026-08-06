@@ -12,9 +12,6 @@ from dlightrag.core.retrieval.models import MetadataFilter
 class MetadataIndexProtocol(Protocol):
     """Common interface for PGMetadataIndex and test doubles."""
 
-    async def initialize(self) -> None:
-        raise NotImplementedError
-
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         raise NotImplementedError
 
@@ -40,9 +37,6 @@ class MetadataIndexProtocol(Protocol):
         raise NotImplementedError
 
     async def find_by_download_locator(self, download_locator: str) -> list[str]:
-        raise NotImplementedError
-
-    async def get_field_schema(self) -> dict[str, Any]:
         raise NotImplementedError
 
 

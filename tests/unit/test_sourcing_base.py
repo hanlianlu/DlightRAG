@@ -20,7 +20,7 @@ class StreamingOnlySource(AsyncDataSource):
 async def test_async_data_source_list_collects_streaming_documents() -> None:
     source = StreamingOnlySource()
 
-    assert await source.alist_documents(prefix="docs/") == [
+    assert [d async for d in source.aiter_documents(prefix="docs/")] == [
         SourceDocument(key="docs/a.pdf"),
         SourceDocument(key="docs/b.pdf"),
     ]

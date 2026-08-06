@@ -143,7 +143,7 @@ def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
 
     assert "ghcr.io/astral-sh/uv" not in dockerfile
     assert "uv==${UV_VERSION}" in dockerfile
-    assert "COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/" in dockerfile
+    assert "COPY --from=uv-bin /usr/local/bin/uv /bin/" in dockerfile
 
 
 def test_docx_native_parser_runtime_dependency_is_direct() -> None:

@@ -766,8 +766,7 @@ class TestBackoff:
         with pytest.raises(RAGServiceUnavailableError):
             await manager._get_service("ws_a")
         assert not manager.is_ready()
-        error_info = manager.get_error_info()
-        assert "ws_a" in error_info["backoff_workspaces"]
+        assert "ws_a" in manager._backoff
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_backoff_blocks_retry(self, mock_create, test_cfg) -> None:

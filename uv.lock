@@ -2,9 +2,6 @@ version = 1
 revision = 3
 requires-python = "==3.14.*"
 
-[manifest]
-constraints = [{ name = "onnxruntime", specifier = "<1.24" }]
-
 [[package]]
 name = "aiobotocore"
 version = "3.9.0"

@@ -77,6 +77,8 @@ services:
     command: ["dlightrag-mcp"]
 
   lightrag-gui:
+    # Optional graph browser. Start it with: docker compose --profile gui up -d
+    profiles: [gui]
     restart: unless-stopped
     image: *app-image
     build: *app-build
@@ -101,11 +103,12 @@ services:
       LLM_BINDING_HOST: https://openrouter.ai/api/v1
       LLM_BINDING_API_KEY: ${DLIGHTRAG_LLM__DEFAULT__API_KEY}
       LLM_MODEL: google/gemini-2.5-flash
-      # Embedding — OpenRouter (initialization only)
-      EMBEDDING_BINDING: openai
-      EMBEDDING_BINDING_HOST: https://openrouter.ai/api/v1
-      EMBEDDING_BINDING_API_KEY: ${DLIGHTRAG_LLM__DEFAULT__API_KEY}
-      EMBEDDING_MODEL: openai/text-embedding-3-small
+      # Embedding — must match config.yaml: the vector columns are 1024-dim.
+      EMBEDDING_BINDING: voyageai
+      EMBEDDING_BINDING_HOST: https://api.voyageai.com/v1
+      EMBEDDING_BINDING_API_KEY: ${DLIGHTRAG_EMBEDDING__API_KEY}
+      EMBEDDING_MODEL: voyage-multimodal-3.5
+      EMBEDDING_DIM: "1024"
       # Server
       HOST: "0.0.0.0"
       PORT: "9621"

@@ -24,7 +24,7 @@ Usage:
     # Query & answer (requires API server: docker compose up dlightrag-api)
     uv run scripts/cli.py query "What are the key findings?" --chunk-top-k 30
     uv run scripts/cli.py query "findings?" --workspaces project-a project-b
-    uv run scripts/cli.py query "findings?" --filter-author Ada
+    uv run scripts/cli.py query "findings?" --filters-json '{"author":"Ada"}'
     uv run scripts/cli.py answer "What are the key findings?"
     uv run scripts/cli.py answer "summarize chart" --query-image data:image/png;base64,... --answer-context-top-k 4
     uv run scripts/cli.py chat
@@ -40,8 +40,13 @@ import sys
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
-from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_image_blocks_from_urls
+from dlightrag.core.client_requests import (
+    ingest_kwargs_from_payload,
+    ingest_spec_from_payload,
+    query_image_blocks_from_urls,
+)
 
 DEFAULT_API_URL = "http://localhost:8100"
 DEFAULT_QUERY_TIMEOUT = 120
@@ -100,83 +105,27 @@ def _die(msg: str) -> None:
 
 
 def _validate_ingest_args(args: argparse.Namespace) -> None:
-    source = args.source_type
-    if source != "url" and (args.download_uri is not None or args.download_uris is not None):
-        _die("--download-uri and --download-uris are only for url source")
-    if source == "local":
-        if not args.path:
-            _die("local source requires a path. Usage: ingest <path> [--replace]")
-        if args.container_name or args.blob_path or args.prefix:
-            _die("--container, --blob-path, --prefix are only for azure_blob source")
-        if args.bucket or args.s3_key:
-            _die("--bucket, --s3-key are only for s3 source")
-    elif source == "azure_blob":
-        if args.path:
-            _die("positional path is not used with azure_blob. Use --blob-path or --prefix.")
-        if not args.container_name:
-            _die("azure_blob requires --container")
-        if args.blob_path and args.prefix:
-            _die("--blob-path and --prefix are mutually exclusive")
-        if args.bucket or args.s3_key:
-            _die("--bucket, --s3-key are only for s3 source")
-    elif source == "s3":
-        if args.path:
-            _die("positional path is not used with s3")
-        if not args.bucket:
-            _die("s3 requires --bucket")
-        if args.s3_key and args.prefix:
-            _die("--s3-key and --prefix are mutually exclusive for s3")
-        if args.container_name or args.blob_path:
-            _die("--container, --blob-path are only for azure_blob source")
-    elif source == "url":
-        if args.path:
-            _die("positional path is not used with url")
-        if not args.url and not args.urls:
-            _die("url source requires --url or --urls")
-        if args.url and args.urls:
-            _die("--url and --urls are mutually exclusive")
-        if args.filename and not args.url:
-            _die("--filename can only be used with --url")
-        if args.source_uri and not args.url:
-            _die("--source-uri can only be used with --url")
-        if args.source_uri and args.source_uris:
-            _die("--source-uri and --source-uris are mutually exclusive")
-        if args.source_uris and len(args.source_uris) != len(args.urls or []):
-            _die("--source-uris must match the number of --urls values")
-        url_count = int(args.url is not None) + len(args.urls or [])
-        if args.download_uri is not None and args.download_uris is not None:
-            _die("--download-uri and --download-uris are mutually exclusive")
-        if args.download_uri is not None and url_count != 1:
-            _die("--download-uri can only be used with a single URL")
-        if args.download_uris is not None and len(args.download_uris) != url_count:
-            _die("--download-uris must match the number of URL values")
+    """Reject flags aimed at the wrong source, then defer to the shared spec."""
+    if args.source_type != "local" and args.path:
+        _die(f"positional path is not used with {args.source_type}")
+    if args.source_type != "azure_blob" and (args.container_name or args.blob_path):
+        _die("--container, --blob-path are only for azure_blob source")
+    if args.source_type != "s3" and (args.bucket or args.s3_key):
+        _die("--bucket, --s3-key are only for s3 source")
+    try:
+        ingest_spec_from_payload(args)
+    except ValidationError as exc:
+        _die("; ".join(error["msg"].removeprefix("Value error, ") for error in exc.errors()))
 
 
 def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
-    filters = dict(getattr(args, "filters_json", None) or {})
-    field_map = {
-        "filter_filename": "filename",
-        "filter_file_extension": "file_extension",
-        "filter_title": "title",
-        "filter_author": "author",
-        "filter_creation_date_from": "creation_date_from",
-        "filter_creation_date_to": "creation_date_to",
-    }
-    for attr, field in field_map.items():
-        value = getattr(args, attr, None)
-        if value is not None:
-            filters[field] = value
-
-    custom = getattr(args, "filter_custom", None)
+    filters = dict(args.filters_json or {})
+    custom = args.filter_custom
     if custom is not None:
         existing = filters.get("custom")
         filters["custom"] = {**existing, **custom} if isinstance(existing, dict) else custom
 
     return filters or None
-
-
-def _query_image_blocks(values: list[str]) -> list[dict[str, Any]]:
-    return query_image_blocks_from_urls(values)
 
 
 def _apply_query_options(
@@ -185,29 +134,25 @@ def _apply_query_options(
     *,
     include_answer_limits: bool = False,
 ) -> dict[str, Any]:
-    if getattr(args, "top_k", None) is not None:
+    if args.top_k is not None:
         payload["top_k"] = args.top_k
-    if getattr(args, "chunk_top_k", None) is not None:
+    if args.chunk_top_k is not None:
         payload["chunk_top_k"] = args.chunk_top_k
-    if getattr(args, "workspaces", None):
+    if args.workspaces:
         payload["workspaces"] = args.workspaces
 
     filters = _metadata_filter_payload(args)
     if filters is not None:
         payload["filters"] = filters
 
-    if getattr(args, "query_images", None):
-        payload["query_images"] = _query_image_blocks(args.query_images)
+    if args.query_images:
+        payload["query_images"] = query_image_blocks_from_urls(args.query_images)
 
     if include_answer_limits:
-        if getattr(args, "answer_context_top_k", None) is not None:
+        if args.answer_context_top_k is not None:
             payload["answer_context_top_k"] = args.answer_context_top_k
 
     return payload
-
-
-def _build_retrieve_payload(args: argparse.Namespace) -> dict[str, Any]:
-    return _apply_query_options({"query": args.query}, args)
 
 
 def _build_answer_payload(
@@ -217,10 +162,6 @@ def _build_answer_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"query": query, "stream": False}
     return _apply_query_options(payload, args, include_answer_limits=True)
-
-
-def _build_ingest_kwargs(args: argparse.Namespace) -> dict[str, Any]:
-    return ingest_kwargs_from_payload(args)
 
 
 def _answer_images_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -282,7 +223,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
     from dlightrag.core.service import RAGService
 
     source = args.source_type
-    kwargs = _build_ingest_kwargs(args)
+    kwargs = ingest_kwargs_from_payload(args)
 
     if source == "local":
         print(f"Ingesting: {args.path} (replace={args.replace})")
@@ -326,7 +267,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 def cmd_query(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/retrieve"
-    payload = _build_retrieve_payload(args)
+    payload = _apply_query_options({"query": args.query}, args)
 
     print(f"Query: {args.query}")
     if args.workspaces:
@@ -416,12 +357,6 @@ def _add_filter_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Full metadata filters JSON object sent to the API",
     )
-    parser.add_argument("--filter-filename", dest="filter_filename")
-    parser.add_argument("--filter-file-extension", dest="filter_file_extension")
-    parser.add_argument("--filter-title", dest="filter_title")
-    parser.add_argument("--filter-author", dest="filter_author")
-    parser.add_argument("--filter-creation-date-from", dest="filter_creation_date_from")
-    parser.add_argument("--filter-creation-date-to", dest="filter_creation_date_to")
     parser.add_argument(
         "--filter-custom-json",
         type=_json_object_arg,

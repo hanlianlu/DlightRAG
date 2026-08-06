@@ -4,7 +4,6 @@ from dlightrag.citations.parser import (
     DOC_CITATION_PATTERN,
     claimless_chunk_ids,
     clean_invalid_citations,
-    extract_citation_keys,
     extract_cited_chunks,
     strip_generated_references_section,
 )
@@ -53,16 +52,6 @@ def test_chunk_citations_allow_chinese_adjacency():
 def test_citation_pattern_no_match():
     m = CITATION_PATTERN.search("no citations here")
     assert m is None
-
-
-def test_extract_citation_keys_basic():
-    text = "Answer [1-2] and [2-1] here [1-2] again."
-    keys = extract_citation_keys(text)
-    assert keys == ["1-2", "2-1"]
-
-
-def test_extract_citation_keys_empty():
-    assert extract_citation_keys("no citations") == []
 
 
 def test_clean_invalid_citations():
@@ -118,7 +107,6 @@ def test_huge_chunk_index_stays_text_without_raising():
     )
     marker = f"[1-{'9' * 5000}]"
 
-    assert extract_citation_keys(marker) == []
     assert extract_cited_chunks(indexer, marker) == {}
     assert clean_invalid_citations(indexer, marker) == marker
 
@@ -151,7 +139,6 @@ def test_attachment_citations_flow_through_indexing_and_cleanup():
     )
     text = "All [att-1], exact [att-12-1], invalid [att-1-9] and [att-99]."
 
-    assert extract_citation_keys(text) == ["att-1", "att-12-1", "att-1-9", "att-99"]
     assert extract_cited_chunks(indexer, text) == {
         "att-1": ["a1", "a2"],
         "att-12": ["b1"],
@@ -182,26 +169,6 @@ class TestDocCitationPattern:
 
     def test_no_match_on_empty_brackets(self):
         assert DOC_CITATION_PATTERN.findall("See [] here") == []
-
-
-class TestExtractCitationKeysDocLevel:
-    """Test extract_citation_keys with doc-level [n] format."""
-
-    def test_extracts_doc_level(self):
-        keys = extract_citation_keys("Answer based on [1] and [2].")
-        assert keys == ["1", "2"]
-
-    def test_extracts_doc_level_before_chinese_text(self):
-        keys = extract_citation_keys("《货币、权力与人》[1]和《中国为什么有前途》[3]")
-        assert keys == ["1", "3"]
-
-    def test_extracts_mixed(self):
-        keys = extract_citation_keys("From [1] and specifically [1-2].")
-        assert keys == ["1", "1-2"]
-
-    def test_deduplicates_doc_level(self):
-        keys = extract_citation_keys("[1] agrees with [1].")
-        assert keys == ["1"]
 
 
 class TestExtractCitedChunksDocLevel:

@@ -186,7 +186,7 @@ class LLMConfig(BaseModel):
             model="z-ai/glm-5.2",
             base_url="https://openrouter.ai/api/v1",
             structured_output="json_schema",
-            temperature=0.5,
+            temperature=0.4,
         )
     )
     roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)
@@ -867,7 +867,7 @@ class DlightragConfig(BaseSettings):
     max_async: int = Field(default=8, ge=1)
     embedding_func_max_async: int = Field(default=16, ge=1)
     embedding_batch_num: int = Field(
-        default=32,
+        default=64,
         ge=1,
         description=(
             "Texts sent per embedding provider request (the per-request batch size). "

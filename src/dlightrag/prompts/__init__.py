@@ -2,15 +2,11 @@
 """Centralized prompts for DlightRAG."""
 
 from .guidance import (
-    ANSWER_CONTEXT_GUIDANCE,
-    CITATION_GUIDANCE,
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
     LISTWISE_RERANK_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
-    RERANK_GUIDANCE,
 )
-from .identity import CORE_IDENTITY
 from .planner import (
     PLANNER_IMAGE_CONTEXT_GUIDANCE,
 )
@@ -22,12 +18,7 @@ from .web_planner import (
 )
 
 __all__ = [
-    # identity
-    "CORE_IDENTITY",
     # guidance
-    "ANSWER_CONTEXT_GUIDANCE",
-    "CITATION_GUIDANCE",
-    "RERANK_GUIDANCE",
     "LISTWISE_RERANK_SYSTEM_PROMPT",
     "HIGHLIGHT_BATCH_USER_PROMPT",
     # planner

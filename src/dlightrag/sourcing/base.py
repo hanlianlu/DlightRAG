@@ -27,10 +27,6 @@ class AsyncDataSource(ABC):
     All async data sources must implement this interface.
     """
 
-    async def alist_documents(self, prefix: str | None = None) -> list[SourceDocument]:
-        """Collect available documents into a list."""
-        return [document async for document in self.aiter_documents(prefix=prefix)]
-
     @abstractmethod
     def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[SourceDocument]:
         """Stream available documents.
