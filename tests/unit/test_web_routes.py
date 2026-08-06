@@ -1447,7 +1447,7 @@ class TestWebWorkspaceCreate:
             data={"workspace_name": "new workspace"},
         )
         assert resp.status_code == 200
-        assert "workspaceCreated" in resp.headers["hx-trigger"]
+        assert resp.json() == {"workspace": "new_workspace", "display_name": "new workspace"}
         set_cookies = resp.headers.get_list("set-cookie")
         assert any(
             cookie.startswith("dlightrag_workspace=new_workspace;") for cookie in set_cookies
@@ -1470,11 +1470,11 @@ class TestWebWorkspaceCreate:
         assert resp.status_code == 409
 
     @pytest.mark.parametrize(
-        ("workspace_name", "expect_error_markup"),
+        "workspace_name",
         [
-            pytest.param("", True, id="empty_name"),
-            pytest.param("bad/name", False, id="forbidden_chars"),
-            pytest.param("a" * 65, False, id="too_long"),
+            pytest.param("", id="empty_name"),
+            pytest.param("bad/name", id="forbidden_chars"),
+            pytest.param("a" * 65, id="too_long"),
         ],
     )
     async def test_create_workspace_invalid_name(
@@ -1482,15 +1482,13 @@ class TestWebWorkspaceCreate:
         client: AsyncClient,
         test_config: DlightragConfig,
         workspace_name: str,
-        expect_error_markup: bool,
     ) -> None:
         resp = await client.post(
             "/web/workspaces/create",
             data={"workspace_name": workspace_name},
         )
         assert resp.status_code == 400
-        if expect_error_markup:
-            assert 'class="file-error"' in resp.text
+        assert resp.json()["error"]
 
 
 class TestWebWorkspaceDelete:
@@ -1506,7 +1504,7 @@ class TestWebWorkspaceDelete:
             data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
         )
         assert resp.status_code == 200
-        assert "workspaceDeleted" in resp.headers["hx-trigger"]
+        assert resp.json() == {"workspace": "test_ws", "next_workspace": "default"}
         assert "dlightrag_workspace=default" in resp.headers["set-cookie"]
         mock_manager.areset.assert_awaited_once_with(workspace="test_ws")
 
@@ -1522,11 +1520,7 @@ class TestWebWorkspaceDelete:
         )
 
         assert resp.status_code == 200
-        trigger = json.loads(resp.headers["hx-trigger"])
-        assert trigger["workspaceDeleted"] == {
-            "workspace": "default",
-            "next_workspace": "research",
-        }
+        assert resp.json() == {"workspace": "default", "next_workspace": "research"}
         set_cookies = resp.headers.get_list("set-cookie")
         assert any(cookie.startswith("dlightrag_workspace=research;") for cookie in set_cookies)
         assert any(cookie.startswith("dlightrag_workspace_ids=research;") for cookie in set_cookies)
@@ -1543,11 +1537,7 @@ class TestWebWorkspaceDelete:
         )
 
         assert resp.status_code == 200
-        trigger = json.loads(resp.headers["hx-trigger"])
-        assert trigger["workspaceDeleted"] == {
-            "workspace": "test_fallback_ws",
-            "next_workspace": "default",
-        }
+        assert resp.json() == {"workspace": "test_fallback_ws", "next_workspace": "default"}
         mock_manager.areset.assert_awaited_once_with(workspace="test_fallback_ws")
 
     @pytest.mark.parametrize(

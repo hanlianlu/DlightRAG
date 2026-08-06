@@ -10,7 +10,6 @@ import {setupAttachmentInputs} from './attachments.ts';
 import {setupQueryForm} from './chat.ts';
 import {setupConversations} from './conversations.ts';
 import {setupFilesPanel} from './files-panel.ts';
-import {setupHtmxInteractions} from './htmx.ts';
 import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
 import {setupPanel} from './panel.ts';
@@ -28,7 +27,6 @@ document.addEventListener('DOMContentLoaded', function() {
     setupSourcePanel();
     setupFilesPanel();
     setupPanelResize();
-    setupHtmxInteractions();
     setupImageLightbox();
     setupAttachmentInputs();
     setupQueryForm();

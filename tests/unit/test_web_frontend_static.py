@@ -76,8 +76,6 @@ def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
     base_html = (web_root / "templates" / "base.html").read_text(encoding="utf-8")
 
     assert 'src="https://' not in base_html
-    assert 'src="/static/vendor/htmx.min.js' in base_html
-    assert (web_root / "static" / "vendor" / "htmx.min.js").is_file()
 
 
 def test_web_shell_bootstraps_theme_preference_before_stylesheet() -> None:

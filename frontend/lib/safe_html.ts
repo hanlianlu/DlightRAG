@@ -2,23 +2,6 @@
 
 import DOMPurify, {type Config} from 'dompurify';
 
-// htmx action attributes: only trusted server-rendered fragments (file panel,
-// htmx swaps) ever need these. They must NOT survive on untrusted LLM answer
-// content, where an injected hx-delete/hx-post would be a CSRF-like action sink
-// if that content were ever processed by htmx.
-const HX_ATTRS = [
-  'hx-confirm',
-  'hx-delete',
-  'hx-encoding',
-  'hx-get',
-  'hx-indicator',
-  'hx-post',
-  'hx-swap',
-  'hx-target',
-  'hx-trigger',
-  'hx-vals',
-];
-
 // Attributes shared by both profiles. data-action / data-* are kept for LLM
 // content because answer image strips and reference lists rely on them
 // (open-lightbox / open-ref-source), and their click handlers re-validate input.
@@ -44,15 +27,15 @@ const BASE_ADD_ATTR = [
   'y2',
 ];
 
-// Permissive profile — trusted server fragments (includes htmx attributes).
+// Permissive profile — trusted server fragments.
 const SANITIZE_CONFIG: Config = {
   USE_PROFILES: {html: true, svg: true},
   ALLOW_DATA_ATTR: true,
   ADD_TAGS: ['line', 'polyline'],
-  ADD_ATTR: [...BASE_ADD_ATTR, ...HX_ATTRS],
+  ADD_ATTR: [...BASE_ADD_ATTR],
 };
 
-// Strict profile — untrusted LLM answer/preview/highlight content (no htmx).
+// Strict profile — untrusted LLM answer/preview/highlight content.
 const LLM_SANITIZE_CONFIG: Config = {
   USE_PROFILES: {html: true, svg: true},
   ALLOW_DATA_ATTR: true,

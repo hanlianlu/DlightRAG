@@ -135,9 +135,6 @@ function showFilePanelLoading(): void {
 }
 
 function processSwappedFilePanelContent(panelContent: HTMLElement): void {
-    if (window.htmx && typeof window.htmx.process === 'function') {
-        window.htmx.process(panelContent);
-    }
     applyProgressBars(panelContent);
     showEmptyPanelPlaceholder();
 }

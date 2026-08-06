@@ -3,20 +3,15 @@
 import type { WorkspaceRecord } from './bus';
 
 /**
- * Raw detail of the server's workspace `HX-Trigger` events (and the `data-all`
- * bootstrap attribute). The wire shape is snake_case because it comes straight
- * from the Python backend — this is the ONE place that is allowed to know that.
+ * Raw shape of the server's `data-all` workspace bootstrap attribute. It is
+ * snake_case because it comes straight from the Python backend — this is the
+ * ONE place that is allowed to know that.
  */
 export interface WorkspaceEventDetail {
   workspace?: string;
   display_name?: string;
   embedding_model?: string;
   next_workspace?: string;
-}
-
-/** Unwrap an htmx `HX-Trigger` CustomEvent into its raw workspace detail. */
-export function readWorkspaceDetail(event: Event): WorkspaceEventDetail {
-  return (event as CustomEvent<WorkspaceEventDetail>).detail ?? {};
 }
 
 /**

@@ -24,14 +24,13 @@ def test_ingestion_panel_opens(page):
 
 @pytest.mark.e2e
 def test_file_panel_request_state_does_not_show_upload_indicator(page):
-    """Non-upload panel requests must not surface the upload-only indicator."""
+    """Only an upload in progress may surface the upload indicator."""
     page.goto("/web/")
     page.wait_for_selector(".app", timeout=10000)
 
     page.click("#files-btn")
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
 
-    page.locator("#panel-content").evaluate("el => el.classList.add('htmx-request')")
     assert not page.locator("#upload-spinner").is_visible()
 
     page.locator("#upload-zone").evaluate("el => el.classList.add('is-uploading')")

@@ -471,10 +471,10 @@ retrieval is active, and included as bounded model blocks for answers. These
 public calls accept no Composer documents.
 
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
-`DELETE /workspaces/{workspace}`), while the `/web/*` surface uses htmx action
-endpoints that return HTML fragments (for example `POST /web/workspaces/create`,
-`POST /web/workspaces/delete`). This split is intentional: Web responses are markup
-rather than JSON. Prefer REST or the SDK for programmatic access.
+`DELETE /workspaces/{workspace}`), while the `/web/*` surface serves the browser
+(for example `POST /web/workspaces/create`, `POST /web/workspaces/delete`) and
+answers with whatever that page needs — an HTML fragment for panels, JSON for
+state the stores own. Prefer REST or the SDK for programmatic access.
 
 Image support is a deployment capability, not a per-request negotiation, so callers
 discover it up front. REST `GET /health` returns `answer_image_capability`

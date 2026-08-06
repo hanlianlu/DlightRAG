@@ -1,18 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web routes for workspace management."""
 
-import json
 import logging
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Form, Request, Response
+from fastapi.responses import JSONResponse
 
 from dlightrag.access_control import AccessAction
 from dlightrag.utils import normalize_workspace
 from dlightrag.web.deps import (
     enforce_web_access,
-    error_response,
     filter_web_workspace_records,
     get_manager,
 )
@@ -53,7 +51,7 @@ def _cookie_active_workspaces(request: Request, visible_workspaces: list[str]) -
 
 
 def _set_workspace_cookies(
-    response: HTMLResponse,
+    response: Response,
     request: Request,
     visible_workspaces: list[str],
     *,
@@ -115,7 +113,11 @@ def _set_workspace_cookies(
     )
 
 
-@router.post("/workspaces/create", response_class=HTMLResponse)
+def _error(message: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status_code)
+
+
+@router.post("/workspaces/create")
 async def create_workspace(
     request: Request,
     workspace_name: str = Form(default=""),
@@ -128,7 +130,7 @@ async def create_workspace(
     try:
         name = validate_workspace_name(workspace_name)
     except ValueError as exc:
-        return error_response(str(exc))
+        return _error(str(exc))
 
     ws = normalize_workspace(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
@@ -136,24 +138,19 @@ async def create_workspace(
     # Duplicate check
     existing = await manager.alist_workspaces()
     if ws in existing:
-        return error_response(f"Workspace '{name}' already exists", status_code=409)
+        return _error(f"Workspace '{name}' already exists", status_code=409)
 
     # Initialize workspace (creates the RAGService)
     try:
         await manager.acreate_workspace(ws, display_name=name)
     except Exception:
         logger.exception("Workspace creation failed")
-        return error_response(
+        return _error(
             "Failed to create workspace; see server logs for details.",
             status_code=500,
         )
 
-    response = HTMLResponse(
-        "",
-        headers={
-            "HX-Trigger": json.dumps({"workspaceCreated": {"workspace": ws, "display_name": name}})
-        },
-    )
+    response = JSONResponse({"workspace": ws, "display_name": name})
     visible_workspaces = await _visible_workspace_names(request, manager)
     _set_workspace_cookies(
         response,
@@ -165,7 +162,7 @@ async def create_workspace(
     return response
 
 
-@router.post("/workspaces/delete", response_class=HTMLResponse)
+@router.post("/workspaces/delete")
 async def delete_workspace(
     request: Request,
     workspace_name: str = Form(default=""),
@@ -177,9 +174,9 @@ async def delete_workspace(
     confirm = confirm_name.strip()
 
     if not name:
-        return error_response("Workspace name cannot be empty")
+        return _error("Workspace name cannot be empty")
     if normalize_workspace(name) != normalize_workspace(confirm):
-        return error_response("Confirmation name does not match")
+        return _error("Confirmation name does not match")
 
     ws = normalize_workspace(name)
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
@@ -188,7 +185,7 @@ async def delete_workspace(
         await manager.areset(workspace=ws)
     except Exception:
         logger.exception("Workspace deletion failed")
-        return error_response(
+        return _error(
             "Failed to delete workspace; see server logs for details.",
             status_code=500,
         )
@@ -197,19 +194,7 @@ async def delete_workspace(
     active = _cookie_active_workspaces(request, visible_workspaces)
     next_workspace = active[0] if active else _default_workspace(visible_workspaces)
 
-    response = HTMLResponse(
-        "",
-        headers={
-            "HX-Trigger": json.dumps(
-                {
-                    "workspaceDeleted": {
-                        "workspace": ws,
-                        "next_workspace": next_workspace,
-                    }
-                }
-            )
-        },
-    )
+    response = JSONResponse({"workspace": ws, "next_workspace": next_workspace})
     _set_workspace_cookies(
         response,
         request,

@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark light">
     <title>DlightRAG</title>
-    <meta name="htmx-config" content='{"allowEval": false, "allowScriptTags": false}'>
     <script>
         (function () {
             var root = document.documentElement;
@@ -59,7 +58,6 @@
 </head>
 <body>
     {% block content %}{% endblock %}
-    <script src="/static/vendor/htmx.min.js?v={{ static_version() }}"></script>
     <script>
     </script>
     <script type="module" src="/static/generated/js/main.js?v={{ static_version() }}"></script>

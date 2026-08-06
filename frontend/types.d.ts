@@ -29,32 +29,7 @@ interface MathJaxConfig {
 }
 
 interface Window {
-  htmx: HTMXGlobal;
   MathJax?: MathJaxConfig;
 }
 
-declare const htmx: HTMXGlobal;
 
-// ── HTMX ──────────────────────────────────────────────────────────────
-
-interface HTMXGlobal {
-  process(element: Element): void;
-  ajax(method: string, url: string, options?: HTMXAjaxOptions): Promise<void>;
-}
-
-interface HTMXAjaxOptions {
-  swap?: string;
-  values?: Record<string, string>;
-}
-
-// Custom events emitted by HTMX after swaps
-interface HTMXEvent extends Event {
-  detail: {
-    isError?: boolean;
-    serverResponse?: string;
-    shouldSwap?: boolean;
-    successful?: boolean;
-    target?: Element;
-    xhr: XMLHttpRequest;
-  };
-}

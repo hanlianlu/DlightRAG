@@ -1,7 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {bus, type WorkspaceRecord} from '../events/bus.ts';
-import {readWorkspaceDetail, toWorkspaceRecord, type WorkspaceEventDetail} from '../events/workspace_events.ts';
+import {toWorkspaceRecord, type WorkspaceEventDetail} from '../events/workspace_events.ts';
+import {
+    WorkspaceApiError,
+    createWorkspaceRequest,
+    deleteWorkspaceRequest,
+} from '../api/workspaces.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
@@ -227,23 +232,22 @@ function createRow(): HTMLDivElement {
     return row;
 }
 
-export function createWorkspace(input: HTMLInputElement): void {
+export async function createWorkspace(input: HTMLInputElement): Promise<void> {
     const name = input.value.trim();
     if (!name) return;
     input.disabled = true;
-    // htmx resolves its promise for 4xx/5xx too, so the outcome has to come
-    // from the event; .catch() alone leaves the input disabled forever.
-    document.body.addEventListener('htmx:afterRequest', function once(event) {
-        const detail = (event as HTMXEvent).detail;
-        if (!detail.xhr.responseURL.endsWith('/web/workspaces/create')) return;
-        document.body.removeEventListener('htmx:afterRequest', once);
+    try {
+        const created = await createWorkspaceRequest(name);
+        workspaceStore.add({
+            workspace: created.workspace,
+            displayName: created.display_name,
+            embeddingModel: '',
+        });
+    } catch (error) {
+        showToast(error instanceof WorkspaceApiError ? error.message : 'Failed to create workspace', 5000);
+    } finally {
         input.disabled = false;
-        if (!detail.successful) showToast('Failed to create workspace', 5000);
-    });
-    void htmx.ajax('POST', '/web/workspaces/create', {
-        values: {workspace_name: name},
-        swap: 'none',
-    });
+    }
 }
 
 function closeWorkspacePopover(): void {
@@ -313,29 +317,28 @@ function setupWorkspaceEvents(): void {
     });
 
     // Dropping a workspace clears every store it owns, so the request outlives
-    // the click. Without this the dialog sits unchanged and a failure, whose
-    // fragment hx-swap="none" discards, looks identical to success.
+    // the click and the dialog would otherwise sit unchanged.
     const deleteForm = document.getElementById('delete-workspace-form');
     if (deleteForm && !deleteForm.dataset.bound) {
         deleteForm.dataset.bound = 'true';
-        deleteForm.addEventListener('htmx:beforeRequest', () => setDeleteWorkspacePending(true));
-        deleteForm.addEventListener('htmx:afterRequest', (event) => {
-            setDeleteWorkspacePending(false);
-            const detail = (event as HTMXEvent).detail;
-            if (!detail.successful) showToast('Could not delete workspace.', 4000);
+        deleteForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const workspace = (document.getElementById('delete-workspace-id') as HTMLInputElement | null)?.value;
+            if (!workspace) return;
+            setDeleteWorkspacePending(true);
+            try {
+                const deleted = await deleteWorkspaceRequest(workspace);
+                workspaceStore.remove(deleted.workspace, deleted.next_workspace);
+            } catch (error) {
+                showToast(
+                    error instanceof WorkspaceApiError ? error.message : 'Could not delete workspace.',
+                    4000,
+                );
+            } finally {
+                setDeleteWorkspacePending(false);
+            }
         });
     }
-
-    // Server-push (htmx HX-Trigger) -> store. The ONLY place that knows the
-    // snake_case wire shape: normalize once, then let the store notify the UI.
-    document.body.addEventListener('workspaceCreated', (event) => {
-        const record = toWorkspaceRecord(readWorkspaceDetail(event));
-        if (record) workspaceStore.add(record);
-    });
-    document.body.addEventListener('workspaceDeleted', (event) => {
-        const detail = readWorkspaceDetail(event);
-        if (detail.workspace) workspaceStore.remove(detail.workspace, detail.next_workspace || '');
-    });
 
     // Store change -> workspace-selector UI (typed bus, camelCase).
     bus.on('workspaceCreated', ({workspace}) => {
