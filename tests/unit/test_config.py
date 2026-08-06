@@ -15,7 +15,6 @@ from dlightrag.config import (
     EmbeddingConfig,
     LLMConfig,
     LLMRolesConfig,
-    MetadataConfig,
     MinerUSidecarConfig,
     ModelConfig,
     QueryImagesConfig,
@@ -273,15 +272,6 @@ class TestQueryAndVisualConfig:
     def test_rejects_invalid_numeric_bounds(self, cls: type, kwargs: dict[str, Any]) -> None:
         with pytest.raises(ValidationError):
             cast(Any, cls)(**kwargs)
-
-
-class TestMetadataConfig:
-    def test_defaults_expose_only_live_metadata_policy_controls(self) -> None:
-        cfg = MetadataConfig()
-
-        assert cfg.allow_ad_hoc_json is True
-        assert cfg.default_ingest_policy == "validate"
-        assert cfg.fields == {}
 
 
 class TestDlightragConfigNested:
@@ -631,8 +621,6 @@ def test_parser_defaults_export_lightrag_env() -> None:
 def test_metadata_and_remote_source_defaults() -> None:
     cfg = _default_test_config()
 
-    assert cfg.metadata.default_ingest_policy == "validate"
-    assert cfg.metadata.allow_ad_hoc_json is True
     assert cfg.retain_remote_source_files is False
 
 

@@ -23,7 +23,6 @@ from dlightrag.core.ingestion.engine import (
     _prepare_ingest_item,
     _raw_path_source_uri,
 )
-from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
 
 def _sha256(content: bytes) -> str:
@@ -530,9 +529,7 @@ async def test_batch_hash_match_metadata_update_waits_for_enqueue_validation(
         "download_locator": str(first),
         "file_extension": "pdf",
         "title": "Old title",
-        "user_metadata": {},
-        "metadata_filterable": {},
-        "metadata_json": {},
+        "custom_metadata": {},
     }
 
     with pytest.raises(FilenameParserHintError):
@@ -597,9 +594,7 @@ async def test_single_hash_match_source_contract_change_updates_metadata(
         "source_uri": "bynder://asset/old",
         "download_locator": "https://cdn.example.com/old-sample.pdf",
         "file_extension": "pdf",
-        "user_metadata": {},
-        "metadata_filterable": {},
-        "metadata_json": {},
+        "custom_metadata": {},
     }
 
     result = await engine.aingest_file(
@@ -710,9 +705,7 @@ async def test_single_hash_match_explicit_default_source_contract_updates_metada
         "source_uri": "bynder://asset/old",
         "download_locator": "https://cdn.example.com/old-sample.pdf",
         "file_extension": "pdf",
-        "user_metadata": {},
-        "metadata_filterable": {},
-        "metadata_json": {},
+        "custom_metadata": {},
     }
 
     result = await engine.aingest_file(
@@ -848,9 +841,7 @@ async def test_pending_metadata_is_persisted_before_parser_enqueue_failure(
             "source_uri": "bynder://asset/1",
             "download_locator": "https://cdn.example.com/assets/1.pdf",
             "file_extension": "pdf",
-            "user_metadata": {},
-            "metadata_filterable": {},
-            "metadata_json": {},
+            "custom_metadata": {},
         }
     ]
 
@@ -981,47 +972,25 @@ async def test_document_ingest_delegates_non_sidecar_parser_route(tmp_path: Path
 async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) -> None:
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")
-    engine, deps = _make_engine(
-        metadata_registry=MetadataFieldRegistry.from_config(
-            {
-                "reviewer": {
-                    "type": "string",
-                    "normalizer": "casefold_trim",
-                    "filterable": True,
-                }
-            }
-        ),
-        allow_ad_hoc_metadata=True,
-        default_metadata_policy="validate",
-    )
+    engine, deps = _make_engine()
 
     await engine.aingest_file(
         source,
         replace=False,
         metadata={"reviewer": " Ada Lovelace ", "project": "Analytical Engine"},
-        metadata_policy="validate",
     )
 
     _, saved = deps["metadata_index"].upsert.await_args.args
-    assert saved["user_metadata"]["reviewer"] == " Ada Lovelace "
-    assert saved["metadata_filterable"]["reviewer"] == "ada lovelace"
-    assert saved["metadata_json"]["project"] == "Analytical Engine"
+    assert saved["custom_metadata"] == {
+        "reviewer": " Ada Lovelace ",
+        "project": "Analytical Engine",
+    }
 
 
 async def test_prepared_file_metadata_overlays_batch_metadata(tmp_path: Path) -> None:
     source = tmp_path / "asset.pdf"
     source.write_bytes(b"%PDF-1.4")
-    engine, deps = _make_engine(
-        metadata_registry=MetadataFieldRegistry.from_config(
-            {
-                "source_system": {"type": "string", "filterable": True},
-                "department": {"type": "string", "filterable": True},
-                "asset_id": {"type": "string", "filterable": True},
-            }
-        ),
-        allow_ad_hoc_metadata=True,
-        default_metadata_policy="validate",
-    )
+    engine, deps = _make_engine()
 
     await engine.aingest_files(
         [
@@ -1034,19 +1003,13 @@ async def test_prepared_file_metadata_overlays_batch_metadata(tmp_path: Path) ->
         ],
         replace=False,
         metadata={"source_system": "Bynder", "department": "Marketing"},
-        metadata_policy="validate",
     )
 
     _, saved = deps["metadata_index"].upsert.await_args.args
-    assert saved["user_metadata"] == {
+    assert saved["custom_metadata"] == {
         "source_system": "Bynder",
         "department": " Legal ",
         "asset_id": "A-123",
-    }
-    assert saved["metadata_filterable"] == {
-        "source_system": "bynder",
-        "department": "legal",
-        "asset_id": "a-123",
     }
 
 

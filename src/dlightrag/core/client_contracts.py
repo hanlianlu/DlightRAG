@@ -6,8 +6,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dlightrag.contracts import MetadataPolicy
-
 # Caller-supplied conversation history is stateless: the client owns persistence
 # and re-sends prior turns each request; DlightRAG never stores them. The message
 # ceiling bounds request size (~50 prior turns); the planner independently
@@ -98,7 +96,6 @@ class IngestDocument(ClientContractModel):
     title: str | None = None
     author: str | None = None
     metadata: dict[str, Any] | None = None
-    metadata_policy: MetadataPolicy | None = None
 
 
 class IngestSpec(ClientContractModel):
@@ -125,7 +122,6 @@ class IngestSpec(ClientContractModel):
     title: str | None = None
     author: str | None = None
     metadata: dict[str, Any] | None = None
-    metadata_policy: MetadataPolicy | None = None
 
     @model_validator(mode="after")
     def _validate_source_fields(self) -> IngestSpec:

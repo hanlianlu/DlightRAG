@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Metadata field registry — single source of truth for document metadata columns."""
+"""Document metadata columns — single source of truth for the metadata table."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -8,9 +8,6 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any
-
-from dlightrag.config import MetadataFieldConfig
-from dlightrag.contracts import MetadataPolicy
 
 
 class MetadataValidationError(ValueError):
@@ -34,55 +31,8 @@ class MetadataFieldDef:
 
 @dataclass(frozen=True)
 class NormalizedUserMetadata:
-    filterable: dict[str, Any]
-    raw_json: dict[str, Any]
+    custom_metadata: dict[str, Any]
     system: dict[str, Any] = field(default_factory=dict)
-
-
-class MetadataFieldRegistry:
-    """Runtime registry for user-declared metadata filter fields."""
-
-    def __init__(self, fields: Mapping[str, MetadataFieldConfig] | None = None) -> None:
-        self._fields = dict(fields or {})
-
-    @classmethod
-    def from_config(cls, config: Mapping[str, Any] | None) -> MetadataFieldRegistry:
-        return cls(
-            {
-                field_id: raw
-                if isinstance(raw, MetadataFieldConfig)
-                else MetadataFieldConfig.model_validate(raw)
-                for field_id, raw in (config or {}).items()
-            }
-        )
-
-    def get(self, field_id: str) -> MetadataFieldConfig | None:
-        return self._fields.get(field_id)
-
-    def filter_spec(self, field_id: str) -> MetadataFieldConfig | None:
-        field_def = self._fields.get(field_id)
-        if field_def is None or not field_def.filterable:
-            return None
-        return field_def
-
-    def normalize_filter(self, filters: Any) -> Any:
-        custom = getattr(filters, "custom", None)
-        if not custom:
-            return filters
-
-        normalized_custom: dict[str, Any] = {}
-        changed = False
-        for key, value in custom.items():
-            field_def = self.filter_spec(key)
-            normalized_value = (
-                _normalize_value(value, field_def.normalizer) if field_def is not None else value
-            )
-            normalized_custom[key] = normalized_value
-            changed = changed or normalized_value != value
-
-        if not changed:
-            return filters
-        return filters.model_copy(update={"custom": normalized_custom})
 
 
 def _coerce_creation_date(value: Any) -> datetime:
@@ -113,18 +63,11 @@ _CALLER_SETTABLE_COLUMNS: Mapping[str, Callable[[Any], Any]] = MappingProxyType(
 )
 
 
-def normalize_user_metadata(
-    metadata: Mapping[str, Any] | None,
-    registry: MetadataFieldRegistry,
-    *,
-    metadata_policy: MetadataPolicy = "validate",
-    allow_ad_hoc_json: bool = True,
-) -> NormalizedUserMetadata:
-    """Normalize user metadata into filterable fields and JSON enrichment."""
+def normalize_user_metadata(metadata: Mapping[str, Any] | None) -> NormalizedUserMetadata:
+    """Route caller metadata to its own column, or verbatim into the JSONB column."""
     if not metadata:
-        return NormalizedUserMetadata(filterable={}, raw_json={})
-    filterable: dict[str, Any] = {}
-    raw_json: dict[str, Any] = {}
+        return NormalizedUserMetadata(custom_metadata={})
+    custom: dict[str, Any] = {}
     system: dict[str, Any] = {}
     for key, value in metadata.items():
         if key.startswith(("sys.", "lightrag.", "user.")):
@@ -138,17 +81,8 @@ def normalize_user_metadata(
             raise MetadataValidationError(
                 f"{key} is a built-in metadata field and cannot be set through metadata"
             )
-        field_def = registry.get(key)
-        if field_def is None:
-            if metadata_policy == "reject_unknown":
-                raise MetadataValidationError(f"undeclared metadata field: {key}")
-            if allow_ad_hoc_json:
-                raw_json[key] = value
-            continue
-        if metadata_policy != "store_only" and field_def.filterable:
-            filterable[key] = _normalize_value(value, field_def.normalizer)
-        raw_json[key] = value
-    return NormalizedUserMetadata(filterable=filterable, raw_json=raw_json, system=system)
+        custom[key] = value
+    return NormalizedUserMetadata(custom_metadata=custom, system=system)
 
 
 def extract_system_metadata(
@@ -175,14 +109,6 @@ def extract_system_metadata(
         "download_locator": download_locator,
         "file_extension": file_name.suffix.lower().lstrip("."),
     }
-
-
-def _normalize_value(value: Any, normalizer: str) -> Any:
-    if normalizer == "casefold_trim" and isinstance(value, str):
-        return value.strip().casefold()
-    if normalizer == "trim" and isinstance(value, str):
-        return value.strip()
-    return value
 
 
 METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
@@ -221,19 +147,9 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         "TIMESTAMP",
         index_type="btree",
     ),
-    MetadataFieldDef("parse_engine", "VARCHAR(64)"),
-    MetadataFieldDef("process_options", "JSONB DEFAULT '{}'"),
     MetadataFieldDef("ingested_at", "TIMESTAMPTZ DEFAULT NOW()"),
-    MetadataFieldDef(
-        "custom_metadata",
-        "JSONB DEFAULT '{}'",
-        index_type="gin",
-    ),
-    MetadataFieldDef(
-        "metadata_json",
-        "JSONB DEFAULT '{}'",
-        index_type="gin",
-    ),
+    # Matched with LOWER(custom_metadata ->> key), which no GIN index can serve.
+    MetadataFieldDef("custom_metadata", "JSONB DEFAULT '{}'"),
 )
 
 

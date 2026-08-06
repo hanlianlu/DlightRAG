@@ -133,7 +133,10 @@ with the BM25 failure chained as its cause.
 
 Metadata filtering is explicit-schema first:
 
-- Declared fields are normalized and filterable.
+- Named fields (`filename`, `file_extension`, `title`, `author`,
+  `creation_date_from`/`creation_date_to`) are typed columns. Custom metadata is
+  one JSONB column, matched by `filters.custom` under the same case-insensitive
+  rule; no key needs declaring first.
 - A named file is one filter field, `filename`. Callers and the planner write the
   name as it was said — complete or partial, with or without an extension — and
   retrieval resolves it: exact match against the stored name or its stem first,
@@ -141,8 +144,6 @@ Metadata filtering is explicit-schema first:
   stem, and pattern fields asked the planner to choose a match operator for a
   corpus it cannot see, and the schema deliberately shows it column names rather
   than values because a workspace's document count is unbounded.
-- Undeclared metadata can be stored as JSONB enrichment, but is not filterable
-  by default.
 - User/API filters are strict. If they resolve to zero candidate documents or
   chunks, retrieval returns no matches.
 - LLM-inferred filters include `filter_confidence` and evidence spans for

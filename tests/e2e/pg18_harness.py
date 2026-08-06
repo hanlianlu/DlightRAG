@@ -16,7 +16,6 @@ from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
     LLMConfig,
-    MetadataConfig,
     ModelConfig,
 )
 
@@ -137,19 +136,6 @@ def make_e2e_config(
             max_token_size=1024,
             asymmetric="auto",
             startup_probe=False,
-        ),
-        metadata=MetadataConfig(
-            allow_ad_hoc_json=True,
-            fields=cast(
-                Any,
-                {
-                    "e2e_case": {
-                        "type": "string",
-                        "normalizer": "casefold_trim",
-                        "filterable": True,
-                    }
-                },
-            ),
         ),
     )
 

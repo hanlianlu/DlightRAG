@@ -122,24 +122,6 @@ parser_sidecars:
   #   ## Only needed on Apple Silicon; see docs/configuration.md.
   #   # code_formula_preset: granite_docling
 
-# ─────────────────────────────────────────────────────────────────
-# Product Schema
-# ─────────────────────────────────────────────────────────────────
-
-metadata:
-  allow_ad_hoc_json: true
-  default_ingest_policy: validate
-  fields: {}
-  ## Declare custom user metadata fields here only when they should become
-  ## filterable. Undeclared metadata is still stored in metadata_json when
-  ## allow_ad_hoc_json is true, but it is not promoted to declared filters.
-  ## Example:
-
-  # fields:
-  #   department:
-  #     type: string
-  #     filterable: true
-
 ## kg_entity_types is a lightweight hint (one line of extraction guidance).
 ## Left empty so DlightRAG defers to LightRAG's built-in general taxonomy
 ## (Person/Organization/Location/Event/Concept/Method/Content/Data/Artifact/

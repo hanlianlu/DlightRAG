@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dlightrag.contracts import MetadataPolicy
-
 
 @dataclass(frozen=True)
 class SourceDocument:
@@ -21,7 +19,6 @@ class SourceDocument:
     title: str | None = None
     author: str | None = None
     metadata: Mapping[str, Any] | None = None
-    metadata_policy: MetadataPolicy | None = None
 
 
 class AsyncDataSource(ABC):

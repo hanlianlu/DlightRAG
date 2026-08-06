@@ -17,7 +17,6 @@ import os
 import re
 import ssl
 import warnings
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode, urlsplit
@@ -29,7 +28,6 @@ from dlightrag.contracts import (
     AsymmetricMode,
     ChatProvider,
     InputModality,
-    MetadataPolicy,
     ServiceRole,
 )
 
@@ -355,36 +353,6 @@ _SIDECAR_ENV_KEYS: set[str] = set()
 for _cls in (VLMSidecarConfig, MinerUSidecarConfig, DoclingSidecarConfig):
     _SIDECAR_ENV_KEYS.update(_cls._ENV_MAP.values())
 _LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(_SIDECAR_ENV_KEYS)
-
-
-class MetadataFieldConfig(BaseModel):
-    """User-declared metadata field behavior."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: str = "string"
-    normalizer: str = "identity"
-    filterable: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def _default_filterable_strings_to_casefold(cls, data: Any) -> Any:
-        """Custom filtering is JSONB containment, so both sides must normalize alike."""
-        if not isinstance(data, Mapping) or data.get("normalizer"):
-            return data
-        if data.get("type", "string") == "string" and data.get("filterable", False):
-            return {**data, "normalizer": "casefold_trim"}
-        return data
-
-
-class MetadataConfig(BaseModel):
-    """Metadata registry and ingest policy controls."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    allow_ad_hoc_json: bool = True
-    default_ingest_policy: MetadataPolicy = "validate"
-    fields: dict[str, MetadataFieldConfig] = Field(default_factory=dict)
 
 
 class RerankConfig(BaseModel):
@@ -835,7 +803,6 @@ class DlightragConfig(BaseSettings):
     parser: ParserConfig = Field(default_factory=ParserConfig)
     parser_sidecars: ParserSidecarsConfig = Field(default_factory=ParserSidecarsConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
-    metadata: MetadataConfig = Field(default_factory=MetadataConfig)
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
     answer: AnswerConfig = Field(default_factory=AnswerConfig)
     web_conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)

@@ -953,10 +953,6 @@ class TestRAGServiceLightRAGMainPath:
                 "dlightrag.core.retrieval.bm25.create_postgres_bm25",
                 new=AsyncMock(return_value=object()),
             ),
-            patch(
-                "dlightrag.core.retrieval.metadata_fields.MetadataFieldRegistry.from_config",
-                return_value=object(),
-            ),
             patch("dlightrag.core.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             await service._do_initialize_unified()
@@ -1038,10 +1034,6 @@ class TestRAGServiceLightRAGMainPath:
             patch(
                 "dlightrag.core.retrieval.bm25.create_postgres_bm25",
                 new=AsyncMock(return_value=object()),
-            ),
-            patch(
-                "dlightrag.core.retrieval.metadata_fields.MetadataFieldRegistry.from_config",
-                return_value=object(),
             ),
             patch("dlightrag.core.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
@@ -1127,10 +1119,6 @@ class TestRAGServiceLightRAGMainPath:
             patch(
                 "dlightrag.core.retrieval.bm25.create_postgres_bm25",
                 new=AsyncMock(return_value=object()),
-            ),
-            patch(
-                "dlightrag.core.retrieval.metadata_fields.MetadataFieldRegistry.from_config",
-                return_value=object(),
             ),
             patch("dlightrag.core.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
@@ -1904,7 +1892,6 @@ class TestRAGServiceLightRAGMainPath:
             source_type="bynder",
             prefix="approved/",
             metadata={"source_system": "bynder", "department": "Marketing"},
-            metadata_policy="validate",
         )
 
         assert result["processed"] == 1
@@ -1913,7 +1900,6 @@ class TestRAGServiceLightRAGMainPath:
         assert seen_items[0].display_filename == "report.pdf"
         assert seen_items[0].title == "Asset report"
         assert seen_items[0].metadata == {"department": "Legal", "asset_id": "asset-123"}
-        assert seen_items[0].metadata_policy is None
 
     async def test_remote_parser_path_uses_display_filename_extension(
         self, test_config: DlightragConfig
@@ -2401,45 +2387,13 @@ class TestRAGServiceLightRAGMainPath:
         assert result.answer is None
         assert result.contexts == {"chunks": []}
 
-    async def test_aretrieve_normalizes_custom_metadata_filters(
+    async def test_metadata_search_passes_custom_filters_through_verbatim(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
-        from dlightrag.core.retrieval.models import MetadataFilter
-        from dlightrag.core.retrieval.protocols import RetrievalResult
-
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service._backend = MagicMock()
-        service._lightrag = None
-        service._metadata_registry = MetadataFieldRegistry.from_config(
-            {"department": {"type": "string", "filterable": True}}
-        )
-        service._retrieval_orchestrator = MagicMock()
-        service._retrieval_orchestrator.aretrieve = AsyncMock(
-            return_value=RetrievalResult(contexts={"chunks": []})
-        )
-
-        await service.aretrieve(
-            "test query",
-            filters=MetadataFilter(custom={"department": " Finance "}),
-        )
-
-        await_args = service._retrieval_orchestrator.aretrieve.await_args
-        assert await_args is not None
-        call_kwargs = await_args.kwargs
-        assert call_kwargs["metadata_filter"].custom == {"department": "finance"}
-
-    async def test_metadata_search_normalizes_custom_metadata_filters(
-        self, test_config: DlightragConfig
-    ) -> None:
-        from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
+        """Case folding belongs to the SQL comparison, not to the value in flight."""
         from dlightrag.core.retrieval.models import MetadataFilter
 
         service = RAGService(config=test_config)
-        service._metadata_registry = MetadataFieldRegistry.from_config(
-            {"department": {"type": "string", "filterable": True}}
-        )
         service._metadata_index = AsyncMock()
         service._metadata_index.query = AsyncMock(return_value=["doc-1"])
 
@@ -2447,7 +2401,7 @@ class TestRAGServiceLightRAGMainPath:
 
         assert result == ["doc-1"]
         sent_filter = service._metadata_index.query.await_args.args[0]
-        assert sent_filter.custom == {"department": "finance"}
+        assert sent_filter.custom == {"department": " Finance "}
 
     async def test_metadata_enrichment_uses_full_doc_id_without_path_fallback(
         self, test_config: DlightragConfig

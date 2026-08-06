@@ -24,7 +24,7 @@ Keep these in normal `config.yaml`:
 
 - model/provider choices: `llm`, `embedding`, `rerank.enabled`, `rerank.strategy`
 - parser sidecar endpoint and visual context controls: `parser_sidecars`
-- metadata schema: `metadata.fields`
+- metadata schema: fixed; custom metadata needs no declaration
 - domain entity guidance: `kg_entity_types`, `extraction.entity_type_prompt_file`
 - PostgreSQL endpoint, process role, and workspace identity: `workspace`,
   `service_role`, `postgres_*`

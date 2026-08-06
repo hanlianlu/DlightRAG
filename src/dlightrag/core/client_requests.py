@@ -90,7 +90,6 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
         "title",
         "author",
         "metadata",
-        "metadata_policy",
         "documents",
     ):
         value = _get(payload, name)

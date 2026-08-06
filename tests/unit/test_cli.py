@@ -185,8 +185,6 @@ def test_ingest_kwargs_support_document_metadata_options() -> None:
             "Ada",
             "--metadata-json",
             '{"department":"finance"}',
-            "--metadata-policy",
-            "reject_unknown",
         ]
     )
 
@@ -196,7 +194,6 @@ def test_ingest_kwargs_support_document_metadata_options() -> None:
         "title": "Quarterly Report",
         "author": "Ada",
         "metadata": {"department": "finance"},
-        "metadata_policy": "reject_unknown",
     }
 
 

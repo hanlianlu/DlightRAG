@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
-from dlightrag.contracts import MetadataPolicy, VisualAssetSize
+from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.answer.capability import AnswerImageCapability, derive_effective_max_images
 from dlightrag.core.answer.engine import AnswerEngine
 from dlightrag.core.answer.errors import (
@@ -475,7 +475,6 @@ class RAGServiceManager:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
         retain_source_file: bool | None = None,
     ) -> dict[str, Any]:
         """Ingest from an in-memory SDK data source without durable job recovery."""
@@ -492,7 +491,6 @@ class RAGServiceManager:
             title=title,
             author=author,
             metadata=metadata,
-            metadata_policy=metadata_policy,
             retain_source_file=retain_source_file,
         )
 
@@ -777,12 +775,10 @@ class RAGServiceManager:
         workspace: str,
         doc_id: str,
         data: dict[str, Any],
-        *,
-        metadata_policy: MetadataPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
         svc = await self._get_service(workspace)
-        await svc.aupdate_metadata(doc_id, data, metadata_policy=metadata_policy)
+        await svc.aupdate_metadata(doc_id, data)
 
     async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""

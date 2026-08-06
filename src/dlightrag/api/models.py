@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field
 
 from dlightrag.citations.schemas import SourceReferencePayload
-from dlightrag.contracts import MetadataPolicy, ServiceRole
+from dlightrag.contracts import ServiceRole
 from dlightrag.core.client_contracts import (
     AnswerRequestContract,
     ClientContractModel,
@@ -75,7 +75,6 @@ class ResetRequest(ClientContractModel):
 
 class MetadataUpdateRequest(ClientContractModel):
     metadata: dict[str, Any]
-    metadata_policy: MetadataPolicy | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════

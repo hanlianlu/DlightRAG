@@ -31,6 +31,12 @@ def _build_create_table() -> str:
 _CREATE_TABLE = _build_create_table()
 
 
+# One canonical comparison for every text match: neither case nor padding is a
+# meaningful difference in a filter, and both sides must fold identically.
+def _canonical(expr: str) -> str:
+    return f"LOWER(TRIM({expr}))"
+
+
 def _index_clause(field_id: str, pg_type: str, index_type: str | None) -> str | None:
     if index_type == "gin":
         return f" USING gin ({field_id})"
@@ -38,7 +44,7 @@ def _index_clause(field_id: str, pg_type: str, index_type: str | None) -> str | 
         return None
 
     if _is_string_pg_type(pg_type):
-        return f" (LOWER({field_id}))"
+        return f" ({_canonical(field_id)})"
     return f" ({field_id})"
 
 
@@ -52,30 +58,17 @@ def _json_param(value: Any) -> str | None:
 
 
 def _build_schema_migrations() -> tuple[Migration, ...]:
+    """Converge the table on what METADATA_FIELDS declares.
+
+    Every statement is derived from the registry rather than recorded as history,
+    so a fresh database and an existing one reach the same shape and the list
+    does not grow with each schema change.
+    """
     migrations = [
         Migration(
             "0001_base",
             "Create document metadata table",
             (_CREATE_TABLE,),
-        ),
-        # Must precede the ensure-column pass, which would otherwise add an
-        # empty column under the new name and leave the old one stranded.
-        Migration(
-            "title_author_single_name",
-            "Name the title and author columns exactly as callers and filters do",
-            (
-                "DO $$ BEGIN "
-                "IF EXISTS (SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = 'dlightrag_doc_metadata' AND column_name = 'doc_title') "
-                "THEN ALTER TABLE dlightrag_doc_metadata RENAME COLUMN doc_title TO title; "
-                "END IF; "
-                "IF EXISTS (SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = 'dlightrag_doc_metadata' AND column_name = 'doc_author') "
-                "THEN ALTER TABLE dlightrag_doc_metadata RENAME COLUMN doc_author TO author; "
-                "END IF; END $$",
-                "DROP INDEX IF EXISTS idx_dm_doc_title",
-                "DROP INDEX IF EXISTS idx_dm_doc_author",
-            ),
         ),
     ]
     for f in METADATA_FIELDS:
@@ -91,22 +84,6 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
         )
     migrations.append(
         Migration(
-            "backfill_source_download_contract",
-            "Backfill source identity and download locator from existing file_path",
-            (
-                "UPDATE dlightrag_doc_metadata "
-                "SET source_uri = COALESCE(source_uri, CASE "
-                "WHEN file_path LIKE 's3://%' OR file_path LIKE 'azure://%' "
-                "OR file_path LIKE 'https://%' THEN file_path "
-                "ELSE 'local://legacy/' || md5(workspace || ':' || doc_id) || '/' || "
-                "regexp_replace(COALESCE(filename, 'source'), '[^A-Za-z0-9._-]', '_', 'g') END), "
-                "download_locator = COALESCE(download_locator, file_path) "
-                "WHERE source_uri IS NULL OR download_locator IS NULL",
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
             "index_workspace_download_locator",
             "Index exact source download ownership lookups",
             (
@@ -115,38 +92,18 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
-    migrations.append(
-        Migration(
-            "drop_uninformative_columns",
-            "Drop metadata columns nothing ever wrote or varied",
-            (
-                "ALTER TABLE dlightrag_doc_metadata "
-                "DROP COLUMN IF EXISTS original_format, "
-                "DROP COLUMN IF EXISTS page_count, "
-                "DROP COLUMN IF EXISTS ingest_strategy",
-            ),
-        )
-    )
-    migrations.append(
-        Migration(
-            "creation_date_naive_utc",
-            "Hold creation_date as UTC without a session-dependent rendering",
-            (
-                "ALTER TABLE dlightrag_doc_metadata "
-                "ALTER COLUMN creation_date TYPE TIMESTAMP "
-                "USING creation_date AT TIME ZONE 'UTC'",
-            ),
-        )
-    )
     for f in METADATA_FIELDS:
         idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
         if idx_clause is None:
             continue
+        # Versioned by the expression: an index only serves a match whose
+        # canonical form it was built with, so changing one must rebuild it.
         migrations.append(
             Migration(
-                f"index_{f.field_id}",
+                f"index_{f.field_id}_canonical",
                 f"Ensure document metadata index {f.field_id}",
                 (
+                    f"DROP INDEX IF EXISTS idx_dm_{f.field_id}",
                     f"CREATE INDEX IF NOT EXISTS idx_dm_{f.field_id} "
                     f"ON dlightrag_doc_metadata{idx_clause}",
                 ),
@@ -157,7 +114,7 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
 
 _SCHEMA_MIGRATIONS = _build_schema_migrations()
 
-_JSONB_MERGE_FIELDS = frozenset({"custom_metadata", "metadata_json"})
+_JSONB_MERGE_FIELDS = frozenset({"custom_metadata"})
 _UPSERT_FIELDS = tuple(f for f in METADATA_FIELDS if f.field_id != "ingested_at")
 _UPSERT_FIELD_IDS = tuple(f.field_id for f in _UPSERT_FIELDS)
 
@@ -190,16 +147,11 @@ def _build_upsert_params(
     doc_id: str,
     system: dict[str, Any],
     custom: dict[str, Any],
-    metadata_json: dict[str, Any],
 ) -> list[Any]:
     values: list[Any] = [workspace, doc_id]
     for field_id in _UPSERT_FIELD_IDS:
         if field_id == "custom_metadata":
             values.append(json.dumps(custom))
-        elif field_id == "metadata_json":
-            values.append(json.dumps(metadata_json))
-        elif field_id == "process_options":
-            values.append(_json_param(system.get(field_id)))
         else:
             values.append(system.get(field_id))
     return values
@@ -245,7 +197,8 @@ _FIELD_SCHEMA = _build_field_schema()
 # A named file is matched against both the full name and the stem, so a caller
 # who omits the extension still hits the functional lower() indexes on both.
 _FILENAME_EXACT_CONDITION = (
-    "(LOWER(filename) = LOWER(${idx}) OR LOWER(filename_stem) = LOWER(${idx}))"
+    "(LOWER(TRIM(filename)) = LOWER(TRIM(${idx})) "
+    "OR LOWER(TRIM(filename_stem)) = LOWER(TRIM(${idx})))"
 )
 _FILENAME_CONTAINS_CONDITION = "filename ILIKE ${idx}"
 
@@ -253,6 +206,14 @@ _FILENAME_CONTAINS_CONDITION = "filename ILIKE ${idx}"
 def _as_ilike_pattern(value: str) -> str:
     """Wrap a bare name in wildcards, leaving a caller's own pattern intact."""
     return value if "%" in value or "_" in value else f"%{value}%"
+
+
+def _decoded_row(row: Any) -> dict[str, Any]:
+    """asyncpg hands JSONB back as text, which callers and comparisons must not see."""
+    decoded = dict(row)
+    raw = decoded.get("custom_metadata")
+    decoded["custom_metadata"] = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    return decoded
 
 
 class PGMetadataIndex:
@@ -300,29 +261,8 @@ class PGMetadataIndex:
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""
-        sys_fields = system_field_ids()
-        system = {k: metadata.get(k) for k in sys_fields}
-        system["parse_engine"] = metadata.get("parse_engine") or metadata.get(
-            "lightrag.parse_engine"
-        )
-        system["process_options"] = metadata.get("process_options") or metadata.get(
-            "lightrag.process_options"
-        )
-
-        filterable = metadata.get("metadata_filterable")
-        if isinstance(filterable, dict):
-            custom = filterable
-        else:
-            custom = {
-                k: v
-                for k, v in metadata.items()
-                if k not in sys_fields
-                and k not in {"ingested_at", "metadata_filterable", "user_metadata"}
-                and not k.startswith("lightrag.")
-            }
-
-        raw_json = metadata.get("metadata_json")
-        metadata_json = raw_json if isinstance(raw_json, dict) else {}
+        system = {k: metadata.get(k) for k in system_field_ids()}
+        custom = metadata.get("custom_metadata")
 
         async def _operation(conn: Any) -> None:
             await conn.execute(
@@ -331,8 +271,7 @@ class PGMetadataIndex:
                     workspace=self._workspace,
                     doc_id=doc_id,
                     system=system,
-                    custom=custom,
-                    metadata_json=metadata_json,
+                    custom=custom if isinstance(custom, dict) else {},
                 ),
             )
 
@@ -344,7 +283,7 @@ class PGMetadataIndex:
         Match strategy per field:
         - string fields: exact match (case-insensitive)
         - date fields: range queries (from/to)
-        - JSONB: containment (@>)
+        - custom metadata: case-insensitive match on the stored JSONB value
         - filename: exact on name or stem, falling back to a contains match
         """
         conditions: list[str] = ["workspace = $1"]
@@ -355,8 +294,7 @@ class PGMetadataIndex:
             value = getattr(filters, attr, None)
             if value is None:
                 continue
-            # Deterministic metadata matching: exact case-insensitive.
-            conditions.append(f"LOWER({attr}) = LOWER(${idx})")
+            conditions.append(f"{_canonical(attr)} = {_canonical(f'${idx}')}")
             params.append(value)
             idx += 1
 
@@ -377,11 +315,15 @@ class PGMetadataIndex:
             params.append(filters.creation_date_to)
             idx += 1
 
-        # JSONB containment
-        if filters.custom:
-            conditions.append(f"custom_metadata @> ${idx}::jsonb")
-            params.append(json.dumps(filters.custom))
-            idx += 1
+        # JSONB values are stored verbatim, so the canonical fold happens here
+        # rather than being baked into what was written.
+        for key, value in (filters.custom or {}).items():
+            conditions.append(
+                f"{_canonical(f'custom_metadata ->> ${idx}')} = {_canonical(f'${idx + 1}')}"
+            )
+            params.append(key)
+            params.append(value if isinstance(value, str) else json.dumps(value))
+            idx += 2
 
         doc_ids = await self._select_doc_ids(conditions, params)
         if doc_ids or filename_slot is None:
@@ -419,7 +361,7 @@ class PGMetadataIndex:
         row = await self._run(_operation)
         if not row:
             return None
-        return dict(row)
+        return _decoded_row(row)
 
     async def get_many(self, doc_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Get metadata for multiple documents in one query."""
@@ -435,7 +377,7 @@ class PGMetadataIndex:
             )
 
         rows = await self._run(_operation)
-        return {str(row["doc_id"]): dict(row) for row in rows}
+        return {str(row["doc_id"]): _decoded_row(row) for row in rows}
 
     async def delete(self, doc_id: str) -> None:
         """Delete metadata for a document."""

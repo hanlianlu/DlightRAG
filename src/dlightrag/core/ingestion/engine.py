@@ -22,12 +22,10 @@ from lightrag.parser.routing import (
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path, resolve_sidecar_uri
 
-from dlightrag.contracts import MetadataPolicy
 from dlightrag.core.document_embedding import DocumentEmbeddingInput, RobustDocumentEmbedder
 from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.core.ingestion.paths import lightrag_archived_source_path
 from dlightrag.core.retrieval.metadata_fields import (
-    MetadataFieldRegistry,
     extract_system_metadata,
     normalize_user_metadata,
 )
@@ -52,7 +50,6 @@ class PreparedIngestFile:
     title: str | None = None
     author: str | None = None
     metadata: Mapping[str, Any] | None = None
-    metadata_policy: MetadataPolicy | None = None
     source_uri_explicit: bool = True
     download_locator_explicit: bool = True
     display_filename_explicit: bool = False
@@ -94,9 +91,6 @@ class UnifiedIngestionEngine:
         workspace: str,
         parser_rules: str,
         chunk_options: dict[str, Any] | None,
-        metadata_registry: MetadataFieldRegistry | None = None,
-        allow_ad_hoc_metadata: bool = True,
-        default_metadata_policy: MetadataPolicy = "validate",
         bm25_language_classifier: Any | None = None,
     ) -> None:
         self._lightrag = lightrag
@@ -106,9 +100,6 @@ class UnifiedIngestionEngine:
         self._workspace = workspace
         self._parser_rules = parser_rules
         self._chunk_options = chunk_options or {}
-        self._metadata_registry = metadata_registry or MetadataFieldRegistry.from_config({})
-        self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
-        self._default_metadata_policy: MetadataPolicy = default_metadata_policy
         self._bm25_language_classifier = bm25_language_classifier
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
@@ -126,7 +117,6 @@ class UnifiedIngestionEngine:
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest a local file through the unified path."""
         file_path = Path(path)
@@ -144,7 +134,6 @@ class UnifiedIngestionEngine:
                 title=title,
                 author=author,
                 metadata=metadata,
-                metadata_policy=metadata_policy,
                 source_uri_explicit=(
                     source_uri is not None if source_uri_explicit is None else source_uri_explicit
                 ),
@@ -202,7 +191,6 @@ class UnifiedIngestionEngine:
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest local files as one LightRAG staged batch.
 
@@ -225,7 +213,6 @@ class UnifiedIngestionEngine:
                     title=title,
                     author=author,
                     metadata=metadata,
-                    metadata_policy=metadata_policy,
                     resolve_parser_directives=False,
                 )
             )
@@ -308,15 +295,11 @@ class UnifiedIngestionEngine:
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
         resolve_parser_directives: bool = True,
     ) -> _PendingDocumentIngest:
         effective_title = item.title if item.title is not None else title
         effective_author = item.author if item.author is not None else author
         effective_metadata = _overlay_metadata(metadata, item.metadata)
-        effective_metadata_policy = (
-            item.metadata_policy if item.metadata_policy is not None else metadata_policy
-        )
         parse_engine: str | None = None
         process_options: str | None = None
         chunk_options: dict[str, Any] | None = None
@@ -336,7 +319,6 @@ class UnifiedIngestionEngine:
                 title=effective_title,
                 author=effective_author,
                 metadata=effective_metadata,
-                metadata_policy=effective_metadata_policy,
             ),
             metadata_update_requested=(
                 _source_contract_update_requested(item)
@@ -446,14 +428,8 @@ class UnifiedIngestionEngine:
         title: str | None,
         author: str | None,
         metadata: Mapping[str, Any] | None,
-        metadata_policy: MetadataPolicy | None,
     ) -> dict[str, Any]:
-        normalized_metadata = normalize_user_metadata(
-            metadata,
-            self._metadata_registry,
-            metadata_policy=metadata_policy or self._default_metadata_policy,
-            allow_ad_hoc_json=self._allow_ad_hoc_metadata,
-        )
+        normalized_metadata = normalize_user_metadata(metadata)
         system_metadata = extract_system_metadata(
             download_locator,
             display_filename=display_filename,
@@ -467,9 +443,7 @@ class UnifiedIngestionEngine:
         system_metadata.update(normalized_metadata.system)
         return {
             **system_metadata,
-            "user_metadata": dict(metadata or {}),
-            "metadata_filterable": normalized_metadata.filterable,
-            "metadata_json": normalized_metadata.raw_json,
+            "custom_metadata": normalized_metadata.custom_metadata,
         }
 
     def _get_ingest_lock(self, doc_id: str) -> asyncio.Lock:
@@ -519,13 +493,12 @@ class UnifiedIngestionEngine:
 
         full_doc = await self._stores.get_full_doc(doc_id)
         light_chunks = list((doc_status or {}).get("chunks_list") or [])
-        lightrag_record = self._lightrag_metadata(full_doc)
         finalized_metadata = _with_finalized_local_download_locator(metadata_record)
-        await self._metadata_index.upsert(doc_id, {**finalized_metadata, **lightrag_record})
+        await self._metadata_index.upsert(doc_id, finalized_metadata)
 
         await self._overwrite_sidecar_image_vectors(
             doc_id=doc_id,
-            sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
+            sidecar_location=_mapping_get(full_doc, "sidecar_location"),
             chunk_ids=set(light_chunks),
         )
         await self._label_bm25_languages(light_chunks)
@@ -673,15 +646,6 @@ class UnifiedIngestionEngine:
         if labels:
             await self._stores.update_chunk_bm25_languages(labels)
 
-    @staticmethod
-    def _lightrag_metadata(full_doc: Mapping[str, Any] | None) -> dict[str, Any]:
-        full_doc = full_doc or {}
-        return {
-            "lightrag.parse_engine": full_doc.get("parse_engine"),
-            "lightrag.process_options": full_doc.get("process_options"),
-            "lightrag.sidecar_location": full_doc.get("sidecar_location"),
-        }
-
 
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -738,9 +702,7 @@ def _hash_match_metadata_record(metadata_record: Mapping[str, Any]) -> dict[str,
         "title": metadata_record.get("title"),
         "author": metadata_record.get("author"),
         "creation_date": metadata_record.get("creation_date"),
-        "user_metadata": deepcopy(metadata_record.get("user_metadata")),
-        "metadata_filterable": deepcopy(metadata_record.get("metadata_filterable")),
-        "metadata_json": deepcopy(metadata_record.get("metadata_json")),
+        "custom_metadata": deepcopy(metadata_record.get("custom_metadata")) or {},
     }
     for field in ("file_path", "download_locator"):
         comparable[field] = _canonicalize_local_metadata_locator(comparable[field])

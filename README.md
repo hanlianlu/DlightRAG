@@ -348,9 +348,10 @@ never silently changes the caller's retention choice.
 `dlightrag_data` named volume mounted at `/app/dlightrag_storage`; the host
 `./dlightrag_storage` directory is only used by native, non-Docker runs.
 
-**Metadata.** Declare filterable custom fields once in configuration. Ingest
-calls pass values. Request-level metadata is the batch default; manifest or
-`SourceDocument` metadata overlays it per document.
+**Metadata.** Pass any custom fields through `metadata` on ingest; they are
+stored as sent and are filterable without being declared first. Request-level
+metadata is the batch default; manifest or `SourceDocument` metadata overlays it
+per document.
 
 **Retrieval and answers.** DlightRAG uses LightRAG `mix` as the base retrieval
 mode, then adds metadata filtering, BM25, optional direct image retrieval, RRF

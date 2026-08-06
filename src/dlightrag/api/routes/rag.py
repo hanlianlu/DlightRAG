@@ -363,15 +363,6 @@ async def ingest_blob(
         except _json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid metadata JSON") from None
 
-    policy = None
-    if metadata_policy:
-        _valid_policies = frozenset({"validate", "reject_unknown", "store_only"})
-        if metadata_policy not in _valid_policies:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid metadata_policy: {metadata_policy}"
-            )
-        policy = metadata_policy
-
     kwargs: dict[str, Any] = {"source_type": "local", "path": str(target_path)}
     if title is not None:
         kwargs["title"] = title
@@ -379,8 +370,6 @@ async def ingest_blob(
         kwargs["author"] = author
     if meta_dict is not None:
         kwargs["metadata"] = meta_dict
-    if policy is not None:
-        kwargs["metadata_policy"] = policy
 
     job = await manager.astart_ingest_job(ws, IngestSpec(**kwargs))
     job["uploaded_file"] = str(target_path)

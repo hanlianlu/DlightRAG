@@ -45,7 +45,6 @@ from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_ima
 
 DEFAULT_API_URL = "http://localhost:8100"
 DEFAULT_QUERY_TIMEOUT = 120
-METADATA_POLICY_VALUES = ("validate", "reject_unknown", "store_only")
 
 
 def _get_timeout() -> int:
@@ -553,12 +552,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         dest="metadata",
         help="User metadata JSON object to attach to ingested documents",
-    )
-    p_ingest.add_argument(
-        "--metadata-policy",
-        choices=list(METADATA_POLICY_VALUES),
-        default=None,
-        help="How undeclared user metadata fields are handled",
     )
 
     # -- query --

@@ -48,7 +48,7 @@ source file or upload
   -> DlightRAG post-ingest maintenance
        active fused text+image embedding overwrites canonical LightRAG drawing chunk vectors
        chunk language labels update BM25 partial indexes
-       declared metadata updates filterable columns
+       caller metadata updates the document metadata row
 ```
 
 Source files and parser-extracted images both go through LightRAG's multimodal

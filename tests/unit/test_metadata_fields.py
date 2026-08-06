@@ -8,7 +8,6 @@ import pytest
 from dlightrag.core.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     METADATA_FIELDS,
-    MetadataFieldRegistry,
     NormalizedUserMetadata,
     extract_system_metadata,
     normalize_user_metadata,
@@ -44,11 +43,6 @@ class TestMetadataFieldDef:
 class TestMetadataFields:
     """METADATA_FIELDS tuple — the canonical field registry."""
 
-    def test_has_system_fields(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        assert len(METADATA_FIELDS) >= 12
-
     def test_has_filename(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
@@ -65,12 +59,6 @@ class TestMetadataFields:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
         assert all(f.index_type != "gin_trgm" for f in METADATA_FIELDS)
-
-    def test_custom_metadata_gin_indexed(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        cm = next(f for f in METADATA_FIELDS if f.field_id == "custom_metadata")
-        assert cm.index_type == "gin"
 
     def test_all_fields_have_pg_type(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
@@ -130,149 +118,32 @@ class TestDerivedFunctions:
         )
 
 
-def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
-    registry = MetadataFieldRegistry.from_config(
-        {
-            "reviewer": {
-                "type": "string",
-                "normalizer": "casefold_trim",
-                "filterable": True,
-            }
-        }
-    )
+def test_user_metadata_is_stored_verbatim() -> None:
+    """Case folding is applied by the SQL comparison, so storage stays lossless."""
+    norm = normalize_user_metadata({"department": " Finance ", "sku": "AbC-123"})
 
-    normalized = normalize_user_metadata({"reviewer": " Ada Lovelace "}, registry)
-
-    assert normalized.filterable["reviewer"] == "ada lovelace"
+    assert norm.custom_metadata == {"department": " Finance ", "sku": "AbC-123"}
 
 
-def test_string_exact_metadata_defaults_to_casefold_trim() -> None:
-    registry = MetadataFieldRegistry.from_config(
-        {"department": {"type": "string", "filterable": True}}
-    )
+def test_any_key_is_accepted_without_declaring_it() -> None:
+    norm = normalize_user_metadata({"project": "Analytical Engine"})
 
-    normalized = normalize_user_metadata({"department": " Finance "}, registry)
-
-    spec = registry.filter_spec("department")
-    assert spec is not None
-    assert spec.normalizer == "casefold_trim"
-    assert normalized.filterable["department"] == "finance"
+    assert norm.custom_metadata == {"project": "Analytical Engine"}
 
 
-def test_identity_normalizer_can_preserve_exact_string_metadata() -> None:
-    registry = MetadataFieldRegistry.from_config(
-        {
-            "sku": {
-                "type": "string",
-                "normalizer": "identity",
-                "filterable": True,
-            }
-        }
-    )
+def test_non_string_values_survive_untouched() -> None:
+    norm = normalize_user_metadata({"pages": 42, "reviewed": True})
 
-    normalized = normalize_user_metadata({"sku": " AbC-123 "}, registry)
-
-    assert normalized.filterable["sku"] == " AbC-123 "
-
-
-def test_custom_metadata_filter_is_normalized_with_registry() -> None:
-    registry = MetadataFieldRegistry.from_config(
-        {
-            "department": {"type": "string", "filterable": True},
-            "sku": {
-                "type": "string",
-                "normalizer": "identity",
-                "filterable": True,
-            },
-        }
-    )
-
-    normalized = registry.normalize_filter(
-        MetadataFilter(custom={"department": " Finance ", "sku": " AbC-123 ", "raw_note": " Raw "})
-    )
-
-    assert normalized.custom == {
-        "department": "finance",
-        "sku": " AbC-123 ",
-        "raw_note": " Raw ",
-    }
-
-
-def test_unknown_metadata_is_stored_but_not_filterable() -> None:
-    registry = MetadataFieldRegistry.from_config({})
-
-    normalized = normalize_user_metadata(
-        {"project": "Analytical Engine"},
-        registry,
-        metadata_policy="validate",
-        allow_ad_hoc_json=True,
-    )
-
-    assert normalized.raw_json["project"] == "Analytical Engine"
-    assert "project" not in normalized.filterable
-
-
-def test_reject_unknown_metadata_policy_blocks_undeclared_key() -> None:
-    registry = MetadataFieldRegistry.from_config({})
-
-    with pytest.raises(ValueError, match="undeclared"):
-        normalize_user_metadata(
-            {"project": "Analytical Engine"},
-            registry,
-            metadata_policy="reject_unknown",
-            allow_ad_hoc_json=True,
-        )
-
-
-def test_store_only_metadata_policy_never_promotes_declared_fields() -> None:
-    registry = MetadataFieldRegistry.from_config(
-        {
-            "reviewer": {
-                "type": "string",
-                "normalizer": "casefold_trim",
-                "filterable": True,
-            }
-        }
-    )
-
-    normalized = normalize_user_metadata(
-        {"reviewer": " Ada Lovelace "},
-        registry,
-        metadata_policy="store_only",
-        allow_ad_hoc_json=True,
-    )
-
-    assert normalized.raw_json["reviewer"] == " Ada Lovelace "
-    assert normalized.filterable == {}
+    assert norm.custom_metadata == {"pages": 42, "reviewed": True}
 
 
 @pytest.mark.parametrize("key", ["sys.filename", "lightrag.content_hash", "user.author"])
 def test_reserved_namespaces_are_rejected_for_user_metadata(key: str) -> None:
-    registry = MetadataFieldRegistry.from_config({})
-
     with pytest.raises(ValueError, match="reserved"):
-        normalize_user_metadata({key: "x"}, registry)
+        normalize_user_metadata({key: "x"})
 
 
-def test_intent_detection_cannot_filter_unknown_metadata_field() -> None:
-    registry = MetadataFieldRegistry.from_config({})
-
-    assert registry.filter_spec("project") is None
-
-
-def test_json_contains_requires_declared_metadata_json_field() -> None:
-    registry = MetadataFieldRegistry.from_config(
-        {"review_notes": {"type": "json", "filterable": True}}
-    )
-
-    spec = registry.filter_spec("review_notes")
-    assert spec is not None
-    assert spec.type == "json"
-    # Only string fields get case folding; JSON values must match as written.
-    assert spec.normalizer == "identity"
-
-
-async def test_metadata_update_revalidates_without_reindexing() -> None:
+async def test_metadata_update_stores_without_reindexing() -> None:
     from unittest.mock import AsyncMock
 
     from dlightrag.core.service import RAGService
@@ -280,27 +151,12 @@ async def test_metadata_update_revalidates_without_reindexing() -> None:
     service = object.__new__(RAGService)
     service.config = _writer_config()
     service._metadata_index = AsyncMock()
-    service._metadata_registry = MetadataFieldRegistry.from_config(
-        {
-            "reviewer": {
-                "type": "string",
-                "normalizer": "casefold_trim",
-                "filterable": True,
-            }
-        }
-    )
-    service._allow_ad_hoc_metadata = True
-    service._default_metadata_policy = "validate"
     service._lightrag = AsyncMock()
 
-    await service.aupdate_metadata(
-        "doc-1",
-        {"reviewer": " Ada Lovelace "},
-        metadata_policy="validate",
-    )
+    await service.aupdate_metadata("doc-1", {"reviewer": " Ada Lovelace "})
 
     _, saved = service._metadata_index.upsert.await_args.args
-    assert saved["metadata_filterable"]["reviewer"] == "ada lovelace"
+    assert saved["custom_metadata"]["reviewer"] == " Ada Lovelace "
     service._lightrag.apipeline_enqueue_documents.assert_not_called()
 
 
@@ -309,16 +165,13 @@ class TestCallerSettableColumns:
 
     @staticmethod
     def _normalize(value: object) -> NormalizedUserMetadata:
-        return normalize_user_metadata(
-            {"creation_date": value}, MetadataFieldRegistry.from_config({})
-        )
+        return normalize_user_metadata({"creation_date": value})
 
     def test_iso_date_reaches_the_column_not_jsonb(self) -> None:
         norm = self._normalize("2024-03-05")
 
         assert norm.system == {"creation_date": datetime(2024, 3, 5, 0, 0)}
-        assert norm.raw_json == {}
-        assert norm.filterable == {}
+        assert norm.custom_metadata == {}
 
     def test_offset_is_converted_to_the_same_instant_the_filter_uses(self) -> None:
         norm = self._normalize("2024-01-01T08:00:00+08:00")
@@ -347,23 +200,4 @@ class TestReservedMetadataKeys:
     @pytest.mark.parametrize("key", sorted(FILTER_FIELD_COLUMNS))
     def test_filter_names_are_rejected_rather_than_stored_in_jsonb(self, key: str) -> None:
         with pytest.raises(ValueError, match="built-in metadata field"):
-            normalize_user_metadata({key: "x"}, MetadataFieldRegistry.from_config({}))
-
-    def test_declaring_a_built_in_name_does_not_bypass_the_guard(self) -> None:
-        registry = MetadataFieldRegistry.from_config(
-            {"title": {"type": "string", "filterable": True}}
-        )
-
-        with pytest.raises(ValueError, match="built-in metadata field"):
-            normalize_user_metadata({"title": "x"}, registry)
-
-    def test_declaring_it_as_a_custom_field_does_not_divert_it(self) -> None:
-        registry = MetadataFieldRegistry.from_config(
-            {"creation_date": {"type": "string", "filterable": True}}
-        )
-
-        norm = normalize_user_metadata({"creation_date": "2024-03-05"}, registry)
-
-        # The built-in column wins; it must not also land in custom_metadata.
-        assert norm.system == {"creation_date": datetime(2024, 3, 5, 0, 0)}
-        assert norm.filterable == {}
+            normalize_user_metadata({key: "x"})

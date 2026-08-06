@@ -86,7 +86,7 @@ class TestFilenameResolution:
         return index, executed
 
     async def test_exact_hit_never_widens(self) -> None:
-        index, executed = self._index({"LOWER(filename)": [{"doc_id": "d1"}]})
+        index, executed = self._index({"LOWER(TRIM(filename))": [{"doc_id": "d1"}]})
 
         result = await index.query(MetadataFilter(filename="report.pdf"))
 
@@ -95,13 +95,13 @@ class TestFilenameResolution:
         assert "ILIKE" not in executed[0][0]
 
     async def test_exact_clause_covers_name_and_stem(self) -> None:
-        index, executed = self._index({"LOWER(filename)": [{"doc_id": "d1"}]})
+        index, executed = self._index({"LOWER(TRIM(filename))": [{"doc_id": "d1"}]})
 
         await index.query(MetadataFilter(filename="report"))
 
         sql = executed[0][0]
-        assert "LOWER(filename) = LOWER($2)" in sql
-        assert "LOWER(filename_stem) = LOWER($2)" in sql
+        assert "LOWER(TRIM(filename)) = LOWER(TRIM($2))" in sql
+        assert "LOWER(TRIM(filename_stem)) = LOWER(TRIM($2))" in sql
 
     async def test_miss_widens_to_contains(self) -> None:
         index, executed = self._index({"ILIKE": [{"doc_id": "d2"}]})
@@ -126,7 +126,7 @@ class TestFilenameResolution:
         await index.query(MetadataFilter(filename="report", file_extension="pdf"))
 
         widened = executed[1][0]
-        assert "LOWER(file_extension) = LOWER($2)" in widened
+        assert "LOWER(TRIM(file_extension)) = LOWER(TRIM($2))" in widened
         assert "filename ILIKE $3" in widened
 
     async def test_no_filename_never_runs_twice(self) -> None:
@@ -149,11 +149,11 @@ class TestMetadataSQL:
     def test_string_btree_indexes_are_case_normalized(self):
         sql = _index_sql()
 
-        assert "ON dlightrag_doc_metadata (LOWER(filename))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(filename_stem))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(file_extension))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(title))" in sql
-        assert "ON dlightrag_doc_metadata (LOWER(author))" in sql
+        assert "ON dlightrag_doc_metadata (LOWER(TRIM(filename)))" in sql
+        assert "ON dlightrag_doc_metadata (LOWER(TRIM(filename_stem)))" in sql
+        assert "ON dlightrag_doc_metadata (LOWER(TRIM(file_extension)))" in sql
+        assert "ON dlightrag_doc_metadata (LOWER(TRIM(title)))" in sql
+        assert "ON dlightrag_doc_metadata (LOWER(TRIM(author)))" in sql
 
     def test_non_string_btree_indexes_remain_plain(self):
         sql = _index_sql()
@@ -164,10 +164,6 @@ class TestMetadataSQL:
         sql = _index_sql()
 
         assert "ON dlightrag_doc_metadata (workspace, download_locator)" in sql
-
-    def test_upsert_sql_has_lightrag_operational_fields(self):
-        assert "parse_engine" in _UPSERT
-        assert "process_options" in _UPSERT
 
     def test_upsert_fields_follow_metadata_registry(self):
         expected = tuple(f.field_id for f in METADATA_FIELDS if f.field_id != "ingested_at")
@@ -192,23 +188,18 @@ class TestMetadataSQL:
             "file_extension": "pdf",
             "title": "Report",
             "author": "Ada",
-            "parse_engine": "mineru-iteP",
-            "process_options": {"chunker": "recursive"},
         }
         params = pg_metadata_index._build_upsert_params(
             workspace="default",
             doc_id="doc-1",
             system=metadata,
-            custom={"department": "finance"},
-            metadata_json={"department": "Finance"},
+            custom={"department": "Finance"},
         )
 
         assert params[:2] == ["default", "doc-1"]
         field_values = dict(zip(pg_metadata_index._UPSERT_FIELD_IDS, params[2:], strict=True))
         assert field_values["filename"] == "report.pdf"
-        assert json.loads(field_values["process_options"]) == {"chunker": "recursive"}
-        assert json.loads(field_values["custom_metadata"]) == {"department": "finance"}
-        assert json.loads(field_values["metadata_json"]) == {"department": "Finance"}
+        assert json.loads(field_values["custom_metadata"]) == {"department": "Finance"}
         assert "ingested_at" not in field_values
 
     def test_metadata_schema_migrations_cover_registry_columns_and_indexes(self):
@@ -220,19 +211,18 @@ class TestMetadataSQL:
             assert f"column_{field.field_id}" in versions
             assert f"ADD COLUMN IF NOT EXISTS {field.field_id}" in sql
             if field.index_type is not None:
-                assert f"index_{field.field_id}" in versions
+                assert f"index_{field.field_id}_canonical" in versions
 
-    def test_metadata_migrations_backfill_new_source_columns(self) -> None:
-        migrations = list(_SCHEMA_MIGRATIONS)
-        versions = [migration.version for migration in migrations]
-        backfill_index = versions.index("backfill_source_download_contract")
+    def test_migrations_are_derived_not_recorded_history(self) -> None:
+        """Every version maps to something METADATA_FIELDS declares today."""
+        declared = {f.field_id for f in METADATA_FIELDS}
+        allowed = (
+            {"0001_base", "index_workspace_download_locator"}
+            | {f"column_{field_id}" for field_id in declared}
+            | {f"index_{field_id}_canonical" for field_id in declared}
+        )
 
-        assert versions.index("column_source_uri") < backfill_index
-        assert versions.index("column_download_locator") < backfill_index
-        statement = "\n".join(migrations[backfill_index].statements)
-        assert "source_uri = COALESCE(source_uri, CASE" in statement
-        assert "download_locator = COALESCE(download_locator, file_path)" in statement
-        assert "WHERE source_uri IS NULL OR download_locator IS NULL" in statement
+        assert {migration.version for migration in _SCHEMA_MIGRATIONS} <= allowed
 
 
 async def test_metadata_index_initializes_schema_with_migrations() -> None:
@@ -339,11 +329,36 @@ async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:
     idx._run = run  # type: ignore[method-assign]
 
     assert await idx.get_many(["doc-1", "doc-2", "doc-1"]) == {
-        "doc-1": {"doc_id": "doc-1", "department": "finance"},
-        "doc-2": {"doc_id": "doc-2", "department": "legal"},
+        "doc-1": {"doc_id": "doc-1", "department": "finance", "custom_metadata": {}},
+        "doc-2": {"doc_id": "doc-2", "department": "legal", "custom_metadata": {}},
     }
     assert "doc_id = ANY($2::text[])" in seen["query"]
     assert seen["args"] == ("default", ["doc-1", "doc-2"])
+
+
+async def test_custom_filter_matches_case_insensitively_with_bound_key() -> None:
+    """Values are stored verbatim, so the fold happens here; the key is never interpolated."""
+    from dlightrag.core.retrieval.models import MetadataFilter
+
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+    seen: dict[str, Any] = {}
+
+    class Conn:
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
+            seen["query"] = query
+            seen["args"] = args
+            return [{"doc_id": "doc-1"}]
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    await idx.query(MetadataFilter(custom={"department": " Finance "}))
+
+    assert "LOWER(TRIM(custom_metadata ->> $2)) = LOWER(TRIM($3))" in seen["query"]
+    assert seen["args"] == ("default", "department", " Finance ")
+    assert "department" not in seen["query"]
 
 
 async def test_metadata_field_schema_reports_only_populated_filters() -> None:

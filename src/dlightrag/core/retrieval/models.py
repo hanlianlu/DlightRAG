@@ -5,11 +5,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class MetadataFilter(BaseModel):
     """Structured filter for document metadata queries."""
+
+    # An unknown name would otherwise be dropped, turning a typo into a filter
+    # that matches every document rather than an error.
+    model_config = ConfigDict(extra="forbid")
 
     filename: str | None = None
     file_extension: str | None = None

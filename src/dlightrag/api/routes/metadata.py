@@ -21,6 +21,33 @@ router = APIRouter()
 _INTERNAL_METADATA_FIELDS = frozenset({"workspace", "doc_id", "file_path", "download_locator"})
 
 
+@router.post("/metadata/search", response_model=SearchMetadataResponse)
+async def search_metadata(
+    filters: dict[str, Any],
+    request: Request,
+    workspace: str | None = None,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return the document IDs matching all key-value pairs in 'filters'."""
+    from pydantic import ValidationError
+
+    from dlightrag.core.retrieval.models import MetadataFilter
+
+    # Validate the user-supplied dict against the MetadataFilter schema.
+    # The storage backend's query() takes a Pydantic model, not a raw dict,
+    # so this also rejects unknown keys before they reach the SQL layer.
+    try:
+        validated = MetadataFilter.model_validate(filters)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid metadata filter: {exc}") from exc
+
+    manager = get_manager(request)
+    ws = resolve_workspace(workspace, request)
+    await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
+    document_ids = await manager.asearch_metadata(ws, validated)
+    return {"document_ids": document_ids, "count": len(document_ids), "workspace": ws}
+
+
 @router.get("/metadata/{doc_id}", response_model=MetadataResponse)
 async def get_metadata(
     doc_id: str,
@@ -64,33 +91,5 @@ async def update_metadata(
         ws,
         doc_id,
         body.metadata,
-        metadata_policy=body.metadata_policy,
     )
     return {"status": "success", "doc_id": doc_id}
-
-
-@router.post("/metadata/search", response_model=SearchMetadataResponse)
-async def search_metadata(
-    filters: dict[str, Any],
-    request: Request,
-    workspace: str | None = None,
-    user: UserContext = Depends(get_current_user),
-) -> dict[str, Any]:
-    """Return the document IDs matching all key-value pairs in 'filters'."""
-    from pydantic import ValidationError
-
-    from dlightrag.core.retrieval.models import MetadataFilter
-
-    # Validate the user-supplied dict against the MetadataFilter schema.
-    # The storage backend's query() takes a Pydantic model, not a raw dict,
-    # so this also rejects unknown keys before they reach the SQL layer.
-    try:
-        validated = MetadataFilter.model_validate(filters)
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid metadata filter: {exc}") from exc
-
-    manager = get_manager(request)
-    ws = resolve_workspace(workspace, request)
-    await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
-    document_ids = await manager.asearch_metadata(ws, validated)
-    return {"document_ids": document_ids, "count": len(document_ids), "workspace": ws}

@@ -128,7 +128,6 @@ def test_ingest_spec_from_payload_preserves_s3_manifest_fields() -> None:
             "bucket": "my-bucket",
             "s3_region": "eu-north-1",
             "metadata": {"source_system": "s3-prod"},
-            "metadata_policy": "reject_unknown",
             "retain_source_file": True,
             "documents": [
                 {
@@ -145,7 +144,6 @@ def test_ingest_spec_from_payload_preserves_s3_manifest_fields() -> None:
         bucket="my-bucket",
         s3_region="eu-north-1",
         metadata={"source_system": "s3-prod"},
-        metadata_policy="reject_unknown",
         retain_source_file=True,
         documents=[
             IngestDocument(

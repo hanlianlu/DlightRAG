@@ -26,7 +26,7 @@ from lightrag.constants import (
 )
 
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.contracts import MetadataPolicy, VisualAssetSize
+from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.client_contracts import IngestDocument, SourceType
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.ingestion.paths import (
@@ -97,7 +97,6 @@ def _source_document_from_manifest(document: IngestDocument, *, key: str) -> Sou
         title=document.title,
         author=document.author,
         metadata=document.metadata,
-        metadata_policy=document.metadata_policy,
     )
 
 
@@ -302,9 +301,6 @@ class RAGService:
         self._lightrag: Any = None  # Direct LightRAG reference
         self._metadata_index: MetadataIndexProtocol | None = None
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
-        self._metadata_registry: Any = None
-        self._allow_ad_hoc_metadata = self.config.metadata.allow_ad_hoc_json
-        self._default_metadata_policy: MetadataPolicy = self.config.metadata.default_ingest_policy
         self._lightrag_stores: LightRAGStores | None = None
         self._ingestion_engine: UnifiedIngestionEngine | None = None
         self._bm25: BM25Retriever | None = None
@@ -738,9 +734,7 @@ class RAGService:
         from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
         from dlightrag.core.retrieval.bm25 import create_postgres_bm25, profiles_from_config
         from dlightrag.core.retrieval.bm25_language import BM25LanguageClassifier
-        from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
-        self._metadata_registry = MetadataFieldRegistry.from_config(config.metadata.fields)
         bm25_profiles = profiles_from_config(config.bm25_profiles)
         bm25_language_classifier = (
             BM25LanguageClassifier(
@@ -765,9 +759,6 @@ class RAGService:
                 workspace=config.workspace,
                 parser_rules=config.parser_rules,
                 chunk_options=config.parser.chunk_options,
-                metadata_registry=self._metadata_registry,
-                allow_ad_hoc_metadata=config.metadata.allow_ad_hoc_json,
-                default_metadata_policy=config.metadata.default_ingest_policy,
                 bm25_language_classifier=bm25_language_classifier,
             )
         )
@@ -1083,7 +1074,6 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest one local file through the unified LightRAG path."""
         if self._ingestion_engine is None:
@@ -1119,7 +1109,6 @@ class RAGService:
             title=title,
             author=author,
             metadata=metadata,
-            metadata_policy=metadata_policy,
         )
         return result
 
@@ -1132,7 +1121,6 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest local files through one LightRAG staged batch."""
         if self._ingestion_engine is None:
@@ -1178,7 +1166,6 @@ class RAGService:
             title=title,
             author=author,
             metadata=metadata,
-            metadata_policy=metadata_policy,
         )
         return result
 
@@ -1190,7 +1177,6 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
     ) -> dict[str, Any]:
         """Ingest explicitly listed local files with per-document metadata."""
         if self._ingestion_engine is None:
@@ -1228,7 +1214,6 @@ class RAGService:
                     title=document.title,
                     author=document.author,
                     metadata=document.metadata,
-                    metadata_policy=document.metadata_policy,
                     source_uri_explicit=document.source_uri is not None,
                     download_locator_explicit=False,
                     display_filename_explicit=document.filename is not None,
@@ -1240,7 +1225,6 @@ class RAGService:
             title=title,
             author=author,
             metadata=metadata,
-            metadata_policy=metadata_policy,
         )
         return result
 
@@ -1285,7 +1269,6 @@ class RAGService:
             title=document.title,
             author=document.author,
             metadata=document.metadata,
-            metadata_policy=document.metadata_policy,
         )
 
     async def _aingest_remote_documents(
@@ -1300,7 +1283,6 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
         progress_callback: RemoteIngestProgressCallback | None = None,
         resume_from_window: int = 0,
         retain_source_file: bool | None = None,
@@ -1478,7 +1460,6 @@ class RAGService:
                     title=title,
                     author=author,
                     metadata=metadata,
-                    metadata_policy=metadata_policy,
                 )
 
                 processed += int(batch_result.get("processed") or 0)
@@ -1536,7 +1517,6 @@ class RAGService:
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataPolicy | None = None,
         retain_source_file: bool | None = None,
         _progress_callback: RemoteIngestProgressCallback | None = None,
         _resume_from_window: int = 0,
@@ -1576,7 +1556,6 @@ class RAGService:
                 title=title,
                 author=author,
                 metadata=metadata,
-                metadata_policy=metadata_policy,
                 progress_callback=_progress_callback,
                 resume_from_window=_resume_from_window,
                 retain_source_file=retain_source_file,
@@ -1610,7 +1589,6 @@ class RAGService:
                 title=kwargs.get("title"),
                 author=kwargs.get("author"),
                 metadata=kwargs.get("metadata"),
-                metadata_policy=kwargs.get("metadata_policy"),
                 retain_source_file=kwargs.get("retain_source_file"),
                 _progress_callback=kwargs.get("_progress_callback"),
                 _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
@@ -1652,7 +1630,6 @@ class RAGService:
             title=kwargs.get("title"),
             author=kwargs.get("author"),
             metadata=kwargs.get("metadata"),
-            metadata_policy=kwargs.get("metadata_policy"),
             retain_source_file=kwargs.get("retain_source_file"),
             _progress_callback=kwargs.get("_progress_callback"),
             _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
@@ -1681,7 +1658,6 @@ class RAGService:
             "title": kwargs.get("title"),
             "author": kwargs.get("author"),
             "metadata": kwargs.get("metadata"),
-            "metadata_policy": kwargs.get("metadata_policy"),
             "retain_source_file": kwargs.get("retain_source_file"),
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
@@ -1780,7 +1756,6 @@ class RAGService:
                     title=kwargs.get("title"),
                     author=kwargs.get("author"),
                     metadata=kwargs.get("metadata"),
-                    metadata_policy=kwargs.get("metadata_policy"),
                 )
             path_str = kwargs.get("path")
             if not path_str:
@@ -1792,7 +1767,6 @@ class RAGService:
                 "title": kwargs.get("title"),
                 "author": kwargs.get("author"),
                 "metadata": kwargs.get("metadata"),
-                "metadata_policy": kwargs.get("metadata_policy"),
             }
             if local_path.is_file():
                 return await self._aingest_local_file(local_path, **common_kwargs)
@@ -1851,7 +1825,6 @@ class RAGService:
         if effective_filters is None and _plan is not None:
             effective_filters = getattr(_plan, "metadata_filter", None)
             filter_source = getattr(_plan, "metadata_filter_source", None)
-        effective_filters = self._normalize_metadata_filter(effective_filters)
 
         effective_bm25_query = (bm25_query or "").strip() or None
         if effective_bm25_query is None and _plan is not None:
@@ -2081,8 +2054,6 @@ class RAGService:
         self,
         doc_id: str,
         data: dict[str, Any],
-        *,
-        metadata_policy: MetadataPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
         self.config.require_writer("metadata update")
@@ -2090,35 +2061,20 @@ class RAGService:
 
         if self._metadata_index is None:
             raise RuntimeError("Metadata index not initialized")
-        normalized = normalize_user_metadata(
-            data,
-            self._metadata_registry,
-            metadata_policy=metadata_policy or self._default_metadata_policy,
-            allow_ad_hoc_json=self._allow_ad_hoc_metadata,
-        )
+        normalized = normalize_user_metadata(data)
         await self._metadata_index.upsert(
             doc_id,
             {
                 **normalized.system,
-                "user_metadata": dict(data),
-                "metadata_filterable": normalized.filterable,
-                "metadata_json": normalized.raw_json,
+                "custom_metadata": normalized.custom_metadata,
             },
         )
 
     async def asearch_metadata(self, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
-        if self._metadata_index is None:
+        if self._metadata_index is None or filters is None:
             return []
-        normalized_filters = self._normalize_metadata_filter(filters)
-        if normalized_filters is None:
-            return []
-        return await self._metadata_index.query(normalized_filters)
-
-    def _normalize_metadata_filter(self, filters: MetadataFilter | None) -> MetadataFilter | None:
-        if filters is None or self._metadata_registry is None:
-            return filters
-        return self._metadata_registry.normalize_filter(filters)
+        return await self._metadata_index.query(filters)
 
     # === FILE MANAGEMENT API ===
 

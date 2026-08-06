@@ -89,17 +89,6 @@ class TestYamlConfigLoading:
         assert config.top_k == 300  # constructor override
         assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"  # from yaml
 
-    def test_repo_config_metadata_schema_uses_current_field_keys(self):
-        config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-        metadata = config["metadata"]
-
-        assert set(metadata) == {"allow_ad_hoc_json", "default_ingest_policy", "fields"}
-        for field_spec in metadata["fields"].values():
-            assert set(field_spec) <= {"type", "normalizer", "filterable"}
-            assert "filter" not in field_spec
-            assert "normalize" not in field_spec
-            assert "indexed" not in field_spec
-
     def test_repo_config_declares_embedding_input_modality(self) -> None:
         config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
 

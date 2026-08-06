@@ -26,7 +26,6 @@ from starlette.types import ASGIApp
 import dlightrag
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.contracts import MetadataPolicy
 from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
@@ -405,24 +404,14 @@ async def list_workspaces_tool() -> dict[str, Any]:
         "answer_image_capability with status (supported/unsupported/unknown), "
         "effective_max_images (max images the answer model accepts; 0 means send none), "
         "configured_ceiling, and model — query images reach the answer model only when "
-        "status is 'supported'. Also returns metadata_schema (declared filterable fields "
-        "with their types, plus allow_ad_hoc_json) so callers can build "
-        "valid retrieve/answer filters without guessing field names."
+        "status is 'supported'."
     ),
     annotations=ToolAnnotations(read_only_hint=True),
 )
 async def get_capabilities_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
-    config = _get_config()
     return {
         "answer_image_capability": answer_image_capability_summary(manager.answer_image_capability),
-        "metadata_schema": {
-            "allow_ad_hoc_json": config.metadata.allow_ad_hoc_json,
-            "fields": {
-                name: {"type": field.type, "filterable": field.filterable}
-                for name, field in config.metadata.fields.items()
-            },
-        },
     }
 
 
@@ -628,10 +617,6 @@ async def ingest_tool(
     metadata: Annotated[
         dict[str, Any] | None,
         Field(default=None, description="User metadata to attach to ingested documents."),
-    ] = None,
-    metadata_policy: Annotated[
-        MetadataPolicy | None,
-        Field(default=None, description="How undeclared user metadata fields are handled."),
     ] = None,
     retain_source_file: Annotated[
         bool | None,

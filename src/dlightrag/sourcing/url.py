@@ -157,7 +157,6 @@ class URLDataSource(AsyncDataSource):
                 title=document.title,
                 author=document.author,
                 metadata=document.metadata,
-                metadata_policy=document.metadata_policy,
             )
 
     async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[SourceDocument]:

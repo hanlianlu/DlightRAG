@@ -2053,6 +2053,38 @@ class TestAPIContracts:
 
 class TestMetadataAPI:
     @pytest.mark.usefixtures("_patch_manager")
+    async def test_search_route_is_not_shadowed_by_the_doc_id_route(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+    ) -> None:
+        """`/metadata/search` is a literal path, so it must be declared first."""
+        mock_manager.asearch_metadata = AsyncMock(return_value=["doc-1"])
+        app.state.manager = mock_manager
+
+        resp = await client.post("/metadata/search", json={"custom": {"department": "legal"}})
+
+        assert resp.status_code == 200
+        assert resp.json()["document_ids"] == ["doc-1"]
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_unknown_filter_name_is_rejected_not_ignored(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+    ) -> None:
+        """A dropped filter name would match every document instead of failing."""
+        mock_manager.asearch_metadata = AsyncMock(return_value=["doc-1"])
+        app.state.manager = mock_manager
+
+        resp = await client.post("/metadata/search", json={"nonsense": "x"})
+
+        assert resp.status_code == 422
+        mock_manager.asearch_metadata.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_get_metadata_hides_internal_paths_and_download_locator(
         self,
         client: AsyncClient,

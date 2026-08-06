@@ -231,11 +231,10 @@ the requested retention policy.
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 | `title` | `string` | — | User-declared document title stored in metadata |
 | `author` | `string` | — | User-declared document author stored in metadata |
-| `metadata` | `object` | — | Declared/custom ingest metadata |
-| `metadata_policy` | `string` | — | `validate`, `reject_unknown`, or `store_only` |
+| `metadata` | `object` | — | Custom ingest metadata |
 REST also supports one-file multipart upload at `POST /ingest/blob`. Fields are
-`file` plus optional `workspace`, `title`, `author`, `metadata` (JSON string),
-and `metadata_policy`. The file is staged under DlightRAG's managed input
+`file` plus optional `workspace`, `title`, `author`, and `metadata` (JSON
+string). The file is staged under DlightRAG's managed input
 workspace directory and returns an ingest job.
 
 For per-document metadata, pass a manifest instead of prefix discovery:
@@ -264,40 +263,19 @@ fail-closed contract as REST.
 
 ### Metadata At Call Time
 
-The filterable metadata schema is service configuration, not an ingest-time API
-payload. Declare custom filter fields in `config.yaml` under `metadata.fields`;
-REST, MCP, and SDK ingest calls then pass values for those fields through
-`metadata`. Configuration fields and defaults live in
-[configuration.md](configuration.md).
-
-```yaml
-metadata:
-  allow_ad_hoc_json: true
-  default_ingest_policy: validate
-  fields:
-    department:
-      type: string
-      filterable: true
-```
-
-For filterable string fields the default normalizer is `casefold_trim`, applied
-identically at ingest and at query time so containment matches; set
-`normalizer: identity` only for case-sensitive identifiers.
+Custom metadata needs no declaration. Any key passed through `metadata` on a
+REST, MCP, or SDK ingest call is stored verbatim and is immediately filterable.
 
 System metadata such as `filename`, `filename_stem`, `file_extension`,
-`title`, `author`, and parser details is extracted or
-mapped by DlightRAG. These names are reserved: supplying one under `metadata` is
-rejected rather than stored where no filter would read it. Set `title` and
-`author` through their ingest parameters; `creation_date` is the one such column
-a caller sets through `metadata`. User metadata follows the configured policy:
-| Policy | Behavior |
-|---|---|
-| `validate` | Default. Declared filterable fields are normalized and promoted to `custom_metadata`; undeclared fields are stored as JSON enrichment when `allow_ad_hoc_json` is true. |
-| `reject_unknown` | Rejects undeclared user metadata fields. |
-| `store_only` | Stores user metadata as JSON enrichment but does not promote declared fields for filtering. |
+`title`, and `author` is extracted or mapped by DlightRAG. These names are
+reserved: supplying one under `metadata` is rejected rather than stored where no
+filter would read it. Set `title` and `author` through their ingest parameters;
+`creation_date` is the one such column a caller sets through `metadata`.
 
-Query filters use the declared schema. For custom metadata, pass
-`filters.custom`, for example `{"custom": {"department": "finance"}}`.
+For custom metadata, filter with `filters.custom`, for example
+`{"custom": {"department": "finance"}}`. Matching is case-insensitive, the same
+rule the named fields use, and it is applied to the comparison rather than to
+the stored value — so what you sent is what you read back.
 Undeclared JSON enrichment is retained for display/debugging, but is not part
 of the supported filter surface.
 
