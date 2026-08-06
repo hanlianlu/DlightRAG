@@ -987,7 +987,7 @@ async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) ->
                 "author": {
                     "type": "string",
                     "normalizer": "casefold_trim",
-                    "filter_ops": ["exact"],
+                    "filterable": True,
                 }
             }
         ),
@@ -1014,9 +1014,9 @@ async def test_prepared_file_metadata_overlays_batch_metadata(tmp_path: Path) ->
     engine, deps = _make_engine(
         metadata_registry=MetadataFieldRegistry.from_config(
             {
-                "source_system": {"type": "string", "filter_ops": ["exact"]},
-                "department": {"type": "string", "filter_ops": ["exact"]},
-                "asset_id": {"type": "string", "filter_ops": ["exact"]},
+                "source_system": {"type": "string", "filterable": True},
+                "department": {"type": "string", "filterable": True},
+                "asset_id": {"type": "string", "filterable": True},
             }
         ),
         allow_ad_hoc_metadata=True,

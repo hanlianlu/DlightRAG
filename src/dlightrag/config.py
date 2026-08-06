@@ -363,7 +363,7 @@ class MetadataFieldConfig(BaseModel):
 
     type: str = "string"
     normalizer: str | None = None
-    filter_ops: list[str] = Field(default_factory=list)
+    filterable: bool = False
 
 
 class MetadataConfig(BaseModel):

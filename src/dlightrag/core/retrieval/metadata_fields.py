@@ -2,7 +2,7 @@
 """Metadata field registry — single source of truth for document metadata columns."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -31,11 +31,7 @@ class DeclaredMetadataField:
     field_id: str
     field_type: str = "string"
     normalizer: str = "identity"
-    filter_ops: tuple[str, ...] = field(default_factory=tuple)
-
-    @property
-    def filterable(self) -> bool:
-        return bool(self.filter_ops)
+    filterable: bool = False
 
     @property
     def type(self) -> str:
@@ -59,13 +55,13 @@ class MetadataFieldRegistry:
         fields = {}
         for field_id, raw in (config or {}).items():
             field_type = str(_field_option(raw, "type", "string") or "string")
-            filter_ops = tuple(_field_option(raw, "filter_ops", ()) or ())
+            filterable = bool(_field_option(raw, "filterable", False))
             normalizer = _field_option(raw, "normalizer", None)
             fields[field_id] = DeclaredMetadataField(
                 field_id=field_id,
                 field_type=field_type,
-                normalizer=str(normalizer or _default_normalizer(field_type, filter_ops)),
-                filter_ops=filter_ops,
+                normalizer=str(normalizer or _default_normalizer(field_type, filterable)),
+                filterable=filterable,
             )
         return cls(fields)
 
@@ -104,8 +100,10 @@ def _field_option(raw: Any, key: str, default: Any) -> Any:
     return getattr(raw, key, default)
 
 
-def _default_normalizer(field_type: str, filter_ops: tuple[str, ...]) -> str:
-    if field_type == "string" and "exact" in filter_ops:
+def _default_normalizer(field_type: str, filterable: bool) -> str:
+    # Custom filtering is JSONB containment, so a filterable string only matches
+    # when ingest and query normalize identically.
+    if field_type == "string" and filterable:
         return "casefold_trim"
     return "identity"
 

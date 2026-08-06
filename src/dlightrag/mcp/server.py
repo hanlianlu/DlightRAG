@@ -406,7 +406,7 @@ async def list_workspaces_tool() -> dict[str, Any]:
         "effective_max_images (max images the answer model accepts; 0 means send none), "
         "configured_ceiling, and model — query images reach the answer model only when "
         "status is 'supported'. Also returns metadata_schema (declared filterable fields "
-        "with their types and filter_ops, plus allow_ad_hoc_json) so callers can build "
+        "with their types, plus allow_ad_hoc_json) so callers can build "
         "valid retrieve/answer filters without guessing field names."
     ),
     annotations=ToolAnnotations(read_only_hint=True),
@@ -419,7 +419,7 @@ async def get_capabilities_tool() -> dict[str, Any]:
         "metadata_schema": {
             "allow_ad_hoc_json": config.metadata.allow_ad_hoc_json,
             "fields": {
-                name: {"type": field.type, "filter_ops": field.filter_ops}
+                name: {"type": field.type, "filterable": field.filterable}
                 for name, field in config.metadata.fields.items()
             },
         },

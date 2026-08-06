@@ -277,13 +277,12 @@ metadata:
   fields:
     department:
       type: string
-      filter_ops: ["exact"]
+      filterable: true
 ```
 
-For string fields with `exact` filtering, the default normalizer is
-`casefold_trim`; set `normalizer: identity` only for case-sensitive identifiers.
-There is no separate `indexed` flag: declaring a field with filter operations
-is the product signal that it is filterable.
+For filterable string fields the default normalizer is `casefold_trim`, applied
+identically at ingest and at query time so containment matches; set
+`normalizer: identity` only for case-sensitive identifiers.
 
 System metadata such as `filename`, `filename_stem`, `file_extension`,
 `doc_title`, `doc_author`, and parser details is extracted or

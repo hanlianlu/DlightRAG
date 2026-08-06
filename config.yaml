@@ -138,7 +138,7 @@ metadata:
   # fields:
   #   department:
   #     type: string
-  #     filter_ops: ["exact"]
+  #     filterable: true
 
 ## kg_entity_types is a lightweight hint (one line of extraction guidance).
 ## Left empty so DlightRAG defers to LightRAG's built-in general taxonomy

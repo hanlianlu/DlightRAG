@@ -142,7 +142,7 @@ def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
             "author": {
                 "type": "string",
                 "normalizer": "casefold_trim",
-                "filter_ops": ["exact"],
+                "filterable": True,
             }
         }
     )
@@ -154,7 +154,7 @@ def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
 
 def test_string_exact_metadata_defaults_to_casefold_trim() -> None:
     registry = MetadataFieldRegistry.from_config(
-        {"department": {"type": "string", "filter_ops": ["exact"]}}
+        {"department": {"type": "string", "filterable": True}}
     )
 
     normalized = normalize_user_metadata({"department": " Finance "}, registry)
@@ -171,7 +171,7 @@ def test_identity_normalizer_can_preserve_exact_string_metadata() -> None:
             "sku": {
                 "type": "string",
                 "normalizer": "identity",
-                "filter_ops": ["exact"],
+                "filterable": True,
             }
         }
     )
@@ -184,11 +184,11 @@ def test_identity_normalizer_can_preserve_exact_string_metadata() -> None:
 def test_custom_metadata_filter_is_normalized_with_registry() -> None:
     registry = MetadataFieldRegistry.from_config(
         {
-            "department": {"type": "string", "filter_ops": ["exact"]},
+            "department": {"type": "string", "filterable": True},
             "sku": {
                 "type": "string",
                 "normalizer": "identity",
-                "filter_ops": ["exact"],
+                "filterable": True,
             },
         }
     )
@@ -236,7 +236,7 @@ def test_store_only_metadata_policy_never_promotes_declared_fields() -> None:
             "author": {
                 "type": "string",
                 "normalizer": "casefold_trim",
-                "filter_ops": ["exact"],
+                "filterable": True,
             }
         }
     )
@@ -268,13 +268,14 @@ def test_intent_detection_cannot_filter_unknown_metadata_field() -> None:
 
 def test_json_contains_requires_declared_metadata_json_field() -> None:
     registry = MetadataFieldRegistry.from_config(
-        {"metadata_json": {"type": "json", "filter_ops": ["contains"]}}
+        {"metadata_json": {"type": "json", "filterable": True}}
     )
 
     spec = registry.filter_spec("metadata_json")
     assert spec is not None
     assert spec.type == "json"
-    assert "contains" in spec.filter_ops
+    # Only string fields get case folding; JSON values must match as written.
+    assert spec.normalizer == "identity"
 
 
 async def test_metadata_update_revalidates_without_reindexing() -> None:
@@ -290,7 +291,7 @@ async def test_metadata_update_revalidates_without_reindexing() -> None:
             "author": {
                 "type": "string",
                 "normalizer": "casefold_trim",
-                "filter_ops": ["exact"],
+                "filterable": True,
             }
         }
     )

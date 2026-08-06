@@ -146,7 +146,7 @@ def make_e2e_config(
                     "e2e_case": {
                         "type": "string",
                         "normalizer": "casefold_trim",
-                        "filter_ops": ["exact"],
+                        "filterable": True,
                     }
                 },
             ),

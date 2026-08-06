@@ -2413,7 +2413,7 @@ class TestRAGServiceLightRAGMainPath:
         service._backend = MagicMock()
         service._lightrag = None
         service._metadata_registry = MetadataFieldRegistry.from_config(
-            {"department": {"type": "string", "filter_ops": ["exact"]}}
+            {"department": {"type": "string", "filterable": True}}
         )
         service._retrieval_orchestrator = MagicMock()
         service._retrieval_orchestrator.aretrieve = AsyncMock(
@@ -2438,7 +2438,7 @@ class TestRAGServiceLightRAGMainPath:
 
         service = RAGService(config=test_config)
         service._metadata_registry = MetadataFieldRegistry.from_config(
-            {"department": {"type": "string", "filter_ops": ["exact"]}}
+            {"department": {"type": "string", "filterable": True}}
         )
         service._metadata_index = AsyncMock()
         service._metadata_index.query = AsyncMock(return_value=["doc-1"])
