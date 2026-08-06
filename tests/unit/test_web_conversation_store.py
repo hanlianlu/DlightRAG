@@ -730,17 +730,10 @@ def test_records_are_frozen_and_schema_is_exact() -> None:
     assert "BYTEA" in sql
     assert "submission_id UUID NOT NULL" in sql
     assert "principal_id, conversation_id, submission_id" in sql
-    page_migration = WEB_CONVERSATION_MIGRATIONS[-1]
-    assert page_migration.version == "0006_web_conversation_page_number"
-    assert any("DROP COLUMN IF EXISTS bbox" in statement for statement in page_migration.statements)
-    assert any(
-        "DROP COLUMN IF EXISTS page_idx" in statement for statement in page_migration.statements
-    )
-    assert any(
-        "ADD COLUMN IF NOT EXISTS page_number INTEGER" in statement
-        for statement in page_migration.statements
-    )
-    assert any("page_number >= 1" in statement for statement in page_migration.statements)
+    assert "page_number INTEGER" in sql
+    assert "page_number >= 1" in sql
+    assert "bbox" not in sql
+    assert "page_idx" not in sql
 
 
 async def test_same_submission_replay_returns_authoritative_turn_without_insert() -> None:
@@ -780,11 +773,9 @@ async def test_same_submission_replay_returns_authoritative_turn_without_insert(
     assert not any("INSERT INTO web_conversation_turns" in query for query, _args in conn.calls)
 
 
-def test_migrations_drop_only_legacy_conversation_storage() -> None:
+def test_migrations_touch_only_web_conversation_storage() -> None:
     sql = "\n".join(
         statement for migration in WEB_CONVERSATION_MIGRATIONS for statement in migration.statements
     )
-    assert "DROP TABLE IF EXISTS dlightrag_checkpoints" in sql
-    assert "DELETE FROM dlightrag_schema_migrations WHERE scope = 'checkpoints'" in sql
     assert "dlightrag_doc_metadata" not in sql
     assert "lightrag_doc_chunks" not in sql

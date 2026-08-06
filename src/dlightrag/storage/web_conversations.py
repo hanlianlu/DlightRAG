@@ -127,116 +127,39 @@ CREATE TABLE IF NOT EXISTS web_conversation_attachment_chunks (
         parser_signature,
         chunk_signature,
         chunk_id
-    )
+    ),
+    -- The cache is written before any turn row exists, so it hangs off the
+    -- conversation; every deletion path removes that row and reclaims it.
+    FOREIGN KEY (principal_id, conversation_id)
+      REFERENCES web_conversations (principal_id, conversation_id)
+      ON DELETE CASCADE
 )
 """
 
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_web_conversations_principal_updated "
     "ON web_conversations (principal_id, updated_at DESC, conversation_id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_web_conversations_updated "
+    "ON web_conversations (updated_at, principal_id, conversation_id)",
     "CREATE INDEX IF NOT EXISTS idx_web_conversation_turns_principal_conversation "
     "ON web_conversation_turns (principal_id, conversation_id, turn_number DESC)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_web_conversation_turns_submission "
+    "ON web_conversation_turns (principal_id, conversation_id, submission_id)",
+    "CREATE INDEX IF NOT EXISTS idx_web_conversation_attachments_catalog "
+    "ON web_conversation_attachments (principal_id, conversation_id, created_at DESC)",
 )
 
 WEB_CONVERSATION_MIGRATIONS = (
     Migration(
         "0001_web_conversations",
-        "Replace legacy checkpoints with scoped Web conversations",
+        "Create scoped Web conversations, turns, images, and attachments",
         (
-            "DROP TABLE IF EXISTS dlightrag_checkpoints",
-            "DELETE FROM dlightrag_schema_migrations WHERE scope = 'checkpoints'",
             _CREATE_CONVERSATIONS,
             _CREATE_TURNS,
             _CREATE_IMAGES,
-            *_CREATE_INDEXES,
-        ),
-    ),
-    Migration(
-        "0002_web_conversation_submission_id",
-        "Add scoped idempotency keys for Web answer submissions",
-        (
-            "ALTER TABLE web_conversation_turns ADD COLUMN IF NOT EXISTS submission_id UUID",
-            "UPDATE web_conversation_turns SET submission_id = turn_id WHERE submission_id IS NULL",
-            "ALTER TABLE web_conversation_turns ALTER COLUMN submission_id SET NOT NULL",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_web_conversation_turns_submission "
-            "ON web_conversation_turns (principal_id, conversation_id, submission_id)",
-        ),
-    ),
-    Migration(
-        "0003_web_conversation_attachments",
-        "Add scoped Web document attachments and content-addressed parse cache",
-        (
             _CREATE_ATTACHMENTS,
             _CREATE_ATTACHMENT_CHUNKS,
-            "CREATE INDEX IF NOT EXISTS idx_web_conversation_attachments_catalog "
-            "ON web_conversation_attachments (principal_id, conversation_id, created_at DESC)",
-        ),
-    ),
-    Migration(
-        "0004_web_conversation_attachment_chunks_cascade",
-        "Reclaim the parse cache when its owning conversation is removed",
-        (
-            # Drop any pre-existing orphan cache rows (from deployments that ran
-            # 0003 before this lifecycle fix) so the new FK validates cleanly.
-            "DELETE FROM web_conversation_attachment_chunks AS c "
-            "WHERE NOT EXISTS ("
-            "SELECT 1 FROM web_conversations AS w "
-            "WHERE w.principal_id = c.principal_id "
-            "AND w.conversation_id = c.conversation_id)",
-            # Cascade the content-addressed cache from its owning conversation.
-            # The conversation row already exists when pre-commit parsing writes
-            # the cache, and this references web_conversations (NOT the turn
-            # rows), so it does not break pre-commit parsing. Conversation
-            # deletion, principal prune, and TTL expiry all delete the
-            # web_conversations row, so the cache is reclaimed on every path.
-            # ADD CONSTRAINT is not idempotent (Postgres has no IF NOT EXISTS
-            # form), so guard it with a catalog existence check. That keeps 0004
-            # safe if deployment drift leaves this version unrecorded and it must
-            # run once after earlier statements already succeeded.
-            """DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'web_conversation_attachment_chunks_conversation_fkey'
-          AND conrelid = 'web_conversation_attachment_chunks'::regclass
-    ) THEN
-        ALTER TABLE web_conversation_attachment_chunks
-        ADD CONSTRAINT web_conversation_attachment_chunks_conversation_fkey
-        FOREIGN KEY (principal_id, conversation_id)
-        REFERENCES web_conversations (principal_id, conversation_id)
-        ON DELETE CASCADE;
-    END IF;
-END $$""",
-        ),
-    ),
-    Migration(
-        "0005_web_conversation_expiry_index",
-        "Index global Web conversation expiry scans",
-        (
-            "CREATE INDEX IF NOT EXISTS idx_web_conversations_updated "
-            "ON web_conversations (updated_at, principal_id, conversation_id)",
-        ),
-    ),
-    Migration(
-        "0006_web_conversation_page_number",
-        "Replace spatial attachment provenance with a 1-based page number",
-        (
-            "ALTER TABLE web_conversation_attachment_chunks DROP COLUMN IF EXISTS bbox",
-            "ALTER TABLE web_conversation_attachment_chunks DROP COLUMN IF EXISTS page_idx",
-            "ALTER TABLE web_conversation_attachment_chunks "
-            "ADD COLUMN IF NOT EXISTS page_number INTEGER",
-            """DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'web_conversation_attachment_chunks_page_number_check'
-          AND conrelid = 'web_conversation_attachment_chunks'::regclass
-    ) THEN
-        ALTER TABLE web_conversation_attachment_chunks
-        ADD CONSTRAINT web_conversation_attachment_chunks_page_number_check
-        CHECK (page_number IS NULL OR page_number >= 1);
-    END IF;
-END $$""",
+            *_CREATE_INDEXES,
         ),
     ),
 )

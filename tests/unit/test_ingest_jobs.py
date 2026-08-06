@@ -4,7 +4,7 @@
 import json
 from typing import Any
 
-from dlightrag.storage.ingest_jobs import _SCHEMA_MIGRATIONS, PGIngestJobStore
+from dlightrag.storage.ingest_jobs import PGIngestJobStore
 
 
 class _Acquire:
@@ -143,18 +143,6 @@ class _Conn:
 
     def transaction(self) -> _Tx:
         return _Tx()
-
-
-def test_ingest_error_truncation_migration_normalizes_legacy_rows() -> None:
-    migration = next(
-        item for item in _SCHEMA_MIGRATIONS if item.version == "0003_ingest_job_error_truncation"
-    )
-    sql = "\n".join(migration.statements)
-
-    assert "UPDATE dlightrag_ingest_jobs" in sql
-    assert "WITH ORDINALITY" in sql
-    assert "errors_truncated = TRUE" in sql
-    assert "jsonb_array_length(errors) > 200" in sql
 
 
 async def test_ingest_job_store_records_window_progress_and_result() -> None:

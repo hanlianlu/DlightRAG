@@ -92,9 +92,6 @@ async def test_workspace_registry_initializes_and_migrates_schema() -> None:
     assert "CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations" in executed_sql
     assert "CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta" in executed_sql
     assert "display_name" in executed_sql
-    assert (
-        "ALTER TABLE dlightrag_workspace_meta ADD COLUMN IF NOT EXISTS display_name" in executed_sql
-    )
     assert any(
         query.startswith("INSERT INTO dlightrag_schema_migrations")
         and args[:2] == ("workspace_registry", "0001_workspace_meta")

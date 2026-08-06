@@ -241,39 +241,6 @@ _SCHEMA_MIGRATIONS = (
         "Create ingest job state table",
         (_CREATE, *_CREATE_INDEXES),
     ),
-    Migration(
-        "0002_ingest_job_leases",
-        "Add ingest job recovery leases",
-        (
-            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS lease_owner TEXT",
-            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
-            f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status_lease "
-            f"ON {TABLE} (status, lease_expires_at)",
-        ),
-    ),
-    Migration(
-        "0003_ingest_job_error_truncation",
-        "Track whether retained ingest errors were truncated",
-        (
-            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS "
-            "errors_truncated BOOLEAN NOT NULL DEFAULT FALSE",
-            f"""
-UPDATE {TABLE}
-SET errors = (
-        SELECT COALESCE(jsonb_agg(value ORDER BY ordinal), '[]'::jsonb)
-        FROM (
-            SELECT value, ordinal
-            FROM jsonb_array_elements(errors)
-                WITH ORDINALITY AS entry(value, ordinal)
-            ORDER BY ordinal
-            LIMIT {_MAX_JOB_ERRORS}
-        ) AS retained
-    ),
-    errors_truncated = TRUE
-WHERE jsonb_array_length(errors) > {_MAX_JOB_ERRORS}
-""".strip(),  # noqa: S608 - interpolates only the fixed table name and integer cap
-        ),
-    ),
 )
 
 

@@ -21,18 +21,6 @@ CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
 )
 """
 
-_MIGRATIONS = (
-    "ALTER TABLE dlightrag_workspace_meta "
-    "ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE dlightrag_workspace_meta "
-    "ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE dlightrag_workspace_meta "
-    "ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
-    "ALTER TABLE dlightrag_workspace_meta "
-    "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
-    "UPDATE dlightrag_workspace_meta SET display_name = workspace WHERE display_name = ''",
-)
-
 _UPSERT = """
 INSERT INTO dlightrag_workspace_meta (workspace, display_name, embedding_model)
 VALUES ($1, $2, $3)
@@ -62,7 +50,7 @@ _SCHEMA_MIGRATIONS = (
     Migration(
         "0001_workspace_meta",
         "Create and migrate workspace registry",
-        (_CREATE, *_MIGRATIONS),
+        (_CREATE,),
     ),
 )
 
