@@ -250,6 +250,17 @@ function closeWorkspacePopover(): void {
     workspaceDismiss.deactivate();
 }
 
+function setDeleteWorkspacePending(pending: boolean): void {
+    const confirmBtn = document.getElementById('delete-workspace-confirm-btn') as HTMLButtonElement | null;
+    const confirmInput = document.getElementById('delete-workspace-confirm-input') as HTMLInputElement | null;
+    if (!confirmBtn || !confirmInput) return;
+    confirmBtn.textContent = pending ? 'Deleting\u2026' : 'Delete';
+    confirmInput.readOnly = pending;
+    confirmBtn.disabled = true;
+    // Let the typed-name rule decide again rather than keeping a second copy of it.
+    if (!pending) confirmInput.dispatchEvent(new Event('input'));
+}
+
 function showDeleteWorkspaceDialog(workspace: string): void {
     const record = workspaceStore.records.find((item) => item.workspace === workspace);
     const displayName = record ? record.displayName : workspace;
@@ -263,6 +274,8 @@ function showDeleteWorkspaceDialog(workspace: string): void {
     name.textContent = displayName;
     idInput.value = workspace;
     confirmInput.value = '';
+    confirmInput.readOnly = false;
+    confirmBtn.textContent = 'Delete';
     confirmBtn.disabled = true;
     confirmInput.oninput = function() {
         const value = confirmInput.value.trim();
@@ -292,6 +305,20 @@ function setupWorkspaceEvents(): void {
         event.preventDefault();
         closeButton.closest('dialog')?.close();
     });
+
+    // Dropping a workspace clears every store it owns, so the request outlives
+    // the click. Without this the dialog sits unchanged and a failure, whose
+    // fragment hx-swap="none" discards, looks identical to success.
+    const deleteForm = document.getElementById('delete-workspace-form');
+    if (deleteForm && !deleteForm.dataset.bound) {
+        deleteForm.dataset.bound = 'true';
+        deleteForm.addEventListener('htmx:beforeRequest', () => setDeleteWorkspacePending(true));
+        deleteForm.addEventListener('htmx:afterRequest', (event) => {
+            setDeleteWorkspacePending(false);
+            const detail = (event as HTMXEvent).detail;
+            if (!detail.successful) showToast('Could not delete workspace.', 4000);
+        });
+    }
 
     // Server-push (htmx HX-Trigger) -> store. The ONLY place that knows the
     // snake_case wire shape: normalize once, then let the store notify the UI.

@@ -53,6 +53,7 @@ interface HTMXEvent extends Event {
     isError?: boolean;
     serverResponse?: string;
     shouldSwap?: boolean;
+    successful?: boolean;
     target?: Element;
     xhr: XMLHttpRequest;
   };
