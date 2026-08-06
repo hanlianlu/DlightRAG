@@ -184,6 +184,14 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:5001:5001"
+    environment:
+      # Upstream would keep working a stuck document for 7 days; DlightRAG stops
+      # polling after 1440 x 5s, so past that the worker is held for nobody.
+      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: "7200"
+      # The two default workers each load their own copy of the models.
+      DOCLING_SERVE_ENG_LOC_SHARE_MODELS: "true"
+      # Upstream defaults to WARNING, which says nothing about a slow parse.
+      DOCLING_SERVE_LOG_LEVEL: INFO
     healthcheck:
       test:
         - CMD
