@@ -2,13 +2,8 @@
 import {closestElement, syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 
 
-const PANEL_DISMISS_EXEMPT_SELECTOR = [
-    '.panel',
-    '#files-btn',
-    '#theme-control',
-    '#chat-sidebar',
-    '#conversation-sidebar-open',
-    '#composer',
+// Source links open their own panel content, so they must not dismiss it first.
+const PANEL_KEEP_OPEN_SELECTOR = [
     '[data-action="filter-source"]',
     '[data-action="open-ref-source"]',
 ].join(', ');
@@ -58,7 +53,9 @@ function shouldDismissPanelOnOutsideClick(target: EventTarget | null): boolean {
     const panel = document.getElementById('panel');
     if (!panel || !panel.classList.contains('open')) return false;
     if (document.body.hasAttribute('data-resizing')) return false;
-    return !closestElement(target, PANEL_DISMISS_EXEMPT_SELECTOR);
+    // Only the conversation area dismisses; persistent chrome never does.
+    return Boolean(closestElement(target, '#chat-area'))
+        && !closestElement(target, PANEL_KEEP_OPEN_SELECTOR);
 }
 
 export function openPanel(title?: string): void {

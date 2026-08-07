@@ -601,6 +601,28 @@ def test_composer_attachment_picker_keeps_files_panel_open(page: Page) -> None:
 
 
 @pytest.mark.e2e
+def test_only_the_conversation_area_dismisses_an_open_panel(page: Page) -> None:
+    """Top-bar chrome must not dismiss the panel; the conversation area must."""
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.locator("#upload-zone").wait_for()
+
+    panel = page.locator("#panel")
+    is_open = "element => element.classList.contains('open')"
+
+    page.locator("#workspace-selector").click()
+    page.get_by_role("listbox", name="Workspaces").wait_for()
+    assert panel.evaluate(is_open) is True
+    page.keyboard.press("Escape")
+
+    page.locator("#chat-area").click(position={"x": 400, "y": 300})
+    assert panel.evaluate(is_open) is False
+
+
+@pytest.mark.e2e
 @pytest.mark.parametrize("viewport", [(900, 800), (390, 844)])
 def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     page: Page, viewport: tuple[int, int]
