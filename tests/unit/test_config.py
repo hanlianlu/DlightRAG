@@ -1391,6 +1391,22 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
 
 
+def test_load_config_rejection_never_quotes_the_api_key(tmp_path) -> None:
+    """A role with a key but no model is invalid; the key must not ride along."""
+    secret = "sk-or-v1-must-never-be-logged"
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DLIGHTRAG_LLM__ROLES__QUERY__API_KEY={secret}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        load_config(env_file)
+
+    assert "llm.roles.query.model: Field required" in str(excinfo.value)
+    assert secret not in str(excinfo.value)
+    # A chained pydantic error would put the key back into the traceback.
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__context__ is None
+
+
 def test_config_repr_redacts_api_keys():
     """repr(config) must not expose plaintext API keys."""
     cfg = _settings_config(

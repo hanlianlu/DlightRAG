@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from dlightrag.contracts import (
@@ -1515,9 +1522,19 @@ _config: DlightragConfig | None = None
 
 def load_config(env_file: str | Path | None = None, **overrides: Any) -> DlightragConfig:
     """Build config from an optional .env file without globally loading dotenv."""
-    if env_file is not None:
-        return DlightragConfig(_env_file=env_file, **overrides)  # type: ignore[call-arg]
-    return DlightragConfig(**overrides)
+    try:
+        if env_file is not None:
+            return DlightragConfig(_env_file=env_file, **overrides)  # type: ignore[call-arg]
+        return DlightragConfig(**overrides)
+    except ValidationError as exc:
+        # Pydantic echoes the rejected input, which here is the settings mapping
+        # holding API keys. Field locations alone say what to fix.
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors(include_input=False, include_url=False)
+        )
+    # Raised outside the handler so the original error is not chained onto it.
+    raise ValueError(f"Invalid dlightrag configuration: {detail}")
 
 
 def get_config() -> DlightragConfig:
