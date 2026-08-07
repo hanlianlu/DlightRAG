@@ -1391,8 +1391,11 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
 
 
-def test_load_config_rejection_never_quotes_the_api_key(tmp_path) -> None:
+def test_load_config_rejection_never_quotes_the_api_key(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A role with a key but no model is invalid; the key must not ride along."""
+    monkeypatch.chdir(tmp_path)  # the repo config.yaml would supply the missing model
     secret = "sk-or-v1-must-never-be-logged"
     env_file = tmp_path / ".env"
     env_file.write_text(f"DLIGHTRAG_LLM__ROLES__QUERY__API_KEY={secret}\n", encoding="utf-8")
