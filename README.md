@@ -110,8 +110,8 @@ DLIGHTRAG_RERANK__API_KEY=...
 ```
 
 These match the checked-in `config.yaml`, which configures DeepSeek extract and
-keyword roles, host-local Unsloth query and VLM roles, plus Voyage reranking.
-The Unsloth roles use their own query/VLM API key entries. Role overrides are
+keyword roles, OpenRouter default, query, and VLM roles, plus Voyage reranking.
+Role overrides are
 atomic: an omitted or blank key falls back to the complete default model
 configuration instead of combining its endpoint with the default key. If you
 remove role-specific model blocks or switch rerank back to `chat_llm_reranker`,
@@ -320,9 +320,10 @@ dlightrag-mcp
 ```
 
 MCP tools include `retrieve`, `answer`, `ingest`, `get_ingest_job`,
-`list_files`, `delete_files`, `list_workspaces`, `create_workspace`, and
-`delete_workspace`, plus `get_capabilities` for image and metadata-filter
-capability discovery. See [docs/interfaces.md](docs/interfaces.md#mcp-server)
+`cancel_ingest_job`, `list_files`, `delete_files`, `list_workspaces`,
+`create_workspace`, and `delete_workspace`, plus `get_capabilities` for image
+and metadata-filter capability discovery. See
+[docs/interfaces.md](docs/interfaces.md#mcp-server)
 for the authoritative tool-result contract.
 
 ## Core Concepts

@@ -291,6 +291,7 @@ Actions enforced by REST, Web, and MCP include:
 | `workspace.delete` | Delete workspace |
 | `workspace.reset` | Reset workspace |
 | `job.read` | Read ingest job status |
+| `job.cancel` | Stop a running ingest job |
 
 ### Source download boundary
 
@@ -319,7 +320,7 @@ allowed when any entry matches, so presets and exact actions can be combined
 | Preset | Expands to |
 |---|---|
 | `reader` | `workspace.query`, `workspace.list_files`, `workspace.download_source`, `workspace.read_metadata`, `workspace.read_visual_asset` |
-| `editor` | `reader` plus `workspace.ingest`, `workspace.update_metadata`, `workspace.delete_files`, `job.read` |
+| `editor` | `reader` plus `workspace.ingest`, `workspace.update_metadata`, `workspace.delete_files`, `job.read`, `job.cancel` |
 | `admin` | `*` (every action, including `workspace.create`, `workspace.delete`, `workspace.reset`) |
 
 ```yaml

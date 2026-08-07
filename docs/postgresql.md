@@ -157,12 +157,11 @@ undirected: LightRAG canonicalizes each pair in Python before writing, never
 with SQL `LEAST`/`GREATEST`, so endpoint ordering cannot drift with the
 database collation.
 
-This replaces the earlier Apache AGE backend, which stored each workspace in
-its own `{workspace}_graph` schema of `agtype` label tables. Dropping AGE
-removes a compiled extension from the image, removes `shared_preload_libraries`
-and per-workspace schema DDL from the operational surface, and lowers the graph
-floor to stock PostgreSQL 14. Upstream measures `get_knowledge_graph` at 39ms
-against AGE's 1099ms on the same data.
+Keeping the graph in ordinary tables is why no compiled graph extension,
+`shared_preload_libraries` entry, or per-workspace schema DDL appears anywhere
+in the operational surface, and why the graph alone would run on stock
+PostgreSQL 14. Upstream measures `get_knowledge_graph` at 39ms against the
+former Apache AGE backend's 1099ms on the same data.
 
 The tables are created by `initialize()` under an advisory lock, so any process
 may be first. Workspace isolation is a column, not a schema, so resetting a

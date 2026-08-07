@@ -364,14 +364,23 @@ Background ingestion through REST or MCP returns a job first:
 ```
 
 `GET /ingest/jobs/{job_id}` and MCP `get_ingest_job` return the same job row.
-`status` is one of `queued`, `running`, `succeeded`, or `failed`. When the job
-succeeds, `result` contains the same single-file or staged batch response shown
-above. At most 200 error messages are retained per job; `failed_items` remains
+`status` is one of `queued`, `running`, `succeeded`, `partial`, or `failed`.
+`partial` means some items landed and some did not, so `result` is present but
+incomplete; `succeeded` and `partial` are the two states that carry a `result`,
+containing the same single-file or staged batch response shown above. At most
+200 error messages are retained per job; `failed_items` remains
 the authoritative failed-item count and `errors_truncated` reports whether
 additional messages were omitted. REST, Web, and MCP start the job immediately and do not wait on
 `ingest_timeout`. The SDK convenience method `RAGServiceManager.aingest()` starts
 the same durable job, waits up to `ingest_timeout`, and returns either the
-completed result or the still-running job row without cancelling it. On service
+completed result or the still-running job row without cancelling it.
+
+`POST /ingest/jobs/{job_id}/cancel` and MCP `cancel_ingest_job` stop a running
+job and return the job row. Whatever the job already ingested stays ingested;
+unfinished documents are parked so a later run picks them up. Both require the
+`job.cancel` action.
+
+On service
 startup, recent `queued`/`running` rows are recovered automatically. Remote
 prefix jobs resume from `current_window`, so completed source windows are not
 downloaded again; already processed documents are still deduplicated by
@@ -692,9 +701,9 @@ JSON for clients that consume text-only tool results. Expected validation or
 authorization failures set `isError: true`; protocol-level `MCPError` responses
 remain JSON-RPC errors. The server exposes these tools:
 
-`retrieve`, `answer`, `ingest`, `get_ingest_job`, `list_files`, `delete_files`,
-`list_workspaces`, `create_workspace`, `delete_workspace`, and
-`get_capabilities`.
+`retrieve`, `answer`, `ingest`, `get_ingest_job`, `cancel_ingest_job`,
+`list_files`, `delete_files`, `list_workspaces`, `create_workspace`,
+`delete_workspace`, and `get_capabilities`.
 
 Answer payloads keep `sources` at top level:
 
