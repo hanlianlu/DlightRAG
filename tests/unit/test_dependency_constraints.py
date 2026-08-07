@@ -15,9 +15,12 @@ def _dependencies() -> list[str]:
 
 
 def test_eval_dependency_group_uses_lightrag_evaluation_extra() -> None:
+    """The eval group may add the evaluation extra, but must not drift off the runtime floor."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    (runtime_pin,) = [dep for dep in _dependencies() if dep.startswith("lightrag-hku")]
+    version_spec = runtime_pin.removeprefix("lightrag-hku")
 
-    assert pyproject["dependency-groups"]["eval"] == ["lightrag-hku[evaluation]>=1.5.4"]
+    assert pyproject["dependency-groups"]["eval"] == [f"lightrag-hku[evaluation]{version_spec}"]
 
 
 def test_langfuse_dependency_has_no_upper_bound() -> None:
