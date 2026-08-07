@@ -40,6 +40,22 @@ def test_workspace_popover_closes(page):
 
 
 @pytest.mark.e2e
+def test_scope_toggle_keeps_a_half_typed_workspace_name(page):
+    """Changing the search scope must not discard the name being typed."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
+    page.locator(".ui-popover-input").fill("half typed name")
+
+    page.locator('[data-workspace-all="true"]').click()
+    page.wait_for_timeout(300)
+
+    assert page.locator(".ui-popover-input").input_value() == "half typed name"
+
+
+@pytest.mark.e2e
 def test_workspace_create_input_visible(page):
     """Verify the new-workspace input row exists inside the popover."""
     page.goto("/web/")

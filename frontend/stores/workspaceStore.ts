@@ -37,6 +37,7 @@ class WorkspaceStore extends Store {
     this.#active = this.#validActive(active);
     this.#primary = this.#validPrimary(primary);
     this.#syncCookies();
+    this.emit('workspaceToggled', { workspaces: [...this.#active] });
   }
 
   toggle(workspace: string): void {

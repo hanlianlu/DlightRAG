@@ -49,18 +49,14 @@
             </svg>
         </button>
         <span class="topbar-scope-label">Search in:</span>
-        <div class="workspace-selector"
+        <workspace-scope class="workspace-selector"
              id="workspace-selector"
              role="button"
              tabindex="0"
              aria-label="Choose search workspaces"
              data-all='{{ workspaces|tojson }}'
              data-primary="{{ primary_workspace }}"
-             data-active='{{ active_workspaces|tojson }}'>
-            <span class="workspace-dot" id="workspace-dot"></span>
-            <span class="workspace-label" id="workspace-label"></span>
-            <svg class="workspace-caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4 L5 6.5 L7.5 4"/></svg>
-        </div>
+             data-active='{{ active_workspaces|tojson }}'></workspace-scope>
         <div class="topbar-spacer"></div>
         <button class="topbar-btn" id="files-btn" type="button">Files</button>
         <div id="theme-control">

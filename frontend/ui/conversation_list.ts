@@ -29,14 +29,12 @@ const SKELETON_COUNT = 3;
 export class ConversationList extends LightElement {
     static properties = {
         listState: {attribute: false},
-        errorMessage: {attribute: false},
         busy: {attribute: false},
         openMenuId: {state: true},
         renameId: {state: true},
     };
 
     declare listState: ConversationListState;
-    declare errorMessage: string;
     declare busy: boolean;
     declare openMenuId: string | null;
     declare renameId: string | null;
@@ -46,7 +44,6 @@ export class ConversationList extends LightElement {
     constructor() {
         super();
         this.listState = 'loading';
-        this.errorMessage = '';
         this.busy = false;
         this.openMenuId = null;
         this.renameId = null;
@@ -260,8 +257,7 @@ export class ConversationList extends LightElement {
         }
         return html`
             ${this.listState === 'error'
-                ? this.#renderStatus(
-                    this.errorMessage || 'Conversations are unavailable.', 'Retry', 'reload')
+                ? this.#renderStatus('Could not load conversations.', 'Retry', 'reload')
                 : nothing}
             ${this.listState === 'empty-error'
                 ? this.#renderStatus('No conversation is open.', 'Retry New chat', 'new')

@@ -43,7 +43,6 @@ let historyController: AbortController | null = null;
 let bootstrapController: AbortController | null = null;
 let pendingLifecycleAction = false;
 let listState: ConversationListState = 'loading';
-let listErrorMessage = '';
 let drawerOpen = false;
 let desktopCollapsed = false;
 let drawerReturnFocus: HTMLElement | null = null;
@@ -118,6 +117,11 @@ function resolveNewConversationButton(): HTMLButtonElement | null {
     return document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
 }
 
+/** Where focus belongs once a delete has settled and its row is gone. */
+function resolveSurvivingConversation(): HTMLElement | null {
+    return resolveActiveConversationSelect() || resolveNewConversationButton();
+}
+
 function resolveDeleteAllButton(): HTMLButtonElement | null {
     return document.getElementById('delete-all-conversations-btn') as HTMLButtonElement | null;
 }
@@ -176,7 +180,6 @@ function syncList(): void {
     if (!list) return;
     list.busy = busy;
     list.listState = listState;
-    list.errorMessage = listErrorMessage;
 }
 
 async function commitRename(conversationId: string, title: string): Promise<void> {
@@ -429,9 +432,7 @@ async function requestDelete(conversationId: string): Promise<void> {
 
     setLifecyclePending(true);
     let resolveFinalFocus: FocusResolver = function() {
-        return resolveConversationActions(conversationId)
-            || resolveActiveConversationSelect()
-            || resolveNewConversationButton();
+        return resolveConversationActions(conversationId) || resolveSurvivingConversation();
     };
     try {
         await deleteConversation(conversationId);
@@ -441,17 +442,13 @@ async function requestDelete(conversationId: string): Promise<void> {
             clearConversationSources();
             await selectFallbackConversation(false);
         }
-        resolveFinalFocus = function() {
-            return resolveActiveConversationSelect() || resolveNewConversationButton();
-        };
+        resolveFinalFocus = resolveSurvivingConversation;
     } catch (error) {
         if (error instanceof ConversationApiError && error.status === 404) {
             if (wasActive) clearDraft();
             conversationStore.remove(conversationId);
             if (wasActive) await selectFallbackConversation(false);
-            resolveFinalFocus = function() {
-                return resolveActiveConversationSelect() || resolveNewConversationButton();
-            };
+            resolveFinalFocus = resolveSurvivingConversation;
         } else {
             showToast('Could not delete the conversation.', 5000);
         }
@@ -491,9 +488,7 @@ async function requestDeleteAll(): Promise<void> {
         }
         listState = 'ready';
         await createFallbackConversation(false);
-        resolveFinalFocus = function() {
-            return resolveActiveConversationSelect() || resolveNewConversationButton();
-        };
+        resolveFinalFocus = resolveSurvivingConversation;
     } catch {
         showToast('Could not delete conversations.', 5000);
     } finally {
@@ -524,7 +519,6 @@ export async function initializeConversations(): Promise<void> {
     } catch (error) {
         if (isAbortError(error) || !conversationStore.isCurrentRequest(requestGeneration)) return;
         listState = conversationStore.conversations.length > 0 ? 'error' : 'empty-error';
-        listErrorMessage = 'Could not load conversations.';
         syncList();
         if (conversationStore.conversations.length === 0) {
             renderConversationHistoryError(function() { void initializeConversations(); });

@@ -11,7 +11,7 @@ import {closestElement} from '../lib/dom.ts';
 import {openPanel} from './panel.ts';
 import {type RelativeFile, withRelativePath} from './folder-upload.ts';
 import {showToast} from './toast.ts';
-import {createWorkspace} from './workspaces.ts';
+import './workspace_create.ts';
 
 type IngestWorkspaceRecord = {
     workspace: string;
@@ -303,32 +303,7 @@ function toggleIngestPopover(container: HTMLElement): void {
         popover.appendChild(item);
     });
 
-    const createRow = document.createElement('div');
-    createRow.className = 'ui-popover-create';
-
-    const input = document.createElement('input');
-    input.className = 'ui-popover-input';
-    input.type = 'text';
-    input.placeholder = 'New workspace...';
-    input.addEventListener('click', (e) => e.stopPropagation());
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            createWorkspace(input);
-        }
-    });
-    createRow.appendChild(input);
-
-    const btn = document.createElement('button');
-    btn.className = 'ui-popover-create-btn';
-    btn.type = 'button';
-    btn.textContent = '+';
-    btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        createWorkspace(input);
-    });
-    createRow.appendChild(btn);
-    popover.appendChild(createRow);
+    popover.appendChild(document.createElement('workspace-create'));
 
     container.appendChild(popover);
     ingestPopoverEl = popover;
