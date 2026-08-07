@@ -590,7 +590,7 @@ def test_storage_backends_are_postgres_only() -> None:
     cfg = _default_test_config()
 
     assert cfg.vector_storage == "PGVectorStorage"
-    assert cfg.graph_storage == "PGGraphStorage"
+    assert cfg.graph_storage == "PGTableGraphStorage"
     assert cfg.kv_storage == "PGKVStorage"
     assert cfg.doc_status_storage == "PGDocStatusStorage"
     assert cfg.embedding.asymmetric == "auto"

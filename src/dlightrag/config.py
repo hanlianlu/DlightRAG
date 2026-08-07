@@ -778,8 +778,9 @@ class DlightragConfig(BaseSettings):
     vector_storage: Literal["PGVectorStorage"] = Field(
         default="PGVectorStorage", description="LightRAG vector storage backend."
     )
-    graph_storage: Literal["PGGraphStorage"] = Field(
-        default="PGGraphStorage", description="LightRAG graph storage backend."
+    graph_storage: Literal["PGTableGraphStorage"] = Field(
+        default="PGTableGraphStorage",
+        description="LightRAG graph storage backend.",
     )
     kv_storage: Literal["PGKVStorage"] = Field(
         default="PGKVStorage", description="LightRAG KV storage backend."

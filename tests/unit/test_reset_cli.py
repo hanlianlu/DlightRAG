@@ -24,7 +24,6 @@ def test_print_workspace_result_uses_current_reset_contract(
         {
             "lightrag_storages_dropped": 4,
             "domain_stores_dropped": ["metadata_index"],
-            "graphs_dropped": ["demo_chunk_entity_relation"],
             "pending_tasks_cancelled": 2,
             "ingest_jobs_cancelled": 1,
             "orphan_tables_cleaned": 3,
@@ -36,7 +35,6 @@ def test_print_workspace_result_uses_current_reset_contract(
     output = capsys.readouterr().out
     assert "LightRAG storages dropped: 4" in output
     assert "DlightRAG stores cleared: metadata_index" in output
-    assert "AGE graphs dropped: demo_chunk_entity_relation" in output
     assert "Pending tasks cancelled: 2" in output
     assert "Ingest jobs cancelled: 1" in output
     assert "Orphan tables cleaned: 3" in output

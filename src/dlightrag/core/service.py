@@ -102,11 +102,10 @@ def _source_document_from_manifest(document: IngestDocument, *, key: str) -> Sou
 
 # PostgreSQL advisory lock serializing first-time storage init across
 # concurrent workers (multi-Gunicorn processes, Docker scale-out, launchd
-# respawn). Wraps the multi-step DDL sequence — CREATE EXTENSION pgvector
-# / age, CREATE TABLE, CREATE INDEX, AGE create_graph(), seed rows — as
-# a critical section. Per-statement IF NOT EXISTS isn't enough: the PG
-# catalog has known races on concurrent CREATE TABLE, AGE create_graph()
-# is non-idempotent, and the sequence itself can't run in a single
+# respawn). Wraps the multi-step DDL sequence — CREATE EXTENSION pgvector,
+# CREATE TABLE, CREATE INDEX, seed rows — as a critical section.
+# Per-statement IF NOT EXISTS isn't enough: the PG catalog has known races
+# on concurrent CREATE TABLE, and the sequence itself can't run in a single
 # transaction (CREATE EXTENSION / CREATE INDEX both bar that). First
 # acquirer runs _do_initialize(); other workers poll with backoff up to
 # 180s, then proceed against ready storage. Same pattern Flyway / Django
@@ -718,13 +717,6 @@ class RAGService:
             thumb_cache=ThumbnailCache(max_size=config.visual_assets.thumb_cache_size),
         )
 
-        # Post-init verification: ensure AGE graph labels actually exist.
-        # Catches stale/corrupted graphs left by previous failed inits
-        # (e.g., schema created but vlabels missing due to uncaught errors).
-        # Skipped on readers: the repair path drops/recreates the graph (writes).
-        if not config.is_reader:
-            await self._verify_graph_labels(lightrag)
-
         self._backend = self._build_retrieval_backend(
             config,
             lightrag=lightrag,
@@ -852,76 +844,6 @@ class RAGService:
             )
 
     # -- Graph verification ----------------------------------------------------
-
-    @staticmethod
-    async def _verify_graph_labels(lightrag: Any) -> None:
-        """Verify AGE graph labels exist after initialize_storages().
-
-        If the graph schema exists but required labels (``base``, ``DIRECTED``)
-        are missing — typically from a previous failed init before the
-        DuplicateSchemaError patch — drop the corrupted graph and re-run
-        initialization to rebuild it cleanly.
-        """
-        graph_storage = getattr(lightrag, "chunk_entity_relation_graph", None)
-        if graph_storage is None:
-            return
-
-        graph_name = getattr(graph_storage, "graph_name", None)
-        db = getattr(graph_storage, "db", None)
-        if not graph_name or db is None:
-            return
-
-        pool = getattr(db, "pool", None)
-        if pool is None:
-            return
-
-        try:
-            async with pool.acquire() as conn:
-                # Check if the graph schema exists at all
-                schema_exists = await conn.fetchval(
-                    "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)",
-                    graph_name,
-                )
-                if not schema_exists:
-                    return  # No schema → init will create everything fresh
-
-                # Check if the 'base' label table exists within the schema
-                base_exists = await conn.fetchval(
-                    "SELECT EXISTS("
-                    "  SELECT 1 FROM pg_tables"
-                    "  WHERE schemaname = $1 AND tablename = 'base'"
-                    ")",
-                    graph_name,
-                )
-                if base_exists:
-                    return  # Healthy graph
-
-                # Corrupted: schema exists but 'base' label missing.
-                # Drop the graph and let initialize() rebuild it.
-                logger.warning(
-                    "Corrupted AGE graph '%s': schema exists but 'base' label missing. "
-                    "Dropping and rebuilding.",
-                    graph_name,
-                )
-                import re
-
-                if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", graph_name):
-                    logger.error("Invalid AGE graph name: %r, skipping drop", graph_name)
-                    return
-                await conn.execute('SET search_path = ag_catalog, "$user", public')
-                await conn.execute("SELECT drop_graph($1, true)", graph_name)
-
-        except Exception:
-            logger.warning(
-                "Graph verification failed for '%s', proceeding anyway",
-                graph_name,
-                exc_info=True,
-            )
-            return
-
-        # Re-run graph initialization after dropping corrupted graph
-        logger.info("Re-initializing graph storage for '%s'", graph_name)
-        await graph_storage.initialize()
 
     async def aclose(self) -> None:
         """Clean up storages and worker pools (best-effort)."""

@@ -92,7 +92,7 @@ services:
       POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
       POSTGRES_DATABASE: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
       # Storage backends — must match DlightRAG exactly
-      LIGHTRAG_GRAPH_STORAGE: PGGraphStorage
+      LIGHTRAG_GRAPH_STORAGE: PGTableGraphStorage
       LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
       LIGHTRAG_KV_STORAGE: PGKVStorage
       LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
@@ -137,9 +137,9 @@ services:
       - pg18_data:/var/lib/postgresql
     command:
       - "postgres"
-      # AGE, pg_textsearch, and pg_jieba require preloading
+      # pg_textsearch and pg_jieba require preloading
       - "-c"
-      - "shared_preload_libraries=age,pg_textsearch,pg_jieba"
+      - "shared_preload_libraries=pg_textsearch,pg_jieba"
       # Memory
       - "-c"
       - "shared_buffers=${DLIGHTRAG_POSTGRES_SHARED_BUFFERS:-8GB}"

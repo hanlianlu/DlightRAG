@@ -157,14 +157,6 @@ class LightRAGContractGuard:
             if not hasattr(self._lightrag, attr):
                 errors.append(f"LightRAG missing '{attr}' storage attribute for reader attach")
 
-        graph_storage = getattr(self._lightrag, "chunk_entity_relation_graph", None)
-        if graph_storage is not None and not callable(
-            getattr(graph_storage, "_get_workspace_graph_name", None)
-        ):
-            errors.append(
-                "chunk_entity_relation_graph missing callable '_get_workspace_graph_name'"
-            )
-
         required_client_attrs = (
             "get_config",
             "_build_vector_signature",

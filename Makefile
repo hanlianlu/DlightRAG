@@ -151,7 +151,7 @@ ci-full: ci
 test-e2e: frontend-build
 	uv run pytest tests/e2e/ -v -m e2e --tb=short
 
-# Full + E2E: needs PostgreSQL 18 with AGE; model calls are faked in tests
+# Full + E2E: needs PostgreSQL 18; model calls are faked in tests
 ci-e2e: ci-full test-e2e
 	DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -v --tb=short -m e2e_pg18
 	@echo "CI (e2e) passed."

@@ -74,7 +74,7 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
     assert exit_code == 0
     assert calls["workspace"] == "research"
     assert calls["storage_names"] == {
-        "graph": "PGGraphStorage",
+        "graph": "PGTableGraphStorage",
         "vector": "PGVectorStorage",
         "kv": "PGKVStorage",
         "doc_status": "PGDocStatusStorage",
@@ -327,7 +327,7 @@ def _fake_config() -> SimpleNamespace:
         workspace="research",
         working_dir="/tmp/dlightrag",
         vector_storage="PGVectorStorage",
-        graph_storage="PGGraphStorage",
+        graph_storage="PGTableGraphStorage",
         kv_storage="PGKVStorage",
         doc_status_storage="PGDocStatusStorage",
         embedding_batch_num=7,

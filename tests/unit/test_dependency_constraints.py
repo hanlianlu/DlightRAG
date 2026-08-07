@@ -42,7 +42,6 @@ def test_postgres_init_uses_required_pg18_extensions() -> None:
     init_sql = Path("postgres/init.sql").read_text(encoding="utf-8")
 
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in init_sql
-    assert "CREATE EXTENSION IF NOT EXISTS age;" in init_sql
     assert "CREATE EXTENSION IF NOT EXISTS pg_textsearch;" in init_sql
     assert "CREATE EXTENSION IF NOT EXISTS pg_jieba;" in init_sql
 
@@ -52,7 +51,6 @@ def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
 
     assert "pgvector/pgvector:pg18" in dockerfile
     assert "postgresql-server-dev-18" in dockerfile
-    assert "--branch PG18" in dockerfile
     # A pin is required (no floating main/latest), but the exact patch version is
     # intentionally NOT asserted so routine version bumps don't break the test.
     assert re.search(r"ARG PG_TEXTSEARCH_REF=v\d+\.\d+", dockerfile)
@@ -71,7 +69,7 @@ def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
 def test_compose_preloads_postgres_extensions() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
-    assert "shared_preload_libraries=age,pg_textsearch,pg_jieba" in compose
+    assert "shared_preload_libraries=pg_textsearch,pg_jieba" in compose
 
 
 def test_compose_postgres_performance_knobs_are_env_overridable() -> None:

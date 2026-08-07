@@ -2,7 +2,7 @@
 """Read-only LightRAG PostgreSQL attach for replica reader processes.
 
 LightRAG's normal ``PostgreSQLDB.initdb()`` bootstraps the vector extension,
-tables, indexes, and AGE graph labels, and ``check_tables()`` runs schema
+tables, and indexes, and ``check_tables()`` runs schema
 migrations. A reader process connected to a physical hot standby must never run
 that path -- even after a transient pool reset/reconnect. ``ReadOnlyPostgreSQLDB``
 overrides only pool bootstrap: it creates the asyncpg pool with the pgvector
@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 import asyncpg
+from lightrag.kg.pgtable_impl import PGTableGraphStorage
 from lightrag.kg.postgres_impl import ClientManager, PostgreSQLDB, namespace_to_table_name
 from lightrag.kg.shared_storage import (
     get_default_workspace,
@@ -47,6 +48,11 @@ READ_ONLY_STORAGE_ATTRS = (
     "llm_response_cache",
     "doc_status",
 )
+
+# PGTableGraphStorage keeps the whole graph in two shared tables scoped by
+# (workspace, namespace). LightRAG's namespace_to_table_name() has no entry
+# for the graph namespace, so the reader names them here.
+GRAPH_TABLES = ("lightrag_graph_nodes", "lightrag_graph_edges")
 
 
 def parse_postgres_server_settings(raw: Any) -> dict[str, str]:
@@ -206,7 +212,7 @@ async def _release_read_only_db(db: Any, *, reference_count: int) -> None:
         logger.warning("Failed to roll back LightRAG read-only DB references", exc_info=True)
 
 
-def _bind_storage_db_workspace_and_graph(
+def _bind_storage_db_workspace(
     *,
     storages: list[Any],
     db: Any,
@@ -218,28 +224,23 @@ def _bind_storage_db_workspace_and_graph(
             storage.workspace = db.workspace
         elif not getattr(storage, "workspace", None):
             storage.workspace = fallback_workspace
-        graph_name_builder = getattr(storage, "_get_workspace_graph_name", None)
-        if callable(graph_name_builder):
-            storage.graph_name = graph_name_builder()
 
 
-def _required_tables_and_graphs(storages: list[Any]) -> tuple[set[str], set[str]]:
+def _required_tables(storages: list[Any]) -> set[str]:
     tables: set[str] = set()
-    graph_names: set[str] = set()
     for storage in storages:
+        if isinstance(storage, PGTableGraphStorage):
+            tables.update(GRAPH_TABLES)
+            continue
         table_name = getattr(storage, "table_name", None)
         if isinstance(table_name, str) and table_name:
             tables.add(table_name)
-        else:
-            namespace = getattr(storage, "namespace", None)
-            if namespace:
-                mapped = namespace_to_table_name(namespace)
-                if mapped:
-                    tables.add(mapped)
-        graph_name = getattr(storage, "graph_name", None)
-        if isinstance(graph_name, str) and graph_name:
-            graph_names.add(graph_name)
-    return tables, graph_names
+            continue
+        namespace = getattr(storage, "namespace", None)
+        mapped = namespace_to_table_name(namespace) if namespace else None
+        if mapped:
+            tables.add(mapped)
+    return tables
 
 
 async def _verify_reader_session(conn: asyncpg.Connection) -> None:
@@ -266,24 +267,6 @@ async def _verify_required_tables(
             ) from exc
 
 
-async def _verify_required_graph_labels(
-    conn: asyncpg.Connection,
-    *,
-    graph_names: set[str],
-) -> None:
-    for graph_name in sorted(graph_names):
-        labels_present = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = $1 "
-            "AND tablename = 'base') AND EXISTS(SELECT 1 FROM pg_tables "
-            "WHERE schemaname = $1 AND tablename = 'DIRECTED')",
-            graph_name,
-        )
-        if not labels_present:
-            raise RuntimeError(
-                f"LightRAG AGE graph {graph_name} is missing labels; initialize it on the writer first"
-            )
-
-
 async def verify_lightrag_read_only_schema(
     *,
     db: Any,
@@ -293,11 +276,9 @@ async def verify_lightrag_read_only_schema(
     if db.pool is None:
         raise RuntimeError("LightRAG read-only PostgreSQL pool was not created")
 
-    tables, graph_names = _required_tables_and_graphs(storages)
     async with db.pool.acquire() as conn:
         await _verify_reader_session(conn)
-        await _verify_required_tables(conn, tables=tables)
-        await _verify_required_graph_labels(conn, graph_names=graph_names)
+        await _verify_required_tables(conn, tables=_required_tables(storages))
 
 
 def _bind_default_workspace(lightrag: Any) -> None:
@@ -322,7 +303,7 @@ async def attach_lightrag_storages_read_only(
         active_storage_count=len(active_storages),
     )
     try:
-        _bind_storage_db_workspace_and_graph(
+        _bind_storage_db_workspace(
             storages=active_storages,
             db=db,
             fallback_workspace=config.workspace,

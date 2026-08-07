@@ -71,24 +71,6 @@ def test_verify_read_only_attach_contract_reports_missing_client_manager_attach_
             guard.verify_read_only_attach_contract()
 
 
-def test_verify_read_only_attach_contract_reports_missing_workspace_graph_helper() -> None:
-    import lightrag.kg.postgres_impl as postgres_impl
-
-    guard = LightRAGContractGuard(_fake_lightrag(graph_storage=SimpleNamespace(graph_name="graph")))
-
-    fake_manager = SimpleNamespace(
-        get_config=lambda *, vector_storage=None: {"database": "db"},
-        _build_vector_signature=lambda config, vector_storage: {"database": "db"},
-        _assert_compatible_vector_signature=lambda signature: None,
-        _lock=object(),
-        _instances={"db": None, "ref_count": 0, "vector_signature": None},
-    )
-
-    with patch.object(postgres_impl, "ClientManager", fake_manager):
-        with pytest.raises(RuntimeError, match="_get_workspace_graph_name"):
-            guard.verify_read_only_attach_contract()
-
-
 def test_verify_read_only_attach_contract_rejects_positional_only_keyword_arg() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 

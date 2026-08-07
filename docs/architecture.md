@@ -152,7 +152,7 @@ Core storage is PostgreSQL 18:
 | Component | Backend |
 |---|---|
 | Vector store | `PGVectorStorage` with pgvector |
-| Graph store | `PGGraphStorage` with Apache AGE |
+| Graph store | `PGTableGraphStorage` (plain tables) |
 | KV store | `PGKVStorage` |
 | Document status | `PGDocStatusStorage` |
 | BM25 | pg_textsearch |

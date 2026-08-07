@@ -20,8 +20,8 @@ from dlightrag.config import (
 )
 
 RUN_E2E_ENV = "DLIGHTRAG_RUN_E2E_PG18"
-REQUIRED_EXTENSIONS = ("vector", "age", "pg_textsearch", "pg_jieba")
-REQUIRED_PRELOAD_LIBRARIES = ("age", "pg_textsearch", "pg_jieba")
+REQUIRED_EXTENSIONS = ("vector", "pg_textsearch", "pg_jieba")
+REQUIRED_PRELOAD_LIBRARIES = ("pg_textsearch", "pg_jieba")
 
 
 def e2e_enabled(env: Mapping[str, str] | None = None) -> bool:

@@ -1,8 +1,8 @@
 # PostgreSQL
 
 This page is for operators deploying or tuning DlightRAG's database layer. It
-owns PostgreSQL version requirements, extensions, pool sizing, HNSW tuning, AGE
-patches, schema migrations, and deployment notes. Runtime ownership lives in
+owns PostgreSQL version requirements, extensions, pool sizing, HNSW tuning,
+schema migrations, and deployment notes. Runtime ownership lives in
 [architecture.md](architecture.md); config fields live in
 [configuration.md](configuration.md); rebuild procedures live in
 [operations.md](operations.md).
@@ -10,7 +10,6 @@ patches, schema migrations, and deployment notes. Runtime ownership lives in
 DlightRAG's supported core storage ecosystem is PostgreSQL 18 with:
 
 - `pgvector` for vector search
-- Apache AGE for LightRAG graph storage
 - `pg_textsearch` for BM25
 - `pg_jieba` for the Chinese `public.jiebacfg` BM25 profile
 
@@ -25,7 +24,7 @@ embedding models or dimensions after data has been indexed; changing
 `embedding.dim` requires clearing the workspace and rebuilding vector indexes.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
-local `postgres/` image definition and preloads `age,pg_textsearch,pg_jieba`.
+local `postgres/` image definition and preloads `pg_textsearch,pg_jieba`.
 
 Default vector storage is `HALFVEC(dim)` with HNSW. Plain `HNSW` over
 `VECTOR(dim)` remains available as an explicit fallback for deployments that
@@ -114,7 +113,7 @@ health checks, and managed-service maintenance.
 DlightRAG-owned PostgreSQL tables use `dlightrag_schema_migrations` as a small
 ledger for domain schema changes. This applies to DlightRAG tables such as
 `dlightrag_doc_metadata` and `dlightrag_workspace_meta`; LightRAG-owned tables
-and AGE graph schemas remain managed by LightRAG.
+remain managed by LightRAG.
 
 DlightRAG ensures these idempotent DDL migrations on startup and records their
 versions in the ledger.
@@ -123,42 +122,32 @@ Web Composer attachment chunks store only an optional 1-based `page_number` for
 display. Spatial bbox data and the ambiguous `page_idx` field are not part of
 the DlightRAG schema.
 
-## LightRAG AGE Contract Patches
+## Graph Storage
 
-DlightRAG keeps two narrowly scoped patches around LightRAG PostgreSQL AGE
-graph initialization. They remain required with LightRAG 1.5.5 because upstream still lacks the guards
-below.
-They self-disable through source inspection if upstream adds equivalent
-handling, and should be deleted once `required_patch_names(PostgreSQLDB)`
-returns an empty tuple.
+LightRAG's knowledge graph uses `PGTableGraphStorage`: two ordinary PostgreSQL
+tables, no extension.
 
-### Patch 1: `configure_age()` and Existing Graphs
+| Table | Key |
+| --- | --- |
+| `lightrag_graph_nodes` | `(workspace, namespace, id)` |
+| `lightrag_graph_edges` | `(workspace, namespace, src_id, tgt_id)` |
 
-**Location:** `lightrag/kg/postgres_impl.py`, `PostgreSQLDB.configure_age()`
+Node and edge attributes live in a `properties JSONB` column, and traversal is
+plain recursive SQL over an index on `(workspace, namespace, tgt_id)`. Edges are
+undirected: LightRAG canonicalizes each pair in Python before writing, never
+with SQL `LEAST`/`GREATEST`, so endpoint ordering cannot drift with the
+database collation.
 
-Apache AGE can raise `asyncpg.exceptions.DuplicateSchemaError` when
-`create_graph()` races with an existing graph. The patch pre-checks
-`ag_catalog.ag_graph`, catches `DuplicateSchemaError` for races, and avoids
-normal startup error noise.
+This replaces the earlier Apache AGE backend, which stored each workspace in
+its own `{workspace}_graph` schema of `agtype` label tables. Dropping AGE
+removes a compiled extension from the image, removes `shared_preload_libraries`
+and per-workspace schema DDL from the operational surface, and lowers the graph
+floor to stock PostgreSQL 14. Upstream measures `get_knowledge_graph` at 39ms
+against AGE's 1099ms on the same data.
 
-### Patch 2: `execute()` and Idempotent DDL
-
-**Location:** `lightrag/kg/postgres_impl.py`, `PostgreSQLDB.execute()`
-
-The patch wraps idempotent DDL calls so `DuplicateSchemaError` is handled when
-`ignore_if_exists=True` or `upsert=True`.
-
-### Auto-Detection
-
-Both patches inspect the upstream methods and skip themselves when the required
-checks are present. The public audit helper is:
-
-```python
-from dlightrag.core._lightrag_patches import required_patch_names
-from lightrag.kg.postgres_impl import PostgreSQLDB
-
-print(required_patch_names(PostgreSQLDB))
-```
+The tables are created by `initialize()` under an advisory lock, so any process
+may be first. Workspace isolation is a column, not a schema, so resetting a
+workspace is a `DELETE`, and orphaned workspaces leave no schemas behind.
 
 ## PG Pool Architecture
 
@@ -193,9 +182,9 @@ credentials, no app-level routing, and no read-after-write replay policy.
 
 A reader:
 
-- attaches to the already-provisioned schema without any DDL, migration, or AGE
-  graph creation, and verifies the required tables/labels exist (fail-fast if
-  the writer has not created them yet);
+- attaches to the already-provisioned schema without any DDL or migration, and
+  verifies the required tables exist (fail-fast if the writer has not created
+  them yet);
 - forces `default_transaction_read_only=on` on every connection (both pools and
   direct probes) as defense-in-depth, so a reader accidentally pointed at a
   writable endpoint still cannot write;
@@ -206,9 +195,9 @@ A reader:
 
 Infrastructure requirements:
 
-- Use **physical streaming replication** (it copies AGE, pgvector, and DDL
+- Use **physical streaming replication** (it copies pgvector and DDL
   byte-for-byte; logical replication does not propagate DDL and is unfit for the
-  AGE/extension stack).
+  extension stack).
 - Keep replication **asynchronous**; never make ingest wait on a replica.
 - Bring up a writer to create/migrate schema first, let replication ship it,
   then start readers. On schema-changing releases, migrate on the writer first,
@@ -228,20 +217,5 @@ Infrastructure requirements:
 
 ## Version Support Log
 
-`lightrag-hku==1.5.5` needs `configure_age` and `execute`. Remove the
-patch module when upstream covers both — check by running:
-
-```bash
-uv run python -c "
-from lightrag.kg.postgres_impl import PostgreSQLDB
-import inspect
-configure_age = inspect.getsource(PostgreSQLDB.configure_age)
-execute = inspect.getsource(PostgreSQLDB.execute)
-print('configure_age pre-check:', 'ag_catalog.ag_graph' in configure_age)
-print('configure_age DuplicateSchemaError:', 'DuplicateSchemaError' in configure_age)
-print('execute DuplicateSchemaError:', 'DuplicateSchemaError' in execute)
-"
-```
-
-If all three checks print `True`, the patches can be removed after the unit
-tests covering graph initialization are updated.
+`lightrag-hku>=1.5.6` is required: `PGTableGraphStorage` first ships there.
+DlightRAG carries no patches against LightRAG's PostgreSQL layer.

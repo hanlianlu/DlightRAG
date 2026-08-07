@@ -446,7 +446,7 @@ should normally stay out of `config.yaml`:
 
 ```yaml
 vector_storage: PGVectorStorage
-graph_storage: PGGraphStorage
+graph_storage: PGTableGraphStorage
 kv_storage: PGKVStorage
 doc_status_storage: PGDocStatusStorage
 ```

@@ -6,8 +6,8 @@ from typing import Any
 _BOOTSTRAPPABLE_EXTENSIONS = frozenset({"pg_textsearch", "pg_jieba"})
 
 # DlightRAG's PostgreSQL major is a hard runtime requirement, not a tunable:
-# Apache AGE, pgvector halfvec, pg_textsearch, and pg_jieba are all pinned to
-# the PG18 ecosystem. It is a named constant (not config) so it cannot be
+# pgvector halfvec, pg_textsearch, and pg_jieba are all pinned to the PG18
+# ecosystem. It is a named constant (not config) so it cannot be
 # lowered into a cryptic runtime failure.
 REQUIRED_POSTGRES_MAJOR = 18
 

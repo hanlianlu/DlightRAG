@@ -35,9 +35,6 @@ def _print_workspace_result(ws: str, result: dict[str, Any]) -> None:
     cleared = result.get("domain_stores_dropped", [])
     if cleared:
         print(f"    DlightRAG stores cleared: {', '.join(cleared)}")
-    graphs = result.get("graphs_dropped", [])
-    if graphs:
-        print(f"    AGE graphs dropped: {', '.join(graphs)}")
     pending_tasks = result.get("pending_tasks_cancelled", 0)
     if pending_tasks:
         print(f"    Pending tasks cancelled: {pending_tasks}")

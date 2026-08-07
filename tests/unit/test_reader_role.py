@@ -7,6 +7,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from lightrag.kg.pgtable_impl import PGTableGraphStorage
 
 from dlightrag.config import DlightragConfig, EmbeddingConfig
 
@@ -178,8 +179,6 @@ class TestReadOnlyAdapter:
                     return "on"
                 if "SELECT 1 FROM " in sql:
                     return 1
-                if "FROM pg_tables" in sql:
-                    return 1
                 raise AssertionError(f"unexpected SQL: {sql}")
 
         class FakeAcquire:
@@ -205,15 +204,6 @@ class TestReadOnlyAdapter:
                 self.workspace = "db-workspace"
                 self.pool = FakePool(conn)
                 self.initdb = AsyncMock()
-
-        class GraphStorage:
-            def __init__(self) -> None:
-                self.db = None
-                self.workspace = None
-                self.graph_name = "stale"
-
-            def _get_workspace_graph_name(self) -> str:
-                return f"graph::{self.workspace}"
 
         conn = FakeConn()
         set_workspace_calls: list[str | None] = []
@@ -259,7 +249,9 @@ class TestReadOnlyAdapter:
             raising=False,
         )
 
-        graph = GraphStorage()
+        graph = PGTableGraphStorage.__new__(PGTableGraphStorage)
+        graph.db = None
+        graph.workspace = ""
         full_docs = SimpleNamespace(db=None, workspace=None, namespace="full_docs", table_name=None)
         chunks_vdb = SimpleNamespace(
             db=None,
@@ -304,14 +296,15 @@ class TestReadOnlyAdapter:
         assert full_docs.workspace == "db-workspace"
         assert chunks_vdb.workspace == "db-workspace"
         assert graph.workspace == "db-workspace"
-        assert graph.graph_name == "graph::db-workspace"
         init_pipeline_status.assert_awaited_once_with(workspace="reader-workspace")
         assert set_workspace_calls == ["reader-workspace"]
         assert lightrag._storages_status == "initialized"
         assert lightrag._owning_loop is asyncio.get_running_loop()
         assert any(sql == "SHOW transaction_read_only" for sql, _ in conn.fetchval_calls)
-        assert any("SELECT 1 FROM " in sql for sql, _ in conn.fetchval_calls)
-        assert any("FROM pg_tables" in sql for sql, _ in conn.fetchval_calls)
+        probed = " ".join(sql for sql, _ in conn.fetchval_calls if "SELECT 1 FROM " in sql)
+        assert "LIGHTRAG_DOC_FULL" in probed
+        assert "lightrag_graph_nodes" in probed
+        assert "lightrag_graph_edges" in probed
 
     async def test_attach_entry_point_reuses_db_and_preserves_signature_checks(
         self, monkeypatch: pytest.MonkeyPatch
@@ -323,8 +316,6 @@ class TestReadOnlyAdapter:
                 if sql == "SHOW transaction_read_only":
                     return "on"
                 if "SELECT 1 FROM " in sql:
-                    return 1
-                if "FROM pg_tables" in sql:
                     return 1
                 raise AssertionError(f"unexpected SQL: {sql}")
 

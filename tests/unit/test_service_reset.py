@@ -68,11 +68,6 @@ def _pg_cleanup_patches():
             "dlightrag.core.reset._clean_workspace_meta",
             new_callable=AsyncMock,
         ),
-        patch(
-            "dlightrag.core.reset._drop_age_graphs",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
     ):
         yield
 
@@ -178,43 +173,13 @@ class TestAresetPhase3:
                 "dlightrag.core.reset._clean_workspace_meta",
                 new_callable=AsyncMock,
             ),
-            patch(
-                "dlightrag.core.reset._drop_age_graphs",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
         ):
             result = await service.areset()
         assert result["orphan_tables_cleaned"] == 3
 
 
 class TestAresetPhase4:
-    """Phase 4: AGE graph schema drop."""
-
-    async def test_runs_on_pg_backend(self) -> None:
-        service = _make_service()
-        with (
-            patch(
-                "dlightrag.core.reset._clean_orphan_tables",
-                new_callable=AsyncMock,
-                return_value=0,
-            ),
-            patch(
-                "dlightrag.core.reset._clean_workspace_meta",
-                new_callable=AsyncMock,
-            ),
-            patch(
-                "dlightrag.core.reset._drop_age_graphs",
-                new_callable=AsyncMock,
-                return_value=["test_ws_chunk_entity_relation"],
-            ),
-        ):
-            result = await service.areset()
-        assert result["graphs_dropped"] == ["test_ws_chunk_entity_relation"]
-
-
-class TestAresetPhase5:
-    """Phase 5: Local files."""
+    """Phase 4: Local files."""
 
     async def test_keep_files_skips_cleanup(self) -> None:
         service = _make_service()

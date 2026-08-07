@@ -51,7 +51,6 @@ def _make_mock_service(workspace: str = "default") -> MagicMock:
             "lightrag_storages_dropped": 12,
             "domain_stores_dropped": ["metadata_index"],
             "orphan_tables_cleaned": 0,
-            "graphs_dropped": [],
             "local_files_removed": 5,
             "errors": [],
         }
@@ -201,7 +200,6 @@ class TestManagerAresetNonexistentWorkspace:
         assert "does_not_exist" in result["workspaces"]
         ws_result = result["workspaces"]["does_not_exist"]
         assert ws_result["workspace"] == "does-not-exist"
-        assert "graphs_dropped" in ws_result
         assert "orphan_tables_cleaned" in ws_result
         assert "local_files_removed" in ws_result
         assert ws_result["ingest_jobs_cancelled"] == 0
@@ -221,7 +219,6 @@ class TestManagerAresetErrorHandling:
                 "workspace": "ws1",
                 "lightrag_storages_dropped": 0,
                 "domain_stores_dropped": [],
-                "graphs_dropped": [],
                 "orphan_tables_cleaned": 0,
                 "local_files_removed": 0,
                 "errors": ["Phase 1 (full_docs): boom"],
