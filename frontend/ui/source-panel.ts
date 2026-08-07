@@ -139,12 +139,7 @@ function renderExpandedSourceMath(root: Element): void {
 function toggleDoc(header: Element): void {
     const doc = header.closest<HTMLElement>('.source-doc');
     if (!doc) return;
-    const panelContent = doc.closest('#panel-content') || doc.parentElement;
-    if (!panelContent) return;
     const expand = !doc.classList.contains('expanded');
-    forEachDoc(panelContent, function(d) {
-        if (d !== doc) setDocExpanded(d, false);
-    });
     setDocExpanded(doc, expand);
     if (expand) {
         applyActiveHighlight(doc);
