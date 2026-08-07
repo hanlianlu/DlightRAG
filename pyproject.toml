@@ -94,6 +94,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dlightrag"]
+# Built by Vite and gitignored, so hatchling would otherwise leave the UI out.
+artifacts = ["src/dlightrag/web/static/generated/**"]
 
 [tool.ruff]
 target-version = "py314"

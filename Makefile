@@ -147,7 +147,8 @@ ci-full: ci
 
 # ─────────────────────────────────────────────────────────────────
 # Playwright E2E UI tests (headless)
-test-e2e:
+# The bundle is gitignored, so these would otherwise run against a missing UI.
+test-e2e: frontend-build
 	uv run pytest tests/e2e/ -v -m e2e --tb=short
 
 # Full + E2E: needs PostgreSQL 18 with AGE; model calls are faked in tests

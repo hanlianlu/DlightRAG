@@ -63,6 +63,9 @@ output/
 node_modules/
 frontend/node_modules/
 
+# Vite output; built by `make frontend-build` and by the Dockerfile.
+src/dlightrag/web/static/generated/
+
 # Testing
 .pytest_cache/
 htmlcov/

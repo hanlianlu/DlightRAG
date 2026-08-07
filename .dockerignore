@@ -49,7 +49,7 @@ postgres/
 # Dev/test files
 tests/
 docs/
-frontend/
+frontend/node_modules/
 scripts/
 *.md
 !README.md
