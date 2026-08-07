@@ -58,13 +58,16 @@ llm:
           type: disabled
     query:
       provider: openai
-      model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
-      base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
-      structured_output: json_object
+      model: xiaomi/mimo-v2.5 # huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
+      base_url: https://openrouter.ai/api/v1 # http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
+      structured_output: json_schema
       temperature: 0.4
       model_kwargs:
-        chat_template_kwargs:
-          enable_thinking: false
+        thinking:
+          type: disabled
+      # model_kwargs:
+      #   chat_template_kwargs:
+      #     enable_thinking: false
     vlm:
       provider: openai
       model: xiaomi/mimo-v2.5
