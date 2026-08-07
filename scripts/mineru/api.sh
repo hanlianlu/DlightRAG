@@ -9,6 +9,7 @@ source "$mineru_script_dir/env.sh"
 load_mineru_env_key MINERU_API_HOST
 load_mineru_env_key MINERU_API_PORT
 load_mineru_env_key MINERU_SERVICE_VENV
+load_mineru_env_key MINERU_HYBRID_EFFORT
 
 host="${MINERU_API_HOST:-127.0.0.1}"
 port="${MINERU_API_PORT:-8210}"

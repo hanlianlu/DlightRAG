@@ -31,6 +31,15 @@ public ``llm_aided_title`` entry point does not expose it, so there is no
 configuration path; the builders are read from module globals at call time,
 which makes rebinding them sufficient.
 
+Finally it exposes the hybrid parse effort. ``medium`` force-disables
+image/chart analysis and feeds the VLM pipeline-YOLO layout boxes instead of
+letting it detect blocks itself; ``high`` returns whole figures with bound
+captions and non-empty chart content, at roughly five times the parse time.
+Which trade is right depends on the corpus, but MinerU hardcodes the constant
+with no environment override. Its ``effort`` form field binds it as a default at
+function-definition time, so rebinding it here -- before MinerU's API module is
+imported -- moves the choice into ``.env.mineru``.
+
 It also widens the HTTP keep-alive. Uvicorn closes idle connections after 5s and
 MinerU exposes no flag for it, while LightRAG's MinerU client polls a *pooled*
 connection every ``poll_interval_seconds`` (DlightRAG default: 5). The two
@@ -46,6 +55,8 @@ The cost is one idle socket per client held longer, which a loopback sidecar
 with a single client does not notice.
 """
 
+import os
+import sys
 from functools import wraps
 
 import uvicorn.config
@@ -88,3 +99,16 @@ def _request_strict_json(builder):
 
 for _name in ("_build_title_optimize_prompt", "_build_relative_title_optimize_prompt"):
     setattr(_llm_aided, _name, _request_strict_json(getattr(_llm_aided, _name)))
+
+import mineru.cli.backend_options as _backend_options  # noqa: E402  # type: ignore[import-not-found]
+
+_effort = os.environ.get("MINERU_HYBRID_EFFORT", "").strip()
+if _effort in _backend_options.HYBRID_EFFORT_CHOICES:
+    _backend_options.DEFAULT_HYBRID_EFFORT = _effort
+elif _effort:
+    # A typo must not quietly leave the corpus on the other trade-off.
+    print(
+        f"sitecustomize: ignoring MINERU_HYBRID_EFFORT={_effort!r}; "
+        f"expected one of {_backend_options.HYBRID_EFFORT_CHOICES}",
+        file=sys.stderr,
+    )
