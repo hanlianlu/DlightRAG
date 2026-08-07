@@ -4,6 +4,7 @@ import {html, nothing, svg, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {WorkspaceRecord} from '../events/bus.ts';
 import {BusController, LightElement} from '../lib/lit_host.ts';
+import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
@@ -146,7 +147,12 @@ export class WorkspaceScope extends LightElement {
         const sorted = [...workspaceStore.records]
             .sort((left, right) => left.displayName.localeCompare(right.displayName));
         return html`
-            <div class="ui-popover ui-popover--workspace" role="listbox" aria-label="Workspaces">
+            <div
+                class="ui-popover ui-popover--workspace"
+                role="listbox"
+                aria-label="Workspaces"
+                @keydown=${(event: KeyboardEvent) => { rovingArrowKeydown(event, '[role="option"]'); }}
+            >
                 ${this.#renderAllOption()}
                 ${repeat(sorted, (record) => record.workspace, (record) => this.#renderOption(record))}
                 <workspace-create></workspace-create>

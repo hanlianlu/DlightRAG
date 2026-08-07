@@ -74,7 +74,8 @@ export function openPanel(title?: string): void {
         document.body.classList.toggle('files-panel-open', title === 'FILES');
         panel.setAttribute('aria-label', title === 'FILES' ? 'Files' : 'Sources');
         if (titleEl) titleEl.textContent = title === 'FILES' ? '' : 'Sources';
-        if (title !== 'FILES') document.getElementById('ingest-target')?.replaceChildren();
+        const ingest = document.querySelector('ingest-target');
+        if (ingest) ingest.active = title === 'FILES';
     }
     applyPanelModality();
     if (isDrawer()) window.requestAnimationFrame(function() {

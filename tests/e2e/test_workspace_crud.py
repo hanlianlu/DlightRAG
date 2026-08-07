@@ -56,6 +56,32 @@ def test_scope_toggle_keeps_a_half_typed_workspace_name(page):
 
 
 @pytest.mark.e2e
+def test_workspace_popover_is_arrow_navigable(page):
+    """Arrow and Home/End keys must move focus between scope options."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
+
+    focused_index = """() => {
+        const options = [...document.querySelectorAll('.ui-popover--workspace [role=option]')];
+        return options.indexOf(document.activeElement?.closest('[role=option]'));
+    }"""
+    last = page.locator(".ui-popover--workspace [role=option]").count() - 1
+    page.locator(".ui-popover--workspace [role=option]").first.focus()
+
+    page.keyboard.press("ArrowDown")
+    assert page.evaluate(focused_index) == 1
+
+    page.keyboard.press("End")
+    assert page.evaluate(focused_index) == last
+
+    page.keyboard.press("Home")
+    assert page.evaluate(focused_index) == 0
+
+
+@pytest.mark.e2e
 def test_workspace_create_input_visible(page):
     """Verify the new-workspace input row exists inside the popover."""
     page.goto("/web/")

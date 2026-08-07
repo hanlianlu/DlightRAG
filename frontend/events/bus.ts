@@ -19,6 +19,7 @@ export interface DlightragEvents {
   conversationSaveCheckRequested: (payload: { conversationId: string }) => void;
   conversationDeferredSelectionReady: (payload: { conversationId: string }) => void;
   conversationStreamChanged: (payload: { active: boolean }) => void;
+  ingestWorkspaceChanged: (payload: { workspace: string }) => void;
 }
 
 export const bus: Emitter<DlightragEvents> = createNanoEvents<DlightragEvents>();

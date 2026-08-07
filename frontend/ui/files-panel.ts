@@ -3,20 +3,13 @@
 import {bus} from '../events/bus.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
-import {installRovingArrowNavigation} from '../lib/listbox.ts';
-import {createAutoDismiss} from '../lib/popover.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {closestElement} from '../lib/dom.ts';
 import {openPanel} from './panel.ts';
 import {type RelativeFile, withRelativePath} from './folder-upload.ts';
 import {showToast} from './toast.ts';
-import './workspace_create.ts';
-
-type IngestWorkspaceRecord = {
-    workspace: string;
-    displayName: string;
-};
+import './ingest_target.ts';
 
 type PanelRequest = {
     id: number;
@@ -24,7 +17,6 @@ type PanelRequest = {
     workspace: string;
 };
 
-let ingestPopoverEl: HTMLElement | null = null;
 let activePanelRequest: PanelRequest | null = null;
 let nextPanelRequestId = 0;
 let ingestPollController: AbortController | null = null;
@@ -32,11 +24,9 @@ let ingestPollTimer: number | null = null;
 let ingestPollWorkspace: string | null = null;
 let activeFileMutations = 0;
 
-const ingestDismiss = createAutoDismiss({
-    getAnchor: () => document.getElementById('ingest-target'),
-    isOpen: () => ingestPopoverEl !== null,
-    onDismiss: () => closeIngestPopover(),
-});
+function ingestTarget() {
+    return document.querySelector('ingest-target');
+}
 
 export function hasActiveFileMutation(): boolean {
     return activeFileMutations > 0;
@@ -187,162 +177,6 @@ export async function refreshFilePanel(workspace = ingestStore.workspace): Promi
     } finally {
         finishPanelRequest(request);
     }
-}
-
-function createCaretIcon(): SVGSVGElement {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', '8');
-    svg.setAttribute('height', '8');
-    svg.setAttribute('viewBox', '0 0 10 10');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '1.5');
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', 'M2.5 4 L5 6.5 L7.5 4');
-    svg.appendChild(path);
-    return svg;
-}
-
-function renderIngestPill(): void {
-    const container = document.getElementById('ingest-target');
-    if (!container) return;
-    container.replaceChildren();
-
-    const label = document.createElement('span');
-    label.className = 'ingest-target-label';
-    label.textContent = 'Files in:';
-    container.appendChild(label);
-
-    const pill = document.createElement('span');
-    pill.className = 'ingest-target-pill';
-    pill.setAttribute('role', 'button');
-    pill.setAttribute('tabindex', '0');
-    const record = getIngestWorkspaceRecords().find(
-        (item) => item.workspace === ingestStore.workspace,
-    );
-    const displayName = record?.displayName || ingestStore.workspace;
-    pill.setAttribute('aria-label', `Files in ${displayName}; choose file workspace`);
-
-    const dot = document.createElement('span');
-    dot.className = 'ingest-target-dot';
-    pill.appendChild(dot);
-
-    const name = document.createElement('span');
-    name.className = 'ingest-target-name';
-    name.textContent = displayName;
-    pill.appendChild(name);
-
-    const caret = document.createElement('span');
-    caret.className = 'ingest-target-caret';
-    caret.appendChild(createCaretIcon());
-    pill.appendChild(caret);
-
-    pill.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleIngestPopover(container);
-    });
-    pill.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            toggleIngestPopover(container);
-        }
-    });
-
-    container.appendChild(pill);
-}
-
-function getIngestWorkspaceRecords(): IngestWorkspaceRecord[] {
-    return workspaceStore.records.map((record) => ({
-        workspace: record.workspace,
-        displayName: record.displayName,
-    }));
-}
-
-function toggleIngestPopover(container: HTMLElement): void {
-    if (ingestPopoverEl) {
-        closeIngestPopover();
-        return;
-    }
-    container.classList.add('open');
-    const pill = container.querySelector('.ingest-target-pill');
-    if (pill) pill.setAttribute('aria-expanded', 'true');
-
-    const popover = document.createElement('div');
-    popover.className = 'ui-popover ui-popover--ingest';
-    popover.setAttribute('role', 'listbox');
-    popover.setAttribute('aria-label', 'Select ingest workspace');
-
-    const records = getIngestWorkspaceRecords();
-    const current = ingestStore.workspace;
-
-    records.slice().sort((a, b) => a.displayName.localeCompare(b.displayName)).forEach((record) => {
-        const item = document.createElement('div');
-        item.className = 'ui-popover-item';
-        item.setAttribute('role', 'option');
-        item.setAttribute('tabindex', '0');
-        item.setAttribute('aria-selected', record.workspace === current ? 'true' : 'false');
-
-        const radio = document.createElement('div');
-        radio.className = 'ingest-target-popover-radio' + (record.workspace === current ? ' on' : '');
-        item.appendChild(radio);
-
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = record.displayName;
-        item.appendChild(nameSpan);
-
-        item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            selectIngestWorkspace(record.workspace);
-        });
-        item.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                selectIngestWorkspace(record.workspace);
-            }
-        });
-        popover.appendChild(item);
-    });
-
-    popover.appendChild(document.createElement('workspace-create'));
-
-    container.appendChild(popover);
-    ingestPopoverEl = popover;
-    installRovingArrowNavigation(popover, '[role="option"]');
-    ingestDismiss.activate();
-}
-
-function selectIngestWorkspace(workspace: string): void {
-    ingestStore.set(workspace);
-    updateIngestPillLabel();
-    closeIngestPopover();
-    void refreshFilePanel(workspace);
-}
-
-function updateIngestPillLabel(): void {
-    const nameEl = document.querySelector('.ingest-target-name');
-    const record = getIngestWorkspaceRecords().find(
-        (item) => item.workspace === ingestStore.workspace,
-    );
-    const displayName = record?.displayName || ingestStore.workspace;
-    if (nameEl) nameEl.textContent = displayName;
-    document.querySelector('.ingest-target-pill')?.setAttribute(
-        'aria-label',
-        `Files in ${displayName}; choose file workspace`,
-    );
-}
-
-function closeIngestPopover(): void {
-    if (ingestPopoverEl) {
-        ingestPopoverEl.remove();
-        ingestPopoverEl = null;
-    }
-    const container = document.getElementById('ingest-target');
-    if (container) {
-        container.classList.remove('open');
-        const pill = container.querySelector('.ingest-target-pill');
-        if (pill) pill.setAttribute('aria-expanded', 'false');
-    }
-    ingestDismiss.deactivate();
 }
 
 function setUploadBusy(isBusy: boolean): void {
@@ -516,7 +350,6 @@ function handleFolderInputChange(input: HTMLInputElement): void {
 export function openFilesPanel(): void {
     ingestStore.resetToPrimary();
     openPanel('FILES');
-    renderIngestPill();
     void refreshFilePanel(ingestStore.workspace);
 }
 
@@ -578,15 +411,16 @@ export function setupFilesPanel(): void {
 
     bus.on('workspaceCreated', ({workspace}) => {
         ingestStore.set(workspace);
-        updateIngestPillLabel();
-        closeIngestPopover();
         if (isFilesPanelActive()) void refreshFilePanel(workspace);
     });
 
     bus.on('workspaceDeleted', ({nextWorkspace}) => {
         ingestStore.set(nextWorkspace || workspaceStore.primary);
-        updateIngestPillLabel();
         if (isFilesPanelActive()) void refreshFilePanel(ingestStore.workspace);
+    });
+
+    bus.on('ingestWorkspaceChanged', ({workspace}) => {
+        if (isFilesPanelActive()) void refreshFilePanel(workspace);
     });
 
     document.body.addEventListener('panelOpening', function(e) {
@@ -595,7 +429,6 @@ export function setupFilesPanel(): void {
     });
 
     document.body.addEventListener('panelClosed', function() {
-        closeIngestPopover();
         stopIngestPolling();
         abortPanelRequest();
     });

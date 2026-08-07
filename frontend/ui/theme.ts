@@ -7,7 +7,7 @@ import {
     type ThemePreference,
 } from '../lib/theme.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
-import {installRovingArrowNavigation} from '../lib/listbox.ts';
+import {rovingArrowKeydown} from '../lib/listbox.ts';
 
 type ThemeElements = {
     root: HTMLElement;
@@ -221,7 +221,9 @@ export function setupTheme(): void {
         });
     });
 
-    installRovingArrowNavigation(menu, '[role="menuitemradio"]');
+    menu.addEventListener('keydown', (event) => {
+        rovingArrowKeydown(event, '[role="menuitemradio"]');
+    });
 
     window.addEventListener('storage', (event) => {
         let storageArea: Storage | null = null;

@@ -439,7 +439,6 @@ class TestWebIndex:
         assert json.loads(html.unescape(active_match.group(1))) == ["default", "test_ws"]
         assert 'data-primary="default"' in response.text
         assert "Search in:" in response.text
-        assert "Files in:" in response.text
 
     async def test_web_invalid_saved_scope_falls_back_to_all_authorized_workspaces(
         self, client: AsyncClient, test_config: DlightragConfig
