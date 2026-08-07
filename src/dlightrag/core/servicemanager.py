@@ -52,6 +52,7 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResul
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import ComposerProcessingResources, RAGService
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
 from dlightrag.utils import log_safe, normalize_workspace
 
 logger = logging.getLogger(__name__)
@@ -451,7 +452,7 @@ class RAGServiceManager:
         if row is None:
             raise RAGServiceUnavailableError(detail=f"Ingest job disappeared: {job['job_id']}")
         status = str(row.get("status") or "")
-        if status == "succeeded":
+        if status in JOB_STATES_WITH_RESULT:
             result = row.get("result")
             return result if isinstance(result, dict) else {}
         if status == "failed":

@@ -19,6 +19,9 @@ JOB_ORPHAN_AFTER_SECONDS = 12 * JOB_LEASE_SECONDS
 # Caps every bulk statement here, not just the pruning ones.
 _BATCH_LIMIT = 1000
 ABANDONED_ERROR = "ingest job abandoned after process exit"
+# 'partial' means some items landed and some did not, so the result is still
+# worth returning -- unlike 'failed', where nothing did.
+JOB_STATES_WITH_RESULT = ("succeeded", "partial")
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_ingest_jobs (
@@ -120,7 +123,7 @@ SELECT COUNT(*)::int FROM updated
 _FINISH = """
 WITH updated AS (
     UPDATE dlightrag_ingest_jobs
-    SET status = 'succeeded',
+    SET status = CASE WHEN failed_items > 0 THEN 'partial' ELSE 'succeeded' END,
         result_json = $2::jsonb,
         lease_owner = NULL,
         lease_expires_at = NULL,
@@ -223,7 +226,7 @@ WITH deleted AS (
     WHERE job_id IN (
         SELECT job_id
         FROM dlightrag_ingest_jobs
-        WHERE status IN ('succeeded', 'failed')
+        WHERE status IN ('succeeded', 'partial', 'failed')
           AND COALESCE(finished_at, updated_at) < NOW() - ($1 * INTERVAL '1 second')
         ORDER BY COALESCE(finished_at, updated_at) ASC
         LIMIT $2
@@ -435,5 +438,6 @@ __all__ = [
     "JOB_LEASE_SECONDS",
     "JOB_ORPHAN_AFTER_SECONDS",
     "JOB_RETENTION_SECONDS",
+    "JOB_STATES_WITH_RESULT",
     "PGIngestJobStore",
 ]

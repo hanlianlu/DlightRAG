@@ -12,6 +12,11 @@ from dlightrag.storage.ingest_jobs import (
 )
 
 
+def _finished_status(row: dict[str, Any]) -> str:
+    """Mirror _FINISH's CASE so the fake cannot drift from the real statement."""
+    return "partial" if int(row.get("failed_items") or 0) > 0 else "succeeded"
+
+
 class _Acquire:
     def __init__(self, conn: _Conn) -> None:
         self._conn = conn
@@ -84,8 +89,8 @@ class _Conn:
             self.row["failed_items"] += args[3]
             self.row["current_window"] = args[4]
             self.row["errors"] = json.dumps(json.loads(self.row["errors"]) + json.loads(args[5]))
-        elif "SET status = 'succeeded'" in query and self.row is not None:
-            self.row["status"] = "succeeded"
+        elif "THEN 'partial' ELSE 'succeeded'" in query and self.row is not None:
+            self.row["status"] = _finished_status(self.row)
             self.row["result_json"] = args[1]
 
     async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
@@ -122,8 +127,8 @@ class _Conn:
                 retained += incoming
             self.row["errors"] = json.dumps(retained)
             return 1
-        if "SET status = 'succeeded'" in query and self.row is not None:
-            self.row["status"] = "succeeded"
+        if "THEN 'partial' ELSE 'succeeded'" in query and self.row is not None:
+            self.row["status"] = _finished_status(self.row)
             self.row["result_json"] = args[1]
             self.row["lease_owner"] = None
             self.row["lease_expires_at"] = None
@@ -177,7 +182,8 @@ async def test_ingest_job_store_records_window_progress_and_result() -> None:
     row = await store.get("job-1")
 
     assert row is not None
-    assert row["status"] == "succeeded"
+    # One of the 64 items failed, so the job must not call itself a success.
+    assert row["status"] == "partial"
     assert row["workspace"] == "default"
     assert row["total_items"] == 64
     assert row["processed_items"] == 63
@@ -349,7 +355,7 @@ async def test_ingest_job_store_prunes_stale_jobs() -> None:
     assert json.loads(mark_args[1]) == ["ingest job abandoned after process exit"]
     assert mark_args[3] == 200
     delete_query, delete_args = conn.fetchvals[1]
-    assert "status IN ('succeeded', 'failed')" in delete_query
+    assert "status IN ('succeeded', 'partial', 'failed')" in delete_query
     assert delete_args[0] == JOB_RETENTION_SECONDS == 7 * 24 * 3600
 
 
@@ -415,3 +421,28 @@ def test_the_orphan_window_leaves_room_for_a_live_lease_to_renew() -> None:
     """Reaping at the lease boundary would kill workers that are merely slow."""
     assert JOB_ORPHAN_AFTER_SECONDS > JOB_LEASE_SECONDS * 4
     assert JOB_ORPHAN_AFTER_SECONDS < JOB_RETENTION_SECONDS
+
+
+async def test_a_job_that_lost_no_items_still_reports_success() -> None:
+    """The CASE must not turn every finished job into a partial one."""
+    conn = _Conn()
+    store = PGIngestJobStore(pool=_Pool(conn))
+    await store.create(job_id="job-1", workspace="default", source_type="s3", request={})
+    await store.claim_running("job-1", lease_owner="owner-1", lease_seconds=300)
+    await store.record_window(
+        "job-1",
+        total_delta=8,
+        processed_delta=8,
+        failed_delta=0,
+        current_window=1,
+        errors=[],
+        lease_owner="owner-1",
+        lease_seconds=300,
+    )
+
+    await store.finish("job-1", result={"processed": 8}, lease_owner="owner-1")
+
+    row = await store.get("job-1")
+    assert row is not None
+    assert row["status"] == "succeeded"
+    assert row["failed_items"] == 0
