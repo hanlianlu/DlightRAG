@@ -54,25 +54,43 @@
        Components reference these — never raw values, never Layer 1 directly.
        ═══════════════════════════════════════════════════════════════════ */
 
-    /* ── Color: Gold palette ── */
+    /* ── Colour ramps ── */
+    /* Primitives. Every semantic colour below names a step on one of these, so
+       a value's place in its ramp can be read instead of measured. Stone and
+       red are Tailwind's; gold is ours, at a constant 12.33 L* per step. */
+    --color-stone-50: #fafaf9;
+    --color-stone-100: #f5f5f4;
+    --color-stone-200: #e7e5e4;
+    --color-stone-300: #d6d3d1;
+    --color-stone-400: #a8a29e;
+    --color-stone-500: #78716c;
+    --color-stone-600: #57534e;
+    --color-stone-700: #44403c;
+    --color-stone-800: #292524;
+    --color-stone-900: #1c1917;
+    --color-stone-950: #0c0a09;
+
     --color-gold-100: #f7de9d;
     --color-gold-200: #d2b661;
     --color-gold-300: #a7904c;
     --color-gold-400: #7e6c37;
     --color-gold-500: #574a24;
+
+    --color-red-400: #f87171;
+    --color-red-700: #b91c1c;
     /* ── Color: Text ── */
-    --color-text-primary: #f5f5f4;
-    --color-text-secondary: #e7e5e4;
-    --color-text-tertiary: #d6d3d1;
-    --color-text-muted: #a8a29e;
-    --color-text-subtle: #78716c;
-    --color-text-dim: #57534e;
+    --color-text-primary: var(--color-stone-100);
+    --color-text-secondary: var(--color-stone-200);
+    --color-text-tertiary: var(--color-stone-300);
+    --color-text-muted: var(--color-stone-400);
+    --color-text-subtle: var(--color-stone-500);
+    --color-text-dim: var(--color-stone-600);
 
     /* ── Color: Background ── */
-    --color-bg-base: #0c0a09;
-    --color-bg-surface: #1c1917;
-    --color-bg-elevated: #292524;
-    --color-bg-subtle: #14110f;
+    --color-bg-base: var(--color-stone-950);
+    --color-bg-surface: var(--color-stone-900);
+    --color-bg-elevated: var(--color-stone-800);
+    --color-bg-subtle: var(--color-stone-950);
     --color-bg-hover: rgba(120, 113, 108, 0.10);
     --color-accent-hover: rgba(210, 182, 97, 0.08);
     --color-accent-hover-strong: rgba(210, 182, 97, 0.14);
@@ -83,7 +101,7 @@
     --color-divider: rgba(120, 113, 108, 0.12);
 
     /* ── Color: Semantic ── */
-    --color-danger: #f87171;
+    --color-danger: var(--color-red-400);
     --color-danger-surface: rgba(248, 113, 113, 0.15);
 
     /* ── Color: Accent surfaces & borders (gold-200 at alpha) ── */
@@ -117,7 +135,7 @@
    --color-action-bg-subtle-hover: rgba(87, 74, 36, 0.42);
 
    /* ── Theme semantics: danger ── */
-   --color-danger-bg: #b91c1c;
+   --color-danger-bg: var(--color-red-700);
    --color-on-danger: #ffffff;
 
    /* ── Theme semantics: controls and rows ── */
@@ -198,19 +216,19 @@
 :root[data-color-mode='light'] {
    color-scheme: light;
 
-   --color-text-primary: #1c1917;
-   --color-text-secondary: #292524;
-   --color-text-tertiary: #44403c;
-   --color-text-muted: #57534e;
-   --color-text-subtle: #78716c;
-   --color-text-dim: #a8a29e;
+   --color-text-primary: var(--color-stone-900);
+   --color-text-secondary: var(--color-stone-800);
+   --color-text-tertiary: var(--color-stone-700);
+   --color-text-muted: var(--color-stone-600);
+   --color-text-subtle: var(--color-stone-500);
+   --color-text-dim: var(--color-stone-400);
 
    /* Elevation moves away from the reading canvas: darker here, lighter in dark
       mode. White is the ceiling, so the light ramp has to descend to stay
       monotonic, which also gives the conversation the strongest contrast. */
-   --color-bg-base: #fafaf9;
-   --color-bg-surface: #e7e5e4;
-   --color-bg-elevated: #d6d3d1;
+   --color-bg-base: var(--color-stone-50);
+   --color-bg-surface: var(--color-stone-200);
+   --color-bg-elevated: var(--color-stone-300);
    --color-bg-subtle: #ffffff;
    --color-bg-hover: rgba(68, 64, 60, 0.08);
    --color-accent-hover: rgba(126, 108, 55, 0.11);
@@ -220,9 +238,9 @@
    --color-border-strong: rgba(68, 64, 60, 0.28);
    --color-divider: rgba(68, 64, 60, 0.14);
 
-   --color-danger: #b42318;
-   --color-danger-bg: #b42318;
-   --color-danger-surface: rgba(180, 35, 24, 0.14);
+   --color-danger: var(--color-red-700);
+   --color-danger-bg: var(--color-red-700);
+   --color-danger-surface: rgba(185, 28, 28, 0.14);
    --color-on-danger: #ffffff;
 
    --color-accent-text: rgba(126, 108, 55, 0.85);
@@ -277,5 +295,5 @@
    --color-upload-hover: rgba(126, 108, 55, 0.07);
    --color-upload-focus: rgba(126, 108, 55, 0.40);
    --color-progress-fill: var(--color-gold-400);
-   --color-image-caption: #f5f5f4;
+   --color-image-caption: var(--color-stone-100);
 }

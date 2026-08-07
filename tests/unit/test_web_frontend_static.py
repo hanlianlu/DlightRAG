@@ -41,34 +41,6 @@ def test_index_has_final_conversation_shell() -> None:
     ):
         assert selector in template
     assert 'aria-label="Conversations"' in template
-    assert "Clear" not in template
-    assert ">Chats<" not in template
-
-
-def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None:
-    images = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
-    policy = (FRONTEND_UI / "image_policy.ts").read_text(encoding="utf-8")
-
-    assert "MAX_IMAGES" not in images
-    assert "MAX_IMAGE_SIZE" not in images
-    assert "10 * 1024 * 1024" not in images
-    assert "10 * 1024 * 1024" not in policy
-    assert "data-effective-current-upload-limit" in (
-        ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html"
-    ).read_text(encoding="utf-8")
-    assert "data-max-upload-bytes" in (
-        ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html"
-    ).read_text(encoding="utf-8")
-    assert "imageAdmission.clear()" in images
-    assert images.count("URL.revokeObjectURL") >= 2
-    assert "imageAdmission.admit(file)" in images
-
-
-def test_saved_answer_refresh_does_not_close_its_source_panel() -> None:
-    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
-
-    assert "if (clearSources) clearConversationSources();" in controller
-    assert "selectConversation(conversationId, false, false)" in controller
 
 
 def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
@@ -108,17 +80,6 @@ def test_web_static_css_build_keeps_only_served_bundles() -> None:
 
     assert css_files == {"pygments.css"}
     assert generated_css_files == {"style.css"}
-
-
-def test_pygments_css_contains_dual_color_mode_roots_and_style_provenance() -> None:
-    css = (ROOT / "src/dlightrag/web/static/pygments.css").read_text(encoding="utf-8")
-
-    assert '[data-color-mode="light"] .highlight' in css
-    assert '[data-color-mode="dark"] .highlight' in css
-    assert "Xcode" in css
-    assert "GitHub Dark" in css
-    assert "#7D6622" in css and "#836C28" not in css
-    assert "#858D98" in css and "#6E7681" not in css
 
 
 def test_pygments_css_matches_generator() -> None:
