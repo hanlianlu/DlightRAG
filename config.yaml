@@ -141,22 +141,12 @@ workspace: default
 ## API against a write-capable endpoint. 'reader' serves only stateless
 ## query/read APIs against an infra-managed physical read replica under eventual
 ## consistency (no schema writes; mutating APIs return 403). For a reader, point
-## postgres_host at the read endpoint. See
+## DLIGHTRAG_POSTGRES_HOST at the read endpoint. See
 ## docs/postgresql.md#reader-role-and-read-replicas.
 # service_role: writer
 
-## Under Docker Compose, .env wins: any DLIGHTRAG_POSTGRES_* there overrides the
-## fields below. Point at an external endpoint from .env, not from here; these
-## fields are for running outside Compose.
-## postgres_ssl_mode options include disable | allow | prefer | require | verify-ca | verify-full
-
-# postgres_host: localhost
-# postgres_port: 5432
-# postgres_user: dlightrag
-# postgres_password: dlightrag
-# postgres_database: dlightrag
-# postgres_ssl_mode: require
-# postgres_ssl_root_cert:
+## The PostgreSQL endpoint lives in .env (untracked), not here. See .env.example
+## and docs/postgresql.md#external-and-managed-endpoints.
 
 ## See docs/configuration.md to tune them. Raise it only after provider rate limits 
 ## and PostgreSQL capacity are understood.

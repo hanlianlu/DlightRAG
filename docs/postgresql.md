@@ -30,6 +30,25 @@ Default vector storage is `HALFVEC(dim)` with HNSW. Plain `HNSW` over
 `VECTOR(dim)` remains available as an explicit fallback for deployments that
 prefer full-precision storage and have rebuilt indexes accordingly.
 
+## External and Managed Endpoints
+
+Set `DLIGHTRAG_POSTGRES_*` in `.env` (see `.env.example`). `config.yaml` is
+tracked and carries no endpoint; under Compose `.env` outranks it anyway.
+
+Three capabilities are gated independently, so missing one does not force the
+others down:
+
+| Requirement | If unavailable |
+| --- | --- |
+| PostgreSQL 18 | Hard stop, no fallback |
+| pgvector ≥ 0.7 | `pg_vector_index_type: HNSW` |
+| `pg_textsearch` | `bm25_enabled: false` (vector-only) |
+
+`pg_textsearch` refuses to install unless the server preloads it, which managed
+providers rarely expose — that, not the extension catalog, usually decides
+whether BM25 is available. `pg_jieba` installs and tokenizes without preloading,
+and is needed only for the `public.jiebacfg` BM25 profile.
+
 ## Tuning Boundaries
 
 DlightRAG splits PostgreSQL tuning into two layers:
@@ -63,11 +82,11 @@ postgres_connection_retries: 10
 postgres_connection_retry_backoff: 3.0
 postgres_connection_retry_backoff_max: 30.0
 postgres_pool_close_timeout: 5.0
-postgres_ssl_mode: require  # disable | allow | prefer | require | verify-ca | verify-full
-postgres_ssl_root_cert: /etc/postgresql/ca.crt
 ```
 
-PostgreSQL SSL config is bridged to LightRAG's `POSTGRES_SSL_*` environment
+SSL belongs with the endpoint in `.env`
+(`DLIGHTRAG_POSTGRES_SSL_MODE`, `_SSL_ROOT_CERT`, `_SSL_CERT`, `_SSL_KEY`,
+`_SSL_CRL`). It is bridged to LightRAG's `POSTGRES_SSL_*` environment
 contract. DlightRAG's domain-store pool, reset helpers, and status probes use
 the same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do
 not need a second SSL configuration surface.
@@ -175,7 +194,8 @@ and session-level PostgreSQL tuning.
 ## Reader role and read replicas
 
 To scale read/query load horizontally, run additional processes with
-`service_role: reader` (or `DLIGHTRAG_SERVICE_ROLE=reader`) whose `postgres_host`
+`service_role: reader` (or `DLIGHTRAG_SERVICE_ROLE=reader`) whose
+`DLIGHTRAG_POSTGRES_HOST`
 points at an infra-managed **read endpoint**. Replica routing, health, and
 failover stay entirely in the infrastructure layer; DlightRAG accepts no replica
 credentials, no app-level routing, and no read-after-write replay policy.

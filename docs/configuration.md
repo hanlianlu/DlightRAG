@@ -496,7 +496,7 @@ service_role: writer   # default: ingest + all APIs against a write-capable endp
 Readers run under **eventual consistency**: a document ingested on the writer is
 retrievable on readers only after replication catches up. Point a reader with
 `DLIGHTRAG_SERVICE_ROLE=reader` (or `service_role: reader`) and set its
-`postgres_host` to the read endpoint. See [postgresql.md](postgresql.md#reader-role-and-read-replicas)
+`DLIGHTRAG_POSTGRES_HOST` to the read endpoint. See [postgresql.md](postgresql.md#reader-role-and-read-replicas)
 for deployment, replication, and asset-sharing requirements.
 
 Use [postgresql.md](postgresql.md) for production sizing, SSL, shared memory, and extension
