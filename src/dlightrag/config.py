@@ -872,7 +872,7 @@ class DlightragConfig(BaseSettings):
     )
 
     # Concurrency (product-tier; also surfaced in config.yaml).
-    max_async: int = Field(default=8, ge=1)
+    max_async: int = Field(default=16, ge=1)
     embedding_func_max_async: int = Field(default=16, ge=1)
     embedding_batch_num: int = Field(
         default=64,
