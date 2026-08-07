@@ -487,7 +487,7 @@ def wrap_rerank_func(fn: Callable[..., Any], *, name: str = "reranking") -> Call
             "as_type": "span",
             "name": name,
             "input": {"query": _truncate_text(query, limit=1000)},
-            "metadata": {"query": query[:200], "chunk_count": len(chunks), "top_k": top_k},
+            "metadata": {"chunk_count": len(chunks), "top_k": top_k},
         }
         return await _run_with_observation(
             fn,
