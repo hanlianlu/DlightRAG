@@ -59,6 +59,7 @@ from dlightrag.core.ingestion.uploads import (
     write_upload_stream,
 )
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
+from dlightrag.core.servicemanager import answer_trace_output
 from dlightrag.observability import trace_observation
 
 from .deps import (
@@ -242,13 +243,14 @@ async def answer(
     async def event_generator() -> AsyncIterator[str]:
         token_iter: AsyncIterator[str] | None = None
         async with trace_observation(
-            "answer_stream_pipeline",
+            "answer_pipeline",
             as_type="chain",
             input={"query": body.query},
             metadata={
+                "stream": True,
                 "workspaces": resolved_workspaces,
             },
-        ):
+        ) as observation:
             try:
                 contexts, token_iter = await manager.aanswer_stream(
                     body.query,
@@ -287,6 +289,9 @@ async def answer(
                     finalized.sources,
                     resolver=_link_builder,
                     downloadable_workspaces=downloadable_workspaces,
+                )
+                observation.update(
+                    output=answer_trace_output(finalized.answer, finalized.sources, contexts)
                 )
                 yield sse_data_event(AnswerSourcesStreamEvent(data=source_payloads))
                 trace = getattr(token_iter, "trace", None)

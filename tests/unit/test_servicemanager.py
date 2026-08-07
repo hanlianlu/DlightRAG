@@ -1152,9 +1152,6 @@ class TestAnswerViaEngine:
         assert result is expected_result
         retrieve = next(call for call in trace_calls if call["name"] == "retrieve")
         answer_pipeline = next(call for call in trace_calls if call["name"] == "answer_pipeline")
-        answer_generation = next(
-            call for call in trace_calls if call["name"] == "answer_generation"
-        )
         assert retrieve["input"] == {"query": "what is X?"}
         assert "query" not in retrieve["metadata"]
         assert retrieve["metadata"] == {
@@ -1175,18 +1172,8 @@ class TestAnswerViaEngine:
         ]
         assert answer_pipeline["input"] == {"query": "what is X?"}
         assert "query" not in answer_pipeline["metadata"]
+        assert answer_pipeline["metadata"]["stream"] is False
         assert answer_pipeline["updates"] == [
-            {
-                "output": {
-                    "answer_len": len(answer_text),
-                    "source_count": 0,
-                    "context_chunk_count": 0,
-                }
-            }
-        ]
-        assert answer_generation["input"] == {"query": "what is X?"}
-        assert answer_generation["metadata"] == {"context_chunks": 0, "context_top_k": 30}
-        assert answer_generation["updates"] == [
             {
                 "output": {
                     "answer_len": len(answer_text),

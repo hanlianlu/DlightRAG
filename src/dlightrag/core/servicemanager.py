@@ -10,7 +10,14 @@ import inspect
 import logging
 import time
 from collections import defaultdict
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Sequence,
+)
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -169,11 +176,14 @@ def _context_output(contexts: RetrievalContexts) -> dict[str, int]:
     }
 
 
-def _answer_output(result: RetrievalResult) -> dict[str, int]:
+def answer_trace_output(
+    answer: str | None, sources: Sequence[Any] | None, contexts: Any
+) -> dict[str, int]:
+    """Shape the answer counts a pipeline span reports, streamed or not."""
     return {
-        "answer_len": len(result.answer or ""),
-        "source_count": len(result.sources or []),
-        "context_chunk_count": _context_count(result.contexts, "chunks"),
+        "answer_len": len(answer or ""),
+        "source_count": len(sources or []),
+        "context_chunk_count": _context_count(contexts, "chunks"),
     }
 
 
@@ -1514,6 +1524,7 @@ class RAGServiceManager:
                     as_type="chain",
                     input={"query": query},
                     metadata={
+                        "stream": False,
                         "workspaces": ws_list,
                         "history_turns": len(history or []),
                         "query_image_count": len(turn.current_query_images),
@@ -1532,23 +1543,13 @@ class RAGServiceManager:
                         current_image_descriptions=turn.current_image_descriptions,
                     )
                     engine = self._get_answer_engine()
-                    async with trace_observation(
-                        "answer_generation",
-                        as_type="chain",
-                        input={"query": plan.standalone_query},
-                        metadata={
-                            "context_chunks": len(retrieval.contexts.get("chunks", [])),
-                            "context_top_k": limits.context_top_k,
-                        },
-                    ) as generation_trace:
-                        result = await engine.generate(
-                            plan.standalone_query,
-                            retrieval.contexts,
-                            query_images=current_images or None,
-                            conversation_history=history,
-                            context_top_k=limits.context_top_k,
-                        )
-                        generation_trace.update(output=_answer_output(result))
+                    result = await engine.generate(
+                        plan.standalone_query,
+                        retrieval.contexts,
+                        query_images=current_images or None,
+                        conversation_history=history,
+                        context_top_k=limits.context_top_k,
+                    )
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
                     if semantic_highlights:
@@ -1572,7 +1573,9 @@ class RAGServiceManager:
                             result.answer,
                             result.answer_images,
                         )
-                    pipeline_trace.update(output=_answer_output(result))
+                    pipeline_trace.update(
+                        output=answer_trace_output(result.answer, result.sources, result.contexts)
+                    )
                     return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
@@ -1826,4 +1829,5 @@ def _positive_int_or_none(value: Any) -> int | None:
 __all__ = [
     "RAGServiceManager",
     "RAGServiceUnavailableError",
+    "answer_trace_output",
 ]

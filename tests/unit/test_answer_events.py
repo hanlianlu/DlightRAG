@@ -54,7 +54,8 @@ def _record_observations(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             updates.append(kwargs)
 
     @asynccontextmanager
-    async def fake_observation(_name: str, **kwargs):
+    async def fake_observation(name: str, **kwargs):
+        captured["name"] = name
         captured["start"] = kwargs
         yield RecordingHandle()
 
@@ -498,6 +499,16 @@ async def test_transport_and_capability_metrics_reach_observation(
     assert caps["answer_image_effective_limit"] == 6
     assert caps["history_image_catalog_count"] == 2
     assert caps["history_images_selected"] == 1
+
+    # Streaming shares the non-streaming span name, so one Langfuse view covers both.
+    assert captured["name"] == "answer_pipeline"
+    start = captured["start"]
+    assert isinstance(start, dict)
+    assert start["metadata"]["stream"] is True
+    updates = captured["updates"]
+    assert isinstance(updates, list)
+    outputs = [update["output"] for update in updates if "output" in update]
+    assert outputs == [{"answer_len": 6, "source_count": 0, "context_chunk_count": 0}]
     assert caps["history_image_resolution_status"] == "degraded"
 
     transport = [

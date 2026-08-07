@@ -19,6 +19,7 @@ from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.core.scope import RequestScope
+from dlightrag.core.servicemanager import answer_trace_output
 from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils import log_safe
@@ -271,7 +272,7 @@ async def stream_answer_events(
 
     The request-root span is opened here, then query planning runs lazily inside
     it (see ``_emit_answer_events``). Planning shares this task and OTEL context,
-    so ``query_planning`` nests under ``answer_stream_pipeline`` and the whole
+    so ``query_planning`` nests under ``answer_pipeline`` and the whole
     turn -- plan, retrieve, generate, highlight -- lands in one trace. An
     already-committed submission replays below without planning at all.
     """
@@ -289,6 +290,7 @@ async def stream_answer_events(
             ).hexdigest(),
         }
     metadata = {
+        "stream": True,
         "workspaces": ws_list,
         **identity,
         "history_turns_loaded": len(prepared_conversation.text_history) // 2,
@@ -296,7 +298,7 @@ async def stream_answer_events(
         "current_document_count": len(validated_documents),
     }
     async with trace_observation(
-        "answer_stream_pipeline",
+        "answer_pipeline",
         as_type="chain",
         input={"query": query},
         metadata=metadata,
@@ -535,7 +537,8 @@ async def _emit_answer_events(
             yield sse_event("trace", AnswerTraceEvent(trace=trace))
         if observation is not None:
             observation.update(
-                metadata=_answer_transport_metrics(trace if isinstance(trace, dict) else {})
+                output=answer_trace_output(done.answer, payload.sources, contexts),
+                metadata=_answer_transport_metrics(trace if isinstance(trace, dict) else {}),
             )
         highlighted_sources = await enrich_semantic_highlights(
             payload.sources,
