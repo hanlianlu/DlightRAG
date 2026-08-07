@@ -9,7 +9,6 @@ import {
     getConversationHistory,
     listConversations,
     renameConversation,
-    type ConversationSummary,
 } from '../api/conversations.ts';
 import {bus} from '../events/bus.ts';
 import {
@@ -19,6 +18,13 @@ import {
 } from '../lib/chat_renderer.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
+import './conversation_list.ts';
+import type {
+    ConversationIntentDetail,
+    ConversationListState,
+    ConversationRenameDetail,
+    ConversationRetryDetail,
+} from './conversation_list.ts';
 import {isQueryInFlight, isQueryStopping} from './chat.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
 import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
@@ -31,17 +37,13 @@ import {syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
 const DESKTOP_MEDIA = '(min-width: 1200px)';
 
-type ListState = 'loading' | 'ready' | 'error' | 'empty-error';
 type FocusResolver = () => HTMLElement | null;
 
 let historyController: AbortController | null = null;
 let bootstrapController: AbortController | null = null;
 let pendingLifecycleAction = false;
-let listState: ListState = 'loading';
+let listState: ConversationListState = 'loading';
 let listErrorMessage = '';
-let openMenuId: string | null = null;
-let renameId: string | null = null;
-let renameDraft: string | null = null;
 let drawerOpen = false;
 let desktopCollapsed = false;
 let drawerReturnFocus: HTMLElement | null = null;
@@ -120,8 +122,14 @@ function resolveDeleteAllButton(): HTMLButtonElement | null {
     return document.getElementById('delete-all-conversations-btn') as HTMLButtonElement | null;
 }
 
-function restoreStableFocus(resolveTarget: FocusResolver): void {
-    window.requestAnimationFrame(function() { resolveTarget()?.focus(); });
+function conversationList() {
+    return document.querySelector('conversation-list');
+}
+
+/** Waits for the list to re-render so focus lands on a node that still exists. */
+async function restoreStableFocus(resolveTarget: FocusResolver): Promise<void> {
+    await conversationList()?.updateComplete;
+    resolveTarget()?.focus();
 }
 
 function dialogResult(
@@ -133,7 +141,7 @@ function dialogResult(
     return new Promise(function(resolve) {
         dialog.addEventListener('close', function() {
             const result = dialog.returnValue;
-            restoreStableFocus(resolveReturnTarget);
+            void restoreStableFocus(resolveReturnTarget);
             resolve(result);
         }, {once: true});
     });
@@ -156,276 +164,37 @@ function lifecycleBlocked(): boolean {
 
 function setLifecyclePending(pending: boolean): void {
     pendingLifecycleAction = pending;
-    renderConversationList();
+    syncList();
 }
 
-function makeStatus(message: string, retryLabel: string, retry: () => void): HTMLElement {
-    const status = document.createElement('div');
-    status.className = 'conversation-list-status';
-    status.setAttribute('role', 'status');
-
-    const copy = document.createElement('span');
-    copy.textContent = message;
-    status.appendChild(copy);
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = retryLabel;
-    button.addEventListener('click', retry);
-    status.appendChild(button);
-    return status;
+/** Pushes the shell state the list cannot derive on its own. */
+function syncList(): void {
+    const busy = isQueryInFlight() || pendingLifecycleAction;
+    resolveNewConversationButton()?.toggleAttribute('disabled', busy);
+    resolveDeleteAllButton()?.toggleAttribute('disabled', busy);
+    const list = conversationList();
+    if (!list) return;
+    list.busy = busy;
+    list.listState = listState;
+    list.errorMessage = listErrorMessage;
 }
 
-function closeActionsMenu(restoreFocus = false): void {
-    const id = openMenuId;
-    openMenuId = null;
-    renderConversationList();
-    if (restoreFocus && id) {
-        document.querySelector<HTMLButtonElement>(
-            `[data-conversation-id="${CSS.escape(id)}"] [aria-label="Conversation actions"]`,
-        )?.focus();
-    }
-}
-
-function focusMenuItem(conversationId: string, last = false): void {
-    window.requestAnimationFrame(function() {
-        const menu = document.querySelector<HTMLElement>(
-            `[data-conversation-id="${CSS.escape(conversationId)}"] [role="menu"]`,
-        );
-        const items = menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
-        if (!items || items.length === 0) return;
-        items[last ? items.length - 1 : 0].focus();
-    });
-}
-
-function startRename(conversationId: string): void {
-    openMenuId = null;
-    renameId = conversationId;
-    renameDraft = conversationStore.conversations.find(
-        (conversation) => conversation.conversation_id === conversationId,
-    )?.title || '';
-    renderConversationList();
-    window.requestAnimationFrame(function() {
-        const input = document.querySelector<HTMLInputElement>(
-            `[data-conversation-id="${CSS.escape(conversationId)}"] input`,
-        );
-        input?.focus();
-        input?.select();
-    });
-}
-
-async function commitRename(conversation: ConversationSummary, title: string): Promise<void> {
-    renameId = null;
-    renameDraft = null;
-    const trimmed = title.trim();
-    if (!trimmed || trimmed === (conversation.title || '').trim()) {
-        renderConversationList();
-        return;
-    }
-    renderConversationList();
+async function commitRename(conversationId: string, title: string): Promise<void> {
     try {
-        const summary = await renameConversation(conversation.conversation_id, trimmed);
-        conversationStore.upsertSummary(summary);
+        conversationStore.upsertSummary(await renameConversation(conversationId, title));
     } catch (error) {
         if (error instanceof ConversationApiError && error.status === 404) {
-            const wasActive = conversationStore.activeConversationId === conversation.conversation_id;
-            conversationStore.remove(conversation.conversation_id);
+            const wasActive = conversationStore.activeConversationId === conversationId;
+            conversationStore.remove(conversationId);
             if (wasActive) await selectFallbackConversation();
         } else if (error instanceof ConversationApiError && error.status === 422) {
             showToast('Conversation titles must be 1 to 120 characters.', 5000);
         } else {
             showToast('Could not rename the conversation.', 5000);
         }
-        renderConversationList();
     }
 }
 
-function renderRenameInput(conversation: ConversationSummary): HTMLInputElement {
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = renameDraft ?? conversation.title ?? '';
-    input.maxLength = 120;
-    input.setAttribute('aria-label', 'Conversation title');
-    let settled = false;
-    const cancel = (): void => {
-        if (settled) return;
-        settled = true;
-        renameId = null;
-        renameDraft = null;
-        renderConversationList();
-    };
-    const submit = (): void => {
-        if (settled) return;
-        settled = true;
-        void commitRename(conversation, input.value);
-    };
-    input.addEventListener('keydown', function(event) {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            submit();
-        } else if (event.key === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            cancel();
-        }
-    });
-    input.addEventListener('input', function() { renameDraft = input.value; });
-    input.addEventListener('blur', submit);
-    return input;
-}
-
-function renderActionsMenu(conversation: ConversationSummary): HTMLElement {
-    const menu = document.createElement('div');
-    menu.className = 'conversation-actions-menu';
-    menu.setAttribute('role', 'menu');
-    menu.setAttribute('aria-label', 'Conversation actions');
-
-    const rename = document.createElement('button');
-    rename.type = 'button';
-    rename.setAttribute('role', 'menuitem');
-    rename.textContent = 'Rename';
-    rename.addEventListener('click', function() { startRename(conversation.conversation_id); });
-
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.setAttribute('role', 'menuitem');
-    remove.className = 'conversation-delete-action';
-    remove.textContent = 'Delete';
-    remove.disabled = isQueryInFlight() || pendingLifecycleAction;
-    remove.addEventListener('click', function() { void requestDelete(conversation.conversation_id); });
-
-    menu.addEventListener('keydown', function(event) {
-        const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
-            .filter((item) => !item.disabled);
-        const index = items.indexOf(document.activeElement as HTMLButtonElement);
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault();
-            const delta = event.key === 'ArrowDown' ? 1 : -1;
-            items[(index + delta + items.length) % items.length]?.focus();
-        } else if (event.key === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            closeActionsMenu(true);
-        }
-    });
-    menu.append(rename, remove);
-    return menu;
-}
-
-function renderConversationRow(conversation: ConversationSummary): HTMLElement {
-    const active = conversation.conversation_id === conversationStore.activeConversationId;
-    const row = document.createElement('div');
-    row.className = 'conversation-row';
-    row.setAttribute('role', 'listitem');
-    row.dataset.conversationId = conversation.conversation_id;
-    if (active) row.setAttribute('aria-current', 'page');
-
-    if (renameId === conversation.conversation_id) {
-        row.appendChild(renderRenameInput(conversation));
-    } else {
-        const select = document.createElement('button');
-        select.type = 'button';
-        select.className = 'conversation-select';
-        select.textContent = conversation.title || 'New chat';
-        if (!conversation.title) select.setAttribute('aria-label', 'Open untitled conversation');
-        select.disabled = isQueryInFlight() || pendingLifecycleAction;
-        select.addEventListener('click', function() {
-            void requestSelectConversation(conversation.conversation_id);
-        });
-        row.appendChild(select);
-    }
-
-    const actions = document.createElement('button');
-    actions.type = 'button';
-    actions.className = 'conversation-actions-button';
-    actions.setAttribute('aria-label', 'Conversation actions');
-    actions.setAttribute('aria-haspopup', 'menu');
-    actions.setAttribute('aria-expanded', openMenuId === conversation.conversation_id ? 'true' : 'false');
-    actions.textContent = '•••';
-    actions.addEventListener('click', function(event) {
-        event.stopPropagation();
-        if (openMenuId === conversation.conversation_id) {
-            closeActionsMenu();
-            return;
-        }
-        openMenuId = conversation.conversation_id;
-        renameId = null;
-        renderConversationList();
-        focusMenuItem(conversation.conversation_id);
-    });
-    actions.addEventListener('keydown', function(event) {
-        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-        event.preventDefault();
-        if (openMenuId !== conversation.conversation_id) {
-            openMenuId = conversation.conversation_id;
-            renderConversationList();
-        }
-        focusMenuItem(conversation.conversation_id, event.key === 'ArrowUp');
-    });
-    row.appendChild(actions);
-    if (openMenuId === conversation.conversation_id) {
-        row.appendChild(renderActionsMenu(conversation));
-    }
-    return row;
-}
-
-function updateConversationListDisabledState(): void {
-    const disabled = isQueryInFlight() || pendingLifecycleAction;
-    const newButton = document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
-    if (newButton) newButton.disabled = disabled;
-    const deleteAllButton = resolveDeleteAllButton();
-    if (deleteAllButton) deleteAllButton.disabled = disabled;
-    const list = document.getElementById('conversation-list');
-    if (!list) return;
-    list.querySelectorAll<HTMLButtonElement>(
-        '.conversation-select, .conversation-delete-action',
-    ).forEach((btn) => {
-        btn.disabled = disabled;
-    });
-}
-
-function renderConversationList(): void {
-    const list = document.getElementById('conversation-list');
-    if (!list) return;
-    list.replaceChildren();
-    const newButton = document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
-    if (newButton) newButton.disabled = isQueryInFlight() || pendingLifecycleAction;
-    const deleteAllButton = resolveDeleteAllButton();
-    if (deleteAllButton) deleteAllButton.disabled = isQueryInFlight() || pendingLifecycleAction;
-
-    if (listState === 'loading' && conversationStore.conversations.length === 0) {
-        for (let index = 0; index < 3; index += 1) {
-            const skeleton = document.createElement('div');
-            skeleton.className = 'conversation-skeleton';
-            skeleton.setAttribute('aria-hidden', 'true');
-            list.appendChild(skeleton);
-        }
-        const loading = document.createElement('span');
-        loading.className = 'sr-only';
-        loading.textContent = 'Loading conversations';
-        list.appendChild(loading);
-        return;
-    }
-
-    if (listState === 'error') {
-        list.appendChild(makeStatus(
-            listErrorMessage || 'Conversations are unavailable.',
-            'Retry',
-            function() { void initializeConversations(); },
-        ));
-    } else if (listState === 'empty-error') {
-        list.appendChild(makeStatus(
-            'No conversation is open.',
-            'Retry New chat',
-            function() { void requestNewConversation(); },
-        ));
-    }
-
-    conversationStore.conversations.forEach(function(conversation) {
-        list.appendChild(renderConversationRow(conversation));
-    });
-
-}
 
 function closeCompactDrawer(restoreFocus = false): void {
     if (isDesktop() || !drawerOpen) return;
@@ -519,7 +288,7 @@ async function loadConversation(
     if (!conversationStore.select(conversationId)) return false;
     const controller = new AbortController();
     historyController = controller;
-    renderConversationList();
+    syncList();
     if (clearSources) clearConversationSources();
     if (showLoading && conversationStore.canRenderHistory(requestGeneration)) {
         renderConversationHistoryLoading();
@@ -631,7 +400,7 @@ async function createFallbackConversation(focusAfter = true): Promise<void> {
     } catch {
         if (!conversationStore.isCurrentRequest(requestGeneration)) return;
         listState = 'empty-error';
-        renderConversationList();
+        syncList();
         renderConversationHistoryError(function() { void requestNewConversation(); });
         showToast('Could not create a replacement conversation.', 5000);
     }
@@ -644,8 +413,6 @@ async function requestDelete(conversationId: string): Promise<void> {
     const resolveActions = function(): HTMLElement | null {
         return resolveConversationActions(conversationId);
     };
-    openMenuId = null;
-    renderConversationList();
     const dialog = document.getElementById('delete-conversation-dialog') as HTMLDialogElement | null;
     const warning = document.getElementById('delete-conversation-draft-warning');
     if (warning) warning.hidden = !discardsDraft;
@@ -741,7 +508,7 @@ export async function initializeConversations(): Promise<void> {
     bootstrapController = controller;
     const requestGeneration = conversationStore.beginRequest();
     listState = 'loading';
-    renderConversationList();
+    syncList();
     try {
         const conversations = await listConversations(controller.signal);
         if (!conversationStore.isCurrentRequest(requestGeneration)) return;
@@ -758,7 +525,7 @@ export async function initializeConversations(): Promise<void> {
         if (isAbortError(error) || !conversationStore.isCurrentRequest(requestGeneration)) return;
         listState = conversationStore.conversations.length > 0 ? 'error' : 'empty-error';
         listErrorMessage = 'Could not load conversations.';
-        renderConversationList();
+        syncList();
         if (conversationStore.conversations.length === 0) {
             renderConversationHistoryError(function() { void initializeConversations(); });
         }
@@ -784,17 +551,23 @@ export function setupConversations(): void {
     });
     document.getElementById('chat-sidebar')?.addEventListener('keydown', focusTrap);
 
-    document.addEventListener('click', function(event) {
-        if (!openMenuId || !(event.target instanceof Node)) return;
-        const row = document.querySelector(
-            `[data-conversation-id="${CSS.escape(openMenuId)}"]`,
-        );
-        if (row?.contains(event.target)) return;
-        closeActionsMenu();
+    const list = conversationList();
+    list?.addEventListener('conversation-select', function({detail}) {
+        void requestSelectConversation(detail.conversationId);
     });
+    list?.addEventListener('conversation-delete', function({detail}) {
+        void requestDelete(detail.conversationId);
+    });
+    list?.addEventListener('conversation-rename', function({detail}) {
+        void commitRename(detail.conversationId, detail.title);
+    });
+    list?.addEventListener('conversation-retry', function({detail}) {
+        void (detail.kind === 'reload' ? initializeConversations() : requestNewConversation());
+    });
+
     document.addEventListener('keydown', function(event) {
         if (event.key === 'Escape' && !isDesktop() && drawerOpen) {
-            if (document.querySelector('dialog[open]') || openMenuId) return;
+            if (document.querySelector('dialog[open]') || conversationList()?.menuOpen) return;
             event.preventDefault();
             closeCompactDrawer(true);
         }
@@ -804,9 +577,8 @@ export function setupConversations(): void {
     });
     window.addEventListener('resize', applySidebarState);
 
-    bus.on('conversationListChanged', renderConversationList);
-    bus.on('conversationSelected', renderConversationList);
-    bus.on('conversationStreamChanged', updateConversationListDisabledState);
+    // The list re-renders itself from the store; only the in-flight flag is ours.
+    bus.on('conversationStreamChanged', syncList);
     bus.on('conversationAnswerSaved', function({conversationId}) {
         if (conversationStore.activeConversationId !== conversationId) return;
         void selectConversation(conversationId, false, false);
@@ -820,6 +592,6 @@ export function setupConversations(): void {
     });
 
     applySidebarState();
-    renderConversationList();
+    syncList();
     void initializeConversations();
 }
