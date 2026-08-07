@@ -45,3 +45,23 @@ for (const [theme, direction] of [['dark', 1], ['light', -1]] as const) {
         }
     });
 }
+
+/** Tailwind stone, plus the gold ramp this file declares, plus plain white. */
+const PALETTE = new Set([
+    '#fafaf9', '#f5f5f4', '#e7e5e4', '#d6d3d1', '#a8a29e', '#78716c',
+    '#57534e', '#44403c', '#292524', '#1c1917', '#0c0a09', '#14110f',
+    '#f7de9d', '#d2b661', '#a7904c', '#7e6c37', '#574a24',
+    '#ffffff',
+    '#f87171', '#b91c1c', '#b42318',
+]);
+
+// Both drifts this file has seen -- the inverted surface ramp and an accent a
+// step off the gold scale -- entered as a literal nobody could place by eye.
+test('every colour is a member of a declared ramp', () => {
+    const strays = [...css.matchAll(/#[0-9a-fA-F]{6}\b/g)]
+        .map((match) => match[0].toLowerCase())
+        .filter((hex) => !PALETTE.has(hex));
+
+    assert.deepEqual([...new Set(strays)], [], 'off-palette literals');
+});
+

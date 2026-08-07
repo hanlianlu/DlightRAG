@@ -209,12 +209,12 @@
       mode. White is the ceiling, so the light ramp has to descend to stay
       monotonic, which also gives the conversation the strongest contrast. */
    --color-bg-base: #fafaf9;
-   --color-bg-surface: #f5f5f4;
-   --color-bg-elevated: #e7e5e4;
+   --color-bg-surface: #e7e5e4;
+   --color-bg-elevated: #d6d3d1;
    --color-bg-subtle: #ffffff;
    --color-bg-hover: rgba(68, 64, 60, 0.08);
-   --color-accent-hover: rgba(128, 103, 25, 0.11);
-   --color-accent-hover-strong: rgba(128, 103, 25, 0.18);
+   --color-accent-hover: rgba(126, 108, 55, 0.11);
+   --color-accent-hover-strong: rgba(126, 108, 55, 0.18);
 
    --color-border-subtle: rgba(68, 64, 60, 0.16);
    --color-border-strong: rgba(68, 64, 60, 0.28);
@@ -225,14 +225,14 @@
    --color-danger-surface: rgba(180, 35, 24, 0.14);
    --color-on-danger: #ffffff;
 
-   --color-accent-text: rgba(128, 103, 25, 0.85);
-   --color-accent-indicator: rgba(128, 103, 25, 0.78);
-   --color-accent-border-strong: rgba(128, 103, 25, 0.42);
-   --color-accent-border: rgba(128, 103, 25, 0.38);
-   --color-accent-border-soft: rgba(128, 103, 25, 0.30);
-   --color-accent-border-faint: rgba(128, 103, 25, 0.26);
-   --color-accent-surface: rgba(128, 103, 25, 0.16);
-   --color-accent-ghost: rgba(128, 103, 25, 0.09);
+   --color-accent-text: rgba(126, 108, 55, 0.85);
+   --color-accent-indicator: rgba(126, 108, 55, 0.78);
+   --color-accent-border-strong: rgba(126, 108, 55, 0.42);
+   --color-accent-border: rgba(126, 108, 55, 0.38);
+   --color-accent-border-soft: rgba(126, 108, 55, 0.30);
+   --color-accent-border-faint: rgba(126, 108, 55, 0.26);
+   --color-accent-surface: rgba(126, 108, 55, 0.16);
+   --color-accent-ghost: rgba(126, 108, 55, 0.09);
 
    --color-scrim: rgba(28, 25, 23, 0.38);
    --color-scrim-strong: rgba(28, 25, 23, 0.48);
@@ -240,30 +240,30 @@
 
    --shadow-overlay: 0 18px 48px rgba(28, 25, 23, 0.26);
 
-   --color-accent-action: #806719;
-   --color-accent-emphasis: #574a24;
-   --color-accent-muted: #806719;
-   --color-action-bg: #806719;
-   --color-action-bg-hover: #574a24;
+   --color-accent-action: var(--color-gold-400);
+   --color-accent-emphasis: var(--color-gold-500);
+   --color-accent-muted: var(--color-gold-400);
+   --color-action-bg: var(--color-gold-400);
+   --color-action-bg-hover: var(--color-gold-500);
    --color-on-action: #ffffff;
    --color-action-border: rgba(87, 74, 36, 0.26);
    --color-action-border-hover: rgba(87, 74, 36, 0.38);
    --color-action-bg-subtle: rgba(87, 74, 36, 0.14);
    --color-action-bg-subtle-hover: rgba(87, 74, 36, 0.22);
 
-   --color-control-surface: rgba(231, 229, 228, 0.56);
-   --color-control-border-hover: rgba(128, 103, 25, 0.30);
-   --color-control-ring: rgba(128, 103, 25, 0.54);
-   --color-control-ring-soft: rgba(128, 103, 25, 0.20);
-   --color-selected-row: rgba(128, 103, 25, 0.16);
+   --color-control-surface: rgba(214, 211, 209, 0.56);
+   --color-control-border-hover: rgba(126, 108, 55, 0.30);
+   --color-control-ring: rgba(126, 108, 55, 0.54);
+   --color-control-ring-soft: rgba(126, 108, 55, 0.20);
+   --color-selected-row: rgba(126, 108, 55, 0.16);
    --color-row-alt: rgba(68, 64, 60, 0.06);
    --color-row-hover-faint: rgba(68, 64, 60, 0.05);
-   --color-source-highlight: rgba(128, 103, 25, 0.20);
+   --color-source-highlight: rgba(126, 108, 55, 0.20);
 
    --color-source-surface: rgba(231, 229, 228, 0.78);
    --color-source-surface-active: rgba(231, 229, 228, 0.96);
    --color-source-accent: rgba(68, 64, 60, 0.16);
-   --color-source-accent-active: rgba(128, 103, 25, 0.32);
+   --color-source-accent-active: rgba(126, 108, 55, 0.32);
 
    --color-overlay-backdrop: rgba(28, 25, 23, 0.32);
    --color-overlay-border: rgba(120, 113, 108, 0.30);
@@ -274,8 +274,8 @@
    --shadow-toast: 0 4px 16px rgba(28, 25, 23, 0.18);
    --shadow-lightbox-image: 0 20px 60px rgba(28, 25, 23, 0.28);
 
-   --color-upload-hover: rgba(128, 103, 25, 0.07);
-   --color-upload-focus: rgba(128, 103, 25, 0.40);
-   --color-progress-fill: #806719;
+   --color-upload-hover: rgba(126, 108, 55, 0.07);
+   --color-upload-focus: rgba(126, 108, 55, 0.40);
+   --color-progress-fill: var(--color-gold-400);
    --color-image-caption: #f5f5f4;
 }

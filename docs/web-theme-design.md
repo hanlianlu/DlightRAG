@@ -106,21 +106,29 @@ can be read rather than measured.
 | Semantic role | Dark | Mineral Light |
 |---|---|---|
 | Page background | `#0c0a09` stone-950 | `#fafaf9` stone-50 |
-| Primary surface | `#1c1917` stone-900 | `#f5f5f4` stone-100 |
-| Elevated surface | `#292524` stone-800 | `#e7e5e4` stone-200 |
+| Primary surface | `#1c1917` stone-900 | `#e7e5e4` stone-200 |
+| Elevated surface | `#292524` stone-800 | `#d6d3d1` stone-300 |
 | Primary text | `#f5f5f4` stone-100 | `#1c1917` stone-900 |
 | Body text | `#d6d3d1` stone-300 | `#44403c` stone-700 |
 | Muted text | `#a8a29e` stone-400 | `#57534e` stone-600 |
-| Primary accent | `#d2b661` | `#806719` |
+| Primary accent | `#d2b661` gold-200 | `#7e6c37` gold-400 |
 | Danger | `#f87171` | `#b42318` |
 
-Borders, dividers and row tints are stone at low alpha: stone-500 in dark,
-stone-700 in light. Scrims and overlay shadows are stone-950 and stone-900
-respectively.
+The light surfaces skip stone-100: measured in OKLCH it sits only 1.5 L\* from
+stone-50, a quarter of dark's first step. Stone-50/200/300 steps by 6.2 and 5.4
+against dark's 6.9 and 5.2, so both themes separate their surfaces by the same
+perceived amount.
+
+The gold ramp is perceptually even by construction — 12.33 L\* per step, hue
+held within 2° — so each theme takes the step that clears its canvas rather than
+a value tuned by hand. Borders, dividers and row tints are stone at low alpha:
+stone-500 in dark, stone-700 in light. Scrims and overlay shadows are stone-950
+and stone-900 respectively.
 
 Each ramp steps away from the page background as elevation rises, so the
 conversation always holds the strongest contrast against its text: lighter in
-dark, darker in light. `frontend/tokens/ramp.test.ts` asserts that direction.
+dark, darker in light. `frontend/tokens/ramp.test.ts` asserts that direction and
+rejects any colour that is not a member of a declared ramp.
 
 Full-height drawers are edges rather than floating cards, so they are separated
 by that tone step plus a hairline border. Neither theme casts a drawer shadow:
