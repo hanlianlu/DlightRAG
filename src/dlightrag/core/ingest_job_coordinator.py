@@ -106,8 +106,9 @@ class IngestJobCoordinator:
             store = PGIngestJobStore()
             await store.initialize()
             self._store = store
-            self._sweeper = asyncio.create_task(self._sweep_jobs(store))
+            # Recovery gets first refusal on a job sitting at the orphan boundary.
             await self._recover_jobs(store)
+            self._sweeper = asyncio.create_task(self._sweep_jobs(store))
         return self._store
 
     async def start_recovery(self) -> None:

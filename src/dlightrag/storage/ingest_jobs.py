@@ -16,7 +16,8 @@ JOB_HEARTBEAT_SECONDS = 60
 # restarting process) to reclaim the job, and it partitions orphans exactly --
 # fresher ones are recovered, older ones are failed.
 JOB_ORPHAN_AFTER_SECONDS = 12 * JOB_LEASE_SECONDS
-_PRUNE_BATCH = 1000
+# Caps every bulk statement here, not just the pruning ones.
+_BATCH_LIMIT = 1000
 ABANDONED_ERROR = "ingest job abandoned after process exit"
 
 _CREATE = """
@@ -374,7 +375,7 @@ class PGIngestJobStore:
         """Return queued/running jobs whose owner may still come back for them."""
 
         async def _operation(conn: Any) -> list[Any]:
-            return await conn.fetch(_LIST_RECOVERABLE, JOB_ORPHAN_AFTER_SECONDS, _PRUNE_BATCH)
+            return await conn.fetch(_LIST_RECOVERABLE, JOB_ORPHAN_AFTER_SECONDS, _BATCH_LIMIT)
 
         rows = await self._run(_operation)
         return [_serialize_row(row) for row in rows]
@@ -387,10 +388,10 @@ class PGIngestJobStore:
                 _MARK_ABANDONED,
                 JOB_ORPHAN_AFTER_SECONDS,
                 json.dumps([ABANDONED_ERROR]),
-                _PRUNE_BATCH,
+                _BATCH_LIMIT,
                 _MAX_JOB_ERRORS,
             )
-            deleted = await conn.fetchval(_PRUNE_COMPLETED, JOB_RETENTION_SECONDS, _PRUNE_BATCH)
+            deleted = await conn.fetchval(_PRUNE_COMPLETED, JOB_RETENTION_SECONDS, _BATCH_LIMIT)
             return {
                 "failed_abandoned": int(failed or 0),
                 "deleted_completed": int(deleted or 0),
