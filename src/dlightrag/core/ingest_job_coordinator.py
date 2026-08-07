@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from dlightrag.core.client_contracts import SourceType
+from dlightrag.storage.ingest_jobs import (
+    JOB_HEARTBEAT_SECONDS,
+    JOB_LEASE_SECONDS,
+    JOB_ORPHAN_AFTER_SECONDS,
+)
 from dlightrag.utils import log_safe, normalize_workspace
 
 if TYPE_CHECKING:
@@ -24,10 +29,8 @@ class LeaseLostError(RuntimeError):
 
 
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
-_JOB_LEASE_SECONDS = 300
-_JOB_HEARTBEAT_SECONDS = 60
-# Well under the 24h abandoned-job threshold, so a dead worker is reaped promptly.
-_JOB_SWEEP_SECONDS = 3600
+# Sweeping faster than the orphan window means no dead worker waits two passes.
+_JOB_SWEEP_SECONDS = JOB_ORPHAN_AFTER_SECONDS // 2
 
 
 class IngestJobStore(Protocol):
@@ -325,7 +328,7 @@ class IngestJobCoordinator:
         claimed = await store.claim_running(
             job_id,
             lease_owner=self._lease_owner,
-            lease_seconds=_JOB_LEASE_SECONDS,
+            lease_seconds=JOB_LEASE_SECONDS,
         )
         if claimed:
             await store.fail(job_id, error=error, lease_owner=self._lease_owner)
@@ -343,7 +346,7 @@ class IngestJobCoordinator:
         claimed = await store.claim_running(
             job_id,
             lease_owner=self._lease_owner,
-            lease_seconds=_JOB_LEASE_SECONDS,
+            lease_seconds=JOB_LEASE_SECONDS,
         )
         if not claimed:
             logger.info("Skipping ingest job %s; another worker owns it", job_id)
@@ -368,7 +371,7 @@ class IngestJobCoordinator:
                 current_window=progress.batch_index + 1,
                 errors=list(progress.errors),
                 lease_owner=self._lease_owner,
-                lease_seconds=_JOB_LEASE_SECONDS,
+                lease_seconds=JOB_LEASE_SECONDS,
             )
             if not updated:
                 raise LeaseLostError("ingest job lease lost")
@@ -391,7 +394,7 @@ class IngestJobCoordinator:
                     current_window=1,
                     errors=errors,
                     lease_owner=self._lease_owner,
-                    lease_seconds=_JOB_LEASE_SECONDS,
+                    lease_seconds=JOB_LEASE_SECONDS,
                 )
                 if not updated:
                     raise LeaseLostError("ingest job lease lost")
@@ -441,12 +444,12 @@ class IngestJobCoordinator:
         parent_task: asyncio.Task[None] | None,
     ) -> None:
         while True:
-            await asyncio.sleep(_JOB_HEARTBEAT_SECONDS)
+            await asyncio.sleep(JOB_HEARTBEAT_SECONDS)
             try:
                 renewed = await store.heartbeat(
                     job_id,
                     lease_owner=self._lease_owner,
-                    lease_seconds=_JOB_LEASE_SECONDS,
+                    lease_seconds=JOB_LEASE_SECONDS,
                 )
             except Exception:
                 logger.warning("Ingest job lease heartbeat failed for %s", job_id, exc_info=True)

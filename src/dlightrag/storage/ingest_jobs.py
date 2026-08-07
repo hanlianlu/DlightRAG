@@ -9,8 +9,13 @@ from dlightrag.utils import normalize_workspace
 
 TABLE = "dlightrag_ingest_jobs"
 JOB_RETENTION_SECONDS = 7 * 24 * 3600
-# A running job untouched this long has no live owner: liveness, not retention.
-STALE_RUNNING_SECONDS = 24 * 3600
+JOB_LEASE_SECONDS = 300
+JOB_HEARTBEAT_SECONDS = 60
+# Liveness is the lease, nothing else: a live worker renews it every heartbeat.
+# This window is how long after a lease lapses we still expect its owner (or a
+# restarting process) to reclaim the job, and it partitions orphans exactly --
+# fresher ones are recovered, older ones are failed.
+JOB_ORPHAN_AFTER_SECONDS = 12 * JOB_LEASE_SECONDS
 _PRUNE_BATCH = 1000
 ABANDONED_ERROR = "ingest job abandoned after process exit"
 
@@ -175,7 +180,7 @@ WHERE (
     status = 'queued'
     OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
 )
-  AND updated_at >= NOW() - ($1 * INTERVAL '1 second')
+  AND COALESCE(lease_expires_at, updated_at) >= NOW() - ($1 * INTERVAL '1 second')
 ORDER BY updated_at ASC
 LIMIT $2
 """
@@ -202,7 +207,7 @@ WITH updated AS (
         SELECT job_id
         FROM dlightrag_ingest_jobs
         WHERE status IN ('queued', 'running')
-          AND updated_at < NOW() - ($1 * INTERVAL '1 second')
+          AND COALESCE(lease_expires_at, updated_at) < NOW() - ($1 * INTERVAL '1 second')
         ORDER BY updated_at ASC
         LIMIT $3
     )
@@ -366,21 +371,21 @@ class PGIngestJobStore:
         return _serialize_row(row) if row is not None else None
 
     async def list_recoverable(self) -> list[dict[str, Any]]:
-        """Return queued/running jobs that are recent enough to recover."""
+        """Return queued/running jobs whose owner may still come back for them."""
 
         async def _operation(conn: Any) -> list[Any]:
-            return await conn.fetch(_LIST_RECOVERABLE, STALE_RUNNING_SECONDS, _PRUNE_BATCH)
+            return await conn.fetch(_LIST_RECOVERABLE, JOB_ORPHAN_AFTER_SECONDS, _PRUNE_BATCH)
 
         rows = await self._run(_operation)
         return [_serialize_row(row) for row in rows]
 
     async def prune(self) -> dict[str, int]:
-        """Mark abandoned in-flight jobs failed and delete old finished rows."""
+        """Fail jobs whose owner is gone for good and delete old finished rows."""
 
         async def _operation(conn: Any) -> dict[str, int]:
             failed = await conn.fetchval(
                 _MARK_ABANDONED,
-                STALE_RUNNING_SECONDS,
+                JOB_ORPHAN_AFTER_SECONDS,
                 json.dumps([ABANDONED_ERROR]),
                 _PRUNE_BATCH,
                 _MAX_JOB_ERRORS,
@@ -425,7 +430,9 @@ def _json_value(value: Any, *, default: Any) -> Any:
 
 __all__ = [
     "ABANDONED_ERROR",
+    "JOB_HEARTBEAT_SECONDS",
+    "JOB_LEASE_SECONDS",
+    "JOB_ORPHAN_AFTER_SECONDS",
     "JOB_RETENTION_SECONDS",
     "PGIngestJobStore",
-    "STALE_RUNNING_SECONDS",
 ]

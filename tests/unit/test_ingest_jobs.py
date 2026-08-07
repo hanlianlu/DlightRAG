@@ -5,8 +5,9 @@ import json
 from typing import Any
 
 from dlightrag.storage.ingest_jobs import (
+    JOB_LEASE_SECONDS,
+    JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,
-    STALE_RUNNING_SECONDS,
     PGIngestJobStore,
 )
 
@@ -342,8 +343,9 @@ async def test_ingest_job_store_prunes_stale_jobs() -> None:
     mark_query, mark_args = conn.fetchvals[0]
     assert "status IN ('queued', 'running')" in mark_query
     assert "errors_truncated =" in mark_query
-    # Liveness, not retention: a dead worker must be reaped long before 7 days.
-    assert mark_args[0] == STALE_RUNNING_SECONDS == 24 * 3600
+    # Liveness comes from the lease, so the reaper keys off it, not updated_at.
+    assert "COALESCE(lease_expires_at, updated_at) <" in mark_query
+    assert mark_args[0] == JOB_ORPHAN_AFTER_SECONDS
     assert json.loads(mark_args[1]) == ["ingest job abandoned after process exit"]
     assert mark_args[3] == 200
     delete_query, delete_args = conn.fetchvals[1]
@@ -391,7 +393,9 @@ async def test_ingest_job_store_lists_recoverable_jobs() -> None:
     query, args = conn.fetches[0]
     assert "status = 'queued'" in query
     assert "lease_expires_at < NOW()" in query
-    assert args[0] == STALE_RUNNING_SECONDS
+    # Recovery and reaping split orphans on the same boundary: no gap, no overlap.
+    assert "COALESCE(lease_expires_at, updated_at) >=" in query
+    assert args[0] == JOB_ORPHAN_AFTER_SECONDS
 
 
 async def test_ingest_job_store_deletes_workspace_jobs() -> None:
@@ -405,3 +409,9 @@ async def test_ingest_job_store_deletes_workspace_jobs() -> None:
     query, args = conn.fetchvals[0]
     assert "DELETE FROM dlightrag_ingest_jobs" in query
     assert args == ("project_a",)
+
+
+def test_the_orphan_window_leaves_room_for_a_live_lease_to_renew() -> None:
+    """Reaping at the lease boundary would kill workers that are merely slow."""
+    assert JOB_ORPHAN_AFTER_SECONDS > JOB_LEASE_SECONDS * 4
+    assert JOB_ORPHAN_AFTER_SECONDS < JOB_RETENTION_SECONDS
