@@ -145,7 +145,9 @@ workspace: default
 ## docs/postgresql.md#reader-role-and-read-replicas.
 # service_role: writer
 
-## Docker Compose supplies local PostgreSQL defaults. Update these and Docker Compose for an external PostgreSQL endpoint. 
+## Under Docker Compose, .env wins: any DLIGHTRAG_POSTGRES_* there overrides the
+## fields below. Point at an external endpoint from .env, not from here; these
+## fields are for running outside Compose.
 ## postgres_ssl_mode options include disable | allow | prefer | require | verify-ca | verify-full
 
 # postgres_host: localhost

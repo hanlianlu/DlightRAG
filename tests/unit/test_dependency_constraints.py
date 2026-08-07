@@ -72,6 +72,14 @@ def test_compose_preloads_postgres_extensions() -> None:
     assert "shared_preload_libraries=pg_textsearch,pg_jieba" in compose
 
 
+def test_compose_postgres_endpoint_is_env_overridable() -> None:
+    """A hardcoded endpoint would silently beat config.yaml: env outranks YAML."""
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "DLIGHTRAG_POSTGRES_HOST: ${DLIGHTRAG_POSTGRES_HOST:-postgres}" in compose
+    assert 'DLIGHTRAG_POSTGRES_PORT: "${DLIGHTRAG_POSTGRES_PORT:-5432}"' in compose
+
+
 def test_compose_postgres_performance_knobs_are_env_overridable() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
