@@ -234,9 +234,9 @@
             <h2 id="delete-conversation-title">Delete conversation</h2>
             <p id="delete-conversation-message">This conversation and its history will be permanently deleted.</p>
             <p id="delete-conversation-draft-warning" hidden>Your unsent draft and attachments will also be discarded.</p>
-            <div class="conversation-dialog-actions">
+            <div class="ui-dialog-actions">
                 <button type="submit" value="cancel">Cancel</button>
-                <button type="submit" value="delete" class="conversation-dialog-danger">Delete</button>
+                <button type="submit" value="delete" class="ui-dialog-danger">Delete</button>
             </div>
         </form>
     </dialog>
@@ -246,9 +246,9 @@
         <form method="dialog">
             <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
             <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
-            <div class="conversation-dialog-actions">
+            <div class="ui-dialog-actions">
                 <button type="submit" value="cancel">Cancel</button>
-                <button type="submit" value="delete-all" class="conversation-dialog-danger">Delete all</button>
+                <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all</button>
             </div>
         </form>
     </dialog>
@@ -257,7 +257,7 @@
         <form method="dialog">
             <h2 id="discard-draft-title">Discard draft?</h2>
             <p>Your unsent message and attachments will not move to another conversation.</p>
-            <div class="conversation-dialog-actions">
+            <div class="ui-dialog-actions">
                 <button type="submit" value="cancel">Keep editing</button>
                 <button type="submit" value="discard">Discard and continue</button>
             </div>
@@ -277,13 +277,12 @@
                    class="workspace-dialog-input"
                    autocomplete="off"
                    placeholder="Type workspace name...">
-            <div class="workspace-dialog-actions">
+            <div class="ui-dialog-actions">
                 <button type="button"
-                        class="workspace-dialog-cancel"
                         data-action="close-delete-workspace-dialog">Cancel</button>
                 <button type="submit"
                         id="delete-workspace-confirm-btn"
-                        class="workspace-dialog-delete"
+                        class="ui-dialog-danger"
                         disabled>Delete</button>
             </div>
         </form>

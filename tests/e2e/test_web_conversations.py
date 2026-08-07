@@ -386,7 +386,7 @@ def test_delete_all_conversations_is_quiet_accessible_and_creates_fresh_session(
 
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     title = dialog.get_by_role("heading", name="Delete all conversations?")
-    actions = dialog.locator(".conversation-dialog-actions")
+    actions = dialog.locator(".ui-dialog-actions")
     assert dialog.evaluate(
         """element => {
             const bounds = element.getBoundingClientRect();
@@ -424,9 +424,7 @@ def test_delete_all_failure_preserves_conversations_draft_and_theme_tokens(page:
     trigger.click()
     dialog = page.get_by_role("dialog", name="Delete all conversations?")
     danger = dialog.get_by_role("button", name="Delete all")
-    page.add_style_tag(
-        content=".conversation-dialog-actions button { transition: none !important; }"
-    )
+    page.add_style_tag(content=".ui-dialog-actions button { transition: none !important; }")
     for color_mode in ("light", "dark"):
         page.locator("html").evaluate(
             "(element, mode) => { element.dataset.colorMode = mode; }",
@@ -480,7 +478,7 @@ def test_delete_all_is_keyboard_accessible_and_centered_on_mobile(page: Page) ->
     title = dialog.get_by_role("heading", name="Delete all conversations?")
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     assert (
-        dialog.locator(".conversation-dialog-actions").evaluate(
+        dialog.locator(".ui-dialog-actions").evaluate(
             "element => getComputedStyle(element).justifyContent"
         )
         == "center"

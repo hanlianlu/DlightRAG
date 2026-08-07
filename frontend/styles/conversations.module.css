@@ -191,8 +191,8 @@
 
 :global(.conversation-row input) {
     background: var(--color-bg-subtle);
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-xs);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
     color: var(--color-text-primary);
     font: inherit;
     font-size: var(--font-size-detail);
@@ -201,9 +201,9 @@
     padding: var(--space-tight);
 }
 
+/* The row already tints on :focus-within, so a ring here would be a third layer. */
 :global(.conversation-row input:focus) {
-    border-color: var(--color-action-border-hover);
-    box-shadow: 0 0 0 2px var(--color-accent-hover);
+    border-color: var(--color-accent-border);
 }
 
 :global(.conversation-list-status) {
@@ -325,47 +325,6 @@
     line-height: var(--line-height-control);
 }
 
-:global(.conversation-dialog-actions) {
-    display: flex;
-    gap: var(--space-tight);
-    justify-content: flex-end;
-    margin-top: var(--space-section);
-}
-
-:global(.conversation-dialog-actions button) {
-    background: transparent;
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-size-detail);
-    padding: var(--space-tight) var(--space-component);
-    transition: background 150ms, border-color 150ms, color 150ms;
-}
-
-:global(.conversation-dialog-actions button:hover) {
-    background: var(--color-bg-hover);
-    border-color: var(--color-control-border-hover);
-    color: var(--color-text-primary);
-}
-
-:global(.conversation-dialog-actions .conversation-dialog-danger) {
-    background: var(--color-danger-bg);
-    border-color: transparent;
-    color: var(--color-on-danger);
-}
-
-:global(.conversation-dialog-actions .conversation-dialog-danger:hover) {
-    background: color-mix(
-        in srgb,
-        var(--color-danger-bg) 90%,
-        var(--color-text-primary)
-    );
-    border-color: transparent;
-    color: var(--color-on-danger);
-}
-
 :global(#delete-all-conversations-dialog h2) {
     text-align: center;
     white-space: nowrap;
@@ -376,14 +335,14 @@
     text-align: center;
 }
 
-:global(#delete-all-conversations-dialog .conversation-dialog-actions) {
+:global(#delete-all-conversations-dialog .ui-dialog-actions) {
     justify-content: center;
 }
 
+/* Buttons take the ring; inputs signal focus with their border, as everywhere else. */
 :global(#chat-sidebar button:focus-visible),
-:global(#chat-sidebar input:focus-visible),
 :global(#conversation-sidebar-open:focus-visible),
-:global(.conversation-dialog-actions button:focus-visible) {
+:global(.ui-dialog-actions button:focus-visible) {
     outline: 2px solid var(--color-control-ring);
     outline-offset: 2px;
 }
