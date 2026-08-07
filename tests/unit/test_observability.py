@@ -3,6 +3,7 @@
 
 import inspect
 from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -111,6 +112,50 @@ async def test_trace_observation_redacts_error_text_in_privacy_mode() -> None:
     update = client.observations[-1].updates[-1]
     assert update["status_message"] == "error"
     assert "secret provider detail" not in str(update)
+
+
+def _record_propagation(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> None:
+    @contextmanager
+    def fake_propagate(**kwargs: Any) -> Generator[None]:
+        order.append(f"session={kwargs['session_id']}")
+        yield
+
+    monkeypatch.setattr("langfuse.propagate_attributes", fake_propagate)
+
+
+async def test_trace_observation_opens_the_session_before_the_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Langfuse only propagates to spans opened after the session context."""
+    order: list[str] = []
+    _record_propagation(monkeypatch, order)
+
+    class _OrderedClient(_RecordingLangfuse):
+        def start_as_current_observation(self, **kwargs: Any) -> _RecordingObservation:
+            order.append("span")
+            return super().start_as_current_observation(**kwargs)
+
+    observability._client = _OrderedClient()
+
+    async with observability.trace_observation(
+        "answer_pipeline", as_type="chain", session_id="conv-1"
+    ):
+        pass
+
+    assert order == ["session=conv-1", "span"]
+
+
+async def test_trace_observation_without_a_session_claims_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    _record_propagation(monkeypatch, order)
+    observability._client = _RecordingLangfuse()
+
+    async with observability.trace_observation("ingest_pipeline", as_type="chain"):
+        pass
+
+    assert order == []
 
 
 def test_init_tracing_reads_trace_sensitive_flag() -> None:

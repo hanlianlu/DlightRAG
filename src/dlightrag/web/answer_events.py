@@ -278,16 +278,18 @@ async def stream_answer_events(
     """
     ws_list = workspaces or [workspace or manager.config.workspace]
     if trace_sensitive_enabled():
+        conversation_ref = prepared_conversation.conversation_id
         identity = {
             "principal_id": prepared_conversation.principal_id,
-            "conversation_id": prepared_conversation.conversation_id,
+            "conversation_id": conversation_ref,
         }
     else:
+        conversation_ref = hashlib.sha256(
+            prepared_conversation.conversation_id.encode("utf-8")
+        ).hexdigest()
         identity = {
             "principal_hash": prepared_conversation.principal_id,
-            "conversation_hash": hashlib.sha256(
-                prepared_conversation.conversation_id.encode("utf-8")
-            ).hexdigest(),
+            "conversation_hash": conversation_ref,
         }
     metadata = {
         "stream": True,
@@ -302,6 +304,7 @@ async def stream_answer_events(
         as_type="chain",
         input={"query": query},
         metadata=metadata,
+        session_id=conversation_ref,
     ) as observation:
         if prepared_conversation.committed_submission is not None:
             done = _done_from_committed_turn(prepared_conversation.committed_submission)

@@ -8,7 +8,7 @@ every wrapper returns the original function unchanged (zero overhead).
 
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
@@ -506,6 +506,7 @@ async def trace_observation(
     as_type: str = "span",
     input: Any | None = None,
     metadata: Any | None = None,
+    session_id: str | None = None,
 ) -> AsyncIterator[_ObservationHandle]:
     """Mark a DlightRAG operation as a Langfuse v4 observation."""
     if _client is None:
@@ -516,10 +517,18 @@ async def trace_observation(
         observation_kwargs["input"] = input
     if metadata is not None:
         observation_kwargs["metadata"] = metadata
+    stack = ExitStack()
     try:
-        cm = _client.start_as_current_observation(**observation_kwargs)
-        observation = cm.__enter__()
+        if session_id is not None:
+            from langfuse import propagate_attributes
+
+            # Entered first: Langfuse only propagates to spans opened afterwards.
+            stack.enter_context(propagate_attributes(session_id=session_id))
+        observation = stack.enter_context(
+            _client.start_as_current_observation(**observation_kwargs)
+        )
     except Exception:
+        stack.close()
         logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
         yield _ObservationHandle(None)
         return
@@ -538,4 +547,4 @@ async def trace_observation(
             _safe_update(observation, level="ERROR", status_message=status)
             raise
     finally:
-        _exit_observation(cm, exc_type, exc, tb)
+        _exit_observation(stack, exc_type, exc, tb)

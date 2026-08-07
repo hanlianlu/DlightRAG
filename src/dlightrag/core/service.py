@@ -792,6 +792,7 @@ class RAGService:
 
     async def _resume_lightrag_pipeline(self) -> None:
         """Run LightRAG's native sweep for pending and interrupted documents."""
+        from dlightrag.observability import trace_observation
         from dlightrag.storage.pool import pg_pool
 
         try:
@@ -800,7 +801,12 @@ class RAGService:
                 lock_key = _pipeline_recovery_lock_key(self.config.workspace)
                 await conn.execute("SELECT pg_advisory_lock($1)", lock_key)
                 try:
-                    await self._lightrag.apipeline_process_enqueue_documents()
+                    async with trace_observation(
+                        "ingest_pipeline",
+                        as_type="chain",
+                        metadata={"trigger": "startup_recovery"},
+                    ):
+                        await self._lightrag.apipeline_process_enqueue_documents()
                     logger.info("LightRAG startup pipeline recovery complete")
                 finally:
                     await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)

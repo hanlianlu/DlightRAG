@@ -103,6 +103,17 @@ class UnifiedIngestionEngine:
         self._bm25_language_classifier = bm25_language_classifier
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
+    async def _process_enqueued(self, doc_ids: list[str]) -> None:
+        """Root span for the run, so extraction calls land in one trace instead of thousands."""
+        from dlightrag.observability import trace_observation
+
+        async with trace_observation(
+            "ingest_pipeline",
+            as_type="chain",
+            metadata={"document_count": len(doc_ids), "doc_ids": doc_ids},
+        ):
+            await self._lightrag.apipeline_process_enqueue_documents()
+
     async def aingest_file(
         self,
         path: str | Path,
@@ -174,7 +185,7 @@ class UnifiedIngestionEngine:
                 if entry.chunk_options is not None
                 else self._chunk_options or None,
             )
-            await self._lightrag.apipeline_process_enqueue_documents()
+            await self._process_enqueued([entry.doc_id])
 
             return await self._finalize_ingested_document(
                 doc_id=entry.doc_id,
@@ -261,7 +272,7 @@ class UnifiedIngestionEngine:
                     process_options=[entry.process_options for entry in enqueue_entries],
                     chunk_options=chunk_options,
                 )
-                await self._lightrag.apipeline_process_enqueue_documents()
+                await self._process_enqueued([entry.doc_id for entry in enqueue_entries])
 
                 for entry in enqueue_entries:
                     try:
