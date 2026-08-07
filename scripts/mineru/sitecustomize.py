@@ -31,18 +31,6 @@ public ``llm_aided_title`` entry point does not expose it, so there is no
 configuration path; the builders are read from module globals at call time,
 which makes rebinding them sufficient.
 
-Finally it raises the hybrid parse effort. MinerU ships ``DEFAULT_HYBRID_EFFORT
-= "medium"``, which force-disables image/chart analysis
-(``_resolve_effective_image_analysis``) and feeds the VLM pipeline-YOLO layout
-boxes instead of letting it detect blocks itself. On dense multi-panel figures
-that leaves most figures split into per-panel crops with missing or misbound
-captions. At ``high`` the same paper yields whole figures with every caption
-correct, more extracted text overall, and chart/image content that ``medium``
-leaves empty — at roughly five times the parse time. The effort is a hardcoded
-constant with no environment override, but the API's ``effort`` form field
-binds it as a default at function-definition time, so rebinding the constant
-before MinerU is imported changes the server default.
-
 It also widens the HTTP keep-alive. Uvicorn closes idle connections after 5s and
 MinerU exposes no flag for it, while LightRAG's MinerU client polls a *pooled*
 connection every ``poll_interval_seconds`` (DlightRAG default: 5). The two
@@ -50,7 +38,7 @@ deadlines coincide, so each poll is a coin flip on whether the server tears the
 connection down just as the client reuses it; httpx then raises
 ``RemoteProtocolError: Server disconnected without sending a response`` and the
 whole ingest fails while MinerU keeps parsing, unaware. Longer parses poll more
-often and so fail more reliably — a ~470s hybrid/high parse gets ~94 chances.
+often and so fail more reliably — a ~470s parse gets ~94 chances.
 The value matches docling-serve, which ships ``timeout_keep_alive = 60``: both
 sidecars then behave alike, and the margin covers any sane poll interval instead
 of breaking again the moment an operator raises a knob that has no upper bound.
@@ -78,10 +66,7 @@ def _config_with_keep_alive(self, *args, **kwargs):
 
 uvicorn.config.Config.__init__ = _config_with_keep_alive
 
-import mineru.cli.backend_options as _backend_options  # noqa: E402  # type: ignore[import-not-found]
 import mineru.utils.llm_aided as _llm_aided  # noqa: E402  # type: ignore[import-not-found]
-
-_backend_options.DEFAULT_HYBRID_EFFORT = "high"
 
 _PROMPT_INPUT_ANCHOR = "Input title list:"
 _STRICT_JSON_DIRECTIVE = (
