@@ -373,11 +373,11 @@ seed, then validates inline `[n]` and `[n-m]` citations against the final
 post-fusion context. The system prompt tells the model not to generate a
 reference section; the output boundary still normalizes provider drift by
 discarding generated bibliography tails and deriving `sources` deterministically
-from validated inline markers. Validation has two outcomes: a marker that
-resolves to no chunk is dropped, and a `[n-m]` marker that resolves to an excerpt
-holding nothing but Markdown headings is degraded to its document marker `[n]` —
-such an excerpt states no fact, so the claim is credited to the document rather
-than to a passage the model only guessed at. Returned `sources` contain only
+from validated inline markers. Validation has two outcomes. A marker resolving
+to no chunk is dropped. A `[n-m]` marker resolving to an excerpt of nothing but
+Markdown headings degrades to its document marker `[n]`: that excerpt states no
+fact, so the claim is credited to the document rather than to a passage the
+model only guessed at. Returned `sources` contain only
 cited documents and chunks.
 Answer generation also derives `answer_images` and `answer_blocks` from those
 validated cited sources before transport projection, so SDK, REST, MCP, and Web

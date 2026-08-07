@@ -93,11 +93,14 @@ there is no setting for it.
 
 A parse therefore emits zero `chart` blocks by design — the figures arrive as
 `image` blocks and become `drawing` chunks carrying the sidecar's description.
-That is the expected shape, not a missing feature. It does mean the whole-figure
-segmentation MinerU produces is what the sidecar sees, which is why the parse
-engine matters: the `hybrid-engine` backend at its `high` effort lets the VLM
-detect blocks itself instead of consuming precomputed layout boxes, yielding
-whole figures with correctly bound captions rather than per-panel fragments.
+That is the expected shape, not a missing feature.
+
+The sidecar only ever sees the figures MinerU cut, so the `hybrid-engine`
+backend's effort setting decides what it gets. MinerU's own default, `medium`,
+consumes precomputed layout boxes and can split a dense multi-panel figure into
+fragments. `high` lets the VLM detect blocks itself, returning whole figures with
+correctly bound captions, at roughly 5x the parse time. Set
+`MINERU_HYBRID_EFFORT=high` in `.env.mineru` for figure-heavy corpora.
 
 To use Docling instead, remove/comment the MinerU block and configure only:
 
@@ -863,12 +866,12 @@ the job keeps running and the method returns its current row instead of
 cancelling it. REST, Web, and MCP start jobs immediately and are not governed by
 this wait setting.
 
-Ingest job state is stored in `dlightrag_ingest_jobs`. DlightRAG keeps this as
-operational state rather than user-facing configuration: recent queued/running
-jobs are recovered automatically on startup, completed jobs are pruned after 14
-days, queued/running jobs that have not updated for 24 hours are marked failed
-on job-store initialization, and workspace reset cancels active in-process jobs
-before deleting the matching workspace's job rows. Remote prefix recovery resumes
+Ingest job state is stored in `dlightrag_ingest_jobs` as operational state, not
+user-facing configuration. A sweeper runs every 30 minutes and on startup: it
+fails jobs whose owner stopped renewing the 5-minute lease an hour ago, and
+deletes finished jobs older than 7 days. Startup also recovers recent
+queued/running jobs, and workspace reset cancels active in-process jobs before
+deleting that workspace's job rows. Remote prefix recovery resumes
 from the next unfinished source window; single-document internals remain owned by
 LightRAG's document status pipeline.
 
