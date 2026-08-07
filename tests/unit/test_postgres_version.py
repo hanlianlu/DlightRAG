@@ -72,3 +72,16 @@ async def test_ensure_postgres_extensions_rejects_unknown_names() -> None:
 
     with pytest.raises(ValueError, match="unsupported PostgreSQL extension"):
         await ensure_postgres_extensions(conn, ("pg_textsearch; DROP SCHEMA public",))
+
+
+async def test_ensure_postgres_extensions_names_the_way_out() -> None:
+    """A managed endpoint reports the server's own error, which never mentions BM25."""
+
+    class _RefusingConn:
+        async def execute(self, statement: str) -> None:
+            raise RuntimeError("pg_textsearch library not loaded.")
+
+    with pytest.raises(RuntimeError, match="bm25_enabled: false") as excinfo:
+        await ensure_postgres_extensions(_RefusingConn(), ("pg_textsearch",))
+
+    assert "pg_textsearch library not loaded." in str(excinfo.value)

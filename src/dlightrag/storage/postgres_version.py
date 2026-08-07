@@ -66,4 +66,11 @@ async def ensure_postgres_extensions(conn: Any, extensions: tuple[str, ...]) -> 
     for extension in extensions:
         if extension not in _BOOTSTRAPPABLE_EXTENSIONS:
             raise ValueError(f"unsupported PostgreSQL extension bootstrap: {extension!r}")
-        await conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+        try:
+            await conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")
+        except Exception as exc:
+            # Both bootstrappable extensions exist only to serve BM25.
+            raise RuntimeError(
+                f"PostgreSQL extension {extension!r} is unavailable ({exc}). "
+                "It backs BM25 retrieval; set bm25_enabled: false to run vector-only."
+            ) from exc
