@@ -100,24 +100,33 @@ Theme-specific values live only in the token layer. Components consume semantic 
 
 Core palette:
 
+Both themes are Tailwind stone, mirrored by step, so a value's place in the ramp
+can be read rather than measured.
+
 | Semantic role | Dark | Mineral Light |
 |---|---|---|
-| Page background | `#0c0a09` | `#ffffff` |
-| Primary surface | `#1c1917` | `#f5f5f2` |
-| Elevated surface | `#292524` | `#e9e8e2` |
-| Primary text | `#f5f5f4` | `#24231f` |
-| Body text | `#d6d3d1` | `#45443f` |
-| Muted text | `#a8a29e` | `#66645d` |
+| Page background | `#0c0a09` stone-950 | `#fafaf9` stone-50 |
+| Primary surface | `#1c1917` stone-900 | `#f5f5f4` stone-100 |
+| Elevated surface | `#292524` stone-800 | `#e7e5e4` stone-200 |
+| Primary text | `#f5f5f4` stone-100 | `#1c1917` stone-900 |
+| Body text | `#d6d3d1` stone-300 | `#44403c` stone-700 |
+| Muted text | `#a8a29e` stone-400 | `#57534e` stone-600 |
 | Primary accent | `#d2b661` | `#806719` |
 | Danger | `#f87171` | `#b42318` |
 
+Borders, dividers and row tints are stone at low alpha: stone-500 in dark,
+stone-700 in light. Scrims and overlay shadows are stone-950 and stone-900
+respectively.
+
 Each ramp steps away from the page background as elevation rises, so the
 conversation always holds the strongest contrast against its text: lighter in
-dark, darker in light. Because white is the ceiling, the light ramp descends.
+dark, darker in light. `frontend/tokens/ramp.test.ts` asserts that direction.
 
 Full-height drawers are edges rather than floating cards, so they are separated
-by that tone step plus a hairline border, not by a cast shadow. Only elements
-that overlap the conversation — popovers, menus, dialogs, toasts — carry one.
+by that tone step plus a hairline border. Neither theme casts a drawer shadow:
+in light the surface sits below the canvas, and in dark a black shadow over
+`#0c0a09` resolves to `rgb(8,7,6)`. Only elements that overlap the conversation
+— popovers, menus, dialogs, toasts — carry one.
 
 The token layer defines the complete light values needed by existing semantic roles, including hover, active, border, source surface, overlays, selection, shadow, and on-accent text.
 

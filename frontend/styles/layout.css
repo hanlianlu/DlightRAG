@@ -484,7 +484,6 @@ body.panel-open .composer-inner {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    box-shadow: var(--shadow-panel);
 }
 
 body.conversation-sidebar-open .panel {
