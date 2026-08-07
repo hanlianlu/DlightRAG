@@ -207,8 +207,11 @@
    --color-text-subtle: #6f6d65;
    --color-text-dim: #726f67;
 
-   --color-bg-base: #f5f5f2;
-   --color-bg-surface: #ffffff;
+   /* Elevation moves away from the reading canvas: darker here, lighter in dark
+      mode. White is the ceiling, so the light ramp has to descend to stay
+      monotonic, which also gives the conversation the strongest contrast. */
+   --color-bg-base: #ffffff;
+   --color-bg-surface: #f5f5f2;
    --color-bg-elevated: #e9e8e2;
    --color-bg-subtle: #efefeb;
    --color-bg-hover: rgba(69, 68, 63, 0.08);
@@ -268,8 +271,10 @@
    --color-overlay-border: rgba(111, 109, 101, 0.30);
    --color-overlay-veil: rgba(36, 35, 31, 0.78);
    --color-lightbox-nav-bg: rgba(255, 255, 255, 0.26);
-   --shadow-panel: -8px 0 32px rgba(36, 35, 31, 0.20);
-   --shadow-sidebar: 12px 0 36px rgba(36, 35, 31, 0.12);
+   /* The drawers sit below the canvas here, so they must not cast onto it; the
+      tone step and their hairline carry the separation. Overlays still float. */
+   --shadow-panel: none;
+   --shadow-sidebar: none;
    --shadow-popover: 0 12px 34px rgba(36, 35, 31, 0.22);
    --shadow-menu: 0 12px 28px rgba(36, 35, 31, 0.20);
    --shadow-toast: 0 4px 16px rgba(36, 35, 31, 0.18);

@@ -102,14 +102,22 @@ Core palette:
 
 | Semantic role | Dark | Mineral Light |
 |---|---|---|
-| Page background | `#0c0a09` | `#f5f5f2` |
-| Primary surface | `#1c1917` | `#ffffff` |
+| Page background | `#0c0a09` | `#ffffff` |
+| Primary surface | `#1c1917` | `#f5f5f2` |
 | Elevated surface | `#292524` | `#e9e8e2` |
 | Primary text | `#f5f5f4` | `#24231f` |
 | Body text | `#d6d3d1` | `#45443f` |
 | Muted text | `#a8a29e` | `#66645d` |
 | Primary accent | `#d2b661` | `#806719` |
 | Danger | `#f87171` | `#b42318` |
+
+Each ramp steps away from the page background as elevation rises, so the
+conversation always holds the strongest contrast against its text: lighter in
+dark, darker in light. Because white is the ceiling, the light ramp descends.
+
+Full-height drawers are edges rather than floating cards, so they are separated
+by that tone step plus a hairline border, not by a cast shadow. Only elements
+that overlap the conversation — popovers, menus, dialogs, toasts — carry one.
 
 The token layer defines the complete light values needed by existing semantic roles, including hover, active, border, source surface, overlays, selection, shadow, and on-accent text.
 
