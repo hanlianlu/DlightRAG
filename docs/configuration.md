@@ -84,12 +84,11 @@ parser_sidecars:
 ```
 
 `parser_sidecars.vlm` owns figure understanding, and MinerU's own image
-analysis is deliberately left off. LightRAG defaults `MINERU_LOCAL_IMAGE_ANALYSIS`
-to false and DlightRAG never sets it, so MinerU extracts each figure as a crop
-but does not analyse it; the VLM sidecar then describes that crop together with
-the surrounding text. Enabling MinerU's analysis would run a second VLM over the
-same image for roughly 58% more parse time and largely duplicate content, so
-there is no setting for it.
+analysis is deliberately left off. MinerU extracts each figure as a crop; the
+VLM sidecar then describes that crop together with the surrounding text.
+Enabling MinerU's analysis would run a second VLM over the same image for
+roughly 58% more parse time and largely duplicate content, so there is no
+setting for it.
 
 A parse therefore emits zero `chart` blocks by design — the figures arrive as
 `image` blocks and become `drawing` chunks carrying the sidecar's description.
@@ -113,10 +112,9 @@ parser_sidecars:
 
 `parser_sidecars.docling.do_formula_enrichment` transcribes detected formula
 regions and defaults on, matching MinerU's `enable_formula`, so the parser
-choice does not decide whether a corpus keeps its mathematics. Docling detects
-formulas during layout either way but leaves their text empty when this is off,
-and LightRAG then drops the empty formula silently. Turn it off only to save
-parse time on a corpus without mathematics.
+choice does not decide whether a corpus keeps its mathematics. Turning it off
+drops formulas silently rather than erroring, so turn it off only on a corpus
+without mathematics.
 
 `parser_sidecars.docling.code_formula_preset` names the model that transcribes
 them. Leave it unset unless the parser service runs on Apple Silicon:
@@ -126,34 +124,30 @@ them. Leave it unset unless the parser service runs on Apple Silicon:
 | CUDA, XPU, or CPU | Unset — Docling's built-in `codeformulav2` is used |
 | MPS | `granite_docling` |
 
-`codeformulav2` ships only a Transformers engine, whose supported devices
-exclude MPS, so enrichment fails there without a preset. `granite_docling` also
-ships an MLX engine. A stock docling-serve allows every preset — the
-`DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS` allowlist only matters if an
-operator has narrowed it. Repointing the preset invalidates the Docling bundle
-cache, so affected documents re-parse on their own.
+Docling's default model cannot run on MPS, so enrichment fails on Apple Silicon
+until the preset is set. Repointing the preset invalidates the Docling bundle
+cache, so affected documents re-parse on their own. The
+`DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS` allowlist matters only if an
+operator narrowed it; a stock docling-serve allows every preset.
 
-OCR needs no configuration. Docling's `auto` engine skips Nemotron on anything
-without CUDA and x86_64, so the CPU image always lands on RapidOCR, whose
-`PP-OCRv6_rec_small` reads Han and Latin from one 18708-character table. There
-is no second engine to route between, and `ocr_lang` never reaches the engine
-that `auto` picks.
+OCR needs no configuration, and `ocr_lang` has no effect: the CPU image resolves
+to a single engine that reads Han and Latin from one table.
 
 Both external parser clients poll every 5 seconds for at most 1440 attempts, a
 two-hour wait budget. **The parser service's HTTP keep-alive must exceed that
-interval.** Both clients reuse a pooled connection, so when the server's idle
-timeout equals the poll interval every poll races the server's connection close
-and a long parse eventually dies with `Server disconnected without sending a
-response` — while the parser keeps working, unaware. docling-serve already ships
-60 seconds; MinerU inherits Uvicorn's 5, exactly the poll interval, so
-`scripts/mineru/sitecustomize.py` widens the local sidecar to the same 60. A
+interval.** The clients reuse a pooled connection, so a keep-alive equal to the
+poll interval makes every poll race the server's connection close, and a long
+parse eventually dies with `Server disconnected without sending a response`
+while the parser keeps working, unaware. docling-serve already ships 60 seconds;
+`scripts/mineru/sitecustomize.py` raises the local MinerU sidecar to match. A
 parser service DlightRAG does not launch must be configured the same way
-(docling-serve: `--timeout-keep-alive`). OCR, formula
-enrichment, output formats, referenced images, raw-bundle
-validation, and retry semantics remain owned by LightRAG and the parser service. The optional local
-profile starts with `docker compose --profile docling up -d`; an external
-deployment supplies its own reachable endpoint. Native DlightRAG processes use
-`127.0.0.1` endpoints when their parser runs on the same host.
+(docling-serve: `--timeout-keep-alive`).
+
+OCR, formula enrichment, output formats, referenced images, raw-bundle
+validation, and retry semantics remain owned by LightRAG and the parser service.
+The optional local profile starts with `docker compose --profile docling up -d`;
+an external deployment supplies its own reachable endpoint. Native DlightRAG
+processes use `127.0.0.1` endpoints when their parser runs on the same host.
 
 `parser_sidecars.mineru.language` is MinerU's OCR language hint for scanned or
 image-based documents. It is separate from `extraction.language`, which controls
@@ -806,6 +800,27 @@ mcp_resource_server_url: https://rag.example.com/mcp
 This one optional field makes the MCP server publish RFC 9728 Protected Resource
 Metadata using the existing `jwt_issuer`. It is not needed for stdio, simple
 bearer auth, or directly supplied static-key JWTs. See [security.md](security.md).
+
+## Observability
+
+Tracing is off until both `langfuse_public_key` and `langfuse_secret_key` are
+set; those are secrets and belong in `.env`. The rest is non-secret and lives in
+`config.yaml`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `langfuse_host` | `https://cloud.langfuse.com` | Where traces are sent. Set per run mode — see [operations.md](operations.md#trace-endpoint-address) |
+| `langfuse_trace_sensitive_data` | `true` | `false` redacts the query, raw error text, and raw IDs. Does not affect LLM prompt/response capture |
+| `langfuse_export_external_spans` | `false` | Also export third-party OTEL spans. DlightRAG records model calls itself, so leaving this off avoids double counting |
+| `langfuse_environment` | unset | Environment label on every trace |
+| `langfuse_release` | unset | Release label on every trace |
+| `langfuse_sample_rate` | `1.0` | Fraction of traces exported |
+| `langfuse_timeout` | SDK default | Export request timeout, seconds |
+| `langfuse_flush_at` | SDK default | Events buffered before a flush |
+| `langfuse_flush_interval` | SDK default | Seconds between flushes |
+
+Running the bundled local stack is covered in
+[operations.md](operations.md#local-langfuse-observability).
 
 ## Citations
 
