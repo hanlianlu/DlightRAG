@@ -666,6 +666,15 @@ class RAGServiceManager:
         self._config.require_writer("ingest job access")
         return await self._ingest_jobs.get_job(job_id)
 
+    async def acancel_ingest_job(self, job_id: str) -> dict[str, Any] | None:
+        """Stop a running ingest job, keeping whatever it already ingested."""
+        self._config.require_writer("ingest job cancellation")
+        job = await self._ingest_jobs.get_job(job_id)
+        if job is None:
+            return None
+        await self._ingest_jobs.cancel_job(job_id, workspace=str(job.get("workspace", "")))
+        return await self._ingest_jobs.get_job(job_id)
+
     def _get_file_panel_store(self) -> PGFilePanelStore:
         if self._file_panel_store is None:
             from dlightrag.storage.file_panel import PGFilePanelStore

@@ -854,6 +854,41 @@ class TestIngestEndpoint:
         assert "lease_expires_at" not in body
         mock_manager.aget_ingest_job.assert_awaited_once_with("job-1")
 
+    async def test_cancel_ingest_job(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        mock_manager.acancel_ingest_job = AsyncMock(
+            return_value={
+                "job_id": "job-1",
+                "workspace": "default",
+                "source_type": "s3",
+                "status": "failed",
+                "processed_items": 64,
+            }
+        )
+
+        resp = await client.post("/ingest/jobs/job-1/cancel")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "failed"
+        # Cancelling stops further work; it never unwinds what already landed.
+        assert body["processed_items"] == 64
+        mock_manager.acancel_ingest_job.assert_awaited_once_with("job-1")
+
+    async def test_cancel_unknown_ingest_job_is_404(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        mock_manager.aget_ingest_job = AsyncMock(return_value=None)
+        mock_manager.acancel_ingest_job = AsyncMock()
+
+        resp = await client.post("/ingest/jobs/nope/cancel")
+
+        assert resp.status_code == 404
+        mock_manager.acancel_ingest_job.assert_not_awaited()
+
     @pytest.mark.usefixtures("_patch_manager")
     async def test_s3_key_and_prefix_mutually_exclusive(
         self, client: AsyncClient, mock_config: DlightragConfig

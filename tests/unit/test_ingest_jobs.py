@@ -4,7 +4,11 @@
 import json
 from typing import Any
 
-from dlightrag.storage.ingest_jobs import PGIngestJobStore
+from dlightrag.storage.ingest_jobs import (
+    JOB_RETENTION_SECONDS,
+    STALE_RUNNING_SECONDS,
+    PGIngestJobStore,
+)
 
 
 class _Acquire:
@@ -331,24 +335,20 @@ async def test_ingest_job_store_prunes_stale_jobs() -> None:
     conn.fetchval_results = [2, 3]
     store = PGIngestJobStore(pool=_Pool(conn))
 
-    result = await store.prune(
-        completed_ttl_seconds=14 * 24 * 3600,
-        stale_running_seconds=24 * 3600,
-        batch_size=500,
-    )
+    result = await store.prune()
 
     assert result == {"failed_abandoned": 2, "deleted_completed": 3}
     assert len(conn.fetchvals) == 2
     mark_query, mark_args = conn.fetchvals[0]
     assert "status IN ('queued', 'running')" in mark_query
     assert "errors_truncated =" in mark_query
-    assert mark_args[0] == 24 * 3600
+    # Liveness, not retention: a dead worker must be reaped long before 7 days.
+    assert mark_args[0] == STALE_RUNNING_SECONDS == 24 * 3600
     assert json.loads(mark_args[1]) == ["ingest job abandoned after process exit"]
-    assert mark_args[2] == 500
     assert mark_args[3] == 200
     delete_query, delete_args = conn.fetchvals[1]
     assert "status IN ('succeeded', 'failed')" in delete_query
-    assert delete_args == (14 * 24 * 3600, 500)
+    assert delete_args[0] == JOB_RETENTION_SECONDS == 7 * 24 * 3600
 
 
 async def test_ingest_job_store_lists_recoverable_jobs() -> None:
@@ -382,7 +382,7 @@ async def test_ingest_job_store_lists_recoverable_jobs() -> None:
     ]
     store = PGIngestJobStore(pool=_Pool(conn))
 
-    rows = await store.list_recoverable(stale_running_seconds=3600, limit=25)
+    rows = await store.list_recoverable()
 
     assert rows[0]["job_id"] == "job-1"
     assert rows[0]["workspace"] == "project_a"
@@ -391,7 +391,7 @@ async def test_ingest_job_store_lists_recoverable_jobs() -> None:
     query, args = conn.fetches[0]
     assert "status = 'queued'" in query
     assert "lease_expires_at < NOW()" in query
-    assert args == (3600, 25)
+    assert args[0] == STALE_RUNNING_SECONDS
 
 
 async def test_ingest_job_store_deletes_workspace_jobs() -> None:

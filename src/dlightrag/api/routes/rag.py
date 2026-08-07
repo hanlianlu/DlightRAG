@@ -150,6 +150,28 @@ async def get_ingest_job(
     return job
 
 
+@router.post("/ingest/jobs/{job_id}/cancel", response_model=IngestJobStatusResponse)
+async def cancel_ingest_job(
+    job_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Stop a running ingest job, keeping whatever it already ingested."""
+    manager = get_manager(request)
+    job = await manager.aget_ingest_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Ingest job not found")
+    workspace = job.get("workspace")
+    await enforce_access(
+        request,
+        user,
+        AccessAction.JOB_CANCEL,
+        workspace=str(workspace) if workspace else None,
+    )
+    cancelled = await manager.acancel_ingest_job(job_id)
+    return cancelled if cancelled is not None else job
+
+
 @router.post("/retrieve", response_model=RetrievalResponse)
 async def retrieve(
     body: RetrieveRequest, request: Request, user: UserContext = Depends(get_current_user)

@@ -2023,6 +2023,45 @@ class RAGService:
             for doc_id, info in (processed or {}).items()
         ]
 
+    async def afail_unfinished_docs(self, *, reason: str) -> int:
+        """Park unfinished documents as FAILED so no startup sweep resumes them.
+
+        LightRAG's recovery resets PARSING/ANALYZING/PROCESSING back to PENDING
+        and picks them up again, which would silently undo a cancellation.
+        """
+        self._ensure_initialized()
+        if self._lightrag_stores is None:
+            return 0
+
+        from dataclasses import asdict
+
+        from lightrag.base import DocStatus
+
+        unfinished = (
+            DocStatus.PENDING,
+            DocStatus.PARSING,
+            DocStatus.ANALYZING,
+            DocStatus.PROCESSING,
+            DocStatus.PREPROCESSED,
+        )
+        updates: dict[str, Any] = {}
+        for status in unfinished:
+            try:
+                docs = await self._lightrag_stores.docs_by_status(status)
+            except Exception as exc:
+                logger.warning("Failed to query %s docs: %s", status.value, exc)
+                continue
+            for doc_id, info in docs.items():
+                # Echo the whole row back so no field is dropped on the way through.
+                row = asdict(info)
+                row["status"] = DocStatus.FAILED
+                row["error_msg"] = reason
+                updates[doc_id] = row
+
+        if updates:
+            await self._lightrag_stores.doc_status.upsert(updates)
+        return len(updates)
+
     async def alist_failed_docs(self) -> list[dict[str, Any]]:
         """Return all documents currently in DocStatus.FAILED for this workspace."""
         self._ensure_initialized()

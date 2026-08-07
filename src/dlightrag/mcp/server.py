@@ -678,6 +678,30 @@ async def get_ingest_job_tool(
 
 
 @mcp_app.tool(
+    name="cancel_ingest_job",
+    description=(
+        "Stop a running ingest job. Documents already ingested are kept; "
+        "unfinished ones end up failed and can be retried."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def cancel_ingest_job_tool(
+    job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
+) -> dict[str, Any]:
+    args = IngestJobStatusInput.model_validate(locals())
+    manager = await _ensure_manager()
+    if not args.job_id:
+        raise ValueError("job_id is required")
+    result = await manager.aget_ingest_job(args.job_id)
+    if result is None:
+        raise ValueError(f"Ingest job not found: {args.job_id}")
+    workspace = result.get("workspace")
+    await _enforce_access(AccessAction.JOB_CANCEL, str(workspace) if workspace else None)
+    cancelled = await manager.acancel_ingest_job(args.job_id)
+    return cancelled if cancelled is not None else result
+
+
+@mcp_app.tool(
     name="list_files",
     description=(
         "List documents ingested in one workspace. Response returns files, count, and workspace."

@@ -119,6 +119,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
 
     assert names == {
         "answer",
+        "cancel_ingest_job",
         "create_workspace",
         "delete_files",
         "delete_workspace",

@@ -26,6 +26,8 @@ class LeaseLostError(RuntimeError):
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 _JOB_LEASE_SECONDS = 300
 _JOB_HEARTBEAT_SECONDS = 60
+# Well under the 24h abandoned-job threshold, so a dead worker is reaped promptly.
+_JOB_SWEEP_SECONDS = 3600
 
 
 class IngestJobStore(Protocol):
@@ -91,6 +93,7 @@ class IngestJobCoordinator:
         self._workspaces: dict[str, str] = {}
         self._recovery_started = False
         self._closing = False
+        self._sweeper: asyncio.Task[None] | None = None
         self._lease_owner = uuid.uuid4().hex
 
     async def get_store(self) -> IngestJobStore:
@@ -100,21 +103,24 @@ class IngestJobCoordinator:
             store = PGIngestJobStore()
             await store.initialize()
             self._store = store
-            await self._prune_store(store)
+            self._sweeper = asyncio.create_task(self._sweep_jobs(store))
             await self._recover_jobs(store)
         return self._store
 
     async def start_recovery(self) -> None:
         await self.get_store()
 
-    async def _prune_store(self, store: IngestJobStore) -> None:
-        try:
-            summary = await store.prune()
-        except Exception:
-            logger.warning("Ingest job cleanup failed", exc_info=True)
-            return
-        if summary.get("failed_abandoned") or summary.get("deleted_completed"):
-            logger.info("Ingest job cleanup: %s", summary)
+    async def _sweep_jobs(self, store: IngestJobStore) -> None:
+        """Reap abandoned jobs and drop expired rows, starting immediately."""
+        while True:
+            try:
+                summary = await store.prune()
+            except Exception:
+                logger.warning("Ingest job cleanup failed", exc_info=True)
+            else:
+                if any(summary.values()):
+                    logger.info("Ingest job cleanup: %s", summary)
+            await asyncio.sleep(_JOB_SWEEP_SECONDS)
 
     async def _recover_jobs(self, store: IngestJobStore) -> None:
         if self._recovery_started:
@@ -201,32 +207,47 @@ class IngestJobCoordinator:
                 "Failed to delete ingest jobs for workspace '%s': %s", log_safe(workspace), exc
             )
 
+    async def cancel_job(self, job_id: str, *, workspace: str) -> bool:
+        """Stop one running job. False when it is not ours or already finished."""
+        if self._workspaces.get(job_id) != normalize_workspace(workspace):
+            return False
+        return await self._cancel(job_id)
+
     async def cancel_for_workspace(self, workspace: str) -> int:
         job_ids = [
             job_id
             for job_id, job_workspace in self._workspaces.items()
             if job_workspace == workspace
         ]
-        if not job_ids:
-            return 0
+        cancelled = await asyncio.gather(*(self._cancel(job_id) for job_id in job_ids))
+        return sum(cancelled)
 
-        tasks: list[asyncio.Task[None]] = []
-        for job_id in job_ids:
-            task = self._tasks.get(job_id)
-            if task is None:
-                self._forget(job_id)
-            elif not task.done():
-                task.cancel()
-                tasks.append(task)
-            else:
-                self._forget(job_id)
-
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        for job_id in job_ids:
+    async def _cancel(self, job_id: str) -> bool:
+        task = self._tasks.get(job_id)
+        if task is None or task.done():
             self._forget(job_id)
-        return len(tasks)
+            return False
+        task.cancel()
+        # _run_job's CancelledError branch marks the job failed before re-raising.
+        with suppress(asyncio.CancelledError):
+            _ = await task
+        self._forget(job_id)
+        return True
+
+    async def _park_unfinished_docs(self, workspace: str) -> None:
+        """Best-effort: cancelling the job must not be undone by a later sweep."""
+        try:
+            svc = await self._get_service(workspace)
+            parked = await svc.afail_unfinished_docs(reason="ingest job cancelled")
+        except Exception:
+            logger.warning(
+                "Could not park unfinished documents for '%s'; a restart may resume them",
+                log_safe(workspace),
+                exc_info=True,
+            )
+            return
+        if parked:
+            logger.info("Parked %d unfinished document(s) after cancellation", parked)
 
     async def start_job(
         self,
@@ -385,6 +406,7 @@ class IngestJobCoordinator:
             if lease_lost.is_set():
                 cleanup_after_run = False
             elif not self._closing:
+                await self._park_unfinished_docs(workspace)
                 await store.fail(
                     job_id,
                     error="ingest job cancelled",
@@ -453,6 +475,11 @@ class IngestJobCoordinator:
         return final_result
 
     async def close(self) -> None:
+        if self._sweeper is not None:
+            self._sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._sweeper
+            self._sweeper = None
         if self._tasks:
             self._closing = True
             for task in self._tasks.values():

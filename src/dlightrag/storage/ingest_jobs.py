@@ -8,9 +8,10 @@ from dlightrag.storage.migrations import Migration, apply_migrations
 from dlightrag.utils import normalize_workspace
 
 TABLE = "dlightrag_ingest_jobs"
-DEFAULT_COMPLETED_JOB_TTL_SECONDS = 14 * 24 * 3600
-DEFAULT_STALE_RUNNING_SECONDS = 24 * 3600
-DEFAULT_PRUNE_BATCH_SIZE = 1000
+JOB_RETENTION_SECONDS = 7 * 24 * 3600
+# A running job untouched this long has no live owner: liveness, not retention.
+STALE_RUNNING_SECONDS = 24 * 3600
+_PRUNE_BATCH = 1000
 ABANDONED_ERROR = "ingest job abandoned after process exit"
 
 _CREATE = """
@@ -364,42 +365,27 @@ class PGIngestJobStore:
         row = await self._run(_operation)
         return _serialize_row(row) if row is not None else None
 
-    async def list_recoverable(
-        self,
-        *,
-        stale_running_seconds: int = DEFAULT_STALE_RUNNING_SECONDS,
-        limit: int = DEFAULT_PRUNE_BATCH_SIZE,
-    ) -> list[dict[str, Any]]:
+    async def list_recoverable(self) -> list[dict[str, Any]]:
         """Return queued/running jobs that are recent enough to recover."""
-        if limit <= 0:
-            raise ValueError("limit must be positive")
 
         async def _operation(conn: Any) -> list[Any]:
-            return await conn.fetch(_LIST_RECOVERABLE, stale_running_seconds, limit)
+            return await conn.fetch(_LIST_RECOVERABLE, STALE_RUNNING_SECONDS, _PRUNE_BATCH)
 
         rows = await self._run(_operation)
         return [_serialize_row(row) for row in rows]
 
-    async def prune(
-        self,
-        *,
-        completed_ttl_seconds: int = DEFAULT_COMPLETED_JOB_TTL_SECONDS,
-        stale_running_seconds: int = DEFAULT_STALE_RUNNING_SECONDS,
-        batch_size: int = DEFAULT_PRUNE_BATCH_SIZE,
-    ) -> dict[str, int]:
-        """Mark abandoned in-flight jobs failed and delete old completed rows."""
-        if batch_size <= 0:
-            raise ValueError("batch_size must be positive")
+    async def prune(self) -> dict[str, int]:
+        """Mark abandoned in-flight jobs failed and delete old finished rows."""
 
         async def _operation(conn: Any) -> dict[str, int]:
             failed = await conn.fetchval(
                 _MARK_ABANDONED,
-                stale_running_seconds,
+                STALE_RUNNING_SECONDS,
                 json.dumps([ABANDONED_ERROR]),
-                batch_size,
+                _PRUNE_BATCH,
                 _MAX_JOB_ERRORS,
             )
-            deleted = await conn.fetchval(_PRUNE_COMPLETED, completed_ttl_seconds, batch_size)
+            deleted = await conn.fetchval(_PRUNE_COMPLETED, JOB_RETENTION_SECONDS, _PRUNE_BATCH)
             return {
                 "failed_abandoned": int(failed or 0),
                 "deleted_completed": int(deleted or 0),
@@ -439,8 +425,7 @@ def _json_value(value: Any, *, default: Any) -> Any:
 
 __all__ = [
     "ABANDONED_ERROR",
-    "DEFAULT_COMPLETED_JOB_TTL_SECONDS",
-    "DEFAULT_PRUNE_BATCH_SIZE",
-    "DEFAULT_STALE_RUNNING_SECONDS",
+    "JOB_RETENTION_SECONDS",
     "PGIngestJobStore",
+    "STALE_RUNNING_SECONDS",
 ]

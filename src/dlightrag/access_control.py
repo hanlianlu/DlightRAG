@@ -21,6 +21,7 @@ class AccessAction:
     WORKSPACE_DELETE = "workspace.delete"
     WORKSPACE_RESET = "workspace.reset"
     JOB_READ = "job.read"
+    JOB_CANCEL = "job.cancel"
 
 
 # Named action bundles usable anywhere an action pattern is accepted (e.g. a
@@ -39,6 +40,7 @@ _EDITOR_ACTIONS: tuple[str, ...] = (
     AccessAction.WORKSPACE_UPDATE_METADATA,
     AccessAction.WORKSPACE_DELETE_FILES,
     AccessAction.JOB_READ,
+    AccessAction.JOB_CANCEL,
 )
 ACTION_PRESETS: dict[str, tuple[str, ...]] = {
     "reader": _READER_ACTIONS,
