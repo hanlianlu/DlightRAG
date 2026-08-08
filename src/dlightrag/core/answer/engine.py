@@ -19,18 +19,16 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
-from dlightrag.citations.utils import context_chunk_key
 from dlightrag.core.answer.context import AnswerContextPacker
 from dlightrag.core.answer.errors import CurrentImagePayloadError
+from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import answer_core
-from dlightrag.utils.images import image_data_uri
 from dlightrag.utils.tokens import estimate_messages_tokens, truncate_conversation_history
 
 logger = logging.getLogger(__name__)
@@ -571,43 +569,7 @@ class AnswerEngine:
         with citation tags derived from its ``source_id``, so the LLM
         knows which document each KG fact originated from.
         """
-        parts: list[str] = []
-
-        entities = contexts.get("entities", [])
-        if entities:
-            parts.append("## Entities")
-            for e in entities[:20]:
-                name = e.get("entity_name", "")
-                etype = e.get("entity_type", "")
-                desc = e.get("description", "")
-                cite = ""
-                if indexer:
-                    tags = indexer.get_doc_tags(
-                        e.get("source_id"),
-                        workspace=e.get("_workspace"),
-                    )
-                    if tags:
-                        cite = f" (from {', '.join(tags)})"
-                parts.append(f"- **{name}** ({etype}): {desc}{cite}")
-
-        rels = contexts.get("relationships", [])
-        if rels:
-            parts.append("\n## Relationships")
-            for r in rels[:20]:
-                src = r.get("src_id", "")
-                tgt = r.get("tgt_id", "")
-                desc = r.get("description", "")
-                cite = ""
-                if indexer:
-                    tags = indexer.get_doc_tags(
-                        r.get("source_id"),
-                        workspace=r.get("_workspace"),
-                    )
-                    if tags:
-                        cite = f" (from {', '.join(tags)})"
-                parts.append(f"- {src} -> {tgt}: {desc}{cite}")
-
-        return "\n".join(parts) if parts else "No knowledge graph context available."
+        return format_kg_context(contexts, indexer)
 
     @staticmethod
     def _build_excerpt_blocks(
@@ -633,7 +595,7 @@ class AnswerEngine:
         if composer_chunks:
             blocks.append({"type": "text", "text": "## User-attached documents"})
             blocks.extend(
-                AnswerEngine._build_excerpt_lane_blocks(
+                build_excerpt_lane_blocks(
                     composer_chunks,
                     indexer=indexer,
                     image_blocks_by_context_key=image_blocks_by_context_key,
@@ -642,114 +604,12 @@ class AnswerEngine:
         if rag_chunks:
             blocks.append({"type": "text", "text": "## Knowledge-base evidence"})
             blocks.extend(
-                AnswerEngine._build_excerpt_lane_blocks(
+                build_excerpt_lane_blocks(
                     rag_chunks,
                     indexer=indexer,
                     image_blocks_by_context_key=image_blocks_by_context_key,
                 )
             )
-        return blocks
-
-    @staticmethod
-    def _build_excerpt_lane_blocks(
-        chunks: list[dict[str, Any]],
-        *,
-        indexer: CitationIndexer | None,
-        image_blocks_by_context_key: dict[str, dict[str, Any]] | None,
-    ) -> list[dict[str, Any]]:
-        """Render one evidence lane without changing chunk order."""
-        # Group chunks by reference_id, preserving first-seen order
-        doc_groups: dict[str, list[dict[str, Any]]] = {}
-        doc_order: list[str] = []
-        for chunk in chunks:
-            ref_id = str(chunk.get("reference_id", ""))
-            if ref_id not in doc_groups:
-                doc_order.append(ref_id)
-                doc_groups[ref_id] = [chunk]
-            else:
-                doc_groups[ref_id].append(chunk)
-
-        blocks: list[dict[str, Any]] = []
-
-        for ref_id in doc_order:
-            doc_chunks = doc_groups[ref_id]
-
-            # Document section header
-            first = doc_chunks[0]
-            file_path = first.get("file_path", "")
-            filename = Path(file_path).name if file_path else f"Source {ref_id}"
-
-            # Collect document-level metadata from first chunk
-            meta = first.get("metadata") or {}
-            meta_parts: list[str] = []
-            for k, v in meta.items():
-                if v is not None and str(v).strip():
-                    display_key = k.removeprefix("doc_").replace("_", " ")
-                    meta_parts.append(f"{display_key}: {v}")
-            meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
-
-            workspace = indexer.get_doc_workspace(ref_id) if indexer is not None else None
-            workspace_label = f" [workspace: {workspace}]" if workspace else ""
-            header = f"### Document [{ref_id}]{workspace_label}: {filename}{meta_suffix}"
-            blocks.append({"type": "text", "text": header})
-
-            # Per-chunk: image label + image + text content + dynamic metadata
-            for chunk in doc_chunks:
-                content = chunk.get("content", "").strip()
-                chunk_id = chunk.get("chunk_id", "")
-                page_number = chunk.get("page_number")
-                img_data = chunk.get("image_data")
-
-                # Build citation tag
-                cite_tag = ""
-                if indexer and ref_id and chunk_id:
-                    cidx = indexer.get_chunk_idx(ref_id, chunk_id)
-                    if cidx is not None:
-                        cite_tag = f"[{ref_id}-{cidx}]"
-
-                # Image with enriched label. The label is emitted only when the
-                # corresponding image block is actually sent to the answer model.
-                if img_data:
-                    if image_blocks_by_context_key is not None:
-                        block = image_blocks_by_context_key.get(
-                            context_chunk_key(
-                                chunk_id,
-                                workspace=chunk.get("_workspace"),
-                            )
-                        )
-                    else:
-                        block = {
-                            "type": "image_url",
-                            "image_url": {"url": image_data_uri(img_data)},
-                        }
-                    if block is not None:
-                        label = _build_image_label(
-                            cite_tag=cite_tag,
-                            chunk=chunk,
-                            filename=filename,
-                        )
-                        blocks.append({"type": "text", "text": label})
-                        blocks.append(block)
-
-                # Text excerpt
-                if content:
-                    if cite_tag:
-                        if page_number:
-                            label_line = f"{cite_tag} {filename}, Page {page_number}"
-                        else:
-                            label_line = f"{cite_tag} {filename}"
-                    else:
-                        if page_number:
-                            label_line = f"[{filename}, Page {page_number}]"
-                        else:
-                            label_line = f"[{filename}]"
-                    blocks.append({"type": "text", "text": f"{label_line}\n{content}"})
-
-                # Dynamic metadata line for non-internal chunk annotations.
-                meta_line = _format_chunk_metadata(chunk)
-                if meta_line:
-                    blocks.append({"type": "text", "text": meta_line})
-
         return blocks
 
     def _build_user_prompt(
@@ -829,137 +689,6 @@ def _oldest_history_turn_width(messages: list[dict[str, Any]]) -> int:
         if first_role == "user" and second_role == "assistant":
             return 2
     return 1
-
-
-# ── Internal keys & metadata formatting ──────────────────────────────────
-# Fields that are internal plumbing — never sent to the LLM context.
-# Everything else in the chunk dict auto-surfaces as structured metadata.
-_INTERNAL_KEYS: frozenset[str] = frozenset(
-    {
-        "chunk_id",
-        "chunk_idx",
-        "content",
-        "bm25_profile",
-        "distance",
-        "file_path",
-        "full_doc_id",
-        "image_data",
-        "image_mime_type",
-        "image_url",
-        "metadata",
-        "page_number",
-        "pipeline_stage",
-        "reference_id",
-        "relevance_score",
-        "rerank_score",
-        "score",
-        "sidecar",
-        "sidecar_location",
-        "thumbnail_url",
-        "_answer_image_sent",
-        "_workspace",
-    }
-)
-
-
-def _format_chunk_metadata(
-    chunk: dict[str, Any],
-    *,
-    internal_keys: frozenset[str] = _INTERNAL_KEYS,
-) -> str:
-    """Serialize non-internal chunk fields into a compact metadata line.
-
-    Returns a string like ``[meta: sidecar.type=drawing, sidecar.id=im-hash-xxx]``
-    or an empty string when there are no extra fields.
-    """
-    extra: dict[str, Any] = {}
-    for k, v in chunk.items():
-        if k in internal_keys or k.startswith("_"):
-            continue
-        if v is None or (isinstance(v, str) and not v.strip()):
-            continue
-        extra[k] = v
-
-    if not extra:
-        return ""
-
-    parts: list[str] = []
-    for k, v in extra.items():
-        if isinstance(v, dict):
-            for sk, sv in v.items():
-                if sv is not None and str(sv).strip():
-                    parts.append(f"{k}.{sk}={sv}")
-        elif isinstance(v, list):
-            items = [str(x) for x in v[:5] if str(x).strip()]
-            if len(v) > 5:
-                items.append(f"...({len(v)} total)")
-            parts.append(f"{k}=[{', '.join(items)}]")
-        elif isinstance(v, bool):
-            parts.append(f"{k}={v}")
-        elif isinstance(v, (int, float)):
-            if isinstance(v, float):
-                parts.append(f"{k}={v:.4f}")
-            else:
-                parts.append(f"{k}={v}")
-        else:
-            s = str(v).strip()
-            if len(s) > 120:
-                s = s[:117] + "..."
-            parts.append(f"{k}={s}")
-
-    if not parts:
-        return ""
-
-    return "[meta: " + ", ".join(parts) + "]"
-
-
-def _build_image_label(
-    *,
-    cite_tag: str,
-    chunk: dict[str, Any],
-    filename: str,
-) -> str:
-    """Build an enriched image label with sidecar awareness.
-
-    Produces labels like::
-
-        [1-2] "2025 Annual Report" Page 7 (VLM-generated drawing)
-
-    The ``(VLM-generated drawing)`` suffix appears when the chunk's
-    sidecar indicates a drawing type, helping the LLM distinguish
-    real document images from VLM-generated illustrations.
-    """
-    meta = chunk.get("metadata") or {}
-    title = meta.get("title", "")
-    page_number = chunk.get("page_number")
-    sidecar = chunk.get("sidecar")
-
-    label_parts: list[str] = []
-    if cite_tag:
-        label_parts.append(cite_tag)
-    if title:
-        label_parts.append(f'"{title}"')
-    if page_number is not None:
-        label_parts.append(f"Page {page_number}")
-    elif filename:
-        label_parts.append(filename)
-    else:
-        label_parts.append("Page image")
-
-    # Annotate VLM-generated drawings so the LLM can distinguish them
-    # from actual document photographs/scans.
-    if isinstance(sidecar, dict):
-        stype = sidecar.get("type", "")
-        if stype == "drawing":
-            sid = sidecar.get("id", "")
-            if sid:
-                label_parts.append(f"(VLM drawing: {sid[:24]})")
-            else:
-                label_parts.append("(VLM-generated drawing)")
-        elif stype:
-            label_parts.append(f"(sidecar: {stype})")
-
-    return " ".join(label_parts)
 
 
 __all__ = ["AnswerEngine", "AnswerInputOverflowError"]

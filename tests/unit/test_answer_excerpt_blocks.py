@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for dynamic contract chunk rendering in _build_excerpt_blocks."""
 
-from dlightrag.core.answer.engine import _build_image_label, _format_chunk_metadata
+from dlightrag.core.answer.excerpts import build_image_label, format_chunk_metadata
 
 
 class TestFormatChunkMetadata:
@@ -13,7 +13,7 @@ class TestFormatChunkMetadata:
             "content": "Hello",
             "file_path": "/docs/x.pdf",
         }
-        assert _format_chunk_metadata(chunk) == ""
+        assert format_chunk_metadata(chunk) == ""
 
     def test_skips_internal_keys(self) -> None:
         chunk = {
@@ -39,7 +39,7 @@ class TestFormatChunkMetadata:
             "sidecar_location": "file:///tmp/report.parsed",
             "pipeline_stage": "rerank",
         }
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert result == ""
         assert "chunk_id" not in result
         assert "chunk_idx" not in result
@@ -60,7 +60,7 @@ class TestFormatChunkMetadata:
 
     def test_formats_simple_scalar_fields(self) -> None:
         chunk = {"section_title": "Risk Factors", "chunk_id": "c1"}
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert "section_title=Risk Factors" in result
         assert "[meta:" in result
 
@@ -69,7 +69,7 @@ class TestFormatChunkMetadata:
             "attributes": {"department": "legal", "asset_id": "asset-123"},
             "chunk_id": "c1",
         }
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert "attributes.department=legal" in result
         assert "attributes.asset_id=asset-123" in result
 
@@ -78,7 +78,7 @@ class TestFormatChunkMetadata:
             "tags": ["a", "b", "c", "d", "e", "f"],
             "chunk_id": "c1",
         }
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert "tags=[" in result
         assert "...(6 total)" in result
 
@@ -89,7 +89,7 @@ class TestFormatChunkMetadata:
             "empty_str": "",
             "chunk_id": "c1",
         }
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert result == ""
 
     def test_truncates_long_string_values(self) -> None:
@@ -97,18 +97,18 @@ class TestFormatChunkMetadata:
             "long_field": "x" * 200,
             "chunk_id": "c1",
         }
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert len(result) < 200
         assert "..." in result
 
     def test_handles_bool_values(self) -> None:
         chunk = {"is_visual": True, "chunk_id": "c1"}
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert "is_visual=True" in result
 
     def test_skips_underscore_prefixed_keys(self) -> None:
         chunk = {"_private": "secret", "business": {"type": "contract"}, "chunk_id": "c1"}
-        result = _format_chunk_metadata(chunk)
+        result = format_chunk_metadata(chunk)
         assert "_private" not in result
         assert "business.type=contract" in result
 
@@ -116,7 +116,7 @@ class TestFormatChunkMetadata:
 class TestBuildImageLabel:
     def test_basic_label_with_citation_and_page(self) -> None:
         chunk = {"page_number": 7, "metadata": {"title": "My Report"}}
-        result = _build_image_label(cite_tag="[1-2]", chunk=chunk, filename="report.pdf")
+        result = build_image_label(cite_tag="[1-2]", chunk=chunk, filename="report.pdf")
         assert '[1-2] "My Report" Page 7' == result
 
     def test_label_with_vlm_drawing_sidecar(self) -> None:
@@ -125,7 +125,7 @@ class TestBuildImageLabel:
             "metadata": {},
             "sidecar": {"type": "drawing", "id": "im-hash-abc123def456"},
         }
-        result = _build_image_label(cite_tag="[1-1]", chunk=chunk, filename="paper.pdf")
+        result = build_image_label(cite_tag="[1-1]", chunk=chunk, filename="paper.pdf")
         assert "(VLM drawing: im-hash-abc123def456)" in result
         assert "[1-1]" in result
 
@@ -134,7 +134,7 @@ class TestBuildImageLabel:
             "metadata": {},
             "sidecar": {"type": "drawing"},
         }
-        result = _build_image_label(cite_tag="[1-1]", chunk=chunk, filename="paper.pdf")
+        result = build_image_label(cite_tag="[1-1]", chunk=chunk, filename="paper.pdf")
         assert "(VLM-generated drawing)" in result
 
     def test_label_with_other_sidecar_type(self) -> None:
@@ -142,10 +142,10 @@ class TestBuildImageLabel:
             "metadata": {},
             "sidecar": {"type": "custom_visual", "path": "/img/x.png"},
         }
-        result = _build_image_label(cite_tag="[1-1]", chunk=chunk, filename="paper.pdf")
+        result = build_image_label(cite_tag="[1-1]", chunk=chunk, filename="paper.pdf")
         assert "(sidecar: custom_visual)" in result
 
     def test_label_falls_back_to_filename(self) -> None:
         chunk = {"metadata": {}}
-        result = _build_image_label(cite_tag="", chunk=chunk, filename="photo.jpg")
+        result = build_image_label(cite_tag="", chunk=chunk, filename="photo.jpg")
         assert "photo.jpg" == result
