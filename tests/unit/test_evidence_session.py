@@ -2,6 +2,7 @@
 """Tests for request-local agent evidence."""
 
 from dlightrag.core.agent.evidence import EvidenceSession
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.web_search import WebSearchHit, web_context_rows
 
 
@@ -99,3 +100,42 @@ def test_rendering_labels_knowledge_base_and_open_web_separately() -> None:
     assert "[2-1]" in text
     assert text.index("Knowledge-base evidence") < text.index("corpus alpha c1")
     assert text.index("Open-web evidence") < text.index("current passage")
+
+
+def test_images_are_never_rendered_without_an_explicit_transport_budget() -> None:
+    row = _corpus_row()
+    row["image_data"] = "raw-unbounded-payload"
+    session = EvidenceSession()
+    session.add_rows([row])
+
+    blocks, _ = session.render_blocks()
+
+    assert all(block["type"] != "image_url" for block in blocks)
+
+
+def test_evidence_images_consume_the_supplied_budget_once() -> None:
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    budget = AnswerImageBudget(
+        max_images=1,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+    row = _corpus_row()
+    row["image_data"] = png
+    session = EvidenceSession(rag_image_budget=budget)
+
+    session.add_rows([row])
+    first, _ = session.render_blocks()
+    second, _ = session.render_blocks()
+
+    assert len([block for block in first if block["type"] == "image_url"]) == 1
+    assert len([block for block in second if block["type"] == "image_url"]) == 1
+    assert budget.count == 1

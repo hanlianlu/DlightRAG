@@ -9,6 +9,7 @@ from typing import Any
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.utils import context_chunk_key
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
 
 
@@ -26,7 +27,12 @@ class EvidenceDelta:
 class EvidenceSession:
     """Accumulate one answer's evidence under stable numeric citation ids."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        composer_image_budget: AnswerImageBudget | None = None,
+        rag_image_budget: AnswerImageBudget | None = None,
+    ) -> None:
         self.contexts: RetrievalContexts = {
             "chunks": [],
             "entities": [],
@@ -35,6 +41,9 @@ class EvidenceSession:
         self._source_ids: dict[tuple[str, str, str], str] = {}
         self._seen_chunks: set[str] = set()
         self._seen_rows: dict[str, set[str]] = {}
+        self._composer_image_budget = composer_image_budget
+        self._rag_image_budget = rag_image_budget
+        self._image_blocks: dict[str, dict[str, Any]] = {}
 
     def add_rows(self, rows: list[ContextRow]) -> EvidenceDelta:
         return self.add_contexts({"chunks": rows})
@@ -47,6 +56,7 @@ class EvidenceSession:
                 continue
             self._seen_chunks.add(identity)
             self.contexts["chunks"].append(normalized)
+            self._budget_image(normalized)
             new_chunks += 1
 
         counts: dict[str, int] = {}
@@ -106,10 +116,36 @@ class EvidenceSession:
                 build_excerpt_lane_blocks(
                     rows,
                     indexer=indexer,
-                    image_blocks_by_context_key=image_blocks_by_context_key,
+                    image_blocks_by_context_key=(
+                        image_blocks_by_context_key
+                        if image_blocks_by_context_key is not None
+                        else self._image_blocks
+                    ),
                 )
             )
         return blocks, indexer
+
+    def _budget_image(self, row: ContextRow) -> None:
+        if not row.get("image_data"):
+            return
+        source_type = str((row.get("metadata") or {}).get("source_type") or "")
+        budget = (
+            self._composer_image_budget
+            if source_type == "web_attachment"
+            else self._rag_image_budget
+        )
+        if budget is None:
+            return
+        chunk_id = str(row.get("chunk_id") or "")
+        key = context_chunk_key(chunk_id, workspace=row.get("_workspace"))
+        if not key or key in self._image_blocks:
+            return
+        block = budget.add_base64(
+            str(row["image_data"]),
+            label=chunk_id or str(row.get("file_path") or "evidence_image"),
+        )
+        if block is not None:
+            self._image_blocks[key] = block
 
     def _normalize_chunk(self, row: ContextRow) -> tuple[ContextRow, str]:
         normalized = dict(row)

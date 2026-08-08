@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from dlightrag.core.retrieval.web_search import ExaSearch
     from dlightrag.core.source_download import SourceDownloadTarget
     from dlightrag.models.composer import ComposerModelBundle
+    from dlightrag.models.tool_model import QueryToolModel
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
@@ -39,7 +40,9 @@ from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
+    CurrentImagePayloadError,
 )
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
@@ -142,6 +145,31 @@ class _ScopedAnswerStream:
         if not self._released:
             self._released = True
             self._semaphore.release()
+
+
+class _CompletedAnswerStream:
+    """Expose a completed agent answer through the existing stream contract."""
+
+    def __init__(
+        self,
+        answer: str,
+        *,
+        trace: dict[str, Any],
+        image_descriptions: dict[str, str],
+    ) -> None:
+        self.answer = answer
+        self.trace = trace
+        self.image_descriptions = image_descriptions
+        self._sent = False
+
+    def __aiter__(self) -> _CompletedAnswerStream:
+        return self
+
+    async def __anext__(self) -> str:
+        if self._sent:
+            raise StopAsyncIteration
+        self._sent = True
+        return self.answer
 
 
 def _iso_or_none(value: Any) -> str | None:
@@ -285,6 +313,7 @@ class RAGServiceManager:
         self._query_image_describer: QueryImageDescriber | None = None
         self._composer_model_bundle: ComposerModelBundle | None = None
         self._web_search: ExaSearch | None = None
+        self._query_tool_model: QueryToolModel | None = None
         self._query_image_describer_lock = asyncio.Lock()
         self._composer_model_bundle_lock = asyncio.Lock()
         self._composer_evidence_selector: ComposerEvidenceSelector | None = None
@@ -917,6 +946,40 @@ class RAGServiceManager:
             )
         return self._answer_engine
 
+    def _new_answer_image_budget(self) -> AnswerImageBudget:
+        answer = self._config.answer
+        capability = self._answer_image_capability
+        return AnswerImageBudget(
+            max_images=capability.effective_max_images if capability is not None else 0,
+            max_total_bytes=answer.image_max_total_bytes,
+            max_bytes_per_image=answer.image_max_bytes,
+            max_pixels=answer.image_max_pixels,
+            max_px=answer.image_max_px,
+            min_px=answer.image_min_px,
+            quality=answer.image_quality,
+            min_quality=answer.image_min_quality,
+        )
+
+    @staticmethod
+    def _budget_agent_images(
+        current_images: list[dict[str, Any]],
+        history_images: list[dict[str, Any]],
+        budget: AnswerImageBudget,
+    ) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        for index, image in enumerate(current_images, start=1):
+            block = budget.add_user_image(image, label=f"query_image_{index}")
+            if block is None:
+                raise CurrentImagePayloadError(
+                    f"current image query_image_{index} could not fit the answer image budget"
+                )
+            blocks.append(block)
+        for index, image in enumerate(history_images, start=1):
+            block = budget.add_user_image(image, label=f"selected_history_image_{index}")
+            if block is not None:
+                blocks.append(block)
+        return blocks
+
     def _sem_bound(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """Cap a DlightRAG-owned LLM callable by the direct-LLM concurrency semaphore.
 
@@ -957,6 +1020,16 @@ class RAGServiceManager:
 
             self._web_search = ExaSearch(key)
         return self._web_search
+
+    def _get_query_tool_model(self) -> QueryToolModel | None:
+        """Return the agent model only when external search makes an agent useful."""
+        if not self.web_search_available:
+            return None
+        if self._query_tool_model is None:
+            from dlightrag.models.tool_model import create_query_tool_model
+
+            self._query_tool_model = create_query_tool_model(self._config)
+        return self._query_tool_model
 
     async def _aget_query_image_describer(self) -> QueryImageDescriber:
         """Lazy-create the VLM query-image describer."""
@@ -1484,6 +1557,256 @@ class RAGServiceManager:
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from e
 
+    async def _aanswer_agentic(
+        self,
+        query: str,
+        *,
+        workspace: str | None,
+        workspaces: list[str] | None,
+        all_workspaces: bool,
+        top_k: int | None,
+        chunk_top_k: int | None,
+        answer_context_top_k: int | None,
+        filters: MetadataFilter | None,
+        query_images: list[dict[str, Any]] | None,
+        history: list[dict[str, Any]] | None,
+        semantic_highlights: bool,
+        scope: RequestScope | None,
+    ) -> RetrievalResult:
+        result, _ = await self._arun_agentic_prepared(
+            PreparedAnswerTurn.stateless(query, query_images, history=history),
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            answer_context_top_k=answer_context_top_k,
+            filters=filters,
+            scope=scope,
+            stream=False,
+        )
+        if semantic_highlights:
+            from dlightrag.core.answer.highlights import enrich_semantic_highlights
+
+            result.sources = await enrich_semantic_highlights(
+                result.sources,
+                answer_text=result.answer,
+                config=self._config,
+            )
+            self._set_answer_media(result)
+        return result
+
+    async def _aanswer_stream_agentic_prepared(
+        self,
+        turn: PreparedAnswerTurn,
+        *,
+        workspace: str | None,
+        workspaces: list[str] | None,
+        all_workspaces: bool,
+        top_k: int | None,
+        chunk_top_k: int | None,
+        answer_context_top_k: int | None,
+        filters: MetadataFilter | None,
+        scope: RequestScope | None,
+    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
+        result, prepared = await self._arun_agentic_prepared(
+            turn,
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            answer_context_top_k=answer_context_top_k,
+            filters=filters,
+            scope=scope,
+            stream=True,
+        )
+        stream = _CompletedAnswerStream(
+            result.answer or "",
+            trace=result.trace,
+            image_descriptions=prepared.descriptions_by_ordinal,
+        )
+        return result.contexts, stream
+
+    async def _arun_agentic_prepared(
+        self,
+        turn: PreparedAnswerTurn,
+        *,
+        workspace: str | None,
+        workspaces: list[str] | None,
+        all_workspaces: bool,
+        top_k: int | None,
+        chunk_top_k: int | None,
+        answer_context_top_k: int | None,
+        filters: MetadataFilter | None,
+        scope: RequestScope | None,
+        stream: bool,
+    ) -> tuple[RetrievalResult, PreparedQueryImages]:
+        from dlightrag.core.agent.runner import AgenticAnswerRunner
+        from dlightrag.observability import trace_observation
+
+        ws_list = await self._resolve_manager_query_workspaces(
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+        )
+        scoped = _scope_for_workspaces(scope, ws_list)
+        history = list(turn.text_history) or None
+        current_images = list(turn.current_query_images)
+        history_images = list(turn.history_query_images)
+        if current_images:
+            await self._maybe_reprobe_answer_image_capability()
+        _check_answer_image_capability(
+            query_images=current_images,
+            capability=self._answer_image_capability,
+        )
+
+        if turn.plan is None:
+            plan, prepared = await self._describe_and_plan(
+                turn.retrieval_query,
+                text_history=history,
+                query_images=current_images,
+                ws_list=ws_list,
+            )
+        else:
+            plan = turn.plan
+            described = dict(turn.current_image_descriptions)
+            prepared = PreparedQueryImages(
+                descriptions=list(described.values()),
+                descriptions_by_ordinal=described,
+            )
+
+        first_retrieval = True
+
+        async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
+            nonlocal first_retrieval
+            if first_retrieval:
+                first_retrieval = False
+                return await self.aretrieve(
+                    turn.current_query,
+                    plan=plan,
+                    workspaces=ws_list,
+                    top_k=top_k,
+                    chunk_top_k=chunk_top_k,
+                    filters=filters,
+                    query_images=current_images,
+                    scope=scoped,
+                )
+            return await self.aretrieve(
+                search_query,
+                workspaces=ws_list,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                filters=filters,
+                scope=scoped,
+            )
+
+        web_search = self._get_web_search()
+        tool_model = self._get_query_tool_model()
+        if web_search is None or tool_model is None:
+            raise RuntimeError("Agentic answer requires configured web search and tool model")
+
+        async def model_func(**kwargs: Any) -> Any:
+            async with self._direct_llm_sem:
+                return await tool_model(**kwargs)
+
+        composer_image_budget = self._new_answer_image_budget()
+        rag_image_budget = (
+            self._new_answer_image_budget() if turn.web_composer_visuals else composer_image_budget
+        )
+        bounded_images = self._budget_agent_images(
+            current_images,
+            history_images,
+            composer_image_budget,
+        )
+        runner = AgenticAnswerRunner(
+            model_func=model_func,
+            retrieve_knowledge_base=retrieve_knowledge_base,
+            search_web=web_search.search,
+            context_top_k=answer_context_top_k or self._config.answer.context_top_k,
+            history_token_ceiling=self._config.max_conversation_tokens,
+            composer_image_budget=composer_image_budget,
+            rag_image_budget=rag_image_budget,
+        )
+        initial_contexts: RetrievalContexts | None = None
+        if turn.composer_context_chunks:
+            initial_contexts = {
+                "chunks": [dict(row) for row in turn.composer_context_chunks],
+                "entities": [],
+                "relationships": [],
+            }
+
+        try:
+            async with asyncio.timeout(self._config.request_timeout):
+                async with trace_observation(
+                    "answer_pipeline",
+                    as_type="chain",
+                    input={"query": turn.current_query},
+                    metadata={
+                        "stream": stream,
+                        "agentic": True,
+                        "workspaces": ws_list,
+                        "history_turns": len(history or []),
+                        "query_image_count": len(current_images),
+                        "answer_context_top_k": answer_context_top_k,
+                    },
+                ) as pipeline_trace:
+                    try:
+                        await asyncio.wait_for(
+                            self._answer_stream_sem.acquire(),
+                            timeout=self._config.answer_acquire_timeout,
+                        )
+                    except TimeoutError as exc:
+                        raise RAGServiceUnavailableError(
+                            "Every answer slot is busy; retry shortly."
+                        ) from exc
+                    try:
+                        result = await runner.run(
+                            turn.current_query,
+                            retrieval_query=plan.standalone_query,
+                            initial_contexts=initial_contexts,
+                            conversation_history=history,
+                            query_images=bounded_images or None,
+                        )
+                    finally:
+                        self._answer_stream_sem.release()
+                    result.trace.update(turn.composer_evidence_trace)
+                    result.trace["query_image_description_count"] = len(prepared.descriptions)
+                    result.image_descriptions = prepared.descriptions
+                    self._set_answer_media(result)
+                    pipeline_trace.update(
+                        output=answer_trace_output(
+                            result.answer,
+                            result.sources,
+                            result.contexts,
+                        )
+                    )
+                    return result, prepared
+        except TimeoutError as exc:
+            raise RAGServiceUnavailableError(
+                detail=f"Request timed out after {self._config.request_timeout}s"
+            ) from exc
+
+    @staticmethod
+    def _set_answer_media(result: RetrievalResult) -> None:
+        from dlightrag.core.answer.media import (
+            answer_blocks_from_markdown,
+            answer_images_from_sources,
+        )
+        from dlightrag.models.schemas import Reference
+
+        result.references = [
+            Reference(id=source.id, title=source.title or "Source") for source in result.sources
+        ]
+        result.answer_images = answer_images_from_sources(
+            result.sources,
+            contexts=result.contexts,
+        )
+        result.answer_blocks = answer_blocks_from_markdown(
+            result.answer,
+            result.answer_images,
+        )
+
     async def aanswer(
         self,
         query: str,
@@ -1513,6 +1836,21 @@ class RAGServiceManager:
         Public answer calls do not accept Web Composer documents; those belong
         only to the server-owned Web conversation surface.
         """
+        if self.web_search_available:
+            return await self._aanswer_agentic(
+                query,
+                workspace=workspace,
+                workspaces=workspaces,
+                all_workspaces=all_workspaces,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                answer_context_top_k=answer_context_top_k,
+                filters=filters,
+                query_images=query_images,
+                history=history,
+                semantic_highlights=semantic_highlights,
+                scope=scope,
+            )
         turn = PreparedAnswerTurn.stateless(query, query_images)
         ws_list = await self._resolve_manager_query_workspaces(
             workspace=workspace,
@@ -1651,6 +1989,18 @@ class RAGServiceManager:
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Stream one server-prepared Web turn through the stateless core pipeline."""
+        if self.web_search_available:
+            return await self._aanswer_stream_agentic_prepared(
+                turn,
+                workspace=workspace,
+                workspaces=workspaces,
+                all_workspaces=all_workspaces,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                answer_context_top_k=answer_context_top_k,
+                filters=filters,
+                scope=scope,
+            )
         ws_list = await self._resolve_manager_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
@@ -1789,6 +2139,7 @@ class RAGServiceManager:
         for component in (
             self._answer_engine,
             self._query_planner,
+            self._query_tool_model,
             self._web_search,
             composer_model_bundle,
         ):

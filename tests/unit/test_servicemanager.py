@@ -2717,3 +2717,164 @@ class TestWebSearchCapability:
         await manager.aclose()
 
         assert search._client.is_closed
+
+
+class TestAgenticAnswerCapability:
+    def test_without_exa_no_tool_model_is_constructed(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        create = MagicMock(side_effect=AssertionError("tool model must stay absent"))
+        monkeypatch.setattr("dlightrag.models.tool_model.create_query_tool_model", create)
+        manager = RAGServiceManager(config=test_cfg)
+
+        assert manager._get_query_tool_model() is None
+        create.assert_not_called()
+
+    def test_with_exa_one_tool_model_is_shared(self, test_cfg, monkeypatch) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        model = MagicMock()
+        create = MagicMock(return_value=model)
+        monkeypatch.setattr("dlightrag.models.tool_model.create_query_tool_model", create)
+        manager = RAGServiceManager(config=cfg)
+
+        assert manager._get_query_tool_model() is model
+        assert manager._get_query_tool_model() is model
+        create.assert_called_once_with(cfg)
+
+    async def test_closing_manager_closes_tool_model(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        model = AsyncMock()
+        manager._query_tool_model = model
+
+        await manager.aclose()
+
+        model.aclose.assert_awaited_once()
+
+    async def test_with_exa_aanswer_uses_agentic_path(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        expected = RetrievalResult(answer="agent answer")
+        manager._aanswer_agentic = AsyncMock(return_value=expected)  # type: ignore[method-assign]
+        manager._answer_engine = MagicMock()
+
+        result = await manager.aanswer("question", workspace="alpha")
+
+        assert result is expected
+        manager._aanswer_agentic.assert_awaited_once()  # type: ignore[attr-defined]
+        manager._answer_engine.generate.assert_not_called()
+
+    async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+            return_value=["alpha"]
+        )
+        service = AsyncMock()
+        service.aretrieve.return_value = RetrievalResult()
+        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._query_tool_model = AsyncMock()
+        manager._web_search = AsyncMock()
+
+        await manager.aretrieve("question", workspace="alpha")
+
+        service.aretrieve.assert_awaited_once()
+        manager._query_tool_model.assert_not_awaited()
+        manager._web_search.search.assert_not_awaited()
+
+    async def test_with_exa_prepared_stream_uses_agentic_path(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        expected = ({"chunks": []}, None)
+        manager._aanswer_stream_agentic_prepared = AsyncMock(  # type: ignore[method-assign]
+            return_value=expected
+        )
+        answer_turn = importlib.import_module("dlightrag.core.answer.turn")
+        turn = answer_turn.PreparedAnswerTurn.stateless("question")
+
+        result = await manager._aanswer_stream_prepared(turn, workspace="alpha")
+
+        assert result == expected
+        manager._aanswer_stream_agentic_prepared.assert_awaited_once()  # type: ignore[attr-defined]
+
+    async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
+        from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
+        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        plan = QueryPlan(original_query="What about it?", standalone_query="inflation 2026")
+        prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
+        manager._describe_and_plan = AsyncMock(return_value=(plan, prepared))  # type: ignore[method-assign]
+        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+            return_value=["alpha"]
+        )
+        corpus = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {
+                        "chunk_id": "c1",
+                        "reference_id": "upstream",
+                        "full_doc_id": "doc-1",
+                        "file_path": "report.pdf",
+                        "content": "corpus fact",
+                        "_workspace": "alpha",
+                        "metadata": {
+                            "source_type": "file",
+                            "source_uri": "file:///alpha/report.pdf",
+                            "source_download_locator": "file:///alpha/report.pdf",
+                        },
+                    }
+                ],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+        manager.aretrieve = AsyncMock(return_value=corpus)  # type: ignore[method-assign]
+        web = AsyncMock()
+        web.search.return_value = WebSearchResult(
+            hits=(
+                WebSearchHit(
+                    url="https://example.com/current",
+                    title="Current page",
+                    text="current fact",
+                ),
+            ),
+            cost_dollars=0.007,
+        )
+        manager._web_search = web
+        model = AsyncMock(
+            side_effect=[
+                AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id="first",
+                            name="retrieve_evidence",
+                            arguments={"scope": "all"},
+                        ),
+                    ),
+                    stop_reason="tool_use",
+                ),
+                AssistantTurn(
+                    text="Answer [1-1][2-1].",
+                    tool_calls=(),
+                    stop_reason="stop",
+                ),
+            ]
+        )
+        manager._query_tool_model = model
+        manager._answer_engine = MagicMock()
+
+        result = await manager.aanswer("What about it?", workspace="alpha")
+
+        assert result.answer == "Answer [1-1][2-1]."
+        assert [source.id for source in result.sources] == ["1", "2"]
+        manager._describe_and_plan.assert_awaited_once()  # type: ignore[attr-defined]
+        retrieve_call = manager.aretrieve.await_args  # type: ignore[attr-defined]
+        assert retrieve_call is not None
+        assert retrieve_call.args[0] == "What about it?"
+        assert retrieve_call.kwargs["plan"] is plan
+        web.search.assert_awaited_once_with("inflation 2026")
+        manager._answer_engine.generate.assert_not_called()

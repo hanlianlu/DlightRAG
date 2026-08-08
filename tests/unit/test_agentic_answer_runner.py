@@ -4,7 +4,7 @@
 import asyncio
 from typing import Any
 
-from dlightrag.core.agent.runner import AgenticAnswerRunner
+from dlightrag.core.agent.runner import AgenticAnswerRunner, AgentInputOverflowError
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
 from dlightrag.models.tool_turn import AssistantTurn, ToolCall
@@ -198,3 +198,185 @@ async def test_first_turn_cannot_skip_required_retrieval() -> None:
         assert "required retrieval" in str(exc)
     else:
         raise AssertionError("runner accepted an answer before wave-one retrieval")
+
+
+async def test_user_intent_sees_original_words_while_tools_use_standalone_query() -> None:
+    retrieval_queries: list[str] = []
+
+    async def retrieve(query: str) -> RetrievalResult:
+        retrieval_queries.append(query)
+        return _corpus_result()
+
+    async def search(query: str) -> WebSearchResult:
+        retrieval_queries.append(query)
+        return _web_result()
+
+    model = ScriptedModel(
+        _call("retrieve_evidence", {"scope": "all"}),
+        _answer("Answer [1-1][2-1]."),
+    )
+    await AgenticAnswerRunner(
+        model_func=model,
+        retrieve_knowledge_base=retrieve,
+        search_web=search,
+    ).run("What about it?", retrieval_query="standalone subject query")
+
+    assert model.calls[0]["messages"][-1]["content"] == "What about it?"
+    assert retrieval_queries == ["standalone subject query", "standalone subject query"]
+
+
+async def test_preloaded_composer_evidence_joins_but_does_not_replace_wave_one() -> None:
+    attachment = {
+        "chunk_id": "attachment-1",
+        "reference_id": "attachment-upstream",
+        "full_doc_id": "attachment-doc",
+        "file_path": "uploaded.pdf",
+        "content": "uploaded evidence",
+        "_workspace": "__web_attachment__",
+        "metadata": {
+            "source_type": "web_attachment",
+            "source_uri": "web-attachment://1",
+            "source_download_locator": "web-attachment://1",
+        },
+    }
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    model = ScriptedModel(
+        _call("retrieve_evidence", {"scope": "all"}),
+        _answer("Combined [1-1][2-1][3-1]."),
+    )
+    result = await AgenticAnswerRunner(
+        model_func=model,
+        retrieve_knowledge_base=retrieve,
+        search_web=search,
+    ).run(
+        "Question",
+        initial_contexts={"chunks": [attachment], "entities": [], "relationships": []},
+    )
+
+    assert [source.id for source in result.sources] == ["1", "2", "3"]
+    payload = str(model.calls[1]["messages"][-1]["content"])
+    assert "User-attached documents" in payload
+    assert "Knowledge-base evidence" in payload
+    assert "Open-web evidence" in payload
+
+
+async def test_input_over_envelope_is_rejected_before_a_model_call() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    model = ScriptedModel(_call("retrieve_evidence", {"scope": "all"}))
+    runner = AgenticAnswerRunner(
+        model_func=model,
+        retrieve_knowledge_base=retrieve,
+        search_web=search,
+        input_token_envelope=1,
+    )
+
+    try:
+        await runner.run("Question")
+    except AgentInputOverflowError:
+        pass
+    else:
+        raise AssertionError("runner called a model above its input envelope")
+
+    assert model.calls == []
+
+
+async def test_each_retrieval_lane_uses_the_existing_answer_context_cap() -> None:
+    corpus = _corpus_result()
+    corpus.contexts["chunks"].append(
+        {**corpus.contexts["chunks"][0], "chunk_id": "corpus-2", "content": "second corpus"}
+    )
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return corpus
+
+    async def search(_query: str) -> WebSearchResult:
+        return WebSearchResult(
+            hits=(
+                WebSearchHit(url="https://example.com/a", title="A", text="web a"),
+                WebSearchHit(url="https://example.com/b", title="B", text="web b"),
+            ),
+            cost_dollars=0.007,
+        )
+
+    model = ScriptedModel(
+        _call("retrieve_evidence", {"scope": "all"}),
+        _answer("Answer [1-1][2-1]."),
+    )
+    result = await AgenticAnswerRunner(
+        model_func=model,
+        retrieve_knowledge_base=retrieve,
+        search_web=search,
+        context_top_k=1,
+    ).run("Question")
+
+    assert len(result.contexts["chunks"]) == 2
+    assert {row["metadata"]["source_type"] for row in result.contexts["chunks"]} == {
+        "file",
+        "web_search",
+    }
+
+
+async def test_only_the_latest_tool_exchange_is_replayed_with_canonical_evidence() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(query: str) -> WebSearchResult:
+        return _web_result(query, url=f"https://example.com/{query}")
+
+    model = ScriptedModel(
+        _call("retrieve_evidence", {"scope": "all"}, call_id="wave-one"),
+        _call("search_web", {"query": "second"}, call_id="wave-two"),
+        _answer("Answer [1-1][2-1][3-1]."),
+    )
+    await AgenticAnswerRunner(
+        model_func=model,
+        retrieve_knowledge_base=retrieve,
+        search_web=search,
+    ).run("Question")
+
+    third_messages = model.calls[2]["messages"]
+    serialized = str(third_messages)
+    assert "wave-two" in serialized
+    assert "wave-one" not in serialized
+    assert "Knowledge-base evidence" in serialized
+    assert "Open-web evidence" in serialized
+
+
+async def test_equivalent_tool_calls_share_work_but_report_the_repeat_truthfully() -> None:
+    web_calls = 0
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(_query: str) -> WebSearchResult:
+        nonlocal web_calls
+        web_calls += 1
+        return _web_result()
+
+    model = ScriptedModel(
+        _call("retrieve_evidence", {"scope": "all"}, call_id="wave-one"),
+        _call("search_web", {"query": "Question"}, call_id="repeat"),
+        _answer("Answer [1-1][2-1]."),
+    )
+    await AgenticAnswerRunner(
+        model_func=model,
+        retrieve_knowledge_base=retrieve,
+        search_web=search,
+    ).run("Question")
+
+    assert web_calls == 1
+    repeat_result = model.calls[2]["messages"][-2]
+    assert repeat_result["role"] == "tool"
+    assert "already executed" in repeat_result["content"]
+    assert "added 1" not in repeat_result["content"]
