@@ -851,7 +851,7 @@ class TestRouting:
         # tests do not invoke a real planner LLM.
         async def _fake(self_: object, query: str, **_kwargs: object) -> tuple[object, object]:
             return (
-                SimpleNamespace(standalone_query=query, metadata_filter=None),
+                QueryPlan(original_query=query, standalone_query=query),
                 SimpleNamespace(descriptions=[]),
             )
 
@@ -1060,7 +1060,6 @@ class TestAnswerViaEngine:
                             "standalone_query": "rewritten query",
                             "has_metadata_filter": False,
                             "planner_outcome": "planned",
-                            "external_search": False,
                         }
                     }
                 ],

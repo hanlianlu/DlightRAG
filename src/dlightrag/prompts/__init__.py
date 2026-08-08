@@ -8,7 +8,6 @@ from .guidance import (
     PLANNER_SYSTEM_PROMPT,
 )
 from .planner import (
-    PLANNER_EXTERNAL_SEARCH_GUIDANCE,
     PLANNER_IMAGE_CONTEXT_GUIDANCE,
 )
 from .rag import (
@@ -25,7 +24,6 @@ __all__ = [
     # planner
     "PLANNER_SYSTEM_PROMPT",
     "PLANNER_IMAGE_CONTEXT_GUIDANCE",
-    "PLANNER_EXTERNAL_SEARCH_GUIDANCE",
     # web planner
     "WEB_PLANNER_SYSTEM_PROMPT",
     # rag
