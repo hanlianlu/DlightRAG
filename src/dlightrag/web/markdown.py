@@ -208,7 +208,32 @@ def render_markdown(text: str) -> str:
 
 def render_chunk_content(text: str) -> str:
     """Render chunk content to HTML, allowing HTML passthrough for tables etc."""
-    return _md_chunk.render(text)
+    return _md_chunk.render(separate_html_blocks(text))
+
+
+# CommonMark closes an HTML block only at a blank line, so a parser that emits a
+# whole table on one line takes the rest of the chunk down with it. Only the tags
+# that open such a block are listed: an unknown tag never starts one.
+_HTML_BLOCK_TAGS = "blockquote|div|dl|figure|footer|header|main|nav|ol|p|pre|section|table|ul"
+_ONE_LINE_HTML_BLOCK = re.compile(
+    rf"^\s*<(?P<tag>{_HTML_BLOCK_TAGS})\b[^\n]*</(?P=tag)>\s*$", re.IGNORECASE
+)
+
+
+def separate_html_blocks(text: str) -> str:
+    """End a one-line HTML block with a blank line so the Markdown after it renders.
+
+    Callers that align highlights against the source must pass the same result,
+    since the inserted lines shift every offset after them.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    for index, line in enumerate(lines):
+        out.append(line)
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if following.strip() and _ONE_LINE_HTML_BLOCK.match(line):
+            out.append("")
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------

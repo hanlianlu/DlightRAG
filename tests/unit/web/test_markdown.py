@@ -359,3 +359,32 @@ def test_highlight_content_ignores_phrase_only_present_in_markup():
 
     result = str(_highlight_content("See [report](https://example.com/q3) now", ["example.com"]))
     assert 'class="highlight"' not in result
+
+
+def test_markdown_after_a_one_line_table_still_renders():
+    """CommonMark ends an HTML block at a blank line, and parsers emit neither."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    content = "<table><tr><td>Name</td></tr></table>\n**Answer:** " + "\\_" * 4
+    result = render_chunk_content(content)
+
+    assert "<td>Name</td>" in result
+    assert "<strong>Answer:</strong>" in result
+    assert "\\_" not in result
+    assert "____" in result
+
+
+def test_chunk_without_a_block_tag_is_untouched():
+    from dlightrag.web.markdown import separate_html_blocks
+
+    content = "**Bold** line\n<equation>x = 1</equation>\n<sup>2</sup> trailing"
+
+    assert separate_html_blocks(content) == content
+
+
+def test_a_table_already_followed_by_a_blank_line_is_untouched():
+    from dlightrag.web.markdown import separate_html_blocks
+
+    content = "<table><tr><td>a</td></tr></table>\n\n**After**"
+
+    assert separate_html_blocks(content) == content
