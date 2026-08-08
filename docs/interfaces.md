@@ -502,6 +502,13 @@ DlightRAG PostgreSQL pool responds. Reader processes additionally prove that
 their database session is read-only. Any failed readiness condition returns a
 minimal HTTP 503 response without exposing the underlying exception.
 
+A saturated service also answers HTTP 503: an answer request waits
+`answer_acquire_timeout` seconds for a free generation slot and then refuses,
+rather than queueing the caller indefinitely. Retry. A JSON request body larger
+than the configured image allowance (`query_images.max_current_images` images at
+`query_images.max_upload_bytes` each, base64-expanded) returns HTTP 413 before
+the route reads it.
+
 The Web shell defaults answer scope to `Search in: All authorized workspaces`.
 That authorization-relative multi-workspace selection is independent from
 `Files in`, which continues to name one workspace for file management and

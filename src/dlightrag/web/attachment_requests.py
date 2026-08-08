@@ -16,7 +16,7 @@ from dlightrag.web.attachment_models import (
     ValidatedWebDocument,
     validate_web_documents,
 )
-from dlightrag.web.requests import WebAnswerRequest, read_limited_answer_body
+from dlightrag.web.requests import WebAnswerRequest
 
 # Bound the multipart parse *before* buffering any bodies so a client cannot
 # push Starlette's default 1000 parts into memory/disk ahead of the document
@@ -51,21 +51,11 @@ def _json_list(value: Any, *, field: str) -> list[Any]:
     raise HTTPException(status_code=422, detail=f"Invalid {field}")
 
 
-async def parse_web_answer_request(
-    request: Request,
-    *,
-    max_images: int,
-    max_image_upload_bytes: int,
-) -> ParsedWebAnswerRequest:
+async def parse_web_answer_request(request: Request) -> ParsedWebAnswerRequest:
     content_type = request.headers.get("content-type", "").lower()
     if "multipart/form-data" not in content_type:
         try:
-            raw_body = await read_limited_answer_body(
-                request,
-                max_images=max_images,
-                max_upload_bytes=max_image_upload_bytes,
-            )
-            body = WebAnswerRequest.model_validate_json(raw_body)
+            body = WebAnswerRequest.model_validate_json(await request.body())
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors()) from exc
         return ParsedWebAnswerRequest(

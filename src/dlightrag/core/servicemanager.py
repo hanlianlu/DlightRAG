@@ -1244,7 +1244,13 @@ class RAGServiceManager:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Generate from server-prepared contexts and request-local text history."""
         engine = self._get_answer_engine()
-        await self._answer_stream_sem.acquire()
+        try:
+            await asyncio.wait_for(
+                self._answer_stream_sem.acquire(),
+                timeout=self._config.answer_acquire_timeout,
+            )
+        except TimeoutError as exc:
+            raise RAGServiceUnavailableError("Every answer slot is busy; retry shortly.") from exc
         try:
             generate_kwargs: dict[str, Any] = {
                 "query_images": query_images,

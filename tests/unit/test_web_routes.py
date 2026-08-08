@@ -1036,43 +1036,6 @@ class TestWebAnswerAdapter:
         assert response.status_code == 422
         web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
 
-    async def test_answer_rejects_body_over_route_limit_before_json_materialization(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
-    ) -> None:
-        test_config.query_images.max_current_images = 0
-        web_app.state.manager.config = test_config
-
-        response = await client.post(
-            "/web/answer",
-            content=b"{" + (b"x" * 70_000) + b"}",
-            headers={"Content-Type": "application/json"},
-        )
-
-        assert response.status_code == 413
-        web_app.state.web_conversation_service.prepare_answer.assert_not_awaited()
-
-    async def test_answer_body_limit_uses_configured_image_count_and_bytes(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
-    ) -> None:
-        test_config.query_images.max_current_images = 1
-        test_config.query_images.max_upload_bytes = 3
-        web_app.state.manager.config = test_config
-        exact_limit = (64 * 1024) + 4
-
-        exact = await client.post(
-            "/web/answer",
-            content=b"x" * exact_limit,
-            headers={"Content-Type": "application/json"},
-        )
-        over = await client.post(
-            "/web/answer",
-            content=b"x" * (exact_limit + 1),
-            headers={"Content-Type": "application/json"},
-        )
-
-        assert exact.status_code == 422
-        assert over.status_code == 413
-
     async def test_answer_image_validation_uses_configured_exact_byte_limit(
         self, client: AsyncClient, test_config: DlightragConfig, web_app, monkeypatch
     ) -> None:

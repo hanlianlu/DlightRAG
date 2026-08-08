@@ -873,6 +873,14 @@ class DlightragConfig(BaseSettings):
 
     # Concurrency (product-tier; also surfaced in config.yaml).
     max_async: int = Field(default=16, ge=1)
+    answer_acquire_timeout: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Max seconds to wait for a free answer-generation slot before raising, so "
+            "callers cannot queue indefinitely once ``max_async`` answers are in flight."
+        ),
+    )
     embedding_func_max_async: int = Field(default=16, ge=1)
     embedding_batch_num: int = Field(
         default=64,

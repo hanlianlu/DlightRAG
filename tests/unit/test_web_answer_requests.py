@@ -16,7 +16,7 @@ async def test_parse_json_web_answer_request_preserves_existing_shape() -> None:
 
     @app.post("/probe")
     async def probe(request: Request):
-        body = await parse_web_answer_request(request, max_images=3, max_image_upload_bytes=1000)
+        body = await parse_web_answer_request(request)
         return {
             "query": body.query,
             "images": body.images,
@@ -49,7 +49,7 @@ async def test_parse_multipart_web_answer_request_reads_documents() -> None:
 
     @app.post("/probe")
     async def probe(request: Request):
-        body = await parse_web_answer_request(request, max_images=3, max_image_upload_bytes=1000)
+        body = await parse_web_answer_request(request)
         return {
             "query": body.query,
             "images": body.images,

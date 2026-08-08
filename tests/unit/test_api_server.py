@@ -4,12 +4,13 @@
 import datetime
 from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import jwt
 import pytest
 from fastapi import FastAPI, HTTPException
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 from dlightrag.api import auth as auth_module
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
@@ -2118,3 +2119,98 @@ class TestMetadataAPI:
 
         assert resp.status_code == 422
         mock_manager.asearch_metadata.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# JSON body limit
+# ---------------------------------------------------------------------------
+
+
+def _echo_length_app(max_bytes: int) -> FastAPI:
+    from starlette.requests import Request
+
+    from dlightrag.api.middleware import JsonBodyLimitMiddleware
+
+    application = FastAPI()
+
+    @application.post("/probe")
+    async def probe(request: Request) -> dict[str, int]:
+        return {"received": len(await request.body())}
+
+    application.add_middleware(JsonBodyLimitMiddleware, max_bytes=max_bytes)
+    return application
+
+
+async def _post(app: FastAPI, **kwargs: Any) -> Response:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        return await client.post("/probe", **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_declared_oversize_body_is_refused_before_the_route_runs() -> None:
+    response = await _post(
+        _echo_length_app(100),
+        content=b"x" * 200,
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error_type"] == "validation"
+
+
+@pytest.mark.asyncio
+async def test_an_undeclared_body_stops_at_the_cap_instead_of_growing() -> None:
+    async def chunks():
+        for _ in range(10):
+            yield b"x" * 50
+
+    response = await _post(
+        _echo_length_app(100),
+        content=chunks(),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.json()["received"] == 100
+
+
+@pytest.mark.asyncio
+async def test_a_multipart_upload_is_left_to_its_own_limits() -> None:
+    response = await _post(
+        _echo_length_app(100),
+        files={"f": ("big.bin", b"x" * 400)},
+    )
+
+    assert response.json()["received"] > 100
+
+
+@pytest.mark.asyncio
+async def test_the_app_sizes_the_cap_from_the_configured_image_allowance(
+    mock_config: DlightragConfig,
+) -> None:
+    mock_config.query_images.max_current_images = 0
+    set_config(mock_config)
+
+    response = await _post(
+        create_app(include_web=False),
+        content=b'{"query":"' + b"x" * (64 * 1024) + b'"}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_a_route_that_rejects_an_oversized_upload_is_not_reported_as_an_auth_failure(
+    mock_config: DlightragConfig,
+) -> None:
+    set_config(mock_config)
+    application = create_app(include_web=False)
+
+    @application.post("/probe")
+    async def probe() -> None:
+        raise HTTPException(status_code=413, detail="too many documents")
+
+    response = await _post(application)
+
+    assert response.status_code == 413
+    assert response.json()["error_type"] == "validation"

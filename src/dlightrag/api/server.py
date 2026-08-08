@@ -14,7 +14,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from dlightrag.api.middleware import RequestIdMiddleware, install_request_id_log_record_factory
+from dlightrag.api.middleware import (
+    JsonBodyLimitMiddleware,
+    RequestIdMiddleware,
+    install_request_id_log_record_factory,
+)
 from dlightrag.api.models import ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
@@ -25,6 +29,9 @@ from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 logger = logging.getLogger(__name__)
+
+# Room for the query, workspace list and identifiers that travel beside the images.
+_JSON_BODY_OVERHEAD_BYTES = 64 * 1024
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -76,7 +83,7 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     )
     application.state.config = cfg
 
-    # -- Request ID middleware (outermost — runs first) --
+    # -- Request ID middleware --
     application.add_middleware(RequestIdMiddleware)
 
     # -- CORS middleware (config-driven; see DlightragConfig.cors_allow_origins) --
@@ -103,7 +110,7 @@ def create_app(*, include_web: bool = True) -> FastAPI:
         if status == 503:
             error_type = "unavailable"
         elif 400 <= status < 500:
-            error_type = "validation" if status in {400, 422} else "auth"
+            error_type = "validation" if status in {400, 413, 422} else "auth"
         else:
             error_type = "internal"
         body = ErrorDetail(detail=str(exc.detail), error_type=error_type)
@@ -181,6 +188,15 @@ def create_app(*, include_web: bool = True) -> FastAPI:
                 NoCacheStaticFiles(directory=str(_static_dir)),
                 name="static",
             )
+
+    # Added last so it wraps everything else: an oversized body is refused before
+    # auth or routing has a chance to buffer it. Base64 inflates an image by 4/3.
+    encoded_image_bytes = ((cfg.query_images.max_upload_bytes + 2) // 3) * 4
+    application.add_middleware(
+        JsonBodyLimitMiddleware,
+        max_bytes=_JSON_BODY_OVERHEAD_BYTES
+        + max(0, cfg.query_images.max_current_images) * encoded_image_bytes,
+    )
 
     return application
 

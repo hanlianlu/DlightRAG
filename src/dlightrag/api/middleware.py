@@ -11,12 +11,60 @@ import logging
 import uuid
 from typing import Any
 
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from dlightrag.api.models import ErrorDetail
 
 # Per-request ID (accessible from any async code in the request scope)
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
+
+
+class JsonBodyLimitMiddleware:
+    """Keep an oversized JSON body out of memory.
+
+    A declared Content-Length above the cap is refused; a chunked body that
+    overruns it is cut short, so the route reads truncated JSON and answers 422
+    rather than buffering whatever the client sends.
+    """
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self.app = app
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        if "application/json" not in headers.get("content-type", "").lower():
+            await self.app(scope, receive, send)
+            return
+        declared = headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > self._max_bytes:
+            body = ErrorDetail(detail="Request body is too large", error_type="validation")
+            await JSONResponse(status_code=413, content=body.model_dump())(scope, receive, send)
+            return
+        await self.app(scope, self._capped(receive), send)
+
+    def _capped(self, receive: Receive) -> Receive:
+        seen = 0
+
+        async def capped() -> Message:
+            nonlocal seen
+            message = await receive()
+            if message["type"] != "http.request":
+                return message
+            chunk = message.get("body", b"")
+            if seen + len(chunk) > self._max_bytes:
+                return {"type": "http.request", "body": chunk[: self._max_bytes - seen]}
+            seen += len(chunk)
+            return message
+
+        return capped
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):

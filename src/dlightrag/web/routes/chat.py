@@ -108,11 +108,7 @@ async def answer_stream(
     """Stream answer via SSE, then swap in enriched citations."""
     manager = get_manager(request)
     cfg = manager.config
-    body = await parse_web_answer_request(
-        request,
-        max_images=cfg.query_images.max_current_images,
-        max_image_upload_bytes=cfg.query_images.max_upload_bytes,
-    )
+    body = await parse_web_answer_request(request)
 
     query = body.query
     if not query:

@@ -1586,6 +1586,25 @@ class TestAnswerViaEngine:
         _, second_stream = await asyncio.wait_for(second, timeout=1.0)
         assert second_stream is not None
 
+    async def test_a_saturated_service_says_so_instead_of_queueing_forever(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"max_async": 1, "answer_acquire_timeout": 0.01})
+        manager = RAGServiceManager(config=cfg)
+        contexts = {"chunks": [], "entities": [], "relationships": []}
+
+        async def one_token_stream():
+            yield "token"
+
+        mock_engine = AsyncMock()
+        mock_engine.generate_stream = AsyncMock(return_value=(contexts, one_token_stream()))
+        manager._answer_engine = mock_engine
+
+        await manager._agenerate_stream_from_contexts_prepared("q1", contexts, text_history=None)
+
+        with pytest.raises(RAGServiceUnavailableError):
+            await manager._agenerate_stream_from_contexts_prepared(
+                "q2", contexts, text_history=None
+            )
+
 
 class TestDelegation:
     """Test write-operation delegation."""
