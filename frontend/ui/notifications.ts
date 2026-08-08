@@ -37,9 +37,10 @@ function rememberAsked(): void {
 
 function notifyAnswerReady(): void {
     try {
+        // No tag: a shared one silently replaces the parked notification
+        // instead of alerting again, so every answer but the first goes unseen.
         const notification = new Notification('Answer ready', {
             body: 'DlightRAG finished generating your answer.',
-            tag: 'dlightrag-answer',
         });
         notification.onclick = function() {
             window.focus();
