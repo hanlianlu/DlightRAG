@@ -2,6 +2,7 @@
 """Google Gemini native completion provider."""
 
 import base64
+import json
 import logging
 import re
 from collections.abc import AsyncGenerator
@@ -16,6 +17,13 @@ from dlightrag.models.providers.base import (
     usage_to_dict,
 )
 from dlightrag.models.structured import json_schema_from_response_format
+from dlightrag.models.tool_turn import (
+    AssistantTurn,
+    ToolCall,
+    ToolChoice,
+    ToolDefinition,
+    ToolStopReason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +77,65 @@ def _convert_content(content: str | list[Any]) -> str | list[Any]:
         else:
             parts.append(block)
     return parts
+
+
+def _gemini_tool_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    contents: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role == "assistant":
+            parts: list[Any] = []
+            converted = _convert_content(message.get("content", ""))
+            if isinstance(converted, str):
+                if converted:
+                    parts.append(converted)
+            else:
+                parts.extend(converted)
+            for call in message.get("tool_calls") or ():
+                function = call.get("function") or {}
+                try:
+                    arguments = json.loads(str(function.get("arguments") or "{}"))
+                except json.JSONDecodeError:
+                    arguments = {}
+                part = {
+                    "function_call": {
+                        "id": str(call.get("id") or ""),
+                        "name": str(function.get("name") or ""),
+                        "args": arguments if isinstance(arguments, dict) else {},
+                    }
+                }
+                if call.get("thought_signature") is not None:
+                    part["thought_signature"] = call["thought_signature"]
+                parts.append(part)
+            contents.append({"role": "model", "parts": parts})
+            continue
+        if role == "tool":
+            part = {
+                "function_response": {
+                    "id": str(message.get("tool_call_id") or ""),
+                    "name": str(message.get("name") or ""),
+                    "response": {
+                        "output": str(message.get("content") or ""),
+                        "is_error": bool(message.get("is_error", False)),
+                    },
+                }
+            }
+            if (
+                contents
+                and contents[-1].get("role") == "user"
+                and all("function_response" in item for item in contents[-1].get("parts", []))
+            ):
+                contents[-1]["parts"].append(part)
+            else:
+                contents.append({"role": "user", "parts": [part]})
+            continue
+        contents.append(
+            {
+                "role": _ROLE_MAP.get(str(role), str(role or "user")),
+                "parts": _convert_content(message.get("content", "")),
+            }
+        )
+    return contents
 
 
 class GeminiProvider(CompletionProvider):
@@ -176,6 +243,82 @@ class GeminiProvider(CompletionProvider):
             usage_details=_gemini_usage(response),
         )
 
+    async def complete_tool_turn(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        model_id, contents, config = self._build_args(
+            messages,
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=None,
+            model_kwargs=model_kwargs,
+        )
+        contents = _gemini_tool_contents(
+            [message for message in messages if message.get("role") != "system"]
+        )
+        if tools:
+            config["tools"] = [
+                {
+                    "function_declarations": [
+                        {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.parameters,
+                        }
+                        for tool in tools
+                    ]
+                }
+            ]
+            config["tool_config"] = {
+                "function_calling_config": {
+                    "mode": {"auto": "AUTO", "required": "ANY", "none": "NONE"}[tool_choice]
+                }
+            }
+        response = await self._get_client().aio.models.generate_content(
+            model=model_id,
+            contents=contents,
+            config=config,
+        )
+        candidate = response.candidates[0]
+        parts = getattr(getattr(candidate, "content", None), "parts", None) or ()
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        calls: list[ToolCall] = []
+        for index, part in enumerate(parts):
+            text = getattr(part, "text", None)
+            if isinstance(text, str) and text:
+                (reasoning_parts if getattr(part, "thought", False) else text_parts).append(text)
+            function_call = getattr(part, "function_call", None)
+            if function_call is not None:
+                calls.append(
+                    ToolCall(
+                        id=str(getattr(function_call, "id", None) or f"gemini-{index}"),
+                        name=str(getattr(function_call, "name", "") or ""),
+                        arguments=dict(getattr(function_call, "args", None) or {}),
+                        thought_signature=getattr(part, "thought_signature", None),
+                    )
+                )
+        reasoning = "".join(reasoning_parts)
+        self.last_reasoning = reasoning
+        return AssistantTurn(
+            text="".join(text_parts),
+            reasoning=reasoning,
+            tool_calls=tuple(calls),
+            stop_reason=_gemini_stop_reason(
+                getattr(candidate, "finish_reason", None), has_tool_calls=bool(calls)
+            ),
+            usage_details=_gemini_usage(response),
+        )
+
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -206,3 +349,12 @@ class GeminiProvider(CompletionProvider):
             if chunk.text:
                 yield chunk.text
         capture_stream_usage(usage_holder, usage)
+
+
+def _gemini_stop_reason(reason: Any, *, has_tool_calls: bool) -> ToolStopReason:
+    if has_tool_calls:
+        return "tool_use"
+    name = str(getattr(reason, "name", reason) or "")
+    if name == "MAX_TOKENS":
+        return "length"
+    return "stop"

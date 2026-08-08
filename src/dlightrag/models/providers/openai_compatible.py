@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """OpenAI-compatible completion provider."""
 
+import json
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -13,6 +14,13 @@ from dlightrag.models.providers.base import (
     capture_stream_usage,
     usage_mapping,
     usage_to_dict,
+)
+from dlightrag.models.tool_turn import (
+    AssistantTurn,
+    ToolCall,
+    ToolChoice,
+    ToolDefinition,
+    ToolStopReason,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +67,31 @@ def _cost_to_dict(usage: Any) -> dict[str, float] | None:
     if isinstance(cost, int | float) and not isinstance(cost, bool):
         return {"total": float(cost)}
     return None
+
+
+def _openai_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for message in messages:
+        native = {
+            key: value
+            for key, value in message.items()
+            if key not in {"provider_state", "is_error"}
+        }
+        state = message.get("provider_state")
+        if message.get("role") == "assistant" and isinstance(state, dict):
+            for key in ("reasoning_content", "reasoning_details"):
+                if key in state:
+                    native[key] = state[key]
+        converted.append(native)
+    return converted
+
+
+def _openai_provider_state(message: Any) -> dict[str, Any] | None:
+    extras = getattr(message, "model_extra", None) or {}
+    state = {
+        key: extras[key] for key in ("reasoning_content", "reasoning_details") if key in extras
+    }
+    return state or None
 
 
 class OpenAICompatibleProvider(CompletionProvider):
@@ -129,6 +162,63 @@ class OpenAICompatibleProvider(CompletionProvider):
             cost_details=_cost_to_dict(getattr(response, "usage", None)),
         )
 
+    async def complete_tool_turn(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": _openai_tool_messages(messages),
+        }
+        if tools:
+            call_kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ]
+            call_kwargs["tool_choice"] = tool_choice
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+        if model_kwargs:
+            call_kwargs["extra_body"] = model_kwargs
+
+        response = await self._get_client().chat.completions.create(**call_kwargs)
+        choice = response.choices[0]
+        message = choice.message
+        self.last_reasoning = self._extract_reasoning(message)
+        normalized_calls = tuple(
+            _openai_tool_call(call) for call in (getattr(message, "tool_calls", None) or ())
+        )
+        stop_reason = _openai_stop_reason(
+            getattr(choice, "finish_reason", None),
+            has_tool_calls=bool(normalized_calls),
+        )
+        usage = getattr(response, "usage", None)
+        return AssistantTurn(
+            text=str(getattr(message, "content", None) or ""),
+            reasoning=self.last_reasoning,
+            tool_calls=normalized_calls,
+            stop_reason=stop_reason,
+            usage_details=usage_to_dict(usage),
+            cost_details=_cost_to_dict(usage),
+            provider_state=_openai_provider_state(message),
+        )
+
     async def _open_stream(self, call_kwargs: dict[str, Any]) -> Any:
         """Open a streaming completion, requesting token usage when supported.
 
@@ -191,3 +281,33 @@ class OpenAICompatibleProvider(CompletionProvider):
                 yield delta.content
         self.last_reasoning = "".join(reasoning_parts)
         capture_stream_usage(usage_holder, usage, cost_fn=_cost_to_dict)
+
+
+def _openai_tool_call(raw: Any) -> ToolCall:
+    function = getattr(raw, "function", None)
+    name = str(getattr(function, "name", "") or "")
+    encoded = str(getattr(function, "arguments", "") or "")
+    try:
+        parsed = json.loads(encoded)
+        if not isinstance(parsed, dict):
+            raise TypeError("tool arguments must be a JSON object")
+    except (json.JSONDecodeError, TypeError) as exc:
+        return ToolCall(
+            id=str(getattr(raw, "id", "") or ""),
+            name=name,
+            arguments={},
+            argument_error=str(exc),
+        )
+    return ToolCall(
+        id=str(getattr(raw, "id", "") or ""),
+        name=name,
+        arguments=parsed,
+    )
+
+
+def _openai_stop_reason(reason: Any, *, has_tool_calls: bool) -> ToolStopReason:
+    if has_tool_calls or reason in {"tool_calls", "function_call"}:
+        return "tool_use"
+    if reason == "length":
+        return "length"
+    return "stop"

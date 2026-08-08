@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Anthropic native completion provider."""
 
+import json
 import logging
 import re
 from collections.abc import AsyncGenerator
@@ -10,6 +11,13 @@ from anthropic import AsyncAnthropic
 
 from dlightrag.models.providers.base import CompletionOutput, CompletionProvider, usage_to_dict
 from dlightrag.models.structured import json_schema_from_response_format
+from dlightrag.models.tool_turn import (
+    AssistantTurn,
+    ToolCall,
+    ToolChoice,
+    ToolDefinition,
+    ToolStopReason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +68,70 @@ def _convert_content(content: str | list[Any]) -> str | list[dict[str, Any]]:
         else:
             result.append(block)
     return result
+
+
+def _anthropic_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role == "assistant":
+            blocks: list[dict[str, Any]] = []
+            state = message.get("provider_state")
+            if isinstance(state, dict):
+                thinking_blocks = state.get("thinking_blocks")
+                if isinstance(thinking_blocks, list):
+                    blocks.extend(
+                        dict(block)
+                        for block in thinking_blocks
+                        if isinstance(block, dict)
+                        and block.get("type") in {"thinking", "redacted_thinking"}
+                    )
+            content = _convert_content(message.get("content", ""))
+            if isinstance(content, str):
+                if content:
+                    blocks.append({"type": "text", "text": content})
+            else:
+                blocks.extend(content)
+            for call in message.get("tool_calls") or ():
+                function = call.get("function") or {}
+                try:
+                    arguments = json.loads(str(function.get("arguments") or "{}"))
+                except json.JSONDecodeError:
+                    arguments = {}
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(call.get("id") or ""),
+                        "name": str(function.get("name") or ""),
+                        "input": arguments if isinstance(arguments, dict) else {},
+                    }
+                )
+            converted.append({"role": "assistant", "content": blocks})
+            continue
+        if role == "tool":
+            block = {
+                "type": "tool_result",
+                "tool_use_id": str(message.get("tool_call_id") or ""),
+                "content": str(message.get("content") or ""),
+                "is_error": bool(message.get("is_error", False)),
+            }
+            if (
+                converted
+                and converted[-1].get("role") == "user"
+                and isinstance(converted[-1].get("content"), list)
+                and all(item.get("type") == "tool_result" for item in converted[-1]["content"])
+            ):
+                converted[-1]["content"].append(block)
+            else:
+                converted.append({"role": "user", "content": [block]})
+            continue
+        converted.append(
+            {
+                "role": str(role or "user"),
+                "content": _convert_content(message.get("content", "")),
+            }
+        )
+    return converted
 
 
 def _apply_response_format(
@@ -150,6 +222,104 @@ class AnthropicProvider(CompletionProvider):
         text = "".join(b.text for b in content if getattr(b, "type", None) == "text")
         return CompletionOutput(text, usage_details=usage_to_dict(getattr(response, "usage", None)))
 
+    async def complete_tool_turn(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        system, non_system = _extract_system(messages)
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": _anthropic_tool_messages(non_system),
+            "max_tokens": max_tokens or 8192,
+        }
+        if system:
+            call_kwargs["system"] = system
+        if tools:
+            call_kwargs["tools"] = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.parameters,
+                }
+                for tool in tools
+            ]
+            call_kwargs["tool_choice"] = {
+                "auto": {"type": "auto"},
+                "required": {"type": "any"},
+                "none": {"type": "none"},
+            }[tool_choice]
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        if model_kwargs:
+            for key in _ANTHROPIC_TOP_LEVEL_KEYS:
+                if key in model_kwargs:
+                    call_kwargs[key] = model_kwargs[key]
+            extra = {
+                key: value
+                for key, value in model_kwargs.items()
+                if key not in _ANTHROPIC_TOP_LEVEL_KEYS
+            }
+            if extra:
+                call_kwargs["extra_body"] = extra
+
+        response = await self._get_client().messages.create(**call_kwargs)
+        content = response.content
+        reasoning = "".join(
+            str(getattr(block, "thinking", ""))
+            for block in content
+            if getattr(block, "type", None) == "thinking"
+        )
+        self.last_reasoning = reasoning
+        thinking_blocks: list[dict[str, Any]] = []
+        for block in content:
+            block_type = getattr(block, "type", None)
+            if block_type == "thinking":
+                thinking_blocks.append(
+                    {
+                        "type": "thinking",
+                        "thinking": str(getattr(block, "thinking", "")),
+                        "signature": str(getattr(block, "signature", "")),
+                    }
+                )
+            elif block_type == "redacted_thinking":
+                thinking_blocks.append(
+                    {
+                        "type": "redacted_thinking",
+                        "data": str(getattr(block, "data", "")),
+                    }
+                )
+        calls = tuple(
+            ToolCall(
+                id=str(getattr(block, "id", "") or ""),
+                name=str(getattr(block, "name", "") or ""),
+                arguments=dict(getattr(block, "input", None) or {}),
+            )
+            for block in content
+            if getattr(block, "type", None) == "tool_use"
+        )
+        text = "".join(
+            str(getattr(block, "text", ""))
+            for block in content
+            if getattr(block, "type", None) == "text"
+        )
+        return AssistantTurn(
+            text=text,
+            reasoning=reasoning,
+            tool_calls=calls,
+            stop_reason=_anthropic_stop_reason(
+                getattr(response, "stop_reason", None), has_tool_calls=bool(calls)
+            ),
+            usage_details=usage_to_dict(getattr(response, "usage", None)),
+            provider_state={"thinking_blocks": thinking_blocks} if thinking_blocks else None,
+        )
+
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -220,3 +390,11 @@ class AnthropicProvider(CompletionProvider):
                     merged.update(part)
             if merged:
                 usage_holder["usage_details"] = merged
+
+
+def _anthropic_stop_reason(reason: Any, *, has_tool_calls: bool) -> ToolStopReason:
+    if has_tool_calls or reason == "tool_use":
+        return "tool_use"
+    if reason == "max_tokens":
+        return "length"
+    return "stop"

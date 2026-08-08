@@ -5,6 +5,13 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
+from dlightrag.models.tool_turn import (
+    AssistantTurn,
+    ToolCallingUnavailableError,
+    ToolChoice,
+    ToolDefinition,
+)
+
 
 def usage_mapping(usage: Any) -> dict[str, Any]:
     """Flatten a usage payload to a plain mapping, including SDK extra fields.
@@ -168,6 +175,22 @@ class CompletionProvider(ABC):
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[return]
         raise NotImplementedError
+
+    async def complete_tool_turn(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        tools: list[ToolDefinition],
+        tool_choice: ToolChoice = "auto",
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+    ) -> AssistantTurn:
+        """Run one structured tool-capable turn when the provider supports it."""
+        raise ToolCallingUnavailableError(
+            f"{type(self).__name__} does not implement tool-capable turns"
+        )
 
     async def aclose(self) -> None:
         """Release SDK clients, connection pools, and other resources.

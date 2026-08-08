@@ -9,6 +9,7 @@ import pytest
 
 from dlightrag.models.providers import get_provider
 from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
+from dlightrag.models.tool_turn import ToolDefinition
 
 
 class TestCompletionProviderABC:
@@ -64,6 +65,129 @@ class TestAnthropicProvider:
             await p.complete([{"role": "user", "content": "hi"}], "claude-sonnet-4-20250514")
             call_kwargs = MockSDK.return_value.messages.create.call_args[1]
             assert call_kwargs["max_tokens"] == 8192
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_converts_tools_history_and_response(self):
+        p = get_provider("anthropic", api_key="test-key")
+        tool = ToolDefinition(
+            name="search_web",
+            description="Search the open web.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        )
+        response = SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="thinking",
+                    thinking="Need another source.",
+                    signature="anthropic-signature",
+                ),
+                SimpleNamespace(
+                    type="tool_use",
+                    id="call-2",
+                    name="search_web",
+                    input={"query": "inflation"},
+                ),
+            ],
+            stop_reason="tool_use",
+            usage=SimpleNamespace(input_tokens=8, output_tokens=3),
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "provider_state": {
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "Previous thought.",
+                            "signature": "previous-signature",
+                        }
+                    ]
+                },
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "search_web",
+                            "arguments": '{"query":"prices"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "search_web",
+                "content": "price evidence",
+                "is_error": False,
+            },
+        ]
+
+        with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as sdk:
+            create = AsyncMock(return_value=response)
+            sdk.return_value.messages.create = create
+            cast(Any, p)._client = None
+            turn = await p.complete_tool_turn(
+                messages,
+                "claude-sonnet-4-20250514",
+                tools=[tool],
+                tool_choice="required",
+            )
+
+        await_args = create.await_args
+        assert await_args is not None
+        request = await_args.kwargs
+        assert request["tools"] == [
+            {
+                "name": "search_web",
+                "description": "Search the open web.",
+                "input_schema": tool.parameters,
+            }
+        ]
+        assert request["tool_choice"] == {"type": "any"}
+        assert request["messages"] == [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Previous thought.",
+                        "signature": "previous-signature",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "search_web",
+                        "input": {"query": "prices"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-1",
+                        "content": "price evidence",
+                        "is_error": False,
+                    }
+                ],
+            },
+        ]
+        assert turn.stop_reason == "tool_use"
+        assert turn.reasoning == "Need another source."
+        assert turn.provider_state == {
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Need another source.",
+                    "signature": "anthropic-signature",
+                }
+            ]
+        }
+        assert turn.tool_calls[0].arguments == {"query": "inflation"}
+        assert turn.usage_details == {"input_tokens": 8, "output_tokens": 3}
 
     @pytest.mark.asyncio
     async def test_complete_routes_thinking_to_top_level(self):
@@ -225,6 +349,147 @@ class TestOpenAICompatibleProvider:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
             result = await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4-mini")
         assert result == "hello"
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_sends_tools_and_normalizes_calls(self):
+        p = get_provider("openai", api_key="test-key")
+        function = SimpleNamespace(name="search_web", arguments='{"query":"inflation"}')
+        tool_call = SimpleNamespace(id="call-1", type="function", function=function)
+        message = SimpleNamespace(
+            content=None,
+            tool_calls=[tool_call],
+            model_extra={
+                "reasoning_content": "Need current evidence.",
+                "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}],
+            },
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=message, finish_reason="tool_calls")],
+            usage=SimpleNamespace(prompt_tokens=4, completion_tokens=2),
+        )
+        tool = ToolDefinition(
+            name="search_web",
+            description="Search the open web.",
+            parameters={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        )
+
+        with patch.object(p, "_get_client") as mock_client:
+            create = AsyncMock(return_value=response)
+            mock_client.return_value.chat.completions.create = create
+            turn = await p.complete_tool_turn(
+                [{"role": "user", "content": "latest inflation"}],
+                "mimo-v2.5",
+                tools=[tool],
+                tool_choice="required",
+            )
+
+        await_args = create.await_args
+        assert await_args is not None
+        request = await_args.kwargs
+        assert request["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_web",
+                    "description": "Search the open web.",
+                    "parameters": tool.parameters,
+                },
+            }
+        ]
+        assert request["tool_choice"] == "required"
+        assert turn.stop_reason == "tool_use"
+        assert turn.text == ""
+        assert turn.reasoning == "Need current evidence."
+        assert turn.provider_state == {
+            "reasoning_content": "Need current evidence.",
+            "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}],
+        }
+        assert turn.tool_calls[0].id == "call-1"
+        assert turn.tool_calls[0].name == "search_web"
+        assert turn.tool_calls[0].arguments == {"query": "inflation"}
+        assert turn.tool_calls[0].argument_error is None
+        assert turn.usage_details == {"prompt_tokens": 4, "completion_tokens": 2}
+
+        replay = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [],
+            "provider_state": turn.provider_state,
+        }
+        with patch.object(p, "_get_client") as replay_client:
+            replay_client.return_value.chat.completions.create = AsyncMock(
+                return_value=SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content="done", tool_calls=None, model_extra=None
+                            ),
+                            finish_reason="stop",
+                        )
+                    ],
+                    usage=None,
+                )
+            )
+            await p.complete_tool_turn([replay], "mimo-v2.5", tools=[])
+        replay_args = replay_client.return_value.chat.completions.create.await_args
+        assert replay_args is not None
+        replay_message = replay_args.kwargs["messages"][0]
+        assert "provider_state" not in replay_message
+        assert replay_message["reasoning_content"] == "Need current evidence."
+        assert replay_message["reasoning_details"] == [
+            {"type": "reasoning.encrypted", "data": "opaque"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_preserves_bad_arguments_for_the_loop_to_reject(self):
+        p = get_provider("openai", api_key="test-key")
+        function = SimpleNamespace(name="search_web", arguments='{"query":')
+        message = SimpleNamespace(
+            content=None,
+            tool_calls=[SimpleNamespace(id="call-1", type="function", function=function)],
+            model_extra=None,
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=message, finish_reason="tool_calls")],
+            usage=None,
+        )
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=response)
+            turn = await p.complete_tool_turn(
+                [{"role": "user", "content": "q"}],
+                "mimo-v2.5",
+                tools=[],
+            )
+
+        assert turn.tool_calls[0].arguments == {}
+        assert turn.tool_calls[0].argument_error is not None
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_maps_plain_text_stop(self):
+        p = get_provider("openai", api_key="test-key")
+        message = SimpleNamespace(content="final answer", tool_calls=None, model_extra=None)
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=message, finish_reason="stop")],
+            usage=None,
+        )
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=response)
+            turn = await p.complete_tool_turn(
+                [{"role": "user", "content": "q"}],
+                "mimo-v2.5",
+                tools=[],
+            )
+
+        assert turn.stop_reason == "stop"
+        assert turn.text == "final answer"
+        assert turn.tool_calls == ()
 
     @pytest.mark.asyncio
     async def test_stream_captures_usage_and_cost_from_final_chunk(self):
@@ -618,6 +883,123 @@ class TestGeminiProvider:
             )
             # Verify assistant → model role mapping
             assert any(c.get("role") == "model" for c in contents if isinstance(c, dict))
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_turn_converts_tools_history_and_response(self):
+        p = get_provider("gemini", api_key="test-key")
+        tool = ToolDefinition(
+            name="search_web",
+            description="Search the open web.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        )
+        function_call = SimpleNamespace(
+            id="call-2",
+            name="search_web",
+            args={"query": "inflation"},
+        )
+        response = SimpleNamespace(
+            candidates=[
+                SimpleNamespace(
+                    finish_reason="STOP",
+                    content=SimpleNamespace(
+                        parts=[
+                            SimpleNamespace(
+                                text=None,
+                                thought=False,
+                                function_call=function_call,
+                                thought_signature="gemini-signature",
+                            )
+                        ]
+                    ),
+                )
+            ],
+            usage_metadata=SimpleNamespace(prompt_token_count=8, candidates_token_count=3),
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "search_web",
+                            "arguments": '{"query":"prices"}',
+                        },
+                        "thought_signature": "previous-gemini-signature",
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "search_web",
+                "content": "price evidence",
+                "is_error": False,
+            },
+        ]
+
+        with patch("dlightrag.models.providers.gemini_native.genai") as sdk:
+            client = MagicMock()
+            sdk.Client.return_value = client
+            create = AsyncMock(return_value=response)
+            client.aio.models.generate_content = create
+            cast(Any, p)._client = None
+            turn = await p.complete_tool_turn(
+                messages,
+                "gemini-2.5-flash",
+                tools=[tool],
+                tool_choice="required",
+            )
+
+        await_args = create.await_args
+        assert await_args is not None
+        request = await_args.kwargs
+        assert request["config"]["tools"] == [
+            {
+                "function_declarations": [
+                    {
+                        "name": "search_web",
+                        "description": "Search the open web.",
+                        "parameters": tool.parameters,
+                    }
+                ]
+            }
+        ]
+        assert request["config"]["tool_config"] == {"function_calling_config": {"mode": "ANY"}}
+        assert request["contents"] == [
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "function_call": {
+                            "id": "call-1",
+                            "name": "search_web",
+                            "args": {"query": "prices"},
+                        },
+                        "thought_signature": "previous-gemini-signature",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "function_response": {
+                            "id": "call-1",
+                            "name": "search_web",
+                            "response": {"output": "price evidence", "is_error": False},
+                        }
+                    }
+                ],
+            },
+        ]
+        assert turn.stop_reason == "tool_use"
+        assert turn.tool_calls[0].id == "call-2"
+        assert turn.tool_calls[0].arguments == {"query": "inflation"}
+        assert turn.tool_calls[0].thought_signature == "gemini-signature"
+        assert turn.usage_details == {"prompt_tokens": 8, "candidates_tokens": 3}
 
     @pytest.mark.asyncio
     async def test_stream_uses_gemini_async_stream_api(self):
