@@ -138,3 +138,32 @@ async def test_a_server_error_does_not_park_the_client() -> None:
             await search.search("q")
 
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_the_wait_outlasts_a_live_crawl() -> None:
+    search = ExaSearch("k")
+    try:
+        assert search._client.timeout.read is not None
+        assert search._client.timeout.read > 10.0
+    finally:
+        await search.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pages_that_stop_reading_are_complained_about_not_dropped(caplog) -> None:
+    unreadable = {"results": [{"title": "no url here"}]}
+    search = ExaSearch("k", client=_client(_responds(unreadable)))
+
+    with caplog.at_level("WARNING"):
+        result = await search.search("q")
+
+    assert result.hits == ()
+    assert "no usable passage" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_finding_nothing_is_not_complained_about() -> None:
+    search = ExaSearch("k", client=_client(_responds({"results": []})))
+
+    assert (await search.search("q")).hits == ()

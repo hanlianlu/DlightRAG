@@ -27,6 +27,12 @@ _PARKING_STATUS = {401: "unauthorized", 402: "payment_required"}
 # the open web can be worth beside the corpus without displacing it.
 _HIGHLIGHT_MAX_CHARACTERS = 4000
 
+# Without a cached copy the provider crawls the page live, and its own crawl
+# budget is ten seconds, so httpx's five-second default would call a working
+# search slow. One retry covers a dropped connection without waiting on one.
+_TIMEOUT_SECONDS = 15.0
+_CONNECT_RETRIES = 1
+
 
 class WebSearchUnavailable(Exception):
     """A search could not run; ``reason`` is a stable code the caller can report."""
@@ -58,7 +64,7 @@ class ExaSearch:
 
     def __init__(self, api_key: str, *, client: httpx.AsyncClient | None = None) -> None:
         self._api_key = api_key
-        self._client = client if client is not None else httpx.AsyncClient()
+        self._client = client if client is not None else _default_client()
         self._owns_client = client is None
         self._parked: tuple[str, float] | None = None
 
@@ -104,6 +110,13 @@ class ExaSearch:
         return reason
 
 
+def _default_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=_TIMEOUT_SECONDS,
+        transport=httpx.AsyncHTTPTransport(retries=_CONNECT_RETRIES),
+    )
+
+
 def _read_result(payload: Any) -> WebSearchResult:
     results = payload.get("results") if isinstance(payload, dict) else None
     hits: list[WebSearchHit] = []
@@ -126,6 +139,10 @@ def _read_result(payload: Any) -> WebSearchResult:
             hits.append(WebSearchHit(text=str(body), **page))
     cost = payload.get("costDollars") if isinstance(payload, dict) else None
     total = cost.get("total") if isinstance(cost, dict) else None
+    if results and not hits:
+        # Pages came back and none of them read, so the payload has moved on
+        # without us. Silence here is indistinguishable from finding nothing.
+        logger.warning("Web search returned %d results and no usable passage", len(results))
     return WebSearchResult(tuple(hits), float(total) if isinstance(total, (int, float)) else 0.0)
 
 
