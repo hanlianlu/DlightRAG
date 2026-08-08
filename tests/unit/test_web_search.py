@@ -6,7 +6,12 @@ import json
 import httpx
 import pytest
 
-from dlightrag.core.retrieval.web_search import ExaSearch, WebSearchUnavailable
+from dlightrag.core.retrieval.web_search import (
+    ExaSearch,
+    WebSearchHit,
+    WebSearchUnavailable,
+    web_context_rows,
+)
 
 _PAGE = {
     "url": "https://example.org/taylor",
@@ -178,3 +183,70 @@ async def test_a_payload_without_the_required_field_is_complained_about(caplog) 
 
     assert result.hits == ()
     assert "without a results field" in caplog.text
+
+
+def _hit(url: str, text: str, **kw) -> WebSearchHit:
+    return WebSearchHit(url=url, title=kw.pop("title", "T"), text=text, **kw)
+
+
+def test_passages_from_one_page_share_one_source() -> None:
+    rows = web_context_rows([_hit("https://a/x", "one"), _hit("https://a/x", "two")])
+
+    assert len({row["reference_id"] for row in rows}) == 1
+    assert [row["chunk_id"] for row in rows] == [
+        f"{rows[0]['reference_id']}-1",
+        f"{rows[0]['reference_id']}-2",
+    ]
+
+
+def test_a_repeated_passage_is_dropped_but_a_new_angle_is_kept() -> None:
+    rows = web_context_rows(
+        [
+            _hit("https://a/x", "same"),
+            _hit("https://a/x", "same"),
+            _hit("https://a/x", "different"),
+        ]
+    )
+
+    assert [row["content"] for row in rows] == ["same", "different"]
+
+
+def test_a_web_passage_says_it_came_from_the_web() -> None:
+    (row,) = web_context_rows([_hit("https://a/x", "body", published_date="2026-01-01")])
+
+    assert row["metadata"]["source_type"] == "web_search"
+    assert row["metadata"]["source_uri"] == "https://a/x"
+    assert row["metadata"]["source_download_locator"] == "https://a/x"
+    assert row["metadata"]["published_date"] == "2026-01-01"
+    assert row["_workspace"] == "__web_search__"
+
+
+def test_a_remote_image_is_carried_but_not_yet_shown() -> None:
+    (row,) = web_context_rows([_hit("https://a/x", "body", image_url="https://a/pic.png")])
+
+    assert row["metadata"]["remote_image_url"] == "https://a/pic.png"
+    assert "image_url" not in row
+
+
+def test_an_empty_passage_never_becomes_a_source() -> None:
+    assert web_context_rows([_hit("https://a/x", "   ")]) == []
+
+
+def test_a_web_passage_survives_the_citation_builder_as_a_real_source() -> None:
+    from dlightrag.citations.source_builder import build_sources_from_chunks
+
+    rows = web_context_rows(
+        [_hit("https://a/x", "one", title="A page"), _hit("https://a/x", "two", title="A page")]
+    )
+
+    (source,) = build_sources_from_chunks(rows, image_url_prefix="/web/images")
+
+    assert source.source_uri == "https://a/x"
+    assert source.download_locator == "https://a/x"
+    assert source.title is None or isinstance(source.title, str)
+    assert source.chunks is not None
+    assert [chunk.content for chunk in source.chunks] == ["one", "two"]
+    # A remote address would be rejected by the browser's same-origin image rule,
+    # so nothing is offered until it is served from here.
+    assert [chunk.image_url for chunk in source.chunks] == [None, None]
+    assert [chunk.thumbnail_url for chunk in source.chunks] == [None, None]

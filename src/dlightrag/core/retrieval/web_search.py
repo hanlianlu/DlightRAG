@@ -5,8 +5,10 @@ Passages come back already chosen against the query and already scored, so this
 module hands them over as they are: ranking and packing belong to the caller.
 """
 
+import hashlib
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +34,10 @@ _HIGHLIGHT_MAX_CHARACTERS = 4000
 # search slow. One retry covers a dropped connection without waiting on one.
 _TIMEOUT_SECONDS = 15.0
 _CONNECT_RETRIES = 1
+
+# Web passages belong to no workspace, and the sentinel keeps them out of every
+# workspace-routed path the way Composer documents already are.
+_WEB_SEARCH_WORKSPACE = "__web_search__"
 
 
 class WebSearchUnavailable(Exception):
@@ -155,9 +161,54 @@ def _text_or_none(value: Any) -> str | None:
     return text or None
 
 
+def web_context_rows(hits: Iterable[WebSearchHit]) -> list[dict[str, Any]]:
+    """Project passages into answer-context rows, one source per page.
+
+    Two waves searching different angles reach the same page for different
+    reasons, so a repeat of the same passage is dropped while a new passage on
+    a page already seen is kept.
+    """
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    counts: dict[str, int] = {}
+    for hit in hits:
+        if not hit.text.strip() or (hit.url, hit.text) in seen:
+            continue
+        seen.add((hit.url, hit.text))
+        reference_id = _reference_id(hit.url)
+        index = counts[reference_id] = counts.get(reference_id, 0) + 1
+        rows.append(
+            {
+                "chunk_id": f"{reference_id}-{index}",
+                "reference_id": reference_id,
+                "full_doc_id": reference_id,
+                "file_path": hit.title,
+                "content": hit.text,
+                "page_number": None,
+                "_workspace": _WEB_SEARCH_WORKSPACE,
+                "metadata": {
+                    # The prompt has to be able to say where this came from: a
+                    # page the model chose carries none of an upload's warrant.
+                    "source_type": "web_search",
+                    "source_uri": hit.url,
+                    "source_download_locator": hit.url,
+                    "title": hit.title,
+                    "published_date": hit.published_date,
+                    "remote_image_url": hit.image_url,
+                },
+            }
+        )
+    return rows
+
+
+def _reference_id(url: str) -> str:
+    return "web-" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+
+
 __all__ = [
     "ExaSearch",
     "WebSearchHit",
     "WebSearchResult",
     "WebSearchUnavailable",
+    "web_context_rows",
 ]
