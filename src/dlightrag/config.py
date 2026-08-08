@@ -509,6 +509,21 @@ class QueryImagesConfig(BaseModel):
     )
 
 
+class WebSearchConfig(BaseModel):
+    """Web search credentials. A key present is the capability; there is no switch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(
+        default=None,
+        description=(
+            "Exa API key. Web search is offered to the browser channel when this is "
+            "set and skipped entirely when it is not. Keep it in .env as "
+            "DLIGHTRAG_WEB_SEARCH__API_KEY."
+        ),
+    )
+
+
 class VisualAssetsConfig(BaseModel):
     """Browser-facing visual asset serving controls."""
 
@@ -815,6 +830,7 @@ class DlightragConfig(BaseSettings):
     answer: AnswerConfig = Field(default_factory=AnswerConfig)
     web_conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
     query_images: QueryImagesConfig = Field(default_factory=QueryImagesConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
     access_control: AccessControlConfig = Field(default_factory=AccessControlConfig)
 
