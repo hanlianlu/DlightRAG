@@ -304,3 +304,61 @@ def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:
     assert "'pointerId' in e" in resize_js
     assert "pointercancel" in resize_js
     assert "window.addEventListener('blur', finishDrag)" in resize_js
+
+
+def _css_blocks() -> list[tuple[str, str]]:
+    """Every `selector { declarations }` pair across the served stylesheets."""
+    blocks: list[tuple[str, str]] = []
+    for sheet in sorted(FRONTEND_STYLES.rglob("*.css")):
+        css = re.sub(r"/\*.*?\*/", "", sheet.read_text(encoding="utf-8"), flags=re.S)
+        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+            blocks.append((selector.strip(), body))
+    return blocks
+
+
+def _declarations(body: str) -> dict[str, str]:
+    decls: dict[str, str] = {}
+    for line in body.split(";"):
+        name, _, value = line.partition(":")
+        name, value = name.strip().lower(), value.strip()
+        if not name or not value:
+            continue
+        decls[name] = value
+        if name == "border":
+            # A base `border: 1px solid X` is what a hover `border-color` must beat.
+            decls.setdefault("border-color", value.split()[-1])
+    return decls
+
+
+def test_every_template_button_has_a_hover_rule() -> None:
+    """A control with no hover feedback reads as inert."""
+    templates = ROOT / "src" / "dlightrag" / "web" / "templates"
+    hover_selectors = [sel for sel, _ in _css_blocks() if ":hover" in sel]
+
+    for template in sorted(templates.rglob("*.html")):
+        for tag in re.findall(r"<button\b[^>]*>", template.read_text(encoding="utf-8")):
+            classes = re.search(r'class="([^"]*)"', tag)
+            names = classes.group(1).split() if classes else []
+            covered = any(
+                f".{name}" in selector for name in names for selector in hover_selectors
+            ) or any("button:hover" in selector for selector in hover_selectors)
+            assert covered, f"{template.name}: button {tag} has no hover rule"
+
+
+def test_button_hover_rules_change_something() -> None:
+    """A hover that restates the base is the same as having no hover at all."""
+    blocks = _css_blocks()
+    base = {sel: _declarations(body) for sel, body in blocks if ":hover" not in sel}
+
+    for selector, body in blocks:
+        if ":hover" not in selector:
+            continue
+        hover = _declarations(body)
+        if not hover:
+            continue
+        for part in selector.split(","):
+            root = part.strip().split(":hover")[0].strip()
+            if root not in base:
+                continue
+            changed = any(base[root].get(prop) != value for prop, value in hover.items())
+            assert changed, f"{part.strip()} restates {root} and renders no feedback"

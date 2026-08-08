@@ -56,12 +56,12 @@ function showOffer(): void {
 }
 
 async function acceptOffer(): Promise<void> {
-    rememberAsked();
     hideOffer();
     try {
-        await Notification.requestPermission();
+        // A dismissed prompt leaves the choice open, so the offer may come back.
+        if (await Notification.requestPermission() !== 'default') rememberAsked();
     } catch (_error) {
-        // Denied or unavailable; nothing further to do.
+        rememberAsked();
     }
 }
 
