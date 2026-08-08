@@ -21,6 +21,7 @@ from dlightrag.config import (
     LLMConfig,
     ModelConfig,
     RerankConfig,
+    WebSearchConfig,
     set_config,
 )
 from dlightrag.core.client_contracts import IngestSpec
@@ -2690,3 +2691,30 @@ class TestPlannerSchemaScope:
         get_field_schema.assert_awaited_once_with(workspaces=("reports", "legal"))
         manager._get_service.assert_not_awaited()
         assert ("reports", "legal") in manager._schema_cache
+
+
+class TestWebSearchCapability:
+    """A key present is the capability; without one the path does not exist."""
+
+    def test_without_a_key_there_is_no_web_search_to_reach(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+
+        assert manager.web_search_available is False
+        assert manager._get_web_search() is None
+
+    def test_with_a_key_one_client_is_shared_by_every_turn(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+
+        assert manager.web_search_available is True
+        assert manager._get_web_search() is manager._get_web_search()
+
+    async def test_closing_the_manager_closes_the_web_client(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        search = manager._get_web_search()
+        assert search is not None
+
+        await manager.aclose()
+
+        assert search._client.is_closed

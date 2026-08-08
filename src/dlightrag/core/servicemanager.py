@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
     from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
     from dlightrag.core.request.images import QueryImageDescriber
+    from dlightrag.core.retrieval.web_search import ExaSearch
     from dlightrag.core.source_download import SourceDownloadTarget
     from dlightrag.models.composer import ComposerModelBundle
     from dlightrag.storage.file_panel import PGFilePanelStore
@@ -283,6 +284,7 @@ class RAGServiceManager:
         self._query_planner: QueryPlanner | None = None
         self._query_image_describer: QueryImageDescriber | None = None
         self._composer_model_bundle: ComposerModelBundle | None = None
+        self._web_search: ExaSearch | None = None
         self._query_image_describer_lock = asyncio.Lock()
         self._composer_model_bundle_lock = asyncio.Lock()
         self._composer_evidence_selector: ComposerEvidenceSelector | None = None
@@ -939,6 +941,22 @@ class RAGServiceManager:
                 llm_func=self._sem_bound(get_planner_model_func(self._config)),
             )
         return self._query_planner
+
+    @property
+    def web_search_available(self) -> bool:
+        """Whether a turn may reach the open web. A key present is the capability."""
+        return bool(self._config.web_search.api_key)
+
+    def _get_web_search(self) -> ExaSearch | None:
+        """Return the manager-owned web search client, or None when unconfigured."""
+        key = self._config.web_search.api_key
+        if not key:
+            return None
+        if self._web_search is None:
+            from dlightrag.core.retrieval.web_search import ExaSearch
+
+            self._web_search = ExaSearch(key)
+        return self._web_search
 
     async def _aget_query_image_describer(self) -> QueryImageDescriber:
         """Lazy-create the VLM query-image describer."""
@@ -1771,6 +1789,7 @@ class RAGServiceManager:
         for component in (
             self._answer_engine,
             self._query_planner,
+            self._web_search,
             composer_model_bundle,
         ):
             close = getattr(component, "aclose", None)
