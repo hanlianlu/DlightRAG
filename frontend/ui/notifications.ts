@@ -4,10 +4,15 @@ import {bus} from '../events/bus.ts';
 
 const ASKED_STORAGE_KEY = 'dlightrag-notify-asked';
 
-// Set while an answer streams with the tab hidden, so the offer only appears to
-// someone who actually missed one.
+// Set while an answer streams with nobody watching, so the offer only appears
+// to someone who actually missed one.
 let missedAnswer = false;
 let streaming = false;
+
+function away(): boolean {
+    // Switching apps leaves the tab visible, so focus is the other half of this.
+    return document.hidden || !document.hasFocus();
+}
 
 function supported(): boolean {
     // Absent outside a secure context, so a plain-HTTP deployment shows nothing.
@@ -76,25 +81,34 @@ export function setupNotifications(): void {
     bus.on('conversationStreamChanged', function({active}) {
         if (active) {
             streaming = true;
-            missedAnswer = document.hidden;
+            missedAnswer = away();
             return;
         }
         if (!streaming) return;
         streaming = false;
-        if (document.hidden) missedAnswer = true;
-        if (!document.hidden || !missedAnswer) return;
+        if (!away()) return;
+        missedAnswer = true;
         if (Notification.permission === 'granted') notifyAnswerReady();
     });
 
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            if (streaming) missedAnswer = true;
-            return;
-        }
+    function leftPage(): void {
+        if (streaming) missedAnswer = true;
+    }
+
+    function cameBack(): void {
+        // Returning fires visibilitychange before focus, so re-check both.
+        if (away()) return;
         if (!streaming && missedAnswer && Notification.permission === 'default' && !alreadyAsked()) {
             showOffer();
         }
         missedAnswer = false;
+    }
+
+    window.addEventListener('blur', leftPage);
+    window.addEventListener('focus', cameBack);
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) leftPage();
+        else cameBack();
     });
 
     document.getElementById('notify-offer-accept')?.addEventListener('click', function() {
