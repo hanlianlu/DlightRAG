@@ -612,7 +612,7 @@ class TestExternalSearchPlanning:
 
         schema = seen[0]["structured_output"].schema.model_json_schema()
         assert "external_query" not in schema["properties"]
-        assert "search engine" not in str(seen[0]["messages"][0]["content"])
+        assert "external_query" not in str(seen[0]["messages"][0]["content"])
         assert plan.external_query is None
 
     async def test_with_the_capability_the_planner_may_name_one_search(self):
@@ -623,6 +623,7 @@ class TestExternalSearchPlanning:
         schema = seen[0]["structured_output"].json_schema_response_format()["json_schema"]
         assert "external_query" in schema["schema"]["properties"]
         assert "external_query" in schema["schema"]["required"]
+        assert "external_query" in str(seen[0]["messages"][0]["content"])
         assert plan.external_query == "a"
 
     async def test_a_web_conversation_turn_keeps_its_own_selection_fields(self):
