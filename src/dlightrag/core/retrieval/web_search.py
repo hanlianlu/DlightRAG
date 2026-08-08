@@ -62,15 +62,13 @@ class ExaSearch:
         self._owns_client = client is None
         self._parked: tuple[str, float] | None = None
 
-    async def search(self, query: str, *, full_text: bool = False) -> WebSearchResult:
+    async def search(self, query: str) -> WebSearchResult:
         """Return the passages a search found, or say why it could not run."""
         parked = self._parked_reason()
         if parked is not None:
             raise WebSearchUnavailable(parked)
 
         contents: dict[str, Any] = {"highlights": {"maxCharacters": _HIGHLIGHT_MAX_CHARACTERS}}
-        if full_text:
-            contents["text"] = {"maxCharacters": _HIGHLIGHT_MAX_CHARACTERS}
         try:
             response = await self._client.post(
                 _ENDPOINT,

@@ -51,11 +51,8 @@ async def test_a_passage_is_never_asked_for_at_its_provider_default_length() -> 
     search = ExaSearch("k", client=_client(handler))
 
     await search.search("q")
-    await search.search("q", full_text=True)
 
-    assert all("maxCharacters" in asked[0]["highlights"] for _ in asked)
-    assert "text" not in asked[0]
-    assert "maxCharacters" in asked[1]["text"]
+    assert "maxCharacters" in asked[0]["highlights"]
 
 
 @pytest.mark.asyncio
@@ -63,7 +60,7 @@ async def test_a_returned_page_body_becomes_a_passage_of_its_own() -> None:
     page = {**_PAGE, "text": "Full article body."}
     search = ExaSearch("k", client=_client(_responds({"results": [page]})))
 
-    result = await search.search("q", full_text=True)
+    result = await search.search("q")
 
     assert result.hits[-1].text == "Full article body."
     assert result.hits[-1].url == _PAGE["url"]
