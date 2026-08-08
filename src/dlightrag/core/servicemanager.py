@@ -1096,12 +1096,14 @@ class RAGServiceManager:
                     max_turns=self._config.max_conversation_turns,
                     max_tokens=self._config.max_conversation_tokens,
                     schema=schema,
+                    external_search=self.web_search_available,
                 )
                 trace.update(
                     output={
                         "standalone_query": plan.standalone_query,
                         "has_metadata_filter": plan.metadata_filter is not None,
                         "planner_outcome": plan.planner_outcome,
+                        "external_search": bool(plan.external_query),
                     }
                 )
                 return plan
@@ -1169,12 +1171,14 @@ class RAGServiceManager:
                 max_tokens=self._config.max_conversation_tokens,
                 schema=schema,
                 current_image_descriptions=current_image_descriptions,
+                external_search=self.web_search_available,
             )
             trace.update(
                 output={
                     "standalone_query": plan.standalone_query,
                     "has_metadata_filter": plan.metadata_filter is not None,
                     "planner_outcome": plan.planner_outcome,
+                    "external_search": bool(plan.external_query),
                 }
             )
             return plan

@@ -156,7 +156,7 @@ class TestMakeCompletionFunc:
 
         assert model_for_role(cfg, "query") is cfg.llm.default
 
-    def test_planner_model_func_prefers_keyword_role_direct(self, monkeypatch):
+    def test_planner_model_func_prefers_extract_role_direct(self, monkeypatch):
         from dlightrag.models import llm
 
         captured: dict[str, Any] = {}
@@ -173,9 +173,14 @@ class TestMakeCompletionFunc:
                 roles=LLMRolesConfig(
                     keyword=ModelConfig(
                         provider="openai",
-                        model="deepseek-v4-flash",
+                        model="keyword-model",
                         api_key="sk-keyword",
-                    )
+                    ),
+                    extract=ModelConfig(
+                        provider="openai",
+                        model="deepseek-v4-flash",
+                        api_key="sk-extract",
+                    ),
                 ),
             ),
             embedding=_embedding_config(),
@@ -188,10 +193,10 @@ class TestMakeCompletionFunc:
         assert func == "completion:deepseek-v4-flash"
         assert captured == {
             "model": "deepseek-v4-flash",
-            "api_key": "sk-keyword",
+            "api_key": "sk-extract",
         }
 
-    def test_planner_model_func_uses_default_when_keyword_role_is_unset(self, monkeypatch):
+    def test_planner_model_func_uses_default_when_extract_role_is_unset(self, monkeypatch):
         from dlightrag.models import llm
 
         captured: dict[str, Any] = {}

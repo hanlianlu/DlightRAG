@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
+    PLANNER_EXTERNAL_SEARCH_GUIDANCE,
     PLANNER_IMAGE_CONTEXT_GUIDANCE,
     PLANNER_SYSTEM_PROMPT,
     WEB_PLANNER_SYSTEM_PROMPT,
@@ -104,6 +105,8 @@ class QueryPlan:
     selected_history_image_ids: tuple[str, ...] = ()
     # Web-only conversation planner field (empty for stateless REST/MCP/SDK/retrieve).
     selected_history_attachment_ids: tuple[str, ...] = ()
+    # One query per retrieval channel: this one goes to the open web, when reachable.
+    external_query: str | None = None
     planner_outcome: PlannerOutcome = "planned"
 
     @classmethod
@@ -173,6 +176,36 @@ class WebConversationPlannerStructuredResponse(QueryPlannerStructuredResponse):
 QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT = StructuredOutput(
     name="query_plan",
     schema=WebConversationPlannerStructuredResponse,
+)
+
+
+class ExternalSearchPlannerStructuredResponse(QueryPlannerStructuredResponse):
+    """Stateless planner schema when an outside search engine is reachable.
+
+    Offered only to deployments holding a search credential: strict mode makes
+    every schema field required, so an unconditional field would put the model
+    to work for a capability that is not there.
+    """
+
+    external_query: str | None = None
+
+
+class WebConversationExternalSearchPlannerStructuredResponse(
+    WebConversationPlannerStructuredResponse
+):
+    """Web conversation planner schema when an outside search engine is reachable."""
+
+    external_query: str | None = None
+
+
+QUERY_PLAN_EXTERNAL_SEARCH_STRUCTURED_OUTPUT = StructuredOutput(
+    name="query_plan",
+    schema=ExternalSearchPlannerStructuredResponse,
+)
+
+QUERY_PLAN_WEB_CONVERSATION_EXTERNAL_SEARCH_STRUCTURED_OUTPUT = StructuredOutput(
+    name="query_plan",
+    schema=WebConversationExternalSearchPlannerStructuredResponse,
 )
 
 
@@ -402,6 +435,7 @@ class QueryPlanner:
         max_tokens: int = 65536,
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
+        external_search: bool = False,
     ) -> QueryPlan:
         """Produce a full QueryPlan from one LLM call.
 
@@ -420,6 +454,9 @@ class QueryPlanner:
         system_prompt = PLANNER_SYSTEM_PROMPT
 
         structured_output = QUERY_PLAN_STRUCTURED_OUTPUT
+        if external_search:
+            system_prompt += "\n\n" + PLANNER_EXTERNAL_SEARCH_GUIDANCE
+            structured_output = QUERY_PLAN_EXTERNAL_SEARCH_STRUCTURED_OUTPUT
         if current_image_descriptions:
             system_prompt += "\n\n" + PLANNER_IMAGE_CONTEXT_GUIDANCE
 
@@ -548,6 +585,7 @@ class QueryPlanner:
         allowed_history_image_count: int = 0,
         allowed_history_attachment_count: int = 0,
         current_image_descriptions: list[str] | None = None,
+        external_search: bool = False,
     ) -> QueryPlan:
         """Plan one Web conversation turn (Web ``/web/answer`` only).
 
@@ -574,6 +612,10 @@ class QueryPlanner:
         history = self._truncate_history(conversation_history, max_turns, max_tokens)
 
         system_prompt = WEB_PLANNER_SYSTEM_PROMPT
+        structured_output = QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT
+        if external_search:
+            system_prompt += "\n\n" + PLANNER_EXTERNAL_SEARCH_GUIDANCE
+            structured_output = QUERY_PLAN_WEB_CONVERSATION_EXTERNAL_SEARCH_STRUCTURED_OUTPUT
 
         def render_input(
             messages: list[dict[str, Any]],
@@ -651,7 +693,7 @@ class QueryPlanner:
         response = await self._call_llm_with_retry(
             planner_input,
             system_prompt,
-            structured_output=QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT,
+            structured_output=structured_output,
             start_time=llm_start,
         )
         if response is None:
@@ -660,11 +702,10 @@ class QueryPlanner:
         plan = self._parse_response(
             response,
             query,
-            structured_output=QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT,
+            structured_output=structured_output,
         )
         if plan is None:
             return QueryPlan.fallback(query, "fallback_invalid_response")
-
         # LLM output is not authorization: keep only ids present in the scoped
         # catalogs, deduped and truncated to the allowed count.
         plan.selected_history_image_ids = _scope_ids(
@@ -719,6 +760,7 @@ class QueryPlanner:
         selected_attachments = tuple(
             str(i) for i in data.get("selected_history_attachment_ids", []) if i
         )
+        external_query = str(data.get("external_query") or "").strip() or None
         raw_filters = data.get("filters", {}) or {}
         filter_confidence = str(data.get("filter_confidence") or "").lower() or None
         filter_evidence = data.get("filter_evidence") or []
@@ -739,6 +781,7 @@ class QueryPlanner:
                 else None,
                 selected_history_image_ids=selected,
                 selected_history_attachment_ids=selected_attachments,
+                external_query=external_query,
             )
 
         # Handle date fields specially
@@ -772,6 +815,7 @@ class QueryPlanner:
             metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
             selected_history_image_ids=selected,
             selected_history_attachment_ids=selected_attachments,
+            external_query=external_query,
         )
 
     @staticmethod

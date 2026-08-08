@@ -294,10 +294,9 @@ def test_stateless_turn_carries_no_web_composer_context() -> None:
 async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     planner = AsyncMock()
-    planner.plan.return_value = SimpleNamespace(
+    planner.plan.return_value = QueryPlan(
+        original_query="follow up",
         standalone_query="standalone",
-        metadata_filter=None,
-        planner_outcome="planned",
     )
     manager._query_planner = planner
     manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -1061,6 +1060,7 @@ class TestAnswerViaEngine:
                             "standalone_query": "rewritten query",
                             "has_metadata_filter": False,
                             "planner_outcome": "planned",
+                            "external_search": False,
                         }
                     }
                 ],

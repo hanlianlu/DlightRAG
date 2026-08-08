@@ -182,10 +182,10 @@ def get_keyword_model_func(config: DlightragConfig) -> Callable:
 def get_planner_model_func(config: DlightragConfig) -> Callable:
     """Messages-first planner callable (DlightRAG-owned; nests under the request).
 
-    Uses ``config.llm.roles.keyword`` if set, otherwise ``config.llm.default``.
+    Uses ``config.llm.roles.extract`` if set, otherwise ``config.llm.default``.
     Concurrency is bounded by the caller's semaphore (RAGServiceManager).
     """
-    cfg = model_for_role(config, "keyword")
+    cfg = model_for_role(config, "extract")
     return _make_completion_func(cfg)
 
 

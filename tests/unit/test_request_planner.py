@@ -3,6 +3,7 @@
 
 import json
 import logging
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -589,3 +590,53 @@ class TestHistoryTruncation:
         result = QueryPlanner._truncate_history(history, max_turns=5, max_tokens=100000)
         # max_turns=5 => max_messages=10
         assert len(result) <= 10
+
+
+class TestExternalSearchPlanning:
+    """The open web is offered to the planner only where it is reachable."""
+
+    @staticmethod
+    def _capture(payload: dict[str, object] | None = None):
+        seen: list[dict[str, Any]] = []
+
+        async def llm_func(**kwargs):
+            seen.append(kwargs)
+            return json.dumps(payload or {"standalone_query": "q", "external_query": "a"})
+
+        return seen, llm_func
+
+    async def test_without_the_capability_the_field_is_never_asked_for(self):
+        seen, llm_func = self._capture()
+
+        plan = await QueryPlanner(llm_func=llm_func).plan("q")
+
+        schema = seen[0]["structured_output"].schema.model_json_schema()
+        assert "external_query" not in schema["properties"]
+        assert "search engine" not in str(seen[0]["messages"][0]["content"])
+        assert plan.external_query is None
+
+    async def test_with_the_capability_the_planner_may_name_one_search(self):
+        seen, llm_func = self._capture()
+
+        plan = await QueryPlanner(llm_func=llm_func).plan("q", external_search=True)
+
+        schema = seen[0]["structured_output"].json_schema_response_format()["json_schema"]
+        assert "external_query" in schema["schema"]["properties"]
+        assert "external_query" in schema["schema"]["required"]
+        assert plan.external_query == "a"
+
+    async def test_a_web_conversation_turn_keeps_its_own_selection_fields(self):
+        seen, llm_func = self._capture()
+
+        await QueryPlanner(llm_func=llm_func).plan_web_conversation("q", external_search=True)
+
+        properties = seen[0]["structured_output"].schema.model_json_schema()["properties"]
+        assert "external_query" in properties
+        assert "selected_history_attachment_ids" in properties
+
+    async def test_a_blank_query_is_not_a_search(self):
+        _, llm_func = self._capture({"standalone_query": "q", "external_query": "   "})
+
+        plan = await QueryPlanner(llm_func=llm_func).plan("q", external_search=True)
+
+        assert plan.external_query is None
