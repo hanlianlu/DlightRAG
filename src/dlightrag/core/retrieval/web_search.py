@@ -22,10 +22,10 @@ _ENDPOINT = "https://api.exa.ai/search"
 _PARK_SECONDS = 15 * 60
 _PARKING_STATUS = {401: "unauthorized", 402: "payment_required"}
 
-# Left alone, one highlight measures around 7k characters, so ten results would
-# enter the prompt ahead of every uploaded document. Held to a fifth of the
-# Composer evidence budget: ten results at this size come to roughly 5k tokens.
-_HIGHLIGHT_MAX_CHARACTERS = 2000
+# Left alone, one excerpt measures around 7k characters. This is the length the
+# provider recommends: ten results come to roughly 10k tokens, which a survey of
+# the open web can be worth beside the corpus without displacing it.
+_HIGHLIGHT_MAX_CHARACTERS = 4000
 
 
 class WebSearchUnavailable(Exception):
