@@ -388,3 +388,31 @@ def test_a_table_already_followed_by_a_blank_line_is_untouched():
     content = "<table><tr><td>a</td></tr></table>\n\n**After**"
 
     assert separate_html_blocks(content) == content
+
+
+def test_bold_pseudo_items_each_keep_their_line():
+    """Bold is inline, so a parser numbering items as **1.** merges them all."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    result = render_chunk_content("**1.** first\n**Answer:** ____\n**2.** second")
+
+    assert result.count("<br />") == 2
+    assert result.count("<p>") == 1
+
+
+def test_a_real_list_is_left_for_markdown_to_break():
+    """Inserting breaks into a list Markdown already understands loosens it."""
+    from dlightrag.web.markdown import normalize_chunk_source, render_chunk_content
+
+    for source in ("1. one\n2. two", "- alpha\n- beta", "## Heading\nBody"):
+        assert normalize_chunk_source(source) == source
+
+    assert "<p>" not in render_chunk_content("1. one\n2. two")
+
+
+def test_a_wrapped_sentence_is_not_broken():
+    from dlightrag.web.markdown import normalize_chunk_source
+
+    prose = "output fell gradually from\n1978 to 2007"
+
+    assert normalize_chunk_source(prose) == prose

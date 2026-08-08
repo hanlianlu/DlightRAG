@@ -17,9 +17,9 @@ from dlightrag.core import access as core_access
 from dlightrag.core.scope import RequestScope
 from dlightrag.web.markdown import (
     inject_highlights,
+    normalize_chunk_source,
     render_chunk_content,
     render_markdown,
-    separate_html_blocks,
 )
 
 if TYPE_CHECKING:
@@ -195,7 +195,7 @@ def _citation_badges(text: str) -> Markup:
 
 def _highlight_content(text: str, phrases: list[str] | None = None) -> Markup:
     """Render chunk content as HTML, sanitize, then inject highlight spans."""
-    text = separate_html_blocks(text)  # the offsets highlights use must match the render
+    text = normalize_chunk_source(text)  # the offsets highlights use must match the render
     html = render_chunk_content(text)
     html = nh3.clean(html, tags=_CHUNK_ALLOWED_TAGS, attributes=_CHUNK_ALLOWED_ATTRS)
 

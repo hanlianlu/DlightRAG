@@ -208,7 +208,7 @@ def render_markdown(text: str) -> str:
 
 def render_chunk_content(text: str) -> str:
     """Render chunk content to HTML, allowing HTML passthrough for tables etc."""
-    return _md_chunk.render(separate_html_blocks(text))
+    return _md_chunk.render(normalize_chunk_source(text))
 
 
 # CommonMark closes an HTML block only at a blank line, so a parser that emits a
@@ -221,11 +221,7 @@ _ONE_LINE_HTML_BLOCK = re.compile(
 
 
 def separate_html_blocks(text: str) -> str:
-    """End a one-line HTML block with a blank line so the Markdown after it renders.
-
-    Callers that align highlights against the source must pass the same result,
-    since the inserted lines shift every offset after them.
-    """
+    """End a one-line HTML block with a blank line so the Markdown after it renders."""
     lines = text.split("\n")
     out: list[str] = []
     for index, line in enumerate(lines):
@@ -234,6 +230,34 @@ def separate_html_blocks(text: str) -> str:
         if following.strip() and _ONE_LINE_HTML_BLOCK.match(line):
             out.append("")
     return "\n".join(out)
+
+
+# A parser that numbers items as **1.** states the structure in an inline mark,
+# which leaves every item merged into one paragraph. Bullets, ordered markers and
+# headings need no help: each already interrupts a paragraph on its own.
+_BOLD_ITEM_START = re.compile(r"^\s*\*\*\S")
+_HARD_BREAK = "  "
+
+
+def break_before_bold_items(text: str) -> str:
+    """Keep a line that opens with bold on a line of its own."""
+    lines = text.split("\n")
+    for index in range(len(lines) - 1):
+        line = lines[index]
+        if not line.strip() or line.endswith(_HARD_BREAK):
+            continue
+        if _BOLD_ITEM_START.match(lines[index + 1]):
+            lines[index] = line + _HARD_BREAK
+    return "\n".join(lines)
+
+
+def normalize_chunk_source(text: str) -> str:
+    """Recover the line structure a parser meant but could not express in Markdown.
+
+    Callers that align highlights against the source must pass the same result,
+    since the edits shift every offset after them.
+    """
+    return break_before_bold_items(separate_html_blocks(text))
 
 
 # ---------------------------------------------------------------------------
