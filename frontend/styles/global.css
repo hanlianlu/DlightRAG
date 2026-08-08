@@ -253,6 +253,49 @@ mjx-container {
     transform: translateX(-50%) translateY(0);
 }
 
+/* === Notification Offer === */
+
+.notify-offer {
+    position: fixed;
+    bottom: var(--space-section);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: var(--space-component);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+    padding: var(--space-component) var(--space-section);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-detail);
+    z-index: 200;
+    box-shadow: var(--shadow-toast);
+}
+
+.notify-offer[hidden] {
+    display: none;
+}
+
+.notify-offer-btn {
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-bg-base);
+    color: var(--color-text-primary);
+    padding: var(--space-tight) var(--space-component);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-detail);
+    cursor: pointer;
+}
+
+.notify-offer-btn.is-quiet {
+    border-color: transparent;
+    background: transparent;
+    color: var(--color-text-tertiary);
+}
+
+.notify-offer-btn:hover {
+    border-color: var(--color-border-strong);
+}
+
 /* === Drop Overlay === */
 
 .drop-overlay {

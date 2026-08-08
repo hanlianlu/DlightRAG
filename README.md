@@ -414,8 +414,9 @@ npm run build
 npm run lint:css
 ```
 
-`npm run build` writes the browser bundle to `src/dlightrag/web/static/generated/`;
-commit those generated files with frontend changes.
+`npm run build` writes the browser bundle to `src/dlightrag/web/static/generated/`.
+That directory is gitignored and rebuilt by `make ci`; the wheel picks it up
+through `tool.hatch.build.targets.wheel.artifacts`.
 
 Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 

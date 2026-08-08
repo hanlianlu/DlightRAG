@@ -12,6 +12,7 @@ import {setupConversations} from './conversations.ts';
 import {setupFilesPanel} from './files-panel.ts';
 import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
+import {setupNotifications} from './notifications.ts';
 import {setupPanel} from './panel.ts';
 import {setupPanelResize} from './resize.ts';
 import {setupSourcePanel} from './source-panel.ts';
@@ -32,4 +33,5 @@ document.addEventListener('DOMContentLoaded', function() {
     setupQueryForm();
     setupMathRendering();
     setupConversations();
+    setupNotifications();
 });
