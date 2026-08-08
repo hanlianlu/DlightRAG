@@ -119,6 +119,10 @@ def _default_client() -> httpx.AsyncClient:
 
 def _read_result(payload: Any) -> WebSearchResult:
     results = payload.get("results") if isinstance(payload, dict) else None
+    if results is None:
+        # The provider declares this field required, so its absence means the
+        # payload has moved on without us rather than that nothing was found.
+        logger.warning("Web search answered without a results field")
     hits: list[WebSearchHit] = []
     for result in results or []:
         if not isinstance(result, dict):

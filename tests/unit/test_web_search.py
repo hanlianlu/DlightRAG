@@ -167,3 +167,14 @@ async def test_finding_nothing_is_not_complained_about() -> None:
     search = ExaSearch("k", client=_client(_responds({"results": []})))
 
     assert (await search.search("q")).hits == ()
+
+
+@pytest.mark.asyncio
+async def test_a_payload_without_the_required_field_is_complained_about(caplog) -> None:
+    search = ExaSearch("k", client=_client(_responds({"items": [_PAGE]})))
+
+    with caplog.at_level("WARNING"):
+        result = await search.search("q")
+
+    assert result.hits == ()
+    assert "without a results field" in caplog.text
