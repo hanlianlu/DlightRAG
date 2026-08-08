@@ -5,14 +5,17 @@ from .guidance import (
     ANSWER_CONTEXT_GUIDANCE,
     CITATION_GUIDANCE,
 )
-from .identity import CORE_IDENTITY
+from .identity import core_identity
 
 # --- Answer Generation ---
 
-ANSWER_CORE = "\n\n".join(
-    [
-        CORE_IDENTITY,
-        ANSWER_CONTEXT_GUIDANCE,
-        CITATION_GUIDANCE,
-    ]
-)
+
+def answer_core() -> str:
+    """The answer system prompt, rebuilt per call so its clock is the caller's."""
+    return "\n\n".join(
+        [
+            core_identity(),
+            ANSWER_CONTEXT_GUIDANCE,
+            CITATION_GUIDANCE,
+        ]
+    )
