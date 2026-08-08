@@ -273,6 +273,13 @@ _SOURCE_MARKUP_RE = re.compile(r"<[^<>]*>|\]\([^()]*\)")
 _HIGHLIGHT_OPEN = '<span class="highlight">'
 _HIGHLIGHT_CLOSE = "</span>"
 
+# MathJax pairs its delimiters within one text node, so a highlight that stops in
+# the middle of a formula silently costs the reader the formula. A candidate that
+# already holds markup is past saving and is deliberately left unmatched.
+_MATH_REGION_RE = re.compile(
+    r"\$\$[^<]+?\$\$|\\\[[^<]+?\\\]|\\\([^<]+?\\\)|\$[^$<\n]+?\$", re.DOTALL
+)
+
 
 def _visible_text(html: str) -> tuple[str, list[tuple[int, int]]]:
     """Return the visible text of ``html`` and the HTML slice backing each char."""
@@ -349,6 +356,28 @@ def _text_runs(spans: list[tuple[int, int]], start: int, end: int) -> list[tuple
     return runs
 
 
+def _widen_over_math(html: str, runs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Grow a run that reaches into a formula until it holds the whole formula."""
+    regions = [region.span() for region in _MATH_REGION_RE.finditer(html)]
+    if not regions:
+        return runs
+
+    widened: list[tuple[int, int]] = []
+    for start, end in runs:
+        for region_start, region_end in regions:
+            if start < region_end and region_start < end:
+                start, end = min(start, region_start), max(end, region_end)
+        widened.append((start, end))
+
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(widened):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def inject_highlights(html: str, source: str, phrases: Sequence[str]) -> str:
     """Wrap each phrase of ``source`` in ``<span class="highlight">`` inside ``html``.
 
@@ -377,7 +406,7 @@ def inject_highlights(html: str, source: str, phrases: Sequence[str]) -> str:
     runs = [run for start, end in matched for run in _text_runs(spans, start, end)]
     # Whitespace-only runs are the gaps between block tags (table cells, list
     # items); wrapping them would place a span where no text node exists.
-    runs = sorted(run for run in runs if html[run[0] : run[1]].strip())
+    runs = _widen_over_math(html, sorted(run for run in runs if html[run[0] : run[1]].strip()))
     if not runs:
         return html
 

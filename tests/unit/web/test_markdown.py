@@ -416,3 +416,29 @@ def test_a_wrapped_sentence_is_not_broken():
     prose = "output fell gradually from\n1978 to 2007"
 
     assert normalize_chunk_source(prose) == prose
+
+
+def test_a_highlight_never_cuts_a_formula_in_half():
+    from dlightrag.web.markdown import inject_highlights, render_chunk_content
+
+    body = "i _ {t} = i ^ {*} + a (\\pi_ {t} - \\pi^ {*})"
+    source = f"Taylor argued the bank should use this rule:\n$$\n{body}\n$$\nwhere a is positive."
+    html = render_chunk_content(source)
+
+    out = inject_highlights(html, source, [body])
+
+    formula = out[out.index("$$") : out.rindex("$$") + 2]
+    assert "<" not in formula
+    assert out.count('<span class="highlight">') == 1
+
+
+def test_a_highlight_outside_a_formula_still_marks_only_itself():
+    from dlightrag.web.markdown import inject_highlights, render_chunk_content
+
+    source = "The rule matters.\n$$\nx = y\n$$\nIt was named after Taylor."
+    html = render_chunk_content(source)
+
+    out = inject_highlights(html, source, ["The rule matters."])
+
+    assert '<span class="highlight">The rule matters.</span>' in out
+    assert "$$\nx = y\n$$" in out
