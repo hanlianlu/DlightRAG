@@ -38,7 +38,7 @@ def _is_default_openai_endpoint(base_url: str | None) -> bool:
     return parsed.scheme in {"http", "https"} and parsed.netloc == "api.openai.com"
 
 
-def _structured_response_format(
+def structured_response_format(
     structured_output: StructuredOutput,
     cfg: ModelConfig,
     *,
@@ -112,7 +112,7 @@ def _make_completion_func(
         if structured_output is not None:
             if not isinstance(structured_output, StructuredOutput):
                 raise TypeError("structured_output must be a StructuredOutput")
-            response_format = response_format or _structured_response_format(
+            response_format = response_format or structured_response_format(
                 structured_output, cfg, provider=provider
             )
         model_kwargs = {**cfg.model_kwargs, **kw}
@@ -190,7 +190,7 @@ def get_planner_model_func(config: DlightragConfig) -> Callable:
 
 
 def get_query_model_func(config: DlightragConfig) -> Callable:
-    """Messages-first query callable for AnswerEngine (DlightRAG-owned; nests).
+    """Messages-first query callable for AnswerSynthesizer (DlightRAG-owned; nests).
 
     Uses ``config.llm.roles.query`` if set, otherwise ``config.llm.default``.
     Concurrency is bounded by ``RAGServiceManager._answer_stream_sem``.

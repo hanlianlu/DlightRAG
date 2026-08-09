@@ -37,6 +37,7 @@ class RetrievalResult:
     answer_blocks: list[dict[str, Any]] = field(default_factory=list)
     trace: dict[str, Any] = field(default_factory=dict)
     image_descriptions: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 # ── Backend protocol ──────────────────────────────────────────────

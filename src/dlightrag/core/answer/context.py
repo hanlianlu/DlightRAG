@@ -31,84 +31,38 @@ class AnswerContextPacker:
         self,
         contexts: RetrievalContexts,
         *,
-        rag_image_budget: AnswerImageBudget,
-        composer_image_budget: AnswerImageBudget,
-        context_top_k: int | None = None,
+        image_budget: AnswerImageBudget,
     ) -> PackedAnswerContext:
         chunks = contexts.get("chunks", [])
-        target_chunks = context_top_k if context_top_k and context_top_k > 0 else None
         image_blocks: dict[str, dict[str, Any]] = {}
-        image_counts = {
-            "composer_sent": 0,
-            "composer_skipped": 0,
-            "rag_sent": 0,
-            "rag_skipped": 0,
-        }
+        images_sent = 0
+        images_skipped = 0
 
-        composer_chunks: list[ContextRow] = []
-        rag_chunks: list[ContextRow] = []
+        packed_chunks: list[ContextRow] = []
         for chunk in chunks:
-            source_type = str((chunk.get("metadata") or {}).get("source_type") or "")
-            if source_type == "web_attachment":
-                composer_chunks.append(chunk)
-            else:
-                rag_chunks.append(chunk)
-
-        def pack_rows(
-            rows: list[ContextRow],
-            limit: int | None,
-            *,
-            budget: AnswerImageBudget,
-            lane: str,
-        ) -> list[ContextRow]:
-            packed: list[ContextRow] = []
-            for chunk in rows:
-                if limit is not None and len(packed) >= limit:
-                    break
-
-                chunk_id = str(chunk.get("chunk_id") or "")
-                chunk_key = context_chunk_key(
-                    chunk_id,
-                    workspace=chunk.get("_workspace"),
+            chunk_id = str(chunk.get("chunk_id") or "")
+            chunk_key = context_chunk_key(chunk_id, workspace=chunk.get("_workspace"))
+            content = str(chunk.get("content") or "").strip()
+            image_data = chunk.get("image_data")
+            image_block: dict[str, Any] | None = None
+            if image_data:
+                image_block = image_budget.add_base64(
+                    str(image_data),
+                    label=chunk_id or str(chunk.get("file_path") or "chunk_image"),
                 )
-                content = str(chunk.get("content") or "").strip()
-                image_data = chunk.get("image_data")
-                image_block: dict[str, Any] | None = None
-                if image_data:
-                    image_block = budget.add_base64(
-                        str(image_data),
-                        label=chunk_id or str(chunk.get("file_path") or "chunk_image"),
-                    )
-                    if image_block is not None:
-                        image_counts[f"{lane}_sent"] += 1
-                    else:
-                        image_counts[f"{lane}_skipped"] += 1
+                if image_block is not None:
+                    images_sent += 1
+                else:
+                    images_skipped += 1
 
-                if content or image_block is not None:
-                    packed_chunk = dict(chunk)
-                    if image_block is not None and chunk_key:
-                        packed_chunk["_answer_image_sent"] = True
-                        image_blocks[chunk_key] = image_block
-                    elif image_data:
-                        packed_chunk["_answer_image_sent"] = False
-                    packed.append(packed_chunk)
-            return packed
-
-        rag_limit = None if target_chunks is None else max(0, target_chunks - len(composer_chunks))
-        packed_rag = pack_rows(
-            rag_chunks,
-            rag_limit,
-            budget=rag_image_budget,
-            lane="rag",
-        )
-        composer_limit = None if target_chunks is None else max(0, target_chunks - len(packed_rag))
-        packed_composer = pack_rows(
-            composer_chunks,
-            composer_limit,
-            budget=composer_image_budget,
-            lane="composer",
-        )
-        packed_chunks = [*packed_composer, *packed_rag]
+            if content or image_block is not None:
+                packed_chunk = dict(chunk)
+                if image_block is not None and chunk_key:
+                    packed_chunk["_answer_image_sent"] = True
+                    image_blocks[chunk_key] = image_block
+                elif image_data:
+                    packed_chunk["_answer_image_sent"] = False
+                packed_chunks.append(packed_chunk)
 
         included_chunk_ids = {
             context_chunk_key(c.get("chunk_id"), workspace=c.get("_workspace"))
@@ -135,19 +89,9 @@ class AnswerContextPacker:
         )
         trace = {
             "answer_context_input_chunks": len(chunks),
-            "answer_context_candidate_chunks": len(chunks),
-            "answer_context_target_chunks": target_chunks,
             "answer_context_chunks": len(packed_chunks),
-            "answer_context_composer_images_sent": image_counts["composer_sent"],
-            "answer_context_composer_images_skipped": image_counts["composer_skipped"],
-            "answer_context_rag_images_sent": image_counts["rag_sent"],
-            "answer_context_rag_images_skipped": image_counts["rag_skipped"],
-            "answer_context_images_sent": (
-                image_counts["composer_sent"] + image_counts["rag_sent"]
-            ),
-            "answer_context_images_skipped": (
-                image_counts["composer_skipped"] + image_counts["rag_skipped"]
-            ),
+            "answer_context_images_sent": images_sent,
+            "answer_context_images_skipped": images_skipped,
         }
         return PackedAnswerContext(
             contexts=packed_contexts,

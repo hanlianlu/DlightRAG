@@ -1,12 +1,17 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Manager-owned query model for optional tool-capable turns."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 
+from pydantic import BaseModel
+
 from dlightrag.config import DlightragConfig, ModelConfig
+from dlightrag.models.llm import structured_response_format
 from dlightrag.models.llm_roles import model_for_role
 from dlightrag.models.providers import get_provider
 from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.structured import StructuredOutput
 from dlightrag.models.tool_turn import AssistantTurn, ToolChoice, ToolDefinition
 
 
@@ -15,6 +20,10 @@ class QueryToolModel:
 
     def __init__(self, config: ModelConfig) -> None:
         self._config = config
+        self._model_kwargs = {
+            **config.model_kwargs,
+            **config.agentic_model_kwargs,
+        }
         self._provider: CompletionProvider = get_provider(
             config.provider,
             api_key=config.api_key,
@@ -48,7 +57,7 @@ class QueryToolModel:
                 tools=tools,
                 tool_choice=tool_choice,
                 temperature=self._config.temperature,
-                model_kwargs=self._config.model_kwargs,
+                model_kwargs=self._model_kwargs,
             )
             trace.update(
                 output={
@@ -60,6 +69,91 @@ class QueryToolModel:
                 cost_details=turn.cost_details,
             )
             return turn
+
+    async def stream_text(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+    ) -> AsyncIterator[str]:
+        """Stream a tools-none final answer from a rich tool transcript."""
+        from dlightrag.observability import trace_observation
+
+        usage_holder: dict[str, Any] = {}
+        text_length = 0
+        async with trace_observation(
+            "agent_final_answer",
+            as_type="generation",
+            input={"message_count": len(messages)},
+            metadata={"model": self._config.model},
+        ) as trace:
+            try:
+                async for token in self._provider.stream_tool_text(
+                    messages,
+                    self._config.model,
+                    temperature=self._config.temperature,
+                    model_kwargs=self._model_kwargs,
+                    usage_holder=usage_holder,
+                ):
+                    text_length += len(token)
+                    yield token
+            finally:
+                trace.update(
+                    output={"text_length": text_length},
+                    usage_details=usage_holder.get("usage_details"),
+                    cost_details=usage_holder.get("cost_details"),
+                )
+
+    async def complete_structured(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        structured_output: StructuredOutput,
+    ) -> BaseModel:
+        """Return one validated control decision without inventing a tool action."""
+        from dlightrag.observability import trace_observation
+
+        response_format = structured_response_format(
+            structured_output,
+            self._config,
+            provider=self._provider,
+        )
+        async with trace_observation(
+            "agent_control_decision",
+            as_type="generation",
+            input={"message_count": len(messages)},
+            metadata={
+                "model": self._config.model,
+                "schema": structured_output.name,
+            },
+        ) as trace:
+            try:
+                raw = await self._provider.complete(
+                    messages,
+                    self._config.model,
+                    temperature=self._config.temperature,
+                    response_format=response_format,
+                    model_kwargs=self._model_kwargs,
+                )
+            except Exception:
+                if not (
+                    self._config.provider == "openai"
+                    and response_format.get("type") == "json_schema"
+                ):
+                    raise
+                raw = await self._provider.complete(
+                    messages,
+                    self._config.model,
+                    temperature=self._config.temperature,
+                    response_format={"type": "json_object"},
+                    model_kwargs=self._model_kwargs,
+                )
+            decision = structured_output.parse(raw)
+            trace.update(
+                output=decision.model_dump(mode="json"),
+                usage_details=getattr(raw, "usage_details", None),
+                cost_details=getattr(raw, "cost_details", None),
+            )
+            return decision
 
     async def aclose(self) -> None:
         await self._provider.aclose()

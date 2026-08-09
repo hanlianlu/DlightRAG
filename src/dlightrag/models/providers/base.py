@@ -192,6 +192,22 @@ class CompletionProvider(ABC):
             f"{type(self).__name__} does not implement tool-capable turns"
         )
 
+    async def stream_tool_text(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
+    ) -> AsyncGenerator[str]:  # type: ignore[return]
+        """Stream final text while replaying a provider-native tool transcript."""
+        raise ToolCallingUnavailableError(
+            f"{type(self).__name__} does not implement tool transcript streaming"
+        )
+        yield ""  # pragma: no cover
+
     async def aclose(self) -> None:
         """Release SDK clients, connection pools, and other resources.
 

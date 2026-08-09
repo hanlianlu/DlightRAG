@@ -320,6 +320,30 @@ class AnthropicProvider(CompletionProvider):
             provider_state={"thinking_blocks": thinking_blocks} if thinking_blocks else None,
         )
 
+    async def stream_tool_text(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
+    ) -> AsyncGenerator[str]:  # type: ignore[override]
+        system, non_system = _extract_system(messages)
+        normalized: list[dict[str, Any]] = _anthropic_tool_messages(non_system)
+        if system:
+            normalized.insert(0, {"role": "system", "content": system})
+        async for token in self.stream(
+            normalized,
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model_kwargs=model_kwargs,
+            usage_holder=usage_holder,
+        ):
+            yield token
+
     async def stream(
         self,
         messages: list[dict[str, Any]],

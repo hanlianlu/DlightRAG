@@ -1,18 +1,22 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Centralized answer generation engine.
+"""Final answer synthesis.
 
-Receives merged retrieval contexts from any backend and generates answers
-with proper citations.  Lives at the RAGServiceManager level -- shared across
-all workspaces.
+Receives merged retrieval/evidence contexts from any path and generates the
+single final answer with proper citations.  Lives at the RAGServiceManager
+level -- shared across all workspaces.
 
-The engine accepts a single ``model_func`` callable that follows the
-messages-first interface: it receives ``messages=`` (OpenAI-format list)
-and optional ``stream=`` keyword arguments.  Images are inlined as
-``image_url`` content blocks so there is no separate VLM path -- the
-provider decides how to handle multimodal content.
+The synthesizer accepts a single ``model_func`` callable that follows the
+messages-first interface: it receives ``messages=`` (OpenAI-format list) and an
+optional ``stream=`` keyword argument.  Images are inlined as ``image_url``
+content blocks so there is no separate VLM path -- the provider decides how to
+handle multimodal content.
 
-Both streaming and non-streaming paths use the same freetext system prompt.
-Sources are projected from validated inline citation markers.
+Both streaming and non-streaming paths use the same freetext system prompt and
+the same evidence preparation.  Sources are projected from validated inline
+citation markers.  Input packing is bounded by one :class:`AnswerCapacity`:
+evidence is at most the capacity evidence ceiling, recent history is retained
+first, and fixed evidence that cannot fit beside the generation reserve is
+rejected rather than silently trimmed.
 """
 
 import asyncio
@@ -23,30 +27,27 @@ from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
+from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.answer.context import AnswerContextPacker
-from dlightrag.core.answer.errors import CurrentImagePayloadError
+from dlightrag.core.answer.errors import AnswerInputOverflowError, CurrentImagePayloadError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import answer_core
-from dlightrag.utils.tokens import estimate_messages_tokens, truncate_conversation_history
+from dlightrag.utils.tokens import estimate_content_tokens, estimate_messages_tokens
 
 logger = logging.getLogger(__name__)
 
 NO_CONTEXT_DISCLAIMER = (
     "**General Knowledge Notice:** The answer below is NOT grounded in your knowledge base."
 )
-ANSWER_INPUT_TOKEN_ENVELOPE = 102_400
-
-
-class AnswerInputOverflowError(RuntimeError):
-    """Fixed answer evidence exceeds the configured model-input envelope."""
 
 
 @dataclass
 class _PreparedAnswerPrompt:
     contexts: RetrievalContexts
     user_prompt: str
+    kg_context: str
     indexer: CitationIndexer
     chunk_image_blocks: dict[str, dict[str, Any]]
     trace: dict[str, Any]
@@ -61,16 +62,16 @@ class _PreparedModelCall:
     no_context: bool
 
 
-class AnswerEngine:
-    """Mode-agnostic answer generator with citation support.
+class AnswerSynthesizer:
+    """Mode-agnostic final answer generator with citation support.
 
-    Accepts a single ``model_func`` that speaks the messages-first
-    interface.  Images found in chunks are inlined as ``image_url``
-    content blocks -- no separate VLM routing is needed.
+    Accepts a single ``model_func`` that speaks the messages-first interface.
+    Images found in chunks are inlined as ``image_url`` content blocks -- no
+    separate VLM routing is needed.
 
-    Both ``generate()`` and ``generate_stream()`` use the same unified
-    freetext system prompt.  Sources are projected from validated inline
-    ``[n]`` and ``[n-m]`` markers.
+    Both ``generate()`` and ``generate_stream()`` use the same unified freetext
+    system prompt and identical evidence preparation.  Sources are projected
+    from validated inline ``[n]`` and ``[n-m]`` markers.
     """
 
     def __init__(
@@ -85,9 +86,7 @@ class AnswerEngine:
         image_min_px: int = 1024,
         image_quality: int = 89,
         image_min_quality: int = 79,
-        context_top_k: int | None = 30,
-        input_token_envelope: int = ANSWER_INPUT_TOKEN_ENVELOPE,
-        history_token_ceiling: int = 81_920,
+        context_window_tokens: int = 260_000,
     ) -> None:
         self.model_func = model_func
         self._effective_max_images = effective_max_images
@@ -98,9 +97,7 @@ class AnswerEngine:
         self._image_min_px = image_min_px
         self._image_quality = image_quality
         self._image_min_quality = image_min_quality
-        self._context_top_k = context_top_k
-        self._input_token_envelope = max(1, input_token_envelope)
-        self._history_token_ceiling = max(0, history_token_ceiling)
+        self._capacity = AnswerCapacity(max(1, context_window_tokens))
 
     # ------------------------------------------------------------------
     # Public API
@@ -112,25 +109,24 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
-        context_top_k: int | None = None,
-        separate_composer_visual_budget: bool = False,
         history_images: list[dict[str, Any]] | None = None,
+        warnings: list[str] | None = None,
     ) -> RetrievalResult:
-        """Non-streaming answer generation.
+        """Non-streaming final answer generation.
 
         Returns a :class:`RetrievalResult` with ``answer``, ``contexts``,
-        and ``references`` populated.  Uses the same freetext prompt as
-        streaming; references are derived from validated inline markers.
+        ``references``, and one stable ``warnings`` list populated.  Uses the
+        same freetext prompt as streaming; references are derived from validated
+        inline markers.
 
-        ``query_images`` are user-attached ``image_url`` content blocks
-        inlined ahead of the
-        retrieved-document section, letting the model see the user's input
-        images in addition to retrieved chunks. Designed for multi-turn chat
-        where the user uploads images alongside their question.
+        ``query_images`` are user-attached ``image_url`` content blocks inlined
+        ahead of the retrieved-document section, letting the model see the
+        user's input images in addition to retrieved chunks.
         """
+        collected_warnings = list(warnings or [])
         if self.model_func is None:
-            logger.info("[AE] generate: no model_func available, returning None answer")
-            return RetrievalResult(answer=None, contexts=contexts)
+            logger.info("[AS] generate: no model_func available, returning None answer")
+            return RetrievalResult(answer=None, contexts=contexts, warnings=collected_warnings)
 
         prepared = await asyncio.to_thread(
             self._prepare_model_call,
@@ -139,16 +135,13 @@ class AnswerEngine:
             query_images=query_images,
             history_images=history_images,
             conversation_history=conversation_history,
-            context_top_k=context_top_k,
-            separate_composer_visual_budget=separate_composer_visual_budget,
         )
 
         logger.info(
-            "[AE] generate: input_chunks=%d packed_chunks=%d target=%s images_sent=%d "
+            "[AS] generate: input_chunks=%d packed_chunks=%d images_sent=%d "
             "images_skipped=%d query=%s",
             len(contexts.get("chunks", [])),
             prepared.trace["answer_context_chunks"],
-            prepared.trace["answer_context_target_chunks"],
             prepared.trace["answer_context_images_sent"],
             prepared.trace["answer_context_images_skipped"],
             query[:60],
@@ -158,26 +151,12 @@ class AnswerEngine:
         if prepared.no_context:
             raw = _prepend_no_context_disclaimer(str(raw))
 
-        logger.info(
-            "[AE] generate: LLM returned type=%s len=%d first200=%s",
-            type(raw).__name__,
-            len(raw) if isinstance(raw, str) else -1,
-            repr(raw[:200]) if isinstance(raw, str) else repr(raw),
-        )
-
         # Extract references programmatically from validated inline markers,
         # not from model-generated reference-section text.
         from dlightrag.citations import finalize_answer
 
         finalized = finalize_answer(raw, prepared.contexts, indexer=prepared.indexer)
 
-        logger.info(
-            "[AE] generate: parsed sources=%d answer_len=%d",
-            len(finalized.sources),
-            len(finalized.answer) if finalized.answer else 0,
-        )
-
-        # Convert sources to Reference objects for RetrievalResult
         from dlightrag.core.answer.media import (
             answer_blocks_from_markdown,
             answer_images_from_sources,
@@ -195,6 +174,7 @@ class AnswerEngine:
             answer_images=answer_images,
             answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
             trace=prepared.trace,
+            warnings=collected_warnings,
         )
 
     async def generate_stream(
@@ -203,21 +183,19 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
-        context_top_k: int | None = None,
-        separate_composer_visual_budget: bool = False,
         history_images: list[dict[str, Any]] | None = None,
+        warnings: list[str] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Streaming answer generation.
+        """Streaming final answer generation.
 
-        Uses the same freetext prompt as ``generate()``.  Wraps the
-        token stream with :class:`AnswerStream` for post-stream citation
-        index validation.
-
-        ``query_images`` mirrors ``generate()``: user-attached ``image_url``
-        content blocks are inlined before retrieved-document context.
+        Uses the same freetext prompt and identical evidence preparation as
+        ``generate()``.  Wraps the token stream with :class:`AnswerStream` for
+        post-stream citation index validation and exposes one stable
+        ``warnings`` list on the returned stream.
         """
+        collected_warnings = list(warnings or [])
         if self.model_func is None:
-            logger.info("[AE] generate_stream: no model_func, returning None")
+            logger.info("[AS] generate_stream: no model_func, returning None")
             return contexts, None
 
         prepared = await asyncio.to_thread(
@@ -227,16 +205,13 @@ class AnswerEngine:
             query_images=query_images,
             history_images=history_images,
             conversation_history=conversation_history,
-            context_top_k=context_top_k,
-            separate_composer_visual_budget=separate_composer_visual_budget,
         )
 
         logger.info(
-            "[AE] generate_stream: input_chunks=%d packed_chunks=%d target=%s "
-            "images_sent=%d images_skipped=%d query=%s",
+            "[AS] generate_stream: input_chunks=%d packed_chunks=%d images_sent=%d "
+            "images_skipped=%d query=%s",
             len(contexts.get("chunks", [])),
             prepared.trace["answer_context_chunks"],
-            prepared.trace["answer_context_target_chunks"],
             prepared.trace["answer_context_images_sent"],
             prepared.trace["answer_context_images_skipped"],
             query[:60],
@@ -246,16 +221,10 @@ class AnswerEngine:
         if prepared.no_context:
             token_iterator = _prepend_no_context_stream(token_iterator)
 
-        logger.info(
-            "[AE] generate_stream: model_func returned type=%s",
-            type(token_iterator).__name__,
-        )
-
-        # Always wrap with AnswerStream (passthrough + post-stream citation validation)
         if hasattr(token_iterator, "__aiter__"):
-            logger.info("[AE] generate_stream: wrapping with AnswerStream")
             token_iterator = AnswerStream(token_iterator, indexer=prepared.indexer)
             cast(Any, token_iterator).trace = prepared.trace
+            cast(Any, token_iterator).warnings = collected_warnings
 
         return prepared.contexts, token_iterator
 
@@ -271,41 +240,16 @@ class AnswerEngine:
         query_images: list[dict[str, Any]] | None = None,
         history_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
-        context_top_k: int | None = None,
-        separate_composer_visual_budget: bool = False,
     ) -> _PreparedModelCall:
         original_history = list(conversation_history or [])
-        bounded_history = truncate_conversation_history(
-            original_history,
-            max_messages=len(original_history),
-            max_tokens=self._history_token_ceiling,
-        )
 
-        def build(history: list[dict[str, Any]]) -> _PreparedModelCall:
+        def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
             system_prompt = answer_core()
-            composer_budget = self._new_image_budget()
-            rag_budget = (
-                self._new_image_budget() if separate_composer_visual_budget else composer_budget
-            )
-            # Direct/history Composer images and parsed document visuals share
-            # composer_budget. RAG visual transport has an independent budget in
-            # Web mode and is never allocated from Composer's remainder.
-            current_blocks = self._budget_current_images(query_images, composer_budget)
-            selected_history_blocks = self._budget_history_images(
-                history_images,
-                composer_budget,
-            )
-            history_messages, message_history_blocks = self._build_history_messages(
-                history,
-                composer_budget,
-            )
-            prepared = self._prepare_prompt_context(
-                query,
-                contexts,
-                context_top_k=context_top_k,
-                composer_image_budget=composer_budget,
-                rag_image_budget=rag_budget,
-            )
+            budget = self._new_image_budget()
+            current_blocks = self._budget_current_images(query_images, budget)
+            selected_history_blocks = self._budget_history_images(history_images, budget)
+            history_messages, message_history_blocks = self._build_history_messages(history, budget)
+            prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
             no_context = not _has_answer_evidence(
                 prepared.contexts,
                 query_images=query_images,
@@ -318,43 +262,58 @@ class AnswerEngine:
                 prepared.trace,
                 current_count=len(current_blocks),
                 history_count=len(selected_history_blocks) + len(message_history_blocks),
-                composer_budget=composer_budget,
-                rag_budget=rag_budget,
+                budget=budget,
+            )
+            excerpt_blocks = self._build_excerpt_blocks(
+                prepared.contexts,
+                prepared.indexer,
+                image_blocks_by_context_key=prepared.chunk_image_blocks,
             )
             messages = self._compose_user_messages(
                 system_prompt,
                 prepared.user_prompt,
-                prepared.contexts,
-                prepared.indexer,
+                excerpt_blocks,
                 current_blocks=current_blocks,
                 selected_history_blocks=selected_history_blocks,
                 history_messages=history_messages,
-                chunk_image_blocks_by_context_key=prepared.chunk_image_blocks,
             )
-            return _PreparedModelCall(
+            evidence_tokens = estimate_content_tokens(excerpt_blocks) + estimate_content_tokens(
+                prepared.kg_context
+            )
+            total_tokens = estimate_messages_tokens(messages)
+            call = _PreparedModelCall(
                 contexts=prepared.contexts,
                 messages=messages,
                 indexer=prepared.indexer,
                 trace=prepared.trace,
                 no_context=no_context,
             )
+            return call, evidence_tokens, total_tokens
 
-        kept_history = list(bounded_history)
-        result = build(kept_history)
-        input_tokens = estimate_messages_tokens(result.messages)
-        while kept_history and input_tokens > self._input_token_envelope:
+        kept_history = list(original_history)
+        result, evidence_tokens, total_tokens = build(kept_history)
+        input_budget = self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
+        while kept_history and total_tokens > input_budget:
             kept_history = kept_history[_oldest_history_turn_width(kept_history) :]
-            result = build(kept_history)
-            input_tokens = estimate_messages_tokens(result.messages)
-        if input_tokens > self._input_token_envelope:
+            result, evidence_tokens, total_tokens = build(kept_history)
+        if total_tokens > input_budget:
             raise AnswerInputOverflowError(
-                "Fixed answer evidence exceeds the input envelope: "
-                f"{input_tokens} > {self._input_token_envelope} estimated tokens"
+                "Fixed answer input does not fit beside the generation reserve: "
+                f"{total_tokens} > {input_budget} estimated input tokens"
+            )
+        overhead_tokens = total_tokens - evidence_tokens
+        evidence_ceiling = self._capacity.evidence_ceiling(fixed_input_tokens=overhead_tokens)
+        if evidence_tokens > evidence_ceiling:
+            raise AnswerInputOverflowError(
+                "Fixed answer evidence exceeds the packable evidence ceiling: "
+                f"{evidence_tokens} > {evidence_ceiling} estimated evidence tokens"
             )
         result.trace.update(
             {
-                "answer_input_token_envelope": self._input_token_envelope,
-                "answer_input_tokens": input_tokens,
+                "answer_context_window_tokens": self._capacity.context_window_tokens,
+                "answer_evidence_tokens": evidence_tokens,
+                "answer_evidence_ceiling": evidence_ceiling,
+                "answer_input_tokens": total_tokens,
                 "answer_history_messages_input": len(original_history),
                 "answer_history_messages_kept": len(kept_history),
                 "answer_history_messages_dropped": len(original_history) - len(kept_history),
@@ -427,7 +386,7 @@ class AnswerEngine:
         history_images: list[dict[str, Any]] | None,
         budget: AnswerImageBudget,
     ) -> list[dict[str, Any]]:
-        """Add planner-selected history pixels best-effort to the Composer budget."""
+        """Add planner-selected history pixels best-effort to the shared budget."""
         blocks: list[dict[str, Any]] = []
         for idx, image in enumerate(history_images or [], start=1):
             block = budget.add_user_image(image, label=f"selected_history_image_{idx}")
@@ -439,13 +398,11 @@ class AnswerEngine:
         self,
         system_prompt: str,
         user_prompt: str,
-        contexts: RetrievalContexts,
-        indexer: CitationIndexer | None,
+        excerpt_blocks: list[dict[str, Any]],
         *,
         current_blocks: list[dict[str, Any]],
         selected_history_blocks: list[dict[str, Any]],
         history_messages: list[dict[str, Any]],
-        chunk_image_blocks_by_context_key: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Place budgeted image blocks into the final message structure."""
         content: list[dict[str, Any]] = []
@@ -455,13 +412,7 @@ class AnswerEngine:
         if selected_history_blocks:
             content.append({"type": "text", "text": "## Referenced conversation images\n"})
             content.extend(selected_history_blocks)
-        content.extend(
-            self._build_excerpt_blocks(
-                contexts,
-                indexer,
-                image_blocks_by_context_key=chunk_image_blocks_by_context_key,
-            )
-        )
+        content.extend(excerpt_blocks)
         content.append({"type": "text", "text": user_prompt})
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -477,29 +428,17 @@ class AnswerEngine:
         *,
         current_count: int,
         history_count: int,
-        composer_budget: AnswerImageBudget,
-        rag_budget: AnswerImageBudget,
+        budget: AnswerImageBudget,
     ) -> None:
-        composer_context = int(trace.get("answer_context_composer_images_sent", 0))
-        rag_context = int(trace.get("answer_context_rag_images_sent", 0))
+        rag_context = int(trace.get("answer_context_images_sent", 0))
         trace["answer_images_current"] = current_count
         trace["answer_images_history"] = history_count
-        trace["answer_images_composer"] = composer_context
         trace["answer_images_rag"] = rag_context
-        trace["answer_images_total"] = (
-            current_count + history_count + composer_context + rag_context
-        )
-        if composer_budget is rag_budget:
-            trace["answer_image_budget_used_bytes"] = composer_budget.used_bytes
-        else:
-            trace["answer_composer_image_budget_used_bytes"] = composer_budget.used_bytes
-            trace["answer_rag_image_budget_used_bytes"] = rag_budget.used_bytes
-            trace["answer_image_budget_used_bytes"] = (
-                composer_budget.used_bytes + rag_budget.used_bytes
-            )
+        trace["answer_images_total"] = current_count + history_count + rag_context
+        trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
     def _new_image_budget(self) -> AnswerImageBudget:
-        """Create one fresh transport budget for a single visual lane."""
+        """Create one fresh transport budget shared by every answer visual lane."""
         return AnswerImageBudget(
             max_images=self._effective_max_images,
             max_total_bytes=self._image_max_total_bytes,
@@ -512,7 +451,7 @@ class AnswerEngine:
         )
 
     async def aclose(self) -> None:
-        """Release model-function worker resources owned by this engine."""
+        """Release model-function worker resources owned by this synthesizer."""
         from dlightrag.utils.concurrency import shutdown_async_callable
 
         await shutdown_async_callable(self.model_func)
@@ -522,26 +461,24 @@ class AnswerEngine:
         query: str,
         contexts: RetrievalContexts,
         *,
-        context_top_k: int | None = None,
-        composer_image_budget: AnswerImageBudget | None = None,
-        rag_image_budget: AnswerImageBudget | None = None,
+        image_budget: AnswerImageBudget | None = None,
     ) -> _PreparedAnswerPrompt:
-        if composer_image_budget is None:
-            composer_image_budget = self._new_image_budget()
-        if rag_image_budget is None:
-            rag_image_budget = composer_image_budget
-        effective_context_top_k = self._context_top_k if context_top_k is None else context_top_k
-        packed = AnswerContextPacker().pack(
-            contexts,
-            composer_image_budget=composer_image_budget,
-            rag_image_budget=rag_image_budget,
-            context_top_k=effective_context_top_k,
+        if image_budget is None:
+            image_budget = self._new_image_budget()
+        packed = AnswerContextPacker().pack(contexts, image_budget=image_budget)
+        indexer = self._build_citation_indexer(packed.contexts)
+        kg_context = self._format_kg_context(packed.contexts, indexer=indexer)
+        user_prompt = "\n\n".join(
+            [
+                f"## Knowledge Graph Context\n{kg_context}",
+                f"## Question\n{query}",
+            ]
         )
-        user_prompt, indexer = self._build_user_prompt(query, packed.contexts)
         trace = dict(packed.trace)
         return _PreparedAnswerPrompt(
             contexts=packed.contexts,
             user_prompt=user_prompt,
+            kg_context=kg_context,
             indexer=indexer,
             chunk_image_blocks=packed.image_blocks_by_context_key,
             trace=trace,
@@ -565,9 +502,9 @@ class AnswerEngine:
     ) -> str:
         """Format entities/relationships as markdown text (max 20 each).
 
-        When *indexer* is provided, each entity/relationship is annotated
-        with citation tags derived from its ``source_id``, so the LLM
-        knows which document each KG fact originated from.
+        When *indexer* is provided, each entity/relationship is annotated with
+        citation tags derived from its ``source_id``, so the LLM knows which
+        document each KG fact originated from.
         """
         return format_kg_context(contexts, indexer)
 
@@ -620,20 +557,14 @@ class AnswerEngine:
     ) -> tuple[str, CitationIndexer]:
         """Combine KG context + question.
 
-        Document excerpts are NOT included in the text prompt because
-        they are now rendered as interleaved content blocks (with images)
-        by :meth:`_build_excerpt_blocks`, which is also where every
-        ``[n]`` and ``[n-m]`` marker is defined.
-
-        Returns the prompt string **and** the indexer so that
-        :meth:`_build_excerpt_blocks` can label inline images with their
-        ``[n-m]`` citation markers.
+        Document excerpts are NOT included in the text prompt because they are
+        rendered as interleaved content blocks (with images) by
+        :meth:`_build_excerpt_blocks`, which is also where every ``[n]`` and
+        ``[n-m]`` marker is defined.
         """
-        # Build indexer first so KG context includes citation tags
         if indexer is None:
             indexer = self._build_citation_indexer(contexts)
         kg_context = self._format_kg_context(contexts, indexer=indexer)
-
         prompt_parts = [
             f"## Knowledge Graph Context\n{kg_context}",
             f"## Question\n{query}",
@@ -691,4 +622,4 @@ def _oldest_history_turn_width(messages: list[dict[str, Any]]) -> int:
     return 1
 
 
-__all__ = ["AnswerEngine", "AnswerInputOverflowError"]
+__all__ = ["NO_CONTEXT_DISCLAIMER", "AnswerSynthesizer"]

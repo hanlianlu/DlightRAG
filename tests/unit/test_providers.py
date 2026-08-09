@@ -338,6 +338,67 @@ class TestAnthropicProvider:
         assert tokens == ["hi"]
         assert holder == {"usage_details": {"input_tokens": 10, "output_tokens": 6}}
 
+    @pytest.mark.asyncio
+    async def test_stream_tool_text_replays_native_tool_history(self):
+        p = get_provider("anthropic", api_key="test-key")
+
+        async def fake_stream():
+            yield SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text="final "),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text="answer"),
+            )
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "provider_state": {
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "thought",
+                            "signature": "signature",
+                        }
+                    ]
+                },
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "search",
+                "content": "evidence",
+                "is_error": False,
+            },
+        ]
+        with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as sdk:
+            create = AsyncMock(return_value=fake_stream())
+            sdk.return_value.messages.create = create
+            cast(Any, p)._client = None
+            tokens = [
+                token
+                async for token in p.stream_tool_text(
+                    messages,
+                    "claude-sonnet-4-20250514",
+                )
+            ]
+
+        assert tokens == ["final ", "answer"]
+        await_args = create.await_args
+        assert await_args is not None
+        assert await_args.kwargs["messages"][0]["content"][0]["signature"] == "signature"
+        assert await_args.kwargs["messages"][1]["content"][0]["type"] == "tool_result"
+
 
 class TestOpenAICompatibleProvider:
     @pytest.mark.asyncio
@@ -837,6 +898,55 @@ class TestOpenAICompatibleProvider:
                 tokens.append(t)
         assert tokens == ["hel", "lo"]
 
+    @pytest.mark.asyncio
+    async def test_stream_tool_text_replays_reasoning_state(self):
+        p = get_provider("openai", api_key="test-key")
+
+        async def fake_stream():
+            for text in ("final ", "answer"):
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(delta=SimpleNamespace(content=text, model_extra=None))
+                    ],
+                    usage=None,
+                )
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [],
+                "provider_state": {
+                    "reasoning_content": "thought",
+                    "reasoning_details": [{"type": "reasoning.encrypted", "data": "opaque"}],
+                },
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "search",
+                "content": "evidence",
+                "is_error": False,
+            },
+        ]
+        with patch.object(p, "_get_client") as client:
+            create = AsyncMock(return_value=fake_stream())
+            client.return_value.chat.completions.create = create
+            tokens = [
+                token
+                async for token in p.stream_tool_text(
+                    messages,
+                    "mimo-v2.5",
+                )
+            ]
+
+        assert tokens == ["final ", "answer"]
+        first_request = create.await_args_list[0].kwargs
+        replayed = first_request["messages"][0]
+        assert "provider_state" not in replayed
+        assert replayed["reasoning_content"] == "thought"
+        assert replayed["reasoning_details"][0]["data"] == "opaque"
+
 
 class TestGeminiProvider:
     @pytest.mark.asyncio
@@ -1061,6 +1171,55 @@ class TestGeminiProvider:
                 "total_token_count": 16,
             }
         }
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_text_replays_thought_signature(self):
+        p = get_provider("gemini", api_key="test-key")
+
+        async def fake_stream():
+            yield SimpleNamespace(text="final ", usage_metadata=None)
+            yield SimpleNamespace(text="answer", usage_metadata=None)
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": "{}"},
+                        "thought_signature": "signature",
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "search",
+                "content": "evidence",
+                "is_error": False,
+            },
+        ]
+        with patch("dlightrag.models.providers.gemini_native.genai") as sdk:
+            client = MagicMock()
+            sdk.Client.return_value = client
+            stream = AsyncMock(return_value=fake_stream())
+            client.aio.models.generate_content_stream = stream
+            cast(Any, p)._client = None
+            tokens = [
+                token
+                async for token in p.stream_tool_text(
+                    messages,
+                    "gemini-2.5-flash",
+                )
+            ]
+
+        assert tokens == ["final ", "answer"]
+        await_args = stream.await_args
+        assert await_args is not None
+        first_part = await_args.kwargs["contents"][0]["parts"][0]
+        assert first_part["thought_signature"] == "signature"
 
     @pytest.mark.asyncio
     async def test_json_schema_response_format_uses_response_schema(self):

@@ -219,6 +219,26 @@ class OpenAICompatibleProvider(CompletionProvider):
             provider_state=_openai_provider_state(message),
         )
 
+    async def stream_tool_text(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
+    ) -> AsyncGenerator[str]:  # type: ignore[override]
+        async for token in self.stream(
+            _openai_tool_messages(messages),
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model_kwargs=model_kwargs,
+            usage_holder=usage_holder,
+        ):
+            yield token
+
     async def _open_stream(self, call_kwargs: dict[str, Any]) -> Any:
         """Open a streaming completion, requesting token usage when supported.
 

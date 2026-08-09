@@ -338,8 +338,55 @@ class GeminiProvider(CompletionProvider):
             response_format=response_format,
             model_kwargs=model_kwargs,
         )
+        async for token in self._stream_generated(
+            model_id,
+            contents,
+            config,
+            usage_holder=usage_holder,
+        ):
+            yield token
+
+    async def stream_tool_text(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
+    ) -> AsyncGenerator[str]:  # type: ignore[override]
+        model_id, _, config = self._build_args(
+            messages,
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=None,
+            model_kwargs=model_kwargs,
+        )
+        contents = _gemini_tool_contents(
+            [message for message in messages if message.get("role") != "system"]
+        )
+        async for token in self._stream_generated(
+            model_id,
+            contents,
+            config,
+            usage_holder=usage_holder,
+        ):
+            yield token
+
+    async def _stream_generated(
+        self,
+        model_id: str,
+        contents: list[dict[str, Any]],
+        config: dict[str, Any],
+        *,
+        usage_holder: dict[str, Any] | None,
+    ) -> AsyncGenerator[str]:
         response = await self._get_client().aio.models.generate_content_stream(
-            model=model_id, contents=contents, config=config
+            model=model_id,
+            contents=contents,
+            config=config,
         )
         usage: Any = None
         async for chunk in response:
