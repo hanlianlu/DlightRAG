@@ -14,7 +14,7 @@ from dlightrag.core.resources.models import (
     TextWindowLocator,
     VisualHandle,
 )
-from dlightrag.core.resources.registry import ResourceRegistry
+from dlightrag.core.resources.registry import ResourceRegistry, UrlTextFallback
 
 __all__ = [
     "EXTRACTION_TEXT",
@@ -28,5 +28,6 @@ __all__ = [
     "ResourceRegistry",
     "ResourceRegistryError",
     "TextWindowLocator",
+    "UrlTextFallback",
     "VisualHandle",
 ]

@@ -179,6 +179,38 @@ class _OrchestratorRun:
     registry: ResourceRegistry | None
 
 
+def _exa_contents_text(web_search: ExaSearch) -> Callable[[str], Awaitable[str | None]]:
+    """Adapt Exa Contents to the registry's provider-neutral URL text fallback.
+
+    Usable passages for the one known URL are folded into a single deterministic
+    text once, with the page title preserved as a leading line when it adds
+    information. A parked or unreachable provider yields ``None`` so the caller
+    keeps the original direct-extraction error rather than fabricating evidence.
+    """
+    from dlightrag.core.retrieval.web_search import WebSearchUnavailable
+
+    async def _fallback(url: str) -> str | None:
+        try:
+            result = await web_search.contents(url)
+        except WebSearchUnavailable:
+            return None
+        title: str | None = None
+        passages: list[str] = []
+        for hit in result.hits:
+            text = hit.text.strip()
+            if not text:
+                continue
+            if title is None and hit.title and hit.title != hit.url:
+                title = hit.title.strip() or None
+            passages.append(text)
+        if not passages:
+            return None
+        body = "\n\n".join(passages)
+        return f"{title}\n\n{body}" if title else body
+
+    return _fallback
+
+
 def _iso_or_none(value: Any) -> str | None:
     if value is None:
         return None
@@ -1379,7 +1411,9 @@ class RAGServiceManager:
             )
 
         web_search = self._get_web_search()
-        registry, resource_tools, has_resources = self._build_resource_context(remaining_resources)
+        registry, resource_tools, has_resources = self._build_resource_context(
+            remaining_resources, web_search=web_search
+        )
         research = web_search is not None or has_resources
 
         model_func: Callable[..., Any] | None = None
@@ -1522,8 +1556,17 @@ class RAGServiceManager:
     def _build_resource_context(
         self,
         resources: list[ResourceInput] | None,
+        *,
+        web_search: ExaSearch | None = None,
     ) -> tuple[ResourceRegistry | None, list[AgentTool], bool]:
-        """Register request-local resources and their peer tools; no Exa needed."""
+        """Register request-local resources and their peer tools.
+
+        When Exa is configured, its Contents endpoint is adapted into the
+        registry's provider-neutral URL text fallback so a link whose direct
+        fetch or local conversion fails or comes back empty can recover exactly
+        one text view. The registry owns admission, SSRF revalidation, and the
+        single-fallback contract; it never imports any web-search provider.
+        """
         if not resources:
             return None, [], False
         from dlightrag.core.resources import ResourceRegistry
@@ -1535,6 +1578,7 @@ class RAGServiceManager:
             max_attachments=answer.max_attachments,
             max_attachment_bytes=answer.max_attachment_bytes,
             max_total_attachment_bytes=answer.max_total_attachment_bytes,
+            url_text_fallback=_exa_contents_text(web_search) if web_search is not None else None,
         )
         for resource in resources:
             registry.register(resource)

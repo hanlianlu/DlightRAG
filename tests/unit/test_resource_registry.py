@@ -315,3 +315,284 @@ async def test_async_context_manager_closes_owned_resources() -> None:
 
     assert not path.exists()
     assert registry.has_temp_storage is False
+
+
+# ---------------------------------------------------------------------------
+# URL text fallback (Exa Contents adapter, provider-neutral)
+# ---------------------------------------------------------------------------
+
+
+class _CountingFallback:
+    """A recorded url_text_fallback returning fixed text (or None)."""
+
+    def __init__(self, text: str | None) -> None:
+        self.text = text
+        self.calls = 0
+        self.urls: list[str] = []
+
+    async def __call__(self, url: str) -> str | None:
+        self.calls += 1
+        self.urls.append(url)
+        return self.text
+
+
+async def test_direct_success_skips_url_text_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    fallback = _CountingFallback("EXA TEXT")
+    registry = ResourceRegistry(
+        url_client=_LinkClient(content=b"good body"),
+        url_text_fallback=fallback,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+
+    result = await registry.read(resource_id)
+
+    assert result.content == "good body"
+    assert fallback.calls == 0
+
+
+async def test_direct_decode_failure_uses_one_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    fallback = _CountingFallback("recovered text\nsecond line")
+    registry = ResourceRegistry(
+        url_client=_LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00"),
+        url_text_fallback=fallback,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.bin"))
+
+    result = await registry.read(resource_id)
+    assert "recovered text" in result.content
+    assert fallback.calls == 1
+    assert fallback.urls == ["https://data.example.com/report.bin"]
+
+    again = await registry.read(resource_id)
+    assert "recovered text" in again.content
+    assert fallback.calls == 1
+
+
+async def test_direct_empty_triggers_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    fallback = _CountingFallback("exa body text")
+    registry = ResourceRegistry(
+        url_client=_LinkClient(content=b""),
+        url_text_fallback=fallback,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+
+    result = await registry.read(resource_id)
+
+    assert result.content == "exa body text"
+    assert fallback.calls == 1
+
+
+async def test_invalid_private_url_never_calls_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def private(host: str, port: int, *args: object, **kwargs: object):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
+
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", private)
+    fallback = _CountingFallback("should never appear")
+    registry = ResourceRegistry(
+        url_client=_LinkClient(content=b"x"),
+        url_text_fallback=fallback,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+
+    with pytest.raises(ValueError):
+        await registry.read(resource_id)
+    assert fallback.calls == 0
+
+
+async def test_fallback_empty_preserves_direct_error_and_caches_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.core.resources.models import ResourceDecodeError
+
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    fallback = _CountingFallback(None)
+    registry = ResourceRegistry(
+        url_client=_LinkClient(content=b"\x00\x01\x02\x03binary\x00\x00"),
+        url_text_fallback=fallback,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.bin"))
+
+    with pytest.raises(ResourceDecodeError):
+        await registry.read(resource_id)
+    assert fallback.calls == 1
+
+    with pytest.raises(ResourceDecodeError):
+        await registry.read(resource_id)
+    assert fallback.calls == 1
+
+
+async def test_fallback_text_windows_are_cursor_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    big = "\n".join(f"line {index} " + "x" * 30 for index in range(2000))
+    fallback = _CountingFallback(big)
+    registry = ResourceRegistry(
+        url_client=_LinkClient(content=b""),
+        url_text_fallback=fallback,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+
+    first = await registry.read(resource_id)
+    assert first.has_more is True
+    combined = first.content
+    current = first
+    while current.has_more:
+        current = await registry.read(resource_id, cursor=current.next_cursor)
+        combined = combined + current.content
+    assert combined == big
+    assert fallback.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Request-wide byte accounting for fetched (url/loader) bytes
+# ---------------------------------------------------------------------------
+
+
+async def test_fetched_link_bytes_count_toward_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    registry = ResourceRegistry(
+        max_attachment_bytes=100,
+        max_total_attachment_bytes=8,
+        url_client=_LinkClient(content=b"0123456789"),
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+
+    with pytest.raises(ResourceAdmissionError):
+        await registry.read(resource_id)
+    assert registry._total_bytes == 0
+
+
+async def test_url_and_loader_together_cross_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+
+    async def loader() -> bytes:
+        return b"loaderbytes"
+
+    registry = ResourceRegistry(
+        max_attachment_bytes=100,
+        max_total_attachment_bytes=15,
+        url_client=_LinkClient(content=b"urlbytes"),
+    )
+    url_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+    loader_id = registry.register(ResourceInput(loader=loader))
+
+    first = await registry.read(url_id)
+    assert first.content == "urlbytes"
+    assert registry._total_bytes == 8
+
+    with pytest.raises(ResourceAdmissionError):
+        await registry.read(loader_id)
+    assert registry._total_bytes == 8
+
+
+async def test_concurrent_reads_same_link_charged_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    client = _LinkClient(content=b"0123456789")
+    registry = ResourceRegistry(
+        max_attachment_bytes=100,
+        max_total_attachment_bytes=25,
+        url_client=client,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+
+    results = await asyncio.gather(
+        registry.read(resource_id),
+        registry.read(resource_id),
+        registry.read(resource_id),
+    )
+
+    assert all(result.content == "0123456789" for result in results)
+    assert client.calls == 1
+    assert registry._total_bytes == 10
+
+
+async def test_concurrent_different_links_cannot_exceed_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    registry = ResourceRegistry(
+        max_attachment_bytes=100,
+        max_total_attachment_bytes=15,
+        url_client=_LinkClient(content=b"0123456789"),
+    )
+    left = registry.register(ResourceInput(url="https://data.example.com/a.txt"))
+    right = registry.register(ResourceInput(url="https://data.example.com/b.txt"))
+
+    results = await asyncio.gather(
+        registry.read(left),
+        registry.read(right),
+        return_exceptions=True,
+    )
+
+    ok = [r for r in results if not isinstance(r, BaseException)]
+    errs = [r for r in results if isinstance(r, ResourceAdmissionError)]
+    assert len(ok) == 1
+    assert len(errs) == 1
+    assert registry._total_bytes == 10
+
+
+async def test_inline_plus_fetched_crosses_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    registry = ResourceRegistry(
+        max_attachment_bytes=100,
+        max_total_attachment_bytes=12,
+        url_client=_LinkClient(content=b"0123456789"),
+    )
+    registry.register(ResourceInput(content=b"inline"))
+    link = registry.register(ResourceInput(url="https://data.example.com/x.txt"))
+
+    assert registry._total_bytes == 6
+    with pytest.raises(ResourceAdmissionError):
+        await registry.read(link)
+    assert registry._total_bytes == 6
+
+
+async def test_over_limit_fetch_leaves_no_cached_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    client = _LinkClient(content=b"0123456789")
+    registry = ResourceRegistry(
+        max_attachment_bytes=100,
+        max_total_attachment_bytes=5,
+        url_client=client,
+    )
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/x.txt"))
+
+    with pytest.raises(ResourceAdmissionError):
+        await registry.read(resource_id)
+    assert registry._total_bytes == 0
+
+    with pytest.raises(ResourceAdmissionError):
+        await registry.read(resource_id)
+    assert client.calls == 2
+    assert registry._total_bytes == 0
+
+
+async def test_inline_read_does_not_double_count() -> None:
+    registry = ResourceRegistry(max_attachment_bytes=100, max_total_attachment_bytes=100)
+    resource_id = registry.register(ResourceInput(content=b"inline bytes"))
+    before = registry._total_bytes
+
+    await registry.read(resource_id)
+    await registry.read(resource_id)
+
+    assert registry._total_bytes == before

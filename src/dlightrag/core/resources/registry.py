@@ -13,10 +13,12 @@ ally releases the fetch client and any temporary storage.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import secrets
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -51,6 +53,11 @@ _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
 
 _PDF_MIME = "application/pdf"
+
+# A request-local, provider-neutral fallback that returns already-usable text for
+# a public URL, or ``None`` when it cannot. The manager composition root adapts
+# Exa Contents to this shape; the registry never imports any web-search provider.
+UrlTextFallback = Callable[[str], Awaitable[str | None]]
 
 
 @dataclass(frozen=True)
@@ -99,6 +106,7 @@ class ResourceRegistry:
         max_total_attachment_bytes: int = _DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES,
         url_client: Any | None = None,
         url_timeout: float = 120.0,
+        url_text_fallback: UrlTextFallback | None = None,
     ) -> None:
         self._max_attachments = max_attachments
         self._max_attachment_bytes = max(1, int(max_attachment_bytes))
@@ -106,6 +114,7 @@ class ResourceRegistry:
         self._url_client = url_client
         self._owns_url_client = url_client is None
         self._url_timeout = url_timeout
+        self._url_text_fallback = url_text_fallback
         self._secret = secrets.token_bytes(32)
 
         self._resources: dict[str, _Registered] = {}
@@ -118,6 +127,17 @@ class ResourceRegistry:
         self._tempdir: tempfile.TemporaryDirectory[str] | None = None
         self._total_bytes = 0
         self._closed = False
+        # Fetched (url/loader) bytes are materialized exactly once per resource
+        # and charged against the request-wide total under a lock. A separate
+        # single-flight guards the URL text fallback so it runs at most once per
+        # resource and caches both success and failure.
+        self._fetch_lock = asyncio.Lock()
+        self._total_lock = asyncio.Lock()
+        self._fetch_tasks: dict[str, asyncio.Future[bytes]] = {}
+        self._text_views: dict[str, _ConvertedResource] = {}
+        self._fallback_lock = asyncio.Lock()
+        self._fallback_tasks: dict[str, asyncio.Future[str | None]] = {}
+        self._fallback_done: set[str] = set()
 
     async def __aenter__(self) -> ResourceRegistry:
         return self
@@ -266,18 +286,66 @@ class ResourceRegistry:
     async def _read_windows(
         self, resource: _Registered
     ) -> tuple[list[tuple[TextWindowLocator, str]], tuple[VisualHandle, ...]]:
-        if is_convertible(resource.filename, resource.declared_mime):
-            converted = await self._ensure_converted(resource)
-            return converted.windows, converted.handles
+        view = self._text_views.get(resource.resource_id)
+        if view is not None:
+            return view.windows, view.handles
+        if resource.url is not None:
+            return await self._read_link_windows(resource)
         content = await self._materialize_bytes(resource)
+        return await self._windows_from_content(resource, content)
+
+    async def _windows_from_content(
+        self, resource: _Registered, content: bytes
+    ) -> tuple[list[tuple[TextWindowLocator, str]], tuple[VisualHandle, ...]]:
+        if is_convertible(resource.filename, resource.declared_mime):
+            converted = await self._ensure_converted(resource, content)
+            return converted.windows, converted.handles
         text = decode_text(content, declared_charset=_charset_of(resource.declared_mime))
         return build_text_windows(text), ()
 
-    async def _ensure_converted(self, resource: _Registered) -> _ConvertedResource:
+    async def _read_link_windows(
+        self, resource: _Registered
+    ) -> tuple[list[tuple[TextWindowLocator, str]], tuple[VisualHandle, ...]]:
+        """Read a link, falling back to provider text only when direct fails/empty.
+
+        SSRF revalidation runs before any direct or fallback path, so a private,
+        invalid, or credential URL raises here and never reaches the fallback.
+        The Exa Contents fallback is tried at most once per resource — only after
+        a direct fetch/decode/conversion fails or yields empty — and its text
+        enters the same bounded window pipeline under the original resource id.
+        """
+        url = resource.url
+        if url is None:  # pragma: no cover - only link resources are routed here
+            raise ResourceNotFoundError(f"resource {resource.resource_id} has no link")
+        validate_public_https_url(url, resolve_host=True)
+        try:
+            content = await self._materialize_fetched(
+                resource.resource_id, lambda: self._fetch_link(url)
+            )
+            windows, handles = await self._windows_from_content(resource, content)
+        except ResourceAdmissionError:
+            # A per-attachment or request-wide byte limit is a real bound, not a
+            # direct-extraction failure; never mask it by fetching provider text.
+            raise
+        except Exception:
+            view = await self._fallback_text_view(resource, url)
+            if view is not None:
+                return view.windows, view.handles
+            raise
+        if not windows:
+            view = await self._fallback_text_view(resource, url)
+            if view is not None:
+                return view.windows, view.handles
+        return windows, handles
+
+    async def _ensure_converted(
+        self, resource: _Registered, content: bytes | None = None
+    ) -> _ConvertedResource:
         cached = self._converted.get(resource.resource_id)
         if cached is not None:
             return cached
-        content = await self._materialize_bytes(resource)
+        if content is None:
+            content = await self._materialize_bytes(resource)
         converted = await convert_resource(
             content, filename=resource.filename, declared_mime=resource.declared_mime
         )
@@ -332,6 +400,10 @@ class ResourceRegistry:
             self._paths.clear()
             self._converted.clear()
             self._visual_assets.clear()
+            self._text_views.clear()
+            self._fetch_tasks.clear()
+            self._fallback_tasks.clear()
+            self._fallback_done.clear()
 
     @property
     def has_temp_storage(self) -> bool:
@@ -346,33 +418,109 @@ class ResourceRegistry:
 
     async def _materialize_bytes(self, resource: _Registered) -> bytes:
         if resource.content is not None:
+            # Inline bytes were charged against the total at registration and are
+            # never re-counted on read.
             return resource.content
         if resource.loader is not None:
-            cached = self._fetched.get(resource.resource_id)
-            if cached is not None:
-                return cached
-            data = await resource.loader()
-            if len(data) > self._max_attachment_bytes:
-                raise ResourceAdmissionError("attachment exceeds per-attachment byte limit")
-            self._fetched[resource.resource_id] = data
-            return data
+            return await self._materialize_fetched(resource.resource_id, resource.loader)
         url = resource.url
         if url is None:  # pragma: no cover - a resource is always bytes or a link
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no content")
         # Per-read SSRF revalidation: rerun full scheme/credential/host/DNS checks
         # even when bytes are already cached from an earlier read.
         validate_public_https_url(url, resolve_host=True)
-        cached = self._fetched.get(resource.resource_id)
-        if cached is not None:
-            return cached
-        data = await afetch_public_https_bytes(
+        return await self._materialize_fetched(resource.resource_id, lambda: self._fetch_link(url))
+
+    async def _fetch_link(self, url: str) -> bytes:
+        return await afetch_public_https_bytes(
             url,
             max_bytes=self._max_attachment_bytes,
             timeout=self._url_timeout,
             client=self._ensure_url_client(),
         )
-        self._fetched[resource.resource_id] = data
+
+    async def _materialize_fetched(
+        self, resource_id: str, producer: Callable[[], Awaitable[bytes]]
+    ) -> bytes:
+        """Fetch bytes once per resource and charge them against the total.
+
+        Concurrent reads of the same resource share a single fetch task, so the
+        bytes are produced and charged exactly once. A failed or over-limit fetch
+        is neither cached nor charged. Cancellation of a waiter propagates.
+        """
+        cached = self._fetched.get(resource_id)
+        if cached is not None:
+            return cached
+        async with self._fetch_lock:
+            cached = self._fetched.get(resource_id)
+            if cached is not None:
+                return cached
+            task = self._fetch_tasks.get(resource_id)
+            if task is None:
+                task = asyncio.ensure_future(self._fetch_and_charge(resource_id, producer))
+                self._fetch_tasks[resource_id] = task
+        try:
+            data = await task
+        except BaseException:
+            async with self._fetch_lock:
+                if self._fetch_tasks.get(resource_id) is task:
+                    self._fetch_tasks.pop(resource_id, None)
+            raise
+        async with self._fetch_lock:
+            self._fetch_tasks.pop(resource_id, None)
         return data
+
+    async def _fetch_and_charge(
+        self, resource_id: str, producer: Callable[[], Awaitable[bytes]]
+    ) -> bytes:
+        data = await producer()
+        if len(data) > self._max_attachment_bytes:
+            raise ResourceAdmissionError("attachment exceeds per-attachment byte limit")
+        async with self._total_lock:
+            if self._total_bytes + len(data) > self._max_total_attachment_bytes:
+                raise ResourceAdmissionError("total attachment bytes exceeded")
+            self._total_bytes += len(data)
+            self._fetched[resource_id] = data
+        return data
+
+    async def _fallback_text_view(
+        self, resource: _Registered, url: str
+    ) -> _ConvertedResource | None:
+        """Return a text view built from the provider fallback, at most once.
+
+        The fallback runs a single time per resource; both a usable result and a
+        failure are cached so a later read never re-invokes it. Returned text is
+        kept distinct from any raw fetched bytes and is windowed like any other
+        resource so it remains citable under the original resource id.
+        """
+        if self._url_text_fallback is None:
+            return None
+        resource_id = resource.resource_id
+        cached = self._text_views.get(resource_id)
+        if cached is not None:
+            return cached
+        async with self._fallback_lock:
+            if resource_id in self._fallback_done:
+                return self._text_views.get(resource_id)
+            task = self._fallback_tasks.get(resource_id)
+            if task is None:
+                task = asyncio.ensure_future(self._url_text_fallback(url))
+                self._fallback_tasks[resource_id] = task
+        try:
+            text = await task
+        except BaseException:
+            async with self._fallback_lock:
+                if self._fallback_tasks.get(resource_id) is task:
+                    self._fallback_tasks.pop(resource_id, None)
+            raise
+        async with self._fallback_lock:
+            self._fallback_done.add(resource_id)
+            self._fallback_tasks.pop(resource_id, None)
+            if text and text.strip() and resource_id not in self._text_views:
+                self._text_views[resource_id] = _ConvertedResource(
+                    windows=build_text_windows(text), handles=()
+                )
+            return self._text_views.get(resource_id)
 
     def _ensure_url_client(self) -> Any:
         if self._url_client is None:
@@ -448,4 +596,4 @@ def _charset_of(declared_mime: str | None) -> str | None:
     return None
 
 
-__all__ = ["InspectionTarget", "ResourceRegistry", "ResourceRegistryClosedError"]
+__all__ = ["InspectionTarget", "ResourceRegistry", "ResourceRegistryClosedError", "UrlTextFallback"]

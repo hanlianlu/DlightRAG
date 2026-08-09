@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +26,7 @@ from dlightrag.config import (
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.request.images import prepare_query_images
 from dlightrag.core.request.planner import QueryPlan, QueryPlanner
+from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.base import SourceDocument
@@ -2174,6 +2175,73 @@ class TestWebSearchCapability:
         await manager.aclose()
 
         assert search._client.is_closed
+
+
+class TestExaContentsFallback:
+    """Manager composition root adapts Exa Contents into the registry fallback."""
+
+    async def test_contents_passages_become_one_deterministic_text(self) -> None:
+        from dlightrag.core.retrieval.web_search import (
+            ExaSearch,
+            WebSearchHit,
+            WebSearchResult,
+        )
+        from dlightrag.core.servicemanager import _exa_contents_text
+
+        class _FakeExa:
+            def __init__(self) -> None:
+                self.urls: list[str] = []
+
+            async def contents(self, url: str) -> WebSearchResult:
+                self.urls.append(url)
+                page = {"url": url, "title": "The Page"}
+                return WebSearchResult(
+                    hits=(
+                        WebSearchHit(text="first passage", **page),
+                        WebSearchHit(text="second passage", **page),
+                    ),
+                    cost_dollars=0.0,
+                )
+
+        exa = _FakeExa()
+        fallback = _exa_contents_text(cast(ExaSearch, exa))
+
+        text = await fallback("https://example.org/page")
+
+        assert exa.urls == ["https://example.org/page"]
+        assert text is not None
+        assert "first passage" in text
+        assert "second passage" in text
+        assert "The Page" in text
+
+    async def test_contents_unavailable_yields_no_text(self) -> None:
+        from dlightrag.core.retrieval.web_search import ExaSearch, WebSearchUnavailable
+        from dlightrag.core.servicemanager import _exa_contents_text
+
+        class _FakeExa:
+            async def contents(self, url: str):
+                raise WebSearchUnavailable("timeout")
+
+        fallback = _exa_contents_text(cast(ExaSearch, _FakeExa()))
+
+        assert await fallback("https://example.org/page") is None
+
+    def test_registry_receives_fallback_only_when_web_search_present(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        resources = [ResourceInput(content=b"payload")]
+
+        registry, _tools, has = manager._build_resource_context(
+            resources, web_search=manager._get_web_search()
+        )
+        assert has is True
+        assert registry is not None
+        assert registry._url_text_fallback is not None
+
+        plain = RAGServiceManager(config=test_cfg)
+        registry2, _t2, _h2 = plain._build_resource_context(resources, web_search=None)
+        assert registry2 is not None
+        assert registry2._url_text_fallback is None
 
 
 class TestAgenticAnswerCapability:

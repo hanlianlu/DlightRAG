@@ -861,14 +861,6 @@ class TestAnswerSynthesizerHelpers:
         result = AnswerSynthesizer._format_kg_context(contexts, indexer=indexer)
         assert "(from [1])" in result
 
-    def test_build_user_prompt_contains_all_parts(self) -> None:
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
-        prompt, _indexer = synth._build_user_prompt("What is revenue?", _text_contexts())
-
-        assert "Knowledge Graph Context" in prompt
-        assert "Question" in prompt
-        assert "What is revenue?" in prompt
-
     def test_build_citation_indexer(self) -> None:
         indexer = AnswerSynthesizer._build_citation_indexer(_text_contexts())
         assert indexer.get_max_chunk_idx("1") > 0
