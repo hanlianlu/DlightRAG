@@ -7,6 +7,7 @@ from pydantic import Field
 
 from dlightrag.core.client_contracts import (
     MAX_QUERY_IMAGES,
+    AnswerAttachmentLink,
     AnswerRequestContract,
     ClientContractModel,
     ConversationMessage,
@@ -31,9 +32,8 @@ class RetrieveInput(QueryWorkspaceSelection, RetrieveRequestContract):
 
 class AnswerInput(QueryWorkspaceSelection, AnswerRequestContract):
     filters: dict[str, Any] | None = None
-    query_images: list[QueryImage] = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
+    attachments: list[AnswerAttachmentLink] = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
         default_factory=list,
-        max_length=MAX_QUERY_IMAGES,
     )
 
 

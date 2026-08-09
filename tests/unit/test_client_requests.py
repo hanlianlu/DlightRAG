@@ -34,7 +34,7 @@ def test_per_interface_current_image_admission() -> None:
     web_policy = QueryImagesConfig(max_current_images=4)
     assert web_policy.max_current_images == 4
 
-    for model in (RetrieveRequest, AnswerRequest, RetrieveInput, AnswerInput):
+    for model in (RetrieveRequest, RetrieveInput):
         with pytest.raises(ValidationError):
             model.model_validate({"query": "four images", "query_images": images})
 
@@ -135,6 +135,42 @@ def test_retrieve_accepts_query_images_but_rejects_attachments() -> None:
         assert parsed.query_images is not None
         with pytest.raises(ValidationError):
             model.model_validate({"query": "q", "attachments": []})
+
+
+@pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
+def test_answer_contracts_reject_query_images(model) -> None:
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+    assert "query_images" not in model.model_fields
+    with pytest.raises(ValidationError):
+        model.model_validate({"query": "q", "query_images": [image]})
+
+
+@pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
+def test_answer_contracts_accept_attachment_links(model) -> None:
+    assert "attachments" in model.model_fields
+    parsed = model.model_validate(
+        {
+            "query": "q",
+            "attachments": [{"url": "https://example.com/report.pdf", "filename": "report.pdf"}],
+        }
+    )
+    assert parsed.attachments is not None
+    assert parsed.attachments[0].url == "https://example.com/report.pdf"
+    assert parsed.attachments[0].filename == "report.pdf"
+    with pytest.raises(ValidationError):
+        model.model_validate({"query": "q", "attachments": [{"url": "http://example.com/x.pdf"}]})
+
+
+@pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
+def test_answer_attachments_reject_local_and_base64_fields(model) -> None:
+    for descriptor in (
+        {"path": "/etc/passwd"},
+        {"url": "https://example.com/x.pdf", "path": "/etc/passwd"},
+        {"url": "https://example.com/x.pdf", "content": "aGVsbG8="},
+        {"url": "https://example.com/x.pdf", "data": "aGVsbG8="},
+    ):
+        with pytest.raises(ValidationError):
+            model.model_validate({"query": "q", "attachments": [descriptor]})
 
 
 def test_public_source_contract_has_no_legacy_or_internal_names() -> None:
@@ -371,10 +407,10 @@ def test_answer_contracts_reject_answer_context_top_k(model) -> None:
 
 
 def test_mcp_query_images_stay_non_nullable_with_list_default() -> None:
-    for model in (RetrieveInput, AnswerInput):
-        parsed = model.model_validate({"query": "q"})
-        assert parsed.query_images == []
-        with pytest.raises(ValidationError):
-            model.model_validate({"query": "q", "query_images": None})
-        schema = model.model_json_schema()
-        assert schema["properties"]["query_images"]["type"] == "array"
+    parsed = RetrieveInput.model_validate({"query": "q"})
+    assert parsed.query_images == []
+    with pytest.raises(ValidationError):
+        RetrieveInput.model_validate({"query": "q", "query_images": None})
+    schema = RetrieveInput.model_json_schema()
+    assert schema["properties"]["query_images"]["type"] == "array"
+    assert "query_images" not in AnswerInput.model_fields

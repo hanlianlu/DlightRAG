@@ -1448,21 +1448,12 @@ class TestAnswerEndpoint:
         assert resp.status_code == 200
         assert mock_manager.aanswer.call_args.kwargs["semantic_highlights"] is True
 
-    async def test_answer_rejects_conversation_history_and_accepts_query_image_blocks(
+    async def test_answer_rejects_query_images_and_accepts_attachment_links(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
         history = [
             {"role": "user", "content": [{"type": "text", "text": "previous"}]},
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": "dlightrag-image://img_1"},
-                    }
-                ],
-            },
         ]
         query_images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
 
@@ -1479,7 +1470,7 @@ class TestAnswerEndpoint:
         assert rejected.status_code == 422
         mock_manager.aanswer.assert_not_awaited()
 
-        resp = await client.post(
+        rejected_images = await client.post(
             "/answer",
             json={
                 "query": "What is shown?",
@@ -1487,11 +1478,26 @@ class TestAnswerEndpoint:
                 "query_images": query_images,
             },
         )
+        assert rejected_images.status_code == 422
+        mock_manager.aanswer.assert_not_awaited()
+
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "What is shown?",
+                "stream": False,
+                "attachments": [{"url": "https://example.com/report.pdf", "filename": "r.pdf"}],
+            },
+        )
 
         assert resp.status_code == 200
         call_kwargs = mock_manager.aanswer.call_args.kwargs
         assert "conversation_history" not in call_kwargs
-        assert call_kwargs["query_images"] == query_images
+        assert "query_images" not in call_kwargs
+        resources = call_kwargs["resources"]
+        assert [resource.url for resource in resources] == ["https://example.com/report.pdf"]
+        assert resources[0].filename == "r.pdf"
+        assert resources[0].content is None
 
     async def test_answer_accepts_caller_history(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1537,6 +1543,172 @@ class TestAnswerEndpoint:
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "hello", "stream": False})
         assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# TestAnswerMultipart
+# ---------------------------------------------------------------------------
+
+
+class TestAnswerMultipart:
+    """POST /answer multipart: one JSON request part plus repeated attachment files."""
+
+    async def test_multipart_nonstream_mixes_links_and_files(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        app.state.manager = mock_manager
+        request_part = json_mod.dumps(
+            {
+                "query": "compare",
+                "stream": False,
+                "attachments": [{"url": "https://example.com/a.pdf"}],
+            }
+        )
+        resp = await client.post(
+            "/answer",
+            data={"request": request_part},
+            files=[("attachments", ("report.pdf", b"%PDF-body", "application/pdf"))],
+        )
+
+        assert resp.status_code == 200
+        resources = mock_manager.aanswer.call_args.kwargs["resources"]
+        assert [resource.url for resource in resources if resource.url] == [
+            "https://example.com/a.pdf"
+        ]
+        file_resources = [resource for resource in resources if resource.content is not None]
+        assert file_resources[0].content == b"%PDF-body"
+        assert file_resources[0].filename == "report.pdf"
+
+    async def test_multipart_streaming_passes_resources(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        async def mock_tokens():
+            yield "answer"
+
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
+        app.state.manager = mock_manager
+        request_part = json_mod.dumps({"query": "compare", "stream": True})
+        resp = await client.post(
+            "/answer",
+            data={"request": request_part},
+            files=[("attachments", ("a.txt", b"hello", "text/plain"))],
+        )
+
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        resources = mock_manager.aanswer_stream.call_args.kwargs["resources"]
+        assert resources[0].content == b"hello"
+
+    async def test_multipart_requires_exactly_one_request_part(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        app.state.manager = mock_manager
+        missing = await client.post(
+            "/answer", files=[("attachments", ("a.txt", b"x", "text/plain"))]
+        )
+        assert missing.status_code == 400
+
+        duplicate = await client.post(
+            "/answer",
+            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            files=[
+                (
+                    "request",
+                    (
+                        "r.json",
+                        json_mod.dumps({"query": "q2", "stream": False}),
+                        "application/json",
+                    ),
+                )
+            ],
+        )
+        assert duplicate.status_code == 400
+        mock_manager.aanswer.assert_not_awaited()
+
+    async def test_multipart_rejects_wrong_part_name(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            files=[("documents", ("a.txt", b"x", "text/plain"))],
+        )
+
+        assert resp.status_code == 400
+        mock_manager.aanswer.assert_not_awaited()
+
+    async def test_multipart_malformed_request_part_is_422(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            data={"request": "{not json"},
+            files=[("attachments", ("a.txt", b"x", "text/plain"))],
+        )
+
+        assert resp.status_code == 422
+        mock_manager.aanswer.assert_not_awaited()
+
+    async def test_multipart_enforces_count_limit(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        mock_config.answer.max_attachments = 2
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            files=[("attachments", (f"f{index}.txt", b"x", "text/plain")) for index in range(3)],
+        )
+
+        assert resp.status_code == 413
+        mock_manager.aanswer.assert_not_awaited()
+
+    async def test_multipart_enforces_per_item_limit(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        mock_config.answer.max_attachment_bytes = 8
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            files=[("attachments", ("big.bin", b"x" * 64, "application/octet-stream"))],
+        )
+
+        assert resp.status_code == 413
+        mock_manager.aanswer.assert_not_awaited()
+
+    async def test_multipart_enforces_total_limit(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        mock_config.answer.max_total_attachment_bytes = 16
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            files=[
+                ("attachments", ("a.bin", b"x" * 10, "application/octet-stream")),
+                ("attachments", ("b.bin", b"y" * 10, "application/octet-stream")),
+            ],
+        )
+
+        assert resp.status_code == 413
+        mock_manager.aanswer.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

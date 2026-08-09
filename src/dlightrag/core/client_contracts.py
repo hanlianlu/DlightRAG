@@ -27,8 +27,8 @@ class ConversationMessage(ClientContractModel):
     """One prior, caller-supplied conversation message (stateless).
 
     Callers own conversation persistence, so prior turns are re-sent on each
-    answer request and never stored. Historical images are not accepted here;
-    re-send them as current ``query_images`` when a follow-up depends on them.
+    answer request and never stored. Historical files are not accepted here;
+    re-send them as current ``attachments`` when a follow-up depends on them.
     """
 
     role: Literal["user", "assistant"]
@@ -101,9 +101,13 @@ class RetrieveRequestContract(QueryRequestContract):
 
 
 class AnswerRequestContract(QueryRequestContract):
-    """Shared transport-neutral contract for answer requests."""
+    """Shared transport-neutral contract for answer requests.
 
-    query_images: list[QueryImage] | None = Field(default=None, max_length=MAX_QUERY_IMAGES)
+    Answer inputs never accept ``query_images``; user files and HTTPS references
+    arrive as ``attachments`` and become request-local resources read on demand.
+    """
+
+    attachments: list[AnswerAttachmentLink] | None = None
     semantic_highlights: bool = False
     history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
 
@@ -283,6 +287,7 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 __all__ = [
     "ClientContractModel",
     "ConversationMessage",
+    "AnswerAttachmentLink",
     "AnswerRequestContract",
     "ImageURL",
     "IngestDocument",

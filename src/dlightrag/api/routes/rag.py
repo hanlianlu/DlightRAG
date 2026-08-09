@@ -8,6 +8,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.formparsers import MultiPartException
 
 from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
@@ -35,10 +38,12 @@ from dlightrag.api.models import (
 from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
+from dlightrag.config import AnswerConfig
 from dlightrag.core.access import workspace_names
 from dlightrag.core.answer.errors import ANSWER_STREAM_FAILED, classify_answer_error
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
 from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
+from dlightrag.core.client_attachments import answer_link_resources
 from dlightrag.core.client_contracts import IngestSpec, conversation_history_as_dicts
 from dlightrag.core.client_execution import execute_answer, execute_retrieve
 from dlightrag.core.client_payloads import (
@@ -58,6 +63,7 @@ from dlightrag.core.ingestion.uploads import (
     safe_upload_basename,
     write_upload_stream,
 )
+from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.core.servicemanager import answer_trace_output
 from dlightrag.observability import trace_observation
@@ -205,12 +211,115 @@ async def retrieve(
     )
 
 
+_ALLOWED_ANSWER_PARTS = {"request", "attachments"}
+_MAX_ANSWER_FORM_FIELDS = 8
+# Comfortably holds the JSON `request` part (query, history, filters, links) so a
+# small per-attachment cap never truncates the request envelope.
+_ANSWER_REQUEST_PART_CEILING = 2 * 1024 * 1024
+# Slack over the total attachment budget for multipart boundaries and headers.
+_MULTIPART_ENVELOPE_OVERHEAD = 64 * 1024
+
+
+async def _parse_answer_body(
+    request: Request, answer_cfg: AnswerConfig
+) -> tuple[AnswerRequest, list[ResourceInput]]:
+    """Parse a JSON or multipart answer request bounded by attachment limits.
+
+    JSON bodies carry the complete request with optional HTTPS link descriptors.
+    Multipart bodies carry exactly one JSON ``request`` part plus repeated
+    ``attachments`` file parts; uploaded files and JSON links may mix. Count,
+    per-attachment, and total-byte admission are enforced here, before the
+    orchestrator ever runs, without buffering an unbounded body.
+    """
+    content_type = request.headers.get("content-type", "").lower()
+    if "multipart/form-data" not in content_type:
+        try:
+            body = AnswerRequest.model_validate_json(await request.body())
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        return body, answer_link_resources(body.attachments)
+
+    max_attachments = answer_cfg.max_attachments
+    max_item = max(1, answer_cfg.max_attachment_bytes)
+    max_total = answer_cfg.max_total_attachment_bytes
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > max_total + _MULTIPART_ENVELOPE_OVERHEAD:
+        raise HTTPException(status_code=413, detail="Attachments exceed the total size limit")
+    try:
+        form = await request.form(
+            max_files=max_attachments + 2,
+            max_fields=_MAX_ANSWER_FORM_FIELDS,
+            max_part_size=max(max_item, _ANSWER_REQUEST_PART_CEILING),
+        )
+    except MultiPartException as exc:
+        raise HTTPException(
+            status_code=413, detail=f"Invalid or oversized attachment upload: {exc}"
+        ) from exc
+    try:
+        unexpected = sorted({key for key, _ in form.multi_items()} - _ALLOWED_ANSWER_PARTS)
+        if unexpected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unexpected multipart field(s): {', '.join(unexpected)}",
+            )
+        request_parts = form.getlist("request")
+        if len(request_parts) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="multipart answer requires exactly one 'request' part",
+            )
+        raw_request = request_parts[0]
+        request_json = (
+            await raw_request.read()
+            if isinstance(raw_request, StarletteUploadFile)
+            else raw_request
+        )
+        try:
+            body = AnswerRequest.model_validate_json(request_json)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+        file_resources: list[ResourceInput] = []
+        total = 0
+        for part in form.getlist("attachments"):
+            if not isinstance(part, StarletteUploadFile):
+                raise HTTPException(
+                    status_code=400, detail="'attachments' parts must be uploaded files"
+                )
+            data = await part.read()
+            if len(data) > max_item:
+                raise HTTPException(
+                    status_code=413, detail="An attachment exceeds the per-attachment size limit"
+                )
+            total += len(data)
+            if total > max_total:
+                raise HTTPException(
+                    status_code=413, detail="Attachments exceed the total size limit"
+                )
+            file_resources.append(
+                ResourceInput(
+                    filename=part.filename,
+                    content=data,
+                    declared_mime=part.content_type,
+                )
+            )
+        link_resources = answer_link_resources(body.attachments)
+        if len(link_resources) + len(file_resources) > max_attachments:
+            raise HTTPException(status_code=413, detail="Too many attachments")
+        return body, [*link_resources, *file_resources]
+    finally:
+        await form.close()
+
+
 @router.post("/answer", response_model=AnswerResponse)
-async def answer(
-    body: AnswerRequest, request: Request, user: UserContext = Depends(get_current_user)
-):
-    """RAG query with LLM-generated answer. Set stream=true for SSE."""
+async def answer(request: Request, user: UserContext = Depends(get_current_user)):
+    """RAG query with LLM-generated answer. Set stream=true for SSE.
+
+    Accepts ``application/json`` (link descriptors only) or ``multipart/form-data``
+    with one JSON ``request`` part plus repeated ``attachments`` files.
+    """
     manager = get_manager(request)
+    body, resources = await _parse_answer_body(request, request_config(request).answer)
     kwargs = query_kwargs_from_payload(body)
     resolved_workspaces = await resolve_authorized_query_workspaces(
         request,
@@ -232,6 +341,7 @@ async def answer(
             payload=body,
             resolved_workspaces=resolved_workspaces,
             scope=scope,
+            resources=resources,
         )
         link_builder = SourceDownloadLinkBuilder()
         return answer_payload(
@@ -258,6 +368,7 @@ async def answer(
                     top_k=body.top_k,
                     chunk_top_k=body.chunk_top_k,
                     history=history,
+                    resources=resources,
                     scope=scope,
                     **kwargs,
                 )

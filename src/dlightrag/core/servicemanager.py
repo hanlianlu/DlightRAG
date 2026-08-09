@@ -1868,6 +1868,7 @@ class RAGServiceManager:
         query_images: list[dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
         semantic_highlights: bool = False,
+        resources: list[ResourceInput] | None = None,
         scope: RequestScope | None = None,
     ) -> RetrievalResult:
         """Answer from one or more workspaces through the one answer orchestrator.
@@ -1891,6 +1892,7 @@ class RAGServiceManager:
             filters=filters,
             semantic_highlights=semantic_highlights,
             scope=scope,
+            resources=resources,
         )
 
     async def aanswer_stream(
@@ -1905,6 +1907,7 @@ class RAGServiceManager:
         filters: MetadataFilter | None = None,
         query_images: list[dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
+        resources: list[ResourceInput] | None = None,
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces through the orchestrator.
@@ -1920,6 +1923,7 @@ class RAGServiceManager:
             chunk_top_k=chunk_top_k,
             filters=filters,
             scope=scope,
+            resources=resources,
         )
 
     async def _aanswer_stream_prepared(
@@ -1933,6 +1937,7 @@ class RAGServiceManager:
         chunk_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         scope: RequestScope | None = None,
+        resources: list[ResourceInput] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Stream one server-prepared turn through the one answer orchestrator."""
         return await self._aanswer_stream_orchestrated(
@@ -1944,6 +1949,7 @@ class RAGServiceManager:
             chunk_top_k=chunk_top_k,
             filters=filters,
             scope=scope,
+            resources=resources,
         )
 
     # --- Management ---

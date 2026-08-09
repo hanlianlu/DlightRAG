@@ -30,6 +30,7 @@ from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
+    AnswerAttachmentLink,
     QueryImage,
     SourceType,
 )
@@ -68,6 +69,15 @@ QueryImagesParam = Annotated[
     Field(
         max_length=3,
         description="User-attached image URLs or data URI blocks (max 3)",
+    ),
+]
+AttachmentsParam = Annotated[
+    list[AnswerAttachmentLink],
+    Field(
+        description=(
+            "Answer attachments as HTTPS link descriptors ({url, filename?}). MCP accepts "
+            "links only; local paths, raw bytes, and base64 are rejected."
+        ),
     ),
 ]
 HistoryParam = Annotated[
@@ -350,7 +360,7 @@ async def answer_tool(
         dict[str, Any] | None,
         Field(default=None, description="Metadata filters for structured queries."),
     ] = None,
-    query_images: QueryImagesParam = Field(default_factory=list),
+    attachments: AttachmentsParam = Field(default_factory=list),
     semantic_highlights: Annotated[
         bool,
         Field(default=False, description="Include semantic highlight phrases in cited sources."),

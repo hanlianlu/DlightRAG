@@ -44,8 +44,6 @@ class RetrieveRequest(QueryWorkspaceSelection, RetrieveRequestContract):
 class AnswerRequest(QueryWorkspaceSelection, AnswerRequestContract):
     stream: bool = True
     filters: MetadataFilterRequest | None = None
-    """User-attached images used for VLM semantic enhancement, direct visual
-    retrieval and bounded answer-model image blocks."""
     """Prior conversation turns supplied by the caller. Stateless: the client
     owns persistence and re-sends history each request; DlightRAG never stores
     it. Feeds the planner's standalone-query rewrite and answer generation."""

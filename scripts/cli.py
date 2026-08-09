@@ -26,7 +26,7 @@ Usage:
     uv run scripts/cli.py query "findings?" --workspaces project-a project-b
     uv run scripts/cli.py query "findings?" --filters-json '{"author":"Ada"}'
     uv run scripts/cli.py answer "What are the key findings?"
-    uv run scripts/cli.py answer "summarize chart" --query-image data:image/png;base64,... --answer-context-top-k 4
+    uv run scripts/cli.py answer "summarize report" --attach ./report.pdf --attach-url https://example.com/appendix.pdf
     uv run scripts/cli.py chat
     uv run scripts/cli.py chat --workspaces project-a project-b
 
@@ -37,6 +37,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -128,13 +129,13 @@ def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
     return filters or None
 
 
-def _apply_query_options(
+def _apply_common_options(
     payload: dict[str, Any],
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     if args.top_k is not None:
         payload["top_k"] = args.top_k
-    if args.chunk_top_k is not None:
+    if getattr(args, "chunk_top_k", None) is not None:
         payload["chunk_top_k"] = args.chunk_top_k
     if args.workspaces:
         payload["workspaces"] = args.workspaces
@@ -142,6 +143,15 @@ def _apply_query_options(
     filters = _metadata_filter_payload(args)
     if filters is not None:
         payload["filters"] = filters
+
+    return payload
+
+
+def _apply_query_options(
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    _apply_common_options(payload, args)
 
     if args.query_images:
         payload["query_images"] = query_image_blocks_from_urls(args.query_images)
@@ -155,7 +165,11 @@ def _build_answer_payload(
     query: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"query": query, "stream": False}
-    return _apply_query_options(payload, args)
+    _apply_common_options(payload, args)
+    attachment_urls = getattr(args, "attachment_urls", None)
+    if attachment_urls:
+        payload["attachments"] = [{"url": url} for url in attachment_urls]
+    return payload
 
 
 def _answer_images_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -273,6 +287,28 @@ def cmd_query(args: argparse.Namespace) -> None:
     _print_json(resp.json())
 
 
+def _post_answer(
+    url: str, payload: dict[str, Any], attachment_paths: list[str] | None
+) -> httpx.Response:
+    """Send an answer request as JSON, or multipart when local files are attached."""
+    if attachment_paths:
+        files = [
+            (
+                "attachments",
+                (Path(path).name, Path(path).read_bytes(), "application/octet-stream"),
+            )
+            for path in attachment_paths
+        ]
+        return httpx.post(
+            url,
+            data={"request": json.dumps(payload)},
+            files=files,
+            headers=_headers(),
+            timeout=_get_timeout(),
+        )
+    return httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
+
+
 def cmd_answer(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/answer"
     payload = _build_answer_payload(args, query=args.query)
@@ -282,7 +318,7 @@ def cmd_answer(args: argparse.Namespace) -> None:
         print(f"Workspaces: {', '.join(args.workspaces)}")
     print(f"API: {url}\n")
 
-    resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
+    resp = _post_answer(url, payload, getattr(args, "attachment_paths", None))
     resp.raise_for_status()
     data = resp.json()
 
@@ -360,7 +396,7 @@ def _add_filter_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_retrieval_options(
+def _add_common_options(
     parser: argparse.ArgumentParser,
     *,
     include_chunk_top_k: bool = False,
@@ -370,12 +406,38 @@ def _add_retrieval_options(
         parser.add_argument("--chunk-top-k", type=int, default=None, dest="chunk_top_k")
     parser.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
     _add_filter_options(parser)
+
+
+def _add_retrieval_options(
+    parser: argparse.ArgumentParser,
+    *,
+    include_chunk_top_k: bool = False,
+) -> None:
+    _add_common_options(parser, include_chunk_top_k=include_chunk_top_k)
     parser.add_argument(
         "--query-image",
         action="append",
         default=None,
         dest="query_images",
         help="User-attached image URL or data URI; repeat up to 3 times",
+    )
+
+
+def _add_answer_options(parser: argparse.ArgumentParser) -> None:
+    _add_common_options(parser, include_chunk_top_k=True)
+    parser.add_argument(
+        "--attach",
+        action="append",
+        default=None,
+        dest="attachment_paths",
+        help="Local file to attach as an answer resource; repeatable",
+    )
+    parser.add_argument(
+        "--attach-url",
+        action="append",
+        default=None,
+        dest="attachment_urls",
+        help="HTTPS URL to attach as an answer resource; repeatable",
     )
 
 
@@ -482,11 +544,11 @@ def build_parser() -> argparse.ArgumentParser:
     # -- answer --
     p_answer = sub.add_parser("answer", help="LLM-generated answer with contexts and sources")
     p_answer.add_argument("query", help="Question to answer")
-    _add_retrieval_options(p_answer, include_chunk_top_k=True)
+    _add_answer_options(p_answer)
 
     # -- chat --
     p_chat = sub.add_parser("chat", help="Interactive multi-turn conversation")
-    _add_retrieval_options(p_chat, include_chunk_top_k=True)
+    _add_common_options(p_chat, include_chunk_top_k=True)
 
     return parser
 

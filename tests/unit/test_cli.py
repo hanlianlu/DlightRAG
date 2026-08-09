@@ -2,6 +2,7 @@
 """Tests for CLI argument validation."""
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -92,8 +93,8 @@ def test_answer_payload_supports_current_answer_options() -> None:
             "9",
             "--filters-json",
             '{"author":"Ada"}',
-            "--query-image",
-            "https://example.test/chart.png",
+            "--attach-url",
+            "https://example.test/chart.pdf",
         ]
     )
 
@@ -102,8 +103,53 @@ def test_answer_payload_supports_current_answer_options() -> None:
         "stream": False,
         "chunk_top_k": 9,
         "filters": {"author": "Ada"},
-        "query_images": [_image_block("https://example.test/chart.png")],
+        "attachments": [{"url": "https://example.test/chart.pdf"}],
     }
+
+
+def test_answer_cli_local_attachment_uses_multipart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-body")
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"answer": "done", "references": []}
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any):
+        captured["url"] = url
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(_cli.httpx, "post", fake_post)
+    monkeypatch.setattr(_cli, "_get_api_url", lambda: "https://rag.example")
+    monkeypatch.setattr(_cli, "_headers", lambda: {})
+    monkeypatch.setattr(_cli, "_get_timeout", lambda: 15)
+
+    args = _parse_answer(
+        [
+            "summarize",
+            "--attach",
+            str(source),
+            "--attach-url",
+            "https://example.test/a.pdf",
+        ]
+    )
+    cmd_answer(args)
+
+    assert captured["url"] == "https://rag.example/answer"
+    request_payload = json.loads(captured["data"]["request"])
+    assert request_payload["attachments"] == [{"url": "https://example.test/a.pdf"}]
+    field, (name, content, _mime) = captured["files"][0]
+    assert field == "attachments"
+    assert name == "report.pdf"
+    assert content == b"%PDF-body"
 
 
 def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> None:

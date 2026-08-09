@@ -4,7 +4,7 @@
 from unittest.mock import AsyncMock
 
 from dlightrag.api.models import MetadataFilterRequest, RetrieveRequest
-from dlightrag.core.client_contracts import ConversationMessage, QueryImage
+from dlightrag.core.client_contracts import AnswerAttachmentLink, ConversationMessage, QueryImage
 from dlightrag.core.client_execution import execute_answer, execute_retrieve
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.scope import RequestScope
@@ -51,7 +51,7 @@ async def test_execute_retrieve_forwards_shared_query_kwargs_and_scope() -> None
     ]
 
 
-async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
+async def test_execute_answer_projects_history_and_attachment_resources() -> None:
     result = RetrievalResult(answer="done", contexts={"chunks": []})
     manager = AsyncMock()
     manager.aanswer = AsyncMock(return_value=result)
@@ -61,10 +61,8 @@ async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
         top_k=6,
         chunk_top_k=4,
         filters={"title": "Runbook"},
-        query_images=[
-            QueryImage.model_validate(
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-            )
+        attachments=[
+            AnswerAttachmentLink(url="https://example.com/report.pdf", filename="report.pdf"),
         ],
         semantic_highlights=True,
         history=[
@@ -94,6 +92,8 @@ async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
     ]
     assert call_kwargs["scope"] == scope
     assert call_kwargs["filters"].title == "Runbook"
-    assert call_kwargs["query_images"] == [
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-    ]
+    assert "query_images" not in call_kwargs
+    resources = call_kwargs["resources"]
+    assert [resource.url for resource in resources] == ["https://example.com/report.pdf"]
+    assert resources[0].filename == "report.pdf"
+    assert resources[0].content is None

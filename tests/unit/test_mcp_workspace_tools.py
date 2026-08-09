@@ -132,7 +132,8 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     }
     answer_tool = next(tool for tool in tools if tool.name == "answer")
     answer_props = answer_tool.input_schema["properties"]
-    assert {"query", "history", "query_images", "filters", "chunk_top_k"} <= answer_props.keys()
+    assert {"query", "history", "attachments", "filters", "chunk_top_k"} <= answer_props.keys()
+    assert "query_images" not in answer_props
     ingest_tool = next(tool for tool in tools if tool.name == "ingest")
     ingest_props = ingest_tool.input_schema["properties"]
     assert {"source_type", "path", "url", "documents", "metadata"} <= ingest_props.keys()
@@ -172,12 +173,6 @@ async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_manager)
             },
             "aretrieve",
             "query_images",
-        ),
-        (
-            "answer",
-            {"query": "x", "query_images": [{"url": "data:image/png;base64,abc"}]},
-            "aanswer",
-            "image_url",
         ),
         (
             "retrieve",
@@ -515,9 +510,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "workspaces": ["default"],
             "top_k": 8,
             "chunk_top_k": 12,
-            "query_images": [
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-            ],
+            "attachments": [{"url": "https://example.com/report.pdf", "filename": "report.pdf"}],
             "filters": {"title": "Manual"},
             "semantic_highlights": True,
         },
@@ -536,14 +529,49 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert call_kwargs["workspaces"] == ["default"]
     assert call_kwargs["top_k"] == 8
     assert call_kwargs["chunk_top_k"] == 12
-    assert call_kwargs["query_images"] == [
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-    ]
+    assert "query_images" not in call_kwargs
+    resources = call_kwargs["resources"]
+    assert [resource.url for resource in resources] == ["https://example.com/report.pdf"]
+    assert resources[0].filename == "report.pdf"
+    assert resources[0].content is None
     assert "conversation_history" not in call_kwargs
     assert "session_id" not in call_kwargs
     assert "referenced_image_ids" not in call_kwargs
     assert call_kwargs["filters"].title == "Manual"
     assert call_kwargs["semantic_highlights"] is True
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        {"path": "/etc/passwd"},
+        {"url": "https://example.com/x.pdf", "path": "/etc/passwd"},
+        {"url": "https://example.com/x.pdf", "content": "aGVsbG8="},
+        {"url": "http://example.com/x.pdf"},
+    ],
+)
+async def test_mcp_answer_rejects_local_and_base64_attachments(
+    mock_mcp_manager, descriptor: dict[str, Any]
+) -> None:
+    result = await mcp_server.mcp_app.call_tool(
+        "answer",
+        {"query": "x", "attachments": [descriptor]},
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    mock_mcp_manager.aanswer.assert_not_awaited()
+
+
+async def test_mcp_answer_rejects_top_level_local_fields(mock_mcp_manager) -> None:
+    for field in ("path", "attachment_bytes", "attachment_base64"):
+        result = await mcp_server.mcp_app.call_tool(
+            "answer",
+            {"query": "x", field: "value"},
+        )
+        assert isinstance(result, CallToolResult)
+        assert result.is_error is True
+    mock_mcp_manager.aanswer.assert_not_awaited()
 
 
 async def test_mcp_answer_uses_shared_executor(
