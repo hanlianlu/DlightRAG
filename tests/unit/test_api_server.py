@@ -1536,6 +1536,43 @@ class TestAnswerEndpoint:
         execute.assert_awaited_once()
         mock_manager.aanswer.assert_not_awaited()
 
+    async def test_json_enforces_link_count_limit(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_config.answer.max_attachments = 2
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "q",
+                "stream": False,
+                "attachments": [{"url": f"https://example.com/{index}.pdf"} for index in range(3)],
+            },
+        )
+
+        assert resp.status_code == 413
+        assert "2" in resp.json()["detail"]
+        mock_manager.aanswer.assert_not_awaited()
+
+    async def test_json_stream_enforces_link_count_limit(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_config.answer.max_attachments = 2
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "q",
+                "stream": True,
+                "attachments": [{"url": f"https://example.com/{index}.pdf"} for index in range(3)],
+            },
+        )
+
+        assert resp.status_code == 413
+        mock_manager.aanswer_stream.assert_not_awaited()
+
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:

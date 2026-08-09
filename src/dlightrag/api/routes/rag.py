@@ -220,6 +220,15 @@ _ANSWER_REQUEST_PART_CEILING = 2 * 1024 * 1024
 _MULTIPART_ENVELOPE_OVERHEAD = 64 * 1024
 
 
+def _enforce_answer_attachment_count(count: int, max_attachments: int) -> None:
+    """Reject over-limit attachment counts with a stable 413 and the safe limit."""
+    if count > max_attachments:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many attachments; at most {max_attachments} are allowed",
+        )
+
+
 async def _parse_answer_body(
     request: Request, answer_cfg: AnswerConfig
 ) -> tuple[AnswerRequest, list[ResourceInput]]:
@@ -237,7 +246,9 @@ async def _parse_answer_body(
             body = AnswerRequest.model_validate_json(await request.body())
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors()) from exc
-        return body, answer_link_resources(body.attachments)
+        link_resources = answer_link_resources(body.attachments)
+        _enforce_answer_attachment_count(len(link_resources), answer_cfg.max_attachments)
+        return body, link_resources
 
     max_attachments = answer_cfg.max_attachments
     max_item = max(1, answer_cfg.max_attachment_bytes)
@@ -304,8 +315,7 @@ async def _parse_answer_body(
                 )
             )
         link_resources = answer_link_resources(body.attachments)
-        if len(link_resources) + len(file_resources) > max_attachments:
-            raise HTTPException(status_code=413, detail="Too many attachments")
+        _enforce_answer_attachment_count(len(link_resources) + len(file_resources), max_attachments)
         return body, [*link_resources, *file_resources]
     finally:
         await form.close()

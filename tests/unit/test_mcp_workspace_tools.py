@@ -48,6 +48,7 @@ def mock_mcp_manager(monkeypatch):
     manager.aanswer = AsyncMock()
     manager.aingest = AsyncMock()
     manager.astart_ingest_job = AsyncMock()
+    manager.config.answer.max_attachments = 6
     monkeypatch.setattr(mcp_server, "_ensure_manager", AsyncMock(return_value=manager))
     return manager
 
@@ -556,6 +557,22 @@ async def test_mcp_answer_rejects_local_and_base64_attachments(
     result = await mcp_server.mcp_app.call_tool(
         "answer",
         {"query": "x", "attachments": [descriptor]},
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    mock_mcp_manager.aanswer.assert_not_awaited()
+
+
+async def test_mcp_answer_enforces_link_count_limit(mock_mcp_manager) -> None:
+    mock_mcp_manager.config.answer.max_attachments = 2
+
+    result = await mcp_server.mcp_app.call_tool(
+        "answer",
+        {
+            "query": "x",
+            "attachments": [{"url": f"https://example.com/{index}.pdf"} for index in range(3)],
+        },
     )
 
     assert isinstance(result, CallToolResult)

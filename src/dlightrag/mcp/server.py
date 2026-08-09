@@ -369,6 +369,9 @@ async def answer_tool(
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
     manager = await _ensure_manager()
+    max_attachments = manager.config.answer.max_attachments
+    if len(args.attachments) > max_attachments:
+        raise ValueError(f"Too many attachments; at most {max_attachments} are allowed")
     resolved_workspaces = await _resolve_authorized_query_workspaces(
         manager,
         workspaces=args.workspaces,
