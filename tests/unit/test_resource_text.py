@@ -103,5 +103,32 @@ def test_windows_split_above_observation_budget() -> None:
     # Windows are contiguous and cover every line exactly once.
     assert windows[0][0].start == 1
     assert windows[-1][0].end == len(lines)
-    rebuilt = "\n".join(content for _, content in windows)
+    rebuilt = "".join(content for _, content in windows)
     assert rebuilt == text
+
+
+def test_single_line_over_budget_splits_into_subline_windows() -> None:
+    from dlightrag.utils.tokens import estimate_tokens
+
+    # One physical line (no newline) far larger than a single observation budget.
+    line = "x" * (MAX_TOOL_OBSERVATION_TOKENS * 8)
+
+    windows = build_text_windows(line)
+
+    assert len(windows) >= 2
+    for _, content in windows:
+        assert estimate_tokens(content) <= MAX_TOOL_OBSERVATION_TOKENS
+    # Character sub-windows reconstruct the original line with no drop/duplication.
+    assert "".join(content for _, content in windows) == line
+    # Locators stay truthful: every sub-window lives on the same single line and
+    # carries an explicit intra-line character span covering the whole line.
+    first_locator = windows[0][0]
+    assert first_locator.unit == "line"
+    assert first_locator.start == 1
+    assert first_locator.end == 1
+    assert first_locator.char_start == 1
+    assert windows[-1][0].char_end == len(line)
+    spans = [(loc.char_start, loc.char_end) for loc, _ in windows]
+    for (_, prev_end), (next_start, _) in zip(spans, spans[1:], strict=False):
+        assert prev_end is not None and next_start is not None
+        assert next_start == prev_end + 1

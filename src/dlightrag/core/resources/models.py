@@ -60,11 +60,20 @@ class ResourceManifestEntry:
 
 @dataclass(frozen=True)
 class TextWindowLocator:
-    """Structural, human-readable locator for a returned text window."""
+    """Structural, human-readable locator for a returned text window.
+
+    ``start``/``end`` are 1-based line numbers and always describe the physical
+    lines the window covers. When a single line is larger than one observation
+    budget it is split into character sub-windows on that one line; ``char_start``
+    and ``char_end`` then carry the 1-based inclusive character span within the
+    line. They stay ``None`` for whole-line windows.
+    """
 
     unit: Literal["line"]
     start: int
     end: int
+    char_start: int | None = None
+    char_end: int | None = None
 
 
 @dataclass(frozen=True)

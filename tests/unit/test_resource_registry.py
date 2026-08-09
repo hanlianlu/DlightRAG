@@ -205,11 +205,36 @@ async def test_read_continues_above_observation_budget() -> None:
     assert first.next_cursor is not None
 
     second = await registry.read(resource_id, cursor=first.next_cursor)
-    combined = first.content + "\n" + second.content
+    combined = first.content + second.content
     while second.has_more:
         second = await registry.read(resource_id, cursor=second.next_cursor)
-        combined = combined + "\n" + second.content
+        combined = combined + second.content
     assert combined == text
+
+
+async def test_read_continues_within_single_oversized_line() -> None:
+    from dlightrag.core.answer.capacity import MAX_TOOL_OBSERVATION_TOKENS
+    from dlightrag.utils.tokens import estimate_tokens
+
+    registry = ResourceRegistry()
+    # A minified single-line JSON payload with no newline, far over one budget.
+    payload = '{"data":[' + ",".join(f'"{"v" * 40}"' for _ in range(4000)) + "]}"
+    assert "\n" not in payload
+    assert estimate_tokens(payload) > MAX_TOOL_OBSERVATION_TOKENS
+    resource_id = registry.register(ResourceInput(content=payload.encode("utf-8")))
+
+    first = await registry.read(resource_id)
+    assert estimate_tokens(first.content) <= MAX_TOOL_OBSERVATION_TOKENS
+    assert first.has_more is True
+    assert first.next_cursor is not None
+
+    combined = first.content
+    current = first
+    while current.has_more:
+        current = await registry.read(resource_id, cursor=current.next_cursor)
+        assert estimate_tokens(current.content) <= MAX_TOOL_OBSERVATION_TOKENS
+        combined = combined + current.content
+    assert combined == payload
 
 
 async def test_cursor_is_bound_to_its_resource() -> None:

@@ -22,6 +22,10 @@ _TEXT_BYTES = bytes(range(0x20, 0x7F)) + b"\t\n\r\f\b\x1b" + bytes(range(0x80, 0
 _BINARY_SAMPLE = 8192
 _BINARY_RATIO = 0.30
 
+# The token estimator's loosest bucket is four characters per token, so a token
+# budget can never span more than this many characters.
+_MAX_CHARS_PER_TOKEN = 4
+
 
 def decode_text(content: bytes, *, declared_charset: str | None) -> str:
     """Decode *content* to text or raise :class:`ResourceDecodeError`."""
@@ -74,23 +78,91 @@ def _looks_binary(content: bytes) -> bool:
 
 
 def build_text_windows(text: str) -> list[tuple[TextWindowLocator, str]]:
-    """Split *text* into contiguous line windows within the observation budget."""
-    lines = text.split("\n")
+    """Split *text* into windows within the observation budget.
+
+    Each window's content is an exact contiguous slice of *text*; concatenating
+    every window's content in order reconstructs *text* with no drop or
+    duplication. Windows normally span whole lines. A single line larger than one
+    observation budget is split into character sub-windows whose locators carry
+    an explicit intra-line character span so the structural locator stays
+    truthful.
+    """
+    segments = text.splitlines(keepends=True)
+    if not segments:
+        return []
+
     windows: list[tuple[TextWindowLocator, str]] = []
-    index = 0
-    total = len(lines)
-    while index < total:
-        start = index
-        window_tokens = 0
-        while index < total:
-            line_tokens = max(1, estimate_tokens(lines[index] + "\n"))
-            if index > start and window_tokens + line_tokens > MAX_TOOL_OBSERVATION_TOKENS:
-                break
-            window_tokens += line_tokens
-            index += 1
-        locator = TextWindowLocator(unit="line", start=start + 1, end=index)
-        windows.append((locator, "\n".join(lines[start:index])))
+    pending: list[str] = []
+    pending_tokens = 0
+    pending_start = 1
+
+    def flush(end_line: int) -> None:
+        nonlocal pending, pending_tokens
+        if pending:
+            windows.append(
+                (
+                    TextWindowLocator(unit="line", start=pending_start, end=end_line),
+                    "".join(pending),
+                )
+            )
+            pending = []
+            pending_tokens = 0
+
+    for offset, segment in enumerate(segments):
+        line_no = offset + 1
+        segment_tokens = max(1, estimate_tokens(segment))
+        if segment_tokens > MAX_TOOL_OBSERVATION_TOKENS:
+            flush(line_no - 1)
+            windows.extend(_split_oversized_line(segment, line_no))
+            continue
+        if pending and pending_tokens + segment_tokens > MAX_TOOL_OBSERVATION_TOKENS:
+            flush(line_no - 1)
+        if not pending:
+            pending_start = line_no
+        pending.append(segment)
+        pending_tokens += segment_tokens
+    flush(len(segments))
     return windows
+
+
+def _split_oversized_line(line: str, line_no: int) -> list[tuple[TextWindowLocator, str]]:
+    """Split one over-budget physical line into intra-line character windows."""
+    windows: list[tuple[TextWindowLocator, str]] = []
+    start = 0
+    length = len(line)
+    while start < length:
+        span = _fit_char_span(line, start)
+        end = start + span
+        locator = TextWindowLocator(
+            unit="line",
+            start=line_no,
+            end=line_no,
+            char_start=start + 1,
+            char_end=end,
+        )
+        windows.append((locator, line[start:end]))
+        start = end
+    return windows
+
+
+def _fit_char_span(line: str, start: int) -> int:
+    """Return the largest character count from *start* within the token budget.
+
+    The estimator never decreases as characters are appended, so a bisection
+    finds the longest prefix that fits; at least one character always advances.
+    """
+    remaining = len(line) - start
+    high = min(remaining, MAX_TOOL_OBSERVATION_TOKENS * _MAX_CHARS_PER_TOKEN)
+    if estimate_tokens(line[start : start + high]) <= MAX_TOOL_OBSERVATION_TOKENS:
+        return high
+    low = 1
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if estimate_tokens(line[start : start + midpoint]) <= MAX_TOOL_OBSERVATION_TOKENS:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return low
 
 
 __all__ = ["build_text_windows", "decode_text"]
