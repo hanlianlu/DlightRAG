@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.utils.image_budget import ImagePayloadBudget
 from dlightrag.utils.images import (
     bounded_embedding_image_data_uri,
     bounded_image_data_uri,
@@ -353,3 +354,148 @@ def _png_bytes(size: tuple[int, int]) -> bytes:
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _jpeg_with_orientation(size: tuple[int, int], orientation: int) -> bytes:
+    image = Image.new("RGB", size, (30, 60, 90))
+    exif = image.getexif()
+    exif[0x0112] = orientation
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=95, exif=exif)
+    return buf.getvalue()
+
+
+def _rgba_bytes(size: tuple[int, int], color: tuple[int, int, int, int]) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGBA", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _b64(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
+
+
+# ── Canonical image normalization path (utils.images.bounded_image_data_uri) ──
+
+
+def test_bounded_image_applies_exif_orientation() -> None:
+    # EXIF orientation 6 means "rotate 90deg CW to display"; the canonical path
+    # must physically transpose a landscape 40x20 source into a 20x40 payload.
+    raw = _jpeg_with_orientation((40, 20), orientation=6)
+
+    bounded = bounded_image_data_uri(
+        _b64(raw),
+        max_bytes=5_000_000,
+        max_px=1536,
+        min_px=16,
+        quality=90,
+        min_quality=72,
+    )
+
+    assert bounded is not None
+    uri, _ = bounded
+    decoded, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(decoded)) as image:
+        assert image.size == (20, 40)
+
+
+def test_bounded_image_composites_alpha_over_white() -> None:
+    # A fully transparent source must flatten to white, never black. Forcing a
+    # re-encode (max_px below the source) routes it through the canonical path.
+    raw = _rgba_bytes((64, 64), (0, 0, 0, 0))
+
+    bounded = bounded_image_data_uri(
+        _b64(raw),
+        max_bytes=5_000_000,
+        max_px=32,
+        min_px=16,
+        quality=90,
+        min_quality=72,
+    )
+
+    assert bounded is not None
+    uri, _ = bounded
+    decoded, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(decoded)) as image:
+        pixel = image.convert("RGB").getpixel((0, 0))
+    assert isinstance(pixel, tuple)
+    assert all(channel > 250 for channel in pixel)
+
+
+def test_bounded_image_rejects_source_over_pixel_ceiling() -> None:
+    raw = _png_bytes((11, 10))  # 110 source pixels
+
+    assert (
+        bounded_image_data_uri(
+            _b64(raw),
+            max_bytes=5_000_000,
+            max_px=1536,
+            max_pixels=100,
+            min_px=16,
+            quality=90,
+            min_quality=72,
+        )
+        is None
+    )
+
+
+def test_bounded_image_descends_long_edge_and_quality_to_fit_bytes() -> None:
+    # Incompressible noise forces the resize/quality ladder to run; the result
+    # must satisfy both the byte budget and the long-edge cap.
+    noise = Image.effect_noise((800, 800), 220).convert("RGB")
+    buf = io.BytesIO()
+    noise.save(buf, format="PNG")
+
+    bounded = bounded_image_data_uri(
+        _b64(buf.getvalue()),
+        max_bytes=20_000,
+        max_px=512,
+        min_px=64,
+        quality=90,
+        min_quality=60,
+    )
+
+    assert bounded is not None
+    uri, byte_count = bounded
+    assert byte_count <= 20_000
+    decoded, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(decoded)) as image:
+        assert max(image.size) <= 512
+
+
+def test_bounded_image_reflects_true_format_over_declared_mime() -> None:
+    raw = _png_bytes((32, 32))
+    lying_uri = f"data:image/jpeg;base64,{_b64(raw)}"
+
+    bounded = bounded_image_data_uri(
+        lying_uri,
+        max_bytes=5_000_000,
+        max_px=1536,
+        min_px=16,
+        quality=90,
+        min_quality=72,
+    )
+
+    assert bounded is not None
+    uri, _ = bounded
+    assert uri.startswith("data:image/png;base64,")
+
+
+def test_image_payload_budget_enforces_per_image_and_total_bounds() -> None:
+    small = _b64(_png_bytes((16, 16)))
+    budget = ImagePayloadBudget(
+        max_total_bytes=len(_png_bytes((16, 16))) + 10,
+        max_bytes_per_image=5_000_000,
+        max_pixels=40_000_000,
+        max_px=1536,
+        min_px=16,
+        quality=90,
+        min_quality=72,
+    )
+
+    first = budget.add_base64(small, label="one")
+    assert first is not None
+    # The aggregate byte budget is now nearly exhausted; the second image cannot
+    # fit and is rejected without corrupting the running totals.
+    assert budget.add_base64(small, label="two") is None
+    assert budget.count == 1

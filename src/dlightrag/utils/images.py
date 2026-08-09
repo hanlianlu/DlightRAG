@@ -8,9 +8,11 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
+
+_EXIF_ORIENTATION_TAG = 0x0112
 
 # Pillow's decompression-bomb guard defaults to ~89.5MP (warn) / ~179MP (raise).
 # DlightRAG ingests large document scans, so raise the decode ceiling: images up
@@ -190,7 +192,8 @@ def bounded_image_data_uri(
             if width <= 0 or height <= 0 or width * height > max_pixels:
                 return None
             if (
-                original_format in _PASSTHROUGH_FORMATS
+                not _has_exif_orientation(original)
+                and original_format in _PASSTHROUGH_FORMATS
                 and original_mime
                 and len(raw) <= max_bytes
                 and max(original.size) <= max_px
@@ -198,7 +201,10 @@ def bounded_image_data_uri(
                 uri = f"data:{original_mime};base64,{base64.b64encode(raw).decode('ascii')}"
                 return uri, len(raw)
 
-            image = original.convert("RGB")
+            # Canonical normalization: bake in EXIF rotation, then composite any
+            # alpha over white before dropping to RGB for JPEG re-encoding.
+            oriented = ImageOps.exif_transpose(original) or original
+            image = flatten_image_to_rgb(oriented)
             image.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
 
             current = image
@@ -238,6 +244,15 @@ def _quality_steps(quality: int, min_quality: int) -> list[int]:
         current = max(min_quality, current - 8)
         values.append(current)
     return values
+
+
+def _has_exif_orientation(image: Image.Image) -> bool:
+    """Return whether the image carries a non-trivial EXIF orientation tag."""
+    try:
+        orientation = image.getexif().get(_EXIF_ORIENTATION_TAG)
+    except Exception:
+        return False
+    return orientation not in (None, 1)
 
 
 def flatten_image_to_rgb(image: Image.Image) -> Image.Image:

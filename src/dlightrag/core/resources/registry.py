@@ -19,7 +19,7 @@ import secrets
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -29,6 +29,7 @@ from dlightrag.core.resources.converters import (
     convert_resource,
     is_convertible,
 )
+from dlightrag.core.resources.lexical import bm25_rank, mixed_script_terms
 from dlightrag.core.resources.models import (
     EXTRACTION_TEXT,
     ResourceAdmissionError,
@@ -43,10 +44,23 @@ from dlightrag.core.resources.models import (
 from dlightrag.core.resources.text import build_text_windows, decode_text
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.sourcing.url import afetch_public_https_bytes, validate_public_https_url
+from dlightrag.utils.images import verify_web_image_bytes
 
 _DEFAULT_MAX_ATTACHMENTS = 6
 _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
+
+_PDF_MIME = "application/pdf"
+
+
+@dataclass(frozen=True)
+class InspectionTarget:
+    """Materialized bytes plus the visual class of one inspectable resource."""
+
+    resource_id: str
+    kind: Literal["image", "pdf", "document", "opaque"]
+    content: bytes
+    media_type: str | None
 
 
 @dataclass
@@ -201,9 +215,9 @@ class ResourceRegistry:
         cursor: str | None = None,
     ) -> ResourceReadResult:
         resource = self._require(resource_id)
-        window_index = 0
+        position = 0
         if cursor is not None:
-            window_index = self._resolve_cursor(
+            position = self._resolve_cursor(
                 cursor, resource_id=resource_id, focus=focus
             ).window_index
 
@@ -219,10 +233,14 @@ class ResourceRegistry:
                 visual_handles=resource_handles,
             )
 
-        index = min(window_index, len(windows) - 1)
-        locator, chunk = windows[index]
-        has_more = index + 1 < len(windows)
-        next_cursor = self._mint_cursor(resource_id, focus, index + 1) if has_more else None
+        # Focus reorders the read sequence without changing any window's bytes or
+        # the <=16K contract. Visual handles ride the first *returned* window so
+        # they are never lost when focus selects a nonzero physical window.
+        order = _focus_order(windows, focus)
+        position = min(position, len(order) - 1)
+        locator, chunk = windows[order[position]]
+        has_more = position + 1 < len(order)
+        next_cursor = self._mint_cursor(resource_id, focus, position + 1) if has_more else None
         return ResourceReadResult(
             resource_id=resource_id,
             locator=locator,
@@ -230,7 +248,7 @@ class ResourceRegistry:
             extraction_status=EXTRACTION_TEXT,
             has_more=has_more,
             next_cursor=next_cursor,
-            visual_handles=resource_handles if index == 0 else (),
+            visual_handles=resource_handles if position == 0 else (),
         )
 
     async def _read_windows(
@@ -261,6 +279,32 @@ class ResourceRegistry:
         )
         self._converted[resource.resource_id] = entry
         return entry
+
+    async def inspection_target(self, resource_id: str) -> InspectionTarget:
+        """Materialize a resource and classify how it can be visually inspected."""
+        resource = self._require(resource_id)
+        content = await self._materialize_bytes(resource)
+        if _is_pdf(resource.filename, resource.declared_mime):
+            return InspectionTarget(resource_id, "pdf", content, _PDF_MIME)
+        if is_convertible(resource.filename, resource.declared_mime):
+            return InspectionTarget(resource_id, "document", content, resource.declared_mime)
+        try:
+            media = verify_web_image_bytes(content)
+        except ValueError:
+            media = None
+        if media is not None:
+            return InspectionTarget(resource_id, "image", content, media)
+        return InspectionTarget(resource_id, "opaque", content, resource.declared_mime)
+
+    async def visual_asset(self, resource_id: str, handle_id: str) -> ExtractedVisual:
+        """Return an embedded visual asset by handle, converting on demand."""
+        resource = self._require(resource_id)
+        if is_convertible(resource.filename, resource.declared_mime):
+            await self._ensure_converted(resource)
+        asset = self._visual_assets.get(handle_id)
+        if asset is None:
+            raise ResourceNotFoundError(f"unknown visual handle: {handle_id}")
+        return asset
 
     async def aclose(self) -> None:
         if self._closed:
@@ -349,6 +393,30 @@ def _normalized_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, ""))
 
 
+def _is_pdf(filename: str | None, declared_mime: str | None) -> bool:
+    if filename and Path(filename).suffix.lower() == ".pdf":
+        return True
+    if declared_mime and declared_mime.split(";", 1)[0].strip().lower() == _PDF_MIME:
+        return True
+    return False
+
+
+def _focus_order(windows: list[tuple[TextWindowLocator, str]], focus: str | None) -> list[int]:
+    """Return read positions ordered by focus relevance, physical order otherwise."""
+    count = len(windows)
+    if not focus or count <= 1:
+        return list(range(count))
+    query_terms = mixed_script_terms(focus)
+    if not query_terms:
+        return list(range(count))
+    documents = [mixed_script_terms(text) for _, text in windows]
+    ranked = bm25_rank(query_terms, documents, limit=count)
+    order = [index for index, _ in ranked]
+    seen = set(order)
+    order.extend(index for index in range(count) if index not in seen)
+    return order
+
+
 def _charset_of(declared_mime: str | None) -> str | None:
     if not declared_mime:
         return None
@@ -359,4 +427,4 @@ def _charset_of(declared_mime: str | None) -> str | None:
     return None
 
 
-__all__ = ["ResourceRegistry", "ResourceRegistryClosedError"]
+__all__ = ["InspectionTarget", "ResourceRegistry", "ResourceRegistryClosedError"]
