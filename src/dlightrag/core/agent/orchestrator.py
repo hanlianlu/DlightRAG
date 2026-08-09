@@ -18,8 +18,6 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.citations.finalization import finalize_answer
-from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.agent.tool_loop import (
     AgentTool,
@@ -41,6 +39,7 @@ KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
 WebSearch = Callable[[str], Awaitable[WebSearchResult]]
 ToolModel = Callable[..., Awaitable[AssistantTurn]]
 StreamModel = Callable[..., AsyncIterator[str]]
+FinalText = Callable[..., Awaitable[str]]
 ScopeModel = Callable[..., Awaitable[BaseModel]]
 
 _SEARCH_TOOL_NAMES = frozenset(
@@ -76,27 +75,6 @@ class AgentProtocolError(RuntimeError):
     """The model violated a required agent turn contract."""
 
 
-class ResearchAnswerStream(AnswerStream):
-    """Citation-validating final stream with request-level research trace."""
-
-    def __init__(
-        self,
-        raw_iterator: AsyncIterator[str],
-        *,
-        indexer: Any,
-        trace: dict[str, Any],
-    ) -> None:
-        super().__init__(raw_iterator, indexer=indexer)
-        self.trace = trace
-        self.image_descriptions: dict[str, str] = {}
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedResearchStream:
-    contexts: RetrievalContexts
-    stream: ResearchAnswerStream
-
-
 @dataclass(slots=True)
 class _RunState:
     session: EvidenceLedger
@@ -108,7 +86,6 @@ class _RunState:
     initial_query: str
     evidence_message: dict[str, Any] | None = None
     last_exchange: list[dict[str, Any]] = field(default_factory=list)
-    force_answer: bool = False
     stop_reason: str = "model_stop"
 
     @property
@@ -128,6 +105,7 @@ class AnswerOrchestrator:
         model_func: ToolModel | None = None,
         scope_model_func: ScopeModel | None = None,
         stream_model_func: StreamModel | None = None,
+        final_text_func: FinalText | None = None,
         resource_tools: list[AgentTool] | None = None,
         has_resources: bool = False,
         context_window_tokens: int = 260_000,
@@ -138,6 +116,7 @@ class AnswerOrchestrator:
         self._model_func = model_func
         self._scope_model_func = scope_model_func
         self._stream_model_func = stream_model_func
+        self._final_text_func = final_text_func
         self._resource_tools = list(resource_tools or [])
         self._has_resources = has_resources
         self._capacity = AnswerCapacity(max(1, context_window_tokens))
@@ -200,14 +179,13 @@ class AnswerOrchestrator:
                 history_images=history_images,
                 initial_contexts=initial_contexts,
             )
-        prepared = await self._prepare_research_stream(
+        return await self._run_research_stream(
             query,
             retrieval_query=retrieval_query,
             conversation_history=conversation_history,
             query_images=query_images,
             initial_contexts=initial_contexts,
         )
-        return prepared.contexts, prepared.stream
 
     # ------------------------------------------------------------------
     # Fast path
@@ -289,42 +267,36 @@ class AnswerOrchestrator:
         await self._run_initial_wave(state)
 
         while True:
-            tools = [] if state.force_answer else state.research_tools
-            tool_choice: Literal["auto", "none"] = "none" if state.force_answer else "auto"
             executed, changed = await self._execute_control_turn(
                 state,
-                tools,
-                tool_choice=tool_choice,
+                state.research_tools,
+                tool_choice="auto",
             )
-
             if not executed.assistant.tool_calls:
-                _, indexer = self._render_evidence(state, final=True)
-                finalized = finalize_answer(
-                    executed.assistant.text,
-                    state.session.contexts,
-                    indexer=indexer,
-                )
-                state.trace["agent_stop_reason"] = state.stop_reason
-                return RetrievalResult(
-                    answer=finalized.answer,
-                    contexts=state.session.contexts,
-                    sources=finalized.sources,
-                    trace=state.trace,
-                )
-
-            if state.force_answer:
-                raise AgentProtocolError("The model called a tool after tools were withdrawn.")
-
+                state.stop_reason = "model_stop"
+                break
             names = {result.call.name for result in executed.results if not result.is_error}
             searched = bool(names & _SEARCH_TOOL_NAMES)
             if "finish_research" in names and not searched:
-                state.force_answer = True
                 state.stop_reason = "finish_research"
-            elif not changed:
-                state.force_answer = True
+                break
+            if not changed:
                 state.stop_reason = "no_new_evidence"
+                break
 
-    async def _prepare_research_stream(
+        if self._final_text_func is None:
+            raise RuntimeError("Research answer requires a tools-disabled final model")
+        final_messages, indexer = self._finalize_transcript(state)
+        state.trace["agent_stop_reason"] = state.stop_reason
+        return await self._synthesizer.synthesize_research(
+            final_messages,
+            state.session.contexts,
+            complete=self._final_text_func,
+            indexer=indexer,
+            trace=state.trace,
+        )
+
+    async def _run_research_stream(
         self,
         query: str,
         *,
@@ -332,7 +304,7 @@ class AnswerOrchestrator:
         conversation_history: list[dict[str, Any]] | None,
         query_images: list[dict[str, Any]] | None,
         initial_contexts: RetrievalContexts | None = None,
-    ) -> PreparedResearchStream:
+    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if self._stream_model_func is None or self._model_func is None:
             raise RuntimeError("Streaming research answer requires a final text stream")
         state = self._new_state(
@@ -363,6 +335,23 @@ class AnswerOrchestrator:
                 state.stop_reason = "no_new_evidence"
                 break
 
+        final_messages, indexer = self._finalize_transcript(state)
+        state.trace["agent_stop_reason"] = state.stop_reason
+        return await self._synthesizer.synthesize_research_stream(
+            final_messages,
+            state.session.contexts,
+            stream=self._stream_model_func,
+            indexer=indexer,
+            trace=state.trace,
+        )
+
+    def _finalize_transcript(self, state: _RunState) -> tuple[list[dict[str, Any]], Any]:
+        """Pack the ledger's final citable evidence beside the tool transcript.
+
+        Returns the tools-disabled final message list and the matching citation
+        indexer so the synthesizer finalizes over the same stable identities the
+        transcript's evidence blocks were numbered from.
+        """
         blocks, indexer = self._render_evidence(state, final=True)
         final_messages = [
             *state.base_messages,
@@ -370,13 +359,7 @@ class AnswerOrchestrator:
             {"role": "user", "content": blocks},
         ]
         self._check_envelope(final_messages)
-        state.trace["agent_stop_reason"] = state.stop_reason
-        stream = ResearchAnswerStream(
-            self._stream_model_func(messages=final_messages),
-            indexer=indexer,
-            trace=state.trace,
-        )
-        return PreparedResearchStream(contexts=state.session.contexts, stream=stream)
+        return final_messages, indexer
 
     # ------------------------------------------------------------------
     # Research helpers
@@ -763,7 +746,5 @@ __all__ = [
     "AgentProtocolError",
     "AnswerOrchestrator",
     "InitialScopeDecision",
-    "PreparedResearchStream",
-    "ResearchAnswerStream",
     "SearchInput",
 ]

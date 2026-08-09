@@ -229,6 +229,94 @@ class AnswerSynthesizer:
         return prepared.contexts, token_iterator
 
     # ------------------------------------------------------------------
+    # Research path: single final owner over a tool transcript
+    # ------------------------------------------------------------------
+
+    async def synthesize_research(
+        self,
+        messages: list[dict[str, Any]],
+        contexts: RetrievalContexts,
+        *,
+        complete: Callable[..., Any],
+        indexer: CitationIndexer,
+        trace: dict[str, Any] | None = None,
+        warnings: list[str] | None = None,
+    ) -> RetrievalResult:
+        """Own the tools-disabled final answer for the non-streaming research path.
+
+        The orchestrator supplies the packed tool transcript ``messages`` (which
+        carries provider-native reasoning signatures), the ledger's citable
+        ``contexts``, and the matching ``indexer``.  This method makes the single
+        tools-disabled final call and owns no-context handling, citation
+        finalization, warnings, and answer media so both answer branches share
+        one final owner.
+        """
+        from dlightrag.citations import finalize_answer
+        from dlightrag.core.answer.media import (
+            answer_blocks_from_markdown,
+            answer_images_from_sources,
+        )
+        from dlightrag.models.schemas import Reference
+
+        collected_warnings = list(warnings or [])
+        result_trace = dict(trace or {})
+        no_context = not _has_research_evidence(contexts)
+
+        raw = await complete(messages=messages)
+        text = str(raw)
+        if no_context:
+            text = _prepend_no_context_disclaimer(text)
+            result_trace["answer_no_context"] = True
+
+        finalized = finalize_answer(text, contexts, indexer=indexer)
+        answer_images = answer_images_from_sources(finalized.sources, contexts=contexts)
+        return RetrievalResult(
+            answer=finalized.answer,
+            contexts=contexts,
+            references=[
+                Reference(id=source.id, title=source.title or "Source")
+                for source in finalized.sources
+            ],
+            sources=finalized.sources,
+            answer_images=answer_images,
+            answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
+            trace=result_trace,
+            warnings=collected_warnings,
+        )
+
+    async def synthesize_research_stream(
+        self,
+        messages: list[dict[str, Any]],
+        contexts: RetrievalContexts,
+        *,
+        stream: Callable[..., AsyncIterator[str]],
+        indexer: CitationIndexer,
+        trace: dict[str, Any] | None = None,
+        warnings: list[str] | None = None,
+    ) -> tuple[RetrievalContexts, AnswerStream]:
+        """Own the tools-disabled final stream for the research path.
+
+        Streaming analogue of :meth:`synthesize_research`.  Wraps the provider's
+        native token stream with :class:`AnswerStream` for post-stream citation
+        validation and exposes one stable ``warnings`` list plus no-context
+        handling, keeping the streaming wrapper under the single final owner.
+        """
+        collected_warnings = list(warnings or [])
+        result_trace = dict(trace or {})
+        no_context = not _has_research_evidence(contexts)
+
+        token_iterator: AsyncIterator[str] = stream(messages=messages)
+        if no_context:
+            token_iterator = _prepend_no_context_stream(token_iterator)
+            result_trace["answer_no_context"] = True
+
+        wrapped = AnswerStream(token_iterator, indexer=indexer)
+        cast(Any, wrapped).trace = result_trace
+        cast(Any, wrapped).warnings = collected_warnings
+        cast(Any, wrapped).image_descriptions = {}
+        return contexts, wrapped
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -588,6 +676,11 @@ async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:
         return
     async for token in token_iterator:
         yield token
+
+
+def _has_research_evidence(contexts: RetrievalContexts) -> bool:
+    """A research answer is grounded when the ledger accumulated any context."""
+    return any(contexts.get(key) for key in ("chunks", "entities", "relationships"))
 
 
 def _has_answer_evidence(

@@ -364,9 +364,10 @@ def test_answer_contracts_reject_bm25_query(model) -> None:
 
 
 @pytest.mark.parametrize("model", [AnswerRequest, AnswerInput])
-def test_answer_contracts_require_positive_answer_context_limit(model) -> None:
+def test_answer_contracts_reject_answer_context_top_k(model) -> None:
+    assert "answer_context_top_k" not in model.model_fields
     with pytest.raises(ValidationError):
-        model.model_validate({"query": "q", "answer_context_top_k": 0})
+        model.model_validate({"query": "q", "answer_context_top_k": 3})
 
 
 def test_mcp_query_images_stay_non_nullable_with_list_default() -> None:

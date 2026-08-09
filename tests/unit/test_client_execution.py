@@ -60,7 +60,6 @@ async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
         workspaces=["finance"],
         top_k=6,
         chunk_top_k=4,
-        answer_context_top_k=2,
         filters={"title": "Runbook"},
         query_images=[
             QueryImage.model_validate(
@@ -88,7 +87,6 @@ async def test_execute_answer_projects_history_and_answer_kwargs() -> None:
     assert call_kwargs["workspaces"] == ["finance"]
     assert call_kwargs["top_k"] == 6
     assert call_kwargs["chunk_top_k"] == 4
-    assert call_kwargs["answer_context_top_k"] == 2
     assert call_kwargs["semantic_highlights"] is True
     assert call_kwargs["history"] == [
         {"role": "user", "content": "Earlier question"},

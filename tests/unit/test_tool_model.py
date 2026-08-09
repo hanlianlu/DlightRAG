@@ -170,6 +170,39 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
     }
 
 
+async def test_query_tool_model_completes_final_text_through_owned_provider(monkeypatch) -> None:
+    provider = AsyncMock()
+    provider.complete_tool_turn = AsyncMock(
+        return_value=AssistantTurn(text="final answer", tool_calls=(), stop_reason="stop")
+    )
+    monkeypatch.setattr(
+        "dlightrag.models.tool_model.get_provider",
+        lambda *_args, **_kwargs: provider,
+    )
+    cfg = DlightragConfig(
+        llm=LLMConfig(default=ModelConfig(provider="openai", model="query-model", api_key="key")),
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="embedding-key",
+            startup_probe=False,
+        ),
+    )
+    model = create_query_tool_model(cfg)
+    messages = [{"role": "user", "content": "answer now"}]
+
+    output = await model.complete_text(messages=messages)
+
+    assert output == "final answer"
+    provider.complete_tool_turn.assert_awaited_once_with(
+        messages,
+        "query-model",
+        tools=[],
+        temperature=None,
+        model_kwargs={},
+    )
+
+
 async def test_query_tool_model_selects_scope_with_direct_structured_output(monkeypatch) -> None:
     provider = AsyncMock()
     provider.supports_native_json_schema = False

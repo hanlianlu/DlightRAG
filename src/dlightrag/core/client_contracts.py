@@ -104,7 +104,6 @@ class AnswerRequestContract(QueryRequestContract):
     """Shared transport-neutral contract for answer requests."""
 
     query_images: list[QueryImage] | None = Field(default=None, max_length=MAX_QUERY_IMAGES)
-    answer_context_top_k: int | None = Field(default=None, ge=1)
     semantic_highlights: bool = False
     history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
 

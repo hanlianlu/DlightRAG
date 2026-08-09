@@ -90,8 +90,6 @@ def test_answer_payload_supports_current_answer_options() -> None:
             "summarize",
             "--chunk-top-k",
             "9",
-            "--answer-context-top-k",
-            "4",
             "--filters-json",
             '{"author":"Ada"}',
             "--query-image",
@@ -103,7 +101,6 @@ def test_answer_payload_supports_current_answer_options() -> None:
         "query": "summarize",
         "stream": False,
         "chunk_top_k": 9,
-        "answer_context_top_k": 4,
         "filters": {"author": "Ada"},
         "query_images": [_image_block("https://example.test/chart.png")],
     }
@@ -112,7 +109,7 @@ def test_answer_payload_supports_current_answer_options() -> None:
 def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> None:
     args = _parse_chat(
         [
-            "--answer-context-top-k",
+            "--chunk-top-k",
             "3",
         ]
     )
@@ -120,7 +117,7 @@ def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> Non
     assert _build_answer_payload(args, query="Follow up") == {
         "query": "Follow up",
         "stream": False,
-        "answer_context_top_k": 3,
+        "chunk_top_k": 3,
     }
 
 

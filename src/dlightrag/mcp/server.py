@@ -335,10 +335,6 @@ async def answer_tool(
         int | None,
         Field(default=None, description="Vector chunk candidate count override for this answer"),
     ] = None,
-    answer_context_top_k: Annotated[
-        int | None,
-        Field(default=None, description="Maximum chunks included in the final answer prompt"),
-    ] = None,
     workspaces: Annotated[
         list[str] | None,
         Field(default=None, description="Workspace names to search. Omit for default."),

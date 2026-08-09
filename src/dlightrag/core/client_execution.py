@@ -42,7 +42,6 @@ async def execute_answer(
         workspaces=resolved_workspaces,
         top_k=payload.top_k,
         chunk_top_k=payload.chunk_top_k,
-        answer_context_top_k=payload.answer_context_top_k,
         semantic_highlights=payload.semantic_highlights,
         history=conversation_history_as_dicts(payload.history),
         scope=scope,

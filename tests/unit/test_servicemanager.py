@@ -2743,6 +2743,7 @@ class TestAgenticAnswerCapability:
 
     async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
         from dlightrag.core.agent.orchestrator import InitialScopeDecision
+        from dlightrag.core.answer.synthesizer import AnswerSynthesizer
         from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
         from dlightrag.models.tool_turn import AssistantTurn
 
@@ -2790,26 +2791,28 @@ class TestAgenticAnswerCapability:
         manager._web_search = web
         model = AsyncMock(
             return_value=AssistantTurn(
-                text="Answer [1-1][2-1].",
+                text="draft control turn text",
                 tool_calls=(),
                 stop_reason="stop",
             )
         )
         model.complete_structured.return_value = InitialScopeDecision(include_web=True)
+        model.complete_text = AsyncMock(return_value="Answer [1-1][2-1].")
         manager._query_tool_model = model
-        manager._answer_engine = MagicMock()
+        # A real synthesizer owns the tools-disabled final call for research too.
+        manager._answer_engine = AnswerSynthesizer(image_max_pixels=40_000_000, model_func=None)
 
         result = await manager.aanswer("What about it?", workspace="alpha")
 
         assert result.answer == "Answer [1-1][2-1]."
         assert [source.id for source in result.sources] == ["1", "2"]
+        model.complete_text.assert_awaited_once()
         manager._describe_and_plan.assert_awaited_once()  # type: ignore[attr-defined]
         retrieve_call = manager.aretrieve.await_args  # type: ignore[attr-defined]
         assert retrieve_call is not None
         assert retrieve_call.args[0] == "What about it?"
         assert retrieve_call.kwargs["plan"] is plan
         web.search.assert_awaited_once_with("inflation 2026")
-        manager._answer_engine.generate.assert_not_called()
 
     async def test_agentic_stream_keeps_slots_until_disconnect(self, test_cfg) -> None:
         from dlightrag.citations.streaming import aclose_answer_stream
@@ -2906,3 +2909,95 @@ class TestAgenticAnswerCapability:
         assert model.closed.is_set()
         assert not manager._answer_stream_sem.locked()
         assert not manager._direct_llm_sem.locked()
+
+
+# ---------------------------------------------------------------------------
+# _ScopedAnswerStream must await its cleanup exactly once, never fire-and-forget.
+# ---------------------------------------------------------------------------
+
+
+async def test_scoped_answer_stream_awaits_on_close_on_natural_exhaustion() -> None:
+    from dlightrag.core.servicemanager import _ScopedAnswerStream
+
+    calls = 0
+    closed = asyncio.Event()
+
+    async def on_close() -> None:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        closed.set()
+
+    async def inner() -> AsyncIterator[str]:
+        yield "a"
+        yield "b"
+
+    sem = asyncio.Semaphore(1)
+    await sem.acquire()
+    stream = _ScopedAnswerStream(inner(), sem, on_close=on_close)
+
+    tokens = [token async for token in stream]
+
+    assert tokens == ["a", "b"]
+    # on_close was awaited before StopAsyncIteration propagated -- not scheduled.
+    assert closed.is_set()
+    assert calls == 1
+    # The semaphore slot is released exactly once.
+    assert not sem.locked()
+    # No background task was left running.
+    others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    assert others == []
+    # Cleanup is idempotent: a later aclose does not run on_close again.
+    await stream.aclose()
+    assert calls == 1
+    assert not sem.locked()
+
+
+async def test_scoped_answer_stream_releases_slot_when_on_close_raises() -> None:
+    from dlightrag.core.servicemanager import _ScopedAnswerStream
+
+    async def on_close() -> None:
+        raise RuntimeError("cleanup boom")
+
+    async def inner() -> AsyncIterator[str]:
+        yield "only"
+
+    sem = asyncio.Semaphore(1)
+    await sem.acquire()
+    stream = _ScopedAnswerStream(inner(), sem, on_close=on_close)
+
+    with pytest.raises(RuntimeError, match="cleanup boom"):
+        async for _ in stream:
+            pass
+
+    # Even when cleanup raises, the slot is released and no task lingers.
+    assert not sem.locked()
+    others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    assert others == []
+
+
+async def test_scoped_answer_stream_awaits_on_close_on_explicit_aclose() -> None:
+    from dlightrag.core.servicemanager import _ScopedAnswerStream
+
+    calls = 0
+
+    async def on_close() -> None:
+        nonlocal calls
+        calls += 1
+
+    async def inner() -> AsyncIterator[str]:
+        yield "a"
+        yield "b"
+
+    sem = asyncio.Semaphore(1)
+    await sem.acquire()
+    stream = _ScopedAnswerStream(inner(), sem, on_close=on_close)
+
+    assert await stream.__anext__() == "a"
+    await stream.aclose()
+
+    assert calls == 1
+    assert not sem.locked()
+    # Idempotent across a second aclose.
+    await stream.aclose()
+    assert calls == 1

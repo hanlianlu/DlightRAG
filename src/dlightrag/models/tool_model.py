@@ -103,6 +103,40 @@ class QueryToolModel:
                     cost_details=usage_holder.get("cost_details"),
                 )
 
+    async def complete_text(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+    ) -> str:
+        """Return a tools-disabled final answer from a rich tool transcript.
+
+        Non-streaming analogue of :meth:`stream_text`. Reuses the provider's
+        tool-transcript path with no tools offered, so provider-native reasoning
+        signatures in the transcript are preserved while the model can only emit
+        text.
+        """
+        from dlightrag.observability import trace_observation
+
+        async with trace_observation(
+            "agent_final_answer",
+            as_type="generation",
+            input={"message_count": len(messages)},
+            metadata={"model": self._config.model},
+        ) as trace:
+            turn = await self._provider.complete_tool_turn(
+                messages,
+                self._config.model,
+                tools=[],
+                temperature=self._config.temperature,
+                model_kwargs=self._model_kwargs,
+            )
+            trace.update(
+                output={"text_length": len(turn.text)},
+                usage_details=turn.usage_details,
+                cost_details=turn.cost_details,
+            )
+            return turn.text
+
     async def complete_structured(
         self,
         *,

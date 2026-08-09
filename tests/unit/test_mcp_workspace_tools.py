@@ -515,7 +515,6 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "workspaces": ["default"],
             "top_k": 8,
             "chunk_top_k": 12,
-            "answer_context_top_k": 4,
             "query_images": [
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
             ],
@@ -537,7 +536,6 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert call_kwargs["workspaces"] == ["default"]
     assert call_kwargs["top_k"] == 8
     assert call_kwargs["chunk_top_k"] == 12
-    assert call_kwargs["answer_context_top_k"] == 4
     assert call_kwargs["query_images"] == [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
     ]

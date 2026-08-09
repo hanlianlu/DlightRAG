@@ -557,7 +557,6 @@ async for token in token_iter:
 | `top_k` | `int \| None` | config default | LightRAG KG breadth: entities in local retrieval and relationships in global retrieval. |
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `bm25_query` | `str \| None` | `None` | `retrieve` only. Optional workspace BM25 query override; when omitted, the planner supplies lexical terms or retrieval uses the main query. REST and MCP inputs are capped at 1,024 characters. |
-| `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |

@@ -131,8 +131,6 @@ def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
 def _apply_query_options(
     payload: dict[str, Any],
     args: argparse.Namespace,
-    *,
-    include_answer_limits: bool = False,
 ) -> dict[str, Any]:
     if args.top_k is not None:
         payload["top_k"] = args.top_k
@@ -148,10 +146,6 @@ def _apply_query_options(
     if args.query_images:
         payload["query_images"] = query_image_blocks_from_urls(args.query_images)
 
-    if include_answer_limits:
-        if args.answer_context_top_k is not None:
-            payload["answer_context_top_k"] = args.answer_context_top_k
-
     return payload
 
 
@@ -161,7 +155,7 @@ def _build_answer_payload(
     query: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"query": query, "stream": False}
-    return _apply_query_options(payload, args, include_answer_limits=True)
+    return _apply_query_options(payload, args)
 
 
 def _answer_images_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -369,7 +363,6 @@ def _add_filter_options(parser: argparse.ArgumentParser) -> None:
 def _add_retrieval_options(
     parser: argparse.ArgumentParser,
     *,
-    include_answer_limits: bool = False,
     include_chunk_top_k: bool = False,
 ) -> None:
     parser.add_argument("--top-k", type=int, default=None, dest="top_k")
@@ -384,14 +377,6 @@ def _add_retrieval_options(
         dest="query_images",
         help="User-attached image URL or data URI; repeat up to 3 times",
     )
-    if include_answer_limits:
-        parser.add_argument(
-            "--answer-context-top-k",
-            type=int,
-            default=None,
-            dest="answer_context_top_k",
-            help="Maximum chunks included in the final answer prompt",
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -497,11 +482,11 @@ def build_parser() -> argparse.ArgumentParser:
     # -- answer --
     p_answer = sub.add_parser("answer", help="LLM-generated answer with contexts and sources")
     p_answer.add_argument("query", help="Question to answer")
-    _add_retrieval_options(p_answer, include_answer_limits=True, include_chunk_top_k=True)
+    _add_retrieval_options(p_answer, include_chunk_top_k=True)
 
     # -- chat --
     p_chat = sub.add_parser("chat", help="Interactive multi-turn conversation")
-    _add_retrieval_options(p_chat, include_answer_limits=True, include_chunk_top_k=True)
+    _add_retrieval_options(p_chat, include_chunk_top_k=True)
 
     return parser
 

@@ -257,7 +257,6 @@ async def answer(
                     workspaces=resolved_workspaces,
                     top_k=body.top_k,
                     chunk_top_k=body.chunk_top_k,
-                    answer_context_top_k=body.answer_context_top_k,
                     history=history,
                     scope=scope,
                     **kwargs,

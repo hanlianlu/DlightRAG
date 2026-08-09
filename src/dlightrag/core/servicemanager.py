@@ -101,7 +101,7 @@ class _ScopedAnswerStream:
         self._semaphore = semaphore
         self._released = False
         self._on_close = on_close
-        self._on_close_done = False
+        self._completed = False
 
     def __aiter__(self) -> _ScopedAnswerStream:
         return self
@@ -110,10 +110,10 @@ class _ScopedAnswerStream:
         try:
             return await self._aiter.__anext__()
         except StopAsyncIteration:
-            self._finish()
+            await self._acomplete()
             raise
         except BaseException:
-            self._finish()
+            await self._acomplete()
             raise
 
     async def aclose(self) -> None:
@@ -124,10 +124,7 @@ class _ScopedAnswerStream:
                 if inspect.isawaitable(result):
                     await cast(Awaitable[Any], result)
         finally:
-            if self._on_close is not None and not self._on_close_done:
-                self._on_close_done = True
-                await self._on_close()
-            self._release()
+            await self._acomplete()
 
     @property
     def answer(self) -> str:
@@ -149,11 +146,20 @@ class _ScopedAnswerStream:
     def image_descriptions(self, value: Any) -> None:
         self._inner.image_descriptions = value  # type: ignore[attr-defined]
 
-    def _finish(self) -> None:
-        if self._on_close is not None and not self._on_close_done:
-            self._on_close_done = True
-            asyncio.ensure_future(self._on_close())
-        self._release()
+    async def _acomplete(self) -> None:
+        """Await cleanup exactly once on exhaustion, aclose, error, or cancel.
+
+        The registry close is awaited (never fire-and-forget) and the semaphore
+        slot is always released, even if the close callback raises.
+        """
+        if self._completed:
+            return
+        self._completed = True
+        try:
+            if self._on_close is not None:
+                await self._on_close()
+        finally:
+            self._release()
 
     def _release(self) -> None:
         if not self._released:
@@ -1520,6 +1526,7 @@ class RAGServiceManager:
         model_func: Callable[..., Any] | None = None
         scope_model_func: Callable[..., Any] | None = None
         stream_model_func: Callable[..., AsyncIterator[str]] | None = None
+        final_text_func: Callable[..., Awaitable[str]] | None = None
         if research:
             tool_model = self._get_query_tool_model()
 
@@ -1530,6 +1537,10 @@ class RAGServiceManager:
             async def _scope_model_func(**kwargs: Any) -> Any:
                 async with self._direct_llm_sem:
                     return await tool_model.complete_structured(**kwargs)
+
+            async def _final_text_func(**kwargs: Any) -> str:
+                async with self._direct_llm_sem:
+                    return await tool_model.complete_text(**kwargs)
 
             def _stream_model_func(**kwargs: Any) -> AsyncIterator[str]:
                 async def _bounded() -> AsyncIterator[str]:
@@ -1553,6 +1564,7 @@ class RAGServiceManager:
             model_func = _model_func
             scope_model_func = _scope_model_func
             stream_model_func = _stream_model_func
+            final_text_func = _final_text_func
 
         if research:
             image_budget = self._new_answer_image_budget()
@@ -1571,6 +1583,7 @@ class RAGServiceManager:
             model_func=model_func,
             scope_model_func=scope_model_func,
             stream_model_func=stream_model_func,
+            final_text_func=final_text_func,
             resource_tools=resource_tools,
             has_resources=has_resources,
             context_window_tokens=self._config.answer.context_window_tokens,
@@ -1851,7 +1864,6 @@ class RAGServiceManager:
         all_workspaces: bool = False,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
-        answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         query_images: list[dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
@@ -1890,7 +1902,6 @@ class RAGServiceManager:
         all_workspaces: bool = False,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
-        answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         query_images: list[dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
@@ -1920,7 +1931,6 @@ class RAGServiceManager:
         all_workspaces: bool = False,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
-        answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
