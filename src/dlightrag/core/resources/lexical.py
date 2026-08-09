@@ -1,13 +1,28 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""In-memory BM25 for Web Composer document chunks."""
+"""Resource-neutral lexical focus ranking.
+
+A single mixed-script tokenizer emits Unicode words plus CJK unigrams and
+overlapping bigrams so Latin and CJK queries share one BM25 index. The ranking
+core is source agnostic: it operates on tokenized documents and returns their
+indices, so any caller (structural resource windows, Composer rows) can reuse it
+without pulling in a domain shape.
+"""
 
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
 
 import bm25s
 
-from dlightrag.core.retrieval.protocols import ContextRow
+
+@runtime_checkable
+class StructuralWindow(Protocol):
+    """A rankable resource window that exposes its readable text."""
+
+    @property
+    def text(self) -> str: ...
 
 
 def _is_cjk_char(char: str) -> bool:
@@ -62,26 +77,31 @@ def mixed_script_terms(text: str) -> list[str]:
     return terms
 
 
-def rank_composer_bm25(
-    query: str,
-    rows: list[ContextRow],
+def bm25_rank(
+    query_terms: Sequence[str],
+    documents: Sequence[Sequence[str]],
     *,
     limit: int,
-) -> list[ContextRow]:
-    """Rank Composer rows with Lucene BM25 and discard every zero-score hit."""
-    query_terms = mixed_script_terms(query)
-    if not rows or limit <= 0 or not query_terms:
+) -> list[tuple[int, float]]:
+    """Rank tokenized *documents* against *query_terms* with Lucene BM25.
+
+    Returns ``(document_index, score)`` pairs, most relevant first, with every
+    zero-score hit discarded. Empty documents are skipped but their original
+    positions are preserved in the returned indices. An empty query, empty
+    corpus, or non-positive ``limit`` yields no results.
+    """
+    if limit <= 0 or not query_terms:
         return []
 
-    indexed_rows: list[tuple[int, list[str]]] = []
+    indexed: list[tuple[int, list[str]]] = []
     vocabulary: set[str] = set()
-    for row_index, row in enumerate(rows):
-        terms = mixed_script_terms(str(row.get("content") or ""))
-        if not terms:
+    for position, terms in enumerate(documents):
+        token_list = list(terms)
+        if not token_list:
             continue
-        indexed_rows.append((row_index, terms))
-        vocabulary.update(terms)
-    if not indexed_rows:
+        indexed.append((position, token_list))
+        vocabulary.update(token_list)
+    if not indexed:
         return []
 
     known_query_terms = [term for term in query_terms if term in vocabulary]
@@ -97,26 +117,36 @@ def rank_composer_bm25(
         auto_compile=False,
     )
     retriever.index(
-        [terms for _, terms in indexed_rows],
+        [terms for _, terms in indexed],
         create_empty_token=False,
         show_progress=False,
     )
     result_ids, result_scores = retriever.retrieve(
         [known_query_terms],
-        k=min(limit, len(indexed_rows)),
+        k=min(limit, len(indexed)),
         show_progress=False,
     )
 
-    ranked: list[ContextRow] = []
+    ranked: list[tuple[int, float]] = []
     for raw_index, raw_score in zip(result_ids[0], result_scores[0], strict=True):
         score = float(raw_score)
         if score <= 0:
             continue
-        source_index = indexed_rows[int(raw_index)][0]
-        row = dict(rows[source_index])
-        row["relevance_score"] = score
-        ranked.append(row)
+        ranked.append((indexed[int(raw_index)][0], score))
     return ranked
 
 
-__all__ = ["mixed_script_terms", "rank_composer_bm25"]
+def rank_resource_windows[W: StructuralWindow](
+    query: str,
+    windows: Sequence[W],
+    *,
+    limit: int,
+) -> list[W]:
+    """Return the most query-relevant *windows*, discarding zero-score matches."""
+    query_terms = mixed_script_terms(query)
+    documents = [mixed_script_terms(window.text) for window in windows]
+    ranked = bm25_rank(query_terms, documents, limit=limit)
+    return [windows[index] for index, _ in ranked]
+
+
+__all__ = ["StructuralWindow", "bm25_rank", "mixed_script_terms", "rank_resource_windows"]

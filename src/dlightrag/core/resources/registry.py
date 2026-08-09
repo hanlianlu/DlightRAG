@@ -24,6 +24,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from dlightrag.core.resources.converters import (
+    ExtractedVisual,
+    convert_resource,
+    is_convertible,
+)
 from dlightrag.core.resources.models import (
     EXTRACTION_TEXT,
     ResourceAdmissionError,
@@ -32,6 +37,8 @@ from dlightrag.core.resources.models import (
     ResourceManifestEntry,
     ResourceNotFoundError,
     ResourceReadResult,
+    TextWindowLocator,
+    VisualHandle,
 )
 from dlightrag.core.resources.text import build_text_windows, decode_text
 from dlightrag.sourcing.source_contract import safe_source_filename
@@ -60,6 +67,12 @@ class _CursorState:
     window_index: int
 
 
+@dataclass
+class _ConvertedResource:
+    windows: list[tuple[TextWindowLocator, str]]
+    handles: tuple[VisualHandle, ...]
+
+
 class ResourceRegistry:
     """Own answer resources for one request and expose bounded reads."""
 
@@ -85,6 +98,8 @@ class ResourceRegistry:
         self._fetched: dict[str, bytes] = {}
         self._cursors: dict[str, _CursorState] = {}
         self._paths: dict[str, Path] = {}
+        self._converted: dict[str, _ConvertedResource] = {}
+        self._visual_assets: dict[str, ExtractedVisual] = {}
         self._tempdir: tempfile.TemporaryDirectory[str] | None = None
         self._total_bytes = 0
         self._closed = False
@@ -192,9 +207,7 @@ class ResourceRegistry:
                 cursor, resource_id=resource_id, focus=focus
             ).window_index
 
-        content = await self._materialize_bytes(resource)
-        text = decode_text(content, declared_charset=_charset_of(resource.declared_mime))
-        windows = build_text_windows(text)
+        windows, resource_handles = await self._read_windows(resource)
         if not windows:
             return ResourceReadResult(
                 resource_id=resource_id,
@@ -203,7 +216,7 @@ class ResourceRegistry:
                 extraction_status=EXTRACTION_TEXT,
                 has_more=False,
                 next_cursor=None,
-                visual_handles=(),
+                visual_handles=resource_handles,
             )
 
         index = min(window_index, len(windows) - 1)
@@ -217,8 +230,37 @@ class ResourceRegistry:
             extraction_status=EXTRACTION_TEXT,
             has_more=has_more,
             next_cursor=next_cursor,
-            visual_handles=(),
+            visual_handles=resource_handles if index == 0 else (),
         )
+
+    async def _read_windows(
+        self, resource: _Registered
+    ) -> tuple[list[tuple[TextWindowLocator, str]], tuple[VisualHandle, ...]]:
+        if is_convertible(resource.filename, resource.declared_mime):
+            converted = await self._ensure_converted(resource)
+            return converted.windows, converted.handles
+        content = await self._materialize_bytes(resource)
+        text = decode_text(content, declared_charset=_charset_of(resource.declared_mime))
+        return build_text_windows(text), ()
+
+    async def _ensure_converted(self, resource: _Registered) -> _ConvertedResource:
+        cached = self._converted.get(resource.resource_id)
+        if cached is not None:
+            return cached
+        content = await self._materialize_bytes(resource)
+        converted = await convert_resource(
+            content, filename=resource.filename, declared_mime=resource.declared_mime
+        )
+        handles: list[VisualHandle] = []
+        for visual in converted.visuals:
+            self._visual_assets[visual.handle_id] = visual
+            handles.append(VisualHandle(handle_id=visual.handle_id, label=visual.anchor))
+        entry = _ConvertedResource(
+            windows=build_text_windows(converted.text),
+            handles=tuple(handles),
+        )
+        self._converted[resource.resource_id] = entry
+        return entry
 
     async def aclose(self) -> None:
         if self._closed:
@@ -232,6 +274,8 @@ class ResourceRegistry:
                 self._tempdir.cleanup()
                 self._tempdir = None
             self._paths.clear()
+            self._converted.clear()
+            self._visual_assets.clear()
 
     @property
     def has_temp_storage(self) -> bool:

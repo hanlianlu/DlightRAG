@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from dlightrag.core.request.attachments import ATTACHMENT_CONTEXT_TOKEN_LIMIT
-from dlightrag.core.request.composer_lexical import rank_composer_bm25
+from dlightrag.core.resources.lexical import bm25_rank, mixed_script_terms
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import ContextRow
 from dlightrag.core.retrieval.rerank import rerank_with_fallback
@@ -26,6 +26,17 @@ COMPOSER_CANDIDATE_LIMIT = 30
 
 _STRUCTURE_RE = re.compile(r"(?im)^\s*(?:#{1,6}\s+|\[(?:table|image|equation) name\]|\[table\])")
 _STRUCTURAL_TYPES = frozenset({"table", "drawing", "image", "figure", "equation"})
+
+
+def rank_composer_bm25(query: str, rows: list[ContextRow], *, limit: int) -> list[ContextRow]:
+    """Rank Composer rows by mixed-script BM25, dropping every zero-score hit."""
+    documents = [mixed_script_terms(str(row.get("content") or "")) for row in rows]
+    ranked: list[ContextRow] = []
+    for index, score in bm25_rank(mixed_script_terms(query), documents, limit=limit):
+        row = dict(rows[index])
+        row["relevance_score"] = score
+        ranked.append(row)
+    return ranked
 
 
 class ComposerEvidenceSelector:
