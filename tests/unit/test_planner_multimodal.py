@@ -341,7 +341,6 @@ async def test_web_planner_drops_oldest_history_first(
         captured_messages = kwargs["messages"]
         return '{"standalone_query":"recent topic","filters":{}}'
 
-    monkeypatch.setattr(planner_module, "_PLANNER_INPUT_TOKEN_ENVELOPE", 3_500)
     history = [
         {"role": role, "content": f"TURN-{turn}-{role} " + ("history " * 250)}
         for turn in (1, 2, 3)
@@ -357,7 +356,7 @@ async def test_web_planner_drops_oldest_history_first(
         }
         for turn in (1, 2, 3)
     ]
-    await QueryPlanner(llm_func=llm_func).plan_web_conversation(
+    await QueryPlanner(llm_func=llm_func, input_token_envelope=3_500).plan_web_conversation(
         "latest question",
         conversation_history=history,
         attachment_catalog=documents,
@@ -431,7 +430,6 @@ async def test_web_planner_drops_oldest_catalog_entries_when_needed(
         captured_messages = kwargs["messages"]
         return '{"standalone_query":"q","filters":{}}'
 
-    monkeypatch.setattr(planner_module, "_PLANNER_INPUT_TOKEN_ENVELOPE", 2_000)
     documents = [
         {
             "attachment_id": f"att-{turn}",
@@ -442,7 +440,7 @@ async def test_web_planner_drops_oldest_catalog_entries_when_needed(
         }
         for turn in (1, 2, 3)
     ]
-    await QueryPlanner(llm_func=llm_func).plan_web_conversation(
+    await QueryPlanner(llm_func=llm_func, input_token_envelope=2_000).plan_web_conversation(
         "query",
         attachment_catalog=documents,
         schema={},

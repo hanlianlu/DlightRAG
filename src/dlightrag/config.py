@@ -436,11 +436,6 @@ class AnswerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    context_top_k: int = Field(
-        default=30,
-        ge=1,
-        description="Maximum chunks included in the final answer LLM prompt.",
-    )
     context_window_tokens: int = Field(
         default=260_000,
         ge=1,
@@ -1016,7 +1011,6 @@ class DlightragConfig(BaseSettings):
     max_relation_tokens: int = Field(default=8000, ge=1)
     max_total_tokens: int = Field(default=40000, ge=1)
     max_conversation_turns: int = Field(default=50, ge=0)
-    max_conversation_tokens: int = Field(default=81_920, ge=0)
 
     # ===== Knowledge Graph =====
     kg_chunk_pick_method: Literal["VECTOR", "WEIGHT"] = Field(

@@ -17,6 +17,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://api.exa.ai/search"
+_CONTENTS_ENDPOINT = "https://api.exa.ai/contents"
 
 # A rejected key or an empty balance is not a blip, so asking again next turn
 # only buys a round trip and another warning. Long enough to top up an account,
@@ -99,6 +100,43 @@ class ExaSearch:
             raise WebSearchUnavailable(reason)
         if response.is_error:
             logger.warning("Web search returned HTTP %d", response.status_code)
+            raise WebSearchUnavailable("error")
+        return _read_result(response.json())
+
+    async def contents(self, url: str) -> WebSearchResult:
+        """Fetch the text of one known URL through Exa Contents.
+
+        This is the single known-URL fallback used only after a safe direct
+        fetch or local conversion has failed or come back empty. It never
+        crawls discovered links on its own; the caller registers any returned
+        page as an inert resource handle and reads it explicitly.
+        """
+        parked = self._parked_reason()
+        if parked is not None:
+            raise WebSearchUnavailable(parked)
+
+        try:
+            response = await self._client.post(
+                _CONTENTS_ENDPOINT,
+                headers={"x-api-key": self._api_key},
+                json={
+                    "urls": [url],
+                    "text": True,
+                    "highlights": {"maxCharacters": _HIGHLIGHT_MAX_CHARACTERS},
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise WebSearchUnavailable("timeout") from exc
+        except httpx.HTTPError as exc:
+            raise WebSearchUnavailable("unreachable") from exc
+
+        reason = _PARKING_STATUS.get(response.status_code)
+        if reason is not None:
+            self._parked = (reason, time.monotonic() + _PARK_SECONDS)
+            logger.warning("Web search parked for %d minutes: %s", _PARK_SECONDS // 60, reason)
+            raise WebSearchUnavailable(reason)
+        if response.is_error:
+            logger.warning("Web contents returned HTTP %d", response.status_code)
             raise WebSearchUnavailable("error")
         return _read_result(response.json())
 

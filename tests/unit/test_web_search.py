@@ -80,6 +80,45 @@ async def test_the_reported_cost_is_carried_back_to_the_caller() -> None:
 
 
 @pytest.mark.asyncio
+async def test_contents_fetches_known_url_text_via_the_contents_endpoint() -> None:
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append({"url": str(request.url), "body": json.loads(request.content)})
+        return httpx.Response(200, json={"results": [{**_PAGE, "text": "Body text."}]})
+
+    search = ExaSearch("k", client=_client(handler))
+
+    result = await search.contents("https://example.org/taylor")
+
+    assert seen[0]["url"] == "https://api.exa.ai/contents"
+    assert seen[0]["body"]["urls"] == ["https://example.org/taylor"]
+    assert seen[0]["body"]["text"] is True
+    assert result.hits[-1].text == "Body text."
+
+
+@pytest.mark.asyncio
+async def test_contents_respects_the_same_parking_as_search() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(401, json={})
+
+    search = ExaSearch("k", client=_client(handler))
+
+    with pytest.raises(WebSearchUnavailable) as first:
+        await search.contents("https://a/x")
+    with pytest.raises(WebSearchUnavailable) as second:
+        await search.contents("https://a/x")
+
+    assert first.value.reason == "unauthorized"
+    assert second.value.reason == "unauthorized"
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_an_empty_balance_stops_the_next_search_before_it_leaves_the_process() -> None:
     calls = 0
 

@@ -5,6 +5,7 @@ import asyncio
 import dataclasses
 import importlib
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -15,7 +16,6 @@ import pytest
 
 from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.config import (
-    AnswerConfig,
     DlightragConfig,
     EmbeddingConfig,
     LLMConfig,
@@ -36,6 +36,23 @@ def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": url}}
 
 
+class _AttrStream:
+    """Async token stream that accepts dynamic ``trace``/``answer`` attributes."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self._tokens = tokens
+        self.trace: dict[str, Any] = {}
+        self.image_descriptions: dict[str, str] = {}
+        self.answer = "".join(tokens)
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        async def _gen() -> AsyncIterator[str]:
+            for token in self._tokens:
+                yield token
+
+        return _gen()
+
+
 def _record_trace_calls(calls: list[dict[str, Any]]):
     @asynccontextmanager
     async def _trace(name: str, **kwargs: Any):
@@ -51,7 +68,31 @@ def _record_trace_calls(calls: list[dict[str, Any]]):
     return _trace
 
 
-async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
+class _CapturingOrchestrator:
+    """Stand-in for AnswerOrchestrator that records how the manager drives it."""
+
+    last: dict[str, Any] = {}
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        _CapturingOrchestrator.last = {"init": kwargs}
+
+    @property
+    def uses_research_path(self) -> bool:
+        return bool(self.kwargs.get("has_resources")) or self.kwargs.get("search_web") is not None
+
+    async def answer(self, query: str, **kwargs: Any) -> Any:
+        _CapturingOrchestrator.last["answer"] = {"query": query, **kwargs}
+        return RetrievalResult(answer="ok", contexts={"chunks": []})
+
+    async def answer_stream(self, query: str, **kwargs: Any) -> Any:
+        _CapturingOrchestrator.last["answer_stream"] = {"query": query, **kwargs}
+        return {"chunks": []}, None
+
+
+async def test_prepared_stream_keeps_server_history_internal(
+    test_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
     answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     turn = answer_turn.PreparedAnswerTurn(
         current_query="Follow up",
@@ -59,19 +100,24 @@ async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
         text_history=({"role": "user", "content": "Earlier"},),
     )
     manager = RAGServiceManager(config=test_cfg)
-    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        side_effect=RuntimeError("stop after prepared handoff")
+    manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+        return_value=(
+            QueryPlan(original_query="Follow up", standalone_query="Standalone follow up"),
+            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+        )
     )
+    monkeypatch.setattr("dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator)
 
-    with pytest.raises(RuntimeError, match="stop after prepared handoff"):
-        await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
 
-    await_args = manager._plan_and_retrieve.await_args
-    assert await_args is not None
-    assert await_args.kwargs["text_history"] == [{"role": "user", "content": "Earlier"}]
+    assert _CapturingOrchestrator.last["answer_stream"]["conversation_history"] == [
+        {"role": "user", "content": "Earlier"}
+    ]
 
 
-async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> None:
+async def test_prepared_stream_retrieval_excludes_history_images(
+    test_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Current images drive retrieval; history images only reach the answer model."""
     from dlightrag.core.answer.capability import AnswerImageCapability
 
@@ -94,191 +140,49 @@ async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> No
         model="gpt-4o",
         failure_kind=None,
     )
-    manager._maybe_reprobe_answer_image_capability = AsyncMock()  # type: ignore[attr-defined,method-assign]
-    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        side_effect=RuntimeError("stop after prepared handoff")
-    )
-
-    with pytest.raises(RuntimeError, match="stop after prepared handoff"):
-        await manager._aanswer_stream_prepared(turn, workspaces=["default"])
-
-    await_args = manager._plan_and_retrieve.await_args
-    assert await_args is not None
-    assert await_args.kwargs["query_images"] == current  # retrieval sees current only, not history
-
-
-async def test_prepared_stream_merges_composer_evidence_without_changing_rag(test_cfg) -> None:
-    """Composer evidence is additive; LightRAG rows remain byte-for-byte ordered."""
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    plan = QueryPlan(original_query="q", standalone_query="q")
-    rag_chunks = [
-        {"chunk_id": "ws-1", "content": "workspace one", "rerank_score": 0.9},
-        {"chunk_id": "ws-2", "content": "workspace two", "rerank_score": 0.8},
-    ]
-    expected_rag = [dict(chunk) for chunk in rag_chunks]
-    retrieval = SimpleNamespace(
-        contexts={"chunks": rag_chunks, "entities": [], "relationships": []},
-        trace={},
-    )
-    limits = SimpleNamespace(context_top_k=10, candidate_top_k=5)
-    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
-    manager = RAGServiceManager(config=test_cfg)
-    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        return_value=(plan, prepared, limits, retrieval)
-    )
+    manager._maybe_reprobe_answer_image_capability = AsyncMock()  # type: ignore[method-assign]
     captured: dict[str, Any] = {}
 
-    async def _gen(query: str, contexts: Any, **kwargs: Any):
-        captured["contexts"] = contexts
-        captured["history_images"] = kwargs.get("history_images")
-        captured["separate_composer_visual_budget"] = kwargs.get("separate_composer_visual_budget")
-        return contexts, None
+    async def _describe_and_plan(query: str, *, query_images, **_kwargs: Any):
+        captured["retrieval_images"] = list(query_images)
+        return (
+            QueryPlan(original_query="Follow up", standalone_query="Standalone"),
+            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+        )
 
-    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        side_effect=_gen
+    manager._describe_and_plan = _describe_and_plan  # type: ignore[method-assign]
+    monkeypatch.setattr("dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator)
+
+    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+
+    # The planner (and thus retrieval) sees only current images, never history.
+    assert captured["retrieval_images"] == current
+
+
+async def test_prepared_stream_passes_composer_chunks_as_initial_contexts(
+    test_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Composer evidence is handed to the orchestrator as fixed initial context."""
+    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
+    manager = RAGServiceManager(config=test_cfg)
+    manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+        return_value=(
+            QueryPlan(original_query="q", standalone_query="q"),
+            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+        )
     )
+    monkeypatch.setattr("dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator)
     turn = answer_turn.PreparedAnswerTurn(
         current_query="q",
         retrieval_query="q",
         composer_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
         composer_evidence_trace={"composer_evidence_strategy": "full"},
-        web_composer_visuals=True,
-        history_query_images=(
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,HIST"}},
-        ),
     )
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
 
-    chunks = captured["contexts"]["chunks"]
-    assert chunks[0]["chunk_id"] == "att-1"
-    assert chunks[1:] == expected_rag
-    assert retrieval.trace["composer_evidence_strategy"] == "full"
-    assert captured["separate_composer_visual_budget"] is True
-    assert captured["history_images"] == list(turn.history_query_images)
-
-
-async def test_prepared_stream_merges_composer_failure_trace_without_chunks(test_cfg) -> None:
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    plan = QueryPlan(original_query="q", standalone_query="q")
-    retrieval = SimpleNamespace(
-        contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
-        trace={"workspace": "default"},
-    )
-    limits = SimpleNamespace(context_top_k=10, candidate_top_k=5)
-    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
-    manager = RAGServiceManager(config=test_cfg)
-    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        return_value=(plan, prepared, limits, retrieval)
-    )
-    stream = SimpleNamespace(trace={"answer_generation": "streamed"})
-    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        return_value=(retrieval.contexts, stream)
-    )
-    composer_trace = {
-        "composer_evidence_strategy": "empty",
-        "composer_dense_status": "failed",
-        "composer_dense_error": "RuntimeError",
-    }
-    turn = answer_turn.PreparedAnswerTurn(
-        current_query="q",
-        retrieval_query="q",
-        composer_context_chunks=(),
-        composer_evidence_trace=composer_trace,
-    )
-
-    _, returned_stream = await manager._aanswer_stream_prepared(turn, workspaces=["default"])
-
-    assert retrieval.trace == {"workspace": "default", **composer_trace}
-    assert returned_stream is stream
-    assert stream.trace == {
-        "workspace": "default",
-        **composer_trace,
-        "answer_generation": "streamed",
-    }
-
-
-async def test_prepared_stream_adds_composer_count_without_rebudgeting_rag(test_cfg) -> None:
-    """Composer evidence is additive to the existing LightRAG count budget.
-
-    A document yielding >= context_top_k chunks must not starve workspace
-    grounding: the effective cap passed downstream grows by the attachment count
-    so workspace chunks keep their normal allocation.
-    """
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    plan = QueryPlan(original_query="q", standalone_query="q")
-    workspace_chunks = [{"chunk_id": f"ws-{i}"} for i in range(30)]
-    retrieval = SimpleNamespace(
-        contexts={"chunks": list(workspace_chunks), "entities": [], "relationships": []},
-        trace={},
-    )
-    base_top_k = 30
-    limits = SimpleNamespace(context_top_k=base_top_k, candidate_top_k=5)
-    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
-    manager = RAGServiceManager(config=test_cfg)
-    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        return_value=(plan, prepared, limits, retrieval)
-    )
-    captured: dict[str, Any] = {}
-
-    async def _gen(query: str, contexts: Any, **kwargs: Any):
-        captured["context_top_k"] = kwargs.get("context_top_k")
-        captured["contexts"] = contexts
-        return contexts, None
-
-    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        side_effect=_gen
-    )
-    attachment_chunks = tuple({"chunk_id": f"att-{i}", "content": "clause"} for i in range(32))
-    turn = answer_turn.PreparedAnswerTurn(
-        current_query="q",
-        retrieval_query="q",
-        composer_context_chunks=attachment_chunks,
-    )
-
-    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
-
-    # Effective cap grows by the Composer document chunk count so workspace
-    # context survives.
-    assert captured["context_top_k"] == base_top_k + len(attachment_chunks)
-    # Workspace chunk ids remain within the grown budget window.
-    packed = captured["contexts"]["chunks"][: captured["context_top_k"]]
-    packed_ids = {chunk["chunk_id"] for chunk in packed}
-    assert {chunk["chunk_id"] for chunk in workspace_chunks} <= packed_ids
-
-
-async def test_prepared_stream_leaves_context_top_k_when_no_cap(test_cfg) -> None:
-    """A falsy context_top_k already means 'no cap'; leave it untouched."""
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    plan = QueryPlan(original_query="q", standalone_query="q")
-    retrieval = SimpleNamespace(
-        contexts={"chunks": [{"chunk_id": "ws-1"}], "entities": [], "relationships": []},
-        trace={},
-    )
-    limits = SimpleNamespace(context_top_k=0, candidate_top_k=5)
-    prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
-    manager = RAGServiceManager(config=test_cfg)
-    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        return_value=(plan, prepared, limits, retrieval)
-    )
-    captured: dict[str, Any] = {}
-
-    async def _gen(query: str, contexts: Any, **kwargs: Any):
-        captured["context_top_k"] = kwargs.get("context_top_k")
-        return contexts, None
-
-    manager._agenerate_stream_from_contexts_prepared = AsyncMock(  # type: ignore[attr-defined,method-assign]
-        side_effect=_gen
-    )
-    turn = answer_turn.PreparedAnswerTurn(
-        current_query="q",
-        retrieval_query="q",
-        composer_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
-    )
-
-    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
-
-    assert captured["context_top_k"] == 0  # unchanged: no cap already includes everything
+    initial = _CapturingOrchestrator.last["answer_stream"]["initial_contexts"]
+    assert initial["chunks"] == [{"chunk_id": "att-1", "content": "clause"}]
 
 
 def test_stateless_turn_carries_no_web_composer_context() -> None:
@@ -437,13 +341,18 @@ async def test_private_generation_helper_hands_prepared_history_to_engine(test_c
     engine = AsyncMock()
     engine.generate_stream.return_value = ({"chunks": []}, None)
     manager._answer_engine = engine
+    manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+        return_value=(
+            QueryPlan(original_query="follow up", standalone_query="follow up"),
+            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+        )
+    )
+    manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+        return_value=RetrievalResult(contexts={"chunks": []})
+    )
     history = [{"role": "user", "content": "Earlier"}]
 
-    await manager._agenerate_stream_from_contexts_prepared(
-        "follow up",
-        {"chunks": []},
-        text_history=history,
-    )
+    await manager.aanswer_stream("follow up", workspaces=["default"], history=history)
 
     assert engine.generate_stream.await_args.kwargs["conversation_history"] == history
 
@@ -980,11 +889,11 @@ class TestRouting:
         """aanswer() routes through aretrieve() then AnswerEngine.generate()."""
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
-        mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts)
+        mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
         mock_create.return_value = mock_svc
 
         mock_engine = AsyncMock()
-        mock_engine.generate.return_value = MagicMock()
+        mock_engine.generate.return_value = RetrievalResult(answer="a", contexts=mock_contexts)
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
@@ -997,7 +906,6 @@ class TestRouting:
             mock_contexts,
             query_images=None,
             conversation_history=None,
-            context_top_k=30,
         )
 
 
@@ -1147,7 +1055,6 @@ class TestAnswerViaEngine:
             mock_contexts,
             query_images=None,
             conversation_history=None,
-            context_top_k=30,
         )
         assert result is expected_result
         retrieve = next(call for call in trace_calls if call["name"] == "retrieve")
@@ -1187,15 +1094,15 @@ class TestAnswerViaEngine:
     async def test_aanswer_derives_candidate_and_context_limits(
         self, mock_create, test_cfg
     ) -> None:
-        """Answer over-fetches retrieval candidates and caps final prompt contexts."""
-        cfg = test_cfg.model_copy(update={"answer": AnswerConfig(context_top_k=3)})
+        """Answer over-fetches retrieval candidates for the final prompt."""
+        cfg = test_cfg
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
         mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
         mock_create.return_value = mock_svc
 
         mock_engine = AsyncMock()
-        expected_result = MagicMock(trace={})
+        expected_result = RetrievalResult(answer="a", contexts=mock_contexts)
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=cfg)
@@ -1212,7 +1119,6 @@ class TestAnswerViaEngine:
             mock_contexts,
             query_images=None,
             conversation_history=None,
-            context_top_k=3,
         )
         assert result is expected_result
 
@@ -1221,14 +1127,14 @@ class TestAnswerViaEngine:
         self, mock_create, test_cfg
     ) -> None:
         """Answer chunk_top_k remains the explicit retrieval candidate override."""
-        cfg = test_cfg.model_copy(update={"answer": AnswerConfig(context_top_k=3)})
+        cfg = test_cfg
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
         mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
         mock_create.return_value = mock_svc
 
         mock_engine = AsyncMock()
-        expected_result = MagicMock(trace={})
+        expected_result = RetrievalResult(answer="a", contexts=mock_contexts)
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=cfg)
@@ -1245,28 +1151,29 @@ class TestAnswerViaEngine:
             mock_contexts,
             query_images=None,
             conversation_history=None,
-            context_top_k=3,
         )
         assert result is expected_result
 
     async def test_aanswer_threads_history_to_planning_and_generation(self, test_cfg) -> None:
         """Caller history reaches retrieval planning and answer generation."""
         manager = RAGServiceManager(config=test_cfg)
-        plan = SimpleNamespace(standalone_query="standalone")
-        prepared = SimpleNamespace(descriptions=[])
-        limits = SimpleNamespace(context_top_k=5)
-        retrieval = SimpleNamespace(contexts={"chunks": []}, trace={})
-        manager._plan_and_retrieve = AsyncMock(  # type: ignore[method-assign]
-            return_value=(plan, prepared, limits, retrieval)
+        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                QueryPlan(original_query="follow up", standalone_query="standalone"),
+                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+            )
+        )
+        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+            return_value=RetrievalResult(contexts={"chunks": []})
         )
         mock_engine = AsyncMock()
-        mock_engine.generate.return_value = MagicMock(trace={})
+        mock_engine.generate.return_value = RetrievalResult(answer="a", contexts={"chunks": []})
         manager._answer_engine = mock_engine
         history = [{"role": "user", "content": "Earlier"}]
 
         await manager.aanswer("follow up", workspace="ws_a", history=history)
 
-        plan_call = manager._plan_and_retrieve.await_args
+        plan_call = manager._describe_and_plan.await_args
         assert plan_call is not None
         assert plan_call.kwargs["text_history"] == history
         generate_call = mock_engine.generate.await_args
@@ -1382,7 +1289,6 @@ class TestAnswerViaEngine:
             mock_contexts,
             query_images=None,
             conversation_history=None,
-            context_top_k=30,
         )
         assert contexts is mock_contexts
         assert stream is not None
@@ -1394,10 +1300,10 @@ class TestAnswerViaEngine:
     ) -> None:
         """aanswer() with multiple workspaces federates retrieval, then uses engine."""
         mock_contexts = {"chunks": [{"text": "ctx"}], "entities": [], "relationships": []}
-        mock_fed_retrieve.return_value = MagicMock(contexts=mock_contexts)
+        mock_fed_retrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
 
         mock_engine = AsyncMock()
-        expected_result = MagicMock()
+        expected_result = RetrievalResult(answer="a", contexts=mock_contexts)
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=test_cfg)
@@ -1411,7 +1317,6 @@ class TestAnswerViaEngine:
             mock_contexts,
             query_images=None,
             conversation_history=None,
-            context_top_k=30,
         )
         assert result is expected_result
 
@@ -1462,7 +1367,6 @@ class TestAnswerViaEngine:
             mock_contexts,
             query_images=None,
             conversation_history=None,
-            context_top_k=30,
         )
         assert contexts is mock_contexts
 
@@ -1505,7 +1409,7 @@ class TestAnswerViaEngine:
             engine2 = manager._get_answer_engine()
             assert engine2 is engine
 
-    def test_get_answer_engine_threads_pixel_limit_to_composer_and_rag_budgets(
+    def test_get_answer_engine_threads_pixel_limit_to_one_image_budget(
         self,
         test_cfg,
         monkeypatch,
@@ -1529,11 +1433,12 @@ class TestAnswerViaEngine:
         engine._prepare_model_call(
             "query",
             {"chunks": [], "entities": [], "relationships": []},
-            separate_composer_visual_budget=True,
         )
 
-        assert len(budgets) == 2
-        assert [budget.max_pixels for budget in budgets] == [123, 123]
+        # One evidence image budget carries the configured pixel ceiling; there
+        # are no separate composer/rag lanes.
+        assert len(budgets) == 1
+        assert budgets[0].max_pixels == 123
 
     def test_get_query_planner_uses_planner_model_func(self, test_cfg) -> None:
         """QueryPlanner uses the text planning factory, not the answer/query role."""
@@ -1562,20 +1467,22 @@ class TestAnswerViaEngine:
         cfg = test_cfg.model_copy(update={"max_async": 1})
         manager = RAGServiceManager(config=cfg)
         contexts = {"chunks": [], "entities": [], "relationships": []}
-
-        async def one_token_stream():
-            yield "token"
+        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                QueryPlan(original_query="q", standalone_query="q"),
+                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+            )
+        )
+        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+            return_value=RetrievalResult(contexts=contexts)
+        )
 
         mock_engine = AsyncMock()
-        mock_engine.generate_stream = AsyncMock(return_value=(contexts, one_token_stream()))
+        mock_engine.generate_stream = AsyncMock(return_value=(contexts, _AttrStream(["token"])))
         manager._answer_engine = mock_engine
 
-        _, first_stream = await manager._agenerate_stream_from_contexts_prepared(
-            "q1", contexts, text_history=None
-        )
-        second = asyncio.create_task(
-            manager._agenerate_stream_from_contexts_prepared("q2", contexts, text_history=None)
-        )
+        _, first_stream = await manager.aanswer_stream("q1", workspace="ws_a")
+        second = asyncio.create_task(manager.aanswer_stream("q2", workspace="ws_a"))
         await asyncio.sleep(0)
 
         assert not second.done()
@@ -1590,20 +1497,24 @@ class TestAnswerViaEngine:
         cfg = test_cfg.model_copy(update={"max_async": 1, "answer_acquire_timeout": 0.01})
         manager = RAGServiceManager(config=cfg)
         contexts = {"chunks": [], "entities": [], "relationships": []}
-
-        async def one_token_stream():
-            yield "token"
+        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                QueryPlan(original_query="q", standalone_query="q"),
+                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+            )
+        )
+        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+            return_value=RetrievalResult(contexts=contexts)
+        )
 
         mock_engine = AsyncMock()
-        mock_engine.generate_stream = AsyncMock(return_value=(contexts, one_token_stream()))
+        mock_engine.generate_stream = AsyncMock(return_value=(contexts, _AttrStream(["token"])))
         manager._answer_engine = mock_engine
 
-        await manager._agenerate_stream_from_contexts_prepared("q1", contexts, text_history=None)
+        await manager.aanswer_stream("q1", workspace="ws_a")
 
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._agenerate_stream_from_contexts_prepared(
-                "q2", contexts, text_history=None
-            )
+            await manager.aanswer_stream("q2", workspace="ws_a")
 
 
 class TestDelegation:
@@ -2698,14 +2609,13 @@ class TestWebSearchCapability:
     def test_without_a_key_there_is_no_web_search_to_reach(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
 
-        assert manager.web_search_available is False
         assert manager._get_web_search() is None
 
     def test_with_a_key_one_client_is_shared_by_every_turn(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
 
-        assert manager.web_search_available is True
+        assert manager._get_web_search() is not None
         assert manager._get_web_search() is manager._get_web_search()
 
     async def test_closing_the_manager_closes_the_web_client(self, test_cfg) -> None:
@@ -2720,14 +2630,28 @@ class TestWebSearchCapability:
 
 
 class TestAgenticAnswerCapability:
-    def test_without_exa_no_tool_model_is_constructed(
+    async def test_without_exa_fast_path_never_builds_a_tool_model(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         create = MagicMock(side_effect=AssertionError("tool model must stay absent"))
         monkeypatch.setattr("dlightrag.models.tool_model.create_query_tool_model", create)
         manager = RAGServiceManager(config=test_cfg)
+        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                QueryPlan(original_query="q", standalone_query="q"),
+                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+            )
+        )
+        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+            return_value=RetrievalResult(contexts={"chunks": []})
+        )
+        engine = AsyncMock()
+        engine.generate.return_value = RetrievalResult(answer="a", contexts={"chunks": []})
+        manager._answer_engine = engine
 
-        assert manager._get_query_tool_model() is None
+        await manager.aanswer("q", workspace="alpha")
+
+        # No Exa and no resources means the fast path -- no control tool model.
         create.assert_not_called()
 
     def test_with_exa_one_tool_model_is_shared(self, test_cfg, monkeypatch) -> None:
@@ -2751,17 +2675,28 @@ class TestAgenticAnswerCapability:
 
         model.aclose.assert_awaited_once()
 
-    async def test_with_exa_aanswer_uses_agentic_path(self, test_cfg) -> None:
+    async def test_with_exa_aanswer_uses_agentic_path(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        expected = RetrievalResult(answer="agent answer")
-        manager._aanswer_agentic = AsyncMock(return_value=expected)  # type: ignore[method-assign]
+        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                QueryPlan(original_query="question", standalone_query="question"),
+                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+            )
+        )
         manager._answer_engine = MagicMock()
+        monkeypatch.setattr(
+            "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
+        )
 
-        result = await manager.aanswer("question", workspace="alpha")
+        await manager.aanswer("question", workspace="alpha")
 
-        assert result is expected
-        manager._aanswer_agentic.assert_awaited_once()  # type: ignore[attr-defined]
+        # An Exa key makes the request research, and the fast-path synthesizer is
+        # never invoked directly by the manager.
+        assert _CapturingOrchestrator.last["init"]["search_web"] is not None
+        assert "answer" in _CapturingOrchestrator.last
         manager._answer_engine.generate.assert_not_called()
 
     async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
@@ -2783,24 +2718,33 @@ class TestAgenticAnswerCapability:
         manager._query_tool_model.assert_not_awaited()
         manager._web_search.search.assert_not_awaited()
 
-    async def test_with_exa_prepared_stream_uses_agentic_path(self, test_cfg) -> None:
+    async def test_with_exa_prepared_stream_uses_agentic_path(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        expected = ({"chunks": []}, None)
-        manager._aanswer_stream_agentic_prepared = AsyncMock(  # type: ignore[method-assign]
-            return_value=expected
+        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                QueryPlan(original_query="question", standalone_query="question"),
+                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+            )
+        )
+        manager._answer_engine = MagicMock()
+        monkeypatch.setattr(
+            "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
         answer_turn = importlib.import_module("dlightrag.core.answer.turn")
         turn = answer_turn.PreparedAnswerTurn.stateless("question")
 
-        result = await manager._aanswer_stream_prepared(turn, workspace="alpha")
+        await manager._aanswer_stream_prepared(turn, workspace="alpha")
 
-        assert result == expected
-        manager._aanswer_stream_agentic_prepared.assert_awaited_once()  # type: ignore[attr-defined]
+        assert _CapturingOrchestrator.last["init"]["search_web"] is not None
+        assert "answer_stream" in _CapturingOrchestrator.last
 
     async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
+        from dlightrag.core.agent.orchestrator import InitialScopeDecision
         from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+        from dlightrag.models.tool_turn import AssistantTurn
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
@@ -2845,25 +2789,13 @@ class TestAgenticAnswerCapability:
         )
         manager._web_search = web
         model = AsyncMock(
-            side_effect=[
-                AssistantTurn(
-                    text="",
-                    tool_calls=(
-                        ToolCall(
-                            id="first",
-                            name="retrieve_evidence",
-                            arguments={"scope": "all"},
-                        ),
-                    ),
-                    stop_reason="tool_use",
-                ),
-                AssistantTurn(
-                    text="Answer [1-1][2-1].",
-                    tool_calls=(),
-                    stop_reason="stop",
-                ),
-            ]
+            return_value=AssistantTurn(
+                text="Answer [1-1][2-1].",
+                tool_calls=(),
+                stop_reason="stop",
+            )
         )
+        model.complete_structured.return_value = InitialScopeDecision(include_web=True)
         manager._query_tool_model = model
         manager._answer_engine = MagicMock()
 
@@ -2878,3 +2810,99 @@ class TestAgenticAnswerCapability:
         assert retrieve_call.kwargs["plan"] is plan
         web.search.assert_awaited_once_with("inflation 2026")
         manager._answer_engine.generate.assert_not_called()
+
+    async def test_agentic_stream_keeps_slots_until_disconnect(self, test_cfg) -> None:
+        from dlightrag.citations.streaming import aclose_answer_stream
+        from dlightrag.core.agent.orchestrator import InitialScopeDecision
+        from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
+        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+
+        class StreamingToolModel:
+            def __init__(self) -> None:
+                self.turns = [
+                    AssistantTurn(
+                        text="",
+                        tool_calls=(ToolCall(id="finish", name="finish_research", arguments={}),),
+                        stop_reason="tool_use",
+                    ),
+                ]
+                self.closed = asyncio.Event()
+
+            async def complete_structured(self, **_kwargs: Any) -> InitialScopeDecision:
+                return InitialScopeDecision(include_web=True)
+
+            async def __call__(self, **_kwargs: Any) -> AssistantTurn:
+                return self.turns.pop(0)
+
+            def stream_text(self, **_kwargs: Any) -> AsyncIterator[str]:
+                async def tokens() -> AsyncIterator[str]:
+                    try:
+                        yield "first token"
+                        await asyncio.Event().wait()
+                    finally:
+                        self.closed.set()
+
+                return tokens()
+
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        plan = QueryPlan(original_query="Question", standalone_query="planned question")
+        prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
+        manager._describe_and_plan = AsyncMock(return_value=(plan, prepared))  # type: ignore[method-assign]
+        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+            return_value=["alpha"]
+        )
+        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+            return_value=RetrievalResult(
+                contexts={
+                    "chunks": [
+                        {
+                            "chunk_id": "c1",
+                            "reference_id": "upstream",
+                            "full_doc_id": "doc-1",
+                            "file_path": "report.pdf",
+                            "content": "corpus fact",
+                            "_workspace": "alpha",
+                            "metadata": {
+                                "source_type": "file",
+                                "source_uri": "file:///alpha/report.pdf",
+                                "source_download_locator": "file:///alpha/report.pdf",
+                            },
+                        }
+                    ],
+                    "entities": [],
+                    "relationships": [],
+                }
+            )
+        )
+        web = AsyncMock()
+        web.search.return_value = WebSearchResult(
+            hits=(
+                WebSearchHit(
+                    url="https://example.com/current",
+                    title="Current",
+                    text="web fact",
+                ),
+            ),
+            cost_dollars=0.007,
+        )
+        manager._web_search = web
+        model = StreamingToolModel()
+        manager._query_tool_model = model  # type: ignore[assignment]
+        manager._answer_stream_sem = asyncio.Semaphore(1)
+        manager._direct_llm_sem = asyncio.Semaphore(1)
+
+        contexts, stream = await manager.aanswer_stream("Question", workspace="alpha")
+
+        assert len(contexts["chunks"]) == 2
+        assert stream is not None
+        assert manager._answer_stream_sem.locked()
+        assert not manager._direct_llm_sem.locked()
+        assert await stream.__anext__() == "first token"
+        assert manager._direct_llm_sem.locked()
+
+        await aclose_answer_stream(stream)
+
+        assert model.closed.is_set()
+        assert not manager._answer_stream_sem.locked()
+        assert not manager._direct_llm_sem.locked()

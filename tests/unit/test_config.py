@@ -239,7 +239,7 @@ class TestCitationHighlightConfig:
 class TestAnswerConfig:
     def test_defaults_keep_prompt_context_controls(self):
         cfg = AnswerConfig()
-        assert cfg.context_top_k == 30
+        assert cfg.context_window_tokens == 260_000
         assert cfg.image_max_pixels == 40_000_000
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
@@ -681,7 +681,7 @@ def test_multimodal_retrieval_defaults() -> None:
 def test_conversation_history_token_default_reserves_planner_context() -> None:
     cfg = _default_test_config()
 
-    assert cfg.max_conversation_tokens == 81_920
+    assert cfg.max_conversation_turns == 50
     assert cfg.answer.image_quality == 89
     assert cfg.answer.image_min_quality == 79
     assert cfg.web_conversations.max_turns == 100

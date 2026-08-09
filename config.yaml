@@ -173,7 +173,6 @@ chunk_top_k: 30  # LightRAG QueryParam: chunk/BM25 candidate breadth (not a fina
 direct_visual_top_k: 20  # DlightRAG: image->image query-vector retrieval breadth.
 
 answer:
-  context_top_k: 30
   max_images: 12
   context_window_tokens: 260000        # Shared evidence-packing and synthesis window.
   max_attachments: 6

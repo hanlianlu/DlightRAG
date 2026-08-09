@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
@@ -37,7 +38,12 @@ from dlightrag.utils.tokens import (
 
 logger = logging.getLogger(__name__)
 
-_PLANNER_INPUT_TOKEN_ENVELOPE = 102_400
+# Planning packs into the same declared answer context window as control and
+# final calls, minus the shared final-generation reserve. There is no separate
+# fixed planner envelope.
+_DEFAULT_PLANNER_INPUT_TOKEN_ENVELOPE = (
+    AnswerCapacity(260_000).context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
+)
 _WEB_PLANNER_HISTORY_ATTACHMENT_SUMMARY_MAX_TOKENS = 1_024
 _WEB_PLANNER_HISTORY_IMAGE_DESCRIPTION_MAX_TOKENS = 512
 
@@ -363,8 +369,11 @@ class QueryPlanner:
     def __init__(
         self,
         llm_func: Callable[..., Any] | None = None,
+        *,
+        input_token_envelope: int = _DEFAULT_PLANNER_INPUT_TOKEN_ENVELOPE,
     ) -> None:
         self._llm_func = llm_func
+        self._input_token_envelope = max(1, int(input_token_envelope))
 
     async def _call_llm(
         self,
@@ -432,25 +441,20 @@ class QueryPlanner:
             )
 
         system_tokens = estimate_tokens(system_prompt)
+        envelope = self._input_token_envelope
 
         def fit_to_envelope() -> tuple[str, bool]:
             """Drop the schema, then the oldest turns, until the request fits."""
             messages = history
             metadata_schema = schema_context
             payload = render_input(messages, metadata_schema)
-            if (
-                metadata_schema
-                and _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE
-            ):
+            if metadata_schema and _planner_request_tokens(system_tokens, payload) > envelope:
                 metadata_schema = ""
                 payload = render_input(messages, metadata_schema)
-            while (
-                messages
-                and _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE
-            ):
+            while messages and _planner_request_tokens(system_tokens, payload) > envelope:
                 messages = _drop_oldest_history_turn(messages)
                 payload = render_input(messages, metadata_schema)
-            fits = _planner_request_tokens(system_tokens, payload) <= _PLANNER_INPUT_TOKEN_ENVELOPE
+            fits = _planner_request_tokens(system_tokens, payload) <= envelope
             return payload, fits
 
         planner_input, fits_envelope = await asyncio.to_thread(fit_to_envelope)
@@ -595,6 +599,7 @@ class QueryPlanner:
             )
 
         system_tokens = estimate_tokens(system_prompt)
+        envelope = self._input_token_envelope
 
         def fit_to_envelope() -> tuple[
             str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
@@ -605,14 +610,11 @@ class QueryPlanner:
             images = planned_image_catalog
             documents = planned_attachment_catalog
             payload = render_input(messages, metadata_schema, images, documents)
-            if (
-                metadata_schema
-                and _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE
-            ):
+            if metadata_schema and _planner_request_tokens(system_tokens, payload) > envelope:
                 metadata_schema = ""
                 payload = render_input(messages, metadata_schema, images, documents)
             evict_history = True
-            while _planner_request_tokens(system_tokens, payload) > _PLANNER_INPUT_TOKEN_ENVELOPE:
+            while _planner_request_tokens(system_tokens, payload) > envelope:
                 has_catalog = bool(images or documents)
                 if messages and (evict_history or not has_catalog):
                     messages = _drop_oldest_history_turn(messages)
@@ -631,17 +633,17 @@ class QueryPlanner:
             planned_attachment_catalog,
         ) = await asyncio.to_thread(fit_to_envelope)
         planner_input_tokens = _planner_request_tokens(system_tokens, planner_input)
-        if planner_input_tokens > _PLANNER_INPUT_TOKEN_ENVELOPE:
+        if planner_input_tokens > envelope:
             logger.error(
                 "[Planner] refusing Web plan above the %d-token envelope: %d tokens",
-                _PLANNER_INPUT_TOKEN_ENVELOPE,
+                envelope,
                 planner_input_tokens,
             )
             return QueryPlan.fallback(query, "fallback_input_overflow")
         logger.debug(
             "[Planner] Web input budget: envelope=%d input=%d history_messages=%d "
             "catalog_images=%d catalog_attachments=%d",
-            _PLANNER_INPUT_TOKEN_ENVELOPE,
+            envelope,
             planner_input_tokens,
             len(history),
             len(planned_image_catalog),

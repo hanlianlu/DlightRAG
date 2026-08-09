@@ -408,18 +408,14 @@ class TestPlanWithLLM:
 class TestPlanFallback:
     async def test_oversized_schema_is_omitted_before_input_overflow(
         self,
-        monkeypatch: pytest.MonkeyPatch,
     ):
-        import dlightrag.core.request.planner as planner_module
-
         captured_messages: list[dict[str, object]] = []
 
         async def llm_func(**kwargs):
             captured_messages.extend(kwargs["messages"])
             return '{"standalone_query":"q","filters":{}}'
 
-        monkeypatch.setattr(planner_module, "_PLANNER_INPUT_TOKEN_ENVELOPE", 1_100)
-        planner = QueryPlanner(llm_func=llm_func)
+        planner = QueryPlanner(llm_func=llm_func, input_token_envelope=1_100)
         plan = await planner.plan(
             "short query",
             schema={"columns": [], "custom_keys": ["schema " * 2_000]},
@@ -431,13 +427,9 @@ class TestPlanFallback:
 
     async def test_fixed_input_over_total_envelope_returns_fallback(
         self,
-        monkeypatch: pytest.MonkeyPatch,
     ):
-        import dlightrag.core.request.planner as planner_module
-
         llm = AsyncMock(return_value='{"standalone_query":"unused","filters":{}}')
-        monkeypatch.setattr(planner_module, "_PLANNER_INPUT_TOKEN_ENVELOPE", 1_100)
-        planner = QueryPlanner(llm_func=llm)
+        planner = QueryPlanner(llm_func=llm, input_token_envelope=1_100)
 
         plan = await planner.plan("query " * 1_000)
 
