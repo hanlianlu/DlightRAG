@@ -27,13 +27,11 @@ from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
     PLANNER_IMAGE_CONTEXT_GUIDANCE,
     PLANNER_SYSTEM_PROMPT,
-    WEB_PLANNER_SYSTEM_PROMPT,
 )
 from dlightrag.utils import log_safe
 from dlightrag.utils.tokens import (
     estimate_tokens,
     truncate_conversation_history,
-    truncate_to_estimated_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,8 +42,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PLANNER_INPUT_TOKEN_ENVELOPE = (
     AnswerCapacity(260_000).context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
 )
-_WEB_PLANNER_HISTORY_ATTACHMENT_SUMMARY_MAX_TOKENS = 1_024
-_WEB_PLANNER_HISTORY_IMAGE_DESCRIPTION_MAX_TOKENS = 512
 
 
 def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
@@ -107,9 +103,6 @@ class QueryPlan:
     metadata_filter_source: str | None = None
     metadata_filter_confidence: str | None = None
     metadata_filter_evidence: list[dict[str, Any]] | None = None
-    selected_history_image_ids: tuple[str, ...] = ()
-    # Web-only conversation planner field (empty for stateless REST/MCP/SDK/retrieve).
-    selected_history_attachment_ids: tuple[str, ...] = ()
     planner_outcome: PlannerOutcome = "planned"
 
     @classmethod
@@ -164,24 +157,6 @@ QUERY_PLAN_STRUCTURED_OUTPUT = StructuredOutput(
 )
 
 
-class WebConversationPlannerStructuredResponse(QueryPlannerStructuredResponse):
-    """Web conversation planner schema: adds scoped document/image selection.
-
-    Used only by ``QueryPlanner.plan_web_conversation`` (the Web ``/web/answer``
-    path). The stateless ``QueryPlanner.plan`` contract is unaffected -- its
-    public schema forbids these extra fields.
-    """
-
-    selected_history_image_ids: list[str] = Field(default_factory=list)
-    selected_history_attachment_ids: list[str] = Field(default_factory=list)
-
-
-QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT = StructuredOutput(
-    name="query_plan",
-    schema=WebConversationPlannerStructuredResponse,
-)
-
-
 def _build_schema_section(schema: dict[str, Any] | None) -> str:
     if not schema or not schema.get("filters"):
         return ""
@@ -210,12 +185,7 @@ def _planner_user_payload(
     *,
     metadata_schema: str | None = None,
     history: list[dict[str, Any]] | None = None,
-    prior_images: list[dict[str, Any]] | None = None,
-    prior_documents: list[dict[str, Any]] | None = None,
     current_images: list[str] | None = None,
-    current_documents: list[dict[str, Any]] | None = None,
-    history_image_limit: int | None = None,
-    history_document_limit: int | None = None,
 ) -> str:
     payload: dict[str, Any] = {"query": query}
     if metadata_schema:
@@ -223,92 +193,13 @@ def _planner_user_payload(
     history_text = _convert_history_to_text(history)
     if history_text:
         payload["conversation_history"] = history_text
-    if prior_images:
-        payload["prior_images"] = prior_images
-    if prior_documents:
-        payload["prior_documents"] = prior_documents
     if current_images:
         payload["current_images"] = current_images
-    if current_documents:
-        payload["current_documents"] = current_documents
-    limits: dict[str, int] = {}
-    if history_image_limit is not None:
-        limits["history_images"] = max(0, history_image_limit)
-    if history_document_limit is not None:
-        limits["history_documents"] = max(0, history_document_limit)
-    if limits:
-        payload["limits"] = limits
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _is_empty_filter(f: MetadataFilter) -> bool:
     return f.is_empty()
-
-
-def _scope_ids(
-    selected: tuple[str, ...],
-    allowed: set[str],
-    limit: int,
-) -> tuple[str, ...]:
-    """Keep only selected ids present in the scoped catalog, deduped + truncated.
-
-    LLM output is not authorization: the planner may only return ids that were
-    supplied in the request-local catalog.
-    """
-    deduped: dict[str, None] = {}
-    for item in selected:
-        if str(item) in allowed:
-            deduped.setdefault(str(item), None)
-    return tuple(list(deduped)[: max(0, limit)])
-
-
-def _prepare_history_catalogs(
-    image_catalog: list[dict[str, Any]] | None,
-    attachment_catalog: list[dict[str, Any]] | None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Bound each catalog item and order both catalogs newest-first."""
-    entries: list[tuple[int, int, str, dict[str, Any]]] = []
-    for row in image_catalog or []:
-        prepared = {
-            **row,
-            "vlm_description": truncate_to_estimated_tokens(
-                str(row.get("vlm_description") or ""),
-                _WEB_PLANNER_HISTORY_IMAGE_DESCRIPTION_MAX_TOKENS,
-            ),
-        }
-        entries.append(
-            (
-                int(row.get("turn_number") or -1),
-                int(row.get("ordinal") or 0),
-                "image",
-                prepared,
-            )
-        )
-    for row in attachment_catalog or []:
-        prepared = {
-            **row,
-            "parse_summary": truncate_to_estimated_tokens(
-                str(row.get("parse_summary") or ""),
-                _WEB_PLANNER_HISTORY_ATTACHMENT_SUMMARY_MAX_TOKENS,
-            ),
-        }
-        entries.append(
-            (
-                int(row.get("turn_number") or -1),
-                int(row.get("ordinal") or 0),
-                "attachment",
-                prepared,
-            )
-        )
-
-    prepared_images: list[dict[str, Any]] = []
-    prepared_attachments: list[dict[str, Any]] = []
-    for _, _, kind, row in sorted(entries, key=lambda item: item[:3], reverse=True):
-        if kind == "image":
-            prepared_images.append(row)
-        else:
-            prepared_attachments.append(row)
-    return prepared_images, prepared_attachments
 
 
 def _planner_request_tokens(system_tokens: int, user_payload: str) -> int:
@@ -323,28 +214,6 @@ def _drop_oldest_history_turn(history: list[dict[str, Any]]) -> list[dict[str, A
     ):
         return history[2:]
     return history[1:]
-
-
-def _drop_oldest_catalog_entry(
-    images: list[dict[str, Any]],
-    documents: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    entries = [
-        (
-            int(row.get("turn_number") or -1),
-            int(row.get("ordinal") or 0),
-            kind,
-            index,
-        )
-        for kind, rows in (("image", images), ("document", documents))
-        for index, row in enumerate(rows)
-    ]
-    if not entries:
-        return images, documents
-    _, _, kind, index = min(entries)
-    if kind == "image":
-        return [*images[:index], *images[index + 1 :]], documents
-    return images, [*documents[:index], *documents[index + 1 :]]
 
 
 def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int = 3) -> str:
@@ -537,164 +406,6 @@ class QueryPlanner:
                     return None
         return None
 
-    async def plan_web_conversation(
-        self,
-        query: str,
-        *,
-        conversation_history: list[dict[str, Any]] | None = None,
-        explicit_filter: MetadataFilter | None = None,
-        max_turns: int = 25,
-        max_tokens: int = 65536,
-        schema: dict[str, Any] | None = None,
-        image_catalog: list[dict[str, Any]] | None = None,
-        attachment_catalog: list[dict[str, Any]] | None = None,
-        current_attachment_catalog: list[dict[str, Any]] | None = None,
-        allowed_history_image_count: int = 0,
-        allowed_history_attachment_count: int = 0,
-        current_image_descriptions: list[str] | None = None,
-    ) -> QueryPlan:
-        """Plan one Web conversation turn (Web ``/web/answer`` only).
-
-        Separate contract from the stateless :meth:`plan` used by REST/MCP/SDK/
-        retrieve. Reuses the shared planner helpers (history truncation, schema
-        rendering, structured-output parsing, filter merging) and adds scoped
-        selection of prior Composer documents and images.
-        """
-
-        if self._llm_func is None:
-            return QueryPlan.fallback(query, "fallback_no_model")
-
-        planner_query = query
-
-        # Schema is fetched and cached by the service manager, then passed in.
-        schema_context = _build_schema_context(schema)
-        current_attachment_rows = list(current_attachment_catalog or [])
-        planned_image_descriptions = list(current_image_descriptions or [])
-        planned_image_catalog, planned_attachment_catalog = _prepare_history_catalogs(
-            image_catalog,
-            attachment_catalog,
-        )
-
-        history = self._truncate_history(conversation_history, max_turns, max_tokens)
-
-        system_prompt = WEB_PLANNER_SYSTEM_PROMPT
-        structured_output = QUERY_PLAN_WEB_CONVERSATION_STRUCTURED_OUTPUT
-
-        def render_input(
-            messages: list[dict[str, Any]],
-            metadata_schema: str,
-            images: list[dict[str, Any]],
-            documents: list[dict[str, Any]],
-        ) -> str:
-            return _planner_user_payload(
-                planner_query,
-                metadata_schema=metadata_schema,
-                history=messages,
-                prior_images=images,
-                prior_documents=documents,
-                current_images=planned_image_descriptions,
-                current_documents=current_attachment_rows,
-                history_image_limit=allowed_history_image_count,
-                history_document_limit=allowed_history_attachment_count,
-            )
-
-        system_tokens = estimate_tokens(system_prompt)
-        envelope = self._input_token_envelope
-
-        def fit_to_envelope() -> tuple[
-            str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
-        ]:
-            """Drop the schema, then alternate oldest turn / oldest catalog entry."""
-            messages = history
-            metadata_schema = schema_context
-            images = planned_image_catalog
-            documents = planned_attachment_catalog
-            payload = render_input(messages, metadata_schema, images, documents)
-            if metadata_schema and _planner_request_tokens(system_tokens, payload) > envelope:
-                metadata_schema = ""
-                payload = render_input(messages, metadata_schema, images, documents)
-            evict_history = True
-            while _planner_request_tokens(system_tokens, payload) > envelope:
-                has_catalog = bool(images or documents)
-                if messages and (evict_history or not has_catalog):
-                    messages = _drop_oldest_history_turn(messages)
-                elif has_catalog:
-                    images, documents = _drop_oldest_catalog_entry(images, documents)
-                else:
-                    break
-                evict_history = not evict_history
-                payload = render_input(messages, metadata_schema, images, documents)
-            return payload, messages, images, documents
-
-        (
-            planner_input,
-            history,
-            planned_image_catalog,
-            planned_attachment_catalog,
-        ) = await asyncio.to_thread(fit_to_envelope)
-        planner_input_tokens = _planner_request_tokens(system_tokens, planner_input)
-        if planner_input_tokens > envelope:
-            logger.error(
-                "[Planner] refusing Web plan above the %d-token envelope: %d tokens",
-                envelope,
-                planner_input_tokens,
-            )
-            return QueryPlan.fallback(query, "fallback_input_overflow")
-        logger.debug(
-            "[Planner] Web input budget: envelope=%d input=%d history_messages=%d "
-            "catalog_images=%d catalog_attachments=%d",
-            envelope,
-            planner_input_tokens,
-            len(history),
-            len(planned_image_catalog),
-            len(planned_attachment_catalog),
-        )
-
-        llm_start = time.monotonic()
-        response = await self._call_llm_with_retry(
-            planner_input,
-            system_prompt,
-            structured_output=structured_output,
-            start_time=llm_start,
-        )
-        if response is None:
-            return QueryPlan.fallback(query, "fallback_provider_error")
-
-        plan = self._parse_response(
-            response,
-            query,
-            structured_output=structured_output,
-        )
-        if plan is None:
-            return QueryPlan.fallback(query, "fallback_invalid_response")
-        # LLM output is not authorization: keep only ids present in the scoped
-        # catalogs, deduped and truncated to the allowed count.
-        plan.selected_history_image_ids = _scope_ids(
-            plan.selected_history_image_ids,
-            {str(row["image_id"]) for row in planned_image_catalog},
-            allowed_history_image_count,
-        )
-        allowed_attachments = {str(row["attachment_id"]) for row in planned_attachment_catalog}
-        plan.selected_history_attachment_ids = _scope_ids(
-            plan.selected_history_attachment_ids,
-            allowed_attachments,
-            allowed_history_attachment_count,
-        )
-
-        # Merge explicit filter (explicit wins)
-        if explicit_filter is not None and not _is_empty_filter(explicit_filter):
-            plan.metadata_filter = self._merge_filters(explicit_filter, plan.metadata_filter)
-            plan.metadata_filter_source = "explicit"
-            plan.metadata_filter_confidence = "high"
-
-        logger.info(
-            "[Planner] web result: standalone=%r, history_images=%d, history_attachments=%d",
-            log_safe(plan.standalone_query, max_length=60),
-            len(plan.selected_history_image_ids),
-            len(plan.selected_history_attachment_ids),
-        )
-        return plan
-
     def _parse_response(
         self,
         response: str,
@@ -716,11 +427,6 @@ class QueryPlanner:
 
         data = parsed.model_dump()
         standalone = data.get("standalone_query", query)
-        selected = tuple(str(i) for i in data.get("selected_history_image_ids", []) if i)
-        # Web-only fields: absent (defaulted) for the stateless public schema.
-        selected_attachments = tuple(
-            str(i) for i in data.get("selected_history_attachment_ids", []) if i
-        )
         raw_filters = data.get("filters", {}) or {}
         filter_confidence = str(data.get("filter_confidence") or "").lower() or None
         filter_evidence = data.get("filter_evidence") or []
@@ -739,8 +445,6 @@ class QueryPlanner:
                 metadata_filter_evidence=filter_evidence
                 if isinstance(filter_evidence, list)
                 else None,
-                selected_history_image_ids=selected,
-                selected_history_attachment_ids=selected_attachments,
             )
 
         # Handle date fields specially
@@ -772,8 +476,6 @@ class QueryPlanner:
             metadata_filter_source="llm_inferred" if metadata_filter is not None else None,
             metadata_filter_confidence=filter_confidence,
             metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
-            selected_history_image_ids=selected,
-            selected_history_attachment_ids=selected_attachments,
         )
 
     @staticmethod

@@ -3,59 +3,34 @@
 
 import asyncio
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, TypeVar
+from dataclasses import dataclass
+from typing import Any, TypeVar
 
 import asyncpg
 
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
-from dlightrag.core.answer.errors import CurrentDocumentParseError
-from dlightrag.core.answer.turn import (
-    HISTORICAL_DOCUMENT_LOAD_FAILED,
-    HISTORICAL_DOCUMENT_PARSE_FAILED,
-    HISTORICAL_DOCUMENT_UNAVAILABLE,
-    DocumentWarning,
-    PreparedAnswerTurn,
-)
-from dlightrag.core.request.attachment_digest import build_attachment_planner_digests
-from dlightrag.core.request.attachments import (
-    AttachmentCacheKey,
-    AttachmentContextChunk,
-    AttachmentRequestVector,
-    ParsedAttachmentBundle,
-)
-from dlightrag.sourcing.source_contract import safe_source_filename
+from dlightrag.core.resources.models import ResourceInput
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     CommitTurnResult,
     ConversationSnapshot,
     PendingConversationAttachment,
-    PendingConversationImage,
     PGWebConversationStore,
     StoredConversationAttachment,
-    StoredConversationImage,
 )
-from dlightrag.utils.images import (
-    image_bytes_to_data_uri,
-    thumbnail_bytes,
-)
-from dlightrag.web.attachment_models import ValidatedWebDocument, ValidatedWebImage
+from dlightrag.utils.images import thumbnail_bytes
+from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import (
-    ConversationDocumentReference,
+    ConversationAttachmentReference,
     ConversationHistory,
-    ConversationImageReference,
     ConversationSummary,
     ConversationTurn,
 )
 from dlightrag.web.principal import principal_id_from_user
 from dlightrag.web.safe_html import safe_answer_done
-
-if TYPE_CHECKING:
-    from dlightrag.core.service import ComposerProcessingResources
-    from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -72,9 +47,12 @@ _HISTORY_THUMBNAIL_MAX_BYTES = 128 * 1024
 _HISTORY_THUMBNAIL_QUALITY = 82
 _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
-_MAX_HISTORY_ATTACHMENTS = 3
 _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
+
+
+def _is_image_mime(mime_type: str | None) -> bool:
+    return bool(mime_type) and mime_type.lower().startswith("image/")
 
 
 class WebConversationUnavailableError(RuntimeError):
@@ -90,15 +68,10 @@ class PreparedWebConversation:
     content_revision: int
     text_history: tuple[dict[str, Any], ...]
     committed_submission: CommitTurnResult | None = None
-    # Caption-only catalog of prior Composer documents for the Web planner to
-    # scope which history documents a follow-up refers to (never bytes).
-    attachment_catalog: tuple[dict[str, Any], ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class _DocumentParseFailure:
-    attachment_id: str
-    filename: str
+    # Compact manifest of prior attachments (id, ordinal, filename, mime,
+    # byte_size). Registered as lazy authorized resources each answer; bytes load
+    # only when the model reads/inspects one by id.
+    attachment_manifest: tuple[dict[str, Any], ...] = ()
 
 
 class WebConversationService:
@@ -110,10 +83,12 @@ class WebConversationService:
         store: PGWebConversationStore,
         max_turns: int,
         ttl_days: int,
+        max_attachments: int,
     ) -> None:
         self._store = store
         self._max_turns = max_turns
         self._ttl_days = ttl_days
+        self._max_attachments = max_attachments
         self._prune_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
@@ -225,7 +200,7 @@ class WebConversationService:
         if snapshot is None:
             return None
         text_history: list[dict[str, Any]] = []
-        attachment_catalog: list[dict[str, Any]] = []
+        attachment_manifest: list[dict[str, Any]] = []
         for turn in snapshot.history:
             text_history.extend(
                 (
@@ -234,13 +209,14 @@ class WebConversationService:
                 )
             )
             for attachment in turn.get("attachments") or []:
-                attachment_catalog.append(
+                attachment_manifest.append(
                     {
                         "attachment_id": str(attachment["attachment_id"]),
                         "turn_number": turn.get("turn_number"),
                         "ordinal": attachment.get("ordinal"),
                         "filename": attachment.get("filename"),
-                        "parse_summary": attachment.get("parse_summary") or "",
+                        "mime_type": attachment.get("mime_type"),
+                        "byte_size": attachment.get("byte_size"),
                     }
                 )
         committed_submission = None
@@ -262,370 +238,65 @@ class WebConversationService:
             content_revision=snapshot.content_revision,
             text_history=tuple(text_history),
             committed_submission=committed_submission,
-            attachment_catalog=tuple(attachment_catalog),
+            attachment_manifest=tuple(attachment_manifest),
         )
 
-    async def prepare_answer_turn(
+    def build_answer_resources(
         self,
-        *,
-        manager: RAGServiceManager,
         prepared: PreparedWebConversation,
-        query: str,
-        current_images: list[dict[str, Any]],
-        current_documents: list[ValidatedWebDocument] | None = None,
-        workspaces: list[str] | None = None,
-    ) -> PreparedAnswerTurn:
-        """Plan the turn and materialize referenced history images/documents.
+        current_attachments: tuple[ValidatedWebAttachment, ...],
+    ) -> list[ResourceInput]:
+        """Build the ordered request resources for one answer.
 
-        The Web-variant planner rewrites the query and selects scoped history
-        query images and Composer documents in one call; the selected ids are
-        re-validated and materialized here (web owns the store), and the
-        finished plan is injected so core skips re-planning. Current images
-        always come first and are never displaced by history selection.
-        Current-turn documents are parsed/chunked/budgeted into plain-dict
-        context rows that core merges into retrieval before generation.
+        Current-turn attachments carry inline bytes (the manager extracts verified
+        images into current-image blocks and registers documents). Prior
+        attachments are compact manifest entries registered as lazy authorized
+        resources whose bytes load only when the model reads/inspects them.
         """
-        documents = list(current_documents or [])
-        resources: ComposerProcessingResources | None = None
-
-        async def processing_resources() -> ComposerProcessingResources:
-            nonlocal resources
-            if resources is None:
-                resources = await manager.aget_composer_processing_resources(workspaces)
-            return resources
-
-        document_service = None
-        if documents:
-            document_service = self._get_composer_document_service(
-                await processing_resources(), prepared
+        resources: list[ResourceInput] = [
+            ResourceInput(
+                filename=attachment.filename,
+                content=attachment.attachment_bytes,
+                declared_mime=attachment.mime_type,
             )
-        capability = manager.answer_image_capability
-        effective = capability.effective_max_images if capability is not None else 0
-        remaining = max(0, effective - len(current_images))
-
-        catalog: list[dict[str, Any]] = []
-        if remaining > 0:
-            catalog = await self._store_call(
-                self._store.list_image_catalog(
-                    prepared.principal_id,
-                    prepared.conversation_id,
-                    max_turns=self._max_turns,
-                    ttl_days=self._ttl_days,
-                )
-            )
-
-        document_catalog = list(prepared.attachment_catalog)
-        # Parse current-turn documents BEFORE planning so the planner sees their
-        # content and can make the standalone query document-aware. Parsing is
-        # content-addressed and cached, so this is the only parse of these
-        # documents; the resulting chunks are reused for the answer context below.
-        (
-            current_chunks,
-            current_failures,
-            current_bundles,
-        ) = await self._parse_composer_documents(
-            document_service=document_service,
-            prepared=prepared,
-            documents=documents,
-        )
-        if current_failures:
-            failed = current_failures[0]
-            raise CurrentDocumentParseError(failed.filename)
-        current_digests, digest_trace = build_attachment_planner_digests(current_bundles)
-        if current_bundles:
-            logger.info(
-                "[AttachmentDigest] documents=%d input_tokens=%d output_tokens=%d "
-                "strategy=%s budgets=%s",
-                digest_trace["attachment_digest_documents"],
-                digest_trace["attachment_digest_input_tokens"],
-                digest_trace["attachment_digest_output_tokens"],
-                digest_trace["attachment_digest_strategy"],
-                digest_trace["attachment_digest_document_budgets"],
-            )
-        current_document_catalog = [
-            {
-                "attachment_id": document.attachment_id,
-                "filename": document.filename,
-                "parse_summary": current_digests.get(document.attachment_id, ""),
-            }
-            for document in documents
+            for attachment in current_attachments
         ]
-        described = await manager.adescribe_query_images(current_images)
-        plan = await manager.aplan_web_conversation_query(
-            query,
-            text_history=list(prepared.text_history),
-            image_catalog=catalog or None,
-            attachment_catalog=document_catalog or None,
-            current_attachment_catalog=current_document_catalog or None,
-            allowed_history_image_count=remaining,
-            allowed_history_attachment_count=_MAX_HISTORY_ATTACHMENTS,
-            current_image_descriptions=list(described.values()) or None,
-            workspaces=workspaces,
-        )
-
-        history_blocks: list[dict[str, Any]] = []
-        if plan.selected_history_image_ids:
-            owned = await self._store_call(
-                self._store.fetch_images_by_ids(
-                    prepared.principal_id,
-                    prepared.conversation_id,
-                    list(plan.selected_history_image_ids),
-                    ttl_days=self._ttl_days,
-                )
-            )
-            by_id = {image.image_id: image for image in owned}
-            for image_id in plan.selected_history_image_ids:  # preserve relevance order
-                image = by_id.get(image_id)
-                if image is None:
-                    continue
-                history_blocks.append(_history_image_block(image))
-
-        # History-image resolution is degraded when the planner selected images
-        # that could not all be materialized (fetch/ownership loss); the turn
-        # still continues text-only.
-        selected_count = len(plan.selected_history_image_ids)
-        resolution_status = "degraded" if selected_count > len(history_blocks) else "ok"
-
-        # Resolve the Composer lane independently from workspace RAG. Current
-        # uploads and planner-selected historical documents retain distinct
-        # scope metadata and are selected against the standalone query only.
-        composer_rows: list[dict[str, Any]] = []
-        composer_trace: dict[str, Any] = {}
-        warning_by_id: dict[str, DocumentWarning] = {}
-        history_chunks: list[AttachmentContextChunk] = []
-        history_bundles: list[tuple[str, ParsedAttachmentBundle]] = []
-        selected_attachment_ids = tuple(plan.selected_history_attachment_ids)
-        if selected_attachment_ids:
-            catalog_filenames = {
-                str(item.get("attachment_id")): safe_source_filename(str(item["filename"]))
-                for item in document_catalog
-                if item.get("attachment_id") and item.get("filename")
-            }
-            try:
-                fetched_history_docs = await self._store_call(
-                    self._store.fetch_documents_by_ids(
+        remaining = max(0, self._max_attachments - len(resources))
+        history = list(prepared.attachment_manifest)[-remaining:] if remaining else []
+        for entry in history:
+            resources.append(
+                ResourceInput(
+                    filename=entry.get("filename"),
+                    declared_mime=entry.get("mime_type"),
+                    loader=self._history_loader(
                         prepared.principal_id,
                         prepared.conversation_id,
-                        list(selected_attachment_ids),
-                        ttl_days=self._ttl_days,
-                    )
-                )
-            except WebConversationUnavailableError:
-                logger.warning(
-                    "[HistoricalDocument] fetch unavailable; continuing without %d documents",
-                    len(selected_attachment_ids),
-                    exc_info=True,
-                )
-                fetched_history_docs = []
-                for attachment_id in selected_attachment_ids:
-                    filename = catalog_filenames.get(attachment_id, "A referenced document")
-                    warning_by_id[attachment_id] = DocumentWarning(
-                        code=HISTORICAL_DOCUMENT_LOAD_FAILED,
-                        filename=filename,
-                        message=(
-                            f"{filename} could not be loaded for this answer. "
-                            "The answer will continue without it."
-                        ),
-                    )
-            history_docs_by_id = {
-                document.attachment_id: document for document in fetched_history_docs
-            }
-            for attachment_id in selected_attachment_ids:
-                if attachment_id in history_docs_by_id or attachment_id in warning_by_id:
-                    continue
-                filename = catalog_filenames.get(attachment_id, "A referenced document")
-                warning_by_id[attachment_id] = DocumentWarning(
-                    code=HISTORICAL_DOCUMENT_UNAVAILABLE,
-                    filename=filename,
-                    message=(
-                        f"{filename} is no longer available. The answer will continue without it."
+                        str(entry["attachment_id"]),
                     ),
                 )
-            history_docs = [
-                history_docs_by_id[attachment_id]
-                for attachment_id in selected_attachment_ids
-                if attachment_id in history_docs_by_id
-            ]
-            if history_docs and document_service is None:
-                document_service = self._get_composer_document_service(
-                    await processing_resources(), prepared
-                )
-            (
-                history_chunks,
-                history_failures,
-                history_bundles,
-            ) = await self._parse_composer_documents(
-                document_service=document_service,
-                prepared=prepared,
-                documents=history_docs,
             )
-            for failure in history_failures:
-                warning_by_id.setdefault(
-                    failure.attachment_id,
-                    DocumentWarning(
-                        code=HISTORICAL_DOCUMENT_PARSE_FAILED,
-                        filename=failure.filename,
-                        message=(
-                            f"Could not read {failure.filename}. "
-                            "The answer will continue without it."
-                        ),
-                    ),
-                )
-        if current_chunks or history_chunks:
-            if document_service is None:
-                raise RuntimeError("document service missing for parsed Composer chunks")
-            active_resources = await processing_resources()
-            retrieval_attachment_ids = {
-                attachment_id
-                for attachment_id, bundle in [*current_bundles, *history_bundles]
-                if bundle.evidence_mode == "retrieval"
-            }
-            current_rows = _composer_context_rows(current_chunks, scope="current")
-            history_rows = _composer_context_rows(history_chunks, scope="history")
-            retrieval_rows = [
-                row
-                for row in [*current_rows, *history_rows]
-                if str(row.get("full_doc_id") or "") in retrieval_attachment_ids
-            ]
-            retrieval_chunks = [
-                chunk
-                for chunk in [*current_chunks, *history_chunks]
-                if chunk.attachment_id in retrieval_attachment_ids
-            ]
-            request_vectors = _composer_request_vectors(retrieval_chunks)
-            dense_rankings, dense_trace = await document_service.adense_rankings(
-                plan.standalone_query,
-                retrieval_rows,
-                request_vectors=request_vectors,
-            )
-            composer_rows, composer_trace = await manager._aselect_web_composer_evidence(
-                query=plan.standalone_query,
-                current_rows=current_rows,
-                history_rows=history_rows,
-                dense_rankings=dense_rankings,
-                retrieval_attachment_ids=retrieval_attachment_ids,
-                rerank_func=active_resources.rerank_func,
-            )
-            composer_rows = _assign_composer_reference_ids(composer_rows)
-            composer_trace = {**dense_trace, **composer_trace}
-        composer_document_processing = [
-            {"attachment_id": attachment_id, **bundle.trace}
-            for attachment_id, bundle in [*current_bundles, *history_bundles]
-            if bundle.trace
-        ]
-        if composer_document_processing:
-            composer_trace = {
-                **composer_trace,
-                "composer_document_processing": composer_document_processing,
-            }
+        return resources
 
-        return PreparedAnswerTurn(
-            current_query=query,
-            retrieval_query=query,
-            text_history=tuple(prepared.text_history),
-            current_query_images=tuple(current_images),
-            history_query_images=tuple(history_blocks),
-            current_image_descriptions=described,
-            plan=plan,
-            history_image_catalog_count=len(catalog),
-            history_image_resolution_status=resolution_status,
-            composer_context_chunks=tuple(composer_rows),
-            composer_evidence_trace=composer_trace,
-            web_composer_visuals=True,
-            current_document_digests=current_digests,
-            document_warnings=tuple(
-                warning_by_id[attachment_id]
-                for attachment_id in selected_attachment_ids
-                if attachment_id in warning_by_id
-            ),
-        )
-
-    def _get_composer_document_service(
+    def _history_loader(
         self,
-        resources: ComposerProcessingResources,
-        prepared: PreparedWebConversation,
-    ) -> Any:
-        """Construct the Web-only Composer document service with its injected store."""
-        from dlightrag.core.request.attachments import ComposerDocumentService
-
-        return ComposerDocumentService(
-            lightrag=resources.lightrag,
-            store=self._store,
-            parser_rules=resources.config.parser_rules,
-            ttl_days=self._ttl_days,
-            robust_document_embedder=resources.robust_document_embedder,
-            direct_image_embedding_enabled=resources.direct_image_embedding_enabled,
-            model_bundle=resources.model_bundle,
-            config=resources.config,
-            principal_id=prepared.principal_id,
-            conversation_id=prepared.conversation_id,
-        )
-
-    async def _parse_composer_documents(
-        self,
-        *,
-        document_service: Any | None,
-        prepared: PreparedWebConversation,
-        documents: list[Any],
-    ) -> tuple[
-        list[AttachmentContextChunk],
-        list[_DocumentParseFailure],
-        list[tuple[str, ParsedAttachmentBundle]],
-    ]:
-        """Parse/chunk documents and retain their bundles for planner digests.
-
-        Parsing is content-addressed and cached by the injected store, so a
-        document parsed here (current uploads, before planning) is a cache hit if
-        looked up again. Returns parsed chunks (in document order), neutral parse
-        failures, and bundles that the caller may feed to the deterministic
-        planner-digest selector without reparsing. Failures are neutral internal
-        results; callers decide whether they are fatal or nonfatal.
-        """
-        if not documents:
-            return [], [], []
-        if document_service is None:
-            raise RuntimeError("document service is required for document parsing")
-        chunks: list[AttachmentContextChunk] = []
-        failures: list[_DocumentParseFailure] = []
-        bundles: list[tuple[str, ParsedAttachmentBundle]] = []
-        for document in documents:
-            bundle, meta = await document_service.achunks_for_attachment(
-                principal_id=prepared.principal_id,
-                conversation_id=prepared.conversation_id,
-                attachment_id=document.attachment_id,
-                filename=document.filename,
-                document_bytes=document.document_bytes,
-                content_sha256=document.content_sha256,
-            )
-            bundle = replace(bundle, trace=dict(meta))
-            if meta.get("attachment_parse_error"):
-                failures.append(
-                    _DocumentParseFailure(
-                        attachment_id=document.attachment_id,
-                        filename=safe_source_filename(document.filename),
-                    )
-                )
-            chunks.extend(bundle.chunks)
-            bundles.append((document.attachment_id, bundle))
-        return chunks, failures, bundles
-
-    async def image(
-        self,
-        user: UserContext | None,
+        principal_id: str,
         conversation_id: str,
-        image_id: str,
-    ) -> StoredConversationImage | None:
-        principal_id = principal_id_from_user(user)
-        return await self._store_call(
-            self._store.get_image(
+        attachment_id: str,
+    ) -> Callable[[], Awaitable[bytes]]:
+        async def _load() -> bytes:
+            stored = await self._store.get_attachment(
                 principal_id,
                 conversation_id,
-                image_id,
+                attachment_id,
                 ttl_days=self._ttl_days,
             )
-        )
+            if stored is None:
+                raise FileNotFoundError(f"attachment {attachment_id} is unavailable")
+            return stored.attachment_bytes
 
-    async def document(
+        return _load
+
+    async def attachment(
         self,
         user: UserContext | None,
         conversation_id: str,
@@ -645,16 +316,16 @@ class WebConversationService:
         self,
         user: UserContext | None,
         conversation_id: str,
-        image_id: str,
-    ) -> StoredConversationImage | None:
-        """Derive one bounded UI thumbnail after the scoped original lookup."""
-        image = await self.image(user, conversation_id, image_id)
-        if image is None:
+        attachment_id: str,
+    ) -> tuple[bytes, str] | None:
+        """Derive one bounded UI thumbnail for an image attachment."""
+        stored = await self.attachment(user, conversation_id, attachment_id)
+        if stored is None or not _is_image_mime(stored.mime_type):
             return None
         try:
             payload, mime_type = await asyncio.to_thread(
                 thumbnail_bytes,
-                image.image_bytes,
+                stored.attachment_bytes,
                 max_px=_HISTORY_THUMBNAIL_MAX_PX,
                 max_bytes=_HISTORY_THUMBNAIL_MAX_BYTES,
                 quality=_HISTORY_THUMBNAIL_QUALITY,
@@ -664,11 +335,7 @@ class WebConversationService:
         except Exception:
             logger.warning("Failed to derive Web conversation thumbnail", exc_info=True)
             return None
-        return StoredConversationImage(
-            image_id=image.image_id,
-            mime_type=mime_type,
-            image_bytes=payload,
-        )
+        return payload, mime_type
 
     async def commit_answer(
         self,
@@ -679,41 +346,20 @@ class WebConversationService:
         assistant_text: str,
         answer_sources: dict[str, Any],
         queried_workspaces: list[str],
-        images: tuple[ValidatedWebImage, ...],
-        image_descriptions: dict[str, str],
-        documents: tuple[ValidatedWebDocument, ...] = (),
-        document_parse_summaries: dict[str, str] | None = None,
+        attachments: tuple[ValidatedWebAttachment, ...] = (),
     ) -> CommitTurnResult:
         """Atomically append a completed answer against its captured revision."""
-
-        def description_for(image: ValidatedWebImage) -> str | None:
-            return image_descriptions.get(image.image_id) or image_descriptions.get(
-                str(image.ordinal)
-            )
-
-        pending = [
-            PendingConversationImage(
-                image_id=image.image_id,
-                ordinal=image.ordinal,
-                mime_type=image.mime_type,
-                image_bytes=image.image_bytes,
-                content_sha256=image.content_sha256,
-                vlm_description=description_for(image),
-            )
-            for image in images
-        ]
-        pending_documents = [
+        pending_attachments = [
             PendingConversationAttachment(
-                attachment_id=document.attachment_id,
-                ordinal=document.ordinal,
-                filename=document.filename,
-                mime_type=document.mime_type,
-                suffix=document.suffix,
-                attachment_bytes=document.document_bytes,
-                content_sha256=document.content_sha256,
-                parse_summary=(document_parse_summaries or {}).get(document.attachment_id),
+                attachment_id=attachment.attachment_id,
+                ordinal=attachment.ordinal,
+                filename=attachment.filename,
+                mime_type=attachment.mime_type,
+                suffix=attachment.suffix,
+                attachment_bytes=attachment.attachment_bytes,
+                content_sha256=attachment.content_sha256,
             )
-            for document in documents
+            for attachment in attachments
         ]
         try:
             async with asyncio.timeout(_COMMIT_ATTEMPT_TIMEOUT_SECONDS):
@@ -726,8 +372,7 @@ class WebConversationService:
                     assistant_text=assistant_text,
                     answer_sources=answer_sources,
                     queried_workspaces=queried_workspaces,
-                    images=pending,
-                    attachments=pending_documents,
+                    attachments=pending_attachments,
                     max_turns=self._max_turns,
                     ttl_days=self._ttl_days,
                 )
@@ -803,67 +448,6 @@ class WebConversationService:
             raise WebConversationUnavailableError from exc
 
 
-def _composer_context_rows(
-    chunks: list[AttachmentContextChunk],
-    *,
-    scope: str,
-) -> list[dict[str, Any]]:
-    """Project parsed chunks into scoped Composer-only evidence rows."""
-    rows: list[dict[str, Any]] = []
-    for chunk in chunks:
-        row = chunk.to_context_row()
-        row["metadata"] = {
-            **(row.get("metadata") or {}),
-            "attachment_scope": scope,
-            "chunk_index": chunk.chunk_index,
-            "sidecar_type": chunk.sidecar_type,
-        }
-        rows.append(row)
-    return rows
-
-
-def _assign_composer_reference_ids(
-    rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Copy final Composer rows and assign compact ids by document appearance."""
-    reference_ids: dict[str, str] = {}
-    assigned_rows: list[dict[str, Any]] = []
-    for row in rows:
-        value = row.get("full_doc_id")
-        if not isinstance(value, str) or not value or value != value.strip():
-            raise ValueError("Composer row is missing full_doc_id")
-        full_doc_id = value
-        reference_id = reference_ids.get(full_doc_id)
-        if reference_id is None:
-            reference_id = f"att-{len(reference_ids) + 1}"
-            reference_ids[full_doc_id] = reference_id
-
-        assigned_rows.append({**row, "reference_id": reference_id})
-    return assigned_rows
-
-
-def _composer_request_vectors(
-    chunks: list[AttachmentContextChunk],
-) -> dict[AttachmentCacheKey, AttachmentRequestVector]:
-    """Extract private in-request vectors without adding them to context rows."""
-    return {
-        chunk.cache_key: AttachmentRequestVector(
-            cache_key=chunk.cache_key,
-            embedding_signature=chunk.embedding_signature,
-            embedding_vector=chunk.embedding_vector,
-        )
-        for chunk in chunks
-        if chunk.cache_key is not None
-        and chunk.embedding_signature is not None
-        and chunk.embedding_vector is not None
-    }
-
-
-def _history_image_block(image: StoredConversationImage) -> dict[str, Any]:
-    data_uri = image_bytes_to_data_uri(image.image_bytes, fallback_mime=image.mime_type)
-    return {"type": "image_url", "image_url": {"url": data_uri}}
-
-
 def _conversation_summary(row: dict[str, Any]) -> ConversationSummary:
     return ConversationSummary(
         conversation_id=str(row["conversation_id"]),
@@ -901,11 +485,8 @@ def _answer_snapshot(value: Any) -> tuple[dict[str, Any], list[SourceReferencePa
 
 def _conversation_turn(conversation_id: str, row: dict[str, Any]) -> ConversationTurn:
     turn_number = int(row["turn_number"])
-    images = [
-        _image_reference(conversation_id, turn_number, image) for image in row.get("images", [])
-    ]
-    documents = [
-        _document_reference(conversation_id, turn_number, attachment)
+    attachments = [
+        _attachment_reference(conversation_id, turn_number, attachment)
         for attachment in row.get("attachments", [])
     ]
     answer_sources, sources, answer_images = _answer_snapshot(row.get("answer_sources"))
@@ -915,8 +496,7 @@ def _conversation_turn(conversation_id: str, row: dict[str, Any]) -> Conversatio
         turn_number=turn_number,
         user_text=str(row["user_text"]),
         assistant_text=assistant_text,
-        user_images=images,
-        user_documents=documents,
+        user_attachments=attachments,
         answer_sources=answer_sources,
         answer_html=safe_answer_done(
             answer=assistant_text,
@@ -928,41 +508,26 @@ def _conversation_turn(conversation_id: str, row: dict[str, Any]) -> Conversatio
     )
 
 
-def _image_reference(
-    conversation_id: str,
-    turn_number: int,
-    image: dict[str, Any],
-) -> ConversationImageReference:
-    image_id = str(image["image_id"])
-    ordinal = int(image["ordinal"])
-    url = f"/web/conversations/{conversation_id}/images/{image_id}"
-    return ConversationImageReference(
-        image_id=image_id,
-        ordinal=ordinal,
-        mime_type=str(image["mime_type"]),
-        url=url,
-        thumbnail_url=url + "/thumbnail",
-        label=f"Turn {turn_number}, image {ordinal}",
-    )
-
-
-def _document_reference(
+def _attachment_reference(
     conversation_id: str,
     turn_number: int,
     attachment: dict[str, Any],
-) -> ConversationDocumentReference:
+) -> ConversationAttachmentReference:
     attachment_id = str(attachment["attachment_id"])
     ordinal = int(attachment["ordinal"])
-    parse_summary = attachment.get("parse_summary")
-    return ConversationDocumentReference(
+    mime_type = str(attachment["mime_type"])
+    is_image = _is_image_mime(mime_type)
+    url = f"/web/conversations/{conversation_id}/attachments/{attachment_id}"
+    return ConversationAttachmentReference(
         attachment_id=attachment_id,
         ordinal=ordinal,
+        kind="image" if is_image else "document",
         filename=str(attachment["filename"]),
-        mime_type=str(attachment["mime_type"]),
+        mime_type=mime_type,
         byte_size=int(attachment["byte_size"]),
-        url=f"/web/conversations/{conversation_id}/documents/{attachment_id}",
-        label=f"Turn {turn_number}, document {ordinal}",
-        parse_summary=str(parse_summary) if parse_summary is not None else None,
+        url=url,
+        thumbnail_url=(url + "/thumbnail") if is_image else None,
+        label=f"Turn {turn_number}, attachment {ordinal}",
     )
 
 

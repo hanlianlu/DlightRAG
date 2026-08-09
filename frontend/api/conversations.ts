@@ -7,24 +7,16 @@ export interface ConversationSummary {
   updated_at: string;
 }
 
-export interface ConversationImageReference {
-  image_id: string;
-  ordinal: number;
-  mime_type: string;
-  url: string;
-  thumbnail_url: string;
-  label: string;
-}
-
-export interface ConversationDocumentReference {
+export interface ConversationAttachmentReference {
   attachment_id: string;
   ordinal: number;
+  kind: string;
   filename: string;
   mime_type: string;
   byte_size: number;
   url: string;
+  thumbnail_url: string | null;
   label: string;
-  parse_summary: string | null;
 }
 
 export interface ConversationTurn {
@@ -32,8 +24,7 @@ export interface ConversationTurn {
   turn_number: number;
   user_text: string;
   assistant_text: string;
-  user_images: ConversationImageReference[];
-  user_documents: ConversationDocumentReference[];
+  user_attachments: ConversationAttachmentReference[];
   answer_sources: Record<string, unknown>;
   answer_html: string;
   queried_workspaces: string[];

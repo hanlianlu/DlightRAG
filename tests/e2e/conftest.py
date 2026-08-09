@@ -30,12 +30,11 @@ from playwright.sync_api import Browser, Page, sync_playwright
 from dlightrag.api.server import create_app
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.answer.capability import AnswerImageCapability
-from dlightrag.core.answer.turn import PreparedAnswerTurn
-from dlightrag.storage.web_conversations import CommitTurnResult, StoredConversationImage
+from dlightrag.storage.web_conversations import CommitTurnResult, StoredConversationAttachment
 from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.web.conversation_models import (
+    ConversationAttachmentReference,
     ConversationHistory,
-    ConversationImageReference,
     ConversationSummary,
     ConversationTurn,
 )
@@ -86,7 +85,7 @@ class E2EConversationService:
             "created_at": now,
             "updated_at": now,
             "turns": [],
-            "images": {},
+            "attachments": {},
         }
         with self._lock:
             self._conversations[value["conversation_id"]] = value
@@ -152,36 +151,30 @@ class E2EConversationService:
                 text_history=tuple(text_history),
             )
 
-    async def prepare_answer_turn(
+    def build_answer_resources(
         self,
-        *,
-        manager: Any,
         prepared: PreparedWebConversation,
-        query: str,
-        current_images: list[dict[str, Any]],
-        current_documents: list[Any] | None = None,
-        workspaces: list[str] | None = None,
-    ) -> PreparedAnswerTurn:
-        del manager, current_documents, workspaces
-        return PreparedAnswerTurn.stateless(
-            query,
-            current_images,
-            history=list(prepared.text_history),
-        )
+        current_attachments: tuple[Any, ...],
+    ) -> list[Any]:
+        del prepared, current_attachments
+        return []
 
-    async def image(
-        self, _user: Any, conversation_id: str, image_id: str
-    ) -> StoredConversationImage | None:
+    async def attachment(
+        self, _user: Any, conversation_id: str, attachment_id: str
+    ) -> StoredConversationAttachment | None:
         with self._lock:
             value = self._conversations.get(conversation_id)
             if value is None:
                 return None
-            return value["images"].get(image_id)
+            return value["attachments"].get(attachment_id)
 
     async def thumbnail(
-        self, _user: Any, conversation_id: str, image_id: str
-    ) -> StoredConversationImage | None:
-        return await self.image(_user, conversation_id, image_id)
+        self, _user: Any, conversation_id: str, attachment_id: str
+    ) -> tuple[bytes, str] | None:
+        stored = await self.attachment(_user, conversation_id, attachment_id)
+        if stored is None or not stored.mime_type.lower().startswith("image/"):
+            return None
+        return stored.attachment_bytes, stored.mime_type
 
     def seed_image_history(self, *, turn_count: int) -> str:
         """Create one long image conversation for browser loading probes."""
@@ -198,15 +191,17 @@ class E2EConversationService:
             "created_at": now,
             "updated_at": now,
             "turns": [],
-            "images": {},
+            "attachments": {},
         }
         for index in range(1, turn_count + 1):
-            image_id = str(uuid4())
-            original_url = f"/web/conversations/{conversation_id}/images/{image_id}"
-            value["images"][image_id] = StoredConversationImage(
-                image_id=image_id,
+            attachment_id = str(uuid4())
+            base_url = f"/web/conversations/{conversation_id}/attachments/{attachment_id}"
+            value["attachments"][attachment_id] = StoredConversationAttachment(
+                attachment_id=attachment_id,
+                filename="chart.png",
                 mime_type="image/png",
-                image_bytes=png,
+                suffix=".png",
+                attachment_bytes=png,
             )
             value["turns"].append(
                 ConversationTurn(
@@ -214,14 +209,17 @@ class E2EConversationService:
                     turn_number=index,
                     user_text=f"Image question {index}",
                     assistant_text=f"Image answer {index}",
-                    user_images=[
-                        ConversationImageReference(
-                            image_id=image_id,
+                    user_attachments=[
+                        ConversationAttachmentReference(
+                            attachment_id=attachment_id,
                             ordinal=1,
+                            kind="image",
+                            filename="chart.png",
                             mime_type="image/png",
-                            url=original_url,
-                            thumbnail_url=original_url + "/thumbnail",
-                            label=f"Turn {index}, image 1",
+                            byte_size=len(png),
+                            url=base_url,
+                            thumbnail_url=base_url + "/thumbnail",
+                            label=f"Turn {index}, attachment 1",
                         )
                     ],
                     answer_sources={},
@@ -247,12 +245,9 @@ class E2EConversationService:
         assistant_text: str,
         answer_sources: dict[str, Any],
         queried_workspaces: list[str],
-        images: tuple[Any, ...],
-        image_descriptions: dict[str, str],
-        documents: tuple[Any, ...] = (),
-        document_parse_summaries: dict[str, str] | None = None,
+        attachments: tuple[Any, ...] = (),
     ) -> CommitTurnResult:
-        del submission_id, document_parse_summaries
+        del submission_id
         with self._lock:
             value = self._conversations.get(prepared.conversation_id)
             if value is None or value["content_revision"] != prepared.content_revision:
@@ -260,26 +255,32 @@ class E2EConversationService:
             now = datetime.now(UTC)
             turn_number = len(value["turns"]) + 1
             turn_id = str(uuid4())
-            image_references: list[ConversationImageReference] = []
-            for image in images:
-                value["images"][image.image_id] = StoredConversationImage(
-                    image_id=image.image_id,
-                    mime_type=image.mime_type,
-                    image_bytes=image.image_bytes,
+            attachment_references: list[ConversationAttachmentReference] = []
+            for attachment in attachments:
+                value["attachments"][attachment.attachment_id] = StoredConversationAttachment(
+                    attachment_id=attachment.attachment_id,
+                    filename=attachment.filename,
+                    mime_type=attachment.mime_type,
+                    suffix=attachment.suffix,
+                    attachment_bytes=attachment.attachment_bytes,
+                    content_sha256=attachment.content_sha256,
                 )
-                image_references.append(
-                    ConversationImageReference(
-                        image_id=image.image_id,
-                        ordinal=image.ordinal,
-                        mime_type=image.mime_type,
-                        url=(
-                            f"/web/conversations/{prepared.conversation_id}/images/{image.image_id}"
-                        ),
-                        thumbnail_url=(
-                            f"/web/conversations/{prepared.conversation_id}/images/"
-                            f"{image.image_id}/thumbnail"
-                        ),
-                        label=f"Turn {turn_number}, image {image.ordinal}",
+                is_image = attachment.mime_type.lower().startswith("image/")
+                base_url = (
+                    f"/web/conversations/{prepared.conversation_id}/attachments/"
+                    f"{attachment.attachment_id}"
+                )
+                attachment_references.append(
+                    ConversationAttachmentReference(
+                        attachment_id=attachment.attachment_id,
+                        ordinal=attachment.ordinal,
+                        kind="image" if is_image else "document",
+                        filename=attachment.filename,
+                        mime_type=attachment.mime_type,
+                        byte_size=attachment.byte_size,
+                        url=base_url,
+                        thumbnail_url=(base_url + "/thumbnail") if is_image else None,
+                        label=f"Turn {turn_number}, attachment {attachment.ordinal}",
                     )
                 )
             source_values = answer_sources.get("sources", [])
@@ -291,7 +292,7 @@ class E2EConversationService:
                     turn_number=turn_number,
                     user_text=user_text,
                     assistant_text=assistant_text,
-                    user_images=image_references,
+                    user_attachments=attachment_references,
                     answer_sources=answer_sources,
                     answer_html=safe_answer_done(
                         answer=assistant_text,
@@ -317,10 +318,9 @@ class E2EConversationService:
                 reason=None,
                 summary=summary,
                 turn_id=turn_id,
-                current_image_ids=tuple(image.image_id for image in images),
+                current_attachment_ids=tuple(item.attachment_id for item in attachments),
                 assistant_text=assistant_text,
                 answer_sources=answer_sources,
-                image_descriptions=image_descriptions,
             )
 
 
@@ -348,7 +348,7 @@ def e2e_base_url(
         answer_stream_idle_timeout=120.0,
         citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
         embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
-        answer=SimpleNamespace(image_max_pixels=MODEL_IMAGE_MAX_PIXELS),
+        answer=SimpleNamespace(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, max_attachments=6),
         query_images=SimpleNamespace(
             max_current_images=3,
             max_upload_bytes=15 * 1024 * 1024,

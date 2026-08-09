@@ -24,12 +24,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
-    from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
     from dlightrag.core.request.images import QueryImageDescriber
     from dlightrag.core.resources import ResourceInput, ResourceRegistry
     from dlightrag.core.retrieval.web_search import ExaSearch
     from dlightrag.core.source_download import SourceDownloadTarget
-    from dlightrag.models.composer import ComposerModelBundle
     from dlightrag.models.tool_model import QueryToolModel
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
@@ -64,7 +62,7 @@ from dlightrag.core.request.workspaces import (
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.scope import RequestScope
-from dlightrag.core.service import ComposerProcessingResources, RAGService
+from dlightrag.core.service import RAGService
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
 from dlightrag.utils import log_safe, normalize_workspace
@@ -175,13 +173,10 @@ class _OrchestratorRun:
     plan: QueryPlan
     prepared: PreparedQueryImages
     query_images: list[dict[str, Any]] | None
-    history_images: list[dict[str, Any]] | None
-    initial_contexts: RetrievalContexts | None
     history: list[dict[str, Any]] | None
     current_image_count: int
     ws_list: list[str]
     registry: ResourceRegistry | None
-    composer_trace: dict[str, Any]
 
 
 def _iso_or_none(value: Any) -> str | None:
@@ -323,12 +318,9 @@ class RAGServiceManager:
         )
         self._query_planner: QueryPlanner | None = None
         self._query_image_describer: QueryImageDescriber | None = None
-        self._composer_model_bundle: ComposerModelBundle | None = None
         self._web_search: ExaSearch | None = None
         self._query_tool_model: QueryToolModel | None = None
         self._query_image_describer_lock = asyncio.Lock()
-        self._composer_model_bundle_lock = asyncio.Lock()
-        self._composer_evidence_selector: ComposerEvidenceSelector | None = None
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
@@ -974,7 +966,6 @@ class RAGServiceManager:
     @staticmethod
     def _budget_agent_images(
         current_images: list[dict[str, Any]],
-        history_images: list[dict[str, Any]],
         budget: AnswerImageBudget,
     ) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
@@ -985,10 +976,6 @@ class RAGServiceManager:
                     f"current image query_image_{index} could not fit the answer image budget"
                 )
             blocks.append(block)
-        for index, image in enumerate(history_images, start=1):
-            block = budget.add_user_image(image, label=f"selected_history_image_{index}")
-            if block is not None:
-                blocks.append(block)
         return blocks
 
     def _sem_bound(self, func: Callable[..., Any]) -> Callable[..., Any]:
@@ -1043,12 +1030,12 @@ class RAGServiceManager:
         async with self._query_image_describer_lock:
             if self._query_image_describer is None:
                 from dlightrag.core.request.images import QueryImageDescriber
+                from dlightrag.models.llm import get_vlm_model_func
 
                 cfg = self._config.query_images
                 transport = self._config.answer
-                model_bundle = await self._aget_composer_model_bundle()
                 self._query_image_describer = QueryImageDescriber(
-                    vlm_func=model_bundle.vlm_func,
+                    vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
                     max_images=cfg.max_current_images,
                     max_total_bytes=transport.image_max_total_bytes,
                     max_bytes_per_image=transport.image_max_bytes,
@@ -1059,48 +1046,6 @@ class RAGServiceManager:
                     min_quality=transport.image_min_quality,
                 )
         return self._query_image_describer
-
-    async def _aget_composer_model_bundle(self) -> ComposerModelBundle:
-        """Return the sole manager-owned Composer role bundle."""
-        async with self._composer_model_bundle_lock:
-            if self._composer_model_bundle is None:
-                from dlightrag.models.composer import ComposerModelBundle
-                from dlightrag.models.llm import create_composer_analysis_adapter
-
-                self._composer_model_bundle = await ComposerModelBundle.acreate(
-                    self._config,
-                    bind=self._sem_bound,
-                    adapter_factory=create_composer_analysis_adapter,
-                )
-        return self._composer_model_bundle
-
-    def _get_composer_evidence_selector(self) -> ComposerEvidenceSelector:
-        """Create the Web Composer selector without touching workspace services."""
-        if self._composer_evidence_selector is None:
-            from dlightrag.core.request.composer_evidence import ComposerEvidenceSelector
-
-            self._composer_evidence_selector = ComposerEvidenceSelector()
-        return self._composer_evidence_selector
-
-    async def _aselect_web_composer_evidence(
-        self,
-        *,
-        query: str,
-        current_rows: list[dict[str, Any]],
-        history_rows: list[dict[str, Any]],
-        dense_rankings: list[dict[str, Any]],
-        retrieval_attachment_ids: set[str],
-        rerank_func: Any | None,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """Web-only: select Composer evidence in a lane isolated from RAG."""
-        return await self._get_composer_evidence_selector().select(
-            query=query,
-            current_rows=current_rows,
-            history_rows=history_rows,
-            dense_rankings=dense_rankings,
-            retrieval_attachment_ids=retrieval_attachment_ids,
-            rerank_func=rerank_func,
-        )
 
     async def _get_schema(
         self,
@@ -1126,83 +1071,6 @@ class RAGServiceManager:
             return cached[1] if cached is not None else {}
         self._schema_cache[ws_key] = (now, schema)
         return schema
-
-    async def aplan_web_conversation_query(
-        self,
-        query: str,
-        *,
-        text_history: list[dict[str, Any]] | None = None,
-        image_catalog: list[dict[str, Any]] | None = None,
-        attachment_catalog: list[dict[str, Any]] | None = None,
-        current_attachment_catalog: list[dict[str, Any]] | None = None,
-        allowed_history_image_count: int = 0,
-        allowed_history_attachment_count: int = 0,
-        current_image_descriptions: list[str] | None = None,
-        workspaces: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryPlan:
-        """Plan one Web conversation turn using the manager-owned planner.
-
-        Web ``/web/answer`` only. Routes through the separate
-        :meth:`QueryPlanner.plan_web_conversation` contract so scoped history
-        Composer documents and query images are planned in the same call.
-        REST/MCP/SDK/retrieve keep using :meth:`aplan_query`.
-        """
-        planner = self._get_query_planner()
-        from dlightrag.observability import trace_observation
-
-        async def _plan() -> QueryPlan:
-            async with trace_observation(
-                "query_planning",
-                as_type="chain",
-                input={"query": query},
-                metadata={
-                    "workspaces": list(workspaces or []),
-                    "history_messages": len(text_history or []),
-                    "history_image_catalog_count": len(image_catalog or []),
-                    "history_attachment_catalog_count": len(attachment_catalog or []),
-                    "current_attachment_count": len(current_attachment_catalog or []),
-                },
-            ) as trace:
-                schema = await self._get_schema(workspaces)
-                plan = await planner.plan_web_conversation(
-                    query,
-                    conversation_history=text_history,
-                    image_catalog=image_catalog,
-                    attachment_catalog=attachment_catalog,
-                    current_attachment_catalog=current_attachment_catalog,
-                    allowed_history_image_count=allowed_history_image_count,
-                    allowed_history_attachment_count=allowed_history_attachment_count,
-                    current_image_descriptions=current_image_descriptions,
-                    max_turns=self._config.max_conversation_turns,
-                    schema=schema,
-                )
-                trace.update(
-                    output={
-                        "standalone_query": plan.standalone_query,
-                        "has_metadata_filter": plan.metadata_filter is not None,
-                        "planner_outcome": plan.planner_outcome,
-                    }
-                )
-                return plan
-
-        return await self._overlap_query_service_warmup(workspaces, _plan())
-
-    async def aget_composer_processing_resources(
-        self, workspaces: list[str] | tuple[str, ...] | None = None
-    ) -> ComposerProcessingResources:
-        """Borrow one selected workspace service's resources for a Web turn."""
-        normalized = _normalize_workspaces(workspaces)
-        workspace = normalized[0] if normalized else normalize_workspace(self._config.workspace)
-        service = await self._get_service(workspace)
-        model_bundle = await self._aget_composer_model_bundle()
-        return ComposerProcessingResources(
-            lightrag=service.lightrag,
-            robust_document_embedder=service.robust_document_embedder,
-            direct_image_embedding_enabled=service.direct_image_embedding_enabled,
-            rerank_func=service.rerank_func,
-            model_bundle=model_bundle,
-            config=self._config,
-        )
 
     async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
         """Describe current-turn images (ordinal -> text) for image-aware planning.
@@ -1470,8 +1338,7 @@ class RAGServiceManager:
         )
         scoped = _scope_for_workspaces(scope, ws_list)
         history = list(turn.text_history) or None
-        current_images = list(turn.current_query_images)
-        history_images = list(turn.history_query_images)
+        current_images, remaining_resources = await self._extract_current_images(resources)
         if current_images:
             await self._maybe_reprobe_answer_image_capability()
         _check_answer_image_capability(
@@ -1479,20 +1346,12 @@ class RAGServiceManager:
             capability=self._answer_image_capability,
         )
 
-        if turn.plan is None:
-            plan, prepared = await self._describe_and_plan(
-                turn.retrieval_query,
-                text_history=history,
-                query_images=current_images,
-                ws_list=ws_list,
-            )
-        else:
-            plan = turn.plan
-            described = dict(turn.current_image_descriptions)
-            prepared = PreparedQueryImages(
-                descriptions=list(described.values()),
-                descriptions_by_ordinal=described,
-            )
+        plan, prepared = await self._describe_and_plan(
+            turn.retrieval_query,
+            text_history=history,
+            query_images=current_images,
+            ws_list=ws_list,
+        )
 
         first_retrieval = True
 
@@ -1520,7 +1379,7 @@ class RAGServiceManager:
             )
 
         web_search = self._get_web_search()
-        registry, resource_tools, has_resources = self._build_resource_context(resources)
+        registry, resource_tools, has_resources = self._build_resource_context(remaining_resources)
         research = web_search is not None or has_resources
 
         model_func: Callable[..., Any] | None = None
@@ -1568,13 +1427,9 @@ class RAGServiceManager:
 
         if research:
             image_budget = self._new_answer_image_budget()
-            query_images = (
-                self._budget_agent_images(current_images, history_images, image_budget) or None
-            )
-            fast_history_images: list[dict[str, Any]] | None = None
+            query_images = self._budget_agent_images(current_images, image_budget) or None
         else:
             query_images = current_images or None
-            fast_history_images = history_images or None
 
         orchestrator = AnswerOrchestrator(
             synthesizer=self._get_answer_engine(),
@@ -1588,26 +1443,81 @@ class RAGServiceManager:
             has_resources=has_resources,
             context_window_tokens=self._config.answer.context_window_tokens,
         )
-        initial_contexts: RetrievalContexts | None = None
-        if turn.composer_context_chunks:
-            initial_contexts = {
-                "chunks": [dict(row) for row in turn.composer_context_chunks],
-                "entities": [],
-                "relationships": [],
-            }
         return _OrchestratorRun(
             orchestrator=orchestrator,
             plan=plan,
             prepared=prepared,
             query_images=query_images,
-            history_images=fast_history_images,
-            initial_contexts=initial_contexts,
             history=history,
             current_image_count=len(current_images),
             ws_list=ws_list,
             registry=registry,
-            composer_trace=dict(turn.composer_evidence_trace),
         )
+
+    async def _extract_current_images(
+        self,
+        resources: list[ResourceInput] | None,
+    ) -> tuple[list[dict[str, Any]], list[ResourceInput]]:
+        """Split request resources into verified current-image blocks and the rest.
+
+        Inline bytes that decode as a real image and remote image links
+        (materialized under SSRF revalidation) become internal current-image
+        blocks fed to VLM description, direct visual retrieval, and final answer
+        transport. Durable lazy resources (prior attachments) and every non-image
+        resource stay in the request-local registry and are never eagerly
+        materialized. Non-image bytes never enter the image chain.
+        """
+        if not resources:
+            return [], []
+        from dlightrag.utils.images import image_bytes_to_data_uri, verify_web_image_bytes
+
+        max_pixels = self._config.answer.image_max_pixels
+        images: list[dict[str, Any]] = []
+        remaining: list[ResourceInput] = []
+        for resource in resources:
+            data: bytes | None = None
+            if resource.loader is not None:
+                remaining.append(resource)
+                continue
+            if resource.content is not None:
+                data = resource.content
+            elif resource.url is not None and (resource.declared_mime or "").lower().startswith(
+                "image/"
+            ):
+                data = await self._materialize_link_image(resource.url)
+            if data is None:
+                remaining.append(resource)
+                continue
+            try:
+                mime = verify_web_image_bytes(data, max_pixels=max_pixels)
+            except ValueError:
+                remaining.append(resource)
+                continue
+            images.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_bytes_to_data_uri(data, fallback_mime=mime)},
+                }
+            )
+        limit = max(0, int(self._config.query_images.max_current_images))
+        if len(images) > limit:
+            raise CurrentImagePayloadError(f"at most {limit} current images are allowed")
+        return images, remaining
+
+    async def _materialize_link_image(self, url: str) -> bytes | None:
+        """Fetch a current-image link under SSRF revalidation; None if it fails."""
+        from dlightrag.sourcing.url import afetch_public_https_bytes, validate_public_https_url
+
+        try:
+            validate_public_https_url(url, resolve_host=True)
+            return await afetch_public_https_bytes(
+                url,
+                max_bytes=self._config.answer.image_max_bytes,
+                timeout=120.0,
+            )
+        except Exception:
+            logger.warning("Failed to materialize current image link", exc_info=True)
+            return None
 
     def _build_resource_context(
         self,
@@ -1702,12 +1612,9 @@ class RAGServiceManager:
                             retrieval_query=run.plan.standalone_query,
                             conversation_history=run.history,
                             query_images=run.query_images,
-                            history_images=run.history_images,
-                            initial_contexts=run.initial_contexts,
                         )
                     finally:
                         self._answer_stream_sem.release()
-                    result.trace.update(run.composer_trace)
                     result.trace["query_image_description_count"] = len(run.prepared.descriptions)
                     result.image_descriptions = run.prepared.descriptions
                     self._set_answer_media(result)
@@ -1785,8 +1692,6 @@ class RAGServiceManager:
                             retrieval_query=run.plan.standalone_query,
                             conversation_history=run.history,
                             query_images=run.query_images,
-                            history_images=run.history_images,
-                            initial_contexts=run.initial_contexts,
                         )
                         if stream is None:
                             return contexts, None
@@ -1795,7 +1700,6 @@ class RAGServiceManager:
                         merged_trace = (
                             dict(existing_trace) if isinstance(existing_trace, dict) else {}
                         )
-                        merged_trace.update(run.composer_trace)
                         merged_trace["query_image_description_count"] = len(
                             run.prepared.descriptions
                         )
@@ -1865,7 +1769,6 @@ class RAGServiceManager:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         filters: MetadataFilter | None = None,
-        query_images: list[dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
         semantic_highlights: bool = False,
         resources: list[ResourceInput] | None = None,
@@ -1873,9 +1776,11 @@ class RAGServiceManager:
     ) -> RetrievalResult:
         """Answer from one or more workspaces through the one answer orchestrator.
 
-        ``query_images`` are current-request images. VLM descriptions inform
-        query planning, the raw images are embedded when optional direct visual
-        retrieval is active, and bounded image blocks reach the answer model.
+        Current-turn images and documents are supplied through ``resources``. The
+        manager extracts verified current images into internal image blocks (VLM
+        description informs planning, raw images are embedded for optional direct
+        visual retrieval, and bounded blocks reach the answer model) and registers
+        the remaining resources request-locally.
 
         ``history`` is caller-supplied prior turns (``role``/``content`` dicts).
         It is stateless -- the caller owns persistence and passes it per request.
@@ -1883,7 +1788,7 @@ class RAGServiceManager:
         resources or an open-web capability, in which case it researches.
         """
         return await self._aanswer_orchestrated(
-            PreparedAnswerTurn.stateless(query, query_images, history=history),
+            PreparedAnswerTurn.stateless(query, history=history),
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
@@ -1905,17 +1810,16 @@ class RAGServiceManager:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         filters: MetadataFilter | None = None,
-        query_images: list[dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
         resources: list[ResourceInput] | None = None,
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces through the orchestrator.
 
-        See ``aanswer`` for ``query_images`` and ``history`` semantics.
+        See ``aanswer`` for ``resources`` and ``history`` semantics.
         """
         return await self._aanswer_stream_prepared(
-            PreparedAnswerTurn.stateless(query, query_images, history=history),
+            PreparedAnswerTurn.stateless(query, history=history),
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
@@ -2000,15 +1904,12 @@ class RAGServiceManager:
 
         async with self._query_image_describer_lock:
             self._query_image_describer = None
-            async with self._composer_model_bundle_lock:
-                composer_model_bundle = self._composer_model_bundle
 
         for component in (
             self._answer_engine,
             self._query_planner,
             self._query_tool_model,
             self._web_search,
-            composer_model_bundle,
         ):
             close = getattr(component, "aclose", None)
             if not callable(close):
@@ -2021,11 +1922,6 @@ class RAGServiceManager:
                 cancellation = _defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Failed to close manager component", exc_info=True)
-
-        if composer_model_bundle is not None and composer_model_bundle.is_closed:
-            async with self._composer_model_bundle_lock:
-                if self._composer_model_bundle is composer_model_bundle:
-                    self._composer_model_bundle = None
 
         for ws, svc in self._services.items():
             try:

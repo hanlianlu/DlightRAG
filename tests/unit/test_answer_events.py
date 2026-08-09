@@ -5,10 +5,9 @@ import asyncio
 import datetime
 import json
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -21,30 +20,58 @@ from dlightrag.core.answer.errors import (
     CurrentDocumentParseError,
     CurrentImagePayloadError,
 )
-from dlightrag.core.answer.turn import (
-    HISTORICAL_DOCUMENT_PARSE_FAILED,
-    HISTORICAL_DOCUMENT_UNAVAILABLE,
-    DocumentWarning,
-    PreparedAnswerTurn,
-)
-from dlightrag.core.request.planner import QueryPlan
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.answer_events import stream_answer_events
-from dlightrag.web.attachment_models import ValidatedWebImage
+from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversations import PreparedWebConversation, WebConversationUnavailableError
 
 if TYPE_CHECKING:
     from dlightrag.core.servicemanager import RAGServiceManager
 
+_CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
+_SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
+_PRINCIPAL = "a" * 64
+
 
 def _fake_manager(**attrs: Any) -> RAGServiceManager:
-    # The real manager always exposes answer_image_capability (a property);
-    # default it here so fakes match that interface without repeating it.
     attrs.setdefault("answer_image_capability", None)
     return cast("RAGServiceManager", SimpleNamespace(**attrs))
 
 
+def _make_service() -> AsyncMock:
+    """A conversation service whose sync ``build_answer_resources`` returns a list."""
+    service = AsyncMock()
+    service.build_answer_resources = Mock(return_value=[])
+    return service
+
+
+def _prepared(**overrides: Any) -> PreparedWebConversation:
+    defaults: dict[str, Any] = {
+        "principal_id": _PRINCIPAL,
+        "conversation_id": _CONVERSATION_ID,
+        "content_revision": 2,
+        "text_history": (),
+    }
+    defaults.update(overrides)
+    return PreparedWebConversation(**defaults)
+
+
+def _image_attachment() -> ValidatedWebAttachment:
+    return ValidatedWebAttachment(
+        attachment_id="ephemeral-image",
+        ordinal=1,
+        filename="chart.png",
+        mime_type="image/png",
+        suffix=".png",
+        attachment_bytes=b"png",
+        content_sha256="digest",
+        kind="image",
+    )
+
+
 def _record_observations(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    from contextlib import asynccontextmanager
+
     captured: dict[str, object] = {"updates": []}
 
     class RecordingHandle:
@@ -70,7 +97,6 @@ class _TracedStream:
         self._tokens = list(tokens)
         self.trace = trace
         self.answer = "".join(self._tokens)
-        self.image_descriptions: dict[str, str] = {}
 
     def __aiter__(self) -> AsyncIterator[str]:
         return self._iter()
@@ -102,28 +128,21 @@ async def _collect(
     *,
     service: AsyncMock,
     result: CommitTurnResult | None = None,
-    validated_images: tuple[ValidatedWebImage, ...] = (),
+    validated_attachments: tuple[ValidatedWebAttachment, ...] = (),
     contexts: dict[str, Any] | None = None,
     tokens: tuple[str, ...] = ("Complete answer",),
+    token_iter: Any = None,
+    manager: Any = None,
 ):
     if result is not None:
         service.commit_answer.return_value = result
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hello",
-        retrieval_query="hello",
-    )
-    manager = _fake_manager(
-        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
-        _aanswer_stream_prepared=AsyncMock(
-            return_value=(contexts or {"chunks": []}, _tokens(tokens))
-        ),
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
-    )
+    if manager is None:
+        manager = _fake_manager(
+            config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+            _aanswer_stream_prepared=AsyncMock(
+                return_value=(contexts or {"chunks": []}, token_iter or _tokens(tokens))
+            ),
+        )
     events = [
         event
         async for event in stream_answer_events(
@@ -135,32 +154,25 @@ async def _collect(
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=validated_images,
-            submission_id="22222222-2222-4222-8222-222222222222",
+            prepared_conversation=_prepared(),
+            validated_attachments=validated_attachments,
+            submission_id=_SUBMISSION_ID,
         )
     ]
     return events
 
 
-async def _collect_prepare_error(
+async def _collect_stream_error(
     monkeypatch: pytest.MonkeyPatch,
     error: BaseException,
 ) -> tuple[list[str], dict[str, object], AsyncMock, AsyncMock]:
     captured = _record_observations(monkeypatch)
-    service = AsyncMock()
-    service.prepare_answer_turn.side_effect = error
-    answer_stream_prepared = AsyncMock()
+    service = _make_service()
+    answer_stream_prepared = AsyncMock(side_effect=error)
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         answer_image_capability=None,
         _aanswer_stream_prepared=answer_stream_prepared,
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
     )
     events = [
         event
@@ -171,9 +183,9 @@ async def _collect_prepare_error(
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            submission_id="22222222-2222-4222-8222-222222222222",
+            prepared_conversation=_prepared(),
+            validated_attachments=(),
+            submission_id=_SUBMISSION_ID,
         )
     ]
     return events, captured, service, answer_stream_prepared
@@ -198,193 +210,55 @@ def test_current_document_parse_error_builds_its_public_contract_from_filename()
 
 
 async def test_successful_stream_commits_once_before_done() -> None:
-    service = AsyncMock()
-    attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
+    service = _make_service()
     now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
     service.commit_answer.return_value = CommitTurnResult(
         saved=True,
         reason=None,
         summary={
-            "conversation_id": "11111111-1111-4111-8111-111111111111",
+            "conversation_id": _CONVERSATION_ID,
             "title": "Hello",
             "content_revision": 3,
             "created_at": now,
             "updated_at": now,
         },
         turn_id="turn-id",
-        current_image_ids=("durable-image",),
+        current_attachment_ids=("durable-attachment",),
     )
 
-    events = await _collect(
-        service=service,
-        contexts={
-            "chunks": [
-                {
-                    "reference_id": "att-1",
-                    "full_doc_id": attachment_id,
-                    "_workspace": "__web_attachment__",
-                    "file_path": "report.pdf",
-                    "content": "Attachment evidence",
-                    "chunk_id": "attachment-chunk-1",
-                    "metadata": {
-                        "source_type": "web_attachment",
-                        "source_uri": f"web-attachment://{attachment_id}",
-                        "source_download_locator": f"web-attachment://{attachment_id}",
-                    },
-                }
-            ]
-        },
-        tokens=("Complete answer [att-1-1]",),
-    )
+    events = await _collect(service=service, tokens=("Complete answer",))
 
     service.commit_answer.assert_awaited_once()
     answer_sources = service.commit_answer.await_args.kwargs["answer_sources"]
     assert answer_sources["answer_images"] == []
-    assert len(answer_sources["sources"]) == 1
-    source = answer_sources["sources"][0]
-    assert source["id"] == "att-1"
-    assert source["source_uri"] == f"web-attachment://{attachment_id}"
-    assert source["download_url"] == (
-        f"/web/conversations/11111111-1111-4111-8111-111111111111/documents/{attachment_id}"
-    )
     assert "composer_" not in json.dumps(answer_sources)
-    assert "att-1" not in source["download_url"]
     done = next(event for event in events if "event: done" in event)
     assert '"conversation_saved": true' in done
+    assert "durable-attachment" in done
 
 
-async def test_historical_document_warnings_emit_one_ordered_event_and_continue() -> None:
-    service = AsyncMock()
-    warnings = (
-        DocumentWarning(
-            code=HISTORICAL_DOCUMENT_PARSE_FAILED,
-            filename="history-report.pdf",
-            message=("Could not read history-report.pdf. The answer will continue without it."),
-        ),
-        DocumentWarning(
-            code=HISTORICAL_DOCUMENT_UNAVAILABLE,
-            filename="appendix.pdf",
-            message=("appendix.pdf is no longer available. The answer will continue without it."),
-        ),
+async def test_committed_submission_replays_without_regenerating() -> None:
+    now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
+    service = _make_service()
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        _aanswer_stream_prepared=AsyncMock(side_effect=AssertionError("must not regenerate")),
     )
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="summarize that report",
-        retrieval_query="summarize the prior report",
-        document_warnings=warnings,
-    )
-    service.commit_answer.return_value = CommitTurnResult(
+    committed = CommitTurnResult(
         saved=True,
         reason=None,
-        summary=None,
+        summary={
+            "conversation_id": _CONVERSATION_ID,
+            "title": "Prior",
+            "content_revision": 3,
+            "created_at": now,
+            "updated_at": now,
+        },
         turn_id="turn-id",
-    )
-    answer_stream_prepared = AsyncMock(
-        return_value=({"chunks": []}, _tokens(("Answer without the report",)))
-    )
-    manager = _fake_manager(
-        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
-        _aanswer_stream_prepared=answer_stream_prepared,
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
-    )
-
-    events = [
-        event
-        async for event in stream_answer_events(
-            manager=manager,
-            cfg=SimpleNamespace(
-                citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))
-            ),
-            query="summarize that report",
-            workspaces=["default"],
-            workspace="default",
-            conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            submission_id="22222222-2222-4222-8222-222222222222",
-        )
-    ]
-
-    event_names = [event.splitlines()[0] for event in events]
-    planning_index = event_names.index("event: progress")
-    warning_index = event_names.index("event: warning")
-    assert event_names.count("event: warning") == 1
-    searching_index = event_names.index("event: progress", planning_index + 1)
-    generating_index = event_names.index("event: progress", searching_index + 1)
-    done_index = event_names.index("event: done")
-    assert planning_index < warning_index < searching_index < generating_index < done_index
-    warning_payload = json.loads(events[warning_index].split("data: ", 1)[1])
-    assert warning_payload == {
-        "message": (
-            "2 referenced documents could not be used. The answer will continue without them."
-        ),
-        "documents": [
-            {
-                "code": HISTORICAL_DOCUMENT_PARSE_FAILED,
-                "filename": "history-report.pdf",
-                "message": warnings[0].message,
-            },
-            {
-                "code": HISTORICAL_DOCUMENT_UNAVAILABLE,
-                "filename": "appendix.pdf",
-                "message": warnings[1].message,
-            },
-        ],
-    }
-    answer_stream_prepared.assert_awaited_once()
-    service.commit_answer.assert_awaited_once()
-    answer_sources = service.commit_answer.await_args.kwargs["answer_sources"]
-    assert "warning" not in json.dumps(answer_sources).lower()
-    assert HISTORICAL_DOCUMENT_PARSE_FAILED not in json.dumps(answer_sources)
-
-
-async def test_revision_conflict_is_visible_and_not_appended() -> None:
-    service = AsyncMock()
-    image = ValidatedWebImage(
-        image_id="ephemeral-image",
-        ordinal=1,
-        mime_type="image/png",
-        image_bytes=b"png",
-        data_uri="data:image/png;base64,cG5n",
-        content_sha256="digest",
-    )
-    events = await _collect(
-        service=service,
-        result=CommitTurnResult(
-            saved=False, reason="conversation_changed", summary=None, turn_id=None
-        ),
-        validated_images=(image,),
-    )
-
-    done = next(event for event in events if "event: done" in event)
-    assert '"conversation_saved": false' in done
-    assert '"conversation_save_reason": "conversation_changed"' in done
-    assert "ephemeral-image" not in done
-    assert '"current_image_ids": []' in done
-
-
-async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
-    async def failing_tokens():
-        yield "partial"
-        raise RuntimeError("provider failed")
-
-    service = AsyncMock()
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hello", retrieval_query="hello"
-    )
-    manager = _fake_manager(
-        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
-        _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, failing_tokens())),
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
+        current_attachment_ids=("prior-attachment",),
+        assistant_text="Prior answer",
+        answer_sources={"sources": [], "answer_images": []},
+        replayed=True,
     )
 
     events = [
@@ -396,11 +270,49 @@ async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            submission_id="22222222-2222-4222-8222-222222222222",
+            prepared_conversation=_prepared(committed_submission=committed),
+            validated_attachments=(),
+            submission_id=_SUBMISSION_ID,
         )
     ]
+
+    done = next(event for event in events if "event: done" in event)
+    assert '"conversation_saved": true' in done
+    assert "Prior answer" in done
+    assert "prior-attachment" in done
+    service.commit_answer.assert_not_awaited()
+
+
+async def test_revision_conflict_is_visible_and_not_appended() -> None:
+    service = _make_service()
+
+    events = await _collect(
+        service=service,
+        result=CommitTurnResult(
+            saved=False, reason="conversation_changed", summary=None, turn_id=None
+        ),
+        validated_attachments=(_image_attachment(),),
+    )
+
+    done = next(event for event in events if "event: done" in event)
+    assert '"conversation_saved": false' in done
+    assert '"conversation_save_reason": "conversation_changed"' in done
+    assert "ephemeral-image" not in done
+    assert '"current_attachment_ids": []' in done
+
+
+async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
+    async def failing_tokens():
+        yield "partial"
+        raise RuntimeError("provider failed")
+
+    service = _make_service()
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, failing_tokens())),
+    )
+
+    events = await _collect(service=service, manager=manager)
 
     assert any("event: error" in event for event in events)
     assert not any("event: done" in event for event in events)
@@ -412,33 +324,24 @@ async def test_transport_and_capability_metrics_reach_observation(
 ) -> None:
     captured = _record_observations(monkeypatch)
     now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
-    service = AsyncMock()
+    service = _make_service()
     service.commit_answer.return_value = CommitTurnResult(
         saved=True,
         reason=None,
         summary={
-            "conversation_id": "11111111-1111-4111-8111-111111111111",
+            "conversation_id": _CONVERSATION_ID,
             "title": "Hi",
             "content_revision": 3,
             "created_at": now,
             "updated_at": now,
         },
         turn_id="turn-id",
-        current_image_ids=(),
     )
     trace = {
         "answer_images_current": 1,
-        "answer_images_history": 1,
-        "answer_images_composer": 1,
         "answer_images_rag": 2,
-        "answer_images_total": 5,
+        "answer_images_total": 3,
         "answer_image_budget_used_bytes": 4096,
-        "answer_composer_image_budget_used_bytes": 1536,
-        "answer_rag_image_budget_used_bytes": 2560,
-        "answer_context_composer_images_sent": 1,
-        "answer_context_composer_images_skipped": 2,
-        "answer_context_rag_images_sent": 2,
-        "answer_context_rag_images_skipped": 3,
     }
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
@@ -455,37 +358,8 @@ async def test_transport_and_capability_metrics_reach_observation(
             return_value=({"chunks": []}, _TracedStream(["answer"], trace))
         ),
     )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
-    )
-    turn = PreparedAnswerTurn(
-        current_query="hi",
-        retrieval_query="hi",
-        plan=QueryPlan(
-            original_query="hi",
-            standalone_query="hi",
-            selected_history_image_ids=("img-1",),
-        ),
-        history_image_catalog_count=2,
-        history_image_resolution_status="degraded",
-    )
-    service.prepare_answer_turn.return_value = turn
 
-    async for _event in stream_answer_events(
-        manager=manager,
-        cfg=SimpleNamespace(citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))),
-        query="hi",
-        workspaces=["default"],
-        workspace="default",
-        conversation_service=service,
-        prepared_conversation=prepared,
-        validated_images=(),
-        submission_id="22222222-2222-4222-8222-222222222222",
-    ):
-        pass
+    await _collect(service=service, manager=manager)
 
     capability = [
         metadata
@@ -497,8 +371,6 @@ async def test_transport_and_capability_metrics_reach_observation(
     assert caps["answer_image_capability_status"] == "supported"
     assert caps["answer_image_configured_ceiling"] == 8
     assert caps["answer_image_effective_limit"] == 6
-    assert caps["history_image_catalog_count"] == 2
-    assert caps["history_images_selected"] == 1
 
     # Streaming shares the non-streaming span name, so one Langfuse view covers both.
     assert captured["name"] == "answer_pipeline"
@@ -509,63 +381,24 @@ async def test_transport_and_capability_metrics_reach_observation(
     assert isinstance(updates, list)
     outputs = [update["output"] for update in updates if "output" in update]
     assert outputs == [{"answer_len": 6, "source_count": 0, "context_chunk_count": 0}]
-    assert caps["history_image_resolution_status"] == "degraded"
 
     transport = [
         metadata for metadata in _metadata_updates(captured) if "answer_images_total" in metadata
     ]
     assert transport, "transport metrics were not emitted"
     metrics = transport[-1]
-    assert metrics["answer_images_total"] == 5
+    assert metrics["answer_images_total"] == 3
     assert metrics["answer_images_current"] == 1
-    assert metrics["answer_images_history"] == 1
-    assert metrics["answer_images_composer"] == 1
     assert metrics["answer_images_rag"] == 2
     assert metrics["answer_image_bytes_total"] == 4096
-    assert metrics["answer_composer_image_bytes"] == 1536
-    assert metrics["answer_rag_image_bytes"] == 2560
-    assert metrics["composer_raw_images_skipped"] == 2
-    assert metrics["composer_visual_descriptions_included"] == 3
-    assert metrics["rag_raw_images_skipped"] == 3
-    assert metrics["rag_visual_descriptions_included"] == 5
 
 
 async def test_current_image_payload_error_maps_to_limit_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured = _record_observations(monkeypatch)
-    service = AsyncMock()
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hi", retrieval_query="hi"
+    events, captured, service, _prepared_mock = await _collect_stream_error(
+        monkeypatch, CurrentImagePayloadError("2 current-turn images exceed 1")
     )
-    manager = _fake_manager(
-        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
-        answer_image_capability=None,
-        _aanswer_stream_prepared=AsyncMock(
-            side_effect=CurrentImagePayloadError("2 current-turn images exceed 1")
-        ),
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
-    )
-
-    events = [
-        event
-        async for event in stream_answer_events(
-            manager=manager,
-            cfg=SimpleNamespace(),
-            query="hi",
-            workspaces=["default"],
-            workspace="default",
-            conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            submission_id="22222222-2222-4222-8222-222222222222",
-        )
-    ]
 
     error_event = next(event for event in events if "event: error" in event)
     error_payload = json.loads(error_event.split("data: ", 1)[1])
@@ -588,7 +421,7 @@ async def test_current_document_parse_error_emits_safe_typed_error_before_genera
 ) -> None:
     parse_error = CurrentDocumentParseError("broken.docx")
     parse_error.__cause__ = RuntimeError("raw parser exception: customer secret")
-    events, captured, service, answer_stream_prepared = await _collect_prepare_error(
+    events, captured, service, _prepared_mock = await _collect_stream_error(
         monkeypatch, parse_error
     )
 
@@ -605,7 +438,6 @@ async def test_current_document_parse_error_emits_safe_typed_error_before_genera
         if "error_kind" in metadata
     ]
     assert error_kinds == [CURRENT_DOCUMENT_PARSE_FAILED]
-    answer_stream_prepared.assert_not_awaited()
     service.commit_answer.assert_not_awaited()
 
 
@@ -616,9 +448,7 @@ async def test_answer_image_error_emits_its_safe_message(
         "Images are unavailable for this answer model.",
         error_kind=CURRENT_IMAGES_UNSUPPORTED,
     )
-    events, _captured, _service, _answer_stream_prepared = await _collect_prepare_error(
-        monkeypatch, error
-    )
+    events, _captured, _service, _prepared_mock = await _collect_stream_error(monkeypatch, error)
 
     error_event = next(event for event in events if "event: error" in event)
     assert json.loads(error_event.split("data: ", 1)[1]) == {
@@ -636,19 +466,10 @@ async def test_cancellation_propagates_without_committing(
         yield "partial"
         raise asyncio.CancelledError
 
-    service = AsyncMock()
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hello", retrieval_query="hello"
-    )
+    service = _make_service()
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, cancelled_tokens())),
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
     )
 
     async def consume() -> None:
@@ -659,9 +480,9 @@ async def test_cancellation_propagates_without_committing(
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            submission_id="22222222-2222-4222-8222-222222222222",
+            prepared_conversation=_prepared(),
+            validated_attachments=(),
+            submission_id=_SUBMISSION_ID,
         ):
             pass
 
@@ -683,19 +504,10 @@ async def _run_failing_stream(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         yield "partial"
         raise RuntimeError("secret provider detail")
 
-    service = AsyncMock()
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="private prompt", retrieval_query="private prompt"
-    )
+    service = _make_service()
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, failing_tokens())),
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
     )
 
     _events = [
@@ -707,9 +519,9 @@ async def _run_failing_stream(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
             workspaces=["default"],
             workspace="default",
             conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            submission_id="22222222-2222-4222-8222-222222222222",
+            prepared_conversation=_prepared(),
+            validated_attachments=(),
+            submission_id=_SUBMISSION_ID,
         )
     ]
     return captured
@@ -725,8 +537,8 @@ async def test_failure_records_error_detail_and_raw_ids_by_default(
     assert isinstance(start, dict)
     # Full traceability by default: query, raw error text, and raw IDs are captured.
     assert start["input"] == {"query": "private prompt"}
-    assert start["metadata"]["principal_id"] == "a" * 64
-    assert start["metadata"]["conversation_id"] == "11111111-1111-4111-8111-111111111111"
+    assert start["metadata"]["principal_id"] == _PRINCIPAL
+    assert start["metadata"]["conversation_id"] == _CONVERSATION_ID
     assert "secret provider detail" in serialized
     assert '"conversation_saved": false' in serialized
     assert "answer_failed" in serialized
@@ -742,7 +554,7 @@ async def test_privacy_mode_redacts_error_text_and_ids(
     serialized = json.dumps(captured)
     # Privacy mode: generic error text and hashed IDs; raw values must not leak.
     assert "secret provider detail" not in serialized
-    assert "11111111-1111-4111-8111-111111111111" not in serialized
+    assert _CONVERSATION_ID not in serialized
     assert "answer_stream_failed" in serialized
     start = captured["start"]
     assert isinstance(start, dict)
@@ -756,7 +568,7 @@ async def test_privacy_mode_redacts_error_text_and_ids(
     ("result", "expected_saved", "expected_reason"),
     (
         (
-            CommitTurnResult(True, None, None, "turn", current_image_ids=("stored",)),
+            CommitTurnResult(True, None, None, "turn", current_attachment_ids=("stored",)),
             True,
             None,
         ),
@@ -774,7 +586,7 @@ async def test_completed_stream_records_terminal_save_outcome(
     expected_reason: str | None,
 ) -> None:
     captured = _record_observations(monkeypatch)
-    service = AsyncMock()
+    service = _make_service()
 
     await _collect(service=service, result=result)
 
@@ -785,25 +597,17 @@ async def test_completed_stream_records_terminal_save_outcome(
     assert terminal["conversation_save_reason"] == expected_reason
 
 
-async def test_storage_failure_records_unsaved_and_exposes_no_image_ids(
+async def test_storage_failure_records_unsaved_and_exposes_no_attachment_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _record_observations(monkeypatch)
-    service = AsyncMock()
+    service = _make_service()
     service.commit_answer.side_effect = WebConversationUnavailableError
-    image = ValidatedWebImage(
-        image_id="ephemeral-image",
-        ordinal=1,
-        mime_type="image/png",
-        image_bytes=b"png",
-        data_uri="data:image/png;base64,cG5n",
-        content_sha256="digest",
-    )
 
-    events = await _collect(service=service, validated_images=(image,))
+    events = await _collect(service=service, validated_attachments=(_image_attachment(),))
 
     done = next(event for event in events if "event: done" in event)
-    assert '"current_image_ids": []' in done
+    assert '"current_attachment_ids": []' in done
     assert "ephemeral-image" not in done
     updates = captured["updates"]
     assert isinstance(updates, list)
@@ -831,7 +635,7 @@ async def test_cancellation_during_commit_does_not_cancel_persistence(
             raise
         return CommitTurnResult(True, None, None, "turn")
 
-    service = AsyncMock()
+    service = _make_service()
     service.commit_answer.side_effect = commit_answer
     consume = asyncio.create_task(_collect(service=service))
     await started.wait()
@@ -864,7 +668,7 @@ async def test_cancelled_client_records_unknown_post_commit_outcome(
         await release.wait()
         return CommitTurnResult(False, "commit_outcome_unknown", None, None)
 
-    service = AsyncMock()
+    service = _make_service()
     service.commit_answer.side_effect = commit_answer
     consume = asyncio.create_task(_collect(service=service))
     await started.wait()
@@ -885,7 +689,7 @@ async def test_saving_heartbeat_keeps_persistence_wait_visible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("dlightrag.web.answer_events._PERSISTENCE_HEARTBEAT_SECONDS", 0.001)
-    service = AsyncMock()
+    service = _make_service()
 
     async def commit_answer(*_args, **_kwargs):
         await asyncio.sleep(0.005)
@@ -918,20 +722,11 @@ async def test_generator_close_after_saving_heartbeat_finishes_commit(
         finished.set()
         return CommitTurnResult(True, None, None, "turn")
 
-    service = AsyncMock()
+    service = _make_service()
     service.commit_answer.side_effect = commit_answer
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hello", retrieval_query="hello"
-    )
     manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
     )
     stream = stream_answer_events(
         manager=manager,
@@ -940,9 +735,9 @@ async def test_generator_close_after_saving_heartbeat_finishes_commit(
         workspaces=["default"],
         workspace="default",
         conversation_service=service,
-        prepared_conversation=prepared,
-        validated_images=(),
-        submission_id="22222222-2222-4222-8222-222222222222",
+        prepared_conversation=_prepared(),
+        validated_attachments=(),
+        submission_id=_SUBMISSION_ID,
     )
 
     while True:
@@ -960,66 +755,35 @@ async def test_generator_close_after_saving_heartbeat_finishes_commit(
     assert finished.is_set()
 
 
-async def test_documents_thread_into_prepare_commit_and_surface_attachment_ids() -> None:
-    from dlightrag.web.attachment_models import validate_web_documents
+async def test_attachments_thread_into_commit_and_surface_attachment_ids() -> None:
+    from dlightrag.web.attachment_models import validate_web_attachments
 
-    (document,) = validate_web_documents([("notes.md", "text/markdown", b"# Termination clause")])
-    service = AsyncMock()
-    now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
-    service.prepare_answer_turn.return_value = PreparedAnswerTurn(
-        current_query="hello",
-        retrieval_query="hello",
-        current_document_digests={document.attachment_id: "Termination clause digest"},
+    (document,) = validate_web_attachments(
+        [("notes.md", "text/markdown", b"# Termination clause")],
+        max_attachments=6,
+        image_max_bytes=15 * 1024 * 1024,
     )
+    service = _make_service()
+    now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
     service.commit_answer.return_value = CommitTurnResult(
         saved=True,
         reason=None,
         summary={
-            "conversation_id": "11111111-1111-4111-8111-111111111111",
+            "conversation_id": _CONVERSATION_ID,
             "title": "Hello",
             "content_revision": 3,
             "created_at": now,
             "updated_at": now,
         },
         turn_id="turn-id",
-        current_image_ids=(),
         current_attachment_ids=("durable-doc",),
     )
-    manager = _fake_manager(
-        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
-        _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
-    )
-    prepared = PreparedWebConversation(
-        principal_id="a" * 64,
-        conversation_id="11111111-1111-4111-8111-111111111111",
-        content_revision=2,
-        text_history=(),
-    )
 
-    events = [
-        event
-        async for event in stream_answer_events(
-            manager=manager,
-            cfg=SimpleNamespace(
-                citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))
-            ),
-            query="hello",
-            workspaces=["default"],
-            workspace="default",
-            conversation_service=service,
-            prepared_conversation=prepared,
-            validated_images=(),
-            validated_documents=(document,),
-            submission_id="22222222-2222-4222-8222-222222222222",
-        )
-    ]
+    events = await _collect(service=service, validated_attachments=(document,))
 
-    prepare_kwargs = service.prepare_answer_turn.await_args.kwargs
-    assert prepare_kwargs["current_documents"] == [document]
-    commit_kwargs = service.commit_answer.await_args.kwargs
-    assert commit_kwargs["documents"] == (document,)
-    assert commit_kwargs["document_parse_summaries"] == {
-        document.attachment_id: "Termination clause digest"
-    }
+    service.build_answer_resources.assert_called_once()
+    assert service.build_answer_resources.call_args.args[1] == (document,)
+    service.commit_answer.assert_awaited_once()
+    assert service.commit_answer.await_args.kwargs["attachments"] == (document,)
     done = next(event for event in events if "event: done" in event)
     assert "durable-doc" in done

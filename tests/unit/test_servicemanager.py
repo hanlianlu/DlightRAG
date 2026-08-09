@@ -2,7 +2,6 @@
 """Tests for RAGServiceManager: workspace pool, routing, health tracking."""
 
 import asyncio
-import dataclasses
 import importlib
 import json
 from collections.abc import AsyncIterator
@@ -115,86 +114,6 @@ async def test_prepared_stream_keeps_server_history_internal(
     ]
 
 
-async def test_prepared_stream_retrieval_excludes_history_images(
-    test_cfg, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Current images drive retrieval; history images only reach the answer model."""
-    from dlightrag.core.answer.capability import AnswerImageCapability
-
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    current = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,CUR"}}]
-    history = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,HIST"}}]
-    turn = answer_turn.PreparedAnswerTurn(
-        current_query="Follow up",
-        retrieval_query="Standalone",
-        current_query_images=tuple(current),
-        history_query_images=tuple(history),
-    )
-    manager = RAGServiceManager(config=test_cfg)
-    manager._answer_image_capability = AnswerImageCapability(
-        status="supported",
-        configured_ceiling=6,
-        effective_max_images=6,
-        provider="openai",
-        base_url=None,
-        model="gpt-4o",
-        failure_kind=None,
-    )
-    manager._maybe_reprobe_answer_image_capability = AsyncMock()  # type: ignore[method-assign]
-    captured: dict[str, Any] = {}
-
-    async def _describe_and_plan(query: str, *, query_images, **_kwargs: Any):
-        captured["retrieval_images"] = list(query_images)
-        return (
-            QueryPlan(original_query="Follow up", standalone_query="Standalone"),
-            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-        )
-
-    manager._describe_and_plan = _describe_and_plan  # type: ignore[method-assign]
-    monkeypatch.setattr("dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator)
-
-    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
-
-    # The planner (and thus retrieval) sees only current images, never history.
-    assert captured["retrieval_images"] == current
-
-
-async def test_prepared_stream_passes_composer_chunks_as_initial_contexts(
-    test_cfg, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Composer evidence is handed to the orchestrator as fixed initial context."""
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    manager = RAGServiceManager(config=test_cfg)
-    manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-        return_value=(
-            QueryPlan(original_query="q", standalone_query="q"),
-            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-        )
-    )
-    monkeypatch.setattr("dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator)
-    turn = answer_turn.PreparedAnswerTurn(
-        current_query="q",
-        retrieval_query="q",
-        composer_context_chunks=({"chunk_id": "att-1", "content": "clause"},),
-        composer_evidence_trace={"composer_evidence_strategy": "full"},
-    )
-
-    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
-
-    initial = _CapturingOrchestrator.last["answer_stream"]["initial_contexts"]
-    assert initial["chunks"] == [{"chunk_id": "att-1", "content": "clause"}]
-
-
-def test_stateless_turn_carries_no_web_composer_context() -> None:
-    """REST/MCP/SDK turns never receive the Web-only Composer lane."""
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    turn = answer_turn.PreparedAnswerTurn.stateless("q")
-    assert turn.composer_context_chunks == ()
-    assert turn.composer_evidence_trace == {}
-    assert turn.document_warnings == ()
-    assert turn.web_composer_visuals is False
-
-
 async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     planner = AsyncMock()
@@ -215,8 +134,7 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
     assert planner.plan.await_args.kwargs["conversation_history"] == history
 
 
-@pytest.mark.parametrize("planner_kind", ["standard", "web"])
-async def test_query_planning_overlaps_workspace_warmup(test_cfg, planner_kind: str) -> None:
+async def test_query_planning_overlaps_workspace_warmup(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     warm_started = asyncio.Event()
     release_warm = asyncio.Event()
@@ -233,27 +151,20 @@ async def test_query_planning_overlaps_workspace_warmup(test_cfg, planner_kind: 
         return QueryPlan(original_query="query", standalone_query="planned")
 
     manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
-    if planner_kind == "standard":
-        describer = AsyncMock()
-        describer.describe.return_value = {}
-        manager._aget_query_image_describer = AsyncMock(  # type: ignore[method-assign]
-            return_value=describer
-        )
-        manager._aplan_query_prepared = AsyncMock(  # type: ignore[method-assign]
-            side_effect=plan_query
-        )
-        operation = manager._describe_and_plan(
-            "query",
-            text_history=None,
-            query_images=None,
-            ws_list=["reports"],
-        )
-    else:
-        planner = AsyncMock()
-        planner.plan_web_conversation.side_effect = plan_query
-        manager._query_planner = planner
-        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
-        operation = manager.aplan_web_conversation_query("query", workspaces=["reports"])
+    describer = AsyncMock()
+    describer.describe.return_value = {}
+    manager._aget_query_image_describer = AsyncMock(  # type: ignore[method-assign]
+        return_value=describer
+    )
+    manager._aplan_query_prepared = AsyncMock(  # type: ignore[method-assign]
+        side_effect=plan_query
+    )
+    operation = manager._describe_and_plan(
+        "query",
+        text_history=None,
+        query_images=None,
+        ws_list=["reports"],
+    )
 
     task = asyncio.create_task(operation)
     try:
@@ -535,99 +446,6 @@ class TestGetService:
         )
         assert mock_create.await_count == 1
         assert all(r is mock_service for r in results)
-
-    @pytest.mark.parametrize(
-        ("workspaces", "expected_workspace"),
-        [
-            ([" Research Notes ", "ignored"], "research_notes"),
-            (None, "default"),
-        ],
-    )
-    async def test_composer_processing_resources_borrow_selected_service_once(
-        self,
-        test_cfg: DlightragConfig,
-        workspaces: list[str] | None,
-        expected_workspace: str,
-    ) -> None:
-        config = test_cfg.model_copy(update={"workspace": "default"})
-        manager = RAGServiceManager(config=config)
-        lightrag = object()
-        document_embedder = object()
-        rerank_func = object()
-        model_bundle = object()
-        service = SimpleNamespace(
-            lightrag=lightrag,
-            robust_document_embedder=document_embedder,
-            direct_image_embedding_enabled=True,
-            rerank_func=rerank_func,
-        )
-        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
-        manager._aget_composer_model_bundle = AsyncMock(  # type: ignore[method-assign]
-            return_value=model_bundle
-        )
-
-        resources = await manager.aget_composer_processing_resources(workspaces)
-
-        manager._get_service.assert_awaited_once_with(expected_workspace)
-        manager._aget_composer_model_bundle.assert_awaited_once_with()
-        assert resources.lightrag is lightrag
-        assert resources.robust_document_embedder is document_embedder
-        assert resources.direct_image_embedding_enabled is True
-        assert resources.rerank_func is rerank_func
-        assert resources.model_bundle is model_bundle
-        assert resources.config is config
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            resources.lightrag = object()  # pyright: ignore[reportAttributeAccessIssue]
-
-    def test_composer_evidence_selector_is_stateless_and_uses_no_model_factory(
-        self,
-        test_cfg: DlightragConfig,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        def _must_not_create(*_args: Any, **_kwargs: Any) -> Any:
-            raise AssertionError("selector must borrow per-turn resources")
-
-        monkeypatch.setattr("dlightrag.models.llm.get_embedding_func", _must_not_create)
-        monkeypatch.setattr("dlightrag.models.llm.get_multimodal_embedder", _must_not_create)
-        monkeypatch.setattr("dlightrag.models.llm.get_rerank_func", _must_not_create)
-        manager = RAGServiceManager(config=test_cfg)
-
-        selector = manager._get_composer_evidence_selector()
-
-        assert selector is manager._get_composer_evidence_selector()
-
-    async def test_composer_evidence_selector_receives_resolved_attachment_ids(
-        self,
-        test_cfg: DlightragConfig,
-    ) -> None:
-        manager = RAGServiceManager(config=test_cfg)
-        selector = SimpleNamespace(select=AsyncMock(return_value=([{"chunk_id": "c1"}], {})))
-        manager._composer_evidence_selector = selector  # type: ignore[assignment]
-        current_rows = [{"chunk_id": "c1", "full_doc_id": "full"}]
-        history_rows = [{"chunk_id": "h1", "full_doc_id": "retrieval"}]
-        dense_rankings = [history_rows[0]]
-        retrieval_attachment_ids = {"retrieval"}
-        rerank_func = object()
-
-        selected, trace = await manager._aselect_web_composer_evidence(
-            query="query",
-            current_rows=current_rows,
-            history_rows=history_rows,
-            dense_rankings=dense_rankings,
-            retrieval_attachment_ids=retrieval_attachment_ids,
-            rerank_func=rerank_func,
-        )
-
-        assert selected == [{"chunk_id": "c1"}]
-        assert trace == {}
-        selector.select.assert_awaited_once_with(
-            query="query",
-            current_rows=current_rows,
-            history_rows=history_rows,
-            dense_rankings=dense_rankings,
-            retrieval_attachment_ids=retrieval_attachment_ids,
-            rerank_func=rerank_func,
-        )
 
 
 class TestWorkspaceCreation:
@@ -973,53 +791,6 @@ class TestAnswerViaEngine:
                 ],
             }
         ]
-
-    async def test_web_planner_trace_records_attachments_and_outcome(
-        self, test_cfg, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        async def llm_func(**_kwargs) -> str:
-            return "not valid structured output"
-
-        trace_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            "dlightrag.observability.trace_observation",
-            _record_trace_calls(trace_calls),
-        )
-        manager = RAGServiceManager(config=test_cfg)
-        manager._query_planner = QueryPlanner(llm_func=llm_func)
-        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
-
-        plan = await manager.aplan_web_conversation_query(
-            "what is this?",
-            text_history=[
-                {"role": "user", "content": "Earlier question"},
-                {"role": "assistant", "content": "Earlier answer"},
-            ],
-            attachment_catalog=[
-                {
-                    "attachment_id": "prior-doc",
-                    "turn_number": 1,
-                    "ordinal": 0,
-                    "filename": "prior.pdf",
-                    "parse_summary": "Prior report",
-                }
-            ],
-            current_attachment_catalog=[
-                {
-                    "attachment_id": "current-doc",
-                    "filename": "current.pdf",
-                    "parse_summary": "Current report",
-                }
-            ],
-            workspaces=["ws_a"],
-        )
-
-        assert plan.planner_outcome == "fallback_invalid_response"
-        trace = trace_calls[0]
-        assert trace["metadata"]["history_messages"] == 2
-        assert trace["metadata"]["history_attachment_catalog_count"] == 1
-        assert trace["metadata"]["current_attachment_count"] == 1
-        assert trace["updates"][-1]["output"]["planner_outcome"] == ("fallback_invalid_response")
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_calls_retrieve_then_engine(
@@ -2238,230 +2009,6 @@ class TestClose:
         svc_b.aclose.assert_awaited_once()
         assert manager._services == {}
         assert not manager._ready
-
-    async def test_close_retains_composer_bundle_until_failed_closer_retries(
-        self,
-        test_cfg,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from dlightrag.models.composer import ComposerModelBundle
-
-        events: list[str] = []
-        vlm_attempts = 0
-
-        async def close_vlm() -> None:
-            nonlocal vlm_attempts
-            vlm_attempts += 1
-            events.append("bundle-vlm")
-            if vlm_attempts == 1:
-                raise RuntimeError("temporary close failure")
-
-        async def close_extract() -> None:
-            events.append("bundle-extract")
-
-        bundle = ComposerModelBundle(
-            vlm_func=AsyncMock(),
-            extract_func=AsyncMock(),
-            vlm_identity={},
-            extract_identity={},
-            _closers=(close_vlm, close_extract),
-        )
-        service = AsyncMock()
-        service.aclose.side_effect = lambda: events.append("service")
-        pool_close = AsyncMock(side_effect=lambda: events.append("pool"))
-        shutdown_tracing = MagicMock(side_effect=lambda: events.append("tracing"))
-        monkeypatch.setattr("dlightrag.storage.pool.pg_pool.close", pool_close)
-        monkeypatch.setattr("dlightrag.observability.shutdown_tracing", shutdown_tracing)
-        manager = RAGServiceManager(config=test_cfg)
-        manager._composer_model_bundle = bundle
-        manager._services = {"default": service}
-
-        await manager.aclose()
-
-        assert events == [
-            "bundle-vlm",
-            "bundle-extract",
-            "service",
-            "pool",
-            "tracing",
-        ]
-        assert manager._composer_model_bundle is bundle
-        assert bundle.is_closed is False
-
-        await manager.aclose()
-        await manager.aclose()
-
-        assert vlm_attempts == 2
-        assert bundle.is_closed is True
-        assert manager._composer_model_bundle is None
-
-    async def test_close_defers_bundle_cancellation_until_manager_cleanup_finishes(
-        self,
-        test_cfg,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from dlightrag.models.composer import ComposerModelBundle
-
-        events: list[str] = []
-        cancellation_seen_by_closer: list[asyncio.CancelledError] = []
-        close_started = asyncio.Event()
-        block_close = asyncio.Event()
-        vlm_attempts = 0
-
-        async def close_vlm() -> None:
-            nonlocal vlm_attempts
-            vlm_attempts += 1
-            if vlm_attempts > 1:
-                events.append("bundle-vlm-retry")
-                return
-            events.append("bundle-vlm-started")
-            close_started.set()
-            try:
-                await block_close.wait()
-            except asyncio.CancelledError as exc:
-                cancellation_seen_by_closer.append(exc)
-                events.append("bundle-vlm-cancelled")
-                raise
-
-        async def close_extract() -> None:
-            events.append("bundle-extract")
-
-        bundle = ComposerModelBundle(
-            vlm_func=AsyncMock(),
-            extract_func=AsyncMock(),
-            vlm_identity={},
-            extract_identity={},
-            _closers=(close_vlm, close_extract),
-        )
-        service = AsyncMock()
-        service.aclose.side_effect = lambda: events.append("service")
-        pool_close = AsyncMock(side_effect=lambda: events.append("pool"))
-        shutdown_tracing = MagicMock(side_effect=lambda: events.append("tracing"))
-        monkeypatch.setattr("dlightrag.storage.pool.pg_pool.close", pool_close)
-        monkeypatch.setattr("dlightrag.observability.shutdown_tracing", shutdown_tracing)
-        manager = RAGServiceManager(config=test_cfg)
-        manager._composer_model_bundle = bundle
-        manager._services = {"default": service}
-
-        close_task = asyncio.create_task(manager.aclose())
-        await close_started.wait()
-        close_task.cancel("manager shutdown")
-        with pytest.raises(asyncio.CancelledError, match="manager shutdown") as exc_info:
-            await close_task
-        events.append("cancellation-observed")
-
-        assert cancellation_seen_by_closer == [exc_info.value]
-        assert events == [
-            "bundle-vlm-started",
-            "bundle-vlm-cancelled",
-            "bundle-extract",
-            "service",
-            "pool",
-            "tracing",
-            "cancellation-observed",
-        ]
-        assert manager._composer_model_bundle is bundle
-        assert bundle.is_closed is False
-
-        await manager.aclose()
-
-        assert vlm_attempts == 2
-        assert bundle.is_closed is True
-        assert manager._composer_model_bundle is None
-
-    async def test_composer_bundle_is_lazy_shared_and_manager_owned(
-        self, test_cfg, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from dlightrag.models.composer import ComposerModelBundle
-
-        vlm = AsyncMock()
-        bundle = SimpleNamespace(
-            vlm_func=vlm,
-            extract_func=AsyncMock(),
-            aclose=AsyncMock(),
-            is_closed=True,
-        )
-        create = AsyncMock(return_value=bundle)
-        monkeypatch.setattr(ComposerModelBundle, "acreate", create)
-        manager = RAGServiceManager(config=test_cfg)
-
-        assert await manager._aget_composer_model_bundle() is bundle
-        assert await manager._aget_composer_model_bundle() is bundle
-        describer = await manager._aget_query_image_describer()
-
-        assert describer._vlm_func is vlm
-        create.assert_awaited_once()
-
-        await manager.aclose()
-        await manager.aclose()
-
-        bundle.aclose.assert_awaited_once()
-        assert manager._query_image_describer is None
-
-    async def test_composer_borrowers_do_not_duplicate_role_providers(
-        self, test_cfg, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from dlightrag.core.request.composer_analysis import create_composer_analysis_proxy
-        from dlightrag.models import llm
-
-        providers: list[SimpleNamespace] = []
-
-        def get_provider(*args: Any, **kwargs: Any) -> SimpleNamespace:
-            provider = SimpleNamespace(aclose=AsyncMock())
-            providers.append(provider)
-            return provider
-
-        monkeypatch.setattr(llm, "get_provider", get_provider)
-        manager = RAGServiceManager(config=test_cfg)
-
-        bundle = await manager._aget_composer_model_bundle()
-        describer = await manager._aget_query_image_describer()
-        proxy = create_composer_analysis_proxy(
-            lightrag=SimpleNamespace(tokenizer=object()),
-            model_bundle=bundle,
-            config=test_cfg,
-        )
-
-        assert len(providers) == 2
-        assert describer._vlm_func is bundle.vlm_func
-        assert proxy.role_llm_funcs["vlm"] is bundle.vlm_func
-        assert proxy.role_llm_funcs["extract"] is bundle.extract_func
-
-        await manager.aclose()
-        await manager.aclose()
-
-        for provider in providers:
-            provider.aclose.assert_awaited_once()
-
-    async def test_composer_bundle_lazy_creation_is_single_flight(
-        self, test_cfg, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from dlightrag.models.composer import ComposerModelBundle
-
-        started = asyncio.Event()
-        release = asyncio.Event()
-        bundle = SimpleNamespace(aclose=AsyncMock(), is_closed=True)
-
-        async def create(*args: Any, **kwargs: Any) -> SimpleNamespace:
-            started.set()
-            await release.wait()
-            return bundle
-
-        create_mock = AsyncMock(side_effect=create)
-        monkeypatch.setattr(ComposerModelBundle, "acreate", create_mock)
-        manager = RAGServiceManager(config=test_cfg)
-
-        first = asyncio.create_task(manager._aget_composer_model_bundle())
-        await started.wait()
-        second = asyncio.create_task(manager._aget_composer_model_bundle())
-        await asyncio.sleep(0)
-        release.set()
-
-        assert await first is bundle
-        assert await second is bundle
-        create_mock.assert_awaited_once()
-
-        await manager.aclose()
 
 
 class TestWorkspaceDiscovery:

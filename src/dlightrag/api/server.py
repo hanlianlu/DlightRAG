@@ -169,6 +169,7 @@ def create_app(*, include_web: bool = True) -> FastAPI:
             store=PGWebConversationStore(),
             max_turns=cfg.web_conversations.max_turns,
             ttl_days=cfg.web_conversations.ttl_days,
+            max_attachments=cfg.answer.max_attachments,
         )
 
         @application.exception_handler(WebConversationUnavailableError)

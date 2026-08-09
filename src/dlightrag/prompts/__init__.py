@@ -13,9 +13,6 @@ from .planner import (
 from .rag import (
     answer_core,
 )
-from .web_planner import (
-    WEB_PLANNER_SYSTEM_PROMPT,
-)
 
 __all__ = [
     # guidance
@@ -24,8 +21,6 @@ __all__ = [
     # planner
     "PLANNER_SYSTEM_PROMPT",
     "PLANNER_IMAGE_CONTEXT_GUIDANCE",
-    # web planner
-    "WEB_PLANNER_SYSTEM_PROMPT",
     # rag
     "answer_core",
     "HIGHLIGHT_SYSTEM_PROMPT",

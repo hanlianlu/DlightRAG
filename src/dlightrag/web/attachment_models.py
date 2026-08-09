@@ -1,26 +1,23 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Web current-turn attachment admission (images + documents) and request-local models."""
+"""Web current-turn attachment admission (one ordered images+documents collection)."""
 
-import base64
-import binascii
 import hashlib
 import mimetypes
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
 from dlightrag.core.ingestion.uploads import safe_upload_basename
-from dlightrag.utils.images import (
-    MODEL_IMAGE_MAX_PIXELS,
-    split_data_uri,
-    verify_web_image_bytes,
-)
+from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS, verify_web_image_bytes
 
-MAX_CURRENT_DOCUMENTS = 3
-MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
+# One ordered attachment collection per message. Images and documents mix; the
+# manager extracts verified images into current-image blocks and registers the
+# rest as request-local resources. The admitted count is owned at runtime by
+# ``config.answer.max_attachments`` and threaded in by callers.
+MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 
-COMPOSER_DOCUMENT_EXTENSIONS = frozenset(
+SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
     {
         "pdf",
         "docx",
@@ -57,19 +54,6 @@ COMPOSER_DOCUMENT_EXTENSIONS = frozenset(
 AttachmentKind = Literal["image", "document", "unsupported"]
 
 
-@dataclass(frozen=True, slots=True)
-class ValidatedWebDocument:
-    """One current-turn Web Composer document after admission."""
-
-    attachment_id: str
-    ordinal: int
-    filename: str
-    mime_type: str
-    suffix: str
-    document_bytes: bytes
-    content_sha256: str
-
-
 def _suffix(filename: str) -> str:
     safe = safe_upload_basename(filename)
     dot = safe.rfind(".")
@@ -81,121 +65,84 @@ def classify_web_attachment(filename: str, mime_type: str | None) -> AttachmentK
     if mime.startswith("image/"):
         return "image"
     extension = _suffix(filename).lstrip(".")
-    return "document" if extension in COMPOSER_DOCUMENT_EXTENSIONS else "unsupported"
+    return "document" if extension in SUPPORTED_DOCUMENT_EXTENSIONS else "unsupported"
 
 
-def validate_web_documents(
-    documents: Sequence[tuple[str, str | None, bytes]],
-) -> tuple[ValidatedWebDocument, ...]:
-    if len(documents) > MAX_CURRENT_DOCUMENTS:
-        raise ValueError("Web answer accepts at most 3 documents per message")
+@dataclass(frozen=True, slots=True)
+class ValidatedWebAttachment:
+    """One admitted current-turn Web attachment (image or document)."""
 
-    validated: list[ValidatedWebDocument] = []
-    for ordinal, (filename, mime_type, payload) in enumerate(documents, start=1):
+    attachment_id: str
+    ordinal: int
+    filename: str
+    mime_type: str
+    suffix: str
+    attachment_bytes: bytes
+    content_sha256: str
+    kind: Literal["image", "document"]
+
+    @property
+    def byte_size(self) -> int:
+        return len(self.attachment_bytes)
+
+
+def validate_web_attachments(
+    items: Sequence[tuple[str, str | None, bytes]],
+    *,
+    max_attachments: int,
+    image_max_bytes: int,
+    image_max_pixels: int = MODEL_IMAGE_MAX_PIXELS,
+    document_max_bytes: int = MAX_ATTACHMENT_BYTES,
+    image_max_count: int | None = None,
+) -> tuple[ValidatedWebAttachment, ...]:
+    """Admit one ordered mixed collection of current-turn image/document uploads."""
+    if len(items) > max_attachments:
+        raise ValueError(f"Web answer accepts at most {max_attachments} attachments per message")
+    validated: list[ValidatedWebAttachment] = []
+    image_count = 0
+    for ordinal, (filename, mime_type, payload) in enumerate(items, start=1):
         safe_name = safe_upload_basename(filename)
         suffix = _suffix(safe_name)
-        if classify_web_attachment(safe_name, mime_type) != "document":
-            raise ValueError(f"Unsupported Composer document: {safe_name}")
         if not payload:
-            raise ValueError(f"Composer document is empty: {safe_name}")
-        if len(payload) > MAX_DOCUMENT_BYTES:
-            raise ValueError("Composer document exceeds 100 MB")
-        detected_mime = (
-            mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
-        )
+            raise ValueError(f"Attachment is empty: {safe_name}")
+        kind = classify_web_attachment(safe_name, mime_type)
+        if kind == "image":
+            image_count += 1
+            if image_max_count is not None and image_count > image_max_count:
+                raise ValueError(f"Web answer accepts at most {image_max_count} current images")
+            if len(payload) > image_max_bytes:
+                raise ValueError(f"image {safe_name} exceeds the {image_max_bytes}-byte limit")
+            try:
+                detected_mime = verify_web_image_bytes(payload, max_pixels=image_max_pixels)
+            except ValueError as exc:
+                raise ValueError(f"image {safe_name} {exc}") from exc
+        elif kind == "document":
+            if len(payload) > document_max_bytes:
+                raise ValueError(f"document {safe_name} exceeds the size limit")
+            detected_mime = (
+                mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+            )
+        else:
+            raise ValueError(f"Unsupported attachment: {safe_name}")
         validated.append(
-            ValidatedWebDocument(
+            ValidatedWebAttachment(
                 attachment_id=str(uuid4()),
                 ordinal=ordinal,
                 filename=safe_name,
                 mime_type=detected_mime,
                 suffix=suffix,
-                document_bytes=payload,
+                attachment_bytes=payload,
                 content_sha256=hashlib.sha256(payload).hexdigest(),
-            )
-        )
-    return tuple(validated)
-
-
-# --- Web current-turn image admission ---------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ValidatedWebImage:
-    """One canonical browser image upload, safe for model use and persistence."""
-
-    image_id: str
-    ordinal: int
-    mime_type: str
-    image_bytes: bytes
-    data_uri: str
-    content_sha256: str
-
-    @property
-    def model_block(self) -> dict[str, Any]:
-        return {"type": "image_url", "image_url": {"url": self.data_uri}}
-
-
-def _strict_base64_decoded_size(payload: str) -> int | None:
-    """Return decoded size from canonical padding without allocating decoded bytes."""
-    if not payload or len(payload) % 4:
-        return None
-    padding = len(payload) - len(payload.rstrip("="))
-    misplaced_padding = "=" in payload[:-padding] if padding else "=" in payload
-    if padding > 2 or misplaced_padding:
-        return None
-    return (len(payload) // 4 * 3) - padding
-
-
-def validate_web_images(
-    values: list[str],
-    *,
-    max_images: int,
-    max_bytes: int,
-    max_pixels: int = MODEL_IMAGE_MAX_PIXELS,
-) -> tuple[ValidatedWebImage, ...]:
-    """Strictly validate browser image uploads and return their canonical form."""
-    if len(values) > max_images:
-        raise ValueError(f"at most {max_images} current images are allowed")
-    validated: list[ValidatedWebImage] = []
-    for ordinal, value in enumerate(values, start=1):
-        _declared_mime, payload = split_data_uri(value)
-        decoded_size = _strict_base64_decoded_size(payload)
-        if decoded_size is not None and decoded_size > max_bytes:
-            raise ValueError(f"current image {ordinal} exceeds the {max_bytes}-byte limit")
-        try:
-            raw = base64.b64decode(payload, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(f"current image {ordinal} is not valid base64") from exc
-        if not raw:
-            raise ValueError(f"current image {ordinal} is empty")
-        if len(raw) > max_bytes:
-            raise ValueError(f"current image {ordinal} exceeds the {max_bytes}-byte limit")
-        try:
-            mime_type = verify_web_image_bytes(raw, max_pixels=max_pixels)
-        except ValueError as exc:
-            raise ValueError(f"current image {ordinal} {exc}") from exc
-        encoded = base64.b64encode(raw).decode("ascii")
-        validated.append(
-            ValidatedWebImage(
-                image_id=str(uuid4()),
-                ordinal=ordinal,
-                mime_type=mime_type,
-                image_bytes=raw,
-                data_uri=f"data:{mime_type};base64,{encoded}",
-                content_sha256=hashlib.sha256(raw).hexdigest(),
+                kind="image" if kind == "image" else "document",
             )
         )
     return tuple(validated)
 
 
 __all__ = [
-    "COMPOSER_DOCUMENT_EXTENSIONS",
-    "MAX_CURRENT_DOCUMENTS",
-    "MAX_DOCUMENT_BYTES",
-    "ValidatedWebDocument",
-    "ValidatedWebImage",
+    "MAX_ATTACHMENT_BYTES",
+    "SUPPORTED_DOCUMENT_EXTENSIONS",
+    "ValidatedWebAttachment",
     "classify_web_attachment",
-    "validate_web_documents",
-    "validate_web_images",
+    "validate_web_attachments",
 ]

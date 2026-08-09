@@ -115,56 +115,46 @@ async def delete_conversation(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/conversations/{conversation_id}/images/{image_id}")
-async def conversation_image(
-    conversation_id: UUID,
-    image_id: UUID,
-    request: Request,
-    service: WebConversationService = Depends(get_web_conversation_service),
-) -> Response:
-    image = await service.image(_user(request), str(conversation_id), str(image_id))
-    if image is None:
-        raise HTTPException(status_code=404, detail="Image not found")
-    return Response(
-        content=image.image_bytes,
-        media_type=image.mime_type,
-        headers={"Cache-Control": "private, max-age=3600"},
-    )
-
-
-@router.get("/conversations/{conversation_id}/images/{image_id}/thumbnail")
-async def conversation_image_thumbnail(
-    conversation_id: UUID,
-    image_id: UUID,
-    request: Request,
-    service: WebConversationService = Depends(get_web_conversation_service),
-) -> Response:
-    thumbnail = await service.thumbnail(_user(request), str(conversation_id), str(image_id))
-    if thumbnail is None:
-        raise HTTPException(status_code=404, detail="Thumbnail not available")
-    return Response(
-        content=thumbnail.image_bytes,
-        media_type=thumbnail.mime_type,
-        headers={"Cache-Control": "private, max-age=86400, immutable"},
-    )
-
-
-@router.get("/conversations/{conversation_id}/documents/{attachment_id}")
-async def conversation_document(
+@router.get("/conversations/{conversation_id}/attachments/{attachment_id}")
+async def conversation_attachment(
     conversation_id: UUID,
     attachment_id: UUID,
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> Response:
-    document = await service.document(_user(request), str(conversation_id), str(attachment_id))
-    if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    attachment = await service.attachment(_user(request), str(conversation_id), str(attachment_id))
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    headers = {
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if not attachment.mime_type.lower().startswith("image/"):
+        headers["Content-Disposition"] = _attachment_content_disposition(attachment.filename)
     return Response(
-        content=document.attachment_bytes,
-        media_type=document.mime_type,
+        content=attachment.attachment_bytes,
+        media_type=attachment.mime_type,
+        headers=headers,
+    )
+
+
+@router.get("/conversations/{conversation_id}/attachments/{attachment_id}/thumbnail")
+async def conversation_attachment_thumbnail(
+    conversation_id: UUID,
+    attachment_id: UUID,
+    request: Request,
+    service: WebConversationService = Depends(get_web_conversation_service),
+) -> Response:
+    thumbnail = await service.thumbnail(_user(request), str(conversation_id), str(attachment_id))
+    if thumbnail is None:
+        raise HTTPException(status_code=404, detail="Thumbnail not available")
+    payload, mime_type = thumbnail
+    return Response(
+        content=payload,
+        media_type=mime_type,
         headers={
-            "Cache-Control": "private, max-age=3600",
-            "Content-Disposition": _attachment_content_disposition(document.filename),
+            "Cache-Control": "private, max-age=86400, immutable",
+            "X-Content-Type-Options": "nosniff",
         },
     )
 

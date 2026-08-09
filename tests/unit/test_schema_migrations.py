@@ -236,3 +236,52 @@ async def test_apply_migrations_rejects_duplicate_versions_before_mutating_db() 
         await apply_migrations(conn, scope="example", migrations=duplicate)
 
     assert conn.executed == []
+
+
+async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
+    """The Web conversation reset migration only touches web_conversation* tables.
+
+    It deletes every Web conversation row, drops the three superseded tables,
+    and recreates one unified raw-attachment table under the existing ledger,
+    without referencing workspace documents, LightRAG tables, ingest jobs, or
+    global migration tables.
+    """
+    from dlightrag.storage.web_conversations import WEB_CONVERSATION_MIGRATIONS
+
+    conn = _Conn()
+    await apply_migrations(
+        conn,
+        scope="web_conversations",
+        migrations=WEB_CONVERSATION_MIGRATIONS,
+    )
+
+    ddl = [query for query, _ in conn.executed if "web_conversation" in query.lower()]
+    joined = "\n".join(ddl)
+    assert "DELETE FROM web_conversations" in joined
+    assert "DROP TABLE IF EXISTS web_conversation_attachment_chunks" in joined
+    assert "DROP TABLE IF EXISTS web_conversation_images" in joined
+    assert "DROP TABLE IF EXISTS web_conversation_attachments" in joined
+    drop_index = next(
+        i for i, q in enumerate(ddl) if "DROP TABLE IF EXISTS web_conversation_attachments" in q
+    )
+    create_index = next(
+        i
+        for i, q in enumerate(ddl)
+        if "CREATE TABLE IF NOT EXISTS web_conversation_attachments" in q
+    )
+    assert drop_index < create_index
+
+    # Nothing outside the Web conversation scope is touched.
+    executed_sql = "\n".join(query for query, _ in conn.executed)
+    for foreign in (
+        "dlightrag_doc_metadata",
+        "lightrag_doc_chunks",
+        "lightrag_graph_nodes",
+        "ingest_jobs",
+        "dlightrag_checkpoints",
+        "init.sql",
+    ):
+        assert foreign not in executed_sql
+    # Every applied version was recorded against the web_conversations scope only.
+    assert {scope for scope, _ in conn.applied} == {"web_conversations"}
+    assert ("web_conversations", "0002_unified_web_conversation_attachments") in conn.applied

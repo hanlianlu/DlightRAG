@@ -789,7 +789,7 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
 
     def record_image_request(request) -> None:
         path = urlparse(request.url).path
-        prefix = f"/web/conversations/{conversation_id}/images/"
+        prefix = f"/web/conversations/{conversation_id}/attachments/"
         if not path.startswith(prefix):
             return
         if path.endswith("/thumbnail"):

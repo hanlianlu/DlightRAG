@@ -2,12 +2,12 @@
 {% block content %}
 <div class="app"
      id="app"
-     data-max-upload-bytes="{{ query_image_max_upload_bytes }}"
-     data-answer-image-capability="{{ answer_image_capability_status }}"
-     data-effective-current-upload-limit="{{ effective_current_upload_limit }}"
-     data-document-max-upload-bytes="{{ query_document_max_upload_bytes }}"
-    data-document-current-upload-limit="{{ query_document_current_upload_limit }}"
-    data-document-extensions='{{ query_document_extensions|tojson }}'>
+     data-attachment-count-limit="{{ query_attachment_count_limit }}"
+     data-attachment-image-max-bytes="{{ query_attachment_image_max_bytes }}"
+     data-attachment-document-max-bytes="{{ query_attachment_document_max_bytes }}"
+     data-attachment-extensions='{{ query_attachment_extensions|tojson }}'
+     data-attachment-image-capability="{{ query_attachment_image_capability }}"
+     data-attachment-image-limit="{{ query_attachment_image_limit }}">
     <nav id="chat-sidebar" aria-label="Conversations">
         <div class="conversation-top-row">
             <button id="new-conversation-btn" type="button">

@@ -23,7 +23,7 @@ from dlightrag.core.servicemanager import answer_trace_output
 from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils import log_safe
-from dlightrag.web.attachment_models import ValidatedWebDocument, ValidatedWebImage
+from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import ConversationSummary
 from dlightrag.web.conversations import (
     PreparedWebConversation,
@@ -36,7 +36,6 @@ from dlightrag.web.events import (
     AnswerMetaEvent,
     AnswerProgressEvent,
     AnswerTraceEvent,
-    AnswerWarningEvent,
 )
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
@@ -48,14 +47,10 @@ logger = logging.getLogger(__name__)
 _PERSISTENCE_HEARTBEAT_SECONDS = 10.0
 
 
-def _capability_metrics(manager: RAGServiceManager, turn: PreparedAnswerTurn) -> dict[str, Any]:
-    """Resolver/selection/capability metrics known before generation (design §18)."""
+def _capability_metrics(manager: RAGServiceManager) -> dict[str, Any]:
+    """Resolver/selection/capability metrics known before generation."""
     capability = manager.answer_image_capability
-    plan = turn.plan
     return {
-        "history_image_catalog_count": turn.history_image_catalog_count,
-        "history_images_selected": len(plan.selected_history_image_ids) if plan is not None else 0,
-        "history_image_resolution_status": turn.history_image_resolution_status,
         "answer_image_capability_status": capability.status
         if capability is not None
         else "unknown",
@@ -69,30 +64,12 @@ def _capability_metrics(manager: RAGServiceManager, turn: PreparedAnswerTurn) ->
 
 
 def _answer_transport_metrics(trace: dict[str, Any]) -> dict[str, Any]:
-    """Transport metrics derived from the final assembled answer messages (design §18).
-
-    Web Composer and RAG lanes have independent count/byte budgets; totals are
-    retained for request-level dashboards.
-    """
-    composer_sent = int(trace.get("answer_context_composer_images_sent", 0) or 0)
-    composer_skipped = int(trace.get("answer_context_composer_images_skipped", 0) or 0)
-    rag_sent = int(trace.get("answer_context_rag_images_sent", 0) or 0)
-    rag_skipped = int(trace.get("answer_context_rag_images_skipped", 0) or 0)
+    """Transport metrics derived from the final assembled answer messages."""
     return {
         "answer_images_current": int(trace.get("answer_images_current", 0) or 0),
-        "answer_images_history": int(trace.get("answer_images_history", 0) or 0),
-        "answer_images_composer": int(trace.get("answer_images_composer", 0) or 0),
         "answer_images_rag": int(trace.get("answer_images_rag", 0) or 0),
         "answer_images_total": int(trace.get("answer_images_total", 0) or 0),
         "answer_image_bytes_total": int(trace.get("answer_image_budget_used_bytes", 0) or 0),
-        "answer_composer_image_bytes": int(
-            trace.get("answer_composer_image_budget_used_bytes", 0) or 0
-        ),
-        "answer_rag_image_bytes": int(trace.get("answer_rag_image_budget_used_bytes", 0) or 0),
-        "composer_visual_descriptions_included": composer_sent + composer_skipped,
-        "composer_raw_images_skipped": composer_skipped,
-        "rag_visual_descriptions_included": rag_sent + rag_skipped,
-        "rag_raw_images_skipped": rag_skipped,
     }
 
 
@@ -151,9 +128,7 @@ def _done_from_committed_turn(commit: CommitTurnResult) -> AnswerDoneEvent:
     return AnswerDoneEvent(
         html=safe_answer_done(answer=answer, sources=sources, answer_images=answer_images),
         answer=answer,
-        current_image_ids=list(commit.current_image_ids),
         current_attachment_ids=list(commit.current_attachment_ids),
-        image_descriptions=commit.image_descriptions,
         answer_images=answer_images,
         answer_blocks=answer_blocks_from_markdown(answer, answer_images),
         conversation_saved=True,
@@ -161,49 +136,10 @@ def _done_from_committed_turn(commit: CommitTurnResult) -> AnswerDoneEvent:
     )
 
 
-def _apply_attachment_source_links(
-    sources: list[SourceReferencePayload], *, conversation_id: str
-) -> list[SourceReferencePayload]:
-    """Project scoped download URLs onto Web Composer document sources.
-
-    Web Composer document sources carry a ``web-attachment://<attachment_id>``
-    ``source_uri`` and no workspace, so ``project_source_payloads`` leaves their
-    ``download_url`` unset. Rewrite it to the conversation-scoped attachment
-    route and drop chunk image URLs (Composer document figures are delivered
-    inline as ``image_data``, not via the workspace image route). Workspace
-    sources are left untouched.
-    """
-    projected: list[SourceReferencePayload] = []
-    for source in sources:
-        # ``source_uri`` is ``str | None``; guard against a future None so this
-        # never raises AttributeError. Real Composer document sources are
-        # unchanged.
-        if not (source.source_uri or "").startswith("web-attachment://"):
-            projected.append(source)
-            continue
-        attachment_id = source.source_uri.removeprefix("web-attachment://")
-        chunks = [
-            chunk.model_copy(update={"image_url": None, "thumbnail_url": None})
-            for chunk in (source.chunks or [])
-        ]
-        projected.append(
-            source.model_copy(
-                update={
-                    "download_url": (
-                        f"/web/conversations/{conversation_id}/documents/{attachment_id}"
-                    ),
-                    "chunks": chunks,
-                }
-            )
-        )
-    return projected
-
-
 async def _build_answer_done_payload(
     *,
     clean_answer: str,
     contexts: dict[str, Any],
-    image_descriptions: Any,
     manager: RAGServiceManager,
     cfg: Any,
     workspace: str,
@@ -227,9 +163,6 @@ async def _build_answer_done_payload(
         resolver=resolver,
         downloadable_workspaces=downloadable_workspaces,
     )
-    source_payloads = _apply_attachment_source_links(
-        source_payloads, conversation_id=conversation_id
-    )
     answer_images = cited_images
     answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
 
@@ -240,7 +173,6 @@ async def _build_answer_done_payload(
             answer_images=answer_images,
         ),
         answer=finalized.answer,
-        image_descriptions=image_descriptions,
         answer_images=answer_images,
         answer_blocks=answer_blocks,
         conversation_saved=False,
@@ -264,8 +196,7 @@ async def stream_answer_events(
     downloadable_workspaces: set[str] | None = None,
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
-    validated_images: tuple[ValidatedWebImage, ...],
-    validated_documents: tuple[ValidatedWebDocument, ...] = (),
+    validated_attachments: tuple[ValidatedWebAttachment, ...] = (),
     submission_id: str,
 ) -> AsyncGenerator[str]:
     """Yield browser SSE events for one answer request, under a request-root span.
@@ -296,8 +227,7 @@ async def stream_answer_events(
         "workspaces": ws_list,
         **identity,
         "history_turns_loaded": len(prepared_conversation.text_history) // 2,
-        "current_image_count": len(validated_images),
-        "current_document_count": len(validated_documents),
+        "current_attachment_count": len(validated_attachments),
     }
     async with trace_observation(
         "answer_pipeline",
@@ -327,8 +257,7 @@ async def stream_answer_events(
             downloadable_workspaces=downloadable_workspaces,
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
-            validated_images=validated_images,
-            validated_documents=validated_documents,
+            validated_attachments=validated_attachments,
             observation=observation,
             submission_id=submission_id,
         )
@@ -350,8 +279,7 @@ async def _emit_answer_events(
     downloadable_workspaces: set[str] | None = None,
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
-    validated_images: tuple[ValidatedWebImage, ...],
-    validated_documents: tuple[ValidatedWebDocument, ...] = (),
+    validated_attachments: tuple[ValidatedWebAttachment, ...] = (),
     observation: Any = None,
     submission_id: str,
 ) -> AsyncGenerator[str]:
@@ -371,37 +299,21 @@ async def _emit_answer_events(
 
         yield sse_event("progress", AnswerProgressEvent(phase="planning"))
 
-        # Plan inside the request-root span so query_planning nests under it
-        # (same task/OTEL context). The web layer owns the conversation image
-        # store, so planner-selected history images are materialized here too.
-        turn = await conversation_service.prepare_answer_turn(
-            manager=manager,
-            prepared=prepared_conversation,
-            query=query,
-            current_images=[image.model_block for image in validated_images],
-            current_documents=list(validated_documents),
-            workspaces=ws_list,
+        # Build the turn and its request resources. Current-turn attachments carry
+        # inline bytes (the manager extracts verified images into current-image
+        # blocks and registers documents); prior attachments are lazy authorized
+        # resources. Planning runs inside the manager under this request-root span.
+        turn = PreparedAnswerTurn(
+            current_query=query,
+            retrieval_query=query,
+            text_history=tuple(prepared_conversation.text_history),
+        )
+        resources = conversation_service.build_answer_resources(
+            prepared_conversation,
+            validated_attachments,
         )
         if observation is not None:
-            observation.update(metadata=_capability_metrics(manager, turn))
-
-        if turn.document_warnings:
-            warning_count = len(turn.document_warnings)
-            warning_message = (
-                turn.document_warnings[0].message
-                if warning_count == 1
-                else (
-                    f"{warning_count} referenced documents could not be used. "
-                    "The answer will continue without them."
-                )
-            )
-            yield sse_event(
-                "warning",
-                AnswerWarningEvent(
-                    message=warning_message,
-                    documents=list(turn.document_warnings),
-                ),
-            )
+            observation.update(metadata=_capability_metrics(manager))
 
         yield sse_event("progress", AnswerProgressEvent(phase="searching"))
 
@@ -409,6 +321,7 @@ async def _emit_answer_events(
             turn,
             workspaces=ws_list,
             scope=scope,
+            resources=resources,
         )
         t1 = time.monotonic()
         logger.info("[SSE] planning+retrieval+stream setup done (%.1fs)", t1 - t0)
@@ -441,14 +354,12 @@ async def _emit_answer_events(
                 last_preview_len = len(accumulated_text)
 
         clean_answer = getattr(token_iter, "answer", None) or full_answer
-        image_descriptions = getattr(token_iter, "image_descriptions", {}) or {}
 
         # ── Build done payload ─────────────────────────────────────
         effective_workspace = workspace or manager.config.workspace
         payload = await _build_answer_done_payload(
             clean_answer=clean_answer,
             contexts=contexts,
-            image_descriptions=image_descriptions,
             manager=manager,
             cfg=cfg,
             workspace=effective_workspace,
@@ -470,10 +381,7 @@ async def _emit_answer_events(
                     assistant_text=payload.done.answer,
                     answer_sources=answer_sources,
                     queried_workspaces=ws_list,
-                    images=validated_images,
-                    image_descriptions=image_descriptions,
-                    documents=validated_documents,
-                    document_parse_summaries=turn.current_document_digests,
+                    attachments=validated_attachments,
                 )
             )
             while True:
@@ -495,7 +403,6 @@ async def _emit_answer_events(
                 summary = _conversation_summary(commit.summary)
                 done = payload.done.model_copy(
                     update={
-                        "current_image_ids": list(commit.current_image_ids) if commit.saved else [],
                         "current_attachment_ids": (
                             list(commit.current_attachment_ids) if commit.saved else []
                         ),
@@ -510,7 +417,6 @@ async def _emit_answer_events(
             logger.exception("Conversation storage unavailable after answer completion")
             done = payload.done.model_copy(
                 update={
-                    "current_image_ids": [],
                     "current_attachment_ids": [],
                     "conversation_saved": False,
                     "conversation_save_reason": "storage_unavailable",
@@ -521,7 +427,6 @@ async def _emit_answer_events(
             logger.exception("Conversation persistence failed after answer completion")
             done = payload.done.model_copy(
                 update={
-                    "current_image_ids": [],
                     "current_attachment_ids": [],
                     "conversation_saved": False,
                     "conversation_save_reason": "persistence_failed",

@@ -43,6 +43,66 @@ def test_index_has_final_conversation_shell() -> None:
     assert 'aria-label="Conversations"' in template
 
 
+def test_index_advertises_one_unified_attachment_policy() -> None:
+    from dlightrag.web.deps import templates
+
+    html = templates.env.get_template("index.html").render(
+        request=None,
+        workspace="default",
+        workspaces=[],
+        primary_workspace="default",
+        active_workspaces=["default"],
+        query_attachment_count_limit=6,
+        query_attachment_image_max_bytes=15728640,
+        query_attachment_document_max_bytes=104857600,
+        query_attachment_extensions=["md", "pdf"],
+        query_attachment_image_capability="supported",
+        query_attachment_image_limit=3,
+        query_attachment_accept="image/*,.md,.pdf",
+    )
+
+    # One collection: unified count + per-item byte limits + formats + image capability.
+    assert 'data-attachment-count-limit="6"' in html
+    assert 'data-attachment-image-max-bytes="15728640"' in html
+    assert 'data-attachment-document-max-bytes="104857600"' in html
+    assert 'data-attachment-image-capability="supported"' in html
+    assert 'data-attachment-image-limit="3"' in html
+    assert '"md"' in html and '"pdf"' in html
+    assert 'accept="image/*,.md,.pdf"' in html
+
+    # The split image/document admission surface is gone.
+    for stale in (
+        "data-effective-current-upload-limit",
+        "data-document-current-upload-limit",
+        "data-max-upload-bytes",
+        "data-answer-image-capability",
+    ):
+        assert stale not in html
+
+
+def test_index_route_advertises_exact_backend_attachment_limits() -> None:
+    chat_source = (ROOT / "src/dlightrag/web/routes/chat.py").read_text(encoding="utf-8")
+
+    assert '"query_attachment_count_limit": manager.config.answer.max_attachments,' in chat_source
+    assert '"query_attachment_document_max_bytes": MAX_ATTACHMENT_BYTES,' in chat_source
+    assert (
+        '"query_attachment_image_max_bytes": manager.config.query_images.max_upload_bytes,'
+        in chat_source
+    )
+
+
+def test_frontend_submits_only_the_unified_attachments_part() -> None:
+    frontend = ROOT / "frontend"
+    request_builder = (frontend / "lib" / "answer_request.ts").read_text(encoding="utf-8")
+
+    assert "form.append('attachments', file, file.name)" in request_builder
+    # No split image/document parts in the submission path.
+    for source in ("lib/answer_request.ts", "ui/chat.ts"):
+        text = (frontend / source).read_text(encoding="utf-8")
+        assert "append('images'" not in text
+        assert "append('documents'" not in text
+
+
 def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
     web_root = ROOT / "src/dlightrag/web"
     base_html = (web_root / "templates" / "base.html").read_text(encoding="utf-8")

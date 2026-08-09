@@ -27,8 +27,7 @@ import type {
 } from './conversation_list.ts';
 import {isQueryInFlight, isQueryStopping} from './chat.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
-import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
-import {getPendingImageData} from './images.ts';
+import {clearAttachments, getPendingAttachments} from './attachments.ts';
 import {closePanel} from './panel.ts';
 import {syncPanelEffectiveWidth} from './resize.ts';
 import {showToast} from './toast.ts';
@@ -76,8 +75,7 @@ function focusComposer(): void {
 function hasUnsavedDraft(): boolean {
     return (
         Boolean(composerInput()?.value)
-        || getPendingImageData().length > 0
-        || getPendingDocumentFiles().length > 0
+        || getPendingAttachments().length > 0
     );
 }
 

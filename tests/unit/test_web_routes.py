@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for WebGUI route endpoints."""
 
-import base64
 import datetime
 import html
 import io
@@ -10,7 +9,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import jwt
 import pytest
@@ -20,9 +19,8 @@ from PIL import Image
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
 from dlightrag.core.answer.capability import AnswerImageCapability
-from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.storage.web_conversations import CommitTurnResult
-from dlightrag.web.attachment_models import COMPOSER_DOCUMENT_EXTENSIONS
+from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.web.conversations import PreparedWebConversation
 
 if TYPE_CHECKING:
@@ -106,17 +104,7 @@ def web_app(mock_manager, test_config: DlightragConfig):
         )
     )
 
-    async def _prepare_answer_turn(
-        *, manager, prepared, query, current_images, current_documents=None, workspaces=None
-    ):
-        return PreparedAnswerTurn(
-            current_query=query,
-            retrieval_query=query,
-            text_history=tuple(prepared.text_history),
-            current_query_images=tuple(current_images),
-        )
-
-    conversation_service.prepare_answer_turn = AsyncMock(side_effect=_prepare_answer_turn)
+    conversation_service.build_answer_resources = Mock(return_value=[])
     conversation_service.commit_answer = AsyncMock(
         return_value=CommitTurnResult(
             saved=True,
@@ -473,7 +461,7 @@ class TestWebIndex:
         resp = await client.get("/web/")
 
         assert resp.status_code == 200
-        assert 'data-max-upload-bytes="12345"' in resp.text
+        assert 'data-attachment-image-max-bytes="12345"' in resp.text
 
     async def test_index_projects_supported_capability_effective_limit(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
@@ -493,9 +481,9 @@ class TestWebIndex:
         resp = await client.get("/web/")
 
         assert resp.status_code == 200
-        assert 'data-answer-image-capability="supported"' in resp.text
+        assert 'data-attachment-image-capability="supported"' in resp.text
         # min(max_current_images=3, effective_max_images=2) == 2
-        assert 'data-effective-current-upload-limit="2"' in resp.text
+        assert 'data-attachment-image-limit="2"' in resp.text
 
     async def test_index_unknown_capability_disables_upload(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
@@ -514,8 +502,8 @@ class TestWebIndex:
         resp = await client.get("/web/")
 
         assert resp.status_code == 200
-        assert 'data-answer-image-capability="unknown"' in resp.text
-        assert 'data-effective-current-upload-limit="0"' in resp.text
+        assert 'data-attachment-image-capability="unknown"' in resp.text
+        assert 'data-attachment-image-limit="0"' in resp.text
 
     async def test_chat_template_projects_document_attachment_limits(
         self, client: AsyncClient
@@ -523,14 +511,14 @@ class TestWebIndex:
         resp = await client.get("/web/")
 
         assert resp.status_code == 200
-        assert 'data-document-current-upload-limit="3"' in resp.text
-        assert 'data-document-max-upload-bytes="104857600"' in resp.text
-        extensions_match = re.search(r"data-document-extensions='([^']+)'", resp.text)
+        assert 'data-attachment-count-limit="6"' in resp.text
+        assert 'data-attachment-document-max-bytes="104857600"' in resp.text
+        extensions_match = re.search(r"data-attachment-extensions='([^']+)'", resp.text)
         accept_match = re.search(r'id="attachment-input"[^>]*accept="([^"]+)"', resp.text)
         assert extensions_match is not None
         assert accept_match is not None
 
-        expected_extensions = sorted(COMPOSER_DOCUMENT_EXTENSIONS)
+        expected_extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
         assert json.loads(html.unescape(extensions_match.group(1))) == expected_extensions
         assert accept_match.group(1) == ",".join(
             ["image/*", *(f".{extension}" for extension in expected_extensions)]
@@ -782,9 +770,7 @@ class TestWebSSEBoundary:
         assert json.loads(data_line.removeprefix("data: ")) == {
             "html": "<b>x</b>",
             "answer": "x",
-            "current_image_ids": [],
             "current_attachment_ids": [],
-            "image_descriptions": {},
             "answer_images": [],
             "answer_blocks": [],
             "conversation_saved": False,
@@ -923,26 +909,26 @@ class TestWebAnswerAdapter:
         web_app.state.manager.config = test_config
         image_buffer = io.BytesIO()
         Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
-        image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
 
         resp = await client.post(
             "/web/answer",
-            json={
+            data={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
                 "submission_id": SUBMISSION_ID,
-                "images": [image_b64],
-                "workspaces": ["default", "test_ws"],
+                "workspaces": json.dumps(["default", "test_ws"]),
             },
+            files=[("attachments", ("chart.png", image_buffer.getvalue(), "image/png"))],
         )
 
         assert resp.status_code == 200
         assert captured["manager"] is web_app.state.manager
         assert captured["cfg"] is test_config
         # Planning moved into the stream: the route now passes the raw query and
-        # validated images; the presenter plans under the request-root span.
+        # validated attachments; the presenter plans under the request-root span.
         assert captured["query"] == "hello"
-        assert len(captured["validated_images"]) == 1
+        assert len(captured["validated_attachments"]) == 1
+        assert captured["validated_attachments"][0].kind == "image"
         assert captured["workspaces"] == ["default", "test_ws"]
         assert captured["workspace"] == "default"
         assert "turn" not in captured
@@ -993,12 +979,12 @@ class TestWebAnswerAdapter:
 
         response = await client.post(
             "/web/answer",
-            json={
+            data={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
                 "submission_id": SUBMISSION_ID,
-                "images": [base64.b64encode(b"not an image").decode()],
             },
+            files=[("attachments", ("chart.png", b"not an image", "image/png"))],
         )
 
         assert response.status_code == 422
@@ -1014,26 +1000,51 @@ class TestWebAnswerAdapter:
 
         assert response.status_code == 422
 
-    async def test_answer_rejects_configured_image_count_before_model(
+    async def test_answer_rejects_too_many_attachments_before_model(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
+        web_app.state.manager.config = test_config
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
+        raw = image_buffer.getvalue()
+
+        response = await client.post(
+            "/web/answer",
+            data={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
+            files=[("attachments", (f"chart{i}.png", raw, "image/png")) for i in range(7)],
+        )
+
+        assert response.status_code == 413
+        web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
+
+    async def test_answer_rejects_over_image_sublimit_before_model(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        # Lower the configured current-image sublimit; admission must reject the
+        # over-limit image count with a pre-stream 4xx instead of the late
+        # mid-stream synthesizer error.
         test_config.query_images.max_current_images = 1
         web_app.state.manager.config = test_config
         image_buffer = io.BytesIO()
         Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
-        image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
+        raw = image_buffer.getvalue()
 
         response = await client.post(
             "/web/answer",
-            json={
+            data={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
                 "submission_id": SUBMISSION_ID,
-                "images": [image_b64, image_b64],
             },
+            files=[("attachments", (f"chart{i}.png", raw, "image/png")) for i in range(2)],
         )
 
         assert response.status_code == 422
+        assert "at most 1 current images" in response.text
         web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
 
     async def test_answer_image_validation_uses_configured_exact_byte_limit(
@@ -1050,60 +1061,36 @@ class TestWebAnswerAdapter:
         image_buffer = io.BytesIO()
         Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
         raw = image_buffer.getvalue()
-        payload = base64.b64encode(raw).decode()
         test_config.query_images.max_upload_bytes = len(raw)
         web_app.state.manager.config = test_config
 
         exact = await client.post(
             "/web/answer",
-            json={
+            data={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
                 "submission_id": SUBMISSION_ID,
-                "images": [payload],
             },
+            files=[("attachments", ("chart.png", raw, "image/png"))],
         )
         test_config.query_images.max_upload_bytes = len(raw) - 1
         over = await client.post(
             "/web/answer",
-            json={
+            data={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
                 "submission_id": "33333333-3333-4333-8333-333333333333",
-                "images": [payload],
             },
+            files=[("attachments", ("chart.png", raw, "image/png"))],
         )
 
         assert exact.status_code == 200
         assert over.status_code == 422
 
-    async def test_answer_rejects_invalid_base64_before_model(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
-    ) -> None:
-        web_app.state.manager.config = test_config
-
-        response = await client.post(
-            "/web/answer",
-            json={
-                "query": "hello",
-                "conversation_id": CONVERSATION_ID,
-                "submission_id": SUBMISSION_ID,
-                "images": ["%%%"],
-            },
-        )
-
-        assert response.status_code == 422
-        web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
-
     @pytest.mark.parametrize(
         ("source_id", "citation_ref"),
         [
             pytest.param("att-1", "att-1-1", id="compact-attachment"),
-            pytest.param(
-                "composer_98ec1e3a1187454b8929743bd5bc7d4b",
-                "composer_98ec1e3a1187454b8929743bd5bc7d4b-1",
-                id="legacy-composer-stored-snapshot",
-            ),
         ],
     )
     async def test_same_submission_replay_returns_stored_answer_before_model(
@@ -1116,14 +1103,14 @@ class TestWebAnswerAdapter:
     ) -> None:
         attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
         source_uri = f"web-attachment://{attachment_id}"
-        download_url = f"/web/conversations/{CONVERSATION_ID}/documents/{attachment_id}"
+        download_url = f"/web/conversations/{CONVERSATION_ID}/attachments/{attachment_id}"
         web_app.state.manager.config = test_config
         committed_submission = CommitTurnResult(
             saved=True,
             reason=None,
             summary=None,
             turn_id="turn",
-            current_image_ids=("stored-image",),
+            current_attachment_ids=("stored-image",),
             assistant_text=f"Stored answer [{citation_ref}]",
             answer_sources={
                 "sources": [
@@ -1598,7 +1585,6 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
     payload = await answer_events._build_answer_done_payload(
         clean_answer="Answer [1-1].",
         contexts=contexts,
-        image_descriptions={},
         manager=manager,
         cfg=cfg,
         workspace="default",
@@ -1671,7 +1657,6 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
     await answer_events._build_answer_done_payload(
         clean_answer="Answer [1-1].",
         contexts=contexts,
-        image_descriptions={},
         manager=manager,
         cfg=cfg,
         workspace="default",

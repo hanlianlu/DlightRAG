@@ -2,37 +2,10 @@
 
 import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
-import type {ConversationImageReference} from '../api/conversations.ts';
-import {getImageAdmissionPolicy, ImageReadAdmissionController} from './image_policy.ts';
+import type {ConversationAttachmentReference} from '../api/conversations.ts';
 import {closestElement, wrapTabFocus} from '../lib/dom.ts';
 
 const SAFE_DATA_IMAGE_SRC_RE = /^data:image\/(?:avif|bmp|gif|jpeg|jpg|png|webp);base64,[a-z0-9+/=]+$/i;
-const pendingImages: PendingImage[] = [];
-
-// The unified composer strip (images + document chips) owns rendering; when it
-// registers a handler, image mutations delegate to it so both attachment kinds
-// share one `#thumbnail-strip`. Falls back to self-rendering images otherwise.
-let pendingImagesChangedHandler: (() => void) | null = null;
-
-export function setPendingImagesChangedHandler(handler: (() => void) | null): void {
-    pendingImagesChangedHandler = handler;
-}
-
-interface PendingImage {
-    file: File;
-    dataUrl: string;
-    objectUrl: string;
-}
-
-const imageAdmission = new ImageReadAdmissionController({
-    getPolicy: getImageAdmissionPolicy,
-    getCommittedCount: function() { return pendingImages.length; },
-    onReady: function(file, dataUrl) {
-        const objectUrl = URL.createObjectURL(file);
-        pendingImages.push({file, dataUrl, objectUrl});
-        renderThumbnails();
-    },
-});
 
 type LightboxElement = HTMLDivElement & {
     __lightboxPrev?: HTMLButtonElement;
@@ -40,38 +13,13 @@ type LightboxElement = HTMLDivElement & {
     __lightboxImg?: HTMLImageElement;
 };
 
-export function addImage(file: File): void {
-    imageAdmission.admit(file);
-}
-
-export function getPendingImageData(): string[] {
-    return pendingImages.map(function(img) { return img.dataUrl; });
-}
-
-export function renderMessageImages(
+// Render image attachments (composer previews and stored history alike) as lazy
+// async thumbnails that open their full-resolution original in the lightbox on
+// demand. `thumbnail_url` falls back to `url` when a derived thumbnail is absent
+// (e.g. live blob previews that carry a single object URL).
+export function renderMessageAttachmentImages(
     container: Element,
-    storedImages?: readonly ConversationImageReference[],
-): void {
-    if (storedImages) {
-        renderStoredMessageImages(container, storedImages);
-        return;
-    }
-    if (pendingImages.length === 0) return;
-    const msgImages = document.createElement('div');
-    msgImages.className = chatStyles.messageImages;
-    pendingImages.forEach(function(img) {
-        const imgEl = document.createElement('img');
-        imgEl.className = chatStyles.messageImg;
-        imgEl.src = img.dataUrl;
-        imgEl.alt = 'Attached image';
-        msgImages.appendChild(imgEl);
-    });
-    container.appendChild(msgImages);
-}
-
-function renderStoredMessageImages(
-    container: Element,
-    images: readonly ConversationImageReference[],
+    images: readonly ConversationAttachmentReference[],
 ): void {
     if (images.length === 0) return;
     const msgImages = document.createElement('div');
@@ -102,7 +50,7 @@ function renderStoredMessageImages(
         imgEl.alt = reference.label;
         imgEl.loading = 'lazy';
         imgEl.decoding = 'async';
-        const thumbnailSrc = _safeImageSrc(reference.thumbnail_url);
+        const thumbnailSrc = _safeImageSrc(reference.thumbnail_url || reference.url);
         const fullSrc = _safeImageSrc(reference.url);
 
         const showError = (): void => {
@@ -142,52 +90,6 @@ function renderStoredMessageImages(
         msgImages.appendChild(card);
     });
     container.appendChild(msgImages);
-}
-
-export function clearImages(): void {
-    imageAdmission.clear();
-    pendingImages.forEach(function(img) { URL.revokeObjectURL(img.objectUrl); });
-    pendingImages.length = 0;
-    renderThumbnails();
-}
-
-function removeImage(index: number): void {
-    const removed = pendingImages.splice(index, 1);
-    if (removed.length > 0) URL.revokeObjectURL(removed[0].objectUrl);
-    renderThumbnails();
-}
-
-function renderThumbnails(): void {
-    if (pendingImagesChangedHandler) {
-        pendingImagesChangedHandler();
-        return;
-    }
-    const strip = document.getElementById('thumbnail-strip');
-    if (!strip) return;
-    strip.replaceChildren();
-    renderPendingImageThumbnails(strip);
-}
-
-export function renderPendingImageThumbnails(strip: Element): void {
-    pendingImages.forEach(function(img, idx) {
-        const item = document.createElement('div');
-        item.className = chatStyles.thumbnailItem;
-
-        const imgEl = document.createElement('img');
-        imgEl.className = chatStyles.thumbnailImg;
-        imgEl.src = img.objectUrl && img.objectUrl.startsWith('blob:') ? img.objectUrl : '';
-        imgEl.alt = 'Attached image';
-        item.appendChild(imgEl);
-
-        const btn = document.createElement('button');
-        btn.className = chatStyles.thumbnailRemove;
-        btn.textContent = 'x';
-        btn.setAttribute('data-idx', String(idx));
-        btn.addEventListener('click', function() { removeImage(idx); });
-        item.appendChild(btn);
-
-        strip.appendChild(item);
-    });
 }
 
 function _safeImageUrl(src: unknown): URL | null {

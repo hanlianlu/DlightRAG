@@ -11,10 +11,8 @@ from dlightrag.core.access import workspace_names
 from dlightrag.utils import normalize_workspace
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.attachment_models import (
-    COMPOSER_DOCUMENT_EXTENSIONS,
-    MAX_CURRENT_DOCUMENTS,
-    MAX_DOCUMENT_BYTES,
-    validate_web_images,
+    MAX_ATTACHMENT_BYTES,
+    SUPPORTED_DOCUMENT_EXTENSIONS,
 )
 from dlightrag.web.attachment_requests import parse_web_answer_request
 from dlightrag.web.conversations import WebConversationService
@@ -76,7 +74,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             manager.config.query_images.max_current_images,
             capability.effective_max_images,
         )
-    document_extensions = sorted(COMPOSER_DOCUMENT_EXTENSIONS)
+    document_extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
 
     return templates.TemplateResponse(
         request,
@@ -86,12 +84,12 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "workspaces": workspaces,
             "primary_workspace": primary,
             "active_workspaces": active,
-            "query_image_max_upload_bytes": manager.config.query_images.max_upload_bytes,
-            "answer_image_capability_status": capability_status,
-            "effective_current_upload_limit": effective_current_upload_limit,
-            "query_document_max_upload_bytes": MAX_DOCUMENT_BYTES,
-            "query_document_current_upload_limit": MAX_CURRENT_DOCUMENTS,
-            "query_document_extensions": document_extensions,
+            "query_attachment_count_limit": manager.config.answer.max_attachments,
+            "query_attachment_image_max_bytes": manager.config.query_images.max_upload_bytes,
+            "query_attachment_document_max_bytes": MAX_ATTACHMENT_BYTES,
+            "query_attachment_extensions": document_extensions,
+            "query_attachment_image_capability": capability_status,
+            "query_attachment_image_limit": effective_current_upload_limit,
             "query_attachment_accept": ",".join(
                 ["image/*", *(f".{extension}" for extension in document_extensions)]
             ),
@@ -108,7 +106,21 @@ async def answer_stream(
     """Stream answer via SSE, then swap in enriched citations."""
     manager = get_manager(request)
     cfg = manager.config
-    body = await parse_web_answer_request(request)
+    # Enforce the current-image sublimit at admission (pre-stream 4xx) instead of
+    # deferring to the mid-stream synthesizer check. Capability may cap it below
+    # the configured ``query_images.max_current_images``; when unprobed we fall
+    # back to the configured limit, matching the late synthesizer enforcement.
+    capability = manager.answer_image_capability
+    image_max_count = cfg.query_images.max_current_images
+    if capability is not None:
+        image_max_count = min(image_max_count, capability.effective_max_images)
+    body = await parse_web_answer_request(
+        request,
+        max_attachments=cfg.answer.max_attachments,
+        image_max_bytes=cfg.query_images.max_upload_bytes,
+        image_max_pixels=cfg.answer.image_max_pixels,
+        image_max_count=max(0, image_max_count),
+    )
 
     query = body.query
     if not query:
@@ -135,16 +147,6 @@ async def answer_stream(
     downloadable_workspaces = workspace_names(downloadable_records)
     scope = get_request_scope(request, target_workspaces)
 
-    try:
-        validated_images = validate_web_images(
-            body.images,
-            max_images=cfg.query_images.max_current_images,
-            max_bytes=cfg.query_images.max_upload_bytes,
-            max_pixels=cfg.answer.image_max_pixels,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
     # Planning runs lazily inside the stream (under the request-root span), not
     # here: this keeps query_planning nested in the answer_pipeline trace
     # and lets an already-committed (duplicate) submission replay without
@@ -160,8 +162,7 @@ async def answer_stream(
             downloadable_workspaces=downloadable_workspaces,
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
-            validated_images=validated_images,
-            validated_documents=body.documents,
+            validated_attachments=body.attachments,
             submission_id=str(body.submission_id),
         ),
         media_type="text/event-stream",

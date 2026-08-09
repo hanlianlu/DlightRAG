@@ -1,17 +1,16 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {renderMessageImages} from '../ui/images.ts';
+import {renderMessageAttachmentImages} from '../ui/images.ts';
 import {renderMath} from './math.ts';
 import {renderDiagrams} from '../ui/mermaid.ts';
 import {createDocumentChip} from './document_chip.ts';
-import {answerErrorMessage, notifyAnswerWarning} from './errors.ts';
+import {answerErrorMessage} from './errors.ts';
 import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
 import {parseData} from './sse.ts';
 import chatStyles from '../styles/chat.module.css';
 import type {
-  ConversationDocumentReference,
+  ConversationAttachmentReference,
   ConversationHistory,
-  ConversationImageReference,
   ConversationSummary,
 } from '../api/conversations.ts';
 import type {ConversationSavePresentation} from '../stores/pendingSubmissionStore.ts';
@@ -33,10 +32,6 @@ export interface DonePayload {
   conversation_saved: boolean;
   conversation_save_reason?: string | null;
   conversation?: ConversationSummary | null;
-}
-
-export interface AnswerRendererOptions {
-  onWarning?: (message: string) => void;
 }
 
 interface ProgressPayload {
@@ -145,13 +140,13 @@ function _safeDocumentHref(src: unknown): string {
   return '';
 }
 
-// Render stored Composer documents as compact chips (filename + size) that
-// download the original via a same-origin link, using the shared chip component.
+// Render document attachments as compact chips (filename + size) that download
+// the original via a same-origin link, using the shared chip component.
 function renderMessageDocuments(
   container: Element,
-  documents?: readonly ConversationDocumentReference[],
+  documents: readonly ConversationAttachmentReference[],
 ): void {
-  if (!documents || documents.length === 0) return;
+  if (documents.length === 0) return;
   const strip = document.createElement('div');
   strip.className = chatStyles.messageDocuments;
   documents.forEach(function (reference) {
@@ -168,8 +163,7 @@ function renderMessageDocuments(
 
 export function createChatTurn(
   query: string,
-  images?: readonly ConversationImageReference[],
-  documents?: readonly ConversationDocumentReference[],
+  attachments?: readonly ConversationAttachmentReference[],
 ): ChatTurn {
   const chatMessages = document.getElementById('chat-messages')!;
   const chatArea = document.getElementById('chat-area')!;
@@ -178,8 +172,16 @@ export function createChatTurn(
 
   const userWrapper = document.createElement('div');
   userWrapper.className = chatStyles.userMessageWrapper;
-  renderMessageImages(userWrapper, images);
-  renderMessageDocuments(userWrapper, documents);
+  if (attachments && attachments.length > 0) {
+    renderMessageAttachmentImages(
+      userWrapper,
+      attachments.filter((attachment) => attachment.kind === 'image'),
+    );
+    renderMessageDocuments(
+      userWrapper,
+      attachments.filter((attachment) => attachment.kind === 'document'),
+    );
+  }
 
   const userDiv = document.createElement('div');
   userDiv.className = chatStyles.userMessage;
@@ -256,7 +258,7 @@ export function clearChatViewport(): void {
 export function renderConversationHistory(history: ConversationHistory): void {
   clearChatViewport();
   for (const stored of history.turns) {
-    const turn = createChatTurn(stored.user_text, stored.user_images, stored.user_documents);
+    const turn = createChatTurn(stored.user_text, stored.user_attachments);
     applyFinalAnswerHtml(turn, stored.answer_html);
   }
 }
@@ -329,7 +331,7 @@ export function markAnswerStopped(turn: ChatTurn): void {
   turn.contentDiv.appendChild(note);
 }
 
-export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOptions = {}) {
+export function createAnswerRenderer(turn: ChatTurn) {
   let fullAnswer = '';
   let failed = false;
   let saveOutcome: DonePayload | null = null;
@@ -464,9 +466,6 @@ export function createAnswerRenderer(turn: ChatTurn, options: AnswerRendererOpti
       else if (eventType === 'done') handleDone(data);
       else if (eventType === 'highlights') handleHighlights(data);
       else if (eventType === 'progress') handleProgress(data);
-      else if (eventType === 'warning') {
-        notifyAnswerWarning(parseData(data), options.onWarning);
-      }
       else if (eventType === 'error') {
         failed = true;
         setAnswerError(turn, answerErrorMessage(parseData(data)));

@@ -1,103 +1,155 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for Web Composer document admission."""
+"""Tests for unified Web current-turn attachment admission."""
 
 import hashlib
+import io
+from collections.abc import Sequence
 
 import pytest
-from lightrag.parser.registry import suffix_capabilities
-from lightrag.parser.routing import resolve_parser_directives
+from PIL import Image
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig
 from dlightrag.web.attachment_models import (
-    COMPOSER_DOCUMENT_EXTENSIONS,
-    MAX_CURRENT_DOCUMENTS,
-    MAX_DOCUMENT_BYTES,
-    ValidatedWebDocument,
+    MAX_ATTACHMENT_BYTES,
+    SUPPORTED_DOCUMENT_EXTENSIONS,
+    ValidatedWebAttachment,
     classify_web_attachment,
-    validate_web_documents,
+    validate_web_attachments,
 )
+
+_LARGE_IMAGE_BYTES = 15 * 1024 * 1024
+
+
+def _validate(
+    items: Sequence[tuple[str, str | None, bytes]],
+    *,
+    max_attachments: int = 6,
+    image_max_bytes: int = _LARGE_IMAGE_BYTES,
+    **kwargs: int,
+) -> tuple[ValidatedWebAttachment, ...]:
+    return validate_web_attachments(
+        items, max_attachments=max_attachments, image_max_bytes=image_max_bytes, **kwargs
+    )
+
+
+def _png_bytes(size: tuple[int, int] = (8, 8)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, "white").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def test_classify_web_attachment_separates_images_and_documents() -> None:
     assert classify_web_attachment("chart.png", "image/png") == "image"
+    assert classify_web_attachment("photo.jpg", None) == "image"
     assert classify_web_attachment("report.pdf", "application/pdf") == "document"
     assert classify_web_attachment("notes.md", "text/markdown") == "document"
-    assert classify_web_attachment("notes.markdown", "text/markdown") == "unsupported"
     assert classify_web_attachment("archive.zip", "application/zip") == "unsupported"
+    assert classify_web_attachment("payload.bin", None) == "unsupported"
 
 
-def test_composer_document_policy_is_supported_by_default_parser_routing() -> None:
-    assert COMPOSER_DOCUMENT_EXTENSIONS
-    config = DlightragConfig(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            startup_probe=False,
-        )
+def test_supported_document_extensions_cover_core_formats() -> None:
+    assert SUPPORTED_DOCUMENT_EXTENSIONS
+    assert {"pdf", "docx", "pptx", "xlsx", "md", "csv", "json", "html"} <= (
+        SUPPORTED_DOCUMENT_EXTENSIONS
     )
 
-    unsupported: list[str] = []
-    for extension in sorted(COMPOSER_DOCUMENT_EXTENSIONS):
-        directives = resolve_parser_directives(
-            f"document.{extension}",
-            parser_rules=config.parser_rules,
-            require_external_endpoint=False,
-        )
-        if extension not in suffix_capabilities(directives.engine):
-            unsupported.append(f"{extension}:{directives.engine}")
 
-    assert unsupported == []
+def test_validate_admits_mixed_ordered_image_and_document() -> None:
+    png = _png_bytes()
+    doc = b"# report\nbody"
+    validated = _validate(
+        [
+            ("chart.png", "image/png", png),
+            ("notes.md", "text/markdown", doc),
+        ],
+    )
+
+    assert [item.kind for item in validated] == ["image", "document"]
+    assert [item.ordinal for item in validated] == [1, 2]
+    image, document = validated
+    assert isinstance(image, ValidatedWebAttachment)
+    assert image.filename == "chart.png"
+    assert image.mime_type == "image/png"
+    assert image.attachment_bytes == png
+    assert image.byte_size == len(png)
+    assert image.content_sha256 == hashlib.sha256(png).hexdigest()
+    assert document.suffix == ".md"
+    assert document.attachment_bytes == doc
 
 
-def test_validate_web_documents_enforces_count_and_size() -> None:
-    payload = b"x" * 12
-    docs = [
-        ("a.pdf", "application/pdf", payload),
-        (
-            "b.docx",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            payload,
-        ),
-        ("c.md", "text/markdown", payload),
+def test_validate_rejects_too_many_attachments() -> None:
+    png = _png_bytes()
+    items = [(f"c{i}.png", "image/png", png) for i in range(7)]
+
+    with pytest.raises(ValueError, match="at most 6 attachments"):
+        _validate(items)
+
+
+def test_validate_enforces_a_lowered_attachment_count_limit() -> None:
+    png = _png_bytes()
+    items = [(f"c{i}.png", "image/png", png) for i in range(3)]
+
+    with pytest.raises(ValueError, match="at most 2 attachments"):
+        _validate(items, max_attachments=2)
+
+
+def test_validate_enforces_current_image_sublimit() -> None:
+    png = _png_bytes()
+    items = [
+        ("a.png", "image/png", png),
+        ("b.png", "image/png", png),
+        ("notes.md", "text/markdown", b"# ok"),
     ]
 
-    validated = validate_web_documents(docs)
-
-    assert len(validated) == MAX_CURRENT_DOCUMENTS
-    assert all(isinstance(item, ValidatedWebDocument) for item in validated)
-    assert validated[0].filename == "a.pdf"
-    assert validated[0].suffix == ".pdf"
-    assert validated[0].document_bytes == payload
-    assert validated[0].content_sha256 == hashlib.sha256(payload).hexdigest()
+    with pytest.raises(ValueError, match="at most 1 current images"):
+        _validate(items, image_max_count=1)
 
 
-def test_validate_web_documents_rejects_too_many_documents() -> None:
-    docs = [(f"doc{i}.pdf", "application/pdf", b"x") for i in range(MAX_CURRENT_DOCUMENTS + 1)]
+def test_validate_image_uses_detected_mime_over_declared() -> None:
+    png = _png_bytes()
 
-    with pytest.raises(ValueError, match="at most 3 documents"):
-        validate_web_documents(docs)
+    (image,) = _validate([("mislabeled.jpg", "image/jpeg", png)])
 
-
-def test_validate_web_documents_rejects_oversized_document() -> None:
-    with pytest.raises(ValueError) as exc_info:
-        validate_web_documents([("huge.pdf", "application/pdf", b"x" * (MAX_DOCUMENT_BYTES + 1))])
-
-    assert str(exc_info.value) == "Composer document exceeds 100 MB"
+    assert image.kind == "image"
+    assert image.mime_type == "image/png"
 
 
-def test_validate_web_documents_rejects_unsafe_or_unsupported_names() -> None:
+def test_validate_rejects_image_over_byte_limit() -> None:
+    png = _png_bytes()
+
+    with pytest.raises(ValueError, match="exceeds"):
+        _validate([("chart.png", "image/png", png)], image_max_bytes=len(png) - 1)
+
+
+def test_validate_rejects_image_over_pixel_limit() -> None:
+    png = _png_bytes((32, 32))
+
+    with pytest.raises(ValueError, match="pixel"):
+        _validate([("chart.png", "image/png", png)], image_max_pixels=100)
+
+
+def test_validate_rejects_corrupt_image_bytes() -> None:
+    with pytest.raises(ValueError, match="image"):
+        _validate([("chart.png", "image/png", b"not-a-real-image")])
+
+
+def test_validate_rejects_document_over_byte_limit() -> None:
+    with pytest.raises(ValueError, match="size limit"):
+        _validate(
+            [("huge.pdf", "application/pdf", b"x" * (MAX_ATTACHMENT_BYTES + 1))],
+            document_max_bytes=MAX_ATTACHMENT_BYTES,
+        )
+
+
+def test_validate_rejects_unsupported_attachment() -> None:
+    with pytest.raises(ValueError, match="Unsupported attachment"):
+        _validate([("archive.zip", "application/zip", b"x")])
+
+
+def test_validate_rejects_empty_attachment() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        _validate([("empty.pdf", "application/pdf", b"")])
+
+
+def test_validate_rejects_unsafe_filename() -> None:
     with pytest.raises(ValueError, match="Unsafe"):
-        validate_web_documents([("../secret.pdf", "application/pdf", b"x")])
-
-    with pytest.raises(ValueError) as exc_info:
-        validate_web_documents([("archive.zip", "application/zip", b"x")])
-
-    assert str(exc_info.value) == "Unsupported Composer document: archive.zip"
-
-
-def test_validate_web_documents_rejects_empty_document() -> None:
-    with pytest.raises(ValueError) as exc_info:
-        validate_web_documents([("empty.pdf", "application/pdf", b"")])
-
-    assert str(exc_info.value) == "Composer document is empty: empty.pdf"
+        _validate([("../secret.pdf", "application/pdf", b"body")])

@@ -59,22 +59,9 @@ if TYPE_CHECKING:
     from dlightrag.core.retrieval.provenance import ProvenanceCache
     from dlightrag.core.retrieval.retriever import UnifiedRetriever
     from dlightrag.core.visual_assets import VisualAssetResolver
-    from dlightrag.models.composer import ComposerModelBundle
     from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class ComposerProcessingResources:
-    """Non-owning resources borrowed for one prepared Web Composer turn."""
-
-    lightrag: Any
-    robust_document_embedder: RobustDocumentEmbedder
-    direct_image_embedding_enabled: bool
-    rerank_func: Any
-    model_bundle: ComposerModelBundle
-    config: DlightragConfig
 
 
 def _ingest_documents(value: Any | None) -> list[IngestDocument] | None:
@@ -2494,4 +2481,4 @@ def _remove_remote_parser_sources(items: list[PreparedIngestFile]) -> None:
                 logger.debug("Failed to remove remote parser source: %s", candidate, exc_info=True)
 
 
-__all__ = ["ComposerProcessingResources", "RAGService"]
+__all__ = ["RAGService"]

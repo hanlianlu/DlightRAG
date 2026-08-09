@@ -72,6 +72,7 @@ class _Registered:
     content: bytes | None
     url: str | None
     byte_size: int | None
+    loader: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -126,10 +127,20 @@ class ResourceRegistry:
 
     def register(self, resource: ResourceInput) -> str:
         self._ensure_open()
-        if (resource.content is None) == (resource.url is None):
-            raise ResourceAdmissionError("resource requires exactly one of content or url")
+        provided = sum(
+            1 for value in (resource.content, resource.url, resource.loader) if value is not None
+        )
+        if provided != 1:
+            raise ResourceAdmissionError("resource requires exactly one of content, url, or loader")
 
-        if resource.url is not None:
+        if resource.loader is not None:
+            # Durable server-owned bytes stay lazy: no eager fetch, no byte-size
+            # admission until the model actually reads/inspects the resource.
+            dedup_key = ("loader", secrets.token_bytes(16))
+            source = "bytes"
+            byte_size = None
+            content = None
+        elif resource.url is not None:
             # Cheap scheme/credential check now; full DNS/redirect happens on read.
             validate_public_https_url(resource.url)
             dedup_key = ("link", _normalized_url(resource.url).encode("utf-8"))
@@ -166,6 +177,7 @@ class ResourceRegistry:
             content=content,
             url=resource.url,
             byte_size=byte_size,
+            loader=resource.loader,
         )
         self._ids_by_dedup[dedup_key] = resource_id
         if byte_size is not None:
@@ -335,6 +347,15 @@ class ResourceRegistry:
     async def _materialize_bytes(self, resource: _Registered) -> bytes:
         if resource.content is not None:
             return resource.content
+        if resource.loader is not None:
+            cached = self._fetched.get(resource.resource_id)
+            if cached is not None:
+                return cached
+            data = await resource.loader()
+            if len(data) > self._max_attachment_bytes:
+                raise ResourceAdmissionError("attachment exceeds per-attachment byte limit")
+            self._fetched[resource.resource_id] = data
+            return data
         url = resource.url
         if url is None:  # pragma: no cover - a resource is always bytes or a link
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no content")

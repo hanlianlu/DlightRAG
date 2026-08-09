@@ -81,14 +81,6 @@ class TestQueryPlan:
 
 
 class TestStatelessPlan:
-    async def test_selection_fields_stay_empty(self):
-        llm = AsyncMock(
-            return_value=json.dumps({"standalone_query": "revenue 2023", "filters": {}})
-        )
-        planner = QueryPlanner(llm_func=llm)
-        plan = await planner.plan("explain that", conversation_history=[])
-        assert plan.selected_history_image_ids == ()
-
     async def test_dynamic_planner_context_is_json_user_data(self):
         captured_messages: list[dict[str, object]] = []
 

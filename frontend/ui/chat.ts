@@ -2,10 +2,10 @@
 
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
-import {getPendingImageData} from './images.ts';
-import {clearAttachments, getPendingDocumentFiles} from './attachments.ts';
-import {showToast} from './toast.ts';
+import {clearAttachments, getPendingAttachments} from './attachments.ts';
 import {streamSSE} from '../lib/sse.ts';
+import {buildAnswerRequest} from '../lib/answer_request.ts';
+import type {ConversationAttachmentReference} from '../api/conversations.ts';
 import {
     createAnswerRenderer,
     createChatTurn,
@@ -52,41 +52,6 @@ function isLineBreakInput(e: InputEvent): boolean {
     return e.inputType === 'insertLineBreak';
 }
 
-/**
- * Build the `/web/answer` request body. Keeps the legacy JSON path byte-for-byte
- * when no documents are attached; switches to multipart/form-data (matching the
- * server's `parse_web_answer_request` contract) only when documents are present.
- */
-function buildAnswerRequestBody(input: {
-    query: string;
-    images: string[];
-    workspaces: string[];
-    conversationId: string;
-    submissionId: string;
-    documents: File[];
-}): {body: BodyInit; headers?: Record<string, string>} {
-    if (input.documents.length === 0) {
-        return {
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                query: input.query,
-                images: input.images,
-                workspaces: input.workspaces,
-                conversation_id: input.conversationId,
-                submission_id: input.submissionId,
-            }),
-        };
-    }
-    const form = new FormData();
-    form.append('query', input.query);
-    form.append('images', JSON.stringify(input.images));
-    form.append('workspaces', JSON.stringify(input.workspaces));
-    form.append('conversation_id', input.conversationId);
-    form.append('submission_id', input.submissionId);
-    input.documents.forEach(function(file) { form.append('documents', file, file.name); });
-    return {body: form};
-}
-
 export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
@@ -118,9 +83,28 @@ export async function submitQuery(query: string): Promise<void> {
         );
     };
 
-    const turn = createChatTurn(query);
-    const imageData = getPendingImageData();
-    const documentFiles = getPendingDocumentFiles();
+    const pendingAttachments = getPendingAttachments();
+    // Render the just-submitted attachments in the user bubble from fresh object
+    // URLs so clearing the composer strip (which revokes its own URLs) cannot
+    // blank the sent turn. History reload later re-renders from server URLs.
+    const liveAttachmentRefs: ConversationAttachmentReference[] = pendingAttachments.map(
+        function(item, index) {
+            const previewUrl = URL.createObjectURL(item.file);
+            return {
+                attachment_id: item.id,
+                ordinal: index + 1,
+                kind: item.kind,
+                filename: item.file.name,
+                mime_type: item.file.type,
+                byte_size: item.file.size,
+                url: previewUrl,
+                thumbnail_url: previewUrl,
+                label: item.file.name,
+            };
+        },
+    );
+    const turn = createChatTurn(query, liveAttachmentRefs);
+    const attachmentFiles = pendingAttachments.map(function(item) { return item.file; });
 
     try {
         armIdleTimeout();
@@ -134,9 +118,8 @@ export async function submitQuery(query: string): Promise<void> {
         const activeWorkspaces = [...workspaceStore.active];
         const fingerprint = await payloadFingerprint({
             query,
-            images: imageData,
-            documents: documentFiles.map(function(file) {
-                return {name: file.name, size: file.size, type: file.type};
+            attachments: pendingAttachments.map(function(item) {
+                return {name: item.file.name, size: item.file.size, type: item.file.type};
             }),
             workspaces: activeWorkspaces,
         });
@@ -145,19 +128,15 @@ export async function submitQuery(query: string): Promise<void> {
             return;
         }
         const submissionId = pendingSubmissionStore.getOrCreate(conversationId, fingerprint);
-        const onWarning = (message: string): void => {
-            if (pendingSubmissionStore.claimWarningDelivery(conversationId, submissionId)) {
-                showToast(message, 5000);
-            }
-        };
-        const {body: requestBody, headers: requestHeaders} = buildAnswerRequestBody({
-            query,
-            images: imageData,
-            workspaces: activeWorkspaces,
-            conversationId: conversationStore.activeConversationId,
-            submissionId,
-            documents: documentFiles,
-        });
+        const {body: requestBody, headers: requestHeaders} = buildAnswerRequest(
+            {
+                query,
+                workspaces: activeWorkspaces,
+                conversationId: conversationStore.activeConversationId,
+                submissionId,
+            },
+            attachmentFiles,
+        );
         clearAttachments();
         for (let attempt = 0; attempt < 2; attempt += 1) {
             try {
@@ -174,7 +153,7 @@ export async function submitQuery(query: string): Promise<void> {
                     return;
                 }
 
-                const activeRenderer = createAnswerRenderer(turn, {onWarning});
+                const activeRenderer = createAnswerRenderer(turn);
                 await streamSSE(response, function(eventType, data) {
                     armIdleTimeout();
                     if (conversationStore.activeConversationId !== conversationId) return;

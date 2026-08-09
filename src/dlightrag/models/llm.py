@@ -5,21 +5,16 @@ Uses the provider registry (openai, anthropic, gemini) to build callables.
 Provides _adapt_for_lightrag() to bridge to LightRAG's (prompt, system_prompt) signature.
 """
 
+import hashlib
 import inspect
 import logging
+import posixpath
 from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import Any, cast
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from dlightrag.config import DlightragConfig, ModelConfig
-from dlightrag.models.composer import (
-    ComposerAnalysisRole,
-    ComposerAnalysisSettings,
-    ComposerImagePayloadError,
-    ComposerImageTransportSettings,
-    normalized_endpoint_fingerprint,
-)
 from dlightrag.models.llm_roles import (
     LIGHTRAG_ROLE_NAMES,
     has_complete_api_key_setting,
@@ -209,129 +204,40 @@ def get_vlm_model_func(config: DlightragConfig) -> Callable:
     return _make_completion_func(cfg)
 
 
+def normalized_endpoint_fingerprint(value: Any) -> str | None:
+    """Hash a canonical endpoint without persisting recoverable routing data."""
+    if not value:
+        return None
+    raw = str(value)
+    try:
+        parsed = urlsplit(raw)
+        scheme = parsed.scheme.lower()
+        if scheme not in {"http", "https"}:
+            return None
+        hostname = (parsed.hostname or "").rstrip(".").lower()
+        if not hostname:
+            return None
+        port = parsed.port
+        if port == {"http": 80, "https": 443}.get(scheme):
+            port = None
+        authority = f"[{hostname}]" if ":" in hostname else hostname
+        if port is not None:
+            authority = f"{authority}:{port}"
+        path = posixpath.normpath(parsed.path or "/")
+        if not path.startswith("/"):
+            path = f"/{path}"
+        canonical = urlunsplit((scheme, authority, path, "", ""))
+    except ValueError:
+        return None
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _sanitized_model_identity(cfg: ModelConfig) -> dict[str, str | None]:
     return {
         "provider": cfg.provider,
         "model": cfg.model,
         "endpoint_fingerprint": normalized_endpoint_fingerprint(cfg.base_url),
     }
-
-
-def _composer_image_blocks(
-    image_inputs: list[dict[str, Any]] | None,
-    *,
-    settings: ComposerImageTransportSettings,
-) -> list[dict[str, Any]]:
-    from dlightrag.utils.images import bounded_image_data_uri
-
-    blocks: list[dict[str, Any]] = []
-    remaining_bytes = settings.image_max_total_bytes
-    for image in list(image_inputs or [])[: settings.max_images]:
-        payload = str(image.get("base64") or "")
-        mime_type = str(image.get("mime_type") or "image/png")
-        value = payload if payload.startswith("data:") else f"data:{mime_type};base64,{payload}"
-        bounded = bounded_image_data_uri(
-            value,
-            max_bytes=min(settings.image_max_bytes, remaining_bytes),
-            max_px=settings.image_max_px,
-            max_pixels=settings.image_max_pixels,
-            min_px=settings.image_min_px,
-            quality=settings.image_quality,
-            min_quality=settings.image_min_quality,
-        )
-        if bounded is None:
-            continue
-        uri, byte_count = bounded
-        if byte_count > remaining_bytes:
-            continue
-        blocks.append({"type": "image_url", "image_url": {"url": uri}})
-        remaining_bytes -= byte_count
-        if remaining_bytes <= 0:
-            break
-    return blocks
-
-
-def create_composer_analysis_adapter(
-    config: DlightragConfig,
-    *,
-    role: ComposerAnalysisRole,
-) -> tuple[
-    Callable[..., Awaitable[Any]],
-    dict[str, str | None],
-    Callable[[], Awaitable[None]],
-]:
-    """Build a cache-neutral LightRAG analysis callable for one Composer role."""
-    cfg = model_for_role(config, role)
-    owner_closers: list[Callable[[], Awaitable[Any]]] = []
-    completion = _make_completion_func(
-        cfg,
-        owner_closers=owner_closers,
-    )
-
-    async def adapter(
-        prompt: str | None = None,
-        *,
-        messages: list[dict[str, Any]] | None = None,
-        system_prompt: str | None = None,
-        history_messages: list[dict[str, Any]] | None = None,
-        image_inputs: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> Any:
-        for control in (
-            "_priority",
-            "hashing_kv",
-            "keyword_extraction",
-            "enable_cot",
-            "pipeline_status",
-            "pipeline_status_lock",
-            "cancellation_requested",
-        ):
-            kwargs.pop(control, None)
-        if kwargs:
-            unknown = ", ".join(sorted(kwargs))
-            raise TypeError(f"Unexpected Composer analysis control(s): {unknown}")
-
-        if messages is not None:
-            if prompt is not None or system_prompt or history_messages or image_inputs:
-                raise ValueError("messages-first and prompt-first inputs cannot be combined")
-            prepared_messages = messages
-        else:
-            if prompt is None:
-                raise TypeError("prompt or messages is required")
-            prepared_messages: list[dict[str, Any]] = []
-            if system_prompt:
-                prepared_messages.append({"role": "system", "content": system_prompt})
-            if history_messages:
-                prepared_messages.extend(history_messages)
-            image_blocks = (
-                _composer_image_blocks(
-                    image_inputs,
-                    settings=ComposerAnalysisSettings.resolve(config).vlm_image_transport,
-                )
-                if image_inputs
-                else []
-            )
-            if image_inputs and not image_blocks:
-                raise ComposerImagePayloadError(
-                    "Composer image payload admission rejected all supplied images"
-                )
-            user_content: str | list[dict[str, Any]] = prompt
-            if image_blocks:
-                user_content = [*image_blocks, {"type": "text", "text": prompt}]
-            prepared_messages.append({"role": "user", "content": user_content})
-        return await completion(
-            messages=prepared_messages,
-            response_format=response_format,
-            stream=stream,
-        )
-
-    async def close() -> None:
-        for closer in owner_closers:
-            await closer()
-
-    return adapter, _sanitized_model_identity(cfg), close
 
 
 def _lightrag_adapted(
@@ -475,7 +381,6 @@ def get_rerank_func(
 
 __all__ = [
     "build_role_llm_configs",
-    "create_composer_analysis_adapter",
     "get_chat_rerank_scoring_config",
     "get_default_model_func",
     "get_default_model_func_for_lightrag",

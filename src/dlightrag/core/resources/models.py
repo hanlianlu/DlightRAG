@@ -7,6 +7,7 @@ results derived from these types are exposed to the model.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -35,16 +36,21 @@ class ResourceDecodeError(ResourceRegistryError):
 
 @dataclass(frozen=True)
 class ResourceInput:
-    """Immutable answer resource: either inline bytes or an inert HTTPS link.
+    """Immutable answer resource: inline bytes, an inert HTTPS link, or a loader.
 
-    Exactly one of ``content`` or ``url`` is supplied by the caller. Links stay
-    inert until an explicit read materializes them under full SSRF revalidation.
+    Exactly one of ``content``, ``url``, or ``loader`` is supplied by the caller.
+    Links stay inert until an explicit read materializes them under full SSRF
+    revalidation. ``loader`` is an authorized, request-local async callable used
+    for durable server-owned bytes (e.g. prior Web attachments) that must stay
+    lazy: the registry invokes it only when the model reads or inspects the
+    resource, so no path or provider locator is ever exposed.
     """
 
     filename: str | None = None
     content: bytes | None = None
     url: str | None = None
     declared_mime: str | None = None
+    loader: Callable[[], Awaitable[bytes]] | None = None
 
 
 @dataclass(frozen=True)

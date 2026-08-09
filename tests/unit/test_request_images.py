@@ -11,7 +11,6 @@ from PIL import Image
 
 from dlightrag.core.request.images import QueryImageDescriber
 from dlightrag.utils.images import decode_image_base64
-from dlightrag.web.attachment_models import validate_web_images
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -104,19 +103,14 @@ async def test_query_image_descriptions_keep_sparse_ordinals() -> None:
     assert descriptions == {"2": "Image 2: second image"}
 
 
-async def test_query_image_vlm_receives_bounded_transport_while_durable_bytes_remain() -> None:
+async def test_query_image_vlm_receives_bounded_transport() -> None:
     original_uri = _image_data_uri(Image.effect_noise((256, 192), 180).convert("RGB"))
-    raw, _mime = decode_image_base64(original_uri)
-    (durable,) = validate_web_images(
-        [original_uri],
-        max_images=1,
-        max_bytes=len(raw),
-    )
-    original_bytes = durable.image_bytes
     vlm = AsyncMock(return_value="bounded image")
     describer = _describer(vlm, max_images=1, max_bytes=5_000, max_px=96)
 
-    descriptions = await describer.describe([durable.model_block])
+    descriptions = await describer.describe(
+        [{"type": "image_url", "image_url": {"url": original_uri}}]
+    )
 
     assert descriptions == {"1": "Image 1: bounded image"}
     await_args = vlm.await_args
@@ -127,8 +121,6 @@ async def test_query_image_vlm_receives_bounded_transport_while_durable_bytes_re
     assert len(bounded_raw) <= 5_000
     with Image.open(io.BytesIO(bounded_raw)) as bounded_image:
         assert max(bounded_image.size) <= 96
-    assert durable.image_bytes == original_bytes
-    assert durable.data_uri == original_uri
 
 
 async def test_query_image_compression_skip_preserves_sparse_ordinal_and_sibling() -> None:

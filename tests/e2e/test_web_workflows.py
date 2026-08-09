@@ -30,13 +30,11 @@ def test_answer_submission_uses_active_conversation_and_restores_saved_history(p
     assert isinstance(payload, dict)
     assert set(payload) == {
         "query",
-        "images",
         "workspaces",
         "conversation_id",
         "submission_id",
     }
     assert payload["query"] == query
-    assert payload["images"] == []
     workspaces = payload["workspaces"]
     assert isinstance(workspaces, list)
     assert set(workspaces) == {"default", "research"}
