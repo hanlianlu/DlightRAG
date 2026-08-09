@@ -103,6 +103,15 @@ class TestYamlConfigLoading:
         documentation = (ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
         assert "max_upload_bytes: 15728640" in documentation
 
+    def test_env_example_keeps_web_search_secret_and_answer_behavior_separate(self) -> None:
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+        assert "# DLIGHTRAG_WEB_SEARCH__API_KEY=" in env_example
+        assert "DLIGHTRAG_ANSWER__CONTEXT_WINDOW_TOKENS" not in env_example
+        assert "DLIGHTRAG_ANSWER__MAX_ATTACHMENTS" not in env_example
+        assert "DLIGHTRAG_ANSWER__MAX_ATTACHMENT_BYTES" not in env_example
+        assert "DLIGHTRAG_ANSWER__MAX_TOTAL_ATTACHMENT_BYTES" not in env_example
+
 
 class TestConfigSources:
     def test_works_without_yaml(self, tmp_path, monkeypatch):
