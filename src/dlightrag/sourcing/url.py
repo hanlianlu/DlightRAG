@@ -6,7 +6,7 @@ import inspect
 import ipaddress
 import logging
 import socket
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
@@ -172,31 +172,21 @@ class URLDataSource(AsyncDataSource):
             raise KeyError(f"unknown URL document id: {key}") from exc
 
         client = self._ensure_client()
-        current_url = url
-        try:
-            for _ in range(_MAX_REDIRECTS + 1):
-                async with client.stream("GET", current_url) as response:
-                    status_code = response.status_code
-                    if status_code in _REDIRECT_STATUSES:
-                        current_url = _redirect_target(
-                            current_url,
-                            response,
-                            resolve_host=self._owns_client,
-                            allow_private_hosts=self._allow_private_hosts,
-                        )
-                        continue
 
-                    response.raise_for_status()
-                    _validate_public_https_url(
-                        str(getattr(response, "url", current_url)),
-                        allow_private_hosts=self._allow_private_hosts,
-                    )
-                    await self._write_response(response, destination)
-                    return
+        async def _consume(response: Any) -> None:
+            await self._write_response(response, destination)
+
+        try:
+            await _follow_and_consume(
+                client,
+                url,
+                resolve_host=self._owns_client,
+                allow_private_hosts=self._allow_private_hosts,
+                consume=_consume,
+            )
         except Exception:
             destination.unlink(missing_ok=True)
             raise
-        raise ValueError("url ingestion exceeded maximum redirects")
 
     def source_uri_for_key(self, key: str) -> str:
         try:
@@ -301,6 +291,91 @@ def _redirect_target(
     )
 
 
+async def _follow_and_consume[T](
+    client: Any,
+    url: str,
+    *,
+    resolve_host: bool,
+    allow_private_hosts: frozenset[str],
+    consume: Callable[[Any], Awaitable[T]],
+) -> T:
+    """Follow bounded HTTPS redirects, revalidate each hop, then consume the body.
+
+    The single redirect/validation loop is the sole place DNS, scheme, redirect,
+    and public-host checks are applied so callers cannot weaken them.
+    """
+    current_url = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        async with client.stream("GET", current_url) as response:
+            if response.status_code in _REDIRECT_STATUSES:
+                current_url = _redirect_target(
+                    current_url,
+                    response,
+                    resolve_host=resolve_host,
+                    allow_private_hosts=allow_private_hosts,
+                )
+                continue
+            response.raise_for_status()
+            _validate_public_https_url(
+                str(getattr(response, "url", current_url)),
+                allow_private_hosts=allow_private_hosts,
+            )
+            return await consume(response)
+    raise ValueError("url ingestion exceeded maximum redirects")
+
+
+async def afetch_public_https_bytes(
+    url: str,
+    *,
+    max_bytes: int,
+    timeout: float = 120.0,
+    client: Any | None = None,
+    allow_private_hosts: Sequence[str] | None = None,
+) -> bytes:
+    """Fetch a public HTTPS URL into memory under the same SSRF and size checks.
+
+    Applies the identical scheme/credential/public-host/DNS/redirect/byte-limit
+    validation used for ingestion downloads, but returns bounded bytes instead of
+    streaming to disk. ``max_bytes`` caps the accumulated body; the fetch aborts
+    as soon as the limit is exceeded.
+    """
+    patterns = _normalize_host_patterns(allow_private_hosts or ())
+    owns_client = client is None
+    validated = _validate_public_https_url(
+        url, resolve_host=owns_client, allow_private_hosts=patterns
+    )
+    active = client or httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(timeout))
+    limit = max(1, int(max_bytes))
+
+    async def _read(response: Any) -> bytes:
+        return await _read_bounded_bytes(response, limit)
+
+    try:
+        return await _follow_and_consume(
+            active,
+            validated,
+            resolve_host=owns_client,
+            allow_private_hosts=patterns,
+            consume=_read,
+        )
+    finally:
+        if owns_client:
+            await active.aclose()
+
+
+async def _read_bounded_bytes(response: Any, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    written = 0
+    async for chunk in response.aiter_bytes():
+        if not chunk:
+            continue
+        written += len(chunk)
+        if written > limit:
+            raise ValueError(f"url fetch exceeds maximum size of {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _normalize_host_patterns(values: Sequence[str]) -> frozenset[str]:
     return frozenset(_normalize_host(value) for value in values if value)
 
@@ -366,4 +441,4 @@ def _dedupe_key(key: str, existing: dict[str, str]) -> str:
         digest += 1
 
 
-__all__ = ["URLDataSource", "validate_public_https_url"]
+__all__ = ["URLDataSource", "afetch_public_https_bytes", "validate_public_https_url"]

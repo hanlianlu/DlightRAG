@@ -10,7 +10,7 @@ import pytest
 from dlightrag.sourcing.base import SourceDocument
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.sourcing.uri import parse_remote_uri
-from dlightrag.sourcing.url import URLDataSource
+from dlightrag.sourcing.url import URLDataSource, afetch_public_https_bytes
 
 
 class _Response:
@@ -326,3 +326,76 @@ def test_parse_remote_uri_treats_https_as_url_source() -> None:
         "url",
         {"url": "https://api.bynder.com/docs/getting-started"},
     )
+
+
+async def test_afetch_public_https_bytes_returns_bounded_content() -> None:
+    client = _Client(content=b"hello world", final_url="https://cdn.example.com/report.txt")
+
+    data = await afetch_public_https_bytes(
+        "https://cdn.example.com/report.txt", max_bytes=1024, client=client
+    )
+
+    assert data == b"hello world"
+    assert client.urls == ["https://cdn.example.com/report.txt"]
+
+
+async def test_afetch_public_https_bytes_enforces_max_bytes() -> None:
+    client = _Client(content=b"x" * 100, final_url="https://cdn.example.com/big.txt")
+
+    with pytest.raises(ValueError, match="maximum"):
+        await afetch_public_https_bytes(
+            "https://cdn.example.com/big.txt", max_bytes=10, client=client
+        )
+
+
+async def test_afetch_public_https_bytes_follows_and_revalidates_redirects() -> None:
+    class RedirectClient:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        def stream(self, method: str, url: str) -> _Response:
+            assert method == "GET"
+            self.urls.append(url)
+            if url == "https://cdn.example.com/start.txt":
+                return _Response(
+                    b"",
+                    url=url,
+                    status_code=302,
+                    headers={"location": "https://cdn.example.com/final.txt"},
+                )
+            return _Response(b"final body", url="https://cdn.example.com/final.txt")
+
+    client = RedirectClient()
+
+    data = await afetch_public_https_bytes(
+        "https://cdn.example.com/start.txt", max_bytes=1024, client=client
+    )
+
+    assert data == b"final body"
+    assert client.urls == [
+        "https://cdn.example.com/start.txt",
+        "https://cdn.example.com/final.txt",
+    ]
+
+
+async def test_afetch_public_https_bytes_rejects_non_https() -> None:
+    with pytest.raises(ValueError, match="https"):
+        await afetch_public_https_bytes(
+            "http://cdn.example.com/report.txt", max_bytes=1024, client=_Client()
+        )
+
+
+async def test_afetch_public_https_bytes_rejects_private_redirect() -> None:
+    class RedirectClient:
+        def stream(self, method: str, url: str) -> _Response:
+            return _Response(
+                b"",
+                url=url,
+                status_code=302,
+                headers={"location": "https://127.0.0.1/admin.txt"},
+            )
+
+    with pytest.raises(ValueError, match="public"):
+        await afetch_public_https_bytes(
+            "https://cdn.example.com/start.txt", max_bytes=1024, client=RedirectClient()
+        )
