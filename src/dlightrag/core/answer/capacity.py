@@ -18,7 +18,7 @@ FINAL_GENERATION_CAPACITY_RESERVE = 32_768
 
 @dataclass(frozen=True)
 class AnswerCapacity:
-    """Context-window budget shared by planning, packing, and final synthesis."""
+    """Context-window budget shared by planning, packing, and final answer generation."""
 
     context_window_tokens: int
 

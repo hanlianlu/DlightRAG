@@ -1159,6 +1159,8 @@ def test_context_window_note_explains_model_requirement(wiz):
     note = wiz.CONTEXT_WINDOW_NOTE
     assert "260,000" in note or "260000" in note
     assert "context window" in note.lower()
+    assert "final answer generation" in note
+    assert "final " + "synthesis" not in note
 
 
 def test_render_summary_shows_context_and_attachment_settings(wiz):

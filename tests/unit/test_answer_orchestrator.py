@@ -27,7 +27,7 @@ class ScriptedAgent:
         self,
         *turns: AssistantTurn,
         include_web: bool = True,
-        final_text: str = "Final synthesis.",
+        final_text: str = "Final answer generation.",
     ) -> None:
         self._turns = list(turns)
         self.include_web = include_web
@@ -238,7 +238,7 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
     # search_web is never offered; read_resource is a peer tool.
     tool_names = {tool.name for tool in agent.turn_calls[0]["tools"]}
     assert "search_web" not in tool_names
-    assert {"search_knowledge_base", "read_resource", "finish_research"} <= tool_names
+    assert tool_names == {"search_knowledge_base", "read_resource"}
     # The final answer comes from one distinct tools-disabled synthesis call.
     assert len(agent.final_calls) == 1
     assert result.answer == "From the attachment [2-1]."
@@ -278,7 +278,6 @@ async def test_initial_decision_runs_fixed_corpus_and_web_wave_in_parallel() -> 
     assert [tool.name for tool in agent.turn_calls[0]["tools"]] == [
         "search_knowledge_base",
         "search_web",
-        "finish_research",
     ]
     payload = str(agent.turn_calls[0]["messages"][-1]["content"])
     assert "Knowledge-base evidence" in payload
@@ -301,10 +300,7 @@ async def test_explicit_knowledge_base_decision_never_calls_web() -> None:
 
     assert result.answer == "Corpus only [1-1]."
     assert web_calls == 0
-    assert [tool.name for tool in agent.turn_calls[0]["tools"]] == [
-        "search_knowledge_base",
-        "finish_research",
-    ]
+    assert [tool.name for tool in agent.turn_calls[0]["tools"]] == ["search_knowledge_base"]
 
 
 def test_source_decisions_are_closed_and_do_not_absorb_future_tools() -> None:
@@ -384,7 +380,7 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
         return _web_result()
 
     # The model repeats the initial web query, adds no new evidence, and the
-    # loop ends into one distinct tools-disabled final synthesis -- there is no
+    # loop ends into one distinct tools-disabled final answer generation -- there is no
     # second forced tools-none control turn.
     agent = ScriptedAgent(
         _tool(_call(query="Question", source="web")),
@@ -416,7 +412,7 @@ async def test_equivalent_search_shares_work_and_reports_no_new_evidence() -> No
     await _research(agent, retrieve, search).answer("Question")
 
     assert web_calls == 1
-    # The equivalent-call notice lands in the transcript the final synthesis reads.
+    # The equivalent-call notice lands in the transcript the final generation reads.
     assert "already executed" in str(agent.final_calls[0])
     assert "added 1" not in str(agent.final_calls[0])
 
@@ -448,23 +444,22 @@ async def test_failed_tool_call_is_evicted_and_can_be_retried() -> None:
     assert result.answer == "Recovered [1-1][2-1]."
 
 
-async def test_explicit_finish_research_stops_the_loop() -> None:
+async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
 
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    agent = ScriptedAgent(
-        _tool(ToolCall(id="finish", name="finish_research", arguments={})),
-        final_text="Done [1-1][2-1].",
-    )
+    agent = ScriptedAgent(_answer("control draft"), final_text="Done [1-1][2-1].")
     result = await _research(agent, retrieve, search).answer("Question")
 
-    assert result.trace["agent_stop_reason"] == "finish_research"
-    # finish_research breaks the loop; the final answer is a distinct
-    # tools-disabled synthesis, not another forced control turn.
+    assert result.trace["agent_stop_reason"] == "model_stop"
     assert len(agent.turn_calls) == 1
+    assert agent.turn_calls[0]["tool_choice"] == "auto"
+    control_instruction = str(agent.turn_calls[0]["messages"][-1]["content"])
+    assert "Do not draft the answer" in control_instruction
+    assert "brief readiness acknowledgement" in control_instruction
     assert len(agent.final_calls) == 1
     assert result.answer == "Done [1-1][2-1]."
 
@@ -596,7 +591,7 @@ async def test_research_answer_can_be_cancelled_mid_flight() -> None:
         await task
 
 
-async def test_streaming_finishes_research_before_native_tokens_start() -> None:
+async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> None:
     streamed_messages: list[list[dict[str, Any]]] = []
 
     async def retrieve(_query: str) -> RetrievalResult:
@@ -613,7 +608,7 @@ async def test_streaming_finishes_research_before_native_tokens_start() -> None:
         streamed_messages.append(messages)
         return tokens()
 
-    agent = ScriptedAgent(_tool(ToolCall(id="finish", name="finish_research", arguments={})))
+    agent = ScriptedAgent(_answer("control draft"))
     contexts, stream = await _research(
         agent,
         retrieve,
@@ -626,11 +621,12 @@ async def test_streaming_finishes_research_before_native_tokens_start() -> None:
     assert {tool.name for tool in agent.turn_calls[0]["tools"]} == {
         "search_knowledge_base",
         "search_web",
-        "finish_research",
     }
+    assert agent.turn_calls[0]["tool_choice"] == "auto"
     assert "Answer the original request now" in str(streamed_messages[0][-1]["content"])
     assert [token async for token in stream] == ["Final ", "answer [1-1][2-1]."]
     assert cast(Any, stream).answer == "Final answer [1-1][2-1]."
+    assert cast(Any, stream).trace["agent_stop_reason"] == "model_stop"
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +673,7 @@ async def test_research_stream_final_flows_through_synthesizer_no_context_and_wa
     def stream_text(*, messages: list[dict[str, Any]]):
         return tokens()
 
-    agent = ScriptedAgent(_tool(ToolCall(id="finish", name="finish_research", arguments={})))
+    agent = ScriptedAgent(_answer("control draft"))
     contexts, stream = await _research(
         agent,
         retrieve,

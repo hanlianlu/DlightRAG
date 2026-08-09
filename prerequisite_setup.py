@@ -697,7 +697,7 @@ EMBEDDING_MODALITY_NOTE = (
 CONTEXT_WINDOW_NOTE = (
     "[dim]The query and default LLM must accept the configured Answer context "
     "window (answer.context_window_tokens, default 260,000): evidence packing and "
-    "final synthesis share it, so pick a model whose context window is at least "
+    "final answer generation share it, so pick a model whose context window is at least "
     "that large.[/dim]"
 )
 

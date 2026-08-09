@@ -101,9 +101,10 @@ came from and never treats a description as the final answer.
 
 Full resource bytes never enter model context. Only bounded text windows, capped
 tool observations, and budgeted image blocks do. One `AnswerCapacity` shares the
-configured context window across evidence packing and final synthesis: evidence
-is bounded to a fraction of the window, each tool observation is capped, and a
-fixed final-generation reserve is input-packing headroom, not an output cap.
+configured context window across evidence packing and final answer generation:
+evidence is bounded to a fraction of the window, each tool observation is
+capped, and a fixed final-generation reserve is input-packing headroom, not an
+output cap.
 
 When `web_search.api_key` (Exa) is set, the research path may call Exa Search and
 Contents as one more peer tool; passages belong to no workspace and are packed

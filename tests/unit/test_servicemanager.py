@@ -2435,15 +2435,15 @@ class TestAgenticAnswerCapability:
         from dlightrag.citations.streaming import aclose_answer_stream
         from dlightrag.core.agent.orchestrator import InitialScopeDecision
         from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+        from dlightrag.models.tool_turn import AssistantTurn
 
         class StreamingToolModel:
             def __init__(self) -> None:
                 self.turns = [
                     AssistantTurn(
-                        text="",
-                        tool_calls=(ToolCall(id="finish", name="finish_research", arguments={}),),
-                        stop_reason="tool_use",
+                        text="control draft",
+                        tool_calls=(),
+                        stop_reason="stop",
                     ),
                 ]
                 self.closed = asyncio.Event()

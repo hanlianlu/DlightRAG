@@ -439,10 +439,12 @@ attachment bytes through the owning turn and conversation.
 
 `AnswerOrchestrator` owns every answer. A Web turn with attachments or an Exa
 web-search key takes the research path — fixed initial retrieval, peer tools that
-read and inspect the request-local resources, and one final synthesis — while a
-plain query takes the fast knowledge-base path. Provider and resource lifetimes
-are request-local; nothing is shared across turns except the durable raw
-attachment bytes.
+read and inspect the request-local resources, followed by one additional
+tools-disabled LLM call for final answer generation — while a plain query takes
+the fast knowledge-base path and needs only its one answer-generation LLM call.
+After generation, citation/source/media finalization is deterministic. Provider
+and resource lifetimes are request-local; nothing is shared across turns except
+the durable raw attachment bytes.
 
 REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
 accept an optional caller-supplied `history` of prior `role`/`content` turns for

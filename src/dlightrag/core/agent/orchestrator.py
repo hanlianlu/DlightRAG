@@ -3,10 +3,11 @@
 
 One owner routes every answer. A request with no registered resources and no
 open-web capability takes the standard-RAG fast path: fixed knowledge-base
-retrieval and one final synthesis, with no control turn. A request with
+retrieval and one final answer generation, with no control turn. A request with
 attachments/resources or a web-search capability enters the research loop:
 fixed initial retrieval, an optional strict web-scope decision when Exa exists,
-peer tools, evidence-growth convergence, and one tools-disabled final answer.
+peer tools, evidence-growth convergence, and one additional tools-disabled
+final answer generation.
 """
 
 import asyncio
@@ -42,10 +43,6 @@ StreamModel = Callable[..., AsyncIterator[str]]
 FinalText = Callable[..., Awaitable[str]]
 ScopeModel = Callable[..., Awaitable[BaseModel]]
 
-_SEARCH_TOOL_NAMES = frozenset(
-    {"search_knowledge_base", "search_web", "read_resource", "inspect_resource"}
-)
-
 
 class InitialScopeDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -67,10 +64,6 @@ class SearchInput(BaseModel):
     query: str = Field(min_length=1)
 
 
-class FinishResearchInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
 class AgentProtocolError(RuntimeError):
     """The model violated a required agent turn contract."""
 
@@ -80,17 +73,12 @@ class _RunState:
     session: EvidenceLedger
     cache: _ToolCallCache
     trace: dict[str, Any]
-    search_tools: list[AgentTool]
-    finish_tool: AgentTool
+    tools: list[AgentTool]
     base_messages: list[dict[str, Any]]
     initial_query: str
     evidence_message: dict[str, Any] | None = None
     last_exchange: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = "model_stop"
-
-    @property
-    def research_tools(self) -> list[AgentTool]:
-        return [*self.search_tools, self.finish_tool]
 
 
 class AnswerOrchestrator:
@@ -265,24 +253,7 @@ class AnswerOrchestrator:
             initial_contexts=initial_contexts,
         )
         await self._run_initial_wave(state)
-
-        while True:
-            executed, changed = await self._execute_control_turn(
-                state,
-                state.research_tools,
-                tool_choice="auto",
-            )
-            if not executed.assistant.tool_calls:
-                state.stop_reason = "model_stop"
-                break
-            names = {result.call.name for result in executed.results if not result.is_error}
-            searched = bool(names & _SEARCH_TOOL_NAMES)
-            if "finish_research" in names and not searched:
-                state.stop_reason = "finish_research"
-                break
-            if not changed:
-                state.stop_reason = "no_new_evidence"
-                break
+        await self._research_until_stopped(state)
 
         if self._final_text_func is None:
             raise RuntimeError("Research answer requires a tools-disabled final model")
@@ -315,25 +286,7 @@ class AnswerOrchestrator:
             initial_contexts=initial_contexts,
         )
         await self._run_initial_wave(state)
-
-        while True:
-            executed, changed = await self._execute_control_turn(
-                state,
-                state.research_tools,
-                tool_choice="required",
-                finish_control=True,
-            )
-            if not executed.assistant.tool_calls:
-                raise AgentProtocolError("The model skipped a required research action.")
-
-            names = {result.call.name for result in executed.results if not result.is_error}
-            searched = bool(names & _SEARCH_TOOL_NAMES)
-            if "finish_research" in names and not searched:
-                state.stop_reason = "finish_research"
-                break
-            if not changed:
-                state.stop_reason = "no_new_evidence"
-                break
+        await self._research_until_stopped(state)
 
         final_messages, indexer = self._finalize_transcript(state)
         state.trace["agent_stop_reason"] = state.stop_reason
@@ -344,6 +297,17 @@ class AnswerOrchestrator:
             indexer=indexer,
             trace=state.trace,
         )
+
+    async def _research_until_stopped(self, state: _RunState) -> None:
+        """Run evidence turns until the model stops calling tools or adds nothing."""
+        while True:
+            executed, changed = await self._execute_control_turn(state)
+            if not executed.assistant.tool_calls:
+                state.stop_reason = "model_stop"
+                return
+            if not changed:
+                state.stop_reason = "no_new_evidence"
+                return
 
     def _finalize_transcript(self, state: _RunState) -> tuple[list[dict[str, Any]], Any]:
         """Pack the ledger's final citable evidence beside the tool transcript.
@@ -391,7 +355,7 @@ class AnswerOrchestrator:
                 lambda: self._search_corpus(args.query, session),
             )
 
-        search_tools = [
+        tools = [
             AgentTool(
                 "search_knowledge_base",
                 "Search the indexed knowledge base for one concrete unresolved fact.",
@@ -400,7 +364,7 @@ class AnswerOrchestrator:
             ),
         ]
         if self._search_web is not None:
-            search_tools.append(
+            tools.append(
                 AgentTool(
                     "search_web",
                     "Search the open web for one concrete unresolved or current fact.",
@@ -409,20 +373,13 @@ class AnswerOrchestrator:
                 )
             )
         for tool in self._resource_tools:
-            search_tools.append(self._wrap_resource_tool(tool, session, cache))
+            tools.append(self._wrap_resource_tool(tool, session, cache))
 
-        finish_tool = AgentTool(
-            "finish_research",
-            "Finish research when the current evidence is sufficient to answer.",
-            FinishResearchInput,
-            _finish_research,
-        )
         return _RunState(
             session=session,
             cache=cache,
             trace=trace,
-            search_tools=search_tools,
-            finish_tool=finish_tool,
+            tools=tools,
             base_messages=_initial_messages(
                 query,
                 conversation_history=conversation_history,
@@ -471,10 +428,6 @@ class AnswerOrchestrator:
     async def _execute_control_turn(
         self,
         state: _RunState,
-        tools: list[AgentTool],
-        *,
-        tool_choice: Literal["auto", "required", "none"],
-        finish_control: bool = False,
     ) -> tuple[ExecutedTurn, bool]:
         executor = ToolTurnExecutor(cast(ToolModel, self._model_func))
         call_messages = [*state.base_messages, *state.last_exchange]
@@ -484,13 +437,13 @@ class AnswerOrchestrator:
         previous_evidence_count = _evidence_count(state.session)
         executed = await executor.run_turn(
             call_messages,
-            tools,
-            tool_choice=tool_choice,
+            state.tools,
+            tool_choice="auto",
         )
         state.trace["agent_turns"] += 1
         state.last_exchange = executed.messages[len(call_messages) :]
         if executed.assistant.tool_calls:
-            blocks, _ = self._render_evidence(state, finish_control=finish_control)
+            blocks, _ = self._render_evidence(state)
             state.evidence_message = {"role": "user", "content": blocks}
         return executed, _evidence_count(state.session) != previous_evidence_count
 
@@ -499,20 +452,16 @@ class AnswerOrchestrator:
         state: _RunState,
         *,
         final: bool = False,
-        finish_control: bool = False,
     ) -> tuple[list[dict[str, Any]], Any]:
         fixed = estimate_messages_tokens([*state.base_messages, *state.last_exchange])
         blocks, indexer = state.session.transform(self._capacity, fixed_input_tokens=fixed)
         if final:
             instruction = "Answer the original request now from the current evidence above."
-        elif finish_control:
-            instruction = (
-                "Use the current evidence above. Call finish_research if it is sufficient; "
-                "otherwise call one or more tools for a concrete missing fact."
-            )
         else:
             instruction = (
-                "Use the current evidence above. Answer now if it is sufficient; otherwise "
+                "Use the current evidence above only to decide whether more research is needed. "
+                "Do not draft the answer in this control turn. If the evidence is sufficient, "
+                "make no tool call and return only a brief readiness acknowledgement. Otherwise "
                 "call one or more tools for a concrete missing fact."
             )
         return [*blocks, {"type": "text", "text": instruction}], indexer
@@ -533,9 +482,7 @@ class AnswerOrchestrator:
             state.trace["agent_turns"] += 1
             include_web = decision.include_web
             if not include_web:
-                state.search_tools = [
-                    tool for tool in state.search_tools if tool.name != "search_web"
-                ]
+                state.tools = [tool for tool in state.tools if tool.name != "search_web"]
         sources: tuple[Literal["knowledge_base", "web"], ...] = (
             ("knowledge_base", "web") if include_web else ("knowledge_base",)
         )
@@ -646,10 +593,6 @@ class _ToolCallCache:
                 details=result.details,
             )
         return result
-
-
-async def _finish_research(_raw: BaseModel) -> ToolResult:
-    return ToolResult(content="Research is complete; proceed to the final answer.")
 
 
 def _initial_messages(

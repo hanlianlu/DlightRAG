@@ -439,7 +439,7 @@ class AnswerConfig(BaseModel):
     context_window_tokens: int = Field(
         default=260_000,
         ge=1,
-        description="Model context window shared by evidence packing and final synthesis.",
+        description="Model context window shared by evidence packing and final answer generation.",
     )
     max_attachments: int = Field(
         default=6,

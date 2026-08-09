@@ -694,9 +694,9 @@ answer:
 ```
 
 `answer.context_window_tokens` (default 260,000) is the shared model context
-window used by evidence packing and final synthesis. Evidence is capped at 60
-percent of it; a 32,768-token generation reserve is input-packing headroom only,
-not `max_output_tokens` and not an output cap. `answer.max_attachments` (6),
+window used by evidence packing and final answer generation. Evidence is capped
+at 60 percent of it; a 32,768-token generation reserve is input-packing headroom
+only, not `max_output_tokens` and not an output cap. `answer.max_attachments` (6),
 `answer.max_attachment_bytes` (100 MiB), and `answer.max_total_attachment_bytes`
 (128 MiB) bound answer attachment admission. `query_images` remains the
 retrieve-only current-image path.

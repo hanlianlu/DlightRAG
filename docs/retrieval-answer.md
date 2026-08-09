@@ -269,19 +269,22 @@ One `AnswerOrchestrator` routes every answer. It reads request capability and
 picks one of two paths:
 
 - **Fast path** — no attachments and no web-search key. DlightRAG runs fixed
-  knowledge-base retrieval and one `AnswerSynthesizer` final synthesis, with no
-  control turn. This is the standard-RAG path.
+  knowledge-base retrieval and one `AnswerSynthesizer` answer-generation LLM
+  call, with no control turn. This is the standard-RAG path.
 - **Research path** — the request has attachments (registered as request-local
   resources) or `web_search.api_key` (Exa) is set. DlightRAG runs fixed initial
   retrieval, an optional strict web-scope decision when Exa exists, then peer
   tools (`search_knowledge_base`, `read_resource`, `inspect_resource`, and
   `search_web` when enabled) that append observations to an `EvidenceLedger`.
-  When evidence stops growing, one tools-disabled `AnswerSynthesizer` produces
-  the final answer.
+  A control turn with no tool calls, or a tool batch that adds no evidence, ends
+  research. DlightRAG then makes one additional tools-disabled LLM call through
+  `AnswerSynthesizer` to generate the final answer. Control-turn text is only a
+  readiness signal and is never returned as the answer.
 
-Both paths converge on the same `AnswerSynthesizer` final answer, so citation
-validation, `sources`, `answer_images`, and `answer_blocks` are identical across
-paths. Resource reads are deterministic first: `read_resource` decodes UTF-8/CSV
+Both paths converge on the same `AnswerSynthesizer` generation and deterministic
+finalization, so citation validation, `sources`, `answer_images`, and
+`answer_blocks` are identical across paths. Resource reads are deterministic
+first: `read_resource` decodes UTF-8/CSV
 directly and converts HTML/PDF/DOCX/PPTX/XLSX through selected MarkItDown
 converters (plugins disabled, no network, OOXML zip-bomb preflight).
 `inspect_resource` performs focused VLM inspection through the VLM role (or the
@@ -291,9 +294,9 @@ context — only bounded text windows, capped tool observations, and budgeted im
 blocks do.
 
 `AnswerCapacity` shares the configured `answer.context_window_tokens` window
-across evidence packing and final synthesis. Evidence is bounded to 60 percent of
-the window, each tool observation is capped at 16,000 tokens, and a 32,768-token
-final-generation reserve is input-packing headroom only — it is not
+across evidence packing and final answer generation. Evidence is bounded to 60
+percent of the window, each tool observation is capped at 16,000 tokens, and a
+32,768-token final-generation reserve is input-packing headroom only — it is not
 `max_output_tokens` and never forces an answer of that size.
 
 ## Answer Generation
