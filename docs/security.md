@@ -333,6 +333,33 @@ access_control:
       actions: [editor]
 ```
 
+## Answer Attachment Resources
+
+Answer attachments are read as request-local resources and are bounded on every
+channel before the orchestrator runs. `answer.max_attachments` (default 6) caps
+the count, `answer.max_attachment_bytes` (100 MiB) caps each item, and
+`answer.max_total_attachment_bytes` (128 MiB) caps the request; REST multipart
+uploads are refused with a stable 4xx before the body is buffered.
+
+HTTPS link attachments are inert handles until they are read. Only `https` URLs
+are admitted, embedded credentials are rejected, and full scheme/host/SSRF
+validation is repeated on every fetch — a link cannot resolve to a private,
+loopback, or link-local address. Fetched bytes pass the same per/total size and
+decoded-pixel limits as uploads.
+
+Binary conversion is defensive. MarkItDown runs with plugins disabled and no
+network access, and OOXML archives (DOCX/PPTX/XLSX) pass a central-directory
+zip-bomb preflight — entry-count, per-entry size, total size, and expansion-ratio
+limits — before any converter opens them, so an archive that is admissible by
+byte size can still be rejected if its internal expansion looks like a bomb.
+Images pass MIME and decoded-pixel checks before inspection.
+
+Full attachment bytes never enter model context: only bounded text windows,
+capped tool observations, and budgeted image blocks do. The optional Exa
+web-search capability is gated solely by the presence of
+`DLIGHTRAG_WEB_SEARCH__API_KEY`; keep it in `.env`, and its absence removes the
+capability entirely.
+
 ## Deployment Posture
 
 | Deployment | Recommended posture |

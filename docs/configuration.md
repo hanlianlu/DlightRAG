@@ -56,8 +56,9 @@ they need to change:
 The configured external sidecar selects the parser automatically. Configure a
 `mineru` block or a `docling` block; DlightRAG derives the internal LightRAG
 wildcard. With neither block, the code default is MinerU. If both are present,
-only MinerU is effective. Workspace ingest and Web Composer documents consume
-the same derived routing policy.
+only MinerU is effective. MinerU and Docling are durable ingestion parsers only;
+answer attachments are decoded and converted request-locally and never invoke
+them.
 
 Advanced parser fields with code defaults:
 
@@ -553,9 +554,9 @@ configured provider surfaces as a request error during ingest, so lower it then.
 
 BM25 is part of the supported DlightRAG retrieval path. BM25 candidate breadth
 follows the configured chunk candidate budget. `/retrieve` does not re-cap
-fused chunks after semantic/BM25 merge; `/answer` still packs final prompt
-chunks with `answer.context_top_k`. Language profiles and scoring constants
-are advanced index signatures.
+fused chunks after semantic/BM25 merge; `/answer` packs final prompt evidence
+against the shared `answer.context_window_tokens` capacity. Language profiles and
+scoring constants are advanced index signatures.
 
 Defaults:
 
@@ -606,9 +607,9 @@ bm25_b: 0.75
 ```
 
 `bm25_enabled` controls workspace PostgreSQL BM25 indexing, ingest-time
-language labels, and query fusion. It does not disable Web Composer's
-request-local in-memory lexical evidence, which never reads or writes workspace
-indexes.
+language labels, and query fusion. It applies to the workspace knowledge-base
+lane only; the answer research path reads attachments through request-local
+resources that never touch workspace indexes.
 
 Changing profile names, text configs, languages, `bm25_k1`, or `bm25_b`
 changes the expected pg_textsearch index signature. Enabling BM25 for an
@@ -630,21 +631,14 @@ vector scoring inside a small metadata candidate set.
 
 ## Image Budgets
 
-`answer.max_images` and the answer byte/geometry fields define one transport
-budget shape. REST, SDK, and MCP use one instance for their request-local
-current/history/RAG visuals. Web Composer turns create two independent instances
-with that same shape:
-
-- Composer: current direct images, selected history images, and visuals parsed
-  from current/history Composer documents;
-- RAG: LightRAG visual evidence only.
-
-Each Web lane receives the full configured count and byte ceiling. The two
-instances do not borrow or consume each other's remaining capacity. At startup
-the configured shape is clamped to the query-role model's discovered image
-capability. `answer.max_images` must remain `>= query_images.max_current_images`
-so current direct uploads fit inside the Composer budget. Compression budgets
-are advanced model transport limits:
+`answer.max_images` and the answer byte/geometry fields define one image
+transport budget for every answer, across REST, SDK, MCP, and Web. That single
+budget covers current attachment images, focused VLM inspection previews, and
+retrieved workspace visuals together; there is no separate per-lane instance.
+At startup the configured shape is clamped to the query-role model's discovered
+image capability. `answer.max_images` must remain `>= query_images.max_current_images`
+so the retrieve-only current images always fit the shared ceiling. Compression
+budgets are advanced model transport limits:
 
 `chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
 those are omitted, it reuses `llm.default`.
@@ -709,16 +703,25 @@ retrieve-only current-image path.
 
 `answer.image_max_pixels` rejects source images whose decoded dimensions exceed
 the limit before RGB conversion or resizing. The Web upload validator,
-cache-neutral Composer analysis transport, query-image description, and final
+request-local resource inspection, retrieve query-image description, and final
 answer transport use the same ceiling.
 
-## Query Images And Visual Assets
+## Answer Attachments And Web Conversations
 
-In Web/UI terminology, **query attachments** are query images plus Composer
-documents. Current-request images are described with the VLM before retrieval
-when a VLM is configured. Public REST, MCP, CLI, and Python answer/retrieve calls are
-stateless; durable conversation images belong only to the Web conversation
-store. `max_upload_bytes` is the decoded per-image Web admission limit, not the
+Answer public inputs are **attachments**, not query images. REST, the Python
+SDK, MCP, and the Web UI attach files and HTTPS references that become
+request-local resources for the lifetime of one answer. `max_attachments`,
+`max_attachment_bytes`, and `max_total_attachment_bytes` (above) bound admission
+on every channel. Attachments are read on demand — deterministic UTF-8/CSV
+decoding and MarkItDown conversion of HTML/PDF/DOCX/PPTX/XLSX first, then focused
+VLM inspection of figures — and their full bytes never enter model context.
+
+`query_images` is a separate, retrieve-only current-image path used by
+`/retrieve` for knowledge-base visual search. Current-request images are
+described with the VLM before retrieval when a VLM is configured. Public REST,
+MCP, CLI, and Python answer/retrieve calls are stateless; durable conversation
+attachments belong only to the Web conversation store. `max_upload_bytes` is the
+decoded per-image Web admission limit for those retrieve images, not the
 answer-model compression budget. Its default is 15 MiB and the backend and
 browser consume the same value:
 
@@ -741,51 +744,29 @@ lifecycle. It keeps at most 100 complete turns and uses 30-day inactivity
 retention; expired conversations are hidden immediately and reclaimed in
 skip-locked batches by a lightweight hourly task. Listing conversations also
 removes expired rows for the active principal. Cleanup cascades through stored
-turns, images, attachments, and Composer cache rows without
-touching ingest documents, chunks, vectors, graph data, source files, visual
-assets, or jobs. Current-turn images always have priority; historical images
-that miss a transport slot contribute their stored text descriptions. These
-retention and upload controls do not change that behavior.
+turns and their raw answer attachments without touching ingest documents,
+chunks, vectors, graph data, source files, visual assets, or jobs.
 
-Web Composer documents use the configured parser routing and
-`parser_sidecars.vlm.enabled` switch. On a cache miss they run the real parser,
-cache-neutral LightRAG VLM/EXTRACT analysis, and LightRAG multimodal renderer in
-temporary storage. After parse/chunk work or a cache load, each current or
-planner-selected historical Composer document is routed once by its total estimated
-chunk tokens. Documents at or below 24,576 tokens use full mode: every chunk enters
-the Answer Composer document context directly, with no document embedding, vector
-read, exact retrieval, BM25/RRF, or reranking. Documents above 24,576 tokens
-use retrieval mode: document vectors are embedded and cached, exact dense and
-lexical/structural retrieval share one candidate pool, and each document is
-packed independently to at most 24,576 tokens.
+The Web store persists uploaded answer attachments verbatim in one raw table and
+re-registers historical attachments lazily as request-local resources when a
+follow-up turn needs them. `visual_assets` controls browser thumbnails derived
+on demand from those attachments. There is no answer-time parse cache, no
+attachment chunk table, and no vector cache; the answer research path reads every
+resource fresh from its stored bytes.
 
-`RAGServiceManager` lazily creates, owns, and closes one cache-neutral
-`ComposerModelBundle` for the VLM and EXTRACT roles. The bundle's VLM callable
-is shared with `QueryImageDescriber` and sidecar analysis; the manager's
-direct-LLM semaphore is their common concurrency bound rather than a
-per-request or per-workspace limit.
+## Web Search (optional)
 
-The first normalized requested workspace deterministically selects one
-`RAGService`. That service owns and provides its initialized LightRAG
-parser/multimodal renderer, shared `RobustDocumentEmbedder` plus resolved image
-capability, and reranker. Composer only borrows them, does not close them, and
-does not add another resource pool: parser/MM work remains request-local,
-retrieval-mode embedding uses the shared embedder's own semaphore, and
-retrieval-mode reranking uses the service-owned callable. In retrieval mode,
-fused image+text document embedding is used when that resolved capability is
-active; otherwise, or after a fused provider failure, the document vector falls
-back to text-only embedding.
+The answer research path can call the open web when an Exa key is set:
 
-Provider and processing-resource sharing does not share results. Enriched
-chunks and JSONB vectors remain owned only by the Web PostgreSQL store in
-`web_conversation_attachment_chunks`, scoped by principal and conversation.
-Manual delete and TTL pruning cascade those rows; `max_turns` trimming preserves
-them until the conversation itself is deleted or expires. There is no
-cross-conversation reuse, workspace RAG write, HNSW/ANN index, or Composer
-vector configuration. Composer dense ranking is exact blockwise `float32`
-cosine with a fixed internal inclusion threshold of `>= 0.5`. The Composer
-current/history visual budget described above remains independent from the
-workspace RAG visual budget.
+```yaml
+web_search:
+  api_key: null  # set DLIGHTRAG_WEB_SEARCH__API_KEY in .env to enable
+```
+
+The key's presence is the whole capability toggle. When set, the browser channel
+offers web search and the orchestrator may call Exa Search and Contents as one
+more peer tool; when unset, the capability is removed and answers stay
+corpus-only.
 
 ## REST API
 
@@ -890,26 +871,22 @@ request_timeout: 300
 
 `max_conversation_tokens` caps recent text history supplied to the query
 planner. The complete Planner request is bounded to 102400 estimated tokens.
-Current query text, current Composer documents, and current image descriptions
-are fixed inputs. Optional metadata schema, old conversation messages, and prior
-image/document catalog entries yield when the envelope is full. The schema is
-omitted first; history and catalog entries then alternate eviction, oldest first
-within each source. Each current Composer document uses a structure-aware digest
-capped at 8192 tokens; each prior document summary and image description is
-capped at 1024 and 512 tokens respectively. These are internal semantic limits
+Current query text and current image descriptions are fixed inputs. Optional
+metadata schema and old conversation messages yield when the envelope is full:
+the schema is omitted first, then history is evicted oldest first. Each prior
+image description is capped at 512 tokens. These are internal semantic limits
 rather than additional public settings.
 
 `max_upload_bytes` is the per-file cap for REST multipart ingest and Web
 workspace/folder uploads. URL ingestion has its own
-`url_ingest_max_bytes` download cap. Web Composer documents use the product
-constant `MAX_DOCUMENT_BYTES` (100 MiB), projected to the browser by the Web
-route rather than exposed as another deployment knob. `max_upload_size_mb` is
-the additional per-request total cap for multi-file Web workspace uploads (a
-temp-directory guard). `ingest_timeout` limits how long the SDK convenience
-method `RAGServiceManager.aingest()` waits for its durable job. When it expires,
-the job keeps running and the method returns its current row instead of
-cancelling it. REST, Web, and MCP start jobs immediately and are not governed by
-this wait setting.
+`url_ingest_max_bytes` download cap. Answer attachments use the separate
+`answer.max_attachment_bytes` (100 MiB) per-attachment ceiling, not this ingest
+cap. `max_upload_size_mb` is the additional per-request total cap for multi-file
+Web workspace uploads (a temp-directory guard). `ingest_timeout` limits how long
+the SDK convenience method `RAGServiceManager.aingest()` waits for its durable
+job. When it expires, the job keeps running and the method returns its current
+row instead of cancelling it. REST, Web, and MCP start jobs immediately and are
+not governed by this wait setting.
 
 Ingest job state is stored in `dlightrag_ingest_jobs` as operational state, not
 user-facing configuration. A sweeper runs every 30 minutes and on startup: it

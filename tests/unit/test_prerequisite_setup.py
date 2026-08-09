@@ -1060,6 +1060,10 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
         "  base_url: https://api.voyageai.com/v1\n"
         "rerank:\n  enabled: true\n  strategy: voyage_reranker\n  model: rerank-2.5-lite\n"
+        "answer:\n  context_window_tokens: 260000\n  max_attachments: 6\n"
+        "  max_attachment_bytes: 104857600\n  max_total_attachment_bytes: 134217728\n"
+        "  max_images: 12\n"
+        "query_images:\n  max_current_images: 3\n"
         "parser_sidecars:\n  mineru:\n    api_mode: local\n"
         "  docling:\n    endpoint: http://docling:5001\n"
         "workspace: default\n",
@@ -1089,6 +1093,84 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     assert s["workspace"] == "default"
     assert s["keys_set"] == {"LLM": True, "Embedding": True, "Rerank": False}
     assert "sk-a" not in repr(s) and "sk-b" not in repr(s)
+    # Answer context + attachment settings are surfaced for review.
+    assert s["answer"] == {
+        "context_window_tokens": 260000,
+        "max_attachments": 6,
+        "max_attachment_bytes": 104857600,
+        "max_total_attachment_bytes": 134217728,
+        "max_images": 12,
+    }
+    assert s["query_images"] == {"max_current_images": 3}
+    # No dedicated VLM role: the default LLM performs answer visual inspection.
+    assert s["visual_inspection"] == {
+        "role": "default",
+        "provider": "openai",
+        "model": "gpt-x",
+    }
+
+
+def test_read_config_summary_reports_vlm_role_visual_inspection(wiz, tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n"
+        "  default:\n    provider: openai\n    model: gpt-x\n"
+        "  roles:\n    vlm:\n      provider: gemini\n      model: gemini-vision\n"
+        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
+        "rerank:\n  enabled: false\n  strategy: chat_llm_reranker\n"
+        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
+        "workspace: default\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    s = wiz.read_config_summary(cfg, env)
+    # An explicit vlm role owns answer visual inspection.
+    assert s["visual_inspection"] == {
+        "role": "vlm",
+        "provider": "gemini",
+        "model": "gemini-vision",
+    }
+
+
+def test_read_config_summary_uses_answer_defaults_when_absent(wiz, tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n  default:\n    provider: openai\n    model: gpt-x\n"
+        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
+        "rerank:\n  strategy: chat_llm_reranker\n"
+        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
+        "workspace: default\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    s = wiz.read_config_summary(cfg, env)
+    # Absent answer block falls back to the shipped 260K / 6 / 100 MiB / 128 MiB defaults.
+    assert s["answer"]["context_window_tokens"] == 260000
+    assert s["answer"]["max_attachments"] == 6
+    assert s["answer"]["max_attachment_bytes"] == 100 * 1024 * 1024
+    assert s["answer"]["max_total_attachment_bytes"] == 128 * 1024 * 1024
+    assert s["query_images"]["max_current_images"] == 3
+
+
+def test_context_window_note_explains_model_requirement(wiz):
+    # The wizard must warn that the query/default model has to satisfy the window.
+    note = wiz.CONTEXT_WINDOW_NOTE
+    assert "260,000" in note or "260000" in note
+    assert "context window" in note.lower()
+
+
+def test_render_summary_shows_context_and_attachment_settings(wiz):
+    from rich.console import Console
+
+    console = Console(record=True, width=100)
+    summary = wiz.read_config_summary(wiz.CONFIG_PATH, wiz.ENV_PATH)
+    wiz.render_summary(console, summary)
+    text = console.export_text()
+    assert "260,000" in text or "260000" in text
+    assert "6" in text  # max attachments
+    assert "Visual inspection" in text or "visual inspection" in text.lower()
 
 
 def test_home_start_brings_up_stack(wiz, monkeypatch):

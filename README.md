@@ -210,7 +210,7 @@ native Docling deployment likewise sets its active block endpoint to
 
 The Web UI is served by the REST API at `/web/`. It supports workspace
 selection, file/folder upload, durable principal-scoped conversations and
-current-turn images, citations, source panels, and semantic highlights. The
+answer attachments, citations, source panels, and semantic highlights. The
 Web-only conversation lifecycle provides New chat, select, rename, delete, and
 reload persistence with 30-day inactivity retention. `Search in: All authorized
 workspaces` is the answer default; the independent `Files in` selector remains a
@@ -219,11 +219,16 @@ single-workspace file-management target.
 REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
 accept an optional caller-supplied `history` of prior turns for multi-turn
 follow-ups, but never a Web conversation ID or server-stored history: the client
-owns conversation storage and re-sends the turns it wants on each request. Web
-current-image admission is configurable and defaults to three
-images at 15 MiB each. Durable current-turn images always have priority over any
-historical image selection; historical images that miss a transport slot
-contribute their stored text descriptions rather than raw pixels.
+owns conversation storage and re-sends the turns it wants on each request. All
+channels take the same answer inputs: a query plus optional **attachments**
+(images, PDFs, Office documents, HTML/CSV, or HTTPS references). Attachments
+become request-local resources read on demand — deterministic text decoding and
+conversion first, focused VLM inspection for figures — and are bounded by
+`answer.max_attachments` (default 6), a per-attachment size cap (100 MiB), and a
+per-request total (128 MiB). The Web store persists uploaded attachments verbatim
+per turn and re-registers historical ones lazily on follow-ups. The separate
+`/retrieve` path keeps its own `query_images` current-image inputs for
+knowledge-base visual search.
 
 ### REST
 

@@ -8,6 +8,19 @@ recovery workflows. PostgreSQL deployment tuning lives in
 
 The commands here are not part of normal ingestion or query traffic.
 
+## Web Conversation History Reset On Upgrade
+
+The Web conversation store was unified onto one raw answer-attachment table. The
+schema migration that lands it is an intentional one-time reset: on first
+startup after the upgrade, DlightRAG deletes every existing Web conversation
+(cascading to turns and attachments), drops the superseded parsed-attachment and
+image tables, and recreates the single raw-attachment table. There is no
+in-place data migration and no compatibility bridge, so principals lose their
+prior Web chat history exactly once. This affects only the browser conversation
+lifecycle; ingested documents, chunks, vectors, graph data, source files, jobs,
+and stateless REST/MCP/SDK usage are untouched. Communicate the reset before
+upgrading a shared deployment.
+
 ## Optional Docling Parser
 
 Parser selection comes from `config.yaml`: keep one

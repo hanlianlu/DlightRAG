@@ -8,14 +8,14 @@
         <mxCell id="title" value="DlightRAG Unified LightRAG Main Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=25;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
           <mxGeometry x="64" y="24" width="680" height="34" as="geometry"/>
         </mxCell>
-        <mxCell id="subtitle" value="One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, and doc status.&lt;br&gt;DlightRAG adds jobs, metadata governance, query-image visual search, BM25 fusion, visual assets, and cited answers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
-          <mxGeometry x="64" y="66" width="1040" height="40" as="geometry"/>
+        <mxCell id="subtitle" value="One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, and doc status (MinerU/Docling are durable ingestion parsers only).&lt;br&gt;Answers take one attachment contract across REST/SDK/MCP/Web; the AnswerOrchestrator routes a fast KB path or a research path over request-local resources; /retrieve stays knowledge-base only." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="64" y="66" width="1120" height="46" as="geometry"/>
         </mxCell>
 
         <mxCell id="layer_interfaces" value="Interface Boundary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="64" y="126" width="1152" height="108" as="geometry"/>
         </mxCell>
-        <mxCell id="adapters" value="&lt;b&gt;API, SDK, Web UI, MCP&lt;/b&gt;&lt;br&gt;transport, auth, uploads, image routes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=9;" vertex="1" parent="1">
+        <mxCell id="adapters" value="&lt;b&gt;API, SDK, Web UI, MCP&lt;/b&gt;&lt;br&gt;transport, auth, uploads&lt;br&gt;one answer attachment contract" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=9;" vertex="1" parent="1">
           <mxGeometry x="96" y="166" width="210" height="52" as="geometry"/>
         </mxCell>
         <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;workspace routing, stateless answers&lt;br&gt;service lifecycle, ingest jobs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
@@ -37,7 +37,7 @@
         <mxCell id="lane_lightrag" value="LightRAG Main Ownership" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#f59e0b;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#92400e;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="475" y="316" width="330" height="290" as="geometry"/>
         </mxCell>
-        <mxCell id="lane_query" value="Query/Answer Path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
+        <mxCell id="lane_query" value="Answer Orchestration &amp; KB Retrieve" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="858" y="316" width="330" height="290" as="geometry"/>
         </mxCell>
 
@@ -54,7 +54,7 @@
           <mxGeometry x="118" y="535" width="276" height="50" as="geometry"/>
         </mxCell>
 
-        <mxCell id="parser_sidecars" value="&lt;b&gt;Parser Sidecars&lt;/b&gt;&lt;br&gt;text, tables, equations, extracted images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="parser_sidecars" value="&lt;b&gt;Parser Sidecars (MinerU/Docling)&lt;/b&gt;&lt;br&gt;durable ingestion only: text, tables, equations, images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="505" y="360" width="270" height="58" as="geometry"/>
         </mxCell>
         <mxCell id="kg_vectors" value="&lt;b&gt;KG + Vectors&lt;/b&gt;&lt;br&gt;chunks, entities&lt;br&gt;relationships" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=7;" vertex="1" parent="1">
@@ -67,20 +67,20 @@
           <mxGeometry x="505" y="525" width="270" height="58" as="geometry"/>
         </mxCell>
 
-        <mxCell id="planner" value="&lt;b&gt;QueryPlanner&lt;/b&gt;&lt;br&gt;rewrite + filters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="884" y="360" width="126" height="58" as="geometry"/>
+        <mxCell id="orchestrator" value="&lt;b&gt;AnswerOrchestrator&lt;/b&gt;&lt;br&gt;fast path vs research path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="884" y="352" width="276" height="50" as="geometry"/>
         </mxCell>
-        <mxCell id="filter_scope" value="&lt;b&gt;Filter Scope&lt;/b&gt;&lt;br&gt;metadata in-filter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="1034" y="360" width="126" height="58" as="geometry"/>
+        <mxCell id="kb_retrieve" value="&lt;b&gt;KB Retrieve&lt;/b&gt;&lt;br&gt;planner + filters&lt;br&gt;mix + BM25 + RRF&lt;br&gt;rerank&lt;br&gt;/retrieve query images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="884" y="418" width="126" height="106" as="geometry"/>
         </mxCell>
-        <mxCell id="retriever" value="&lt;b&gt;UnifiedRetriever&lt;/b&gt;&lt;br&gt;LightRAG mix + BM25 + query images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="884" y="455" width="276" height="60" as="geometry"/>
+        <mxCell id="resources" value="&lt;b&gt;ResourceRegistry&lt;/b&gt;&lt;br&gt;+ EvidenceLedger&lt;br&gt;request-local" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="1034" y="418" width="126" height="48" as="geometry"/>
         </mxCell>
-        <mxCell id="fusion" value="&lt;b&gt;Hydrate/Rerank&lt;/b&gt;&lt;br&gt;after RRF fusion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="884" y="535" width="126" height="58" as="geometry"/>
+        <mxCell id="peer_tools" value="&lt;b&gt;Peer tools&lt;/b&gt;&lt;br&gt;read (MarkItDown)&lt;br&gt;inspect (VLM)&lt;br&gt;optional Exa search" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="1034" y="476" width="126" height="60" as="geometry"/>
         </mxCell>
-        <mxCell id="answer" value="&lt;b&gt;Answer/Sources&lt;/b&gt;&lt;br&gt;citations + highlights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="1034" y="535" width="126" height="58" as="geometry"/>
+        <mxCell id="answer" value="&lt;b&gt;AnswerSynthesizer&lt;/b&gt; &amp;rarr; Answer/Sources&lt;br&gt;one final path, citations + highlights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="884" y="548" width="276" height="46" as="geometry"/>
         </mxCell>
 
         <mxCell id="layer_storage" value="PostgreSQL 18 Storage Ecosystem" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#86efac;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#166534;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
@@ -89,7 +89,7 @@
         <mxCell id="primary" value="&lt;b&gt;PostgreSQL Endpoint&lt;/b&gt;&lt;br&gt;write-capable app storage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
           <mxGeometry x="120" y="748" width="250" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="storage_surfaces" value="&lt;b&gt;Storage Surfaces&lt;/b&gt;&lt;br&gt;LightRAG chunks/doc status/KG/vectors/sidecars&lt;br&gt;DlightRAG metadata index + pg_textsearch BM25" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22c55e;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="storage_surfaces" value="&lt;b&gt;Storage Surfaces&lt;/b&gt;&lt;br&gt;LightRAG chunks/doc status/KG/vectors/sidecars&lt;br&gt;DlightRAG metadata index + pg_textsearch BM25&lt;br&gt;Web conversations + one raw answer-attachment table" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22c55e;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="470" y="734" width="340" height="86" as="geometry"/>
         </mxCell>
         <mxCell id="external_db_routing" value="&lt;b&gt;External DB Routing&lt;/b&gt;&lt;br&gt;managed by infrastructure" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
@@ -107,11 +107,12 @@
         <mxCell id="e_ingestion_visual" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;endArrow=block;endFill=1;" edge="1" parent="1" source="ingestion" target="visual_path"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e_parser_kg" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b45309;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="parser_sidecars" target="kg_vectors"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e_kg_doc_status" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b45309;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="kg_vectors" target="doc_status"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_planner_filter" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0369a1;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="planner" target="filter_scope"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_filter_retriever" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0369a1;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="filter_scope" target="retriever"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_mix_retriever" value="chunks + references" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b45309;strokeWidth=1.3;endArrow=block;endFill=1;fontFamily=Inter;fontSize=10;fontColor=#92400e;" edge="1" parent="1" source="mix_retrieval" target="retriever"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_retriever_fusion" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="retriever" target="fusion"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_fusion_answer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="fusion" target="answer"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_orch_kb" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0369a1;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="orchestrator" target="kb_retrieve"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_orch_resources" value="research" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;endArrow=block;endFill=1;fontFamily=Inter;fontSize=10;fontColor=#9d174d;" edge="1" parent="1" source="orchestrator" target="resources"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_resources_peer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;endArrow=block;endFill=1;" edge="1" parent="1" source="resources" target="peer_tools"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_kb_answer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="kb_retrieve" target="answer"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_peer_answer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="peer_tools" target="answer"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e_mix_retriever" value="chunks + references" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b45309;strokeWidth=1.3;endArrow=block;endFill=1;fontFamily=Inter;fontSize=10;fontColor=#92400e;" edge="1" parent="1" source="mix_retrieval" target="kb_retrieve"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e_ingestion_primary" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#15803d;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="ingestion" target="primary"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e_visual_primary" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#15803d;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="visual_path" target="primary"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e_kg_primary" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#15803d;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="kg_vectors" target="primary"><mxGeometry relative="1" as="geometry"/></mxCell>

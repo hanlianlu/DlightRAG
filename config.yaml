@@ -169,7 +169,7 @@ embedding_batch_num: 64       # texts per embedding request (provider cap varies
 # direct_visual_top_k, answer.*, and query_images.* are DlightRAG-native.
 top_k: 60        # LightRAG QueryParam: KG entity/relationship breadth.
 chunk_top_k: 30  # LightRAG QueryParam: chunk/BM25 candidate breadth (not a final /retrieve cap).
-# bm25_enabled: true  # Workspace PostgreSQL BM25; Composer-local lexical evidence is separate.
+# bm25_enabled: true  # Workspace PostgreSQL BM25 lane; answer attachments use request-local resources.
 direct_visual_top_k: 20  # DlightRAG: image->image query-vector retrieval breadth.
 
 answer:

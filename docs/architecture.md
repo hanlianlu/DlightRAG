@@ -59,64 +59,67 @@ image. With a text-only embedding model, this alignment is skipped and
 LightRAG's semantic visual chunk remains the multimodal ingestion path.
 
 Parser adapters converge on LightRAG's shared IR and sidecars. DlightRAG does
-not branch on MinerU versus Docling after that boundary. The same derived parser
-policy is injected into workspace ingestion and Web Composer document parsing;
-Composer adds no parser selector or client of its own. Tables and equations
-remain structured text evidence, while successful drawings use the shared VLM
-and fused-vector path.
+not branch on MinerU versus Docling after that boundary. That derived parser
+policy drives durable workspace ingestion only. Tables and equations remain
+structured text evidence, while successful drawings use the shared VLM and
+fused-vector path. MinerU and Docling are the only durable ingestion parsers,
+and the temporary Answer resource path never invokes them.
 
-## Web Composer Document Flow
+## Answer Resource Flow
 
-In Web and UI terminology, **query attachments** are the umbrella for query
-images plus Composer documents. Composer documents borrow processing capability
-from the first normalized requested workspace, but they never become workspace
-documents:
+Every answer runs through one `AnswerOrchestrator`. Public callers attach files
+and HTTPS references as **answer attachments**; the same contract is used by
+REST, the Python SDK, MCP, and the Web UI. Attachments become request-local
+resources for the lifetime of one answer and are never promoted into a
+workspace, LightRAG storage, or a durable cache:
 
 ```text
-temporary Web document
-  -> real LightRAG parser in a TemporaryDirectory
-  -> cache-neutral LightRAG VLM/EXTRACT analysis over a strict proxy
-  -> real LightRAG text chunkers and multimodal sidecar renderer
-  -> route by total estimated chunk tokens
-       <= 24,576 -> full
-         -> Answer Composer document context (all chunks)
-       > 24,576 -> retrieval
-         -> shared RobustDocumentEmbedder
-              fused image+text when the selected service has working image capability
-              text-only when capability is absent or fused embedding fails
-         -> web_conversation_attachment_chunks vector cache
-         -> exact Composer-local retrieval
-         -> Answer Composer document context (independently packed to <= 24,576 tokens)
+answer request (query + optional attachments)
+  -> request-local ResourceRegistry
+       inline bytes held in memory; HTTPS links fetched lazily and revalidated
+       per read (HTTPS-only, SSRF guard, per/total byte and pixel limits)
+  -> AnswerOrchestrator routes by capability
+       fast path: no resources and no web-search key
+         -> fixed knowledge-base retrieval -> one AnswerSynthesizer final answer
+       research path: resources present or an Exa web-search key is set
+         -> fixed initial retrieval + optional strict web-scope decision
+         -> peer tools (search_knowledge_base, read_resource, inspect_resource,
+            optional search_web) writing observations into the EvidenceLedger
+         -> evidence-growth convergence
+         -> one tools-disabled AnswerSynthesizer final answer
 ```
 
-`RAGServiceManager` lazily owns and closes one cache-neutral
-`ComposerModelBundle` containing the VLM and EXTRACT providers. Its VLM callable
-is shared by `QueryImageDescriber` and Composer sidecar analysis, and both roles
-run under the manager's direct-LLM concurrency bound. Independently, the first
-normalized requested workspace deterministically selects one `RAGService`; that
-service owns and provides its initialized LightRAG parser/multimodal renderer,
-shared `RobustDocumentEmbedder` with resolved image capability, and reranker.
-Composer borrows those service resources without creating or closing them.
-Parser/MM work stays in the request's temporary-file scope. Retrieval-mode
-document embedding uses the shared embedder's own semaphore, and retrieval-mode
-reranking invokes the existing service-owned callable; Composer adds no second
-resource pool.
+Resource reads are deterministic first. `read_resource` decodes UTF-8/CSV text
+directly and converts HTML, PDF, DOCX, PPTX, and XLSX through selected MarkItDown
+converters with plugins disabled and no network access; OOXML archives pass a
+zip-bomb preflight before any converter opens them. `inspect_resource` performs
+focused visual inspection through the VLM role (falling back to the default
+LLM), rasterizing PDFs off the event loop and bounding images through the one
+canonical image path. Every visual observation is marked as VLM-derived evidence
+with its exact source/page/sheet/cell locator, so the model cites where a claim
+came from and never treats a description as the final answer.
 
-The lifecycle split does not merge result ownership. Composer output is
-isolated by `principal_id + conversation_id` in the Web PostgreSQL
-`web_conversation_*` tables; sharing model or processing providers never shares
-results. No Composer path writes LightRAG `full_docs`, `doc_status`,
-chunk/vector, BM25, LLM-cache, or KG rows, and no HNSW or other ANN index is
-created for Composer vectors.
+Full resource bytes never enter model context. Only bounded text windows, capped
+tool observations, and budgeted image blocks do. One `AnswerCapacity` shares the
+configured context window across evidence packing and final synthesis: evidence
+is bounded to a fraction of the window, each tool observation is capped, and a
+fixed final-generation reserve is input-packing headroom, not an output cap.
 
-Manual conversation deletion and inactivity-TTL pruning cascade through parsed
-chunks, VLM-derived content, image bytes, and vectors. Max-turn trimming removes
-old turns and, through foreign-key cascades, their turn-owned raw query-image
-rows and raw attachment-upload rows. The conversation-level derived chunk and
-vector cache, including materialized sidecar images, persists until conversation
-TTL pruning or deletion. Identical bytes may be reused within one conversation
-under matching signatures, but are never reused across conversations or
-principals.
+When `web_search.api_key` (Exa) is set, the research path may call Exa Search and
+Contents as one more peer tool; passages belong to no workspace and are packed
+beside corpus evidence. A missing key simply removes the capability.
+
+## Web Attachment Storage
+
+The browser channel wraps the same orchestrator with a principal-scoped
+conversation lifecycle. Uploaded answer attachments are persisted verbatim in one
+raw table, `web_conversation_attachments`, keyed by principal, conversation, and
+turn; there is no parsed-chunk table and no vector cache. Historical attachments
+are re-registered lazily as request-local resources when a follow-up turn needs
+them, and browser thumbnails are derived on demand. Manual deletion and
+inactivity-TTL pruning cascade attachment bytes through the owning turn and
+conversation. Answer attachments are the only durable answer inputs the Web store
+keeps; no answer-time parse or embedding artifact is retained.
 
 ## Retrieval And Answer Flow
 

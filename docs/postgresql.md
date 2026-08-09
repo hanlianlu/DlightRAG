@@ -137,9 +137,17 @@ remain managed by LightRAG.
 DlightRAG ensures these idempotent DDL migrations on startup and records their
 versions in the ledger.
 
-Web Composer attachment chunks store only an optional 1-based `page_number` for
-display. Spatial bbox data and the ambiguous `page_idx` field are not part of
-the DlightRAG schema.
+The Web conversation store keeps answer attachments as raw resources in one
+table, `web_conversation_attachments`: each row holds the original
+`attachment_bytes`, `mime_type`, `suffix`, `byte_size`, and `content_sha256`,
+keyed by principal, conversation, and turn. There is no parsed-chunk table and no
+vector cache; answer attachments are re-read as request-local resources when a
+turn needs them. The unifying migration is an intentional one-time reset: it
+deletes every existing Web conversation (cascading to turns and children), drops
+the superseded parsed-attachment and image tables, and recreates the single
+raw-attachment table. There is no compatibility view or renamed-column bridge, so
+a deployment upgrades once and existing Web chat history is cleared deliberately
+rather than migrated in place.
 
 ## Graph Storage
 

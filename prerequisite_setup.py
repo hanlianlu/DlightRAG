@@ -34,6 +34,17 @@ MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / ".env.mineru.example"
 API_READY_URL = "http://localhost:8100/ready"
 WEB_URL = "http://localhost:8100/web/"
 
+# Mirror of the shipped AnswerConfig/QueryImagesConfig defaults (see
+# src/dlightrag/config.py), used only to display sensible values when a
+# hand-edited config.yaml omits an Answer block. The runtime remains the sole
+# source of truth; these never write config.
+DEFAULT_CONTEXT_WINDOW_TOKENS = 260_000
+DEFAULT_MAX_ATTACHMENTS = 6
+DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
+DEFAULT_MAX_ANSWER_IMAGES = 12
+DEFAULT_MAX_CURRENT_IMAGES = 3
+
 
 # ---------------------------------------------------------------------------
 # Provider registry and role resolvers
@@ -566,6 +577,7 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
 
     mode = prompter.select(MODEL_MODE_PROMPT, MODEL_MODE_CHOICES)
 
+    console.print(CONTEXT_WINDOW_NOTE)
     name, model, base_url, key = _ask_model(prompter, PROVIDERS_LLM, "LLM")
     llm_block, llm_env = resolve_llm_choice(name, model=model, base_url=base_url)
     if key is None:
@@ -678,6 +690,15 @@ EMBEDDING_MODALITY_NOTE = (
     "Jina jina-embeddings-v4) lets DlightRAG embed charts and diagrams as fused "
     "text+image vectors. A text-only model still works, but visual evidence is then "
     "retrieved through its VLM description alone.[/dim]"
+)
+
+# Shown before the LLM provider list: the query/default model reads the whole
+# packed Answer context, so it must accept the declared context window.
+CONTEXT_WINDOW_NOTE = (
+    "[dim]The query and default LLM must accept the configured Answer context "
+    "window (answer.context_window_tokens, default 260,000): evidence packing and "
+    "final synthesis share it, so pick a model whose context window is at least "
+    "that large.[/dim]"
 )
 
 MODELS_OVERWRITE_CONFIRM = (
@@ -795,6 +816,8 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
     roles = llm.get("roles", {}) or {}
     embedding = data.get("embedding", {}) or {}
     rerank = data.get("rerank", {}) or {}
+    answer = data.get("answer", {}) or {}
+    query_images = data.get("query_images", {}) or {}
     parser_sidecars = data.get("parser_sidecars", {}) or {}
     mineru = parser_sidecars.get("mineru", {}) or {}
     docling = parser_sidecars.get("docling", {}) or {}
@@ -803,6 +826,8 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
         if mineru
         else {"name": "Docling", "detail": docling.get("endpoint", "?")}
     )
+    # Answer visual inspection reuses the VLM role when set, else the default LLM.
+    inspection = roles.get("vlm") or default
     return {
         "llm_default": {
             "provider": default.get("provider", "?"),
@@ -828,6 +853,29 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "enabled": bool(rerank.get("enabled", False)),
             "model": rerank.get("model"),
             "base_url": rerank.get("base_url"),
+        },
+        "answer": {
+            "context_window_tokens": answer.get(
+                "context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS
+            ),
+            "max_attachments": answer.get("max_attachments", DEFAULT_MAX_ATTACHMENTS),
+            "max_attachment_bytes": answer.get(
+                "max_attachment_bytes", DEFAULT_MAX_ATTACHMENT_BYTES
+            ),
+            "max_total_attachment_bytes": answer.get(
+                "max_total_attachment_bytes", DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES
+            ),
+            "max_images": answer.get("max_images", DEFAULT_MAX_ANSWER_IMAGES),
+        },
+        "query_images": {
+            "max_current_images": query_images.get(
+                "max_current_images", DEFAULT_MAX_CURRENT_IMAGES
+            ),
+        },
+        "visual_inspection": {
+            "role": "vlm" if roles.get("vlm") else "default",
+            "provider": inspection.get("provider", "?"),
+            "model": inspection.get("model", "?"),
         },
         "parser": parser,
         "workspace": data.get("workspace", "default"),
@@ -865,6 +913,23 @@ def render_summary(console, summary: dict) -> None:
         table.add_row("", f"[dim]{rerank['base_url']}[/dim]")
     parser = summary["parser"]
     table.add_row("Parser", f"{parser['name']} · {parser['detail']}")
+    answer = summary["answer"]
+    per_mib = answer["max_attachment_bytes"] // (1024 * 1024)
+    total_mib = answer["max_total_attachment_bytes"] // (1024 * 1024)
+    table.add_row("Answer context", f"{answer['context_window_tokens']:,} tokens")
+    table.add_row(
+        "Answer attachments",
+        f"{answer['max_attachments']} max · ≤ {per_mib} MiB each · ≤ {total_mib} MiB total",
+    )
+    table.add_row(
+        "Answer images",
+        f"{answer['max_images']} max · retrieve query images {summary['query_images']['max_current_images']}",
+    )
+    inspection = summary["visual_inspection"]
+    table.add_row(
+        "Visual inspection",
+        f"{inspection['role']} · {inspection['provider']} · {inspection['model']}",
+    )
     table.add_row("Workspace", summary["workspace"])
     table.add_row(
         "API keys",

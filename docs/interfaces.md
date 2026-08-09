@@ -15,15 +15,15 @@ configuration fields live in [configuration.md](configuration.md).
 | MCP Server | Agent tools over stdio or streamable HTTP | Durable ingest jobs |
 | Web UI | Browser upload and chat | Durable ingest jobs behind the Files panel |
 
-In the Web UI, **query attachments** means query images plus Composer documents.
-Both may be current-turn inputs, and the planner may resolve relevant historical
-images and Composer documents from the owning conversation. Composer documents
-are not REST/MCP/SDK retrieve inputs or workspace ingestion records. On a cache
-miss, DlightRAG uses the real configured LightRAG parser, cache-neutral
-VLM/EXTRACT analysis, and the LightRAG multimodal renderer in temporary storage.
-Final chunks and JSONB vectors live only in the owning
-`web_conversation_attachment_chunks` rows; they do not enter workspace documents,
-BM25, vectors, KG, or LLM cache.
+Answer requests take one input contract on every channel: a query plus optional
+**attachments**. Attachments are files (images, PDFs, DOCX, PPTX, XLSX, HTML, CSV)
+or HTTPS references that become request-local resources read on demand for the
+lifetime of one answer. REST and MCP JSON bodies carry HTTPS link descriptors;
+REST multipart bodies additionally carry uploaded files; the Python SDK adds
+path/bytes/url conveniences; and the Web UI uploads the same files. Attachments
+never become workspace documents, never enter LightRAG storage, BM25, vectors,
+or KG, and never appear on `/retrieve`. The separate `/retrieve` path keeps its
+own `query_images` current-image inputs for knowledge-base visual search.
 
 ### Choosing an interface
 
@@ -414,70 +414,43 @@ LightRAG's document status and DlightRAG's content-hash guard.
 The Web-only conversation lifecycle is server-owned and principal-scoped. The
 browser creates, lists, selects, renames, deletes, and reloads conversations
 through `/web/conversations`; it sends only `conversation_id`, the current query,
-current query attachments (query images plus Composer documents), and the selected
-search workspaces to `/web/answer`. Conversation IDs are server-generated UUIDs
-and are never credentials. History and image
-reads always filter by both the authenticated principal and conversation ID, so
-another principal receives the same 404 as a missing conversation.
+current answer attachments, and the selected search workspaces to `/web/answer`.
+Conversation IDs are server-generated UUIDs and are never credentials. History
+and attachment reads always filter by both the authenticated principal and
+conversation ID, so another principal receives the same 404 as a missing
+conversation.
 
-Composer document admission completes before `/web/answer` returns its SSE
-response. Unsupported, empty, unsafe-name, and per-document oversized uploads
-return HTTP 422; a four-document request exceeds the three-document limit and
-returns the route's explicit HTTP 413. No SSE stream starts for these admission
-failures. Once HTTP 200 SSE has started, a current Composer document parse
-failure emits an `error` event with
-`error_kind: CURRENT_DOCUMENT_PARSE_FAILED` and stops before query planning,
-retrieval, or generation. Load, missing-document, and parse failures for
-planner-selected historical Composer documents are nonfatal: the stream emits
-one aggregate `warning` event, continues the answer, and does not persist the
-warning with the conversation turn.
+Answer attachment admission completes before `/web/answer` returns its SSE
+response. Unsupported, empty, unsafe-name, per-attachment oversized, and
+over-count uploads return HTTP 4xx before any stream starts: a request exceeding
+`answer.max_attachments`, `answer.max_attachment_bytes`, or
+`answer.max_total_attachment_bytes` is rejected with a stable limit message. Once
+HTTP 200 SSE has started, a resource that cannot be read raises a classified
+`error` event; the answer does not silently drop evidence.
 
 Web conversations retain up to 100 complete turns with 30-day inactivity
-retention. Current Web images are admitted using `query_images.max_current_images`
-and `query_images.max_upload_bytes`; the defaults are three images and 15 MiB per
-decoded image, and the browser upload entry is gated by the query-role answer
-model's discovered image capability (unsupported or unknown disables uploads).
-All Composer-document-derived cache rows are owned by authenticated principal plus
-conversation. The same bytes and signatures may be reused inside that one
-conversation only; there is no cross-conversation or cross-principal reuse.
-Manual delete and TTL pruning cascade attachment bytes, enriched chunks, image
-bytes, and vectors, while max-turn trimming preserves the conversation-level
-cache.
+retention. Uploaded answer attachments are persisted verbatim in one raw table,
+`web_conversation_attachments`, keyed by principal, conversation, and turn.
+Historical attachments are re-registered lazily as request-local resources when a
+follow-up turn needs them, and browser thumbnails are derived on demand. There is
+no parsed-chunk table and no vector cache: the answer research path reads each
+attachment fresh from its stored bytes. Manual delete and TTL pruning cascade
+attachment bytes through the owning turn and conversation.
 
-Current-turn images always have priority. Referenced historical images are
-resolved by the planner and share the Web Composer transport budget with current
-images and visuals parsed from Composer documents. Workspace RAG visuals use an
-independent budget with the same configured shape; neither lane borrows the
-other's remaining count or bytes.
-
-`RAGServiceManager` owns and closes one cache-neutral `ComposerModelBundle` for
-VLM and EXTRACT. It shares the bundle's VLM callable with
-`QueryImageDescriber` and Composer document analysis under the manager's direct-LLM
-concurrency bound. Separately, the first normalized requested workspace
-deterministically selects one `RAGService`, which owns and provides its
-initialized LightRAG parser/multimodal renderer, shared
-`RobustDocumentEmbedder` plus resolved image capability, and reranker. A Web
-turn borrows and never closes those resources. Parser/MM work remains
-request-local. Retrieval-mode embedding uses the shared embedder's own
-semaphore, and retrieval-mode reranking invokes the service-owned callable; no
-per-turn resource pool is created.
-
-This provider-sharing lifecycle does not share results: result storage remains
-owned only by the principal-scoped Web PostgreSQL store. The Composer store uses
-its existing JSONB vector columns and no HNSW/ANN index. Private cache identity
-and vector fields, including `_cache_key`, `cache_chunk_id`,
-`embedding_signature`, and `embedding_vector`, never appear in public contexts
-or source payloads.
+`AnswerOrchestrator` owns every answer. A Web turn with attachments or an Exa
+web-search key takes the research path — fixed initial retrieval, peer tools that
+read and inspect the request-local resources, and one final synthesis — while a
+plain query takes the fast knowledge-base path. Provider and resource lifetimes
+are request-local; nothing is shared across turns except the durable raw
+attachment bytes.
 
 REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
 accept an optional caller-supplied `history` of prior `role`/`content` turns for
 multi-turn follow-ups, but DlightRAG never persists it: the client owns
-conversation storage and re-sends the turns it wants on each request. They do
-not accept a server `conversation_id` or durable historical-image IDs, and
-`query_images` belong only to the current request and are never persisted.
-They are VLM-described for planning, embedded when optional direct visual
-retrieval is active, and included as bounded model blocks for answers. These
-public calls accept no Composer documents.
+conversation storage and re-sends the turns it wants on each request. They do not
+accept a server `conversation_id`; historical files are re-sent as current
+`attachments` when a follow-up depends on them. Public answer calls take no
+`query_images`; that field belongs to `/retrieve` only.
 
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 `DELETE /workspaces/{workspace}`), while the `/web/*` surface serves the browser
@@ -490,7 +463,7 @@ discover it up front. REST `GET /health` returns `answer_image_capability`
 (`status`, `effective_max_images`, `configured_ceiling`, `model`); the MCP
 `get_capabilities` tool returns the same summary; and the Python SDK exposes it as
 `manager.answer_image_capability`. When `status` is not `supported`, attaching
-`query_images` is rejected fail-closed with a stable `error_kind`
+image resources is rejected fail-closed with a stable `error_kind`
 (`CURRENT_IMAGES_UNSUPPORTED` or `ANSWER_IMAGE_CAPABILITY_UNKNOWN`): REST returns
 HTTP 400 (or a classified SSE `error` event carrying `error_kind` when streaming),
 MCP returns the error text, and the SDK raises `AnswerImageError`.
@@ -504,10 +477,9 @@ minimal HTTP 503 response without exposing the underlying exception.
 
 A saturated service also answers HTTP 503: an answer request waits
 `answer_acquire_timeout` seconds for a free generation slot and then refuses,
-rather than queueing the caller indefinitely. Retry. A JSON request body larger
-than the configured image allowance (`query_images.max_current_images` images at
-`query_images.max_upload_bytes` each, base64-expanded) returns HTTP 413 before
-the route reads it.
+rather than queueing the caller indefinitely. Retry. An answer request whose
+attachments exceed `answer.max_total_attachment_bytes` returns HTTP 413 before
+the route buffers the body.
 
 The Web shell defaults answer scope to `Search in: All authorized workspaces`.
 That authorization-relative multi-workspace selection is independent from
@@ -539,6 +511,24 @@ result.references  # validated cited documents, derived from inline citations
 result.answer_images  # cited visual assets available for rendering
 result.answer_blocks  # markdown/image_ref blocks for structured display
 
+# Answer with attachments: files or HTTPS references become request-local
+# resources read on demand. The SDK builds ResourceInput objects from the
+# AnswerAttachment path/bytes/url conveniences.
+from dlightrag.core.client_attachments import (
+    AnswerAttachment,
+    resource_inputs_from_attachments,
+)
+
+result = await manager.aanswer(
+    query="Summarize the attached report and figure.",
+    resources=resource_inputs_from_attachments(
+        [
+            AnswerAttachment.from_path("report.pdf"),
+            AnswerAttachment.from_url("https://cdn.example.com/figure.png"),
+        ]
+    ),
+)
+
 # Streaming answer
 contexts, token_iter = await manager.aanswer_stream(query="What are the key findings?")
 # contexts (answer-packed RetrievalContexts) available immediately
@@ -558,7 +548,8 @@ async for token in token_iter:
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `bm25_query` | `str \| None` | `None` | `retrieve` only. Optional workspace BM25 query override; when omitted, the planner supplies lexical terms or retrieval uses the main query. REST and MCP inputs are capped at 1,024 characters. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
-| `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
+| `query_images` | `list[QueryImage]` | `None` | `retrieve` only. Current-request OpenAI-style `image_url` blocks for knowledge-base visual search: described by the VLM for semantic/BM25 retrieval and embedded directly for visual retrieval. Capped at 3. Answer calls do not accept this field. |
+| `attachments` | `list[AnswerAttachmentLink]` (SDK: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; the SDK uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.max_attachments` (6), `answer.max_attachment_bytes` (100 MiB), and `answer.max_total_attachment_bytes` (128 MiB). |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `history` | `list[ConversationMessage] \| None` | `None` | `/answer` only. Optional caller-supplied prior turns as `role` (`user`/`assistant`) + `content` messages for multi-turn follow-ups. Stateless: never persisted, so the caller re-sends the turns it wants each request. Folded into the planner's standalone-query rewrite and answer generation. Capped at 100 messages. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `file_extension`, `title`, `author`, `creation_date_from`/`creation_date_to`, and any `custom` key |
@@ -589,6 +580,18 @@ curl -X POST http://localhost:8100/answer \
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{"query": "key findings"}'
+
+# Answer with an HTTPS attachment reference (JSON body)
+curl -X POST http://localhost:8100/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "summarize this", "attachments": [{"url": "https://cdn.example.com/report.pdf", "filename": "report.pdf"}]}'
+
+# Answer with uploaded files (multipart): exactly one JSON `request` part plus
+# repeated `attachments` file parts; uploaded files and JSON links may mix.
+curl -X POST http://localhost:8100/answer \
+  -F 'request={"query": "summarize this", "stream": false};type=application/json' \
+  -F 'attachments=@report.pdf' \
+  -F 'attachments=@figure.png'
 
 # Create an empty workspace
 curl -X POST http://localhost:8100/workspaces \
@@ -756,9 +759,10 @@ Retrieved document images are exposed as route references, not embedded bytes:
 | MCP | Same JSON `image_url`/`thumbnail_url` references as REST when a REST image route is reachable | No separate MCP binary stream today |
 | SDK | `answer_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `answer_images` |
 
-User-supplied `query_images` are different: they can arrive as data URIs and are
-bounded before model use. Public answer/retrieve requests do not persist them or
-return durable image identifiers.
+User-supplied `/retrieve` `query_images` are different: they can arrive as data
+URIs and are bounded before model use. Answer attachments are also different:
+they are read as request-local resources and never returned as durable image
+identifiers. Public answer/retrieve requests do not persist either.
 
 ```python
 from dlightrag.core.retrieval.protocols import (
@@ -959,45 +963,51 @@ To trace `[1-2]` back to source material:
 
 ## Multimodal Queries
 
-Upload images alongside a text query for visual similarity search and answer
-reasoning:
+There are two distinct visual paths, and they belong to different endpoints.
+
+**`/answer` uses attachments.** Send images (and documents) as answer
+attachments; they become request-local resources that the orchestrator reads and
+inspects on demand:
 
 ```python
-# Python SDK
-import base64
-
-with open("photo.png", "rb") as f:
-    img_bytes = f.read()
-
-data_uri = "data:image/png;base64," + base64.b64encode(img_bytes).decode("ascii")
+# Python SDK — answer over an attached image
+from dlightrag.core.client_attachments import (
+    AnswerAttachment,
+    resource_inputs_from_attachments,
+)
 
 result = await manager.aanswer(
     query="What does this diagram show?",
-    query_images=[{"type": "image_url", "image_url": {"url": data_uri}}],
+    resources=resource_inputs_from_attachments(
+        [AnswerAttachment.from_path("photo.png")]
+    ),
 )
 ```
 
 ```bash
-# REST API — base64-encoded image
+# REST API — attach the image as a multipart upload
 curl -X POST http://localhost:8100/answer \
+  -F 'request={"query": "What does this diagram show?", "stream": false};type=application/json' \
+  -F 'attachments=@photo.png'
+```
+
+**`/retrieve` uses `query_images`.** For knowledge-base visual search, send
+current-request images to `/retrieve`; they are VLM-described for semantic/BM25
+retrieval and embedded directly for visual retrieval, without persistence:
+
+```bash
+# REST API — retrieve with a base64-encoded query image
+curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "What does this diagram show?",
-    "stream": false,
+    "query": "diagrams like this one",
     "query_images": [
       {"type": "image_url", "image_url": {"url": "data:image/png;base64,<base64>"}}
     ]
   }'
 ```
 
-`query_images` is the user-facing current-request image path. REST, MCP, CLI,
-and Python calls ask the VLM for concise semantic descriptions, embed the raw
-image for direct visual retrieval, and send a bounded image preview to the
-answer model without persistence. The Web route additionally commits validated
-current-turn images with the complete successful turn in its principal-scoped
-conversation.
-
-Answer-model previews are quality-preserving. Budgeted JPEG, PNG, and WebP
+Answer-model image previews are quality-preserving. Budgeted JPEG, PNG, and WebP
 payloads pass through unchanged; oversized images are recompressed only down to
 the configured `answer.image_min_quality` and `answer.image_min_px` floors. If
 an image still cannot fit, DlightRAG skips it rather than sending a degraded

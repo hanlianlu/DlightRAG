@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
   <title id="title">DlightRAG Unified LightRAG Main Architecture</title>
-  <desc id="desc">Layered DlightRAG architecture with interface boundary, unified ingest and query orchestration, LightRAG ownership, and a single configured PostgreSQL storage endpoint.</desc>
+  <desc id="desc">Layered DlightRAG architecture: one interface boundary with a single answer attachment contract, durable LightRAG ingestion (MinerU/Docling only), an AnswerOrchestrator with fast KB and research paths over a request-local ResourceRegistry/EvidenceLedger with MarkItDown and VLM tools plus optional Exa, a knowledge-base-only retrieve lane, and one PostgreSQL 18 storage ecosystem including a single raw Web answer-attachment table.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
@@ -48,15 +48,15 @@
   <rect class="bg" width="1280" height="900"/>
 
   <text class="title" x="64" y="52">DlightRAG Unified LightRAG Main Architecture</text>
-  <text class="subtitle" x="64" y="80">One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, and doc status.</text>
-  <text class="subtitle" x="64" y="98">DlightRAG adds metadata governance, visual search, BM25 fusion, cited answers, highlights, and operations.</text>
+  <text class="subtitle" x="64" y="80">One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, doc status (MinerU/Docling are durable ingestion parsers only).</text>
+  <text class="subtitle" x="64" y="98">Answers take one attachment contract across REST/SDK/MCP/Web; the AnswerOrchestrator routes a fast KB path or a research path over request-local resources; /retrieve stays KB-only.</text>
 
   <rect class="band-soft" x="64" y="126" width="1152" height="108"/>
   <text class="band-title" x="84" y="151">Interface Boundary</text>
 
   <rect class="box" x="96" y="166" width="210" height="52"/>
   <text class="label" text-anchor="middle" x="201" y="187">API, SDK, Web UI, MCP</text>
-  <text class="small" text-anchor="middle" x="201" y="205">transport, auth, uploads, image routes</text>
+  <text class="small" text-anchor="middle" x="201" y="205">one answer attachment contract</text>
 
   <rect class="box box-indigo" x="382" y="160" width="244" height="64"/>
   <text class="label" text-anchor="middle" x="504" y="184">RAGServiceManager</text>
@@ -106,8 +106,8 @@
   <text class="lane-title" x="495" y="341" fill="#92400e">LightRAG Main Ownership</text>
 
   <rect class="box box-orange" x="505" y="360" width="270" height="58"/>
-  <text class="label" text-anchor="middle" x="640" y="383">Parser Sidecars</text>
-  <text class="small" text-anchor="middle" x="640" y="402">text, tables, equations, extracted images</text>
+  <text class="label" text-anchor="middle" x="640" y="383">Parser Sidecars (MinerU/Docling)</text>
+  <text class="small" text-anchor="middle" x="640" y="402">durable ingestion only: text, tables, equations, images</text>
 
   <rect class="box box-orange" x="505" y="440" width="126" height="64"/>
   <text class="label" text-anchor="middle" x="568" y="463">KG + Vectors</text>
@@ -128,34 +128,39 @@
   <path class="line-orange" d="M 631 472 H 649"/>
 
   <rect class="band-soft" x="858" y="316" width="330" height="290"/>
-  <text class="lane-title" x="878" y="341">Query/Answer Path</text>
+  <text class="lane-title" x="878" y="341">Answer Orchestration &amp; KB Retrieve</text>
 
-  <rect class="box box-blue" x="884" y="360" width="126" height="58"/>
-  <text class="label" text-anchor="middle" x="947" y="383">QueryPlanner</text>
-  <text class="small" text-anchor="middle" x="947" y="402">rewrite + filters</text>
+  <rect class="box box-indigo" x="884" y="352" width="276" height="50"/>
+  <text class="label" text-anchor="middle" x="1022" y="373">AnswerOrchestrator</text>
+  <text class="small" text-anchor="middle" x="1022" y="391">fast path vs research path</text>
 
-  <rect class="box box-blue" x="1034" y="360" width="126" height="58"/>
-  <text class="label" text-anchor="middle" x="1097" y="383">Filter Scope</text>
-  <text class="small" text-anchor="middle" x="1097" y="402">metadata in-filter</text>
+  <rect class="box box-blue" x="884" y="418" width="126" height="106"/>
+  <text class="label" text-anchor="middle" x="947" y="440">KB Retrieve</text>
+  <text class="small" text-anchor="middle" x="947" y="458">planner + filters</text>
+  <text class="small" text-anchor="middle" x="947" y="472">mix + BM25 + RRF</text>
+  <text class="small" text-anchor="middle" x="947" y="486">rerank</text>
+  <text class="small" text-anchor="middle" x="947" y="500">/retrieve query images</text>
 
-  <rect class="box box-blue" x="884" y="455" width="276" height="60"/>
-  <text class="label" text-anchor="middle" x="1022" y="478">UnifiedRetriever</text>
-  <text class="small" text-anchor="middle" x="1022" y="497">LightRAG mix + BM25 + query images</text>
+  <rect class="box box-pink" x="1034" y="418" width="126" height="48"/>
+  <text class="label" text-anchor="middle" x="1097" y="437">ResourceRegistry</text>
+  <text class="small" text-anchor="middle" x="1097" y="454">+ EvidenceLedger</text>
 
-  <rect class="box" x="884" y="535" width="126" height="58"/>
-  <text class="label" text-anchor="middle" x="947" y="558">Hydrate/Rerank</text>
-  <text class="small" text-anchor="middle" x="947" y="577">after RRF fusion</text>
+  <rect class="box box-pink" x="1034" y="476" width="126" height="60"/>
+  <text class="label" text-anchor="middle" x="1097" y="493">Peer tools</text>
+  <text class="small" text-anchor="middle" x="1097" y="509">read (MarkItDown)</text>
+  <text class="small" text-anchor="middle" x="1097" y="523">inspect (VLM) &#183; Exa</text>
 
-  <rect class="box" x="1034" y="535" width="126" height="58"/>
-  <text class="label" text-anchor="middle" x="1097" y="558">Answer/Sources</text>
-  <text class="small" text-anchor="middle" x="1097" y="577">citations + highlights</text>
+  <rect class="box" x="884" y="548" width="276" height="46"/>
+  <text class="label" text-anchor="middle" x="1022" y="568">AnswerSynthesizer &#8594; Answer/Sources</text>
+  <text class="small" text-anchor="middle" x="1022" y="585">one final path, citations + highlights</text>
 
-  <path class="line-blue" d="M 1010 389 H 1034"/>
-  <path class="line-blue" d="M 1097 418 V 455"/>
-  <path class="line-orange" d="M 775 554 H 884"/>
-  <text class="note" text-anchor="middle" x="830" y="546" fill="#92400e">chunks + references</text>
-  <path class="line" d="M 1022 515 V 525 H 947 V 535"/>
-  <path class="line" d="M 1010 564 H 1034"/>
+  <path class="line-blue" d="M 947 402 V 418"/>
+  <path class="line-pink" d="M 1097 402 V 418"/>
+  <path class="line-pink" d="M 1097 466 V 476"/>
+  <path class="line-orange" d="M 775 554 H 850 V 486 H 884"/>
+  <text class="note" text-anchor="middle" x="812" y="470" fill="#92400e">chunks + references</text>
+  <path class="line" d="M 947 524 V 548"/>
+  <path class="line" d="M 1097 536 V 542 H 1022 V 548"/>
 
   <path class="line" d="M 826 224 V 252 H 257 V 316"/>
   <path class="line" d="M 826 252 H 1023 V 316"/>
@@ -168,9 +173,10 @@
   <text class="small" text-anchor="middle" x="245" y="790">write-capable app storage</text>
 
   <rect class="box" x="470" y="734" width="340" height="86" stroke="#22c55e"/>
-  <text class="label" text-anchor="middle" x="640" y="759">Storage Surfaces</text>
-  <text class="small" text-anchor="middle" x="640" y="778">LightRAG chunks/doc status/KG/vectors/sidecars</text>
-  <text class="small" text-anchor="middle" x="640" y="795">DlightRAG metadata index + pg_textsearch BM25</text>
+  <text class="label" text-anchor="middle" x="640" y="756">Storage Surfaces</text>
+  <text class="small" text-anchor="middle" x="640" y="773">LightRAG chunks/doc status/KG/vectors/sidecars</text>
+  <text class="small" text-anchor="middle" x="640" y="789">DlightRAG metadata index + pg_textsearch BM25</text>
+  <text class="small" text-anchor="middle" x="640" y="805">Web conversations + one raw answer-attachment table</text>
 
   <rect class="box box-green" x="920" y="748" width="240" height="58"/>
   <text class="label" text-anchor="middle" x="1040" y="771">External DB Routing</text>

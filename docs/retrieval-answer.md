@@ -11,14 +11,21 @@ engine, always queried in `mix` mode, while DlightRAG adds metadata
 management, optional direct multimodal image search, PostgreSQL BM25, RRF
 fusion, reranking, citations, and answer generation.
 
+`/retrieve` is a knowledge-base-only path: it accepts `query_images` for visual
+search and every `top_k`/`chunk_top_k`/`direct_visual`/KG/BM25/RRF/rerank control.
+`/answer` takes a query plus optional **attachments** and routes through one
+`AnswerOrchestrator`. The orchestrator takes a standard-RAG fast path when a
+request has no attachments and no web-search capability, and a research path when
+it has attachments (request-local resources) or an Exa web-search key.
+
 REST, MCP, and Python answer/retrieve calls remain stateless: each call owns
-only its current query, images, search scope, and any optional caller-supplied
-`history` of prior turns that answer calls fold into planning and generation.
-DlightRAG persists none of it. The Web-only conversation
-lifecycle is a principal-scoped adapter around the same answer pipeline. It
-loads server-owned text history, persists complete successful turns and current
-images, and applies 30-day inactivity retention without changing retrieval or
-ingest storage.
+only its current query, attachments (answers) or images (retrieve), search scope,
+and any optional caller-supplied `history` of prior turns that answer calls fold
+into planning and generation. DlightRAG persists none of it. The Web-only
+conversation lifecycle is a principal-scoped adapter around the same answer
+pipeline. It loads server-owned text history, persists complete successful turns
+and their raw answer attachments, and applies 30-day inactivity retention without
+changing retrieval or ingest storage.
 
 ## Ingestion Shape
 
@@ -68,14 +75,14 @@ startup error.
 ## Query Pipeline
 
 ```text
-RAGService.aretrieve / aanswer(query, query_images, filters)
+RAGService.aretrieve(query, query_images, filters)
   |
   |-- QueryPlanner
   |     built-in metadata fields plus custom_metadata keys
   |     explicit filters are strict
   |     LLM-inferred empty candidates fall back to unfiltered retrieval
   |
-  |-- Query image preparation
+  |-- Query image preparation (retrieve only; query_images)
   |     current-request images only
   |     VLM semantic descriptions for text/BM25/KG retrieval
   |     raw image payloads for direct multimodal embedding when active
@@ -119,9 +126,9 @@ fallback. `bm25_profiles`, `bm25_k1`, and `bm25_b` define the index signatures;
 changing them for an existing corpus requires the offline workspace BM25
 rebuild before query workers attach. Each non-fallback BM25 profile maps to
 exactly one language; the fallback profile must not declare languages.
-`bm25_enabled` controls this workspace PostgreSQL lane only. Web Composer's
-request-local in-memory lexical evidence has no workspace index or shared
-configuration.
+`bm25_enabled` controls this workspace PostgreSQL lane only. The answer research
+path reads attachments through request-local resources, whose lexical ranking is
+in-memory and has no workspace index or shared configuration.
 
 The semantic and workspace BM25 lanes degrade independently. A BM25 query
 failure retains successful semantic results and records `bm25_error_type` in
@@ -184,10 +191,11 @@ DlightRAG keeps the native one.
 
 ## Multimodal Queries
 
-Text queries go through LightRAG `mix`, BM25, fused-candidate hydration, and
-reranking. Image-bearing queries add a direct image vector path only when the
-configured `embedding.input_modality` resolves to multimodal and its startup
-probe succeeds:
+This is the `/retrieve` visual path (`query_images`). Text queries go through
+LightRAG `mix`, BM25, fused-candidate hydration, and reranking. Image-bearing
+queries add a direct image vector path only when the configured
+`embedding.input_modality` resolves to multimodal and its startup probe
+succeeds:
 
 ```text
 query + images
@@ -255,6 +263,39 @@ size, byte, and quality limits before constructing model payloads. Visual chunks
 whose images cannot fit fall back to their text, if present, rather than sending
 unbounded data URIs.
 
+## Answer Orchestration
+
+One `AnswerOrchestrator` routes every answer. It reads request capability and
+picks one of two paths:
+
+- **Fast path** — no attachments and no web-search key. DlightRAG runs fixed
+  knowledge-base retrieval and one `AnswerSynthesizer` final synthesis, with no
+  control turn. This is the standard-RAG path.
+- **Research path** — the request has attachments (registered as request-local
+  resources) or `web_search.api_key` (Exa) is set. DlightRAG runs fixed initial
+  retrieval, an optional strict web-scope decision when Exa exists, then peer
+  tools (`search_knowledge_base`, `read_resource`, `inspect_resource`, and
+  `search_web` when enabled) that append observations to an `EvidenceLedger`.
+  When evidence stops growing, one tools-disabled `AnswerSynthesizer` produces
+  the final answer.
+
+Both paths converge on the same `AnswerSynthesizer` final answer, so citation
+validation, `sources`, `answer_images`, and `answer_blocks` are identical across
+paths. Resource reads are deterministic first: `read_resource` decodes UTF-8/CSV
+directly and converts HTML/PDF/DOCX/PPTX/XLSX through selected MarkItDown
+converters (plugins disabled, no network, OOXML zip-bomb preflight).
+`inspect_resource` performs focused VLM inspection through the VLM role (or the
+default LLM), and marks every visual observation as VLM-derived evidence with its
+exact source/page/sheet/cell locator. Full resource bytes never enter model
+context — only bounded text windows, capped tool observations, and budgeted image
+blocks do.
+
+`AnswerCapacity` shares the configured `answer.context_window_tokens` window
+across evidence packing and final synthesis. Evidence is bounded to 60 percent of
+the window, each tool observation is capped at 16,000 tokens, and a 32,768-token
+final-generation reserve is input-packing headroom only — it is not
+`max_output_tokens` and never forces an answer of that size.
+
 ## Answer Generation
 
 The answer prompt receives:
@@ -265,7 +306,8 @@ The answer prompt receives:
   source numbering
 - document/source metadata
 - quality-preserving bounded inline page or image previews when available
-- user-supplied `query_images`, bounded by the active request transport budget
+- attachment evidence: bounded text windows from `read_resource` and VLM-derived
+  observations from `inspect_resource`, each carrying its source locator
 
 ### Answer LLM Input Shape
 
@@ -301,17 +343,17 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
 ]
 ```
 
-The `## User-attached images` blocks are omitted when the request has no current
-query images. A current image that cannot fit its budget fails the request;
-selected history images are best-effort. Server-prepared Web text history, when
+The `## User-attached images` blocks are omitted when the request has no image
+attachments. An image resource that cannot fit its budget is skipped and its
+VLM-derived text observation remains. Server-prepared Web text history, when
 present, is inserted as prior messages before the current user message.
 
 The sections are intentional:
 
 - `## User-attached images` are part of the user's question, not retrieved evidence.
-- `## User-attached documents` contains Web Composer document evidence. Each
-  answer assigns compact document labels such as `att-1`; its chunk markers use
-  the `[att-1-1]` form.
+- `## User-attached documents` contains attachment evidence read through
+  `read_resource`. Each answer assigns compact document labels such as `att-1`;
+  its chunk markers use the `[att-1-1]` form.
 - `## Knowledge-base evidence` contains LightRAG excerpts and page/image previews.
 - Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
 - Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the answer image budget.
@@ -323,40 +365,27 @@ on the `### Document [n]` heading and `[n-m]` on the excerpt label line. There
 is no separate reference list, so the model cannot pick a marker from a
 content-free menu without reading the excerpt it points at.
 
-Composer `att-N` labels are answer-scoped citation identities, not durable
-attachment IDs. New answer contexts and stored snapshots use these compact
-labels. The attachment UUID remains in the context row's `full_doc_id`, the
-source's `source_uri` (`web-attachment://<uuid>`), and the authenticated download
-identity (`/web/conversations/{conversation_id}/documents/{uuid}`). Existing
-stored snapshots that use `composer_<32hex>` labels are replayed unchanged for
-compatibility; DlightRAG does not emit those labels for new answers.
+Attachment `att-N` labels are answer-scoped citation identities for the
+request-local resources, not durable IDs. They are computed per answer from the
+resources registered for that request; nothing about them is persisted as a
+parsed chunk or vector.
 
-REST, SDK, and MCP answer generation retains one adaptive image transport
-budget for current/history/RAG visuals. Web Composer turns use two independent
-budgets with the same configured count/byte/geometry shape: current direct
-images, selected history images, and parsed document visuals share the Composer
-budget; LightRAG visuals use the RAG budget. Neither lane consumes the other's
-remaining count or bytes, and final message assembly only concatenates the
-already-budgeted blocks. Current direct images have no silent fallback; if they
-cannot fit the Composer budget, the request fails and names the overflow.
-Historical, parsed-document, and RAG images that miss their own lane slot still
-contribute stored text descriptions. Budgeted JPEG, PNG, and WebP payloads are preserved as-is.
-When recompression is needed, DlightRAG enforces both a long-edge floor and a
-JPEG quality floor; an image that cannot fit within those limits is skipped
-instead of being degraded into a low-quality preview.
-
-For Web conversations, validated current-turn images always have priority and
-planner-selected historical images are added best-effort from the Composer
-budget. A historical image that does not fit is omitted while its stored text
-description remains in history. Public REST/MCP/Python calls remain request-local.
+Answer generation uses one image transport budget for current attachment images,
+focused-inspection previews, and retrieved workspace visuals together, bounded by
+`answer.max_images` and the answer byte/geometry fields. Budgeted JPEG, PNG, and
+WebP payloads are preserved as-is. When recompression is needed, DlightRAG
+enforces both a long-edge floor and a JPEG quality floor; an image that cannot
+fit within those limits is skipped instead of being degraded into a low-quality
+preview, and its text observation remains.
 
 `/retrieve` and `/answer` both accept an explicit `chunk_top_k` request to
 override the configured chunk/visual candidate budget; otherwise DlightRAG uses
 `config.chunk_top_k`. For `/answer`, retrieval deliberately over-fetches those
-candidates, then the answer stage packs up to `answer.context_top_k` chunks.
-That budget maps to LightRAG `QueryParam.chunk_top_k`; LightRAG `top_k` remains
-the separate KG entity/relationship breadth. Retrieved
-visual chunks are admitted in reranked order within the RAG context image
+candidates, then the answer stage packs evidence into the shared
+`answer.context_window_tokens` capacity. `chunk_top_k` maps to LightRAG
+`QueryParam.chunk_top_k`; LightRAG `top_k` remains the separate KG
+entity/relationship breadth. Retrieved
+visual chunks are admitted in reranked order within the answer image
 budget. Pure visual chunks whose image cannot be sent are removed from the
 answer context and the packer backfills from later candidates; mixed text+image
 chunks keep their text even if the image is skipped. KG entities and
@@ -416,115 +445,45 @@ There is no cross-workspace global rerank. Round-robin is intentional: it keeps
 workspace representation stable without assuming rerank scores from different
 workspace/model calls are globally calibrated.
 
-## Web Composer Documents
+## Answer Attachments And Resources
 
-In Web/UI terminology, **query attachments** are query images plus Composer
-documents. The document lane uses the configured real LightRAG parser in a
-`TemporaryDirectory`. A strict storage-free proxy then invokes LightRAG's real
-VLM/EXTRACT multimodal analyzer with `llm_response_cache=None`, followed by the
-real LightRAG text chunkers and multimodal sidecar renderer. Parser persistence
-is neutralized by the parse-owner shim. This path cannot write workspace
-`full_docs`, `doc_status`, chunks, vectors, BM25, LLM cache, or KG rows and never
-enters public `/retrieve`.
+Answer attachments are read as request-local resources; they are never parsed
+into workspace documents, never written to LightRAG `full_docs`, `doc_status`,
+chunks, vectors, BM25, LLM cache, or KG rows, and never enter `/retrieve`. A
+request-local `ResourceRegistry` owns every resource for the lifetime of one
+answer: inline bytes stay in memory, HTTPS links are fetched lazily and
+revalidated on every read (HTTPS-only, SSRF guard, per/total byte and pixel
+limits), and full bytes never enter model context — only bounded text windows,
+capped observations, and budgeted image blocks do.
 
-Composer receives the same internally derived MinerU/Docling wildcard as
-workspace ingestion. It has no separate parser configuration, client, retry
-policy, or fallback. Docling pictures therefore enter the same successful
-drawing/VLM/fused-vector path; tables and equations remain structured text.
+`read_resource` is deterministic. UTF-8 and CSV text decode directly; HTML, PDF,
+DOCX, PPTX, and XLSX are converted through selected MarkItDown converters with
+plugins disabled and no network access. A fresh converter is built per call, and
+OOXML archives pass a central-directory zip-bomb preflight (entry-count,
+per-entry, total-size, and expansion-ratio limits) before any converter opens
+them. Continuation cursors are opaque, request-local tokens bound to a resource
+and focus; they expose no path, offset, or provider locator and never cross
+requests.
 
-The Web transport admits current Composer documents before creating the SSE
-response. Application-invalid or per-document oversized uploads return HTTP
-422, while a four-document request exceeds the three-document limit and returns
-the route's explicit HTTP 413; none of these responses starts SSE. Parsing runs
-later inside the HTTP 200 stream under the answer pipeline. A current Composer
-document parse failure emits an `error` event with
-`error_kind: CURRENT_DOCUMENT_PARSE_FAILED` and stops before query planning,
-retrieval, and generation. After planning, load, missing-document, or parse
-failures for selected historical Composer documents are folded into one
-nonfatal aggregate `warning` event. The answer continues without those
-documents, and the warning remains request-local rather than being persisted in
-the conversation turn.
+`inspect_resource` performs focused visual inspection through the VLM role
+(falling back to the default LLM). Images are bounded through the one canonical
+image path and `ImagePayloadBudget`; PDFs are rasterized with pypdfium2 off the
+event loop as a bounded low-resolution overview and, on request, one higher-
+resolution page. Every result is marked `derived_by_vlm` and carries its exact
+source/page/sheet/cell/visual locator, so the model can cite where a claim came
+from and never treats a VLM description as the final answer.
 
-`RAGServiceManager` lazily owns and closes one cache-neutral
-`ComposerModelBundle` for VLM and EXTRACT. `QueryImageDescriber` and Composer
-analysis share its VLM callable under the manager's direct-LLM concurrency
-bound. Separately, the first normalized requested workspace deterministically
-selects one `RAGService`; that service owns and provides its initialized
-LightRAG parser/multimodal renderer, shared `RobustDocumentEmbedder` plus
-resolved image capability, and reranker. Composer borrows those service
-resources without closing them. Parser/MM work remains request-local,
-retrieval-mode embedding uses the shared embedder's own semaphore, and
-retrieval-mode reranking invokes the service-owned callable; Composer creates no
-duplicate concurrency pool.
+When `web_search.api_key` (Exa) is set, the research path can also call Exa
+Search and Contents as one more peer tool. Exa passages come back already scored
+against the query; they belong to no workspace and are packed beside corpus
+evidence. When the key is unset, the web-search capability is removed and answers
+stay corpus-only. A rejected or unpaid key parks the capability for a short
+window rather than retrying every turn.
 
-Provider sharing never shares results. In retrieval mode, visual chunks use
-fused image+text document vectors when image capability is active; invalid
-images, unavailable capability, or fused provider failure use text-only
-document vectors. Enriched chunks, image bytes, embedding signatures, and JSONB
-vectors remain owned only by the principal-scoped Web PostgreSQL store in the
-existing `web_conversation_attachment_chunks` table. There is no pgvector
-dimension contract and no HNSW, IVFFLAT, or other ANN index.
-
-Every read and write is scoped by authenticated principal plus conversation and
-requires an unexpired owning conversation. Manual delete and TTL pruning
-cascade all Composer-document-derived rows. Max-turn trimming removes old turn records
-but preserves the conversation-level parse/vector cache. Cache identity never
-crosses a conversation or principal boundary.
-
-After parse/chunk work or a cache load, each current or planner-selected
-historical Composer document is routed exactly once by its total estimated chunk
-tokens:
-
-```text
-Composer document
-  |-- <= 24,576 tokens -> full
-  |     all chunks enter the Answer Composer context directly
-  |     no document embedding or vector read
-  |     no dense, BM25, structure/coverage, RRF, or rerank work
-  `-- > 24,576 tokens -> retrieval
-        eagerly embed and cache text or fused document vectors
-        current + selected historical retrieval documents share:
-          one global exact-dense ordering
-          one BM25 + structure + coverage + dense RRF(k=60)
-          one top-30 candidate set total
-          one rerank_with_fallback() call
-        pack each document independently to <= 24,576 tokens
-        no document borrows another document's unused allowance
-```
-
-The 24,576-token threshold and allowance are fixed for each Composer document. There
-are no separate current, history, or combined Composer token targets. All
-retrieval-mode rows across current and selected historical Composer documents compete in
-that single top-30 pool. Dense ranking embeds the standalone query once with
-query semantics, streams their cached document vectors in bounded blocks,
-converts each block to `float32`, computes exact cosine similarity, and admits
-scores `>= np.float32(0.5)`. It is an exact `O(ND)` scan with deterministic
-global source-order tie breaking. Missing, stale, invalid, or zero-norm vectors
-disable only the affected dense evidence; BM25, structure, and
-first/middle/last coverage continue. Rerank failure keeps the fused RRF order
-through the same shared fallback executor used by workspace RAG.
-
-Final Composer context keeps current document evidence before selected
-historical document evidence. Each document is packed independently, but the
-complete Answer envelope also contains system and user instructions,
-conversation history, images, workspace RAG evidence, KG context, and
-references. The per-document allowance is not a guarantee that this complete
-envelope fits the answer model; final assembly may raise an overflow error
-rather than silently trim evidence.
-
-There is no Composer-to-ingest or Composer-to-workspace promotion bridge:
-Composer documents and their cache rows never move into ingest or workspace
-storage. Principal, conversation, ownership, and TTL boundaries continue to
-apply throughout the Composer lifecycle.
-
-Composer document chunks carry a `web-attachment://<attachment_id>` source URI and a
-`__web_attachment__` sentinel workspace, so they never resolve a workspace image
-route. Composer document figures are delivered inline as `image_data` in the answer
-context, and the Web answer layer projects a conversation-scoped
-`/web/conversations/<conversation_id>/documents/<attachment_id>` download URL
-onto the finalized Composer document source.
-
-Current direct images, selected history images, and visuals from current/history
-Composer documents share one Composer visual budget. Workspace RAG visuals use
-a separate budget with the same configured shape; the two budgets never borrow
-count or bytes from each other.
+The Web channel persists uploaded answer attachments verbatim in one raw table,
+`web_conversation_attachments`, scoped by principal, conversation, and turn.
+There is no parsed-chunk table and no vector cache. Historical attachments are
+re-registered lazily as request-local resources when a follow-up turn needs them,
+and browser thumbnails are derived on demand from the stored bytes. Manual delete
+and TTL pruning cascade attachment bytes through the owning turn and conversation;
+nothing crosses a conversation or principal boundary.
