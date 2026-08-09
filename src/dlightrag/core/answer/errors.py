@@ -12,6 +12,7 @@ CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
 CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"
 CURRENT_DOCUMENT_PARSE_FAILED = "CURRENT_DOCUMENT_PARSE_FAILED"
 ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
+ANSWER_INPUT_OVERFLOW = "ANSWER_INPUT_OVERFLOW"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
@@ -60,6 +61,13 @@ class CurrentDocumentParseError(AnswerInputError):
         )
 
 
+class AnswerInputOverflowError(AnswerInputError):
+    """Answer inputs exceed the packable context capacity."""
+
+    def __init__(self, public_message: str) -> None:
+        super().__init__(public_message, error_kind=ANSWER_INPUT_OVERFLOW)
+
+
 def classify_answer_error(exc: BaseException) -> str:
     """Map an answer-stream failure to a stable answer-input error kind."""
     if isinstance(exc, AnswerInputError):
@@ -71,12 +79,14 @@ def classify_answer_error(exc: BaseException) -> str:
 
 __all__ = [
     "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
+    "ANSWER_INPUT_OVERFLOW",
     "ANSWER_STREAM_FAILED",
     "CURRENT_DOCUMENT_PARSE_FAILED",
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "AnswerInputError",
     "AnswerImageError",
+    "AnswerInputOverflowError",
     "CurrentDocumentParseError",
     "CurrentImagePayloadError",
     "classify_answer_error",

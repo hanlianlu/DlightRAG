@@ -11,6 +11,7 @@ from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,
+    AnswerAttachmentLink,
     ConversationMessage,
     IngestDocument,
     IngestSpec,
@@ -109,6 +110,31 @@ def test_query_kwargs_never_projects_conversation_state() -> None:
     )
 
     assert kwargs == {}
+
+
+def test_answer_links_are_https_only() -> None:
+    link = AnswerAttachmentLink(url="https://example.com/report.pdf")
+    assert link.filename is None
+    with pytest.raises(ValidationError):
+        AnswerAttachmentLink(url="http://example.com/report.pdf")
+
+
+def test_answer_links_reject_embedded_credentials() -> None:
+    for url in (
+        "https://user:pass@example.com/report.pdf",
+        "https://user@example.com/report.pdf",
+    ):
+        with pytest.raises(ValidationError):
+            AnswerAttachmentLink(url=url)
+
+
+def test_retrieve_accepts_query_images_but_rejects_attachments() -> None:
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+    for model in (RetrieveRequest, RetrieveInput):
+        parsed = model.model_validate({"query": "q", "query_images": [image]})
+        assert parsed.query_images is not None
+        with pytest.raises(ValidationError):
+            model.model_validate({"query": "q", "attachments": []})
 
 
 def test_public_source_contract_has_no_legacy_or_internal_names() -> None:

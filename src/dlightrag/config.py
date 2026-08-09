@@ -135,6 +135,7 @@ class ModelConfig(BaseModel):
     timeout: float = Field(default=240.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
+    agentic_model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -440,6 +441,26 @@ class AnswerConfig(BaseModel):
         ge=1,
         description="Maximum chunks included in the final answer LLM prompt.",
     )
+    context_window_tokens: int = Field(
+        default=260_000,
+        ge=1,
+        description="Model context window shared by evidence packing and final synthesis.",
+    )
+    max_attachments: int = Field(
+        default=6,
+        ge=0,
+        description="Maximum answer attachments admitted per request.",
+    )
+    max_attachment_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        ge=1,
+        description="Maximum bytes accepted for a single answer attachment (100 MiB).",
+    )
+    max_total_attachment_bytes: int = Field(
+        default=128 * 1024 * 1024,
+        ge=1,
+        description="Maximum total bytes accepted across all answer attachments (128 MiB).",
+    )
     max_images: int = Field(
         default=12,
         ge=0,
@@ -497,7 +518,11 @@ class WebConversationsConfig(BaseModel):
 
 
 class QueryImagesConfig(BaseModel):
-    """Current-request image validation and semantic enhancement controls."""
+    """Retrieve-only current-request image validation and enhancement controls.
+
+    ``query_images`` is the retrieve visual path; unified answers admit visual
+    evidence through ``answer`` attachments instead.
+    """
 
     model_config = ConfigDict(extra="forbid")
 

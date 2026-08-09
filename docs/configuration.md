@@ -363,7 +363,7 @@ request format is used:
 ```yaml
 llm:
   roles:
-    keyword:
+    extract:
       provider: openai
       model: deepseek-v4-flash
       base_url: https://api.deepseek.com
@@ -378,6 +378,24 @@ because feature parity is provider-specific. Set `structured_output` to
 `json_schema` only for a custom OpenAI-compatible endpoint known to support
 strict JSON schema response formats. Anthropic native does not support the
 lower-confidence `json_object` mode; use `auto` or `json_schema`.
+
+`model_kwargs` apply to ordinary calls. `agentic_model_kwargs` are a shallow
+top-level overlay used only by the optional Exa-enabled evidence agent. This
+keeps ordinary answers inexpensive while allowing explicit provider-native
+thinking for agent turns without guessing a cross-provider flag:
+
+```yaml
+llm:
+  roles:
+    query:
+      model_kwargs:
+        thinking: {type: disabled}
+      agentic_model_kwargs:
+        thinking: {type: enabled}
+```
+
+If `roles.query` is absent or incomplete, both sets of options come from
+`llm.default` through the normal role fallback.
 
 ## Remote Source URLs
 
@@ -668,6 +686,10 @@ rerank:
 
 answer:
   max_images: 12
+  context_window_tokens: 260000
+  max_attachments: 6
+  max_attachment_bytes: 104857600
+  max_total_attachment_bytes: 134217728
   image_max_bytes: 3000000
   image_max_total_bytes: 24000000
   image_max_px: 1536
@@ -676,6 +698,14 @@ answer:
   image_quality: 89
   image_min_quality: 79
 ```
+
+`answer.context_window_tokens` (default 260,000) is the shared model context
+window used by evidence packing and final synthesis. Evidence is capped at 60
+percent of it; a 32,768-token generation reserve is input-packing headroom only,
+not `max_output_tokens` and not an output cap. `answer.max_attachments` (6),
+`answer.max_attachment_bytes` (100 MiB), and `answer.max_total_attachment_bytes`
+(128 MiB) bound answer attachment admission. `query_images` remains the
+retrieve-only current-image path.
 
 `answer.image_max_pixels` rejects source images whose decoded dimensions exceed
 the limit before RGB conversion or resizing. The Web upload validator,

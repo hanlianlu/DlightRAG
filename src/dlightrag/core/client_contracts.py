@@ -3,8 +3,9 @@
 
 from collections.abc import Sequence
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Caller-supplied conversation history is stateless: the client owns persistence
 # and re-sends prior turns each request; DlightRAG never stores them. The message
@@ -55,6 +56,30 @@ class ImageURL(ClientContractModel):
 class QueryImage(ClientContractModel):
     type: Literal["image_url"]
     image_url: ImageURL
+
+
+class AnswerAttachmentLink(ClientContractModel):
+    """HTTPS-only reference to an answer attachment resolved on explicit read.
+
+    Discovered links are inert handles; full scheme/credential/host validation is
+    repeated when the resource is actually read. Only ``https`` is admitted and
+    embedded credentials are rejected.
+    """
+
+    url: str
+    filename: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _validate_https_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https":
+            raise ValueError("attachment url must use HTTPS")
+        if not parsed.hostname:
+            raise ValueError("attachment url must include a host")
+        if parsed.username or parsed.password:
+            raise ValueError("attachment url must not include credentials")
+        return value
 
 
 type SourceType = Literal["local", "azure_blob", "s3", "url"]

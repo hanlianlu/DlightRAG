@@ -23,8 +23,8 @@
 #
 # LLM roles follow LightRAG role names exactly:
 #   extract — entity/relationship extraction and ingest-time semantic projection
-#   keyword — LightRAG retrieval keyword extraction and query planning
-#   query   — answer generation
+#   keyword — LightRAG retrieval keyword extraction
+#   query   — answer generation and optional evidence-agent turns
 #   vlm     — image/table/equation analysis
 
 llm:
@@ -65,6 +65,9 @@ llm:
       model_kwargs:
         thinking:
           type: disabled
+      agentic_model_kwargs:
+        thinking:
+          type: enabled
       # model_kwargs:
       #   chat_template_kwargs:
       #     enable_thinking: false
@@ -172,8 +175,12 @@ direct_visual_top_k: 20  # DlightRAG: image->image query-vector retrieval breadt
 answer:
   context_top_k: 30
   max_images: 12
+  context_window_tokens: 260000        # Shared evidence-packing and synthesis window.
+  max_attachments: 6
+  max_attachment_bytes: 104857600      # 100 MiB per answer attachment.
+  max_total_attachment_bytes: 134217728  # 128 MiB total across answer attachments.
 
-query_images:
+query_images:                          # Retrieve-only current-image path.
   max_current_images: 3
   max_upload_bytes: 15728640  # 15 MiB per durable current Web image.
 

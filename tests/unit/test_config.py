@@ -92,6 +92,7 @@ class TestModelConfig:
         assert cfg.max_retries == 3
         assert cfg.structured_output == "auto"
         assert cfg.model_kwargs == {}
+        assert cfg.agentic_model_kwargs == {}
 
     def test_anthropic_provider(self):
         cfg = ModelConfig(provider="anthropic", model="claude-3-5-sonnet")
@@ -107,8 +108,13 @@ class TestModelConfig:
             ModelConfig(provider=cast(Any, "invalid"), model="test")
 
     def test_model_kwargs(self):
-        cfg = ModelConfig(model="gpt-5.4-mini", model_kwargs={"top_p": 0.9})
-        assert cfg.model_kwargs == {"top_p": 0.9}
+        cfg = ModelConfig(
+            model="gpt-5.4-mini",
+            model_kwargs={"thinking": {"type": "disabled"}},
+            agentic_model_kwargs={"thinking": {"type": "enabled"}},
+        )
+        assert cfg.model_kwargs == {"thinking": {"type": "disabled"}}
+        assert cfg.agentic_model_kwargs == {"thinking": {"type": "enabled"}}
 
     def test_structured_output_mode(self):
         cfg = ModelConfig(model="deepseek-v4-flash", structured_output="json_object")
@@ -241,6 +247,13 @@ class TestAnswerConfig:
     def test_max_images_default(self):
         assert AnswerConfig().max_images == 12
 
+    def test_attachment_admission_defaults(self) -> None:
+        cfg = AnswerConfig()
+        assert cfg.context_window_tokens == 260_000
+        assert cfg.max_attachments == 6
+        assert cfg.max_attachment_bytes == 100 * 1024 * 1024
+        assert cfg.max_total_attachment_bytes == 128 * 1024 * 1024
+
     @pytest.mark.parametrize(
         "kwargs",
         [
@@ -249,6 +262,10 @@ class TestAnswerConfig:
             {"image_max_pixels": 0},
             {"image_min_px": 0},
             {"image_min_quality": 96},
+            {"context_window_tokens": 0},
+            {"max_attachments": -1},
+            {"max_attachment_bytes": 0},
+            {"max_total_attachment_bytes": 0},
         ],
     )
     def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:
