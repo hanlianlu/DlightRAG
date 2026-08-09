@@ -607,21 +607,21 @@ class AnswerSynthesizer:
         if not chunks:
             return []
 
-        composer_chunks: list[dict[str, Any]] = []
+        attachment_chunks: list[dict[str, Any]] = []
         rag_chunks: list[dict[str, Any]] = []
         for chunk in chunks:
             source_type = str((chunk.get("metadata") or {}).get("source_type") or "")
             if source_type == "web_attachment":
-                composer_chunks.append(chunk)
+                attachment_chunks.append(chunk)
             else:
                 rag_chunks.append(chunk)
 
         blocks: list[dict[str, Any]] = []
-        if composer_chunks:
+        if attachment_chunks:
             blocks.append({"type": "text", "text": "## User-attached documents"})
             blocks.extend(
                 build_excerpt_lane_blocks(
-                    composer_chunks,
+                    attachment_chunks,
                     indexer=indexer,
                     image_blocks_by_context_key=image_blocks_by_context_key,
                 )

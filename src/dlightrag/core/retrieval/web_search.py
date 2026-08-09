@@ -37,7 +37,7 @@ _TIMEOUT_SECONDS = 15.0
 _CONNECT_RETRIES = 1
 
 # Web passages belong to no workspace, and the sentinel keeps them out of every
-# workspace-routed path the way Composer documents already are.
+# workspace-routed path the way attachment resource rows use their own sentinel.
 _WEB_SEARCH_WORKSPACE = "__web_search__"
 
 

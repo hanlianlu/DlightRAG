@@ -183,7 +183,7 @@ def _chunk_image_urls(
     default_workspace: str | None,
 ) -> tuple[str | None, str | None]:
     if (chunk.get("metadata") or {}).get("source_type") == "web_attachment":
-        # Web Composer documents are delivered inline as ``image_data`` in the
+        # Web attachment documents are delivered inline as ``image_data`` in the
         # answer context; they have no workspace image route, so never build a
         # (non-existent) ``/images/__web_attachment__/{chunk_id}`` URL.
         return None, None

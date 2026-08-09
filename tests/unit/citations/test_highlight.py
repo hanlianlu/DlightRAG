@@ -79,11 +79,11 @@ def test_extract_citing_sentences_attachment_doc_and_chunk_levels():
 
 
 def test_extract_citing_sentences_keeps_generic_chunk_compatibility():
-    text = "Legacy evidence [composer_deadbeef-4]. Generic evidence [project_alpha-2]."
+    text = "Generic evidence [report_deadbeef-4]. Other evidence [project_alpha-2]."
 
     assert extract_all_citing_sentences(text) == {
-        "composer_deadbeef-4": ["Legacy evidence [composer_deadbeef-4]."],
-        "project_alpha-2": ["Generic evidence [project_alpha-2]."],
+        "report_deadbeef-4": ["Generic evidence [report_deadbeef-4]."],
+        "project_alpha-2": ["Other evidence [project_alpha-2]."],
     }
 
 

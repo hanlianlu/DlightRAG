@@ -14,7 +14,7 @@ class TestFinalizeAnswer:
             {
                 "chunks": [
                     {
-                        "chunk_id": "composer-chunk-1",
+                        "chunk_id": "att-chunk-1",
                         "reference_id": "att-1",
                         "full_doc_id": attachment_id,
                         "file_path": "Fractions_Worksheet.docx",
@@ -30,20 +30,20 @@ class TestFinalizeAnswer:
             },
         )
 
-        assert result.cited_chunks == {"att-1": ["composer-chunk-1"]}
+        assert result.cited_chunks == {"att-1": ["att-chunk-1"]}
         (source,) = result.sources
         assert source.id == "att-1"
         assert source.document_id == attachment_id
         assert source.source_uri == f"web-attachment://{attachment_id}"
 
-    def test_legacy_composer_reference_cites_all_attachment_chunks(self) -> None:
+    def test_doc_level_attachment_reference_cites_all_attachment_chunks(self) -> None:
         from dlightrag.citations.finalization import finalize_answer
 
         attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
-        reference_id = "composer_98ec1e3a1187454b8929743bd5bc7d4b"
+        reference_id = "att-1"
         chunks = [
             {
-                "chunk_id": f"composer-chunk-{index}",
+                "chunk_id": f"att-chunk-{index}",
                 "reference_id": reference_id,
                 "full_doc_id": attachment_id,
                 "file_path": "worksheet.docx",
@@ -60,7 +60,7 @@ class TestFinalizeAnswer:
 
         result = finalize_answer(f"This is a worksheet [{reference_id}].", {"chunks": chunks})
 
-        assert result.cited_chunks == {reference_id: ["composer-chunk-1", "composer-chunk-2"]}
+        assert result.cited_chunks == {reference_id: ["att-chunk-1", "att-chunk-2"]}
 
     def test_cleans_answer_and_builds_cited_sources_from_raw_contexts(self) -> None:
         from dlightrag.citations.finalization import finalize_answer

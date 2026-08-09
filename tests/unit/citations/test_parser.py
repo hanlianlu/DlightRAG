@@ -16,36 +16,36 @@ def test_citation_pattern_matches_ref_chunk():
     assert m.group(2) == "2"
 
 
-def test_citation_pattern_captures_attachment_and_legacy_composer_chunks():
+def test_citation_pattern_captures_attachment_and_generic_chunks():
     attachment = CITATION_PATTERN.fullmatch("[att-12-3]")
-    composer = CITATION_PATTERN.fullmatch("[composer_deadbeef-4]")
+    generic = CITATION_PATTERN.fullmatch("[report_deadbeef-4]")
 
     assert attachment is not None
     assert attachment.groups() == ("att-12", "3")
-    assert composer is not None
-    assert composer.groups() == ("composer_deadbeef", "4")
+    assert generic is not None
+    assert generic.groups() == ("report_deadbeef", "4")
 
 
 def test_attachment_doc_citation_is_unambiguous_and_keeps_ascii_boundary():
-    text = "附件 [att-1]和旧文档 [composer_deadbeef]，不是引用 [att-2]x"
+    text = "附件 [att-1]和标签 [report_deadbeef]，不是引用 [att-2]x"
 
     assert CITATION_PATTERN.search("[att-1]") is None
-    assert DOC_CITATION_PATTERN.findall(text) == ["att-1", "composer_deadbeef"]
+    assert DOC_CITATION_PATTERN.findall(text) == ["att-1"]
 
 
 def test_chunk_citations_reject_adjacent_ascii_identifier_text():
-    text = "Not citations: [att-1-2]x [1-2]_x [composer_ab-2]-x"
+    text = "Not citations: [att-1-2]x [1-2]_x [report_ab-2]-x"
 
     assert CITATION_PATTERN.findall(text) == []
 
 
 def test_chunk_citations_allow_chinese_adjacency():
-    text = "附件[att-1-2]和数字来源[1-2]及旧来源[composer_ab-2]均有效"
+    text = "附件[att-1-2]和数字来源[1-2]及通用来源[report_ab-2]均有效"
 
     assert CITATION_PATTERN.findall(text) == [
         ("att-1", "2"),
         ("1", "2"),
-        ("composer_ab", "2"),
+        ("report_ab", "2"),
     ]
 
 

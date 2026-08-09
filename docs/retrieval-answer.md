@@ -107,7 +107,7 @@ RAGService.aretrieve(query, query_images, filters)
   |
   |-- Metadata enrichment + reference canonicalization
   |
-  `-- AnswerEngine
+  `-- AnswerSynthesizer
         text excerpts, KG context, source metadata, optional images
 ```
 
@@ -311,7 +311,7 @@ The answer prompt receives:
 
 ### Answer LLM Input Shape
 
-The answer model does not receive the raw `contexts` JSON. `AnswerEngine`
+The answer model does not receive the raw `contexts` JSON. `AnswerSynthesizer`
 builds OpenAI-style messages with explicit evidence and task boundaries:
 
 ```python

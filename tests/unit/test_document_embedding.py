@@ -232,17 +232,6 @@ async def test_text_embedding_failure_omits_only_failed_batch() -> None:
     assert embedder.embed_texts.await_count == 2
 
 
-async def test_query_embedding_uses_query_context() -> None:
-    embedder = _embedder(text=[[0.0, 0.0, 1.0]])
-    executor = _executor(embedder)
-
-    vector = await executor.aembed_query("find this")
-
-    assert vector == [0.0, 0.0, 1.0]
-    embedder.embed_texts.assert_awaited_once_with(["find this"], context="query")
-    embedder.embed_index_fused.assert_not_awaited()
-
-
 @pytest.mark.parametrize(
     "invalid_vectors",
     [
@@ -265,27 +254,6 @@ async def test_wrong_dimension_nonfinite_and_zero_norm_vectors_are_rejected(
 
     assert vectors == []
     assert trace.failed == 1
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        RuntimeError("provider failed"),
-        [],
-        [[1.0, 0.0]],
-        [[float("inf"), 0.0, 1.0]],
-        [[0.0, 0.0, 0.0]],
-    ],
-    ids=["failure", "wrong-count", "wrong-dimension", "nonfinite", "zero-norm"],
-)
-async def test_invalid_query_vector_returns_none(result: object) -> None:
-    embedder = _embedder()
-    if isinstance(result, Exception):
-        embedder.embed_texts.side_effect = result
-    else:
-        embedder.embed_texts.return_value = result
-
-    assert await _executor(embedder).aembed_query("find this") is None
 
 
 @pytest.mark.parametrize("fused_fails", [False, True], ids=["success", "failure"])
@@ -335,7 +303,7 @@ async def test_shared_semaphore_bounds_fused_and_text_calls() -> None:
 
     async def text(texts: list[str], *, context: str) -> list[list[float]]:
         nonlocal text_calls
-        assert context in {"document", "query"}
+        assert context == "document"
         text_calls += 1
         return await enter(len(texts))
 
@@ -349,9 +317,9 @@ async def test_shared_semaphore_bounds_fused_and_text_calls() -> None:
         executor.aembed_documents(
             [DocumentEmbeddingInput(key="image", text="chart", image_bytes=_png_bytes())]
         ),
-        executor.aembed_query("query one"),
-        executor.aembed_query("query two"),
-        executor.aembed_query("query three"),
+        executor.aembed_documents([DocumentEmbeddingInput(key="a", text="text one")]),
+        executor.aembed_documents([DocumentEmbeddingInput(key="b", text="text two")]),
+        executor.aembed_documents([DocumentEmbeddingInput(key="c", text="text three")]),
     ]
     task = asyncio.gather(*calls)
 

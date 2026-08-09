@@ -311,7 +311,7 @@ class RAGServiceManager:
         # Per-workspace backoff: workspace -> (last_error_ts, retry_interval)
         self._backoff: dict[str, tuple[float, float]] = {}
 
-        self._answer_engine: AnswerSynthesizer | None = None
+        self._answer_synthesizer: AnswerSynthesizer | None = None
         self._ingest_jobs = IngestJobCoordinator(
             self._get_ingest_service,
             input_root=self._config.input_dir_path,
@@ -586,7 +586,7 @@ class RAGServiceManager:
     async def _discover_answer_image_capability(self) -> AnswerImageCapability:
         """Probe ``model_for_role(config, "query")`` and build a tri-state capability.
 
-        Probes the model the AnswerEngine actually uses -- not ``llm.default``.
+        Probes the model the AnswerSynthesizer actually uses -- not ``llm.default``.
         Best-effort: failures degrade to ``unknown`` and never block the caller.
         """
         from dlightrag.core.vision_probe import ImageProbeOutcome, probe_image_capability
@@ -927,15 +927,15 @@ class RAGServiceManager:
 
         return {"workspaces": results, "total_errors": total_errors}
 
-    def _get_answer_engine(self) -> AnswerSynthesizer:
+    def _get_answer_synthesizer(self) -> AnswerSynthesizer:
         """Lazy-create the AnswerSynthesizer from global config."""
-        if self._answer_engine is None:
+        if self._answer_synthesizer is None:
             from dlightrag.models.llm import get_query_model_func
 
             answer_cfg = self._config.answer
             capability = self._answer_image_capability
             effective_max_images = capability.effective_max_images if capability is not None else 0
-            self._answer_engine = AnswerSynthesizer(
+            self._answer_synthesizer = AnswerSynthesizer(
                 model_func=get_query_model_func(self._config),
                 effective_max_images=effective_max_images,
                 image_max_bytes=answer_cfg.image_max_bytes,
@@ -947,7 +947,7 @@ class RAGServiceManager:
                 image_min_quality=answer_cfg.image_min_quality,
                 context_window_tokens=answer_cfg.context_window_tokens,
             )
-        return self._answer_engine
+        return self._answer_synthesizer
 
     def _new_answer_image_budget(self) -> AnswerImageBudget:
         answer = self._config.answer
@@ -1238,7 +1238,7 @@ class RAGServiceManager:
         ``query_images`` are current-request images. VLM descriptions inform
         query planning, and the raw images are embedded only when optional
         direct visual retrieval is active. Public retrieval is stateless: it
-        accepts neither history nor Web Composer documents.
+        accepts neither history nor Web attachment documents.
 
         Args:
             plan: Pre-computed QueryPlan from QueryPlanner. When provided,
@@ -1432,7 +1432,7 @@ class RAGServiceManager:
             query_images = current_images or None
 
         orchestrator = AnswerOrchestrator(
-            synthesizer=self._get_answer_engine(),
+            synthesizer=self._get_answer_synthesizer(),
             retrieve_knowledge_base=retrieve_knowledge_base,
             search_web=web_search.search if web_search is not None else None,
             model_func=model_func,
@@ -1906,7 +1906,7 @@ class RAGServiceManager:
             self._query_image_describer = None
 
         for component in (
-            self._answer_engine,
+            self._answer_synthesizer,
             self._query_planner,
             self._query_tool_model,
             self._web_search,

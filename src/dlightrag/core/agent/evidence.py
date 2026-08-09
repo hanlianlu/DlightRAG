@@ -146,13 +146,13 @@ class EvidenceLedger:
         indexer: CitationIndexer,
         image_blocks: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        composer: list[ContextRow] = []
+        attachments: list[ContextRow] = []
         web: list[ContextRow] = []
         corpus: list[ContextRow] = []
         for row in chunks:
             source_type = str((row.get("metadata") or {}).get("source_type") or "")
             if source_type == "web_attachment":
-                composer.append(row)
+                attachments.append(row)
             elif source_type == "web_search":
                 web.append(row)
             else:
@@ -163,7 +163,7 @@ class EvidenceLedger:
         if kg != _NO_KG:
             blocks.append({"type": "text", "text": f"## Knowledge graph evidence\n{kg}"})
         for title, rows in (
-            ("## User-attached documents", composer),
+            ("## User-attached documents", attachments),
             ("## Knowledge-base evidence", corpus),
             ("## Open-web evidence", web),
         ):

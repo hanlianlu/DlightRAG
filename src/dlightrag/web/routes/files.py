@@ -230,7 +230,7 @@ async def upload_files(
     manager = get_manager(request)
     cfg = request_config(request)
     # Per-file document cap is the single shared limit used by every ingest
-    # path (REST /ingest/blob, URL, Composer): one document may not exceed it.
+    # path (REST /ingest/blob, URL, web upload): one document may not exceed it.
     # The larger per-request cap is a temp-directory guard for multi-file
     # (folder) uploads.
     per_file_max_bytes = cfg.max_upload_bytes

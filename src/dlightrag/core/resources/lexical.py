@@ -4,7 +4,7 @@
 A single mixed-script tokenizer emits Unicode words plus CJK unigrams and
 overlapping bigrams so Latin and CJK queries share one BM25 index. The ranking
 core is source agnostic: it operates on tokenized documents and returns their
-indices, so any caller (structural resource windows, Composer rows) can reuse it
+indices, so any caller (structural resource windows, attachment rows) can reuse it
 without pulling in a domain shape.
 """
 

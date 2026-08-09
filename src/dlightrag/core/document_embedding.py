@@ -235,18 +235,6 @@ class RobustDocumentEmbedder:
             error_type=error_type,
         )
 
-    async def aembed_query(self, query: str) -> list[float] | None:
-        """Return one validated query-context vector, or ``None`` on failure."""
-        try:
-            async with self._semaphore:
-                vectors = await self._embedder.embed_texts([query], context="query")
-            return self._validate_vectors(vectors, expected_count=1)[0]
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001
-            logger.warning("Query embedding failed validation or provider execution", exc_info=True)
-            return None
-
     async def _aembed_text_batch(
         self,
         items: list[tuple[int, DocumentEmbeddingInput]],

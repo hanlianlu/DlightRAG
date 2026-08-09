@@ -2389,19 +2389,61 @@ async def test_a_multipart_upload_is_left_to_its_own_limits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_app_sizes_the_cap_from_the_configured_image_allowance(
+async def test_the_app_admits_answer_history_when_images_are_disabled(
     mock_config: DlightragConfig,
 ) -> None:
+    # Answer JSON carries no images, only history text. Disabling query images
+    # must not shrink the cap below a legitimate Answer history body.
     mock_config.query_images.max_current_images = 0
     set_config(mock_config)
 
     response = await _post(
         create_app(include_web=False),
-        content=b'{"query":"' + b"x" * (64 * 1024) + b'"}',
+        content=b'{"query":"' + b"x" * (1024 * 1024) + b'"}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code != 413
+
+
+@pytest.mark.asyncio
+async def test_the_app_still_refuses_a_body_over_the_answer_history_budget(
+    mock_config: DlightragConfig,
+) -> None:
+    from dlightrag.core.client_contracts import (
+        MAX_HISTORY_CONTENT_CHARS,
+        MAX_HISTORY_MESSAGES,
+    )
+
+    mock_config.query_images.max_current_images = 0
+    set_config(mock_config)
+    over_budget = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4 + 2 * 1024 * 1024
+
+    response = await _post(
+        create_app(include_web=False),
+        content=b'{"query":"' + b"x" * over_budget + b'"}',
         headers={"content-type": "application/json"},
     )
 
     assert response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_the_app_expands_the_cap_for_configured_query_images(
+    mock_config: DlightragConfig,
+) -> None:
+    # The retrieve query-image allowance still enlarges the shared cap.
+    mock_config.query_images.max_current_images = 3
+    set_config(mock_config)
+    image_sized_body = 3 * (((mock_config.query_images.max_upload_bytes + 2) // 3) * 4) - 4096
+
+    response = await _post(
+        create_app(include_web=False),
+        content=b'{"query":"' + b"x" * image_sized_body + b'"}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code != 413
 
 
 @pytest.mark.asyncio

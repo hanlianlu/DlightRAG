@@ -25,6 +25,7 @@ from dlightrag.app_state import request_config
 from dlightrag.core.answer.errors import (
     AnswerImageError,
 )
+from dlightrag.core.client_contracts import MAX_HISTORY_CONTENT_CHARS, MAX_HISTORY_MESSAGES
 from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
@@ -32,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 # Room for the query, workspace list and identifiers that travel beside the images.
 _JSON_BODY_OVERHEAD_BYTES = 64 * 1024
+# A Unicode code point costs at most four UTF-8 bytes on the wire.
+_JSON_CHAR_MAX_BYTES = 4
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -193,10 +196,14 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     # Added last so it wraps everything else: an oversized body is refused before
     # auth or routing has a chance to buffer it. Base64 inflates an image by 4/3.
     encoded_image_bytes = ((cfg.query_images.max_upload_bytes + 2) // 3) * 4
+    retrieve_image_bytes = max(0, cfg.query_images.max_current_images) * encoded_image_bytes
+    # Answer JSON carries no images, only history text: the shared cap must also
+    # admit a full conversation history so disabling query images cannot reject a
+    # legitimate Answer request.
+    answer_history_bytes = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * _JSON_CHAR_MAX_BYTES
     application.add_middleware(
         JsonBodyLimitMiddleware,
-        max_bytes=_JSON_BODY_OVERHEAD_BYTES
-        + max(0, cfg.query_images.max_current_images) * encoded_image_bytes,
+        max_bytes=_JSON_BODY_OVERHEAD_BYTES + max(retrieve_image_bytes, answer_history_bytes),
     )
 
     return application

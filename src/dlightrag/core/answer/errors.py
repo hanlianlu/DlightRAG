@@ -49,7 +49,7 @@ class CurrentImagePayloadError(AnswerImageError):
 
 
 class CurrentDocumentParseError(AnswerInputError):
-    """A current Composer document could not be parsed safely."""
+    """A current attachment document could not be parsed safely."""
 
     def __init__(self, safe_filename: str) -> None:
         super().__init__(

@@ -29,16 +29,18 @@ _PRODUCT_DOCS = (
     "docs/evaluation.md",
 )
 
-# Retired product claims. None may reappear in any committed product doc.
+# Retired product claims. None may reappear in any committed product doc. Each is
+# an exact retired phrase, so a legitimate durable-ingestion mention (for example
+# the RobustDocumentEmbedder class) or the chat composer UI is not banned.
 _STALE_PHRASES = (
     "ComposerModelBundle",
-    "RobustDocumentEmbedder",
+    "Web Composer",
+    "Composer document",
     "web_conversation_attachment_chunks",
     "web_conversation_images",
     "24,576",
     "context_top_k",
     "answer_context_top_k",
-    "Composer",
 )
 
 

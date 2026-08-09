@@ -15,9 +15,8 @@ docs/configuration.md.
 
 The preset also joins LightRAG's fixed pipeline constants, which exist so that a
 change to the request shape invalidates every cached bundle on its own. Without
-that, a repointed preset would re-parse Web Composer attachments -- whose
-signature already covers it -- but leave workspace documents on stale
-transcriptions.
+that, a repointed preset would leave already-ingested workspace documents on
+stale transcriptions.
 
 Delete this module once LightRAG forwards the preset itself.
 """

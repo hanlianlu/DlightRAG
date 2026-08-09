@@ -1,7 +1,7 @@
 """Citation pattern matching and extraction.
 
 Supports two formats:
-- [ref]     — doc-level citations (LightRAG and Composer document formats)
+- [ref]     — doc-level citations (LightRAG document format)
 - [ref-idx] — chunk-level citations (DlightRAG granular format)
 """
 
@@ -17,14 +17,11 @@ logger = logging.getLogger(__name__)
 
 _CHUNK_INDEX = r"[0-9]{1,9}"
 _NUMERIC_REF = r"[0-9]+"
-_LEGACY_COMPOSER_REF = r"composer_[0-9a-f]+"
 _ATTACHMENT_REF = r"att-[0-9]+"
 # ``att-N`` is a reserved document namespace, so the generic branch excludes
 # interpreting it as reference ``att`` plus chunk N.
 _GENERIC_CHUNK_REF = rf"(?!att-{_CHUNK_INDEX}\])\w+"
-_CHUNK_REFERENCE_ID = (
-    rf"(?:{_ATTACHMENT_REF}|{_NUMERIC_REF}|{_LEGACY_COMPOSER_REF}|{_GENERIC_CHUNK_REF})"
-)
+_CHUNK_REFERENCE_ID = rf"(?:{_ATTACHMENT_REF}|{_NUMERIC_REF}|{_GENERIC_CHUNK_REF})"
 
 # Keep the trailing guard ASCII-only so citations remain valid before Chinese text.
 _CITATION_TRAILING_BOUNDARY = r"(?![A-Za-z0-9_-])"
@@ -34,12 +31,10 @@ CITATION_PATTERN = re.compile(
     rf"\[({_CHUNK_REFERENCE_ID})-({_CHUNK_INDEX})\]{_CITATION_TRAILING_BOUNDARY}"
 )
 
-# Doc-level: [n], [att-N], or [composer_<uuidhex>] — must NOT match chunk refs or
-# adjacent identifier text. The Composer namespace is deliberately narrow so
-# ordinary Markdown labels do not become citations.
+# Doc-level: [n] or [att-N] — must NOT match chunk refs or adjacent identifier
+# text, so ordinary Markdown labels do not become citations.
 DOC_CITATION_PATTERN = re.compile(
-    rf"\[((?:{_NUMERIC_REF}|{_ATTACHMENT_REF}|{_LEGACY_COMPOSER_REF}))\]"
-    rf"{_CITATION_TRAILING_BOUNDARY}"
+    rf"\[((?:{_NUMERIC_REF}|{_ATTACHMENT_REF}))\]{_CITATION_TRAILING_BOUNDARY}"
 )
 
 

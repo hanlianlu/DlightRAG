@@ -251,7 +251,7 @@ async def test_private_generation_helper_hands_prepared_history_to_engine(test_c
     manager = RAGServiceManager(config=test_cfg)
     engine = AsyncMock()
     engine.generate_stream.return_value = ({"chunks": []}, None)
-    manager._answer_engine = engine
+    manager._answer_synthesizer = engine
     manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
         return_value=(
             QueryPlan(original_query="follow up", standalone_query="follow up"),
@@ -704,7 +704,7 @@ class TestRouting:
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_calls_aretrieve_then_engine(self, mock_create, test_cfg) -> None:
-        """aanswer() routes through aretrieve() then AnswerEngine.generate()."""
+        """aanswer() routes through aretrieve() then AnswerSynthesizer.generate()."""
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
         mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
@@ -714,7 +714,7 @@ class TestRouting:
         mock_engine.generate.return_value = RetrievalResult(answer="a", contexts=mock_contexts)
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         await manager.aanswer("query", workspace="ws_a")
@@ -728,7 +728,7 @@ class TestRouting:
 
 
 class TestAnswerViaEngine:
-    """aanswer and aanswer_stream route through AnswerEngine."""
+    """aanswer and aanswer_stream route through AnswerSynthesizer."""
 
     @pytest.fixture(autouse=True)
     def _stub_planning_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -796,7 +796,7 @@ class TestAnswerViaEngine:
     async def test_aanswer_calls_retrieve_then_engine(
         self, mock_create, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """aanswer() calls aretrieve() then AnswerEngine.generate()."""
+        """aanswer() calls aretrieve() then AnswerSynthesizer.generate()."""
         trace_calls: list[dict[str, Any]] = []
         monkeypatch.setattr(
             "dlightrag.observability.trace_observation",
@@ -816,7 +816,7 @@ class TestAnswerViaEngine:
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("what is X?", workspace="ws_a")
@@ -877,7 +877,7 @@ class TestAnswerViaEngine:
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=cfg)
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspace="ws_a")
@@ -909,7 +909,7 @@ class TestAnswerViaEngine:
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=cfg)
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspace="ws_a", chunk_top_k=7)
@@ -939,7 +939,7 @@ class TestAnswerViaEngine:
         )
         mock_engine = AsyncMock()
         mock_engine.generate.return_value = RetrievalResult(answer="a", contexts={"chunks": []})
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         history = [{"role": "user", "content": "Earlier"}]
 
         await manager.aanswer("follow up", workspace="ws_a", history=history)
@@ -1011,8 +1011,8 @@ class TestAnswerViaEngine:
             )
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_engine = AsyncMock()
-        manager._answer_engine.generate.side_effect = [_answer_result(), _answer_result()]
+        manager._answer_synthesizer = AsyncMock()
+        manager._answer_synthesizer.generate.side_effect = [_answer_result(), _answer_result()]
         manager._query_planner = QueryPlanner(llm_func=None)
 
         plain = await manager.aanswer("query", workspace="ws_a")
@@ -1038,7 +1038,7 @@ class TestAnswerViaEngine:
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_stream_calls_retrieve_then_engine(self, mock_create, test_cfg) -> None:
-        """aanswer_stream() calls aretrieve() then AnswerEngine.generate_stream()."""
+        """aanswer_stream() calls aretrieve() then AnswerSynthesizer.generate_stream()."""
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
         mock_retrieval = MagicMock(contexts=mock_contexts)
@@ -1050,7 +1050,7 @@ class TestAnswerViaEngine:
         mock_engine.generate_stream.return_value = (mock_contexts, mock_stream)
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws_a")
@@ -1078,7 +1078,7 @@ class TestAnswerViaEngine:
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspaces=["ws_a", "ws_b"])
@@ -1105,7 +1105,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
         manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
         manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
-        manager._answer_engine = engine
+        manager._answer_synthesizer = engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("query", all_workspaces=True)
@@ -1128,7 +1128,7 @@ class TestAnswerViaEngine:
         mock_engine.generate_stream.return_value = (mock_contexts, mock_stream)
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         contexts, stream = await manager.aanswer_stream("query", workspaces=["ws_a", "ws_b"])
@@ -1155,7 +1155,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
         manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
         manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
-        manager._answer_engine = engine
+        manager._answer_synthesizer = engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
         resolved_contexts, stream = await manager.aanswer_stream(
@@ -1168,19 +1168,19 @@ class TestAnswerViaEngine:
         assert resolved_contexts is contexts
         assert stream is not None
 
-    def test_get_answer_engine_lazy_creates(self, test_cfg) -> None:
-        """_get_answer_engine() lazily creates an AnswerEngine instance."""
+    def test_get_answer_synthesizer_lazy_creates(self, test_cfg) -> None:
+        """_get_answer_synthesizer() lazily creates an AnswerSynthesizer instance."""
         manager = RAGServiceManager(config=test_cfg)
-        assert manager._answer_engine is None
+        assert manager._answer_synthesizer is None
         with patch("dlightrag.models.llm.get_query_model_func") as mock_llm:
             mock_llm.return_value = MagicMock()
-            engine = manager._get_answer_engine()
+            engine = manager._get_answer_synthesizer()
             assert engine is not None
             # Second call returns same instance
-            engine2 = manager._get_answer_engine()
+            engine2 = manager._get_answer_synthesizer()
             assert engine2 is engine
 
-    def test_get_answer_engine_threads_pixel_limit_to_one_image_budget(
+    def test_get_answer_synthesizer_threads_pixel_limit_to_one_image_budget(
         self,
         test_cfg,
         monkeypatch,
@@ -1189,7 +1189,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
 
         with patch("dlightrag.models.llm.get_query_model_func", return_value=MagicMock()):
-            engine = manager._get_answer_engine()
+            engine = manager._get_answer_synthesizer()
 
         budgets = []
         new_image_budget = engine._new_image_budget
@@ -1250,7 +1250,7 @@ class TestAnswerViaEngine:
 
         mock_engine = AsyncMock()
         mock_engine.generate_stream = AsyncMock(return_value=(contexts, _AttrStream(["token"])))
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
 
         _, first_stream = await manager.aanswer_stream("q1", workspace="ws_a")
         second = asyncio.create_task(manager.aanswer_stream("q2", workspace="ws_a"))
@@ -1280,7 +1280,7 @@ class TestAnswerViaEngine:
 
         mock_engine = AsyncMock()
         mock_engine.generate_stream = AsyncMock(return_value=(contexts, _AttrStream(["token"])))
-        manager._answer_engine = mock_engine
+        manager._answer_synthesizer = mock_engine
 
         await manager.aanswer_stream("q1", workspace="ws_a")
 
@@ -2194,7 +2194,7 @@ class TestAgenticAnswerCapability:
         )
         engine = AsyncMock()
         engine.generate.return_value = RetrievalResult(answer="a", contexts={"chunks": []})
-        manager._answer_engine = engine
+        manager._answer_synthesizer = engine
 
         await manager.aanswer("q", workspace="alpha")
 
@@ -2233,7 +2233,7 @@ class TestAgenticAnswerCapability:
                 SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
             )
         )
-        manager._answer_engine = MagicMock()
+        manager._answer_synthesizer = MagicMock()
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
@@ -2244,7 +2244,7 @@ class TestAgenticAnswerCapability:
         # never invoked directly by the manager.
         assert _CapturingOrchestrator.last["init"]["search_web"] is not None
         assert "answer" in _CapturingOrchestrator.last
-        manager._answer_engine.generate.assert_not_called()
+        manager._answer_synthesizer.generate.assert_not_called()
 
     async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
@@ -2276,7 +2276,7 @@ class TestAgenticAnswerCapability:
                 SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
             )
         )
-        manager._answer_engine = MagicMock()
+        manager._answer_synthesizer = MagicMock()
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
@@ -2347,7 +2347,9 @@ class TestAgenticAnswerCapability:
         model.complete_text = AsyncMock(return_value="Answer [1-1][2-1].")
         manager._query_tool_model = model
         # A real synthesizer owns the tools-disabled final call for research too.
-        manager._answer_engine = AnswerSynthesizer(image_max_pixels=40_000_000, model_func=None)
+        manager._answer_synthesizer = AnswerSynthesizer(
+            image_max_pixels=40_000_000, model_func=None
+        )
 
         result = await manager.aanswer("What about it?", workspace="alpha")
 
