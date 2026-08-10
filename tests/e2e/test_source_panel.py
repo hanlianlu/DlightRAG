@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """E2E tests for source panel: citation click, expand/collapse."""
 
+from urllib.parse import urlparse
+
 import pytest
 
 
@@ -219,7 +221,7 @@ def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
     page.locator(".answer-ref-item").press("Enter")
 
     header = page.locator('#panel-content .source-doc[data-ref="1"] .source-doc-header')
-    download = header.locator(":scope > .source-action-icon")
+    download = header.locator(":scope > .source-action-icon[download]")
 
     assert download.count() == 1
     assert header.locator(":scope > .source-doc-toggle").count() == 1
@@ -228,6 +230,82 @@ def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
     assert download.get_attribute("download") == ""
     download.focus()
     assert download.evaluate("element => element === document.activeElement") is True
+
+
+@pytest.mark.e2e
+def test_public_source_link_opens_new_tab_from_source_panel(page):
+    timestamp = "2026-08-10T12:00:00Z"
+    conversation = {
+        "conversation_id": "public-source-history",
+        "title": "Public source",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+    }
+    source_url = "http://www.sgas.ruc.edu.cn/xwgg/yjyxw/f1a3ff59a5894391b7b0db77951c08b4.htm"
+    answer_html = f"""
+      <div id="answer-content"><p>Cited answer.</p></div>
+      <div id="source-data" class="source-data hidden">
+        <div class="source-doc" data-ref="1">
+          <div class="source-doc-header">
+            <button class="source-doc-toggle" type="button" data-action="toggle-doc">
+              <span class="source-doc-title">RUC source</span>
+              <span class="source-doc-badge">1</span>
+            </button>
+            <a href="{source_url}" aria-label="Open source"
+               target="_blank" rel="noopener noreferrer">Open</a>
+          </div>
+          <div class="source-doc-chunks" hidden>
+            <div class="source-chunk" data-ref="1" data-chunk="1">Evidence</div>
+          </div>
+        </div>
+      </div>
+      <div class="answer-references">
+        <div class="answer-ref-item" data-action="open-ref-source" data-ref="1"
+             role="button" tabindex="0">RUC source</div>
+      </div>
+    """
+
+    def handle_conversations(route):
+        path = urlparse(route.request.url).path
+        if path == "/web/conversations":
+            route.fulfill(json=[conversation])
+            return
+        if path == "/web/conversations/public-source-history/history":
+            route.fulfill(
+                json={
+                    "conversation": conversation,
+                    "turns": [
+                        {
+                            "turn_id": "source-turn",
+                            "turn_number": 1,
+                            "user_text": "Show the source",
+                            "assistant_text": "Cited answer.",
+                            "user_attachments": [],
+                            "answer_sources": {},
+                            "answer_html": answer_html,
+                            "queried_workspaces": [],
+                            "created_at": timestamp,
+                        }
+                    ],
+                }
+            )
+            return
+        route.continue_()
+
+    page.route("**/web/conversations**", handle_conversations)
+    _open_ready_page(page)
+    hidden_link = page.locator('.source-data a[aria-label="Open source"]')
+    assert hidden_link.get_attribute("target") == "_blank"
+    page.locator(".answer-ref-item").press("Enter")
+
+    link = page.get_by_role("link", name="Open source")
+    assert link.get_attribute("target") == "_blank"
+    assert link.get_attribute("rel") == "noopener noreferrer"
+    with page.expect_popup() as popup_info:
+        link.click()
+    popup = popup_info.value
+    assert popup.url.startswith("http://www.sgas.ruc.edu.cn/")
+    popup.close()
 
 
 @pytest.mark.e2e

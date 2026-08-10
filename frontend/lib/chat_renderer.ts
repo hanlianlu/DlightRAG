@@ -57,10 +57,9 @@ function activateChatMode(): void {
 function fixExternalLinks(container: ParentNode): void {
   container.querySelectorAll('a[href]').forEach(function (el: Element) {
     const a = el as HTMLAnchorElement;
-    if (!a.getAttribute('target')) {
-      a.setAttribute('target', '_blank');
-      a.setAttribute('rel', 'noopener noreferrer');
-    }
+    if (a.hasAttribute('download')) return;
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener noreferrer');
   });
 }
 
@@ -238,6 +237,7 @@ function applyFinalAnswerHtml(turn: ChatTurn, html: string): void {
   if (sourceData) {
     (sourceData as HTMLElement).className = 'source-data hidden';
     sourceData.removeAttribute('id');
+    fixExternalLinks(sourceData);
     turn.aiDiv.appendChild(sourceData);
   }
 
@@ -439,6 +439,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
       // Update this turn's stored sources so opening the panel shows highlights.
       // The server also persists them, so history and reloads stay in sync.
       setSanitizedLlmHtml(sourceData, typeof highlightsHtml === 'string' ? highlightsHtml : '');
+      fixExternalLinks(sourceData);
     }
   }
 
