@@ -325,6 +325,9 @@ class DoclingSidecarConfig(BaseModel):
     # Unset sends no preset, leaving LightRAG's request untouched. Setting it also
     # requires the matching docling-serve setting; see docs/configuration.md.
     code_formula_preset: str | None = None
+    # Off, every PDF heading stays at level 1 and chunks lose their section
+    # breadcrumbs. Needs docling-serve >= 1.30.0; see docs/configuration.md.
+    do_pdf_heading_hierarchy: bool = True
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
 

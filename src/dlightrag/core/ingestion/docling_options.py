@@ -1,24 +1,31 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Forward the Docling code/formula preset choice to docling-serve.
+"""Forward the Docling request options LightRAG 1.5.5 never sends.
 
-Docling transcribes detected formula regions only when ``do_formula_enrichment``
-is on, using whichever code/formula model the request names. When the request
-omits ``code_formula_preset`` docling-serve bypasses its preset registry and
-falls back to the pipeline's built-in ``codeformulav2``, so no server setting
-can redirect it -- and because that model ships only a Transformers engine whose
-supported devices exclude MPS, enrichment hard-fails on Apple Silicon. LightRAG
-1.5.5 never sends the field.
+LightRAG's Docling client builds a fixed multipart body, so any docling-serve
+option outside that body is unreachable no matter how the service is
+configured. Two of them change the corpus materially:
 
-Leaving the setting unset installs no patch, so the request stays exactly what
-upstream sends. Naming a preset also requires the service to allow it; see
-docs/configuration.md.
+``code_formula_preset`` names the model that transcribes detected formula
+regions when ``do_formula_enrichment`` is on. Omitting it makes docling-serve
+bypass its preset registry and fall back to the pipeline's built-in
+``codeformulav2``, which ships only a Transformers engine whose supported
+devices exclude MPS -- so enrichment hard-fails on Apple Silicon.
 
-The preset also joins LightRAG's fixed pipeline constants, which exist so that a
-change to the request shape invalidates every cached bundle on its own. Without
-that, a repointed preset would leave already-ingested workspace documents on
-stale transcriptions.
+``do_pdf_heading_hierarchy`` infers section-header levels from PDF bookmarks,
+outline numbering and font style. Without it Docling leaves every heading at
+level 1, and LightRAG's deliberately faithful IR builder then collapses every
+chunk's ``parent_headings`` to the document title alone. Needs docling-serve
+>= 1.30.0 (docling-jobkit >= 3.3.0); older services accept the field and drop
+it silently. See docs/configuration.md.
 
-Delete this module once LightRAG forwards the preset itself.
+An option left at its upstream default installs no patch, so the request stays
+exactly what upstream sends. A forwarded option also joins LightRAG's fixed
+pipeline constants, which exist so that a change to the request shape
+invalidates every cached bundle on its own. Without that, a repointed preset or
+a newly inferred hierarchy would leave already-ingested workspace documents on
+stale parses.
+
+Delete this module once LightRAG forwards these itself.
 """
 
 import logging
@@ -27,21 +34,26 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_PATCH_ATTR = "_dlightrag_sends_code_formula_preset"
+_PATCH_ATTR = "_dlightrag_forwards_docling_options"
 
 
-def apply_docling_code_formula_preset(preset: str | None) -> bool:
-    """Patch LightRAG's Docling client to send *preset*.
+def apply_docling_request_options(
+    *,
+    code_formula_preset: str | None = None,
+    do_pdf_heading_hierarchy: bool = False,
+) -> bool:
+    """Patch LightRAG's Docling client to send the configured options.
 
-    No preset means no patch, so the request stays byte-identical to upstream's.
-    Idempotent; returns True when it installs.
+    Nothing to forward means no patch, so the request stays byte-identical to
+    upstream's. Idempotent; returns True when it installs.
     """
-    if not preset:
+    if not code_formula_preset and not do_pdf_heading_hierarchy:
         return False
     try:
         from lightrag.parser.external.docling.client import (
             FIXED_CONSTANTS,
             DoclingRawClient,
+            _bool_form,
         )
     except Exception:  # pragma: no cover - defensive import guard
         return False
@@ -53,8 +65,10 @@ def apply_docling_code_formula_preset(preset: str | None) -> bool:
     @wraps(original)
     def patched_build_multipart_data(self: Any) -> dict[str, Any]:
         data = original(self)
-        if self.do_formula_enrichment:
-            data.setdefault("code_formula_preset", preset)
+        if code_formula_preset and self.do_formula_enrichment:
+            data.setdefault("code_formula_preset", code_formula_preset)
+        if do_pdf_heading_hierarchy:
+            data.setdefault("do_pdf_heading_hierarchy", _bool_form(True))
         return data
 
     setattr(patched_build_multipart_data, _PATCH_ATTR, True)
@@ -62,9 +76,17 @@ def apply_docling_code_formula_preset(preset: str | None) -> bool:
     DoclingRawClient._build_multipart_data = patched_build_multipart_data
     # Both cache-signature call sites read this dict by reference; setdefault
     # mirrors the body patch so an upstream value always wins.
-    FIXED_CONSTANTS.setdefault("code_formula_preset", preset)
-    logger.info("Applied LightRAG Docling code/formula preset forwarding: %s", preset)
+    if code_formula_preset:
+        FIXED_CONSTANTS.setdefault("code_formula_preset", code_formula_preset)
+    if do_pdf_heading_hierarchy:
+        FIXED_CONSTANTS.setdefault("do_pdf_heading_hierarchy", True)
+    logger.info(
+        "Applied LightRAG Docling option forwarding: code_formula_preset=%s, "
+        "do_pdf_heading_hierarchy=%s",
+        code_formula_preset,
+        do_pdf_heading_hierarchy,
+    )
     return True
 
 
-__all__ = ["apply_docling_code_formula_preset"]
+__all__ = ["apply_docling_request_options"]

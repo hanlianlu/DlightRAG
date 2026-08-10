@@ -109,6 +109,7 @@ parser_sidecars:
   docling:
     endpoint: http://docling:5001
     # code_formula_preset: granite_docling
+    # do_pdf_heading_hierarchy: true
 ```
 
 `parser_sidecars.docling.do_formula_enrichment` transcribes detected formula
@@ -130,6 +131,17 @@ until the preset is set. Repointing the preset invalidates the Docling bundle
 cache, so affected documents re-parse on their own. The
 `DOCLING_SERVE_ALLOWED_CODE_FORMULA_PRESETS` allowlist matters only if an
 operator narrowed it; a stock docling-serve allows every preset.
+
+`parser_sidecars.docling.do_pdf_heading_hierarchy` infers section-header levels
+from the PDF bookmarks, outline numbering and font style, and defaults on.
+Without it Docling leaves every heading at level 1, so a chunk's section
+breadcrumbs collapse to the document title alone and the retrieved context
+loses the chapter it came from. It needs **docling-serve 1.30.0 or newer**
+(docling-jobkit 3.3.0 is the first release that maps the field onto the
+pipeline); an older service accepts the field and drops it silently, so
+verify the service version rather than trusting the setting. Flipping it
+invalidates the Docling bundle cache, so affected documents re-parse on their
+own.
 
 OCR needs no configuration, and `ocr_lang` has no effect: the CPU image resolves
 to a single engine that reads Han and Latin from one table.

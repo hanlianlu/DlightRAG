@@ -9,9 +9,10 @@ so they reach the drawing/VLM sidecar path instead of being dropped;
 extraction, BM25, and citations. LightRAG already removes printed page-number
 items.
 
-Docling code/formula preset: LightRAG sends no preset field, so the parser
-service cannot be told which model transcribes formulas. The patch forwards the
-configured preset and is installed only when one is configured.
+Docling request options: LightRAG's Docling client builds a fixed multipart
+body, so the code/formula preset and PDF heading-level inference are unreachable
+no matter how the parser service is configured. The patch forwards whichever of
+them is configured and is installed only when there is something to forward.
 
 Keep this module small and delete patches as upstream covers them.
 """
@@ -21,17 +22,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def apply(*, docling_code_formula_preset: str | None = None) -> None:
+def apply(
+    *,
+    docling_code_formula_preset: str | None = None,
+    docling_pdf_heading_hierarchy: bool = False,
+) -> None:
     """Apply all LightRAG patches. Idempotent."""
     applied = []
     from dlightrag.core.ingestion.parser_hygiene import apply_mineru_content_list_hygiene
 
     if apply_mineru_content_list_hygiene():
         applied.append("mineru_content_list_hygiene")
-    from dlightrag.core.ingestion.docling_options import apply_docling_code_formula_preset
+    from dlightrag.core.ingestion.docling_options import apply_docling_request_options
 
-    if apply_docling_code_formula_preset(docling_code_formula_preset):
-        applied.append("docling_code_formula_preset")
+    if apply_docling_request_options(
+        code_formula_preset=docling_code_formula_preset,
+        do_pdf_heading_hierarchy=docling_pdf_heading_hierarchy,
+    ):
+        applied.append("docling_request_options")
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
     else:
