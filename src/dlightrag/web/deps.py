@@ -15,6 +15,7 @@ from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.core import access as core_access
 from dlightrag.core.scope import RequestScope
+from dlightrag.sourcing.url import validate_public_https_url
 from dlightrag.web.markdown import (
     inject_highlights,
     normalize_chunk_source,
@@ -210,11 +211,20 @@ def _basename(path: str) -> str:
     return Path(path).name
 
 
+def _public_source_url(value: Any) -> str | None:
+    """Return credential-free public HTTPS provenance, otherwise None."""
+    try:
+        return validate_public_https_url(str(value).strip())
+    except ValueError:
+        return None
+
+
 # Register filters on the Jinja2 environment
 templates.env.filters["citation_badges"] = _citation_badges
 templates.env.filters["highlight_content"] = _highlight_content
 templates.env.filters["reference_label"] = _reference_label
 templates.env.filters["basename"] = _basename
+templates.env.filters["public_source_url"] = _public_source_url
 
 
 def _compute_static_hash() -> str:

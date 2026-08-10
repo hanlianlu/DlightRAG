@@ -855,9 +855,11 @@ Sources are document-level groupings derived from chunks via `build_sources()`.
 They appear in REST/MCP responses and drive the Web UI's source panel. Cited
 answer paths use the same citation indexer as answer validation, so chunk order
 matches `[ref_id-chunk_idx]` markers instead of page sorting. `source_uri` is
-stable provenance. HTTP adapters project the internal document ID and source
-workspace to an authorized `download_url`, then look up the locator server-side;
-raw storage locators and workspace-routing fields are never public.
+stable provenance and is returned consistently by REST, MCP, SDK, and Web. The
+Web source panel renders it as an external link only when it is a credential-free
+public HTTPS URL. HTTP adapters separately project the internal document ID and
+source workspace to an authorized `download_url`, then look up the locator
+server-side; raw storage locators and workspace-routing fields are never public.
 REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
 `/web/files/raw/{document_id}`. Transport-neutral SDK/MCP payloads leave
 `download_url` null.
@@ -896,8 +898,8 @@ REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
 | `id` | string | Reference ID (matches `reference_id` in chunks) |
 | `title` | string \| null | Document title (filename or metadata) |
 | `type` | string \| null | File type |
-| `source_uri` | string | Stable source identity; may use a connector-specific scheme |
-| `download_url` | string \| null | Authorized HTTP download route; null on transport-neutral SDK/MCP payloads and required by Web rendering |
+| `source_uri` | string | Stable source identity; may use a connector-specific scheme. Public HTTPS values are linkable provenance. |
+| `download_url` | string \| null | Authorized HTTP download route for retained files; null when no download permission/route exists. |
 | `cited_chunk_ids` | list \| null | Cited chunk IDs for answer responses; null when returning all retrieved sources |
 | `chunks` | list | Chunk snippets in citation-index order |
 
@@ -964,8 +966,9 @@ To trace `[1-2]` back to source material:
 3. Use `chunk_id` to look up the source in `sources` (by matching `id`)
 4. Use `page_number` when present for human page navigation; it does not
   participate in citation validity or semantic highlight grounding
-5. Use the source's `download_url` for the original file; use
-   `image_url`/`thumbnail_url` for retrieved visual chunks
+5. Use a public HTTPS `source_uri` to visit external provenance, or
+  `download_url` for an authorized retained file; use `image_url`/
+  `thumbnail_url` for retrieved visual chunks
 
 
 ## Multimodal Queries

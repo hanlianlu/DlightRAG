@@ -130,6 +130,29 @@ def test_answer_payload_projects_transport_neutral_source_without_download_url()
     assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
 
 
+def test_public_https_provenance_survives_shared_answer_projection() -> None:
+    from dlightrag.core.client_payloads import answer_payload
+
+    source_uri = "https://www.bbc.com/weather/2711537"
+    result = RetrievalResult(
+        sources=[
+            SourceReference(
+                id="1",
+                title="Gothenburg - BBC Weather",
+                source_uri=source_uri,
+                workspace="__web_search__",
+                document_id="web-source",
+                download_locator=source_uri,
+            )
+        ]
+    )
+
+    source = answer_payload(result)["sources"][0]
+
+    assert source["source_uri"] == source_uri
+    assert source["download_url"] is None
+
+
 def test_public_context_projection_strips_internal_source_metadata() -> None:
     from dlightrag.core.client_payloads import project_contexts_for_client
 

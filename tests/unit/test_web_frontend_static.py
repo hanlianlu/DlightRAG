@@ -195,7 +195,7 @@ def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> No
     )
 
     button_start = source_panel.index('data-action="toggle-doc"')
-    download_link = source_panel.index('class="source-dl-icon"')
+    download_link = source_panel.index('class="source-action-icon"')
     button_end = source_panel.index("</button>", button_start)
 
     assert not button_start < download_link < button_end
@@ -218,7 +218,7 @@ def test_source_panel_requires_download_for_every_authorized_source() -> None:
         encoding="utf-8"
     )
 
-    assert html.count('class="source-dl-icon"') == 1
+    assert html.count('class="source-action-icon"') == 1
     assert 'href="/web/files/raw/doc-notes?workspace=default"' in html
     assert "{% if src.download_url %}" in source_panel_text
 
@@ -237,10 +237,46 @@ def test_source_panel_hides_download_without_caller_permission() -> None:
 
     html = templates.env.get_template("partials/source_panel.html").render(sources=[source])
 
-    assert 'class="source-dl-icon"' not in html
+    assert 'class="source-action-icon"' not in html
 
 
-def test_source_templates_use_only_the_public_download_contract() -> None:
+def test_source_panel_links_public_https_provenance_without_download_permission() -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web.safe_html import safe_source_panel
+
+    source = SourceReferencePayload(
+        id="1",
+        title="Gothenburg weather",
+        source_uri="https://exa.ai/library/weather/gothenburg-sweden?latitude=57.7052&longitude=11.9737",
+        download_url=None,
+        chunks=[],
+    )
+
+    html = safe_source_panel(sources=[source])
+
+    assert 'aria-label="Open source"' in html
+    assert "https://exa.ai/library/weather/gothenburg-sweden?" in html
+    assert "latitude=57.7052&amp;longitude=11.9737" in html
+    assert " download" not in html
+
+
+def test_source_panel_does_not_link_non_public_provenance() -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web.safe_html import safe_source_panel
+
+    sources = [
+        SourceReferencePayload(id="1", source_uri="local://default/report.pdf", chunks=[]),
+        SourceReferencePayload(id="2", source_uri="https://127.0.0.1/private", chunks=[]),
+        SourceReferencePayload(id="3", source_uri="res-opaque", chunks=[]),
+    ]
+
+    html = safe_source_panel(sources=sources)
+
+    assert 'aria-label="Open source"' not in html
+    assert "https://127.0.0.1/private" not in html
+
+
+def test_source_templates_use_the_public_source_contract() -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
     from dlightrag.web.answer_events import _AnswerPayload
     from dlightrag.web.safe_html import safe_answer_done, safe_source_panel
@@ -254,6 +290,7 @@ def test_source_templates_use_only_the_public_download_contract() -> None:
     assert "src.url" not in template_text
     assert "src.path" not in template_text
     assert "src.download_url" in template_text
+    assert "src.source_uri" in template_text
     assert get_type_hints(_AnswerPayload)["sources"] == list[SourceReferencePayload]
     assert get_type_hints(safe_answer_done)["sources"] == list[SourceReferencePayload]
     assert get_type_hints(safe_source_panel)["sources"] == list[SourceReferencePayload]
@@ -328,7 +365,7 @@ def test_panel_action_icons_are_accessible_svg_buttons() -> None:
     assert "&#x2B07;" not in source_panel
     assert 'aria-label="Delete {{ file.file_name }}"' in file_list
     assert 'class="file-delete-icon"' in file_list
-    assert 'class="source-dl-icon-svg"' in source_panel
+    assert 'class="source-action-icon-svg"' in source_panel
     assert 'stroke="currentColor"' in source_panel
 
 

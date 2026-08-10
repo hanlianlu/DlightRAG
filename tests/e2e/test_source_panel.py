@@ -100,11 +100,11 @@ def _inject_answer_with_sources(page) -> None:
                     <span class="source-doc-count">1</span>
                   </button>
                   <a href="/web/files/raw/doc-report?workspace=default"
-                     class="source-dl-icon"
+                     class="source-action-icon"
                      title="Download source"
                      aria-label="Download source"
                      download>
-                    <svg class="source-dl-icon-svg" viewBox="0 0 24 24" fill="none"
+                    <svg class="source-action-icon-svg" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
                          stroke-linejoin="round">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -219,7 +219,7 @@ def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
     page.locator(".answer-ref-item").press("Enter")
 
     header = page.locator('#panel-content .source-doc[data-ref="1"] .source-doc-header')
-    download = header.locator(":scope > .source-dl-icon")
+    download = header.locator(":scope > .source-action-icon")
 
     assert download.count() == 1
     assert header.locator(":scope > .source-doc-toggle").count() == 1

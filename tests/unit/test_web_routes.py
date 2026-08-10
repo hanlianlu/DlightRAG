@@ -749,7 +749,7 @@ class TestWebAnswer:
 
         assert response.status_code == 200
         assert "event: done" in response.text
-        assert "source-dl-icon" not in response.text
+        assert "source-action-icon" not in response.text
         assert "/web/files/raw" not in response.text
 
 

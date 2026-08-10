@@ -301,9 +301,9 @@
     padding: var(--space-tight) var(--space-inline) var(--space-inline);
 }
 
-/* === Source Download Icon === */
+/* === Source Action Icons === */
 
-.source-dl-icon {
+.source-action-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -319,12 +319,12 @@
     transition: color 0.15s, background 0.15s;
 }
 
-.source-dl-icon:hover {
+.source-action-icon:hover {
     color: var(--color-accent-action);
     background: var(--color-accent-hover);
 }
 
-.source-dl-icon-svg {
+.source-action-icon-svg {
     width: var(--size-icon-md);
     height: var(--size-icon-md);
     pointer-events: none;
