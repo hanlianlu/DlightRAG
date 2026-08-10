@@ -194,6 +194,7 @@ def _exa_contents_text(web_search: ExaSearch) -> Callable[[str], Awaitable[str |
             result = await web_search.contents(url)
         except WebSearchUnavailable:
             return None
+        logger.info("Exa Contents fallback completed; cost_dollars=%.6f", result.cost_dollars)
         title: str | None = None
         passages: list[str] = []
         for hit in result.hits:
@@ -999,6 +1000,7 @@ class RAGServiceManager:
     def _budget_agent_images(
         current_images: list[dict[str, Any]],
         budget: AnswerImageBudget,
+        resource_ids: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
         for index, image in enumerate(current_images, start=1):
@@ -1006,6 +1008,13 @@ class RAGServiceManager:
             if block is None:
                 raise CurrentImagePayloadError(
                     f"current image query_image_{index} could not fit the answer image budget"
+                )
+            if index <= len(resource_ids):
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"[current image {index} | resource: {resource_ids[index - 1]}]",
+                    }
                 )
             blocks.append(block)
         return blocks
@@ -1268,7 +1277,7 @@ class RAGServiceManager:
         """Retrieve from one or more workspaces (federated if multiple).
 
         ``query_images`` are current-request images. VLM descriptions inform
-        query planning, and the raw images are embedded only when optional
+        query planning, and verified image blocks are embedded only when optional
         direct visual retrieval is active. Public retrieval is stateless: it
         accepts neither history nor Web attachment documents.
 
@@ -1370,7 +1379,11 @@ class RAGServiceManager:
         )
         scoped = _scope_for_workspaces(scope, ws_list)
         history = list(turn.text_history) or None
-        current_images, remaining_resources = await self._extract_current_images(resources)
+        (
+            current_images,
+            remaining_resources,
+            current_image_resources,
+        ) = await self._prepare_current_images(resources)
         if current_images:
             await self._maybe_reprobe_answer_image_capability()
         _check_answer_image_capability(
@@ -1411,10 +1424,16 @@ class RAGServiceManager:
             )
 
         web_search = self._get_web_search()
-        registry, resource_tools, has_resources = self._build_resource_context(
+        registry, resource_tools = self._build_resource_context(
             remaining_resources, web_search=web_search
         )
-        research = web_search is not None or has_resources
+        current_image_resource_ids = (
+            tuple(registry.register(resource) for resource in current_image_resources)
+            if registry is not None
+            else ()
+        )
+        resource_manifest = registry.manifest() if registry is not None else ()
+        research = web_search is not None or bool(resource_manifest)
 
         model_func: Callable[..., Any] | None = None
         scope_model_func: Callable[..., Any] | None = None
@@ -1461,7 +1480,14 @@ class RAGServiceManager:
 
         if research:
             image_budget = self._new_answer_image_budget()
-            query_images = self._budget_agent_images(current_images, image_budget) or None
+            query_images = (
+                self._budget_agent_images(
+                    current_images,
+                    image_budget,
+                    current_image_resource_ids,
+                )
+                or None
+            )
         else:
             query_images = current_images or None
 
@@ -1474,7 +1500,12 @@ class RAGServiceManager:
             stream_model_func=stream_model_func,
             final_text_func=final_text_func,
             resource_tools=resource_tools,
-            has_resources=has_resources,
+            resource_manifest=resource_manifest,
+            register_web_source=(
+                registry.register_discovered_link
+                if registry is not None and web_search is not None
+                else None
+            ),
             context_window_tokens=self._config.answer.context_window_tokens,
         )
         return _OrchestratorRun(
@@ -1488,26 +1519,29 @@ class RAGServiceManager:
             registry=registry,
         )
 
-    async def _extract_current_images(
+    async def _prepare_current_images(
         self,
         resources: list[ResourceInput] | None,
-    ) -> tuple[list[dict[str, Any]], list[ResourceInput]]:
-        """Split request resources into verified current-image blocks and the rest.
+    ) -> tuple[list[dict[str, Any]], list[ResourceInput], list[ResourceInput]]:
+        """Build current-image blocks while retaining every attachment as a resource.
 
         Inline bytes that decode as a real image and remote image links
         (materialized under SSRF revalidation) become internal current-image
         blocks fed to VLM description, direct visual retrieval, and final answer
-        transport. Durable lazy resources (prior attachments) and every non-image
-        resource stay in the request-local registry and are never eagerly
-        materialized. Non-image bytes never enter the image chain.
+        transport. Their verified bytes also stay in the request-local registry
+        for focused ``inspect_resource`` calls; a remote image is not fetched
+        twice. Durable lazy resources (prior attachments) and every non-image
+        resource remain lazy. Non-image bytes never enter the image chain.
         """
         if not resources:
-            return [], []
+            return [], [], []
+        from dlightrag.core.resources import ResourceInput
         from dlightrag.utils.images import image_bytes_to_data_uri, verify_web_image_bytes
 
         max_pixels = self._config.answer.image_max_pixels
         images: list[dict[str, Any]] = []
         remaining: list[ResourceInput] = []
+        image_resources: list[ResourceInput] = []
         for resource in resources:
             data: bytes | None = None
             if resource.loader is not None:
@@ -1533,10 +1567,17 @@ class RAGServiceManager:
                     "image_url": {"url": image_bytes_to_data_uri(data, fallback_mime=mime)},
                 }
             )
+            image_resource = ResourceInput(
+                filename=resource.filename,
+                content=data,
+                declared_mime=mime,
+            )
+            remaining.append(image_resource)
+            image_resources.append(image_resource)
         limit = max(0, int(self._config.query_images.max_current_images))
         if len(images) > limit:
             raise CurrentImagePayloadError(f"at most {limit} current images are allowed")
-        return images, remaining
+        return images, remaining, image_resources
 
     async def _materialize_link_image(self, url: str) -> bytes | None:
         """Fetch a current-image link under SSRF revalidation; None if it fails."""
@@ -1558,7 +1599,7 @@ class RAGServiceManager:
         resources: list[ResourceInput] | None,
         *,
         web_search: ExaSearch | None = None,
-    ) -> tuple[ResourceRegistry | None, list[AgentTool], bool]:
+    ) -> tuple[ResourceRegistry | None, list[AgentTool]]:
         """Register request-local resources and their peer tools.
 
         When Exa is configured, its Contents endpoint is adapted into the
@@ -1567,8 +1608,8 @@ class RAGServiceManager:
         one text view. The registry owns admission, SSRF revalidation, and the
         single-fallback contract; it never imports any web-search provider.
         """
-        if not resources:
-            return None, [], False
+        if not resources and web_search is None:
+            return None, []
         from dlightrag.core.resources import ResourceRegistry
         from dlightrag.core.resources.tools import build_resource_tools
         from dlightrag.core.resources.visual import ResourceInspector
@@ -1580,7 +1621,7 @@ class RAGServiceManager:
             max_total_attachment_bytes=answer.max_total_attachment_bytes,
             url_text_fallback=_exa_contents_text(web_search) if web_search is not None else None,
         )
-        for resource in resources:
+        for resource in resources or []:
             registry.register(resource)
 
         capability = self._answer_image_capability
@@ -1605,7 +1646,7 @@ class RAGServiceManager:
             inspector=inspector,
             visual_supported=visual_supported,
         )
-        return registry, tools, True
+        return registry, tools
 
     async def _aanswer_orchestrated(
         self,
@@ -1821,10 +1862,11 @@ class RAGServiceManager:
         """Answer from one or more workspaces through the one answer orchestrator.
 
         Current-turn images and documents are supplied through ``resources``. The
-        manager extracts verified current images into internal image blocks (VLM
-        description informs planning, raw images are embedded for optional direct
-        visual retrieval, and bounded blocks reach the answer model) and registers
-        the remaining resources request-locally.
+        manager prepares verified current images as internal image blocks (VLM
+        description informs planning, verified image bytes feed optional direct
+        visual retrieval, and bounded blocks reach the answer model) while also
+        registering every attachment request-locally for agentic reading or
+        focused visual inspection.
 
         ``history`` is caller-supplied prior turns (``role``/``content`` dicts).
         It is stateless -- the caller owns persistence and passes it per request.

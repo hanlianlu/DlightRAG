@@ -99,6 +99,15 @@ canonical image path. Every visual observation is marked as VLM-derived evidence
 with its exact source/page/sheet/cell locator, so the model cites where a claim
 came from and never treats a description as the final answer.
 
+Current image attachments follow both complementary paths: their bounded image
+blocks automatically inform planning, initial visual retrieval, and final
+generation, while the same verified bytes remain request-local resources for
+optional focused evidence. A source-image inspection sends the bounded whole
+image with a concrete focus; it does not crop or zoom an arbitrary region.
+Structural zoom-in is available for a selected PDF page or an extracted embedded
+visual handle. The control prompt tells the model not to repeat inspection for a
+general description when the current image is already visible.
+
 Full resource bytes never enter model context. Only bounded text windows, capped
 tool observations, and budgeted image blocks do. One `AnswerCapacity` shares the
 configured context window across evidence packing and final answer generation:
@@ -106,9 +115,12 @@ evidence is bounded to a fraction of the window, each tool observation is
 capped, and a fixed final-generation reserve is input-packing headroom, not an
 output cap.
 
-When `web_search.api_key` (Exa) is set, the research path may call Exa Search and
-Contents as one more peer tool; passages belong to no workspace and are packed
-beside corpus evidence. A missing key simply removes the capability.
+When `web_search.api_key` (Exa) is set, Exa Search is an optional peer
+capability. Its passages belong to no workspace and are packed beside corpus
+evidence; evidence-producing result URLs become inert request-local resource
+handles that the model may deep-read with `read_resource`. Exa Contents is not a
+peer tool: it is a bounded internal fallback only when a selected public URL
+cannot be read directly. A missing key removes both capabilities.
 
 ## Web Attachment Storage
 

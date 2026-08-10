@@ -51,7 +51,7 @@ async def route_client(
         new_callable=AsyncMock,
         return_value=manager,
     ):
-        app = create_app(include_web=False)
+        app = create_app(include_web_app=False)
         app.state.manager = manager
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -170,7 +170,7 @@ async def test_download_authorization_precedes_metadata_lookup(
         ),
         caplog.at_level(logging.INFO, logger="dlightrag.api.routes.files"),
     ):
-        app = create_app(include_web=False)
+        app = create_app(include_web_app=False)
         app.state.manager = manager
         app.state.access_control = DenyFinanceWorkspace()
         async with AsyncClient(

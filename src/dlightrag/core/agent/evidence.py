@@ -217,7 +217,8 @@ class EvidenceLedger:
 
         if metadata.get("source_type") == "web_search":
             content = str(row.get("content") or "")
-            digest = hashlib.sha256(f"{source_uri}\0{content}".encode()).hexdigest()[:20]
+            evidence_key = str(row.get("_evidence_key") or content)
+            digest = hashlib.sha256(f"{source_uri}\0{evidence_key}".encode()).hexdigest()[:20]
             normalized["chunk_id"] = f"webchunk-{digest}"
             identity = f"web:{digest}"
         else:
@@ -250,8 +251,10 @@ def _collapsed_handle_block(collapsed: list[ContextRow]) -> dict[str, Any] | Non
             or str(row.get("file_path") or "").rsplit("/", 1)[-1]
             or "Source"
         )
+        resource_id = str(metadata.get("resource_id") or "")
+        resource_label = f" [resource: {resource_id}]" if resource_id else ""
         lines.append(
-            f"[{reference_id}] {title} - earlier evidence retained; "
+            f"[{reference_id}] {title}{resource_label} - earlier evidence retained; "
             "re-read this source for full detail."
         )
     return {

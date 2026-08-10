@@ -65,7 +65,7 @@ def _finance_source_context() -> dict[str, object]:
 def _api_app(test_config: DlightragConfig) -> Iterator[FastAPI]:
     """Create the API app after test_config has installed the singleton."""
     global app
-    app = create_app(include_web=False)
+    app = create_app(include_web_app=False)
     yield app
     app.dependency_overrides.clear()
     if hasattr(app.state, "manager"):
@@ -2398,7 +2398,7 @@ async def test_the_app_admits_answer_history_when_images_are_disabled(
     set_config(mock_config)
 
     response = await _post(
-        create_app(include_web=False),
+        create_app(include_web_app=False),
         content=b'{"query":"' + b"x" * (1024 * 1024) + b'"}',
         headers={"content-type": "application/json"},
     )
@@ -2420,7 +2420,7 @@ async def test_the_app_still_refuses_a_body_over_the_answer_history_budget(
     over_budget = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4 + 2 * 1024 * 1024
 
     response = await _post(
-        create_app(include_web=False),
+        create_app(include_web_app=False),
         content=b'{"query":"' + b"x" * over_budget + b'"}',
         headers={"content-type": "application/json"},
     )
@@ -2438,7 +2438,7 @@ async def test_the_app_expands_the_cap_for_configured_query_images(
     image_sized_body = 3 * (((mock_config.query_images.max_upload_bytes + 2) // 3) * 4) - 4096
 
     response = await _post(
-        create_app(include_web=False),
+        create_app(include_web_app=False),
         content=b'{"query":"' + b"x" * image_sized_body + b'"}',
         headers={"content-type": "application/json"},
     )
@@ -2451,7 +2451,7 @@ async def test_a_route_that_rejects_an_oversized_upload_is_not_reported_as_an_au
     mock_config: DlightragConfig,
 ) -> None:
     set_config(mock_config)
-    application = create_app(include_web=False)
+    application = create_app(include_web_app=False)
 
     @application.post("/probe")
     async def probe() -> None:

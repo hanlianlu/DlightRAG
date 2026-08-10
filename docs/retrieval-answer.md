@@ -276,6 +276,9 @@ picks one of two paths:
   retrieval, an optional strict web-scope decision when Exa exists, then peer
   tools (`search_knowledge_base`, `read_resource`, `inspect_resource`, and
   `search_web` when enabled) that append observations to an `EvidenceLedger`.
+  Evidence-producing Web result URLs receive opaque request-local resource ids,
+  allowing a later `read_resource` call to deepen a selected source without a
+  raw-URL tool.
   A control turn with no tool calls, or a tool batch that adds no evidence, ends
   research. DlightRAG then makes one additional tools-disabled LLM call through
   `AnswerSynthesizer` to generate the final answer. Control-turn text is only a
@@ -476,12 +479,26 @@ resolution page. Every result is marked `derived_by_vlm` and carries its exact
 source/page/sheet/cell/visual locator, so the model can cite where a claim came
 from and never treats a VLM description as the final answer.
 
+For a current source image, automatic image description, image-aware planning,
+direct visual retrieval, and bounded final-model visibility happen before the
+agent decides whether more research is needed. `inspect_resource` is therefore
+optional: it re-examines the bounded whole image with a concrete focus and adds
+the result as located, citable VLM evidence. It does not currently accept a
+bounding box or crop arbitrary regions. PDF page locators and embedded visual
+handles provide the narrower structural inspection paths.
+
 When `web_search.api_key` (Exa) is set, the research path can also call Exa
-Search and Contents as one more peer tool. Exa passages come back already scored
-against the query; they belong to no workspace and are packed beside corpus
-evidence. When the key is unset, the web-search capability is removed and answers
-stay corpus-only. A rejected or unpaid key parks the capability for a short
-window rather than retrying every turn.
+Search as a peer tool. Exa passages come back already scored against the query;
+they belong to no workspace and are packed beside corpus evidence. Unique URLs
+that produced evidence become inert request-local handles, and only an explicit
+`read_resource` call fetches one under the normal SSRF, redirect, and byte
+limits. Exa Contents is a bounded internal fallback when direct extraction
+fails or is empty, not a model-visible tool. It does not supply cookies,
+authenticated sessions, or Playwright interaction. Login-gated content must be
+provided by the caller as attachment bytes or a screenshot. When the key is
+unset, both Web capabilities are removed and answers stay corpus-only. A
+rejected or unpaid key parks the capability for a short window rather than
+retrying every turn.
 
 The Web channel persists uploaded answer attachments verbatim in one raw table,
 `web_conversation_attachments`, scoped by principal, conversation, and turn.

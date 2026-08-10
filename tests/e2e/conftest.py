@@ -387,7 +387,7 @@ def e2e_base_url(
     import uvicorn
 
     with patch("dlightrag.api.server.RAGServiceManager.acreate", AsyncMock(return_value=manager)):
-        app = create_app(include_web=True)
+        app = create_app(include_web_app=True)
         app.state.web_conversation_service = e2e_conversation_service
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
         server = uvicorn.Server(config)

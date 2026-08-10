@@ -3,6 +3,7 @@
 
 import asyncio
 import importlib
+import io
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.config import (
@@ -34,6 +36,12 @@ from dlightrag.sourcing.base import SourceDocument
 
 def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _png_bytes() -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (24, 24), (20, 80, 160)).save(output, "PNG")
+    return output.getvalue()
 
 
 class _AttrStream:
@@ -79,7 +87,9 @@ class _CapturingOrchestrator:
 
     @property
     def uses_research_path(self) -> bool:
-        return bool(self.kwargs.get("has_resources")) or self.kwargs.get("search_web") is not None
+        return (
+            bool(self.kwargs.get("resource_manifest")) or self.kwargs.get("search_web") is not None
+        )
 
     async def answer(self, query: str, **kwargs: Any) -> Any:
         _CapturingOrchestrator.last["answer"] = {"query": query, **kwargs}
@@ -2231,15 +2241,14 @@ class TestExaContentsFallback:
         manager = RAGServiceManager(config=cfg)
         resources = [ResourceInput(content=b"payload")]
 
-        registry, _tools, has = manager._build_resource_context(
+        registry, _tools = manager._build_resource_context(
             resources, web_search=manager._get_web_search()
         )
-        assert has is True
         assert registry is not None
         assert registry._url_text_fallback is not None
 
         plain = RAGServiceManager(config=test_cfg)
-        registry2, _t2, _h2 = plain._build_resource_context(resources, web_search=None)
+        registry2, _t2 = plain._build_resource_context(resources, web_search=None)
         assert registry2 is not None
         assert registry2._url_text_fallback is None
 
@@ -2311,8 +2320,68 @@ class TestAgenticAnswerCapability:
         # An Exa key makes the request research, and the fast-path synthesizer is
         # never invoked directly by the manager.
         assert _CapturingOrchestrator.last["init"]["search_web"] is not None
+        init = _CapturingOrchestrator.last["init"]
+        assert init["resource_manifest"] == ()
+        assert {tool.name for tool in init["resource_tools"]} >= {"read_resource"}
+        assert callable(init["register_web_source"])
         assert "answer" in _CapturingOrchestrator.last
         manager._answer_synthesizer.generate.assert_not_called()
+
+    async def test_image_attachment_without_exa_keeps_agentic_inspection(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.core.answer.capability import AnswerImageCapability
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=2,
+            effective_max_images=2,
+            provider="test",
+            base_url=None,
+            model="vision-test",
+            failure_kind=None,
+        )
+        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
+            return_value=(
+                QueryPlan(original_query="inspect", standalone_query="inspect"),
+                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
+            )
+        )
+        manager._answer_synthesizer = MagicMock()
+        monkeypatch.setattr(
+            "dlightrag.models.llm.get_vlm_model_func",
+            MagicMock(return_value=AsyncMock(return_value="visual evidence")),
+        )
+        monkeypatch.setattr(
+            "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
+        )
+
+        await manager.aanswer(
+            "inspect",
+            workspace="alpha",
+            resources=[
+                ResourceInput(
+                    filename="chart.png",
+                    content=_png_bytes(),
+                    declared_mime="image/png",
+                )
+            ],
+        )
+
+        init = _CapturingOrchestrator.last["init"]
+        assert init["search_web"] is None
+        assert {tool.name for tool in init["resource_tools"]} == {
+            "read_resource",
+            "inspect_resource",
+        }
+        assert len(init["resource_manifest"]) == 1
+        assert init["resource_manifest"][0].filename == "chart.png"
+        image_blocks = _CapturingOrchestrator.last["answer"]["query_images"]
+        assert image_blocks[0]["text"] == (
+            f"[current image 1 | resource: {init['resource_manifest'][0].resource_id}]"
+        )
+        assert image_blocks[1]["type"] == "image_url"
 
     async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})

@@ -1,28 +1,18 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Resource-neutral lexical focus ranking.
+"""Request-local resource-window focus ranking.
 
 A single mixed-script tokenizer emits Unicode words plus CJK unigrams and
 overlapping bigrams so Latin and CJK queries share one BM25 index. The ranking
-core is source agnostic: it operates on tokenized documents and returns their
-indices, so any caller (structural resource windows, attachment rows) can reuse it
-without pulling in a domain shape.
+core operates on tokenized windows and returns their indices without creating a
+persistent index or importing the workspace retrieval stack.
 """
 
 from __future__ import annotations
 
 import unicodedata
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
 
 import bm25s
-
-
-@runtime_checkable
-class StructuralWindow(Protocol):
-    """A rankable resource window that exposes its readable text."""
-
-    @property
-    def text(self) -> str: ...
 
 
 def _is_cjk_char(char: str) -> bool:
@@ -136,17 +126,4 @@ def bm25_rank(
     return ranked
 
 
-def rank_resource_windows[W: StructuralWindow](
-    query: str,
-    windows: Sequence[W],
-    *,
-    limit: int,
-) -> list[W]:
-    """Return the most query-relevant *windows*, discarding zero-score matches."""
-    query_terms = mixed_script_terms(query)
-    documents = [mixed_script_terms(window.text) for window in windows]
-    ranked = bm25_rank(query_terms, documents, limit=limit)
-    return [windows[index] for index, _ in ranked]
-
-
-__all__ = ["StructuralWindow", "bm25_rank", "mixed_script_terms", "rank_resource_windows"]
+__all__ = ["bm25_rank", "mixed_script_terms"]

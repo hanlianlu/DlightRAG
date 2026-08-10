@@ -60,7 +60,7 @@ def conversation_service() -> AsyncMock:
 
 @pytest.fixture
 async def conversation_client(conversation_service: AsyncMock):
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     application.state.web_conversation_service = conversation_service
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -74,7 +74,7 @@ async def cookie_conversation_client(
 ):
     test_config.auth_mode = "simple"
     test_config.api_auth_token = "secret-token"
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     application.state.web_conversation_service = conversation_service
     application.state.manager = AsyncMock(config=test_config, answer_image_capability=None)
     transport = ASGITransport(app=application)
@@ -265,7 +265,7 @@ async def test_scoped_thumbnail_requires_web_auth(
 ) -> None:
     test_config.auth_mode = "simple"
     test_config.api_auth_token = "secret-token"
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     application.state.web_conversation_service = conversation_service
     transport = ASGITransport(app=application)
     async with AsyncClient(
@@ -488,7 +488,7 @@ async def test_store_unavailability_returns_retryable_503(
 
     store = AsyncMock()
     getattr(store, store_method).side_effect = ConnectionError("database unavailable")
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
         max_turns=100,
@@ -524,7 +524,7 @@ async def test_postgres_shutdown_returns_retryable_503(shutdown_error: Exception
 
     store = AsyncMock()
     store.list_conversations.side_effect = shutdown_error
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
         max_turns=100,
@@ -562,7 +562,7 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
 
     store = AsyncMock()
     store.list_conversations.side_effect = store_error
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
         max_turns=100,

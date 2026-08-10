@@ -763,10 +763,13 @@ web_search:
   api_key: null  # set DLIGHTRAG_WEB_SEARCH__API_KEY in .env to enable
 ```
 
-The key's presence is the whole capability toggle. When set, the browser channel
-offers web search and the orchestrator may call Exa Search and Contents as one
-more peer tool; when unset, the capability is removed and answers stay
-corpus-only.
+The key's presence is the whole capability toggle. When set, the orchestrator
+may call Exa Search as a peer tool. Evidence-producing result URLs become
+request-local resource handles for optional `read_resource` calls; Exa Contents
+is a bounded internal fallback only after direct reading fails or returns no
+text. When unset, both Web capabilities are removed and answers stay
+corpus-only. Neither path supplies cookies or browser automation for login- or
+interaction-gated pages.
 
 ## REST API
 

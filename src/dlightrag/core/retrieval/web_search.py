@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+from dlightrag.sourcing.url import normalize_https_url_identity
+
 logger = logging.getLogger(__name__)
 
 _ENDPOINT = "https://api.exa.ai/search"
@@ -77,31 +79,15 @@ class ExaSearch:
 
     async def search(self, query: str) -> WebSearchResult:
         """Return the passages a search found, or say why it could not run."""
-        parked = self._parked_reason()
-        if parked is not None:
-            raise WebSearchUnavailable(parked)
-
-        contents: dict[str, Any] = {"highlights": {"maxCharacters": _HIGHLIGHT_MAX_CHARACTERS}}
-        try:
-            response = await self._client.post(
-                _ENDPOINT,
-                headers={"x-api-key": self._api_key},
-                json={"query": query, "contents": contents},
-            )
-        except httpx.TimeoutException as exc:
-            raise WebSearchUnavailable("timeout") from exc
-        except httpx.HTTPError as exc:
-            raise WebSearchUnavailable("unreachable") from exc
-
-        reason = _PARKING_STATUS.get(response.status_code)
-        if reason is not None:
-            self._parked = (reason, time.monotonic() + _PARK_SECONDS)
-            logger.warning("Web search parked for %d minutes: %s", _PARK_SECONDS // 60, reason)
-            raise WebSearchUnavailable(reason)
-        if response.is_error:
-            logger.warning("Web search returned HTTP %d", response.status_code)
-            raise WebSearchUnavailable("error")
-        return _read_result(response.json())
+        return await self._request(
+            _ENDPOINT,
+            {
+                "query": query,
+                "type": "auto",
+                "contents": {"highlights": {"maxCharacters": _HIGHLIGHT_MAX_CHARACTERS}},
+            },
+            operation="search",
+        )
 
     async def contents(self, url: str) -> WebSearchResult:
         """Fetch the text of one known URL through Exa Contents.
@@ -111,32 +97,39 @@ class ExaSearch:
         crawls discovered links on its own; the caller registers any returned
         page as an inert resource handle and reads it explicitly.
         """
+        return await self._request(
+            _CONTENTS_ENDPOINT,
+            {"urls": [url], "text": {"maxCharacters": 10_000}},
+            operation="contents",
+        )
+
+    async def _request(
+        self,
+        endpoint: str,
+        payload: dict[str, Any],
+        *,
+        operation: str,
+    ) -> WebSearchResult:
         parked = self._parked_reason()
         if parked is not None:
             raise WebSearchUnavailable(parked)
-
         try:
             response = await self._client.post(
-                _CONTENTS_ENDPOINT,
+                endpoint,
                 headers={"x-api-key": self._api_key},
-                json={
-                    "urls": [url],
-                    "text": True,
-                    "highlights": {"maxCharacters": _HIGHLIGHT_MAX_CHARACTERS},
-                },
+                json=payload,
             )
         except httpx.TimeoutException as exc:
             raise WebSearchUnavailable("timeout") from exc
         except httpx.HTTPError as exc:
             raise WebSearchUnavailable("unreachable") from exc
-
         reason = _PARKING_STATUS.get(response.status_code)
         if reason is not None:
             self._parked = (reason, time.monotonic() + _PARK_SECONDS)
-            logger.warning("Web search parked for %d minutes: %s", _PARK_SECONDS // 60, reason)
+            logger.warning("Exa access parked for %d minutes: %s", _PARK_SECONDS // 60, reason)
             raise WebSearchUnavailable(reason)
         if response.is_error:
-            logger.warning("Web contents returned HTTP %d", response.status_code)
+            logger.warning("Exa %s returned HTTP %d", operation, response.status_code)
             raise WebSearchUnavailable("error")
         return _read_result(response.json())
 
@@ -210,11 +203,22 @@ def web_context_rows(hits: Iterable[WebSearchHit]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str]] = set()
     counts: dict[str, int] = {}
     for hit in hits:
-        if not hit.text.strip() or (hit.url, hit.text) in seen:
+        url = normalize_https_url_identity(hit.url)
+        if not hit.text.strip() or (url, hit.text) in seen:
             continue
-        seen.add((hit.url, hit.text))
-        reference_id = _reference_id(hit.url)
+        seen.add((url, hit.text))
+        reference_id = _reference_id(url)
         index = counts[reference_id] = counts.get(reference_id, 0) + 1
+        metadata = {
+            # The prompt has to be able to say where this came from: a
+            # page the model chose carries none of an upload's warrant.
+            "source_type": "web_search",
+            "source_uri": url,
+            "source_download_locator": url,
+            "title": hit.title,
+            "published_date": hit.published_date,
+            "remote_image_url": hit.image_url,
+        }
         rows.append(
             {
                 "chunk_id": f"{reference_id}-{index}",
@@ -224,16 +228,7 @@ def web_context_rows(hits: Iterable[WebSearchHit]) -> list[dict[str, Any]]:
                 "content": hit.text,
                 "page_number": None,
                 "_workspace": _WEB_SEARCH_WORKSPACE,
-                "metadata": {
-                    # The prompt has to be able to say where this came from: a
-                    # page the model chose carries none of an upload's warrant.
-                    "source_type": "web_search",
-                    "source_uri": hit.url,
-                    "source_download_locator": hit.url,
-                    "title": hit.title,
-                    "published_date": hit.published_date,
-                    "remote_image_url": hit.image_url,
-                },
+                "metadata": metadata,
             }
         )
     return rows

@@ -91,7 +91,7 @@ def mock_manager():
 @pytest.fixture
 def web_app(mock_manager, test_config: DlightragConfig):
     """Create the FastAPI app with web routes enabled and manager set."""
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     mock_manager.config = test_config
     application.state.manager = mock_manager
     conversation_service = AsyncMock()
@@ -137,7 +137,7 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
 
     manager = AsyncMock()
     conversation_service = AsyncMock()
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     installed_service = application.state.web_conversation_service
     application.state.web_conversation_service = conversation_service
     monkeypatch.setattr(RAGServiceManager, "acreate", AsyncMock(return_value=manager))
@@ -178,7 +178,7 @@ def _configure_web_manager(manager, cfg: DlightragConfig):
 
 
 def _web_client_for(cfg: DlightragConfig, manager):
-    application = create_app(include_web=True)
+    application = create_app(include_web_app=True)
     application.state.manager = _configure_web_manager(manager, cfg)
     transport = ASGITransport(app=application)
     return AsyncClient(

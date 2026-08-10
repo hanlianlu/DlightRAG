@@ -67,16 +67,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def create_app(*, include_web: bool = True) -> FastAPI:
-    """Create and configure the FastAPI application."""
+def create_app(*, include_web_app: bool = True) -> FastAPI:
+    """Create the REST API and optionally mount the bundled browser app."""
     from dlightrag.config import get_config
 
     cfg = get_config()
 
-    # Reader processes serve only the stateless query/read API surface; the
-    # bundled Web app owns conversation persistence, which is writer-only.
+    # Readers still serve REST Answer, including agentic resource and Web-search
+    # capabilities. Only the bundled browser app is writer-only because its
+    # /web routes own durable conversation and attachment persistence.
     if cfg.is_reader:
-        include_web = False
+        include_web_app = False
 
     application = FastAPI(
         title="dlightrag",
@@ -157,7 +158,7 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     application.include_router(router)
 
     # -- Web frontend --
-    if include_web:
+    if include_web_app:
         from dlightrag.storage.web_conversations import PGWebConversationStore
         from dlightrag.web.auth import WebAuthMiddleware
         from dlightrag.web.conversations import (

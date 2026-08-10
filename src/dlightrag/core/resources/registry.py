@@ -22,7 +22,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -45,7 +44,11 @@ from dlightrag.core.resources.models import (
 )
 from dlightrag.core.resources.text import build_text_windows, decode_text
 from dlightrag.sourcing.source_contract import safe_source_filename
-from dlightrag.sourcing.url import afetch_public_https_bytes, validate_public_https_url
+from dlightrag.sourcing.url import (
+    afetch_public_https_bytes,
+    normalize_https_url_identity,
+    validate_public_https_url,
+)
 from dlightrag.utils.images import verify_web_image_bytes
 
 _DEFAULT_MAX_ATTACHMENTS = 6
@@ -119,6 +122,7 @@ class ResourceRegistry:
 
         self._resources: dict[str, _Registered] = {}
         self._ids_by_dedup: dict[tuple[str, bytes], str] = {}
+        self._caller_dedup: set[tuple[str, bytes]] = set()
         self._fetched: dict[str, bytes] = {}
         self._cursors: dict[str, _CursorState] = {}
         self._paths: dict[str, Path] = {}
@@ -146,7 +150,18 @@ class ResourceRegistry:
         await self.aclose()
 
     def register(self, resource: ResourceInput) -> str:
+        return self._register(resource, caller=True)
+
+    def register_discovered_link(self, url: str) -> str | None:
+        """Register one inert search-discovered HTTPS link outside caller count."""
+        try:
+            return self._register(ResourceInput(url=url), caller=False)
+        except ValueError:
+            return None
+
+    def _register(self, resource: ResourceInput, *, caller: bool) -> str:
         self._ensure_open()
+        filename = resource.filename
         provided = sum(
             1 for value in (resource.content, resource.url, resource.loader) if value is not None
         )
@@ -163,7 +178,8 @@ class ResourceRegistry:
         elif resource.url is not None:
             # Cheap scheme/credential check now; full DNS/redirect happens on read.
             validate_public_https_url(resource.url)
-            dedup_key = ("link", _normalized_url(resource.url).encode("utf-8"))
+            filename = _link_filename(resource.url, filename)
+            dedup_key = ("link", normalize_https_url_identity(resource.url).encode("utf-8"))
             source = "link"
             byte_size = None
             content = None
@@ -178,24 +194,34 @@ class ResourceRegistry:
             byte_size = len(content)
 
         existing = self._ids_by_dedup.get(dedup_key)
+        if caller:
+            self._admit_caller_key(dedup_key)
         if existing is not None:
+            registered = self._resources[existing]
+            if caller:
+                if registered.source == "web_search":
+                    registered.source = "link"
+                if resource.url is not None:
+                    registered.url = normalize_https_url_identity(resource.url)
+                if resource.filename:
+                    registered.filename = safe_source_filename(resource.filename)
             return existing
 
-        if len(self._resources) >= self._max_attachments:
-            raise ResourceAdmissionError("too many attachments")
         if byte_size is not None and self._total_bytes + byte_size > (
             self._max_total_attachment_bytes
         ):
+            if caller:
+                self._caller_dedup.remove(dedup_key)
             raise ResourceAdmissionError("total attachment bytes exceeded")
 
         resource_id = self._mint_resource_id(dedup_key)
         self._resources[resource_id] = _Registered(
             resource_id=resource_id,
-            filename=resource.filename,
+            filename=filename,
             declared_mime=resource.declared_mime,
-            source=source,
+            source="web_search" if source == "link" and not caller else source,
             content=content,
-            url=resource.url,
+            url=normalize_https_url_identity(resource.url) if resource.url is not None else None,
             byte_size=byte_size,
             loader=resource.loader,
         )
@@ -204,17 +230,37 @@ class ResourceRegistry:
             self._total_bytes += byte_size
         return resource_id
 
+    def _admit_caller_key(self, dedup_key: tuple[str, bytes]) -> None:
+        if dedup_key in self._caller_dedup:
+            return
+        if len(self._caller_dedup) >= self._max_attachments:
+            raise ResourceAdmissionError("too many attachments")
+        self._caller_dedup.add(dedup_key)
+
     def manifest(self) -> tuple[ResourceManifestEntry, ...]:
         return tuple(
             ResourceManifestEntry(
                 resource_id=item.resource_id,
                 filename=item.filename,
                 declared_mime=item.declared_mime,
-                source=item.source,  # type: ignore[arg-type]
+                source="link" if item.source == "web_search" else item.source,  # type: ignore[arg-type]
                 byte_size=item.byte_size,
             )
             for item in self._resources.values()
         )
+
+    def evidence_source(self, resource_id: str) -> dict[str, str]:
+        """Return stable private provenance for evidence derived from a resource."""
+        resource = self._require(resource_id)
+        source_uri = (
+            resource.url if resource.source == "web_search" and resource.url else resource_id
+        )
+        return {
+            "source_type": "web_search" if resource.source == "web_search" else "web_attachment",
+            "source_uri": source_uri,
+            "source_download_locator": source_uri,
+            "title": safe_source_filename(resource.filename or source_uri),
+        }
 
     async def materialize(self, resource_id: str) -> bytes:
         """Return the full bytes for a resource, fetching a link if needed."""
@@ -248,10 +294,13 @@ class ResourceRegistry:
     ) -> ResourceReadResult:
         resource = self._require(resource_id)
         position = 0
+        effective_focus = focus
         if cursor is not None:
-            position = self._resolve_cursor(
-                cursor, resource_id=resource_id, focus=focus
-            ).window_index
+            state = self._resolve_cursor(cursor, resource_id=resource_id)
+            if focus is not None and focus != state.focus:
+                raise ResourceCursorError("cursor is not valid for this resource read")
+            effective_focus = state.focus
+            position = state.window_index
 
         windows, resource_handles = await self._read_windows(resource)
         if not windows:
@@ -268,11 +317,13 @@ class ResourceRegistry:
         # Focus reorders the read sequence without changing any window's bytes or
         # the <=16K contract. Visual handles ride the first *returned* window so
         # they are never lost when focus selects a nonzero physical window.
-        order = _focus_order(windows, focus)
+        order = _focus_order(windows, effective_focus)
         position = min(position, len(order) - 1)
         locator, chunk = windows[order[position]]
         has_more = position + 1 < len(order)
-        next_cursor = self._mint_cursor(resource_id, focus, position + 1) if has_more else None
+        next_cursor = (
+            self._mint_cursor(resource_id, effective_focus, position + 1) if has_more else None
+        )
         return ResourceReadResult(
             resource_id=resource_id,
             locator=locator,
@@ -542,9 +593,9 @@ class ResourceRegistry:
         self._cursors[token] = _CursorState(resource_id, focus, window_index)
         return token
 
-    def _resolve_cursor(self, cursor: str, *, resource_id: str, focus: str | None) -> _CursorState:
+    def _resolve_cursor(self, cursor: str, *, resource_id: str) -> _CursorState:
         state = self._cursors.get(cursor)
-        if state is None or state.resource_id != resource_id or state.focus != focus:
+        if state is None or state.resource_id != resource_id:
             raise ResourceCursorError("cursor is not valid for this resource read")
         return state
 
@@ -557,9 +608,9 @@ class ResourceRegistryClosedError(RuntimeError):
     """Raised when a closed registry is used again."""
 
 
-def _normalized_url(url: str) -> str:
-    parts = urlsplit(url)
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, ""))
+def _link_filename(url: str, explicit: str | None) -> str:
+    filename = safe_source_filename(explicit or url)
+    return filename if Path(filename).suffix else f"{filename}.html"
 
 
 def _is_pdf(filename: str | None, declared_mime: str | None) -> bool:

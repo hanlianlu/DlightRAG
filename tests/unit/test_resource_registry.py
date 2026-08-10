@@ -133,12 +133,66 @@ def test_register_rejects_non_https_link() -> None:
         registry.register(ResourceInput(url="http://example.com/report.txt"))
 
 
+def test_discovered_links_bypass_only_the_caller_attachment_count() -> None:
+    registry = ResourceRegistry(max_attachments=1)
+    registry.register(ResourceInput(content=b"caller attachment"))
+
+    discovered = registry.register_discovered_link("https://example.com/article")
+
+    assert discovered is not None
+    assert len(registry.manifest()) == 2
+    with pytest.raises(ResourceAdmissionError, match="too many attachments"):
+        registry.register(ResourceInput(content=b"second caller attachment"))
+
+
+def test_discovered_link_deduplicates_with_a_caller_link_and_stays_inert() -> None:
+    client = _LinkClient()
+    registry = ResourceRegistry(url_client=client)
+    discovered = registry.register_discovered_link("https://example.com/article#section")
+    assert discovered is not None
+    assert registry.evidence_source(discovered)["source_uri"] == "https://example.com/article"
+    caller = registry.register(
+        ResourceInput(
+            url="https://example.com/article#other",
+            filename="preferred.html",
+        )
+    )
+
+    assert discovered == caller
+    (entry,) = registry.manifest()
+    assert entry.filename == "preferred.html"
+    assert registry.evidence_source(caller) == {
+        "source_type": "web_attachment",
+        "source_uri": caller,
+        "source_download_locator": caller,
+        "title": "preferred.html",
+    }
+    assert client.calls == 0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com/article",
+        "https://user:secret@example.com/article",
+        "https://localhost/article",
+        "https://127.0.0.1/article",
+    ],
+)
+def test_discovered_link_drops_an_unsafe_search_result(url: str) -> None:
+    registry = ResourceRegistry()
+
+    assert registry.register_discovered_link(url) is None
+    assert registry.manifest() == ()
+
+
 def test_manifest_reports_link_without_size_until_read() -> None:
     registry = ResourceRegistry(url_client=_LinkClient())
     registry.register(ResourceInput(url="https://data.example.com/report.txt"))
 
     entries = registry.manifest()
     assert len(entries) == 1
+    assert entries[0].filename == "report.txt"
     assert entries[0].source == "link"
     assert entries[0].byte_size is None
 
@@ -156,6 +210,28 @@ async def test_url_fetch_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
     assert client.calls == 1
 
 
+async def test_discovered_link_materialization_shares_the_request_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
+    client = _LinkClient(content=b"12345")
+    registry = ResourceRegistry(
+        max_attachment_bytes=10,
+        max_total_attachment_bytes=10,
+        url_client=client,
+    )
+    registry.register(ResourceInput(content=b"123456"))
+    resource_id = registry.register_discovered_link("https://data.example.com/report.txt")
+    assert resource_id is not None
+
+    with pytest.raises(ResourceAdmissionError, match="total attachment bytes"):
+        await registry.read(resource_id)
+    with pytest.raises(ResourceAdmissionError, match="total attachment bytes"):
+        await registry.read(resource_id)
+
+    assert client.calls == 2
+
+
 async def test_read_revalidates_host_resolution_each_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -163,7 +239,10 @@ async def test_read_revalidates_host_resolution_each_read(
 
     def resolver(host: str, port: int, *args: object, **kwargs: object):
         calls["n"] += 1
-        ip = "93.184.216.34" if calls["n"] == 1 else "10.0.0.5"
+        # The first read validates at the registry boundary and again in the
+        # redirect-aware fetcher. A later read must still resolve afresh even
+        # though its bytes are cached.
+        ip = "93.184.216.34" if calls["n"] <= 2 else "10.0.0.5"
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
 
     monkeypatch.setattr("dlightrag.sourcing.url.socket.getaddrinfo", resolver)
@@ -248,6 +327,20 @@ async def test_cursor_is_bound_to_its_resource() -> None:
 
     with pytest.raises(ResourceCursorError):
         await registry.read(small_id, cursor=first.next_cursor)
+
+
+async def test_cursor_inherits_focus_and_rejects_a_conflict() -> None:
+    registry = ResourceRegistry()
+    text = "\n".join(f"line {index} " + "x" * 30 for index in range(2000))
+    resource_id = registry.register(ResourceInput(content=text.encode("utf-8")))
+
+    first = await registry.read(resource_id, focus="line 1999")
+    assert first.next_cursor is not None
+    second = await registry.read(resource_id, cursor=first.next_cursor)
+    assert second.content
+
+    with pytest.raises(ResourceCursorError):
+        await registry.read(resource_id, focus="different", cursor=first.next_cursor)
 
 
 async def test_cursor_is_isolated_across_registries() -> None:

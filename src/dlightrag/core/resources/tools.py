@@ -11,10 +11,15 @@ from __future__ import annotations
 
 from typing import cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
-from dlightrag.core.resources.models import ResourceReadResult, TextWindowLocator, VisualHandle
+from dlightrag.core.resources.models import (
+    ResourceReadResult,
+    ResourceRegistryError,
+    TextWindowLocator,
+    VisualHandle,
+)
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.resources.visual import (
     InspectionLocator,
@@ -23,17 +28,18 @@ from dlightrag.core.resources.visual import (
 )
 
 _READ_DESCRIPTION = (
-    "Read bounded text (at most 16K tokens) from a registered attachment. An "
-    "optional focus reranks the attachment's windows so the most relevant one is "
-    "returned first; pass the returned cursor to continue reading. The result "
+    "Read bounded text (at most 16K tokens) from a registered resource. An "
+    "optional focus reranks the resource's windows so the most relevant one is "
+    "returned first; pass the returned cursor to continue with that same focus. The result "
     "includes a structural locator, the text, any inspectable visual handles, and "
     "a continuation cursor when more remains."
 )
 _INSPECT_DESCRIPTION = (
-    "Visually inspect an attachment for evidence that text extraction cannot give "
+    "Visually inspect a registered resource for evidence that text extraction cannot give "
     "you: a source image, a PDF page, or an embedded figure by its visual handle. "
     "Provide a focus describing exactly what to look for. Set locator to a PDF page "
-    "number or a visual handle id; omit it for a low-resolution PDF overview. Use "
+    "number or a visual handle id; omit it for a low-resolution PDF overview. Locator "
+    "and cursor are mutually exclusive. Use "
     "cursor to page through an overview. The result is VLM-derived evidence tagged "
     "derived_by_vlm with the exact page/sheet/cell/visual locator — treat it as "
     "evidence to cite, never as the final answer."
@@ -41,36 +47,54 @@ _INSPECT_DESCRIPTION = (
 
 
 class _ReadResourceArgs(BaseModel):
-    resource_id: str = Field(description="Identifier of a registered attachment.")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    resource_id: str = Field(min_length=1, description="Identifier of a registered resource.")
     focus: str | None = Field(
-        default=None, description="Optional query to rerank the attachment's text windows."
+        default=None,
+        min_length=1,
+        description="Optional query to rerank the resource's text windows.",
     )
     cursor: str | None = Field(
-        default=None, description="Continuation cursor returned by a previous read."
+        default=None,
+        min_length=1,
+        description="Continuation cursor returned by a previous read.",
     )
 
 
 class _InspectResourceArgs(BaseModel):
-    resource_id: str = Field(description="Identifier of a registered attachment.")
-    focus: str = Field(description="What to look for in the visual content.")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    resource_id: str = Field(min_length=1, description="Identifier of a registered resource.")
+    focus: str = Field(min_length=1, description="What to look for in the visual content.")
     locator: str | None = Field(
-        default=None, description="A PDF page number or a visual handle id to target."
+        default=None,
+        min_length=1,
+        description="A PDF page number or a visual handle id to target.",
     )
-    cursor: str | None = Field(default=None, description="Continuation cursor for a PDF overview.")
+    cursor: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Continuation cursor for a PDF overview.",
+    )
 
 
 def read_resource_tool(registry: ResourceRegistry) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         read_args = cast(_ReadResourceArgs, args)
-        result = await registry.read(
-            read_args.resource_id, focus=read_args.focus, cursor=read_args.cursor
-        )
+        try:
+            result = await registry.read(
+                read_args.resource_id, focus=read_args.focus, cursor=read_args.cursor
+            )
+        except ResourceRegistryError:
+            raise
+        except Exception as exc:
+            raise ResourceRegistryError("resource read failed") from exc
         return ToolResult(
             content=_format_read(result),
             details={
                 "resource_id": result.resource_id,
-                "has_more": result.has_more,
-                "next_cursor": result.next_cursor,
+                **registry.evidence_source(result.resource_id),
             },
         )
 
@@ -85,19 +109,22 @@ def read_resource_tool(registry: ResourceRegistry) -> AgentTool:
 def inspect_resource_tool(inspector: ResourceInspector) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         inspect_args = cast(_InspectResourceArgs, args)
-        result = await inspector.inspect(
-            inspect_args.resource_id,
-            inspect_args.focus,
-            locator=inspect_args.locator,
-            cursor=inspect_args.cursor,
-        )
+        try:
+            result = await inspector.inspect(
+                inspect_args.resource_id,
+                inspect_args.focus,
+                locator=inspect_args.locator,
+                cursor=inspect_args.cursor,
+            )
+        except ResourceRegistryError:
+            raise
+        except Exception as exc:
+            raise ResourceRegistryError("visual inspection failed") from exc
         return ToolResult(
             content=_format_inspection(result),
             details={
                 "resource_id": result.resource_id,
-                "derived_by_vlm": result.derived_by_vlm,
-                "has_more": result.has_more,
-                "next_cursor": result.next_cursor,
+                **inspector.evidence_source(result.resource_id),
             },
         )
 
@@ -125,7 +152,7 @@ def build_resource_tools(
 def _format_read(result: ResourceReadResult) -> str:
     parts: list[str] = []
     if result.locator is not None:
-        parts.append(_describe_text_locator(result.locator))
+        parts.append(f"[{_describe_text_locator(result.locator)}]")
     parts.append(result.content)
     if result.visual_handles:
         parts.append(f"[visual handles: {_describe_handles(result.visual_handles)}]")
@@ -136,10 +163,8 @@ def _format_read(result: ResourceReadResult) -> str:
 
 def _describe_text_locator(locator: TextWindowLocator) -> str:
     if locator.char_start is not None:
-        return (
-            f"[lines {locator.start}-{locator.end}, chars {locator.char_start}-{locator.char_end}]"
-        )
-    return f"[lines {locator.start}-{locator.end}]"
+        return f"lines {locator.start}-{locator.end}, chars {locator.char_start}-{locator.char_end}"
+    return f"lines {locator.start}-{locator.end}"
 
 
 def _describe_handles(handles: tuple[VisualHandle, ...]) -> str:

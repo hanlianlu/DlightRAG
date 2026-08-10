@@ -50,14 +50,15 @@ async def test_a_passage_is_never_asked_for_at_its_provider_default_length() -> 
     asked: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        asked.append(json.loads(request.content)["contents"])
+        asked.append(json.loads(request.content))
         return httpx.Response(200, json={"results": [_PAGE]})
 
     search = ExaSearch("k", client=_client(handler))
 
     await search.search("q")
 
-    assert "maxCharacters" in asked[0]["highlights"]
+    assert asked[0]["type"] == "auto"
+    assert "maxCharacters" in asked[0]["contents"]["highlights"]
 
 
 @pytest.mark.asyncio
@@ -93,7 +94,8 @@ async def test_contents_fetches_known_url_text_via_the_contents_endpoint() -> No
 
     assert seen[0]["url"] == "https://api.exa.ai/contents"
     assert seen[0]["body"]["urls"] == ["https://example.org/taylor"]
-    assert seen[0]["body"]["text"] is True
+    assert seen[0]["body"]["text"] == {"maxCharacters": 10_000}
+    assert "highlights" not in seen[0]["body"]
     assert result.hits[-1].text == "Body text."
 
 
@@ -229,9 +231,10 @@ def _hit(url: str, text: str, **kw) -> WebSearchHit:
 
 
 def test_passages_from_one_page_share_one_source() -> None:
-    rows = web_context_rows([_hit("https://a/x", "one"), _hit("https://a/x", "two")])
+    rows = web_context_rows([_hit("https://a/x#one", "one"), _hit("https://a/x#two", "two")])
 
     assert len({row["reference_id"] for row in rows}) == 1
+    assert {row["metadata"]["source_uri"] for row in rows} == {"https://a/x"}
     assert [row["chunk_id"] for row in rows] == [
         f"{rows[0]['reference_id']}-1",
         f"{rows[0]['reference_id']}-2",

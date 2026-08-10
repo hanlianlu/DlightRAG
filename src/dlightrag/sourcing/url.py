@@ -9,7 +9,7 @@ import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -113,7 +113,7 @@ class URLDataSource(AsyncDataSource):
         for index, document in enumerate(document_inputs):
             url = _validate_public_https_url(
                 document.key,
-                resolve_host=self._owns_client,
+                resolve_host=True,
                 allow_private_hosts=self._allow_private_hosts,
             )
             key = _document_key_from_url(url, index=index, filename=document.display_filename)
@@ -180,7 +180,7 @@ class URLDataSource(AsyncDataSource):
             await _follow_and_consume(
                 client,
                 url,
-                resolve_host=self._owns_client,
+                resolve_host=True,
                 allow_private_hosts=self._allow_private_hosts,
                 consume=_consume,
             )
@@ -337,13 +337,12 @@ async def afetch_public_https_bytes(
     Applies the identical scheme/credential/public-host/DNS/redirect/byte-limit
     validation used for ingestion downloads, but returns bounded bytes instead of
     streaming to disk. ``max_bytes`` caps the accumulated body; the fetch aborts
-    as soon as the limit is exceeded.
+    as soon as the limit is exceeded. DNS validation remains enabled when a
+    caller injects an HTTP client; transport ownership never weakens SSRF policy.
     """
     patterns = _normalize_host_patterns(allow_private_hosts or ())
     owns_client = client is None
-    validated = _validate_public_https_url(
-        url, resolve_host=owns_client, allow_private_hosts=patterns
-    )
+    validated = _validate_public_https_url(url, resolve_host=True, allow_private_hosts=patterns)
     active = client or httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(timeout))
     limit = max(1, int(max_bytes))
 
@@ -354,7 +353,7 @@ async def afetch_public_https_bytes(
         return await _follow_and_consume(
             active,
             validated,
-            resolve_host=owns_client,
+            resolve_host=True,
             allow_private_hosts=patterns,
             consume=_read,
         )
@@ -419,6 +418,12 @@ def validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> st
     return _validate_public_https_url(raw_url, resolve_host=resolve_host)
 
 
+def normalize_https_url_identity(url: str) -> str:
+    """Normalize scheme/host and discard fragments that never reach an HTTP server."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, ""))
+
+
 def _clean_filename(value: str) -> str:
     candidate = value.replace("\\", "/")
     name = PurePosixPath(candidate).name
@@ -441,4 +446,9 @@ def _dedupe_key(key: str, existing: dict[str, str]) -> str:
         digest += 1
 
 
-__all__ = ["URLDataSource", "afetch_public_https_bytes", "validate_public_https_url"]
+__all__ = [
+    "URLDataSource",
+    "afetch_public_https_bytes",
+    "normalize_https_url_identity",
+    "validate_public_https_url",
+]

@@ -25,8 +25,11 @@ def _corpus_row(
     }
 
 
-def _web(text: str) -> list[dict[str, object]]:
-    return web_context_rows([WebSearchHit(url="https://example.com/a", title="Page A", text=text)])
+def _web(text: str, *, resource_id: str | None = None) -> list[dict[str, object]]:
+    rows = web_context_rows([WebSearchHit(url="https://example.com/a", title="Page A", text=text)])
+    if resource_id is not None:
+        rows[0]["metadata"]["resource_id"] = resource_id
+    return rows
 
 
 def test_sources_receive_stable_numeric_request_local_ids() -> None:
@@ -56,6 +59,16 @@ def test_same_page_same_passage_is_ignored_but_a_fresh_passage_survives() -> Non
     assert len(rows) == 2
     assert rows[0]["reference_id"] == rows[1]["reference_id"]
     assert rows[0]["chunk_id"] != rows[1]["chunk_id"]
+
+
+def test_web_resource_cursor_does_not_create_new_evidence_for_the_same_window() -> None:
+    ledger = EvidenceLedger()
+    first = _web("same window\n[more text available; cursor=first]")[0]
+    second = _web("same window\n[more text available; cursor=second]")[0]
+    first["_evidence_key"] = second["_evidence_key"] = "lines 1-20"
+
+    assert ledger.add_rows([first]).new_chunks == 1
+    assert ledger.add_rows([second]).new_chunks == 0
 
 
 def test_equal_upstream_ids_in_different_workspaces_are_distinct_sources() -> None:
@@ -103,6 +116,16 @@ def test_rendering_labels_knowledge_base_and_open_web_separately() -> None:
     assert "[2-1]" in text
     assert text.index("Knowledge-base evidence") < text.index("corpus alpha c1")
     assert text.index("Open-web evidence") < text.index("current passage")
+
+
+def test_rendering_keeps_a_web_source_resource_handle() -> None:
+    ledger = EvidenceLedger()
+    ledger.add_rows(_web("current passage", resource_id="res-web-page"))
+
+    blocks, _ = ledger.render_blocks()
+    text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
+
+    assert "resource id: res-web-page" in text
 
 
 def test_images_are_never_rendered_without_an_explicit_transport_budget() -> None:
@@ -164,6 +187,25 @@ def test_transform_keeps_recent_evidence_and_collapses_older_to_handles() -> Non
     assert "[1]" in text
     # Citation identity for the collapsed source still resolves.
     assert indexer.get_max_chunk_idx("1") > 0
+
+
+def test_transform_keeps_a_collapsed_web_resource_re_readable() -> None:
+    ledger = EvidenceLedger()
+    ledger.add_rows(
+        _web(
+            "OLD-WEB-EVIDENCE " + ("filler " * 200),
+            resource_id="res-web-page",
+        )
+    )
+    ledger.add_rows([_corpus_row(workspace="beta", chunk="new", content="RECENT")])
+
+    capacity = AnswerCapacity(260_000)
+    fixed = capacity.context_window_tokens - 32_768 - 60
+    blocks, _ = ledger.transform(capacity, fixed_input_tokens=fixed)
+
+    text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
+    assert "OLD-WEB-EVIDENCE" not in text
+    assert "[resource: res-web-page]" in text
 
 
 def test_transform_preserves_stable_citation_ids_across_full_render() -> None:

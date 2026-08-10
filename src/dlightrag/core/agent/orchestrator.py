@@ -29,11 +29,17 @@ from dlightrag.core.agent.tool_loop import (
 from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.core.retrieval.web_search import WebSearchResult, web_context_rows
+from dlightrag.core.retrieval.web_search import (
+    WebSearchResult,
+    WebSearchUnavailable,
+    web_context_rows,
+)
 from dlightrag.models.structured import StructuredOutput
 from dlightrag.models.tool_turn import AssistantTurn
 from dlightrag.prompts.agent import agentic_answer_prompt
+from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.utils.tokens import estimate_messages_tokens
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
@@ -59,7 +65,7 @@ INITIAL_SCOPE_OUTPUT = StructuredOutput(
 
 
 class SearchInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     query: str = Field(min_length=1)
 
@@ -95,7 +101,8 @@ class AnswerOrchestrator:
         stream_model_func: StreamModel | None = None,
         final_text_func: FinalText | None = None,
         resource_tools: list[AgentTool] | None = None,
-        has_resources: bool = False,
+        resource_manifest: tuple[ResourceManifestEntry, ...] = (),
+        register_web_source: Callable[[str], str | None] | None = None,
         context_window_tokens: int = 260_000,
     ) -> None:
         self._synthesizer = synthesizer
@@ -106,7 +113,8 @@ class AnswerOrchestrator:
         self._stream_model_func = stream_model_func
         self._final_text_func = final_text_func
         self._resource_tools = list(resource_tools or [])
-        self._has_resources = has_resources
+        self._resource_manifest = tuple(resource_manifest)
+        self._register_web_source = register_web_source
         self._capacity = AnswerCapacity(max(1, context_window_tokens))
         self._input_budget = max(
             1, self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
@@ -115,7 +123,7 @@ class AnswerOrchestrator:
     @property
     def uses_research_path(self) -> bool:
         """A request researches when it has resources or a web-search capability."""
-        return self._has_resources or self._search_web is not None
+        return bool(self._resource_manifest) or self._search_web is not None
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -384,6 +392,7 @@ class AnswerOrchestrator:
                 query,
                 conversation_history=conversation_history,
                 query_images=query_images,
+                resource_manifest=self._resource_manifest,
             ),
             initial_query=effective_retrieval_query,
         )
@@ -476,15 +485,20 @@ class AnswerOrchestrator:
 
     async def _run_initial_wave(self, state: _RunState) -> None:
         self._check_envelope(state.base_messages)
-        include_web = False
+        # Initial retrieval is KB-only unless an available Exa capability is
+        # admitted by the request's strict scope decision.
+        include_web_search = False
         if self._search_web is not None:
             decision = await self._require_scope(state)
             state.trace["agent_turns"] += 1
-            include_web = decision.include_web
-            if not include_web:
-                state.tools = [tool for tool in state.tools if tool.name != "search_web"]
+            include_web_search = decision.include_web
+            if not include_web_search:
+                unavailable = {"search_web"}
+                if not self._resource_manifest:
+                    unavailable.update(tool.name for tool in self._resource_tools)
+                state.tools = [tool for tool in state.tools if tool.name not in unavailable]
         sources: tuple[Literal["knowledge_base", "web"], ...] = (
-            ("knowledge_base", "web") if include_web else ("knowledge_base",)
+            ("knowledge_base", "web") if include_web_search else ("knowledge_base",)
         )
         await self._search_sources(state.initial_query, sources, state)
         blocks, _ = self._render_evidence(state)
@@ -537,6 +551,8 @@ class AnswerOrchestrator:
         messages: list[str] = []
         successes = 0
         for (label, _), result in zip(operations, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
             if isinstance(result, ToolResult):
                 messages.append(result.content)
                 successes += 1
@@ -546,7 +562,10 @@ class AnswerOrchestrator:
             raise RuntimeError("; ".join(messages))
 
     async def _search_corpus(self, query: str, session: EvidenceLedger) -> ToolResult:
-        result = await self._retrieve_knowledge_base(query)
+        try:
+            result = await self._retrieve_knowledge_base(query)
+        except Exception as exc:
+            raise RuntimeError("knowledge-base search failed") from exc
         delta = session.add_contexts(result.contexts)
         return ToolResult(content=f"Knowledge base added {delta.new_chunks} new passages.")
 
@@ -557,11 +576,34 @@ class AnswerOrchestrator:
         trace: dict[str, Any],
     ) -> ToolResult:
         search_web = cast(WebSearch, self._search_web)
-        result = await search_web(query)
+        try:
+            result = await search_web(query)
+        except WebSearchUnavailable:
+            raise
+        except Exception as exc:
+            raise RuntimeError("open-web search failed") from exc
         rows = web_context_rows(result.hits)
+        readable_sources: dict[str, str] = {}
+        if self._register_web_source is not None:
+            resources_by_url: dict[str, str | None] = {}
+            for row in rows:
+                metadata = row.get("metadata") or {}
+                url = str(metadata.get("source_uri") or "")
+                if url not in resources_by_url:
+                    resources_by_url[url] = self._register_web_source(url)
+                resource_id = resources_by_url[url]
+                if resource_id is not None:
+                    metadata["resource_id"] = resource_id
+                    readable_sources.setdefault(resource_id, str(metadata.get("title") or "Source"))
         delta = session.add_rows(rows)
         trace["web_search_cost_dollars"] += result.cost_dollars
-        return ToolResult(content=f"Open web added {delta.new_chunks} new passages.")
+        content = f"Open web added {delta.new_chunks} new passages."
+        if delta.new_chunks and readable_sources:
+            content += "\nResource handles:\n" + "\n".join(
+                f"- {title} [resource: {resource_id}]"
+                for resource_id, title in readable_sources.items()
+            )
+        return ToolResult(content=content)
 
 
 class _ToolCallCache:
@@ -600,24 +642,39 @@ def _initial_messages(
     *,
     conversation_history: list[dict[str, Any]] | None,
     query_images: list[dict[str, Any]] | None,
+    resource_manifest: tuple[ResourceManifestEntry, ...],
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": agentic_answer_prompt()},
         *(conversation_history or []),
     ]
-    if query_images:
+    resource_context = _resource_manifest_context(resource_manifest)
+    if query_images or resource_context:
+        content: list[dict[str, Any]] = [{"type": "text", "text": query}]
+        if resource_context:
+            content.append({"type": "text", "text": resource_context})
+        content.extend(query_images or [])
         messages.append(
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": query},
-                    *query_images,
-                ],
+                "content": content,
             }
         )
     else:
         messages.append({"role": "user", "content": query})
     return messages
+
+
+def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:
+    if not manifest:
+        return ""
+    lines = ["## Registered request-local resources"]
+    for entry in manifest:
+        filename = safe_source_filename(entry.filename or "resource")
+        kind = "image" if (entry.declared_mime or "").lower().startswith("image/") else "resource"
+        lines.append(f"- [resource: {entry.resource_id}] {filename} ({kind})")
+    lines.append("Use only these opaque resource ids with read_resource or inspect_resource.")
+    return "\n".join(lines)
 
 
 def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
@@ -626,21 +683,30 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
     resource_id = str(details.get("resource_id") or "")
     if not resource_id or not result.content.strip():
         return None
-    identity = hashlib.sha256(result.content.encode("utf-8")).hexdigest()[:16]
+    source_type = str(details.get("source_type") or "web_attachment")
+    source_uri = str(details.get("source_uri") or resource_id)
+    metadata = {
+        "source_type": source_type,
+        "source_uri": source_uri,
+        "source_download_locator": str(details.get("source_download_locator") or source_uri),
+        "title": str(details.get("title") or resource_id),
+    }
+    evidence_key = result.content
+    if tool_name == "read_resource":
+        content, marker, cursor = evidence_key.rpartition("\n[more text available; cursor=")
+        if marker and cursor.endswith("]"):
+            evidence_key = content
+    identity = hashlib.sha256(f"{tool_name}\0{evidence_key}".encode()).hexdigest()[:16]
     return {
         "chunk_id": f"{resource_id}::{tool_name}::{identity}",
         "reference_id": resource_id,
         "full_doc_id": resource_id,
-        "file_path": resource_id,
-        "content": result.content,
+        "file_path": str(metadata.get("title") or resource_id),
+        "content": evidence_key if tool_name == "read_resource" else result.content,
         "page_number": None,
-        "_workspace": "__attachment__",
-        "metadata": {
-            "source_type": "web_attachment",
-            "source_uri": resource_id,
-            "source_download_locator": resource_id,
-            "derived_by_vlm": bool(details.get("derived_by_vlm")),
-        },
+        "_workspace": "__web_search__" if source_type == "web_search" else "__attachment__",
+        "_evidence_key": f"{tool_name}:{identity}",
+        "metadata": metadata,
     }
 
 

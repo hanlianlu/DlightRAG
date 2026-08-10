@@ -8,8 +8,12 @@ Evidence is gathered before answering. When the open web is available, include i
 first wave unless the user explicitly limits the answer to the indexed knowledge base.
 Peer tools are independent capabilities: use `search_knowledge_base` for the corpus,
 `search_web` for current or open-web facts, `read_resource` to read bounded text from an
-attachment, and `inspect_resource` to look at an attachment's image, PDF page, or embedded
-figure. Call independent tools in the same turn. After evidence arrives, answer if it
+registered resource, and `inspect_resource` to look at a resource's image, PDF page, or
+embedded figure. Web search results may include opaque resource ids for deeper reading.
+Current image attachments, when present, are already visible and have informed initial
+knowledge-base retrieval. Do not inspect them merely for a general description; inspect
+only a concrete unresolved visual fact that needs focused, citable evidence.
+Call independent tools in the same turn. After evidence arrives, answer if it
 supports the request; search or read again only for a concrete unresolved fact. This is a
 research-control turn, not the final answer: do not draft the answer. When the evidence is
 sufficient, call no tool and return only a brief readiness acknowledgement. Never repeat an

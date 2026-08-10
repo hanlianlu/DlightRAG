@@ -442,6 +442,11 @@ web-search key takes the research path — fixed initial retrieval, peer tools t
 read and inspect the request-local resources, followed by one additional
 tools-disabled LLM call for final answer generation — while a plain query takes
 the fast knowledge-base path and needs only its one answer-generation LLM call.
+Evidence-producing Exa result URLs are registered as opaque request-local
+resources, so the same `read_resource` tool can deepen a search result without
+accepting an arbitrary model-supplied URL. Reading performs no login, cookie
+session, or Playwright interaction; callers provide authenticated bytes or
+screenshots as attachments when those are required.
 After generation, citation/source/media finalization is deterministic. Provider
 and resource lifetimes are request-local; nothing is shared across turns except
 the durable raw attachment bytes.

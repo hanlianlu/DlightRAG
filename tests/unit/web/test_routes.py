@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 def app():
     from dlightrag.api.server import create_app
 
-    real_app = create_app(include_web=True)
+    real_app = create_app(include_web_app=True)
 
     mock_manager = MagicMock()
     mock_manager.aget_file_panel_snapshot = AsyncMock(

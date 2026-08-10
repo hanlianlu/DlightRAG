@@ -59,6 +59,9 @@ class ResourceInspectionResult:
 class ResourceInspector:
     """Turn a registered resource's pixels into bounded, located VLM evidence."""
 
+    def evidence_source(self, resource_id: str) -> dict[str, str]:
+        return self._registry.evidence_source(resource_id)
+
     def __init__(
         self,
         registry: ResourceRegistry,
@@ -104,14 +107,23 @@ class ResourceInspector:
         focus = (focus or "").strip()
         if not focus:
             raise ResourceInspectionError("inspect requires a non-empty focus")
-        handle = locator.strip() if locator else None
+        handle = (locator or "").strip() or None
+        cursor = (cursor or "").strip() or None
+        if handle is not None and cursor is not None:
+            raise ResourceInspectionError("locator and cursor are mutually exclusive")
         if handle and handle.startswith("vis-"):
             return await self._inspect_visual(resource_id, focus, handle)
+        if handle is not None and _parse_page(handle) is None:
+            raise ResourceInspectionError("locator must be a PDF page number or visual handle")
         target = await self._registry.inspection_target(resource_id)
         if target.kind == "image":
+            if handle is not None or cursor is not None:
+                raise ResourceInspectionError(
+                    "source image inspection does not accept a locator or cursor"
+                )
             return await self._inspect_image(resource_id, focus, target.content)
         if target.kind == "pdf":
-            return await self._inspect_pdf(resource_id, focus, target.content, locator, cursor)
+            return await self._inspect_pdf(resource_id, focus, target.content, handle, cursor)
         raise ResourceInspectionError(
             "resource has no directly inspectable visual content; read it and "
             "inspect one of its visual handles"
@@ -174,16 +186,22 @@ class ResourceInspector:
         uris: list[str] = []
         for offset, raw in enumerate(raws):
             uri = self._bound(budget, raw, label=f"{resource_id}:overview{start + offset + 1}")
-            if uri is not None:
-                uris.append(uri)
+            if uri is None:
+                break
+            uris.append(uri)
         if not uris:
             raise ResourceInspectionError("no page could be rendered for the overview")
-        text = await self._ask_vlm(uris, focus, f"{count}-page document overview")
-        has_more = end < count
-        next_cursor = self._mint_cursor(resource_id, focus, end) if has_more else None
+        actual_end = start + len(uris)
+        text = await self._ask_vlm(
+            uris,
+            focus,
+            f"pages {start + 1}-{actual_end} of a {count}-page document",
+        )
+        has_more = actual_end < count
+        next_cursor = self._mint_cursor(resource_id, focus, actual_end) if has_more else None
         return ResourceInspectionResult(
             resource_id,
-            InspectionLocator(kind="pdf_overview", page_start=start + 1, page_end=end),
+            InspectionLocator(kind="pdf_overview", page_start=start + 1, page_end=actual_end),
             text,
             has_more=has_more,
             next_cursor=next_cursor,
@@ -213,7 +231,7 @@ class ResourceInspector:
         try:
             response = await self._vlm_func(messages=[{"role": "user", "content": content}])
         except Exception as exc:  # noqa: BLE001 - any VLM failure is one tool error
-            raise ResourceInspectionError(f"visual inspection failed: {exc}") from exc
+            raise ResourceInspectionError("visual inspection failed") from exc
         text = response.strip() if isinstance(response, str) else str(response).strip()
         if not text:
             raise ResourceInspectionError("visual inspection returned no content")

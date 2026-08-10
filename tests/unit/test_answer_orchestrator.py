@@ -5,7 +5,7 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.core.agent.orchestrator import (
     INITIAL_SCOPE_OUTPUT,
@@ -17,6 +17,7 @@ from dlightrag.core.agent.orchestrator import (
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
+from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
 from dlightrag.models.tool_turn import AssistantTurn, ToolCall
@@ -115,7 +116,8 @@ def _research(
     stream_model_func: Any = None,
     context_window_tokens: int = 260_000,
     resource_tools: list[AgentTool] | None = None,
-    has_resources: bool = False,
+    register_web_source: Any = None,
+    resource_manifest: tuple[ResourceManifestEntry, ...] = (),
 ) -> AnswerOrchestrator:
     return AnswerOrchestrator(
         synthesizer=_research_synthesizer(),
@@ -126,7 +128,8 @@ def _research(
         stream_model_func=stream_model_func,
         final_text_func=agent.final,
         resource_tools=resource_tools,
-        has_resources=has_resources,
+        resource_manifest=resource_manifest,
+        register_web_source=register_web_source,
         context_window_tokens=context_window_tokens,
     )
 
@@ -138,7 +141,10 @@ class _ReadResourceInput(BaseModel):
 
 
 def _fake_read_tool(
-    content: str = "attachment evidence", *, calls: list[str] | None = None
+    content: str = "attachment evidence",
+    *,
+    calls: list[str] | None = None,
+    evidence_source: dict[str, str] | None = None,
 ) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = (
@@ -146,9 +152,12 @@ def _fake_read_tool(
         )
         if calls is not None:
             calls.append(args.resource_id)
-        return ToolResult(content=content, details={"resource_id": args.resource_id})
+        details: dict[str, Any] = {"resource_id": args.resource_id}
+        if evidence_source is not None:
+            details.update(evidence_source)
+        return ToolResult(content=content, details=details)
 
-    return AgentTool("read_resource", "Read a registered attachment.", _ReadResourceInput, execute)
+    return AgentTool("read_resource", "Read a registered resource.", _ReadResourceInput, execute)
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +234,21 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
         search_web=None,
         model_func=agent.turn,
         final_text_func=agent.final,
-        resource_tools=[_fake_read_tool(calls=read_calls)],
-        has_resources=True,
+        resource_tools=[
+            _fake_read_tool(
+                "attachment evidence\n[more text available; cursor=volatile]",
+                calls=read_calls,
+            )
+        ],
+        resource_manifest=(
+            ResourceManifestEntry(
+                resource_id="att-1",
+                filename="report.pdf",
+                declared_mime="application/pdf",
+                source="bytes",
+                byte_size=123,
+            ),
+        ),
     )
     assert orchestrator.uses_research_path is True
 
@@ -239,9 +261,78 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
     tool_names = {tool.name for tool in agent.turn_calls[0]["tools"]}
     assert "search_web" not in tool_names
     assert tool_names == {"search_knowledge_base", "read_resource"}
+    control_messages = str(agent.turn_calls[0]["messages"])
+    assert "att-1" in control_messages
+    assert "report.pdf" in control_messages
     # The final answer comes from one distinct tools-disabled synthesis call.
     assert len(agent.final_calls) == 1
     assert result.answer == "From the attachment [2-1]."
+    assert "cursor=volatile" not in str(agent.final_calls[0])
+
+
+async def test_current_image_manifest_binds_resources_and_discourages_redundant_inspection() -> (
+    None
+):
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    agent = ScriptedAgent(_answer("ready"), final_text="Image answer [1-1].")
+    orchestrator = AnswerOrchestrator(
+        synthesizer=_research_synthesizer(),
+        retrieve_knowledge_base=retrieve,
+        model_func=agent.turn,
+        final_text_func=agent.final,
+        resource_tools=[_fake_read_tool()],
+        resource_manifest=(
+            ResourceManifestEntry(
+                resource_id="res-image",
+                filename="chart.png",
+                declared_mime="image/png",
+                source="bytes",
+                byte_size=456,
+            ),
+            ResourceManifestEntry(
+                resource_id="res-image-2",
+                filename="legend.png",
+                declared_mime="image/png",
+                source="bytes",
+                byte_size=321,
+            ),
+        ),
+    )
+
+    await orchestrator.answer(
+        "What does this show?",
+        query_images=[
+            {
+                "type": "text",
+                "text": "[current image 1 | resource: res-image]",
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,abc"},
+            },
+            {
+                "type": "text",
+                "text": "[current image 2 | resource: res-image-2]",
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,def"},
+            },
+        ],
+    )
+
+    messages = agent.turn_calls[0]["messages"]
+    current_user_content = messages[1]["content"]
+    assert current_user_content[2]["text"] == "[current image 1 | resource: res-image]"
+    assert current_user_content[3]["image_url"]["url"].endswith("abc")
+    assert current_user_content[4]["text"] == "[current image 2 | resource: res-image-2]"
+    assert current_user_content[5]["image_url"]["url"].endswith("def")
+    assert "res-image" in str(messages)
+    system_prompt = " ".join(messages[0]["content"].split())
+    assert "have informed initial knowledge-base retrieval" in system_prompt
+    assert "Do not inspect them merely for a general description" in system_prompt
 
 
 async def test_initial_decision_runs_fixed_corpus_and_web_wave_in_parallel() -> None:
@@ -284,6 +375,77 @@ async def test_initial_decision_runs_fixed_corpus_and_web_wave_in_parallel() -> 
     assert "Open-web evidence" in payload
 
 
+async def test_search_sources_become_opaque_resources_the_model_can_read() -> None:
+    registered: list[str] = []
+    read_calls: list[str] = []
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(_query: str) -> WebSearchResult:
+        return WebSearchResult(
+            hits=(
+                WebSearchHit(
+                    url="https://example.com/article",
+                    title="Useful article",
+                    text="first relevant passage",
+                ),
+                WebSearchHit(
+                    url="https://example.com/article",
+                    title="Useful article",
+                    text="second relevant passage",
+                ),
+                WebSearchHit(
+                    url="https://example.com/empty",
+                    title="Empty page",
+                    text="   ",
+                ),
+            ),
+            cost_dollars=0.0,
+        )
+
+    def register(url: str) -> str:
+        registered.append(url)
+        return "res-web-article"
+
+    agent = ScriptedAgent(
+        _tool(
+            ToolCall(
+                id="read",
+                name="read_resource",
+                arguments={"resource_id": "res-web-article"},
+            )
+        ),
+        _answer("ready"),
+        final_text="Deep answer [2-3].",
+    )
+    result = await _research(
+        agent,
+        retrieve,
+        search,
+        resource_tools=[
+            _fake_read_tool(
+                "deep page text",
+                calls=read_calls,
+                evidence_source={
+                    "source_type": "web_search",
+                    "source_uri": "https://example.com/article",
+                    "source_download_locator": "https://example.com/article",
+                    "title": "Useful article",
+                },
+            )
+        ],
+        register_web_source=register,
+    ).answer("Research the article")
+
+    assert registered == ["https://example.com/article"]
+    assert read_calls == ["res-web-article"]
+    initial_evidence = str(agent.turn_calls[0]["messages"][-1]["content"])
+    assert "res-web-article" in initial_evidence
+    assert result.answer == "Deep answer [2-3]."
+    assert [source.source_uri for source in result.sources] == ["https://example.com/article"]
+
+
 async def test_explicit_knowledge_base_decision_never_calls_web() -> None:
     web_calls = 0
 
@@ -296,7 +458,12 @@ async def test_explicit_knowledge_base_decision_never_calls_web() -> None:
         return _web_result()
 
     agent = ScriptedAgent(_answer("draft"), include_web=False, final_text="Corpus only [1-1].")
-    result = await _research(agent, retrieve, search).answer("Use only my knowledge base")
+    result = await _research(
+        agent,
+        retrieve,
+        search,
+        resource_tools=[_fake_read_tool()],
+    ).answer("Use only my knowledge base")
 
     assert result.answer == "Corpus only [1-1]."
     assert web_calls == 0
@@ -311,6 +478,8 @@ def test_source_decisions_are_closed_and_do_not_absorb_future_tools() -> None:
     assert set(followup) == {"query"}
     assert "all" not in str(followup)
     assert "read_page" not in str(followup)
+    with pytest.raises(ValidationError):
+        SearchInput.model_validate({"query": "   "})
 
 
 async def test_followup_search_uses_one_explicit_source_and_can_deepen() -> None:
@@ -442,6 +611,40 @@ async def test_failed_tool_call_is_evicted_and_can_be_retried() -> None:
 
     assert attempts == 2
     assert result.answer == "Recovered [1-1][2-1]."
+
+
+async def test_knowledge_base_tool_redacts_unexpected_failures() -> None:
+    calls = 0
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise RuntimeError("postgresql://user:secret@internal/db")
+        return _corpus_result()
+
+    agent = ScriptedAgent(
+        _tool(_call(query="missing fact", source="knowledge_base")),
+        final_text="Use the initial evidence [1-1].",
+    )
+    await _research(
+        agent,
+        retrieve,
+        None,
+        resource_manifest=(
+            ResourceManifestEntry(
+                resource_id="res-attachment",
+                filename="notes.txt",
+                declared_mime="text/plain",
+                source="bytes",
+                byte_size=10,
+            ),
+        ),
+    ).answer("Question")
+
+    transcript = str(agent.final_calls[0])
+    assert "secret" not in transcript
+    assert "knowledge-base search failed" in transcript
 
 
 async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> None:
@@ -589,6 +792,18 @@ async def test_research_answer_can_be_cancelled_mid_flight() -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_initial_source_cancellation_is_never_downgraded_to_a_failure() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        raise asyncio.CancelledError
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    agent = ScriptedAgent()
+    with pytest.raises(asyncio.CancelledError):
+        await _research(agent, retrieve, search).answer("Question")
 
 
 async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> None:

@@ -7,9 +7,10 @@ import io
 
 import pytest
 from PIL import Image
+from pydantic import ValidationError
 
 from dlightrag.core.agent.tool_loop import AgentTool
-from dlightrag.core.resources.models import ResourceInput
+from dlightrag.core.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.resources.tools import build_resource_tools
 from dlightrag.core.resources.visual import ResourceInspectionError, ResourceInspector
@@ -72,6 +73,14 @@ def test_read_resource_tool_schema_is_exact() -> None:
     assert fields["resource_id"].is_required()
     assert not fields["focus"].is_required()
     assert not fields["cursor"].is_required()
+    assert read_tool.input_model.model_json_schema()["additionalProperties"] is False
+    parsed = read_tool.input_model.model_validate(
+        {"resource_id": "  res-1  ", "focus": "  revenue  "}
+    )
+    assert parsed.model_dump()["resource_id"] == "res-1"
+    assert parsed.model_dump()["focus"] == "revenue"
+    with pytest.raises(ValidationError):
+        read_tool.input_model.model_validate({"resource_id": "res-1", "url": "https://x"})
 
 
 def test_inspect_resource_tool_schema_is_exact() -> None:
@@ -86,6 +95,9 @@ def test_inspect_resource_tool_schema_is_exact() -> None:
     assert fields["focus"].is_required()
     assert not fields["locator"].is_required()
     assert not fields["cursor"].is_required()
+    assert (
+        tools["inspect_resource"].input_model.model_json_schema()["additionalProperties"] is False
+    )
 
 
 async def test_read_resource_tool_returns_text_and_handles() -> None:
@@ -100,6 +112,26 @@ async def test_read_resource_tool_returns_text_and_handles() -> None:
 
     assert "alpha" in result.content
     assert "gamma" in result.content
+    assert result.details is not None
+    assert result.details["source_type"] == "web_attachment"
+
+
+async def test_read_resource_tool_redacts_unexpected_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ResourceRegistry()
+
+    async def fail(*_args, **_kwargs):
+        raise RuntimeError("https://example.com/?token=secret")
+
+    monkeypatch.setattr(registry, "read", fail)
+    (read_tool,) = build_resource_tools(registry)
+    args = read_tool.input_model.model_validate({"resource_id": "res-safe"})
+
+    with pytest.raises(ResourceRegistryError, match="resource read failed") as failure:
+        await read_tool.execute(args)
+
+    assert "secret" not in str(failure.value)
 
 
 async def test_inspect_resource_tool_returns_derived_evidence() -> None:

@@ -155,6 +155,36 @@ async def test_inspect_pdf_missing_page_raises() -> None:
     assert vlm.calls == []
 
 
+async def test_inspect_rejects_invalid_or_conflicting_locators() -> None:
+    vlm = _RecordingVLM()
+    async with ResourceRegistry() as registry:
+        resource_id = registry.register(
+            ResourceInput(filename="deck.pdf", content=_pdf_bytes([(300, 400)]))
+        )
+        inspector = ResourceInspector(registry, vlm_func=vlm)
+
+        with pytest.raises(ResourceInspectionError, match="page number"):
+            await inspector.inspect(resource_id, "Read the page", locator="page nope")
+        with pytest.raises(ResourceInspectionError, match="mutually exclusive"):
+            await inspector.inspect(resource_id, "Read the page", locator="1", cursor="cursor")
+
+    assert vlm.calls == []
+
+
+async def test_inspect_source_image_rejects_page_cursor() -> None:
+    vlm = _RecordingVLM()
+    async with ResourceRegistry() as registry:
+        resource_id = registry.register(
+            ResourceInput(filename="chart.png", content=_png((2, 3, 4)), declared_mime="image/png")
+        )
+        inspector = ResourceInspector(registry, vlm_func=vlm)
+
+        with pytest.raises(ResourceInspectionError, match="source image"):
+            await inspector.inspect(resource_id, "Read the chart", cursor="cursor")
+
+    assert vlm.calls == []
+
+
 async def test_inspect_pdf_overview_paginates() -> None:
     vlm = _RecordingVLM()
     async with ResourceRegistry() as registry:
@@ -173,6 +203,27 @@ async def test_inspect_pdf_overview_paginates() -> None:
     assert second.locator.page_start == 3
     assert second.locator.page_end == 3
     assert second.has_more is False
+
+
+async def test_inspect_pdf_overview_locator_only_claims_pages_sent_to_vlm() -> None:
+    vlm = _RecordingVLM()
+    async with ResourceRegistry() as registry:
+        resource_id = registry.register(
+            ResourceInput(filename="deck.pdf", content=_pdf_bytes([(200, 260)] * 3))
+        )
+        inspector = ResourceInspector(
+            registry,
+            vlm_func=vlm,
+            max_images=1,
+            overview_page_limit=3,
+        )
+
+        first = await inspector.inspect(resource_id, "Find the chart")
+        assert first.locator.page_start == first.locator.page_end == 1
+        assert first.next_cursor is not None
+        second = await inspector.inspect(resource_id, "Find the chart", cursor=first.next_cursor)
+
+    assert second.locator.page_start == second.locator.page_end == 2
 
 
 async def test_inspect_docx_embedded_visual_handle() -> None:
@@ -224,8 +275,10 @@ async def test_inspect_vlm_failure_surfaces_as_inspection_error() -> None:
         )
         inspector = ResourceInspector(registry, vlm_func=_FailingVLM())
 
-        with pytest.raises(ResourceInspectionError):
+        with pytest.raises(ResourceInspectionError, match="visual inspection failed") as failure:
             await inspector.inspect(resource_id, "What is this?")
+
+    assert "503" not in str(failure.value)
 
 
 async def test_inspect_text_resource_without_handle_raises() -> None:

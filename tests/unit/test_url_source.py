@@ -63,6 +63,37 @@ class _Client:
         self.closed = True
 
 
+class _RedirectClient:
+    def __init__(self, start_url: str, target_url: str, *, content: bytes = b"final body") -> None:
+        self.start_url = start_url
+        self.target_url = target_url
+        self.content = content
+        self.urls: list[str] = []
+
+    def stream(self, method: str, url: str) -> _Response:
+        assert method == "GET"
+        self.urls.append(url)
+        if url == self.start_url:
+            return _Response(
+                b"",
+                url=url,
+                status_code=302,
+                headers={"location": self.target_url},
+            )
+        return _Response(self.content, url=url)
+
+
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
+        ],
+    )
+
+
 def test_safe_source_filename_preserves_extension_when_bounded() -> None:
     result = safe_source_filename(f"{'a' * 200}.pdf")
 
@@ -214,21 +245,10 @@ async def test_url_data_source_revalidates_final_response_url(tmp_path: Path) ->
 
 
 async def test_url_data_source_rejects_private_redirect_before_following(tmp_path: Path) -> None:
-    class RedirectClient:
-        def __init__(self) -> None:
-            self.urls: list[str] = []
-
-        def stream(self, method: str, url: str) -> _Response:
-            assert method == "GET"
-            self.urls.append(url)
-            return _Response(
-                b"",
-                url=url,
-                status_code=302,
-                headers={"location": "https://127.0.0.1/admin.pdf"},
-            )
-
-    client = RedirectClient()
+    client = _RedirectClient(
+        "https://cdn.example.com/start.pdf",
+        "https://127.0.0.1/admin.pdf",
+    )
     source = URLDataSource(urls=["https://cdn.example.com/start.pdf"], client=client)
 
     with pytest.raises(ValueError, match="public"):
@@ -238,6 +258,32 @@ async def test_url_data_source_rejects_private_redirect_before_following(tmp_pat
 
     assert client.urls == ["https://cdn.example.com/start.pdf"]
     assert not (tmp_path / "start.pdf").exists()
+
+
+async def test_url_data_source_rejects_redirect_hostname_that_resolves_private(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def resolver(host: str, port: int, *args: object, **kwargs: object):
+        address = "10.0.0.1" if host == "private.example" else "93.184.216.34"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+
+    client = _RedirectClient(
+        "https://public.example/start.pdf",
+        "https://private.example/admin.pdf",
+        content=b"private",
+    )
+    source = URLDataSource(urls=["https://public.example/start.pdf"], client=client)
+
+    with pytest.raises(ValueError, match="public"):
+        await source.amaterialize_document(
+            ([document async for document in source.aiter_documents()])[0],
+            tmp_path / "start.pdf",
+        )
+
+    assert client.urls == ["https://public.example/start.pdf"]
 
 
 async def test_url_data_source_enforces_download_size_limit(tmp_path: Path) -> None:
@@ -349,23 +395,10 @@ async def test_afetch_public_https_bytes_enforces_max_bytes() -> None:
 
 
 async def test_afetch_public_https_bytes_follows_and_revalidates_redirects() -> None:
-    class RedirectClient:
-        def __init__(self) -> None:
-            self.urls: list[str] = []
-
-        def stream(self, method: str, url: str) -> _Response:
-            assert method == "GET"
-            self.urls.append(url)
-            if url == "https://cdn.example.com/start.txt":
-                return _Response(
-                    b"",
-                    url=url,
-                    status_code=302,
-                    headers={"location": "https://cdn.example.com/final.txt"},
-                )
-            return _Response(b"final body", url="https://cdn.example.com/final.txt")
-
-    client = RedirectClient()
+    client = _RedirectClient(
+        "https://cdn.example.com/start.txt",
+        "https://cdn.example.com/final.txt",
+    )
 
     data = await afetch_public_https_bytes(
         "https://cdn.example.com/start.txt", max_bytes=1024, client=client
@@ -386,16 +419,37 @@ async def test_afetch_public_https_bytes_rejects_non_https() -> None:
 
 
 async def test_afetch_public_https_bytes_rejects_private_redirect() -> None:
-    class RedirectClient:
-        def stream(self, method: str, url: str) -> _Response:
-            return _Response(
-                b"",
-                url=url,
-                status_code=302,
-                headers={"location": "https://127.0.0.1/admin.txt"},
-            )
+    with pytest.raises(ValueError, match="public"):
+        await afetch_public_https_bytes(
+            "https://cdn.example.com/start.txt",
+            max_bytes=1024,
+            client=_RedirectClient(
+                "https://cdn.example.com/start.txt",
+                "https://127.0.0.1/admin.txt",
+            ),
+        )
+
+
+async def test_afetch_rejects_redirect_hostname_that_resolves_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def resolver(host: str, port: int, *args: object, **kwargs: object):
+        address = "10.0.0.1" if host == "private.example" else "93.184.216.34"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+
+    client = _RedirectClient(
+        "https://public.example/start.txt",
+        "https://private.example/admin.txt",
+        content=b"private body",
+    )
 
     with pytest.raises(ValueError, match="public"):
         await afetch_public_https_bytes(
-            "https://cdn.example.com/start.txt", max_bytes=1024, client=RedirectClient()
+            "https://public.example/start.txt",
+            max_bytes=1024,
+            client=client,
         )
+
+    assert client.urls == ["https://public.example/start.txt"]
