@@ -1,8 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Unified retrieval orchestration for LightRAG mix + DlightRAG BM25."""
+"""Unified retrieval orchestration for LightRAG mix + DlightRAG BM25 and visual legs."""
 
 import asyncio
 import logging
+from collections import Counter
 from typing import Any
 
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
@@ -16,6 +17,7 @@ from dlightrag.core.retrieval.protocols import (
     RetrievalBackend,
     RetrievalResult,
 )
+from dlightrag.core.retrieval.visual import DirectVisualRetriever
 from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
@@ -27,30 +29,21 @@ def _chunk_ids(chunks: list[ContextRow]) -> set[str]:
     }
 
 
-def _count_fused_sources(
-    fused_chunks: list[ContextRow],
-    *,
-    semantic_chunks: list[ContextRow],
-    bm25_chunks: list[ContextRow],
-) -> dict[str, int]:
-    semantic_ids = _chunk_ids(semantic_chunks)
-    bm25_ids = _chunk_ids(bm25_chunks)
-    counts = {"semantic_only": 0, "bm25_only": 0, "both": 0}
-
-    for chunk_id in _chunk_ids(fused_chunks):
-        in_semantic = chunk_id in semantic_ids
-        in_bm25 = chunk_id in bm25_ids
-        if in_semantic and in_bm25:
-            counts["both"] += 1
-        elif in_semantic:
-            counts["semantic_only"] += 1
-        elif in_bm25:
-            counts["bm25_only"] += 1
-    return counts
+def _multi_source_count(rankings: list[list[ContextRow]]) -> int:
+    """Chunks more than one leg retrieved — the agreement RRF rewards."""
+    hits: Counter[str] = Counter()
+    for ranking in rankings:
+        hits.update(_chunk_ids(ranking))
+    return sum(1 for count in hits.values() if count > 1)
 
 
 class UnifiedRetriever:
-    """Run retrieval-wide metadata filtering, LightRAG mix, BM25, and fusion."""
+    """Run retrieval-wide metadata filtering, the retrieval legs, and fusion.
+
+    The legs stay independent until one RRF pass: pre-merging any pair would
+    collapse its two votes into one and distort the ranks the survivors carry
+    into fusion.
+    """
 
     def __init__(
         self,
@@ -59,10 +52,12 @@ class UnifiedRetriever:
         bm25: BM25Retriever | None,
         metadata_index: MetadataIndexProtocol,
         stores: MetadataChunkStore,
+        visual: DirectVisualRetriever | None = None,
         rrf_k: int = 60,
     ) -> None:
         self._backend = backend
         self._bm25 = bm25
+        self._visual = visual
         self._metadata_index = metadata_index
         self._stores = stores
         self._rrf_k = rrf_k
@@ -76,6 +71,7 @@ class UnifiedRetriever:
         bm25_query: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
+        query_image_blocks: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         scope = await self._resolve_candidates(metadata_filter)
@@ -116,6 +112,11 @@ class UnifiedRetriever:
                 if self._bm25 is not None
                 else None
             )
+            visual_task = (
+                asyncio.create_task(self._visual.search(query_image_blocks))
+                if self._visual is not None and query_image_blocks
+                else None
+            )
 
             lightrag_error: Exception | None = None
             try:
@@ -147,6 +148,7 @@ class UnifiedRetriever:
                 logger.warning(
                     "BM25 retrieval failed; falling back to semantic-only", exc_info=True
                 )
+            visual_chunks = await visual_task if visual_task is not None else []
             if lightrag_error is not None:
                 if bm25_task is None:
                     raise lightrag_error
@@ -160,14 +162,13 @@ class UnifiedRetriever:
         if bm25_error is not None:
             trace["bm25_error_type"] = type(bm25_error).__name__
         trace["bm25_chunk_count"] = len(bm25_chunks)
-        trace["semantic_chunk_count"] = len(lightrag_result.contexts.get("chunks", []))
+        trace["direct_visual_chunk_count"] = len(visual_chunks)
         semantic_chunks = lightrag_result.contexts.get("chunks", [])
-        if bm25_chunks:
-            fused = rrf_fuse([semantic_chunks, bm25_chunks], k=self._rrf_k)
-        else:
-            fused = list(semantic_chunks)
+        trace["semantic_chunk_count"] = len(semantic_chunks)
+        rankings = [ranking for ranking in (semantic_chunks, visual_chunks, bm25_chunks) if ranking]
+        fused = rrf_fuse(rankings, k=self._rrf_k)
         lightrag_result.contexts["chunks"] = fused
-        trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
+        trace["fused_chunk_count"] = len(fused)
         if scope is not None and metadata_filter_source == "llm_inferred" and not fused:
             relaxed = await self.aretrieve(
                 query,
@@ -176,6 +177,7 @@ class UnifiedRetriever:
                 bm25_query=bm25_query,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
+                query_image_blocks=query_image_blocks,
                 **kwargs,
             )
             relaxed.trace["metadata_filter_source"] = metadata_filter_source
@@ -183,17 +185,11 @@ class UnifiedRetriever:
             relaxed.trace["metadata_candidate_count"] = scope.chunk_count
             relaxed.trace["metadata_filter_relaxed"] = True
             return relaxed
-        fused_source_counts = _count_fused_sources(
-            lightrag_result.contexts["chunks"],
-            semantic_chunks=semantic_chunks,
-            bm25_chunks=bm25_chunks,
-        )
-        trace["fused_source_counts"] = fused_source_counts
+        trace["fused_multi_source_count"] = _multi_source_count(rankings)
         logger.info(
             "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
             "metadata_scope=%s filter_relaxed=%s kg_chunks_dropped=%d semantic_chunks=%d "
-            "bm25_chunks=%d fused_chunks=%d "
-            "fused_sources=semantic_only=%d bm25_only=%d both=%d bm25_top=%s",
+            "visual_chunks=%d bm25_chunks=%d fused_chunks=%d multi_source=%d bm25_top=%s",
             self._bm25 is not None,
             lexical_query if self._bm25 is not None else None,
             metadata_filter_source,
@@ -201,11 +197,10 @@ class UnifiedRetriever:
             trace.get("metadata_filter_relaxed", False),
             filter_stats.kg_chunks_dropped,
             trace["semantic_chunk_count"],
+            trace["direct_visual_chunk_count"],
             trace["bm25_chunk_count"],
             trace["fused_chunk_count"],
-            fused_source_counts["semantic_only"],
-            fused_source_counts["bm25_only"],
-            fused_source_counts["both"],
+            trace["fused_multi_source_count"],
             format_bm25_top(bm25_chunks),
         )
         lightrag_result.trace = trace

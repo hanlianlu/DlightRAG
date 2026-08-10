@@ -424,7 +424,6 @@ class RAGService:
         *,
         lightrag: Any,
         stores: Any,
-        embedder: Any | None = None,
     ) -> LightRAGMixBackend:
         """Build the LightRAG retrieval backend from typed DlightRAG config."""
         from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
@@ -432,8 +431,6 @@ class RAGService:
         return LightRAGMixBackend(
             lightrag=lightrag,
             stores=stores,
-            embedder=embedder,
-            direct_visual_top_k=config.direct_visual_top_k,
             max_entity_tokens=config.max_entity_tokens,
             max_relation_tokens=config.max_relation_tokens,
             max_total_tokens=config.max_total_tokens,
@@ -708,7 +705,6 @@ class RAGService:
             config,
             lightrag=lightrag,
             stores=self._lightrag_stores,
-            embedder=multimodal_embedder if self._direct_image_embedding_enabled else None,
         )
 
         # Initialize metadata index
@@ -754,10 +750,20 @@ class RAGService:
         )
 
         from dlightrag.core.retrieval.retriever import UnifiedRetriever
+        from dlightrag.core.retrieval.visual import DirectVisualRetriever
 
         self._retrieval_orchestrator = UnifiedRetriever(
             backend=self._backend,
             bm25=self._bm25,
+            visual=(
+                DirectVisualRetriever(
+                    embedder=multimodal_embedder,
+                    stores=self._lightrag_stores,
+                    top_k=config.direct_visual_top_k,
+                )
+                if self._direct_image_embedding_enabled
+                else None
+            ),
             metadata_index=self._metadata_index,
             stores=self._lightrag_stores,
             rrf_k=config.rrf_k,

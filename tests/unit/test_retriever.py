@@ -55,7 +55,7 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
         metadata_filter_source="llm_inferred",
     )
 
-    assert result.contexts["chunks"] == [{"chunk_id": "semantic-a"}]
+    assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["semantic-a"]
     backend.aretrieve.assert_awaited_once()
     bm25.search.assert_awaited_once()
     assert bm25.search.await_args.kwargs["scope"] is None
@@ -90,7 +90,7 @@ async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> N
         metadata_filter_source="llm_inferred",
     )
 
-    assert result.contexts["chunks"] == [{"chunk_id": "semantic-a"}]
+    assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["semantic-a"]
     assert result.trace["metadata_filter_relaxed"] is True
     assert result.trace["metadata_doc_count"] == 1
     assert result.trace["metadata_candidate_count"] == 12
@@ -162,6 +162,70 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
         "bm25-b",
     ]
     assert result.contexts["entities"] == [{"entity_name": "E"}]
+
+
+async def test_unified_retriever_fuses_visual_leg_as_an_independent_ranking() -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={
+            "chunks": [{"chunk_id": "semantic-a"}, {"chunk_id": "shared"}],
+            "entities": [],
+            "relationships": [],
+        }
+    )
+    bm25 = AsyncMock()
+    bm25.search.return_value = [{"chunk_id": "bm25-b"}]
+    visual = AsyncMock()
+    visual.search.return_value = [{"chunk_id": "shared"}, {"chunk_id": "visual-c"}]
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        visual=visual,
+        metadata_index=AsyncMock(),
+        stores=AsyncMock(),
+        rrf_k=60,
+    )
+
+    result = await retriever.aretrieve("query", top_k=3, query_image_blocks=[{"type": "image_url"}])
+
+    # "shared" wins on two-leg agreement; the visual leg reaches fusion whole,
+    # never pre-merged into the semantic ranking.
+    assert [c["chunk_id"] for c in result.contexts["chunks"]][0] == "shared"
+    assert {c["chunk_id"] for c in result.contexts["chunks"]} == {
+        "shared",
+        "semantic-a",
+        "visual-c",
+        "bm25-b",
+    }
+    assert result.trace["direct_visual_chunk_count"] == 2
+    assert result.trace["fused_multi_source_count"] == 1
+    assert "query_image_blocks" not in backend.aretrieve.await_args.kwargs
+
+
+async def test_unified_retriever_skips_visual_leg_without_query_images() -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={"chunks": [{"chunk_id": "semantic-a"}], "entities": [], "relationships": []}
+    )
+    bm25 = AsyncMock()
+    bm25.search.return_value = []
+    visual = AsyncMock()
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        visual=visual,
+        metadata_index=AsyncMock(),
+        stores=AsyncMock(),
+    )
+
+    result = await retriever.aretrieve("query", top_k=3)
+
+    visual.search.assert_not_called()
+    assert result.trace["direct_visual_chunk_count"] == 0
 
 
 async def test_unified_retriever_does_not_cap_fused_chunks_to_candidate_limit() -> None:
@@ -266,13 +330,9 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
     assert "semantic_chunks=2" in caplog.text
     assert "bm25_chunks=2" in caplog.text
     assert "fused_chunks=3" in caplog.text
-    assert "fused_sources=semantic_only=1 bm25_only=1 both=1" in caplog.text
+    assert "multi_source=1" in caplog.text
     assert "bm25_top=shared:en:2.000,bm25-b:en:1.000" in caplog.text
-    assert result.trace["fused_source_counts"] == {
-        "semantic_only": 1,
-        "bm25_only": 1,
-        "both": 1,
-    }
+    assert result.trace["fused_multi_source_count"] == 1
 
 
 async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:
@@ -320,7 +380,7 @@ async def test_unified_retriever_bm25_failure_falls_back_to_semantic() -> None:
 
     result = await retriever.aretrieve("query", top_k=5)
 
-    assert result.contexts["chunks"] == [{"chunk_id": "semantic-a"}]
+    assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["semantic-a"]
     assert result.trace["bm25_error_type"] == "RuntimeError"
     assert result.trace["bm25_chunk_count"] == 0
 
