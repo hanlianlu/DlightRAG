@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from typing import get_type_hints
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 FRONTEND_UI = FRONTEND / "ui"
@@ -240,14 +242,23 @@ def test_source_panel_hides_download_without_caller_permission() -> None:
     assert 'class="source-action-icon"' not in html
 
 
-def test_source_panel_links_public_https_provenance_without_download_permission() -> None:
+@pytest.mark.parametrize(
+    "source_uri",
+    [
+        "https://exa.ai/library/weather/gothenburg-sweden?latitude=57.7052&longitude=11.9737",
+        "http://www.sgas.ruc.edu.cn/xwgg/yjyxw/f1a3ff59a5894391b7b0db77951c08b4.htm",
+    ],
+)
+def test_source_panel_links_public_web_provenance_without_download_permission(
+    source_uri: str,
+) -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
     from dlightrag.web.safe_html import safe_source_panel
 
     source = SourceReferencePayload(
         id="1",
         title="Gothenburg weather",
-        source_uri="https://exa.ai/library/weather/gothenburg-sweden?latitude=57.7052&longitude=11.9737",
+        source_uri=source_uri,
         download_url=None,
         chunks=[],
     )
@@ -255,8 +266,9 @@ def test_source_panel_links_public_https_provenance_without_download_permission(
     html = safe_source_panel(sources=[source])
 
     assert 'aria-label="Open source"' in html
-    assert "https://exa.ai/library/weather/gothenburg-sweden?" in html
-    assert "latitude=57.7052&amp;longitude=11.9737" in html
+    assert source_uri.split("?", 1)[0] in html
+    assert 'target="_blank"' in html
+    assert 'rel="noopener noreferrer"' in html
     assert " download" not in html
 
 
@@ -339,12 +351,12 @@ def test_source_titles_fall_back_without_legacy_paths() -> None:
     assert "src.path" not in (partials / "source_panel.html").read_text(encoding="utf-8")
 
 
-def test_source_download_aria_allowlist_does_not_allow_unsafe_anchor_attributes() -> None:
+def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None:
     from dlightrag.web.safe_html import sanitize_html_fragment
 
     html = sanitize_html_fragment(
         '<a href="/web/files/raw/doc-notes" aria-label="Download source" '
-        'onclick="alert(1)" style="display:none" target="_blank">Download</a>'
+        'onclick="alert(1)" style="display:none" target="_self">Download</a>'
     )
 
     assert 'aria-label="Download source"' in html

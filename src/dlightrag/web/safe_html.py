@@ -90,7 +90,7 @@ _ALLOWED_ATTRS: dict[str, set[str]] = {
         "y1",
         "y2",
     },
-    "a": {"aria-label", "download", "href", "title"},
+    "a": {"aria-label", "download", "href", "target", "title"},
     "button": {"type"},
     "col": {"span"},
     "colgroup": {"span"},
@@ -136,6 +136,8 @@ def _attribute_filter(_tag: str, attr: str, value: str) -> str | None:
         return value if _is_safe_url(value) else None
     if lowered == "data-action":
         return value if value in _DATA_ACTIONS else None
+    if lowered == "target":
+        return value if value == "_blank" else None
     return value
 
 

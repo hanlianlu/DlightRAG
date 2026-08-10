@@ -418,6 +418,15 @@ def validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> st
     return _validate_public_https_url(raw_url, resolve_host=resolve_host)
 
 
+def validate_public_web_url(raw_url: str) -> str:
+    """Validate a public HTTP(S) provenance URL for browser navigation."""
+    parsed = urlparse(raw_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("public source URL must use HTTP or HTTPS")
+    _validate_public_https_url(parsed._replace(scheme="https").geturl())
+    return raw_url
+
+
 def normalize_https_url_identity(url: str) -> str:
     """Normalize scheme/host and discard fragments that never reach an HTTP server."""
     parts = urlsplit(url)
@@ -451,4 +460,5 @@ __all__ = [
     "afetch_public_https_bytes",
     "normalize_https_url_identity",
     "validate_public_https_url",
+    "validate_public_web_url",
 ]

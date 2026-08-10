@@ -856,8 +856,8 @@ They appear in REST/MCP responses and drive the Web UI's source panel. Cited
 answer paths use the same citation indexer as answer validation, so chunk order
 matches `[ref_id-chunk_idx]` markers instead of page sorting. `source_uri` is
 stable provenance and is returned consistently by REST, MCP, SDK, and Web. The
-Web source panel renders it as an external link only when it is a credential-free
-public HTTPS URL. HTTP adapters separately project the internal document ID and
+Web source panel renders it in a new tab when it is a credential-free public
+HTTP(S) URL. HTTP adapters separately project the internal document ID and
 source workspace to an authorized `download_url`, then look up the locator
 server-side; raw storage locators and workspace-routing fields are never public.
 REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
@@ -898,7 +898,7 @@ REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
 | `id` | string | Reference ID (matches `reference_id` in chunks) |
 | `title` | string \| null | Document title (filename or metadata) |
 | `type` | string \| null | File type |
-| `source_uri` | string | Stable source identity; may use a connector-specific scheme. Public HTTPS values are linkable provenance. |
+| `source_uri` | string | Stable source identity; may use a connector-specific scheme. Public HTTP(S) values are linkable provenance. |
 | `download_url` | string \| null | Authorized HTTP download route for retained files; null when no download permission/route exists. |
 | `cited_chunk_ids` | list \| null | Cited chunk IDs for answer responses; null when returning all retrieved sources |
 | `chunks` | list | Chunk snippets in citation-index order |

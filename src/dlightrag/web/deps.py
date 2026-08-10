@@ -15,7 +15,7 @@ from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.core import access as core_access
 from dlightrag.core.scope import RequestScope
-from dlightrag.sourcing.url import validate_public_https_url
+from dlightrag.sourcing.url import validate_public_web_url
 from dlightrag.web.markdown import (
     inject_highlights,
     normalize_chunk_source,
@@ -212,9 +212,9 @@ def _basename(path: str) -> str:
 
 
 def _public_source_url(value: Any) -> str | None:
-    """Return credential-free public HTTPS provenance, otherwise None."""
+    """Return credential-free public HTTP(S) provenance, otherwise None."""
     try:
-        return validate_public_https_url(str(value).strip())
+        return validate_public_web_url(str(value).strip())
     except ValueError:
         return None
 
