@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +16,8 @@ from dlightrag.models.tool_turn import (
     ToolChoice,
     ToolDefinition,
 )
+
+logger = logging.getLogger(__name__)
 
 type ToolModelFunc = Callable[..., Awaitable[AssistantTurn]]
 type ToolExecute = Callable[[BaseModel], Awaitable["ToolResult"]]
@@ -125,6 +128,8 @@ async def _execute_call(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        # The model only ever sees the message; the traceback belongs to the operator.
+        logger.warning("Agent tool %r failed", call.name, exc_info=True)
         return _error(call, f'Tool "{call.name}" failed: {exc}')
 
 

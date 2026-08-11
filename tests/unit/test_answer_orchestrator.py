@@ -2,6 +2,7 @@
 """Tests for the capability-driven answer orchestrator."""
 
 import asyncio
+import logging
 from typing import Any, cast
 
 import pytest
@@ -108,6 +109,7 @@ def _research(
     resource_tools: list[AgentTool] | None = None,
     register_web_source: Any = None,
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
+    max_agent_turns: int = 50,
 ) -> AnswerOrchestrator:
     return AnswerOrchestrator(
         synthesizer=_research_synthesizer(),
@@ -120,6 +122,7 @@ def _research(
         resource_manifest=resource_manifest,
         register_web_source=register_web_source,
         context_window_tokens=context_window_tokens,
+        max_agent_turns=max_agent_turns,
     )
 
 
@@ -638,6 +641,78 @@ async def test_knowledge_base_tool_redacts_unexpected_failures() -> None:
     transcript = str(agent.final_calls[0])
     assert "secret" not in transcript
     assert "knowledge-base search failed" in transcript
+
+
+async def test_tool_failure_reaches_the_operator_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        raise RuntimeError("postgresql://user:secret@internal/db")
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    agent = ScriptedAgent(
+        _tool(_call(query="missing fact", source="knowledge_base")),
+        final_text="Best effort answer.",
+    )
+    with caplog.at_level(logging.WARNING, logger="dlightrag.core.agent.tool_loop"):
+        await _research(agent, retrieve, search).answer("Question")
+
+    failures = [
+        record for record in caplog.records if "search_knowledge_base" in record.getMessage()
+    ]
+    assert failures, "a failing tool must be visible to operators, not only to the model"
+    assert failures[0].exc_info is not None
+
+
+async def test_research_stops_at_the_turn_cap_and_still_answers() -> None:
+    calls = 0
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        nonlocal calls
+        calls += 1
+        result = _corpus_result(f"fact {calls}")
+        result.contexts["chunks"][0]["chunk_id"] = f"corpus-{calls}"
+        return result
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    # Every turn finds something new, so only the cap can end this run.
+    agent = ScriptedAgent(
+        _tool(_call(query="angle one", source="knowledge_base", call_id="a")),
+        _tool(_call(query="angle two", source="knowledge_base", call_id="b")),
+        _tool(_call(query="angle three", source="knowledge_base", call_id="c")),
+        final_text="Answer from what was gathered [1-1].",
+    )
+    result = await _research(agent, retrieve, search, max_agent_turns=3).answer("Question")
+
+    assert len(agent.turn_calls) == 3
+    assert result.trace["agent_stop_reason"] == "turn_limit"
+    assert result.answer == "Answer from what was gathered [1-1]."
+
+
+async def test_control_turns_carry_the_calls_already_made() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    agent = ScriptedAgent(
+        _tool(_call(query="savings rate", source="knowledge_base")),
+        _answer("READY"),
+        final_text="Answer [1-1].",
+    )
+    await _research(agent, retrieve, search).answer("Question")
+
+    second_turn = str(agent.turn_calls[1]["messages"][-1])
+    assert "Calls already made" in second_turn
+    assert "search_knowledge_base" in second_turn
+    assert "savings rate" in second_turn
+    # The tools-disabled final call answers from evidence, not from the call log.
+    assert "Calls already made" not in str(agent.final_calls[0])
 
 
 async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> None:

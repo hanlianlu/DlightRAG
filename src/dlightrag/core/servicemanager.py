@@ -1554,6 +1554,7 @@ class RAGServiceManager:
                 else None
             ),
             context_window_tokens=self._config.answer.context_window_tokens,
+            max_agent_turns=self._config.max_agent_turns,
         )
         return _OrchestratorRun(
             orchestrator=orchestrator,

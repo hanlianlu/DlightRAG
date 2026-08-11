@@ -925,7 +925,13 @@ max_upload_bytes: 104857600
 max_upload_size_mb: 512
 ingest_timeout:
 request_timeout: 300
+max_agent_turns: 50
 ```
+
+`max_agent_turns` is a safety cap, not a tuning knob: research normally ends when
+the agent calls no tool or a tool batch adds no evidence. The cap bounds a run
+that keeps finding new evidence -- an open-web question can always find one more
+page -- and answers from what it already has instead of failing.
 
 `max_conversation_tokens` caps recent text history supplied to the query
 planner. The complete Planner request is bounded to 102400 estimated tokens.

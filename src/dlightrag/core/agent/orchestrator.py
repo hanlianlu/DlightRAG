@@ -12,6 +12,7 @@ and one additional tools-disabled final answer generation.
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -22,6 +23,7 @@ from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.agent.tool_loop import (
     AgentTool,
     ExecutedTurn,
+    ToolExecution,
     ToolResult,
     ToolTurnExecutor,
 )
@@ -39,6 +41,12 @@ from dlightrag.models.tool_turn import AssistantTurn
 from dlightrag.prompts import agent_control_prompt, answer_core
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.utils.tokens import estimate_messages_tokens
+
+logger = logging.getLogger(__name__)
+
+# Same bound pi puts on a serialized tool result. Only the result is truncated: the
+# call must survive intact so a later turn can see which angle was already tried.
+_TOOL_RESULT_MAX_CHARS = 2000
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
 WebSearch = Callable[[str], Awaitable[WebSearchResult]]
@@ -62,6 +70,8 @@ class _RunState:
     base_messages: list[dict[str, Any]]
     evidence_message: dict[str, Any] | None = None
     last_exchange: list[dict[str, Any]] = field(default_factory=list)
+    # Which angles this run already tried, so a later control turn does not repeat one.
+    tried_calls: list[str] = field(default_factory=list)
     stop_reason: str = "model_stop"
 
 
@@ -81,6 +91,7 @@ class AnswerOrchestrator:
         resource_manifest: tuple[ResourceManifestEntry, ...] = (),
         register_web_source: Callable[[str], str | None] | None = None,
         context_window_tokens: int = 260_000,
+        max_agent_turns: int = 50,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -95,6 +106,7 @@ class AnswerOrchestrator:
         self._input_budget = max(
             1, self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
         )
+        self._max_agent_turns = max(1, max_agent_turns)
 
     @property
     def uses_research_path(self) -> bool:
@@ -277,8 +289,8 @@ class AnswerOrchestrator:
         )
 
     async def _research_until_stopped(self, state: _RunState) -> None:
-        """Run evidence turns until the model stops calling tools or adds nothing."""
-        while True:
+        """Run evidence turns until the model stops, adds nothing, or hits the cap."""
+        for _ in range(self._max_agent_turns):
             executed, changed = await self._execute_control_turn(state)
             if not executed.assistant.tool_calls:
                 state.stop_reason = "model_stop"
@@ -286,6 +298,11 @@ class AnswerOrchestrator:
             if not changed:
                 state.stop_reason = "no_new_evidence"
                 return
+        state.stop_reason = "turn_limit"
+        logger.warning(
+            "Research stopped at the %d-turn cap; answering from the evidence gathered so far",
+            self._max_agent_turns,
+        )
 
     def _finalize_transcript(self, state: _RunState) -> tuple[list[dict[str, Any]], Any]:
         """Pack the ledger's final citable evidence beside the tool transcript.
@@ -419,6 +436,7 @@ class AnswerOrchestrator:
         )
         state.trace["agent_turns"] += 1
         state.last_exchange = executed.messages[len(call_messages) :]
+        state.tried_calls.extend(_format_tried_call(result) for result in executed.results)
         if executed.assistant.tool_calls:
             blocks, _ = self._render_evidence(state)
             state.evidence_message = {"role": "user", "content": blocks}
@@ -431,6 +449,11 @@ class AnswerOrchestrator:
         final: bool = False,
     ) -> tuple[list[dict[str, Any]], Any]:
         fixed = estimate_messages_tokens([*state.base_messages, *state.last_exchange])
+        tried = "" if final else _format_tried_calls(state.tried_calls)
+        if tried:
+            # Counted as fixed input so a longer call history shrinks the evidence budget
+            # instead of overflowing the envelope.
+            fixed += estimate_messages_tokens([{"role": "user", "content": tried}])
         blocks, indexer = state.session.transform(self._capacity, fixed_input_tokens=fixed)
         if final:
             instruction = "Answer the original request now from the current evidence above."
@@ -440,7 +463,8 @@ class AnswerOrchestrator:
                 "a specific missing fact, or reply `READY` when this evidence supports the "
                 "request. Do not draft the answer here."
             )
-        return [*blocks, {"type": "text", "text": instruction}], indexer
+        prefix = [{"type": "text", "text": tried}] if tried else []
+        return [*prefix, *blocks, {"type": "text", "text": instruction}], indexer
 
     def _check_envelope(self, messages: list[dict[str, Any]]) -> None:
         input_tokens = estimate_messages_tokens(messages)
@@ -607,6 +631,32 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
 
 def _evidence_count(session: EvidenceLedger) -> int:
     return sum(len(rows) for rows in session.contexts.values())
+
+
+def _format_tried_call(execution: ToolExecution) -> str:
+    """One line: the call as issued, and what it returned."""
+    arguments = ", ".join(
+        f"{name}={json.dumps(value, ensure_ascii=False)}"
+        for name, value in execution.call.arguments.items()
+    )
+    outcome = _truncate_result(" ".join(execution.result.content.split()))
+    if execution.is_error:
+        outcome = f"failed: {outcome}"
+    return f"{execution.call.name}({arguments}) -> {outcome}"
+
+
+def _truncate_result(text: str) -> str:
+    if len(text) <= _TOOL_RESULT_MAX_CHARS:
+        return text
+    dropped = len(text) - _TOOL_RESULT_MAX_CHARS
+    return f"{text[:_TOOL_RESULT_MAX_CHARS]} [... {dropped} more characters truncated]"
+
+
+def _format_tried_calls(tried_calls: list[str]) -> str:
+    if not tried_calls:
+        return ""
+    lines = "\n".join(f"- {line}" for line in tried_calls)
+    return f"## Calls already made\n{lines}"
 
 
 def _merge_initial_contexts(

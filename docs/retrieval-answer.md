@@ -287,7 +287,7 @@ picks one of two paths:
   allowing a later `read_resource` call to deepen a selected source without a
   raw-URL tool.
   A control turn with no tool calls, or a tool batch that adds no evidence, ends
-  research. DlightRAG then makes one additional tools-disabled LLM call through
+  research, as does the `max_agent_turns` safety cap. DlightRAG then makes one additional tools-disabled LLM call through
   `AnswerSynthesizer` to generate the final answer. Control-turn text is always
   discarded and never returned as the answer. Control turns use a tool-policy
   system prompt; the final call replaces it with the normal answer/citation

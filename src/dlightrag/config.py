@@ -1181,6 +1181,15 @@ class DlightragConfig(BaseSettings):
         gt=0,
         description="Timeout in seconds for retrieve/answer/query operations.",
     )
+    max_agent_turns: int = Field(
+        default=50,
+        gt=0,
+        description=(
+            "Safety cap on research control turns per answer. Research normally stops when "
+            "the agent calls no tool or a batch adds no evidence; the cap bounds a run that "
+            "keeps finding new evidence, and answers from what it has instead of failing."
+        ),
+    )
     answer_stream_idle_timeout: float = Field(
         default=180.0,
         gt=0,
