@@ -20,7 +20,6 @@ from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,
     get_manager,
-    get_request_scope,
     get_web_conversation_service,
     get_workspace,
     templates,
@@ -145,7 +144,6 @@ async def answer_stream(
         [{"workspace": ws} for ws in target_workspaces],
     )
     downloadable_workspaces = workspace_names(downloadable_records)
-    scope = get_request_scope(request, target_workspaces)
 
     # Planning runs lazily inside the stream (under the request-root span), not
     # here: this keeps query_planning nested in the answer_pipeline trace
@@ -158,7 +156,6 @@ async def answer_stream(
             query=query,
             workspaces=workspaces,
             workspace=workspace,
-            scope=scope,
             downloadable_workspaces=downloadable_workspaces,
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,

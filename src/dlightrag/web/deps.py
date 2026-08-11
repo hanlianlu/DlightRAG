@@ -14,7 +14,6 @@ from dlightrag.access_control import AccessControl, AccessDeniedError, access_co
 from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.core import access as core_access
-from dlightrag.core.scope import RequestScope
 from dlightrag.sourcing.url import validate_public_web_url
 from dlightrag.web.markdown import (
     inject_highlights,
@@ -282,15 +281,6 @@ def get_manager(request: Request) -> RAGServiceManager:
 def get_web_conversation_service(request: Request) -> Any:
     """Return the one app-scoped Web conversation service."""
     return request.app.state.web_conversation_service
-
-
-def get_request_scope(
-    request: Request,
-    workspaces: list[str] | tuple[str, ...] | None = None,
-) -> RequestScope:
-    """Return the authenticated request scope for browser routes."""
-    user = getattr(request.state, "user_context", None)
-    return RequestScope.from_user(user).for_workspaces(workspaces)
 
 
 def _web_access_control(request: Request) -> AccessControl:

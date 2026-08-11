@@ -97,8 +97,6 @@ class AnswerOrchestrator:
         retrieval_query: str | None = None,
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
-        history_images: list[dict[str, Any]] | None = None,
-        initial_contexts: RetrievalContexts | None = None,
     ) -> RetrievalResult:
         if not self.uses_research_path:
             return await self._fast_answer(
@@ -106,14 +104,11 @@ class AnswerOrchestrator:
                 retrieval_query=retrieval_query,
                 conversation_history=conversation_history,
                 query_images=query_images,
-                history_images=history_images,
-                initial_contexts=initial_contexts,
             )
         return await self._run_research(
             query,
             conversation_history=conversation_history,
             query_images=query_images,
-            initial_contexts=initial_contexts,
         )
 
     async def answer_stream(
@@ -123,8 +118,6 @@ class AnswerOrchestrator:
         retrieval_query: str | None = None,
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
-        history_images: list[dict[str, Any]] | None = None,
-        initial_contexts: RetrievalContexts | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if not self.uses_research_path:
             return await self._fast_answer_stream(
@@ -132,14 +125,11 @@ class AnswerOrchestrator:
                 retrieval_query=retrieval_query,
                 conversation_history=conversation_history,
                 query_images=query_images,
-                history_images=history_images,
-                initial_contexts=initial_contexts,
             )
         return await self._run_research_stream(
             query,
             conversation_history=conversation_history,
             query_images=query_images,
-            initial_contexts=initial_contexts,
         )
 
     # ------------------------------------------------------------------
@@ -153,18 +143,14 @@ class AnswerOrchestrator:
         retrieval_query: str | None,
         conversation_history: PriorTurns | None,
         query_images: list[dict[str, Any]] | None,
-        history_images: list[dict[str, Any]] | None = None,
-        initial_contexts: RetrievalContexts | None = None,
     ) -> RetrievalResult:
         retrieval = await self._retrieve_knowledge_base(retrieval_query or query)
-        contexts = _merge_initial_contexts(initial_contexts, retrieval.contexts)
-        generate_kwargs: dict[str, Any] = {
-            "query_images": query_images,
-            "conversation_history": conversation_history,
-        }
-        if history_images:
-            generate_kwargs["history_images"] = history_images
-        result = await self._synthesizer.generate(query, contexts, **generate_kwargs)
+        result = await self._synthesizer.generate(
+            query,
+            retrieval.contexts,
+            query_images=query_images,
+            conversation_history=conversation_history,
+        )
         result.trace.update(retrieval.trace)
         return result
 
@@ -175,19 +161,13 @@ class AnswerOrchestrator:
         retrieval_query: str | None,
         conversation_history: PriorTurns | None,
         query_images: list[dict[str, Any]] | None,
-        history_images: list[dict[str, Any]] | None = None,
-        initial_contexts: RetrievalContexts | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         retrieval = await self._retrieve_knowledge_base(retrieval_query or query)
-        contexts = _merge_initial_contexts(initial_contexts, retrieval.contexts)
-        generate_kwargs: dict[str, Any] = {
-            "query_images": query_images,
-            "conversation_history": conversation_history,
-        }
-        if history_images:
-            generate_kwargs["history_images"] = history_images
         contexts, stream = await self._synthesizer.generate_stream(
-            query, contexts, **generate_kwargs
+            query,
+            retrieval.contexts,
+            query_images=query_images,
+            conversation_history=conversation_history,
         )
         if stream is not None:
             existing = getattr(stream, "trace", None)
@@ -207,7 +187,6 @@ class AnswerOrchestrator:
         *,
         conversation_history: PriorTurns | None,
         query_images: list[dict[str, Any]] | None,
-        initial_contexts: RetrievalContexts | None = None,
     ) -> RetrievalResult:
         if self._model_func is None:
             raise RuntimeError("Research answer requires a tool model")
@@ -215,7 +194,6 @@ class AnswerOrchestrator:
             query,
             conversation_history=conversation_history,
             query_images=query_images,
-            initial_contexts=initial_contexts,
         )
         await self._research_until_stopped(state)
 
@@ -239,7 +217,6 @@ class AnswerOrchestrator:
         *,
         conversation_history: PriorTurns | None,
         query_images: list[dict[str, Any]] | None,
-        initial_contexts: RetrievalContexts | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if self._stream_model_func is None or self._model_func is None:
             raise RuntimeError("Streaming research answer requires a final text stream")
@@ -247,7 +224,6 @@ class AnswerOrchestrator:
             query,
             conversation_history=conversation_history,
             query_images=query_images,
-            initial_contexts=initial_contexts,
         )
         await self._research_until_stopped(state)
 
@@ -289,11 +265,8 @@ class AnswerOrchestrator:
         *,
         conversation_history: PriorTurns | None,
         query_images: list[dict[str, Any]] | None,
-        initial_contexts: RetrievalContexts | None = None,
     ) -> _RunState:
         evidence = EvidenceLedger(image_budget=self._image_budget)
-        if initial_contexts:
-            evidence.add_contexts(initial_contexts)
         trace: dict[str, Any] = {
             "agent_turns": 0,
             "web_search_cost_dollars": 0.0,
@@ -334,27 +307,6 @@ class AnswerOrchestrator:
         state.trace["agent_turns"] += 1
         state.episode.record(executed.messages[len(call_messages) :])
         return executed, state.evidence.row_count != previous_rows
-
-
-def _merge_initial_contexts(
-    initial: RetrievalContexts | None,
-    retrieved: RetrievalContexts,
-) -> RetrievalContexts:
-    """Place server-prepared evidence ahead of retrieved rows without reranking."""
-    if not initial:
-        return retrieved
-    merged: RetrievalContexts = {
-        "chunks": [*initial.get("chunks", []), *retrieved.get("chunks", [])],
-        "entities": [*retrieved.get("entities", []), *initial.get("entities", [])],
-        "relationships": [
-            *retrieved.get("relationships", []),
-            *initial.get("relationships", []),
-        ],
-    }
-    for key, rows in retrieved.items():
-        if key not in merged:
-            merged[key] = list(rows)
-    return merged
 
 
 __all__ = ["AnswerOrchestrator"]

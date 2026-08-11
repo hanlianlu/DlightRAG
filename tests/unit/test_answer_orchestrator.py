@@ -826,38 +826,6 @@ async def test_evidence_is_packed_once_instead_of_once_per_exchange() -> None:
     assert serialized.count("Open-web evidence") == 1
 
 
-async def test_preloaded_evidence_is_visible_without_automatic_searches() -> None:
-    attachment = {
-        "chunk_id": "attachment-1",
-        "reference_id": "attachment-upstream",
-        "full_doc_id": "attachment-doc",
-        "file_path": "uploaded.pdf",
-        "content": "uploaded evidence",
-        "_workspace": "__web_attachment__",
-        "metadata": {
-            "source_type": "web_attachment",
-            "source_uri": "web-attachment://1",
-            "source_download_locator": "web-attachment://1",
-        },
-    }
-
-    async def retrieve(_query: str) -> RetrievalResult:
-        return _corpus_result()
-
-    async def search(_query: str) -> WebSearchResult:
-        return _web_result()
-
-    agent = ScriptedAgent(_answer("draft"), final_text="Combined [1-1].")
-    result = await _research(agent, retrieve, search).answer(
-        "Question",
-        initial_contexts={"chunks": [attachment], "entities": [], "relationships": []},
-    )
-
-    assert [source.id for source in result.sources] == ["1"]
-    payload = str(agent.turn_calls[0]["messages"][-1]["content"])
-    assert "User-attached documents" in payload
-
-
 async def test_input_over_envelope_stops_before_agent_or_retrieval() -> None:
     retrieval_calls = 0
 
@@ -996,7 +964,7 @@ async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() ->
     assert "Do not draft the answer" not in final_system
 
 
-async def test_research_stream_final_flows_through_synthesizer_no_context_and_warnings() -> None:
+async def test_research_stream_final_flows_through_synthesizer_no_context() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return RetrievalResult(contexts={"chunks": [], "entities": [], "relationships": []})
 
@@ -1018,9 +986,6 @@ async def test_research_stream_final_flows_through_synthesizer_no_context_and_wa
     ).answer_stream("Question")
 
     assert stream is not None
-    # The synthesizer owns the no-context disclaimer and the warnings list for
-    # the streaming research branch, not the orchestrator.
-    assert isinstance(cast(Any, stream).warnings, list)
     emitted = [token async for token in stream]
     assert emitted[0].startswith(NO_CONTEXT_DISCLAIMER)
     assert "Best-effort answer." in "".join(emitted)

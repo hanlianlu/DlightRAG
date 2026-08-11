@@ -1685,7 +1685,6 @@ class RAGService:
         query: str,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
-        is_reretrieve: bool = False,
         filters: MetadataFilter | None = None,
         *,
         _plan: Any = None,
@@ -1694,13 +1693,9 @@ class RAGService:
     ) -> RetrievalResult:
         """Retrieve structured data without generating answer.
 
-        Architecture: Plan-First In-Filtering (matching ArtRAG pattern).
-
-        1. Resolve metadata filters → candidate chunk_ids (upfront)
-        2. Set contextvar via metadata_filter_scope
-        3. KG retrieval runs with FilteredVectorStorage (WHERE id = ANY)
-        4. Rerank operates only on filtered results
-        5. Enrich with document metadata
+        The unified retriever applies metadata scope inside every retrieval leg,
+        fuses the resulting candidates, and this service hydrates provenance,
+        reranks, enriches metadata, and assigns citation identities.
 
         Args:
             filters: Optional MetadataFilter for structured metadata queries.
@@ -1727,7 +1722,6 @@ class RAGService:
             bm25_query=effective_bm25_query,
             top_k=top_k,
             chunk_top_k=chunk_top_k,
-            is_reretrieve=is_reretrieve,
             **kwargs,
         )
 

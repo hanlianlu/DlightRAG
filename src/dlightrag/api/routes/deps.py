@@ -13,7 +13,6 @@ from dlightrag.core.request.workspaces import (
     NoQueryableWorkspacesError,
     WorkspaceSelectionConflictError,
 )
-from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager
 
 
@@ -26,12 +25,6 @@ def resolve_workspace(ws: str | None, request: Request | None = None) -> str:
 
     workspace = request_config(request).workspace if request is not None else get_config().workspace
     return normalize_workspace(ws or workspace)
-
-
-def request_scope(
-    user: object | None, workspaces: list[str] | tuple[str, ...] | None
-) -> RequestScope:
-    return RequestScope.from_user(user).for_workspaces(workspaces)
 
 
 def get_access_control(request: Request):

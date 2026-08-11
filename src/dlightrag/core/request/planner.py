@@ -202,10 +202,6 @@ def _planner_user_payload(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _is_empty_filter(f: MetadataFilter) -> bool:
-    return f.is_empty()
-
-
 def _planner_request_tokens(system_tokens: int, user_payload: str) -> int:
     return system_tokens + estimate_tokens(user_payload)
 
@@ -269,7 +265,6 @@ class QueryPlanner:
         query: str,
         *,
         conversation_history: PriorTurns | None = None,
-        explicit_filter: MetadataFilter | None = None,
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
         preserve_query: bool = False,
@@ -342,12 +337,6 @@ class QueryPlanner:
         if preserve_query:
             plan.original_query = query
             plan.standalone_query = query
-
-        # Merge explicit filter (explicit wins)
-        if explicit_filter is not None and not _is_empty_filter(explicit_filter):
-            plan.metadata_filter = self._merge_filters(explicit_filter, plan.metadata_filter)
-            plan.metadata_filter_source = "explicit"
-            plan.metadata_filter_confidence = "high"
 
         logger.info(
             "[Planner] result: standalone=%r, bm25_query=%r, filter_source=%s, "
@@ -477,32 +466,3 @@ class QueryPlanner:
             metadata_filter_confidence=filter_confidence,
             metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
         )
-
-    @staticmethod
-    def _merge_filters(
-        explicit: MetadataFilter,
-        llm_extracted: MetadataFilter | None,
-    ) -> MetadataFilter:
-        """Merge explicit and LLM-extracted filters. Explicit fields win."""
-        if llm_extracted is None:
-            return explicit
-
-        # Build merged filter field by field
-        merged_kwargs: dict[str, Any] = {}
-        filter_fields = [
-            "filename",
-            "file_extension",
-            "title",
-            "author",
-            "creation_date_from",
-            "creation_date_to",
-            "custom",
-        ]
-        for field in filter_fields:
-            explicit_val = getattr(explicit, field, None)
-            llm_val = getattr(llm_extracted, field, None)
-            if explicit_val is not None:
-                merged_kwargs[field] = explicit_val
-            elif llm_val is not None:
-                merged_kwargs[field] = llm_val
-        return MetadataFilter(**merged_kwargs)

@@ -690,7 +690,7 @@ async def test_cancelled_client_records_unknown_post_commit_outcome(
 async def test_saving_heartbeat_keeps_persistence_wait_visible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.web.answer_events._PERSISTENCE_HEARTBEAT_SECONDS", 0.001)
+    monkeypatch.setattr("dlightrag.web.answer_events._SSE_HEARTBEAT_SECONDS", 0.001)
     service = _make_service()
 
     async def commit_answer(*_args, **_kwargs):
@@ -707,7 +707,7 @@ async def test_saving_heartbeat_keeps_persistence_wait_visible(
 async def test_generator_close_after_saving_heartbeat_finishes_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("dlightrag.web.answer_events._PERSISTENCE_HEARTBEAT_SECONDS", 0.001)
+    monkeypatch.setattr("dlightrag.web.answer_events._SSE_HEARTBEAT_SECONDS", 0.001)
     started = asyncio.Event()
     release = asyncio.Event()
     finished = asyncio.Event()

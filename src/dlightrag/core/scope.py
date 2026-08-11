@@ -1,60 +1,24 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Request and session scoping primitives."""
+"""Request-local authenticated principal for MCP middleware."""
 
 import contextvars
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from dlightrag.utils import normalize_workspace
-
-
-def _workspace_tuple(workspaces: Iterable[str] | None) -> tuple[str, ...]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for workspace in workspaces or ():
-        normalized = normalize_workspace(workspace)
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            result.append(normalized)
-    return tuple(sorted(result))
-
 
 @dataclass(frozen=True)
 class RequestScope:
-    """Identity and workspace scope for one external request.
-
-    This is intentionally not an authorization model. It carries authenticated
-    identity and authorized workspace context across REST, Web, and MCP adapters.
-    """
+    """Identity projected from one MCP request into shared ACL checks."""
 
     user_id: str = "anonymous"
     auth_mode: str = "none"
-    workspaces: tuple[str, ...] = ()
     claims: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def anonymous(cls) -> RequestScope:
         return cls()
-
-    @classmethod
-    def from_user(cls, user: Any | None) -> RequestScope:
-        if user is None:
-            return cls.anonymous()
-        return cls(
-            user_id=str(getattr(user, "user_id", "") or "anonymous"),
-            auth_mode=str(getattr(user, "auth_mode", "") or "none"),
-            claims=dict(getattr(user, "claims", {}) or {}),
-        )
-
-    def for_workspaces(self, workspaces: Iterable[str] | None) -> RequestScope:
-        return RequestScope(
-            user_id=self.user_id,
-            auth_mode=self.auth_mode,
-            workspaces=_workspace_tuple(workspaces),
-            claims=dict(self.claims),
-        )
 
 
 _CURRENT_SCOPE: contextvars.ContextVar[RequestScope | None] = contextvars.ContextVar(

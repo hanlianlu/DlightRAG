@@ -7,11 +7,10 @@ from dlightrag.api.models import MetadataFilterRequest, RetrieveRequest
 from dlightrag.core.client_contracts import AnswerAttachmentLink, ConversationMessage, QueryImage
 from dlightrag.core.client_execution import execute_answer, execute_retrieve
 from dlightrag.core.retrieval.protocols import RetrievalResult
-from dlightrag.core.scope import RequestScope
 from dlightrag.mcp.contracts import AnswerInput
 
 
-async def test_execute_retrieve_forwards_shared_query_kwargs_and_scope() -> None:
+async def test_execute_retrieve_forwards_shared_query_kwargs() -> None:
     result = RetrievalResult(contexts={"chunks": []})
     manager = AsyncMock()
     manager.aretrieve = AsyncMock(return_value=result)
@@ -28,13 +27,10 @@ async def test_execute_retrieve_forwards_shared_query_kwargs_and_scope() -> None
             )
         ],
     )
-    scope = RequestScope(user_id="alice", auth_mode="jwt").for_workspaces(["finance"])
-
     executed = await execute_retrieve(
         manager=manager,
         payload=payload,
         resolved_workspaces=["finance"],
-        scope=scope,
     )
 
     assert executed is result
@@ -43,7 +39,6 @@ async def test_execute_retrieve_forwards_shared_query_kwargs_and_scope() -> None
     assert call_kwargs["workspaces"] == ["finance"]
     assert call_kwargs["top_k"] == 8
     assert call_kwargs["chunk_top_k"] == 5
-    assert call_kwargs["scope"] == scope
     assert call_kwargs["bm25_query"] == "quarterly report"
     assert call_kwargs["filters"].author == "Ada"
     assert call_kwargs["query_images"] == [
@@ -70,13 +65,10 @@ async def test_execute_answer_projects_history_and_attachment_resources() -> Non
             ConversationMessage(role="assistant", content="Earlier answer"),
         ],
     )
-    scope = RequestScope(user_id="alice", auth_mode="jwt").for_workspaces(["finance"])
-
     executed = await execute_answer(
         manager=manager,
         payload=payload,
         resolved_workspaces=["finance"],
-        scope=scope,
     )
 
     assert executed is result
@@ -90,7 +82,6 @@ async def test_execute_answer_projects_history_and_attachment_resources() -> Non
         {"role": "user", "content": "Earlier question"},
         {"role": "assistant", "content": "Earlier answer"},
     ]
-    assert call_kwargs["scope"] == scope
     assert call_kwargs["filters"].title == "Runbook"
     assert "query_images" not in call_kwargs
     resources = call_kwargs["resources"]

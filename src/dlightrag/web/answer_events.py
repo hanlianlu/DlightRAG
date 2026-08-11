@@ -18,7 +18,6 @@ from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_imag
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
-from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import answer_trace_output
 from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
@@ -192,7 +191,6 @@ async def stream_answer_events(
     query: str,
     workspaces: list[str] | None,
     workspace: str,
-    scope: RequestScope | None = None,
     downloadable_workspaces: set[str] | None = None,
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
@@ -253,7 +251,6 @@ async def stream_answer_events(
             query=query,
             ws_list=ws_list,
             workspace=workspace,
-            scope=scope,
             downloadable_workspaces=downloadable_workspaces,
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
@@ -275,7 +272,6 @@ async def _emit_answer_events(
     query: str,
     ws_list: list[str],
     workspace: str,
-    scope: RequestScope | None = None,
     downloadable_workspaces: set[str] | None = None,
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
@@ -321,7 +317,6 @@ async def _emit_answer_events(
             manager._aanswer_stream_prepared(
                 turn,
                 workspaces=ws_list,
-                scope=scope,
                 resources=resources,
             )
         )

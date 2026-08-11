@@ -323,12 +323,10 @@ async def retrieve_tool(
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
-    scope = current_request_scope().for_workspaces(resolved_workspaces)
     result = await execute_retrieve(
         manager=manager,
         payload=args,
         resolved_workspaces=resolved_workspaces,
-        scope=scope,
     )
     return retrieval_payload(result)
 
@@ -383,12 +381,10 @@ async def answer_tool(
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
-    scope = current_request_scope().for_workspaces(resolved_workspaces)
     result = await execute_answer(
         manager=manager,
         payload=args,
         resolved_workspaces=resolved_workspaces,
-        scope=scope,
     )
     return answer_payload(result)
 

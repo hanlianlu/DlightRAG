@@ -62,7 +62,6 @@ from dlightrag.core.request.workspaces import (
 )
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import RAGService
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
@@ -261,15 +260,6 @@ def answer_trace_output(
     if trace_sensitive_enabled():
         output["answer"] = answer or ""
     return output
-
-
-def _scope_for_workspaces(
-    scope: RequestScope | None,
-    workspaces: list[str] | tuple[str, ...] | None,
-) -> RequestScope:
-    base = scope or RequestScope.anonymous()
-    normalized = _normalize_workspaces(workspaces)
-    return base.for_workspaces(normalized) if normalized else base
 
 
 def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
@@ -1292,7 +1282,6 @@ class RAGServiceManager:
         bm25_query: str | None = None,
         filters: MetadataFilter | None = None,
         query_images: list[dict[str, Any]] | None = None,
-        scope: RequestScope | None = None,
     ) -> RetrievalResult:
         """Retrieve from one or more workspaces (federated if multiple).
 
@@ -1388,7 +1377,6 @@ class RAGServiceManager:
         top_k: int | None,
         chunk_top_k: int | None,
         filters: MetadataFilter | None,
-        scope: RequestScope | None,
         resources: list[ResourceInput] | None,
     ) -> _OrchestratorRun:
         """Resolve one answer request into a capability-driven orchestrator."""
@@ -1397,7 +1385,6 @@ class RAGServiceManager:
             workspaces=workspaces,
             all_workspaces=all_workspaces,
         )
-        scoped = _scope_for_workspaces(scope, ws_list)
         # One window for the whole request: planning and answering must agree on what
         # the conversation is, or a rewrite can cite a turn the answer never sees.
         history = PriorTurns(list(turn.text_history)).recent(
@@ -1479,7 +1466,6 @@ class RAGServiceManager:
                     chunk_top_k=chunk_top_k,
                     filters=filters,
                     query_images=current_images,
-                    scope=scoped,
                 )
             if plan is None:  # pragma: no cover - construction invariant
                 raise RuntimeError("Fast answer requires a query plan")
@@ -1491,7 +1477,6 @@ class RAGServiceManager:
                 chunk_top_k=chunk_top_k,
                 filters=filters,
                 query_images=current_images,
-                scope=scoped,
             )
 
         model_func: Callable[..., Any] | None = None
@@ -1715,7 +1700,6 @@ class RAGServiceManager:
         chunk_top_k: int | None,
         filters: MetadataFilter | None,
         semantic_highlights: bool,
-        scope: RequestScope | None,
         resources: list[ResourceInput] | None = None,
     ) -> RetrievalResult:
         from dlightrag.observability import trace_observation
@@ -1728,7 +1712,6 @@ class RAGServiceManager:
             top_k=top_k,
             chunk_top_k=chunk_top_k,
             filters=filters,
-            scope=scope,
             resources=resources,
         )
         try:
@@ -1794,7 +1777,6 @@ class RAGServiceManager:
         top_k: int | None,
         chunk_top_k: int | None,
         filters: MetadataFilter | None,
-        scope: RequestScope | None,
         resources: list[ResourceInput] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         from dlightrag.observability import trace_observation
@@ -1807,7 +1789,6 @@ class RAGServiceManager:
             top_k=top_k,
             chunk_top_k=chunk_top_k,
             filters=filters,
-            scope=scope,
             resources=resources,
         )
         registry_transferred = False
@@ -1913,7 +1894,6 @@ class RAGServiceManager:
         history: list[dict[str, Any]] | None = None,
         semantic_highlights: bool = False,
         resources: list[ResourceInput] | None = None,
-        scope: RequestScope | None = None,
     ) -> RetrievalResult:
         """Answer from one or more workspaces through the one answer orchestrator.
 
@@ -1938,7 +1918,6 @@ class RAGServiceManager:
             chunk_top_k=chunk_top_k,
             filters=filters,
             semantic_highlights=semantic_highlights,
-            scope=scope,
             resources=resources,
         )
 
@@ -1954,7 +1933,6 @@ class RAGServiceManager:
         filters: MetadataFilter | None = None,
         history: list[dict[str, Any]] | None = None,
         resources: list[ResourceInput] | None = None,
-        scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces through the orchestrator.
 
@@ -1968,7 +1946,6 @@ class RAGServiceManager:
             top_k=top_k,
             chunk_top_k=chunk_top_k,
             filters=filters,
-            scope=scope,
             resources=resources,
         )
 
@@ -1982,7 +1959,6 @@ class RAGServiceManager:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         filters: MetadataFilter | None = None,
-        scope: RequestScope | None = None,
         resources: list[ResourceInput] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Stream one server-prepared turn through the one answer orchestrator."""
@@ -1994,7 +1970,6 @@ class RAGServiceManager:
             top_k=top_k,
             chunk_top_k=chunk_top_k,
             filters=filters,
-            scope=scope,
             resources=resources,
         )
 

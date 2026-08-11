@@ -72,7 +72,6 @@ from .deps import (
     enforce_access,
     filter_workspace_records,
     get_manager,
-    request_scope,
     resolve_authorized_query_workspaces,
     resolve_workspace,
 )
@@ -196,12 +195,10 @@ async def retrieve(
         user,
         resolved_workspaces,
     )
-    scope = request_scope(user, resolved_workspaces)
     result = await execute_retrieve(
         manager=manager,
         payload=body,
         resolved_workspaces=resolved_workspaces,
-        scope=scope,
     )
     link_builder = SourceDownloadLinkBuilder()
     return retrieval_payload(
@@ -342,7 +339,6 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
         user,
         resolved_workspaces,
     )
-    scope = request_scope(user, resolved_workspaces)
     history = conversation_history_as_dicts(body.history)
 
     if not body.stream:
@@ -350,7 +346,6 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
             manager=manager,
             payload=body,
             resolved_workspaces=resolved_workspaces,
-            scope=scope,
             resources=resources,
         )
         link_builder = SourceDownloadLinkBuilder()
@@ -379,7 +374,6 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
                     chunk_top_k=body.chunk_top_k,
                     history=history,
                     resources=resources,
-                    scope=scope,
                     **kwargs,
                 )
                 public_contexts = project_contexts_for_client(contexts)

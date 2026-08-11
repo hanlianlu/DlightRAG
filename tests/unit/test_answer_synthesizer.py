@@ -2,7 +2,6 @@
 """Tests for the AnswerSynthesizer messages-first interface."""
 
 from types import SimpleNamespace
-from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -131,7 +130,6 @@ class TestAnswerSynthesizerGenerate:
         assert "AI is artificial intelligence" in result.answer
         assert "### References" not in result.answer
         assert len(result.references) == 1
-        assert result.warnings == []
         call_kwargs = model_func.call_args.kwargs
         assert "messages" in call_kwargs
         assert "response_format" not in call_kwargs
@@ -196,10 +194,9 @@ class TestAnswerSynthesizerGenerate:
     async def test_generate_no_model_func(self) -> None:
         synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=None)
         contexts: RetrievalContexts = {"chunks": []}
-        result = await synth.generate("test", contexts, warnings=["kept"])
+        result = await synth.generate("test", contexts)
         assert result.answer is None
         assert result.contexts is contexts
-        assert result.warnings == ["kept"]
 
     @pytest.mark.asyncio
     async def test_generate_empty_context_disclaims_general_knowledge(self) -> None:
@@ -212,15 +209,6 @@ class TestAnswerSynthesizerGenerate:
         assert result.answer == f"{NO_CONTEXT_DISCLAIMER}\n\nThe capital of France is Paris."
         assert result.trace["answer_no_context"] is True
         model_func.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_generate_forwards_incoming_warnings_to_result(self) -> None:
-        model_func = AsyncMock(return_value="answer [1-1].")
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
-
-        result = await synth.generate("q", _text_contexts(), warnings=["one attachment truncated"])
-
-        assert result.warnings == ["one attachment truncated"]
 
     @pytest.mark.asyncio
     async def test_generate_empty_chunks_with_query_image_still_calls_model(self) -> None:
@@ -427,21 +415,6 @@ class TestAnswerSynthesizerStream:
         ctx, token_iter = await synth.generate_stream("test", contexts)
         assert token_iter is None
         assert ctx is contexts
-
-    @pytest.mark.asyncio
-    async def test_generate_stream_exposes_warnings_on_stream(self) -> None:
-        async def mock_stream():
-            yield "text"
-
-        model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
-
-        _ctx, token_iter = await synth.generate_stream(
-            "q", _text_contexts(), warnings=["stream warning"]
-        )
-
-        assert token_iter is not None
-        assert cast(Any, token_iter).warnings == ["stream warning"]
 
     @pytest.mark.asyncio
     async def test_generate_stream_empty_context_disclaims_general_knowledge(self) -> None:
@@ -662,42 +635,6 @@ class TestAnswerSynthesizerImageBudget:
         assert prepared.trace["answer_images_rag"] == 0
         assert prepared.trace["answer_images_total"] == 2
         assert "answer_composer_image_budget_used_bytes" not in prepared.trace
-
-    def test_selected_history_image_has_history_trace(self) -> None:
-        prepared = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            effective_max_images=2,
-        )._prepare_model_call(
-            "prompt",
-            {"chunks": []},
-            query_images=[_image_block()],
-            history_images=[_image_block()],
-        )
-
-        assert prepared.trace["answer_images_current"] == 1
-        assert prepared.trace["answer_images_history"] == 1
-        assert prepared.trace["answer_images_total"] == 2
-        final_content = prepared.messages[-1]["content"]
-        image_blocks = [block for block in final_content if block.get("type") == "image_url"]
-        assert len(image_blocks) == 2
-        assert any(
-            block.get("text") == "## Referenced conversation images\n" for block in final_content
-        )
-
-    def test_selected_history_image_is_answer_evidence_without_current_image(self) -> None:
-        prepared = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            effective_max_images=1,
-        )._prepare_model_call(
-            "prompt",
-            {"chunks": []},
-            history_images=[_image_block()],
-        )
-
-        assert prepared.no_context is False
-        assert "answer_no_context" not in prepared.trace
-        assert prepared.trace["answer_images_current"] == 0
-        assert prepared.trace["answer_images_history"] == 1
 
 
 # ---------------------------------------------------------------------------

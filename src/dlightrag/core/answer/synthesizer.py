@@ -110,31 +110,26 @@ class AnswerSynthesizer:
         contexts: RetrievalContexts,
         query_images: list[dict[str, Any]] | None = None,
         conversation_history: PriorTurns | None = None,
-        history_images: list[dict[str, Any]] | None = None,
-        warnings: list[str] | None = None,
     ) -> RetrievalResult:
         """Non-streaming final answer generation.
 
-        Returns a :class:`RetrievalResult` with ``answer``, ``contexts``,
-        ``references``, and one stable ``warnings`` list populated.  Uses the
-        same freetext prompt as streaming; references are derived from validated
-        inline markers.
+        Returns a :class:`RetrievalResult` with ``answer``, ``contexts``, and
+        ``references``. Uses the same freetext prompt as streaming; references
+        are derived from validated inline markers.
 
         ``query_images`` are user-attached ``image_url`` content blocks inlined
         ahead of the retrieved-document section, letting the model see the
         user's input images in addition to retrieved chunks.
         """
-        collected_warnings = list(warnings or [])
         if self.model_func is None:
             logger.info("[AS] generate: no model_func available, returning None answer")
-            return RetrievalResult(answer=None, contexts=contexts, warnings=collected_warnings)
+            return RetrievalResult(answer=None, contexts=contexts)
 
         prepared = await asyncio.to_thread(
             self._prepare_model_call,
             query,
             contexts,
             query_images=query_images,
-            history_images=history_images,
             conversation_history=conversation_history,
         )
 
@@ -175,7 +170,6 @@ class AnswerSynthesizer:
             answer_images=answer_images,
             answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
             trace=prepared.trace,
-            warnings=collected_warnings,
         )
 
     async def generate_stream(
@@ -184,17 +178,13 @@ class AnswerSynthesizer:
         contexts: RetrievalContexts,
         query_images: list[dict[str, Any]] | None = None,
         conversation_history: PriorTurns | None = None,
-        history_images: list[dict[str, Any]] | None = None,
-        warnings: list[str] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming final answer generation.
 
         Uses the same freetext prompt and identical evidence preparation as
-        ``generate()``.  Wraps the token stream with :class:`AnswerStream` for
-        post-stream citation index validation and exposes one stable
-        ``warnings`` list on the returned stream.
+        ``generate()``. Wraps the token stream with :class:`AnswerStream` for
+        post-stream citation index validation.
         """
-        collected_warnings = list(warnings or [])
         if self.model_func is None:
             logger.info("[AS] generate_stream: no model_func, returning None")
             return contexts, None
@@ -204,7 +194,6 @@ class AnswerSynthesizer:
             query,
             contexts,
             query_images=query_images,
-            history_images=history_images,
             conversation_history=conversation_history,
         )
 
@@ -225,7 +214,6 @@ class AnswerSynthesizer:
         if hasattr(token_iterator, "__aiter__"):
             token_iterator = AnswerStream(token_iterator, indexer=prepared.indexer)
             cast(Any, token_iterator).trace = prepared.trace
-            cast(Any, token_iterator).warnings = collected_warnings
 
         return prepared.contexts, token_iterator
 
@@ -241,7 +229,6 @@ class AnswerSynthesizer:
         complete: Callable[..., Any],
         indexer: CitationIndexer,
         trace: dict[str, Any] | None = None,
-        warnings: list[str] | None = None,
     ) -> RetrievalResult:
         """Own the tools-disabled final answer for the non-streaming research path.
 
@@ -259,7 +246,6 @@ class AnswerSynthesizer:
         )
         from dlightrag.models.schemas import Reference
 
-        collected_warnings = list(warnings or [])
         result_trace = dict(trace or {})
         no_context = not _has_research_evidence(contexts, messages)
 
@@ -282,7 +268,6 @@ class AnswerSynthesizer:
             answer_images=answer_images,
             answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
             trace=result_trace,
-            warnings=collected_warnings,
         )
 
     async def synthesize_research_stream(
@@ -293,16 +278,13 @@ class AnswerSynthesizer:
         stream: Callable[..., AsyncIterator[str]],
         indexer: CitationIndexer,
         trace: dict[str, Any] | None = None,
-        warnings: list[str] | None = None,
     ) -> tuple[RetrievalContexts, AnswerStream]:
         """Own the tools-disabled final stream for the research path.
 
         Streaming analogue of :meth:`synthesize_research`.  Wraps the provider's
         native token stream with :class:`AnswerStream` for post-stream citation
-        validation and exposes one stable ``warnings`` list plus no-context
-        handling, keeping the streaming wrapper under the single final owner.
+        validation and no-context handling.
         """
-        collected_warnings = list(warnings or [])
         result_trace = dict(trace or {})
         no_context = not _has_research_evidence(contexts, messages)
 
@@ -313,7 +295,6 @@ class AnswerSynthesizer:
 
         wrapped = AnswerStream(token_iterator, indexer=indexer)
         cast(Any, wrapped).trace = result_trace
-        cast(Any, wrapped).warnings = collected_warnings
         cast(Any, wrapped).image_descriptions = {}
         return contexts, wrapped
 
@@ -327,7 +308,6 @@ class AnswerSynthesizer:
         contexts: RetrievalContexts,
         *,
         query_images: list[dict[str, Any]] | None = None,
-        history_images: list[dict[str, Any]] | None = None,
         conversation_history: PriorTurns | None = None,
     ) -> _PreparedModelCall:
         original_history = list((conversation_history or PriorTurns()).messages)
@@ -336,13 +316,11 @@ class AnswerSynthesizer:
             system_prompt = answer_core()
             budget = self._new_image_budget()
             current_blocks = self._budget_current_images(query_images, budget)
-            selected_history_blocks = self._budget_history_images(history_images, budget)
             history_messages, message_history_blocks = self._build_history_messages(history, budget)
             prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
             no_context = not _has_answer_evidence(
                 prepared.contexts,
                 query_images=query_images,
-                history_images=history_images,
                 conversation_history=history,
             )
             if no_context:
@@ -350,7 +328,7 @@ class AnswerSynthesizer:
             self._apply_image_trace(
                 prepared.trace,
                 current_count=len(current_blocks),
-                history_count=len(selected_history_blocks) + len(message_history_blocks),
+                history_count=len(message_history_blocks),
                 budget=budget,
             )
             excerpt_blocks = self._build_excerpt_blocks(
@@ -363,7 +341,6 @@ class AnswerSynthesizer:
                 prepared.user_prompt,
                 excerpt_blocks,
                 current_blocks=current_blocks,
-                selected_history_blocks=selected_history_blocks,
                 history_messages=history_messages,
             )
             evidence_tokens = estimate_content_tokens(excerpt_blocks) + estimate_content_tokens(
@@ -470,19 +447,6 @@ class AnswerSynthesizer:
             history_messages.append({"role": hmsg["role"], "content": budgeted})
         return history_messages, history_blocks
 
-    @staticmethod
-    def _budget_history_images(
-        history_images: list[dict[str, Any]] | None,
-        budget: AnswerImageBudget,
-    ) -> list[dict[str, Any]]:
-        """Add planner-selected history pixels best-effort to the shared budget."""
-        blocks: list[dict[str, Any]] = []
-        for idx, image in enumerate(history_images or [], start=1):
-            block = budget.add_user_image(image, label=f"selected_history_image_{idx}")
-            if block is not None:
-                blocks.append(block)
-        return blocks
-
     def _compose_user_messages(
         self,
         system_prompt: str,
@@ -490,7 +454,6 @@ class AnswerSynthesizer:
         excerpt_blocks: list[dict[str, Any]],
         *,
         current_blocks: list[dict[str, Any]],
-        selected_history_blocks: list[dict[str, Any]],
         history_messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Place budgeted image blocks into the final message structure."""
@@ -498,9 +461,6 @@ class AnswerSynthesizer:
         if current_blocks:
             content.append({"type": "text", "text": "## User-attached images\n"})
             content.extend(current_blocks)
-        if selected_history_blocks:
-            content.append({"type": "text", "text": "## Referenced conversation images\n"})
-            content.extend(selected_history_blocks)
         content.extend(excerpt_blocks)
         content.append({"type": "text", "text": user_prompt})
         messages: list[dict[str, Any]] = [
@@ -679,12 +639,11 @@ def _has_answer_evidence(
     contexts: RetrievalContexts,
     *,
     query_images: list[dict[str, Any]] | None,
-    history_images: list[dict[str, Any]] | None,
     conversation_history: list[dict[str, Any]] | None,
 ) -> bool:
     if any(contexts.get(key) for key in ("chunks", "entities", "relationships")):
         return True
-    if query_images or history_images:
+    if query_images:
         return True
     if not conversation_history:
         return False
