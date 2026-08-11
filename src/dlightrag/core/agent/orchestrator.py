@@ -14,16 +14,16 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.core.agent.episode import RunEpisode
 from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.agent.tool_loop import (
     AgentTool,
     ExecutedTurn,
-    ToolExecution,
     ToolResult,
     ToolTurnExecutor,
 )
@@ -38,15 +38,16 @@ from dlightrag.core.retrieval.web_search import (
     web_context_rows,
 )
 from dlightrag.models.tool_turn import AssistantTurn
-from dlightrag.prompts import agent_control_prompt, answer_core
+from dlightrag.prompts import (
+    CONTROL_TURN_INSTRUCTION,
+    FINAL_TURN_INSTRUCTION,
+    agent_control_prompt,
+    answer_core,
+)
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.utils.tokens import estimate_messages_tokens
 
 logger = logging.getLogger(__name__)
-
-# Same bound pi puts on a serialized tool result. Only the result is truncated: the
-# call must survive intact so a later turn can see which angle was already tried.
-_TOOL_RESULT_MAX_CHARS = 2000
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
 WebSearch = Callable[[str], Awaitable[WebSearchResult]]
@@ -63,15 +64,14 @@ class SearchInput(BaseModel):
 
 @dataclass(slots=True)
 class _RunState:
-    session: EvidenceLedger
+    # Memory: what this run has found, and what it has done.
+    evidence: EvidenceLedger
+    episode: RunEpisode
+    base_messages: list[dict[str, Any]]
+    tools: list[AgentTool]
     cache: _ToolCallCache
     trace: dict[str, Any]
-    tools: list[AgentTool]
-    base_messages: list[dict[str, Any]]
-    evidence_message: dict[str, Any] | None = None
-    last_exchange: list[dict[str, Any]] = field(default_factory=list)
-    # Which angles this run already tried, so a later control turn does not repeat one.
-    tried_calls: list[str] = field(default_factory=list)
+    control_message: dict[str, Any] | None = None
     stop_reason: str = "model_stop"
 
 
@@ -253,7 +253,7 @@ class AnswerOrchestrator:
         state.trace["agent_stop_reason"] = state.stop_reason
         return await self._synthesizer.synthesize_research(
             final_messages,
-            state.session.contexts,
+            state.evidence.contexts,
             complete=self._final_text_func,
             indexer=indexer,
             trace=state.trace,
@@ -282,7 +282,7 @@ class AnswerOrchestrator:
         state.trace["agent_stop_reason"] = state.stop_reason
         return await self._synthesizer.synthesize_research_stream(
             final_messages,
-            state.session.contexts,
+            state.evidence.contexts,
             stream=self._stream_model_func,
             indexer=indexer,
             trace=state.trace,
@@ -311,11 +311,11 @@ class AnswerOrchestrator:
         indexer so the synthesizer finalizes over the same stable identities the
         transcript's evidence blocks were numbered from.
         """
-        blocks, indexer = self._render_evidence(state, final=True)
+        blocks, indexer = self._render_turn_blocks(state, final=True)
         final_messages = [
             {"role": "system", "content": answer_core()},
             *state.base_messages[1:],
-            *state.last_exchange,
+            *state.episode.last_exchange,
             {"role": "user", "content": blocks},
         ]
         self._check_envelope(final_messages)
@@ -333,9 +333,9 @@ class AnswerOrchestrator:
         query_images: list[dict[str, Any]] | None,
         initial_contexts: RetrievalContexts | None = None,
     ) -> _RunState:
-        session = EvidenceLedger()
+        evidence = EvidenceLedger()
         if initial_contexts:
-            session.add_contexts(initial_contexts)
+            evidence.add_contexts(initial_contexts)
         cache = _ToolCallCache()
         trace: dict[str, Any] = {
             "agent_turns": 0,
@@ -346,7 +346,7 @@ class AnswerOrchestrator:
             args = _as(raw, SearchInput)
             return await cache.run(
                 _call_key("knowledge_base", args.query),
-                lambda: self._search_corpus(args.query, session),
+                lambda: self._search_corpus(args.query, evidence),
             )
 
         tools = [
@@ -363,28 +363,29 @@ class AnswerOrchestrator:
                     "search_web",
                     "Search the open web for one concrete unresolved or current fact.",
                     SearchInput,
-                    self._make_web_tool(session, cache, trace),
+                    self._make_web_tool(evidence, cache, trace),
                 )
             )
         for tool in self._resource_tools:
-            tools.append(self._wrap_resource_tool(tool, session, cache))
+            tools.append(self._wrap_resource_tool(tool, evidence, cache))
 
         return _RunState(
-            session=session,
-            cache=cache,
-            trace=trace,
-            tools=tools,
+            evidence=evidence,
+            episode=RunEpisode(),
             base_messages=_initial_messages(
                 query,
                 conversation_history=conversation_history,
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
             ),
+            tools=tools,
+            cache=cache,
+            trace=trace,
         )
 
     def _make_web_tool(
         self,
-        session: EvidenceLedger,
+        evidence: EvidenceLedger,
         cache: _ToolCallCache,
         trace: dict[str, Any],
     ) -> Callable[[BaseModel], Awaitable[ToolResult]]:
@@ -392,7 +393,7 @@ class AnswerOrchestrator:
             args = _as(raw, SearchInput)
             return await cache.run(
                 _call_key("web", args.query),
-                lambda: self._search_open_web(args.query, session, trace),
+                lambda: self._search_open_web(args.query, evidence, trace),
             )
 
         return search_web
@@ -400,7 +401,7 @@ class AnswerOrchestrator:
     def _wrap_resource_tool(
         self,
         tool: AgentTool,
-        session: EvidenceLedger,
+        evidence: EvidenceLedger,
         cache: _ToolCallCache,
     ) -> AgentTool:
         """Cache equivalent resource calls and land each observation in the ledger."""
@@ -412,7 +413,7 @@ class AnswerOrchestrator:
                 result = await tool.execute(raw)
                 row = _resource_row(tool.name, result)
                 if row is not None:
-                    session.add_rows([row])
+                    evidence.add_rows([row])
                 return result
 
             return await cache.run(key, run_once)
@@ -424,47 +425,35 @@ class AnswerOrchestrator:
         state: _RunState,
     ) -> tuple[ExecutedTurn, bool]:
         executor = ToolTurnExecutor(cast(ToolModel, self._model_func))
-        call_messages = [*state.base_messages, *state.last_exchange]
-        if state.evidence_message is not None:
-            call_messages.append(state.evidence_message)
+        call_messages = [*state.base_messages, *state.episode.messages()]
+        if state.control_message is not None:
+            call_messages.append(state.control_message)
         self._check_envelope(call_messages)
-        previous_evidence_count = _evidence_count(state.session)
+        previous_evidence_count = _evidence_count(state.evidence)
         executed = await executor.run_turn(
             call_messages,
             state.tools,
             tool_choice="auto",
         )
         state.trace["agent_turns"] += 1
-        state.last_exchange = executed.messages[len(call_messages) :]
-        state.tried_calls.extend(_format_tried_call(result) for result in executed.results)
+        state.episode.record(executed.messages[len(call_messages) :])
         if executed.assistant.tool_calls:
-            blocks, _ = self._render_evidence(state)
-            state.evidence_message = {"role": "user", "content": blocks}
-        return executed, _evidence_count(state.session) != previous_evidence_count
+            blocks, _ = self._render_turn_blocks(state)
+            state.control_message = {"role": "user", "content": blocks}
+        return executed, _evidence_count(state.evidence) != previous_evidence_count
 
-    def _render_evidence(
+    def _render_turn_blocks(
         self,
         state: _RunState,
         *,
         final: bool = False,
     ) -> tuple[list[dict[str, Any]], Any]:
-        fixed = estimate_messages_tokens([*state.base_messages, *state.last_exchange])
-        tried = "" if final else _format_tried_calls(state.tried_calls)
-        if tried:
-            # Counted as fixed input so a longer call history shrinks the evidence budget
-            # instead of overflowing the envelope.
-            fixed += estimate_messages_tokens([{"role": "user", "content": tried}])
-        blocks, indexer = state.session.transform(self._capacity, fixed_input_tokens=fixed)
-        if final:
-            instruction = "Answer the original request now from the current evidence above."
-        else:
-            instruction = (
-                "Evidence gathered so far is above. Decide only what to do next: call tools for "
-                "a specific missing fact, or reply `READY` when this evidence supports the "
-                "request. Do not draft the answer here."
-            )
-        prefix = [{"type": "text", "text": tried}] if tried else []
-        return [*prefix, *blocks, {"type": "text", "text": instruction}], indexer
+        # The answer turn carries one exchange instead of the episode, so it packs more evidence.
+        carried = state.episode.last_exchange if final else state.episode.messages()
+        fixed = estimate_messages_tokens([*state.base_messages, *carried])
+        blocks, indexer = state.evidence.transform(self._capacity, fixed_input_tokens=fixed)
+        instruction = FINAL_TURN_INSTRUCTION if final else CONTROL_TURN_INSTRUCTION
+        return [*blocks, {"type": "text", "text": instruction}], indexer
 
     def _check_envelope(self, messages: list[dict[str, Any]]) -> None:
         input_tokens = estimate_messages_tokens(messages)
@@ -476,22 +465,22 @@ class AnswerOrchestrator:
 
     def _prepare_research(self, state: _RunState) -> None:
         self._check_envelope(state.base_messages)
-        if _evidence_count(state.session):
-            blocks, _ = self._render_evidence(state)
-            state.evidence_message = {"role": "user", "content": blocks}
+        if _evidence_count(state.evidence):
+            blocks, _ = self._render_turn_blocks(state)
+            state.control_message = {"role": "user", "content": blocks}
 
-    async def _search_corpus(self, query: str, session: EvidenceLedger) -> ToolResult:
+    async def _search_corpus(self, query: str, evidence: EvidenceLedger) -> ToolResult:
         try:
             result = await self._retrieve_knowledge_base(query)
         except Exception as exc:
             raise RuntimeError("knowledge-base search failed") from exc
-        delta = session.add_contexts(result.contexts)
+        delta = evidence.add_contexts(result.contexts)
         return ToolResult(content=f"Knowledge base added {delta.new_chunks} new passages.")
 
     async def _search_open_web(
         self,
         query: str,
-        session: EvidenceLedger,
+        evidence: EvidenceLedger,
         trace: dict[str, Any],
     ) -> ToolResult:
         search_web = cast(WebSearch, self._search_web)
@@ -514,7 +503,7 @@ class AnswerOrchestrator:
                 if resource_id is not None:
                     metadata["resource_id"] = resource_id
                     readable_sources.setdefault(resource_id, str(metadata.get("title") or "Source"))
-        delta = session.add_rows(rows)
+        delta = evidence.add_rows(rows)
         trace["web_search_cost_dollars"] += result.cost_dollars
         content = f"Open web added {delta.new_chunks} new passages."
         if delta.new_chunks and readable_sources:
@@ -629,34 +618,8 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
     }
 
 
-def _evidence_count(session: EvidenceLedger) -> int:
-    return sum(len(rows) for rows in session.contexts.values())
-
-
-def _format_tried_call(execution: ToolExecution) -> str:
-    """One line: the call as issued, and what it returned."""
-    arguments = ", ".join(
-        f"{name}={json.dumps(value, ensure_ascii=False)}"
-        for name, value in execution.call.arguments.items()
-    )
-    outcome = _truncate_result(" ".join(execution.result.content.split()))
-    if execution.is_error:
-        outcome = f"failed: {outcome}"
-    return f"{execution.call.name}({arguments}) -> {outcome}"
-
-
-def _truncate_result(text: str) -> str:
-    if len(text) <= _TOOL_RESULT_MAX_CHARS:
-        return text
-    dropped = len(text) - _TOOL_RESULT_MAX_CHARS
-    return f"{text[:_TOOL_RESULT_MAX_CHARS]} [... {dropped} more characters truncated]"
-
-
-def _format_tried_calls(tried_calls: list[str]) -> str:
-    if not tried_calls:
-        return ""
-    lines = "\n".join(f"- {line}" for line in tried_calls)
-    return f"## Calls already made\n{lines}"
+def _evidence_count(evidence: EvidenceLedger) -> int:
+    return sum(len(rows) for rows in evidence.contexts.values())
 
 
 def _merge_initial_contexts(

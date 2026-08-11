@@ -693,7 +693,7 @@ async def test_research_stops_at_the_turn_cap_and_still_answers() -> None:
     assert result.answer == "Answer from what was gathered [1-1]."
 
 
-async def test_control_turns_carry_the_calls_already_made() -> None:
+async def test_control_turns_replay_the_exchanges_this_run_produced() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
 
@@ -702,17 +702,16 @@ async def test_control_turns_carry_the_calls_already_made() -> None:
 
     agent = ScriptedAgent(
         _tool(_call(query="savings rate", source="knowledge_base")),
+        _tool(_call(query="second angle", source="web", call_id="b")),
         _answer("READY"),
         final_text="Answer [1-1].",
     )
     await _research(agent, retrieve, search).answer("Question")
 
-    second_turn = str(agent.turn_calls[1]["messages"][-1])
-    assert "Calls already made" in second_turn
-    assert "search_knowledge_base" in second_turn
-    assert "savings rate" in second_turn
-    # The tools-disabled final call answers from evidence, not from the call log.
-    assert "Calls already made" not in str(agent.final_calls[0])
+    third_turn = str(agent.turn_calls[2]["messages"])
+    assert "savings rate" in third_turn
+    assert "second angle" in third_turn
+    assert "Knowledge base added" in third_turn
 
 
 async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> None:
@@ -735,7 +734,7 @@ async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> N
     assert "Done." in (result.answer or "")
 
 
-async def test_only_latest_exchange_is_replayed_with_canonical_evidence() -> None:
+async def test_evidence_is_packed_once_instead_of_once_per_exchange() -> None:
     async def retrieve(query: str) -> RetrievalResult:
         return _corpus_result(query)
 
@@ -750,9 +749,8 @@ async def test_only_latest_exchange_is_replayed_with_canonical_evidence() -> Non
     await _research(agent, retrieve, search).answer("Question")
 
     serialized = str(agent.turn_calls[2]["messages"])
-    assert "wave-three" in serialized
-    assert "wave-two" not in serialized
-    assert "Open-web evidence" in serialized
+    # Exchanges replay as receipts; the evidence itself is packed once, not per turn.
+    assert serialized.count("Open-web evidence") == 1
 
 
 async def test_preloaded_evidence_is_visible_without_automatic_searches() -> None:

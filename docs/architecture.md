@@ -88,6 +88,7 @@ answer request (query + optional attachments)
                -> a selected KB search lazily derives BM25/filter hints while
                     preserving the agent's search query
                -> selected tools write observations into the EvidenceLedger
+               -> each control turn replays the RunEpisode's exchanges
          -> evidence-growth convergence
          -> one tools-disabled AnswerSynthesizer final answer
 ```

@@ -36,6 +36,8 @@ Every citation marker is defined where its evidence appears, and nowhere else:
 - Do not add a "References", "Sources", or bibliography section; the system validates inline citations and builds sources separately
 """
 
+FINAL_TURN_INSTRUCTION = "Answer the original request now from the current evidence above."
+
 
 def answer_core() -> str:
     """The answer system prompt, rebuilt per call so its clock is the caller's."""
@@ -48,4 +50,4 @@ def answer_core() -> str:
     )
 
 
-__all__ = ["answer_core"]
+__all__ = ["FINAL_TURN_INSTRUCTION", "answer_core"]

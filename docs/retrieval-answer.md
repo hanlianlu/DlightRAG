@@ -283,6 +283,10 @@ picks one of two paths:
   available peer tools (`search_knowledge_base`, `read_resource`,
   `inspect_resource`, and `search_web` when enabled); only the selected tools
   append observations to an `EvidenceLedger`.
+  Every control turn replays the run's `RunEpisode`: the newest exchanges carry
+  provider-native reasoning so a thinking model resumes its own chain, while
+  older exchanges keep only the call and its result, so a later turn still sees
+  which angles are spent without paying for the thinking behind them.
   Evidence-producing Web result URLs receive opaque request-local resource ids,
   allowing a later `read_resource` call to deepen a selected source without a
   raw-URL tool.

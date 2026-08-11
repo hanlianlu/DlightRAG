@@ -10,6 +10,7 @@ Three density buckets:
   - **ASCII** (~1 token / 4 chars): basic Latin, digits, punctuation
 """
 
+import json
 import math
 import re
 from typing import Any
@@ -93,6 +94,12 @@ def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
         total += 4
         total += estimate_tokens(str(message.get("role") or ""))
         total += estimate_content_tokens(message.get("content", ""))
+        # Tool calls and replayed provider reasoning are sent too, and the reasoning
+        # of a thinking model dwarfs the text beside it.
+        for key in ("tool_calls", "provider_state"):
+            payload = message.get(key)
+            if payload:
+                total += estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str))
     return total
 
 
