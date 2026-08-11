@@ -809,12 +809,17 @@ class RAGService:
 
     async def _warmup_lightrag_workers(self) -> None:
         """Pre-initialize LightRAG worker pools in the background."""
+        from dlightrag.observability import trace_observation
+
         try:
             from lightrag import QueryParam
 
-            await self._lightrag.aquery(
-                "__warmup__", param=QueryParam(mode="naive", enable_rerank=False)
-            )
+            # Named span: the probe embeds a synthetic query, which would otherwise
+            # surface as an unattributed embedding trace.
+            async with trace_observation("worker_warmup", as_type="span"):
+                await self._lightrag.aquery(
+                    "__warmup__", param=QueryParam(mode="naive", enable_rerank=False)
+                )
             logger.info("LightRAG worker warm-up complete")
         except Exception:
             logger.debug("LightRAG worker warm-up failed (non-critical)", exc_info=True)

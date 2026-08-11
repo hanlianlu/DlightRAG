@@ -88,6 +88,16 @@ async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
     assert "input" not in client.observations[-1].kwargs
 
 
+async def test_answer_output_follows_the_same_privacy_switch_as_the_query() -> None:
+    from dlightrag.core.servicemanager import answer_trace_output
+
+    observability._trace_sensitive = True
+    assert answer_trace_output("the answer", [], {})["answer"] == "the answer"
+
+    observability._trace_sensitive = False
+    assert "answer" not in answer_trace_output("the answer", [], {})
+
+
 async def test_trace_observation_records_error_text_when_enabled() -> None:
     client = _RecordingLangfuse()
     observability._client = client

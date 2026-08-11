@@ -372,7 +372,7 @@ async def test_transport_and_capability_metrics_reach_observation(
     assert caps["answer_image_configured_ceiling"] == 8
     assert caps["answer_image_effective_limit"] == 6
 
-    # Streaming shares the non-streaming span name, so one Langfuse view covers both.
+    # The web request span is the trace root, so its output carries the answer itself.
     assert captured["name"] == "answer_pipeline"
     start = captured["start"]
     assert isinstance(start, dict)
@@ -380,7 +380,9 @@ async def test_transport_and_capability_metrics_reach_observation(
     updates = captured["updates"]
     assert isinstance(updates, list)
     outputs = [update["output"] for update in updates if "output" in update]
-    assert outputs == [{"answer_len": 6, "source_count": 0, "context_chunk_count": 0}]
+    assert outputs == [
+        {"answer_len": 6, "source_count": 0, "context_chunk_count": 0, "answer": "answer"}
+    ]
 
     transport = [
         metadata for metadata in _metadata_updates(captured) if "answer_images_total" in metadata

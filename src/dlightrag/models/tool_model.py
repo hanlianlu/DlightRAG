@@ -78,8 +78,10 @@ class QueryToolModel:
         messages: list[dict[str, Any]],
     ) -> AsyncIterator[str]:
         """Stream a tools-none final answer from a rich tool transcript."""
-        from dlightrag.observability import trace_observation
+        from dlightrag.observability import trace_observation, trace_sensitive_enabled
 
+        record_text = trace_sensitive_enabled()
+        streamed: list[str] = []
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
         text_length = 0
@@ -104,6 +106,8 @@ class QueryToolModel:
                     ):
                         text_length += len(token)
                         substantive_text = substantive_text or bool(token.strip())
+                        if record_text:
+                            streamed.append(token)
                         yield token
                     _accumulate_metrics(usage_details, attempt_usage.get("usage_details"))
                     _accumulate_metrics(cost_details, attempt_usage.get("cost_details"))
@@ -115,8 +119,11 @@ class QueryToolModel:
                         )
                 raise RuntimeError("Query model returned an empty final answer after retry")
             finally:
+                output: dict[str, Any] = {"text_length": text_length, "attempts": attempts}
+                if record_text:
+                    output["text"] = "".join(streamed)
                 trace.update(
-                    output={"text_length": text_length, "attempts": attempts},
+                    output=output,
                     usage_details=usage_details or None,
                     cost_details=cost_details or None,
                 )
@@ -133,7 +140,7 @@ class QueryToolModel:
         signatures in the transcript are preserved while the model can only emit
         text.
         """
-        from dlightrag.observability import trace_observation
+        from dlightrag.observability import trace_observation, trace_sensitive_enabled
 
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
@@ -167,8 +174,11 @@ class QueryToolModel:
                         )
                 raise RuntimeError("Query model returned an empty final answer after retry")
             finally:
+                output: dict[str, Any] = {"text_length": len(text), "attempts": attempts}
+                if trace_sensitive_enabled():
+                    output["text"] = text
                 trace.update(
-                    output={"text_length": len(text), "attempts": attempts},
+                    output=output,
                     usage_details=usage_details or None,
                     cost_details=cost_details or None,
                 )

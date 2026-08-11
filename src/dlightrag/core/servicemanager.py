@@ -248,13 +248,18 @@ def _context_output(contexts: RetrievalContexts) -> dict[str, int]:
 
 def answer_trace_output(
     answer: str | None, sources: Sequence[Any] | None, contexts: Any
-) -> dict[str, int]:
-    """Shape the answer counts a pipeline span reports, streamed or not."""
-    return {
+) -> dict[str, Any]:
+    """Shape what a pipeline span reports as its answer, streamed or not."""
+    from dlightrag.observability import trace_sensitive_enabled
+
+    output: dict[str, Any] = {
         "answer_len": len(answer or ""),
         "source_count": len(sources or []),
         "context_chunk_count": _context_count(contexts, "chunks"),
     }
+    if trace_sensitive_enabled():
+        output["answer"] = answer or ""
+    return output
 
 
 def _scope_for_workspaces(
@@ -1712,7 +1717,7 @@ class RAGServiceManager:
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 async with trace_observation(
-                    "answer_pipeline",
+                    "answer_orchestration",
                     as_type="chain",
                     input={"query": turn.current_query},
                     metadata={
@@ -1792,7 +1797,7 @@ class RAGServiceManager:
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 async with trace_observation(
-                    "answer_pipeline",
+                    "answer_orchestration",
                     as_type="chain",
                     input={"query": turn.current_query},
                     metadata={

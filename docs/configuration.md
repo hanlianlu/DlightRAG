@@ -879,7 +879,7 @@ set; those are secrets and belong in `.env`. The rest is non-secret and lives in
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `langfuse_host` | `https://cloud.langfuse.com` | Where traces are sent. Set per run mode — see [operations.md](operations.md#trace-endpoint-address) |
-| `langfuse_trace_sensitive_data` | `true` | `false` redacts the query, raw error text, and raw IDs. Does not affect LLM prompt/response capture |
+| `langfuse_trace_sensitive_data` | `true` | `false` redacts the query, the generated answer, raw error text, and raw IDs. Does not affect LLM prompt/response capture |
 | `langfuse_export_external_spans` | `false` | Also export third-party OTEL spans. DlightRAG records model calls itself, so leaving this off avoids double counting |
 | `langfuse_environment` | unset | Environment label on every trace |
 | `langfuse_release` | unset | Release label on every trace |
