@@ -9,49 +9,31 @@ the model selects from the available peer tools, evidence-growth convergence,
 and one additional tools-disabled final answer generation.
 """
 
-import asyncio
-import hashlib
-import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from dlightrag.core.agent.context import ContextAssembler
 from dlightrag.core.agent.episode import RunEpisode
 from dlightrag.core.agent.evidence import EvidenceLedger
-from dlightrag.core.agent.tool_loop import (
-    AgentTool,
-    ExecutedTurn,
-    ToolResult,
-    ToolTurnExecutor,
+from dlightrag.core.agent.tool_loop import AgentTool, ExecutedTurn, ToolTurnExecutor
+from dlightrag.core.agent.tools import (
+    KnowledgeRetrieval,
+    WebSearch,
+    build_run_tools,
 )
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.core.retrieval.web_search import (
-    WebSearchResult,
-    WebSearchUnavailable,
-    web_context_rows,
-)
 from dlightrag.models.tool_turn import AssistantTurn
 
 logger = logging.getLogger(__name__)
 
-KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
-WebSearch = Callable[[str], Awaitable[WebSearchResult]]
 ToolModel = Callable[..., Awaitable[AssistantTurn]]
 StreamModel = Callable[..., AsyncIterator[str]]
 FinalText = Callable[..., Awaitable[str]]
-
-
-class SearchInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    query: str = Field(min_length=1)
 
 
 @dataclass(slots=True)
@@ -61,7 +43,6 @@ class _RunState:
     episode: RunEpisode
     opening: list[dict[str, Any]]
     tools: list[AgentTool]
-    cache: _ToolCallCache
     trace: dict[str, Any]
     stop_reason: str = "model_stop"
 
@@ -311,39 +292,10 @@ class AnswerOrchestrator:
         evidence = EvidenceLedger()
         if initial_contexts:
             evidence.add_contexts(initial_contexts)
-        cache = _ToolCallCache()
         trace: dict[str, Any] = {
             "agent_turns": 0,
             "web_search_cost_dollars": 0.0,
         }
-
-        async def search_knowledge_base(raw: BaseModel) -> ToolResult:
-            args = _as(raw, SearchInput)
-            return await cache.run(
-                _call_key("knowledge_base", args.query),
-                lambda: self._search_corpus(args.query, evidence),
-            )
-
-        tools = [
-            AgentTool(
-                "search_knowledge_base",
-                "Search the indexed knowledge base for one concrete unresolved fact.",
-                SearchInput,
-                search_knowledge_base,
-            ),
-        ]
-        if self._search_web is not None:
-            tools.append(
-                AgentTool(
-                    "search_web",
-                    "Search the open web for one concrete unresolved or current fact.",
-                    SearchInput,
-                    self._make_web_tool(evidence, cache, trace),
-                )
-            )
-        for tool in self._resource_tools:
-            tools.append(self._wrap_resource_tool(tool, evidence, cache))
-
         return _RunState(
             evidence=evidence,
             episode=RunEpisode(),
@@ -353,47 +305,16 @@ class AnswerOrchestrator:
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
             ),
-            tools=tools,
-            cache=cache,
+            tools=build_run_tools(
+                evidence=evidence,
+                trace=trace,
+                retrieve_knowledge_base=self._retrieve_knowledge_base,
+                search_web=self._search_web,
+                resource_tools=self._resource_tools,
+                register_web_source=self._register_web_source,
+            ),
             trace=trace,
         )
-
-    def _make_web_tool(
-        self,
-        evidence: EvidenceLedger,
-        cache: _ToolCallCache,
-        trace: dict[str, Any],
-    ) -> Callable[[BaseModel], Awaitable[ToolResult]]:
-        async def search_web(raw: BaseModel) -> ToolResult:
-            args = _as(raw, SearchInput)
-            return await cache.run(
-                _call_key("web", args.query),
-                lambda: self._search_open_web(args.query, evidence, trace),
-            )
-
-        return search_web
-
-    def _wrap_resource_tool(
-        self,
-        tool: AgentTool,
-        evidence: EvidenceLedger,
-        cache: _ToolCallCache,
-    ) -> AgentTool:
-        """Cache equivalent resource calls and land each observation in the ledger."""
-
-        async def execute(raw: BaseModel) -> ToolResult:
-            key = _resource_call_key(tool.name, raw)
-
-            async def run_once() -> ToolResult:
-                result = await tool.execute(raw)
-                row = _resource_row(tool.name, result)
-                if row is not None:
-                    evidence.add_rows([row])
-                return result
-
-            return await cache.run(key, run_once)
-
-        return AgentTool(tool.name, tool.description, tool.input_model, execute)
 
     async def _execute_control_turn(
         self,
@@ -412,120 +333,6 @@ class AnswerOrchestrator:
         state.trace["agent_turns"] += 1
         state.episode.record(executed.messages[len(call_messages) :])
         return executed, state.evidence.row_count != previous_rows
-
-    async def _search_corpus(self, query: str, evidence: EvidenceLedger) -> ToolResult:
-        try:
-            result = await self._retrieve_knowledge_base(query)
-        except Exception as exc:
-            raise RuntimeError("knowledge-base search failed") from exc
-        delta = evidence.add_contexts(result.contexts)
-        return ToolResult(content=f"Knowledge base added {delta.new_chunks} new passages.")
-
-    async def _search_open_web(
-        self,
-        query: str,
-        evidence: EvidenceLedger,
-        trace: dict[str, Any],
-    ) -> ToolResult:
-        search_web = cast(WebSearch, self._search_web)
-        try:
-            result = await search_web(query)
-        except WebSearchUnavailable:
-            raise
-        except Exception as exc:
-            raise RuntimeError("open-web search failed") from exc
-        rows = web_context_rows(result.hits)
-        readable_sources: dict[str, str] = {}
-        if self._register_web_source is not None:
-            resources_by_url: dict[str, str | None] = {}
-            for row in rows:
-                metadata = row.get("metadata") or {}
-                url = str(metadata.get("source_uri") or "")
-                if url not in resources_by_url:
-                    resources_by_url[url] = self._register_web_source(url)
-                resource_id = resources_by_url[url]
-                if resource_id is not None:
-                    metadata["resource_id"] = resource_id
-                    readable_sources.setdefault(resource_id, str(metadata.get("title") or "Source"))
-        delta = evidence.add_rows(rows)
-        trace["web_search_cost_dollars"] += result.cost_dollars
-        content = f"Open web added {delta.new_chunks} new passages."
-        if delta.new_chunks and readable_sources:
-            content += "\nResource handles:\n" + "\n".join(
-                f"- {title} [resource: {resource_id}]"
-                for resource_id, title in readable_sources.items()
-            )
-        return ToolResult(content=content)
-
-
-class _ToolCallCache:
-    """Run each distinct tool call once, so a repeat costs a turn and not a search.
-
-    This is execution bookkeeping, not memory the model reads: it keys on exact
-    arguments, and the episode is what shows the model which angles are spent.
-    """
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._tasks: dict[str, asyncio.Future[ToolResult]] = {}
-
-    async def run(
-        self,
-        key: str,
-        operation: Callable[[], Awaitable[ToolResult]],
-    ) -> ToolResult:
-        async with self._lock:
-            task = self._tasks.get(key)
-            repeated = task is not None
-            if task is None:
-                task = asyncio.ensure_future(operation())
-                self._tasks[key] = task
-        try:
-            result = await task
-        except BaseException:
-            async with self._lock:
-                if self._tasks.get(key) is task:
-                    self._tasks.pop(key, None)
-            raise
-        if repeated:
-            return ToolResult(
-                content="Equivalent tool call already executed; no new evidence was added.",
-                details=result.details,
-            )
-        return result
-
-
-def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
-    """Project a resource observation into a citable, re-readable evidence row."""
-    details = result.details or {}
-    resource_id = str(details.get("resource_id") or "")
-    if not resource_id or not result.content.strip():
-        return None
-    source_type = str(details.get("source_type") or "web_attachment")
-    source_uri = str(details.get("source_uri") or resource_id)
-    metadata = {
-        "source_type": source_type,
-        "source_uri": source_uri,
-        "source_download_locator": str(details.get("source_download_locator") or source_uri),
-        "title": str(details.get("title") or resource_id),
-    }
-    evidence_key = result.content
-    if tool_name == "read_resource":
-        content, marker, cursor = evidence_key.rpartition("\n[more text available; cursor=")
-        if marker and cursor.endswith("]"):
-            evidence_key = content
-    identity = hashlib.sha256(f"{tool_name}\0{evidence_key}".encode()).hexdigest()[:16]
-    return {
-        "chunk_id": f"{resource_id}::{tool_name}::{identity}",
-        "reference_id": resource_id,
-        "full_doc_id": resource_id,
-        "file_path": str(metadata.get("title") or resource_id),
-        "content": evidence_key if tool_name == "read_resource" else result.content,
-        "page_number": None,
-        "_workspace": "__web_search__" if source_type == "web_search" else "__attachment__",
-        "_evidence_key": f"{tool_name}:{identity}",
-        "metadata": metadata,
-    }
 
 
 def _merge_initial_contexts(
@@ -549,22 +356,4 @@ def _merge_initial_contexts(
     return merged
 
 
-def _call_key(name: str, query: str) -> str:
-    return f"{name}:{json.dumps(query.strip(), ensure_ascii=False)}"
-
-
-def _resource_call_key(name: str, raw: BaseModel) -> str:
-    payload = json.dumps(raw.model_dump(), ensure_ascii=False, sort_keys=True, default=str)
-    return f"{name}:{payload}"
-
-
-def _as[T: BaseModel](value: BaseModel, expected: type[T]) -> T:
-    if not isinstance(value, expected):
-        raise TypeError(f"Expected {expected.__name__}, got {type(value).__name__}")
-    return value
-
-
-__all__ = [
-    "AnswerOrchestrator",
-    "SearchInput",
-]
+__all__ = ["AnswerOrchestrator"]

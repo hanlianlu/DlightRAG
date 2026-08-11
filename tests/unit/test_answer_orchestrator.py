@@ -8,11 +8,9 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from dlightrag.core.agent.orchestrator import (
-    AnswerOrchestrator,
-    SearchInput,
-)
+from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
+from dlightrag.core.agent.tools import SearchInput
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.resources.models import ResourceManifestEntry
