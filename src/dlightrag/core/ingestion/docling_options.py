@@ -12,18 +12,17 @@ bypass its preset registry and fall back to the pipeline's built-in
 devices exclude MPS -- so enrichment hard-fails on Apple Silicon.
 
 ``do_pdf_heading_hierarchy`` infers section-header levels from PDF bookmarks,
-outline numbering and font style. Without it Docling leaves every heading at
-level 1, and LightRAG's deliberately faithful IR builder then collapses every
-chunk's ``parent_headings`` to the document title alone. Needs docling-serve
->= 1.30.0 (docling-jobkit >= 3.3.0); older services accept the field and drop
-it silently. See docs/configuration.md.
+outline numbering and font style. docling-serve defaults it off, and without it
+Docling leaves every heading at level 1, so LightRAG's deliberately faithful IR
+builder collapses every chunk's ``parent_headings`` to the document title alone.
+It is always forwarded: turning it off only degrades the corpus. Needs
+docling-serve >= 1.30.0 (docling-jobkit >= 3.3.0); older services accept the
+field and drop it silently. See docs/configuration.md.
 
-An option left at its upstream default installs no patch, so the request stays
-exactly what upstream sends. A forwarded option also joins LightRAG's fixed
-pipeline constants, which exist so that a change to the request shape
-invalidates every cached bundle on its own. Without that, a repointed preset or
-a newly inferred hierarchy would leave already-ingested workspace documents on
-stale parses.
+A forwarded option also joins LightRAG's fixed pipeline constants, which exist
+so that a change to the request shape invalidates every cached bundle on its
+own. Without that, a repointed preset or a newly inferred hierarchy would leave
+already-ingested workspace documents on stale parses.
 
 Delete this module once LightRAG forwards these itself.
 """
@@ -37,18 +36,12 @@ logger = logging.getLogger(__name__)
 _PATCH_ATTR = "_dlightrag_forwards_docling_options"
 
 
-def apply_docling_request_options(
-    *,
-    code_formula_preset: str | None = None,
-    do_pdf_heading_hierarchy: bool = False,
-) -> bool:
-    """Patch LightRAG's Docling client to send the configured options.
+def apply_docling_request_options(*, code_formula_preset: str | None = None) -> bool:
+    """Patch LightRAG's Docling client to send the options it omits.
 
-    Nothing to forward means no patch, so the request stays byte-identical to
-    upstream's. Idempotent; returns True when it installs.
+    Call only when Docling is the active parser. Idempotent; returns True when
+    it installs.
     """
-    if not code_formula_preset and not do_pdf_heading_hierarchy:
-        return False
     try:
         from lightrag.parser.external.docling.client import (
             FIXED_CONSTANTS,
@@ -67,8 +60,7 @@ def apply_docling_request_options(
         data = original(self)
         if code_formula_preset and self.do_formula_enrichment:
             data.setdefault("code_formula_preset", code_formula_preset)
-        if do_pdf_heading_hierarchy:
-            data.setdefault("do_pdf_heading_hierarchy", _bool_form(True))
+        data.setdefault("do_pdf_heading_hierarchy", _bool_form(True))
         return data
 
     setattr(patched_build_multipart_data, _PATCH_ATTR, True)
@@ -78,13 +70,10 @@ def apply_docling_request_options(
     # mirrors the body patch so an upstream value always wins.
     if code_formula_preset:
         FIXED_CONSTANTS.setdefault("code_formula_preset", code_formula_preset)
-    if do_pdf_heading_hierarchy:
-        FIXED_CONSTANTS.setdefault("do_pdf_heading_hierarchy", True)
+    FIXED_CONSTANTS.setdefault("do_pdf_heading_hierarchy", True)
     logger.info(
-        "Applied LightRAG Docling option forwarding: code_formula_preset=%s, "
-        "do_pdf_heading_hierarchy=%s",
+        "Applied LightRAG Docling option forwarding: code_formula_preset=%s",
         code_formula_preset,
-        do_pdf_heading_hierarchy,
     )
     return True
 

@@ -322,18 +322,20 @@ class DoclingSidecarConfig(BaseModel):
     # On to match MinerU's enable_formula, so the parser choice does not decide
     # whether a corpus keeps its mathematics. Apple Silicon also needs a preset.
     do_formula_enrichment: bool = True
+    # Full-page OCR replacing the PDF text layer. On (docling-serve defaults it
+    # off) because a corpus of badly encoded PDFs silently ingests mojibake
+    # otherwise; see docs/configuration.md.
+    force_ocr: bool = True
     # Unset sends no preset, leaving LightRAG's request untouched. Setting it also
     # requires the matching docling-serve setting; see docs/configuration.md.
     code_formula_preset: str | None = None
-    # Off, every PDF heading stays at level 1 and chunks lose their section
-    # breadcrumbs. Needs docling-serve >= 1.30.0; see docs/configuration.md.
-    do_pdf_heading_hierarchy: bool = True
     poll_interval_seconds: int = Field(default=5, ge=1)
     max_polls: int = Field(default=1440, ge=1)
 
     _ENV_MAP: ClassVar[dict[str, str]] = {
         "endpoint": "DOCLING_ENDPOINT",
         "do_formula_enrichment": "DOCLING_DO_FORMULA_ENRICHMENT",
+        "force_ocr": "DOCLING_FORCE_OCR",
         "poll_interval_seconds": "DOCLING_POLL_INTERVAL_SECONDS",
         "max_polls": "DOCLING_MAX_POLLS",
     }

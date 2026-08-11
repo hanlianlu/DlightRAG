@@ -582,8 +582,8 @@ class RAGService:
         validate_parser_routing_config(self.config.parser_rules)
         docling = self.config.parser_sidecars.docling
         apply_lightrag_patches(
+            docling_active=docling is not None,
             docling_code_formula_preset=docling.code_formula_preset if docling else None,
-            docling_pdf_heading_hierarchy=bool(docling and docling.do_pdf_heading_hierarchy),
         )
         await self._do_initialize_unified()
 

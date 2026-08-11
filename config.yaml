@@ -127,8 +127,8 @@ parser_sidecars:
   #   endpoint: http://host.docker.internal:5001
   #   ## Only needed on Apple Silicon; see docs/configuration.md.
   #   # code_formula_preset: granite_docling
-  #   ## Needs docling-serve >= 1.30.0; see docs/configuration.md.
-  #   # do_pdf_heading_hierarchy: true
+  #   ## false keeps a well-encoded PDF's own text layer; see docs/configuration.md.
+  #   # force_ocr: false
 
 ## kg_entity_types is a lightweight hint (one line of extraction guidance).
 ## Left empty so DlightRAG defers to LightRAG's built-in general taxonomy

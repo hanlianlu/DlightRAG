@@ -10,14 +10,10 @@ def _client(
     *,
     do_formula_enrichment: bool,
     preset: str | None = "granite_docling",
-    heading_hierarchy: bool = True,
 ) -> Any:
     from lightrag.parser.external.docling.client import DoclingRawClient
 
-    apply_docling_request_options(
-        code_formula_preset=preset,
-        do_pdf_heading_hierarchy=heading_hierarchy,
-    )
+    apply_docling_request_options(code_formula_preset=preset)
     client = DoclingRawClient.__new__(DoclingRawClient)
     client.do_ocr = True
     client.force_ocr = False
@@ -42,23 +38,11 @@ def test_heading_hierarchy_sent_as_a_form_boolean() -> None:
     assert data["do_pdf_heading_hierarchy"] == "true"
 
 
-def test_nothing_to_forward_installs_no_patch() -> None:
-    assert (
-        apply_docling_request_options(code_formula_preset=None, do_pdf_heading_hierarchy=False)
-        is False
-    )
-
-
 def test_patch_adds_only_the_forwarded_fields_and_is_idempotent() -> None:
     from lightrag.parser.external.docling.client import DoclingRawClient
 
     client = _client(do_formula_enrichment=True)
-    assert (
-        apply_docling_request_options(
-            code_formula_preset="granite_docling", do_pdf_heading_hierarchy=True
-        )
-        is False
-    )
+    assert apply_docling_request_options(code_formula_preset="granite_docling") is False
 
     original = getattr(DoclingRawClient._build_multipart_data, "_dlightrag_original", None)
     assert original is not None, "Docling option patch did not install"
@@ -75,9 +59,7 @@ def test_patch_adds_only_the_forwarded_fields_and_is_idempotent() -> None:
 def test_forwarded_options_join_the_bundle_cache_signature() -> None:
     from lightrag.parser.external.docling.client import FIXED_CONSTANTS
 
-    apply_docling_request_options(
-        code_formula_preset="granite_docling", do_pdf_heading_hierarchy=True
-    )
+    apply_docling_request_options(code_formula_preset="granite_docling")
 
     assert FIXED_CONSTANTS["code_formula_preset"] == "granite_docling"
     assert FIXED_CONSTANTS["do_pdf_heading_hierarchy"] is True
@@ -91,12 +73,6 @@ def test_do_formula_enrichment_defaults_on_like_mineru() -> None:
     assert DoclingSidecarConfig().do_formula_enrichment is DEFAULT_MINERU_ENABLE_FORMULA
 
 
-def test_do_pdf_heading_hierarchy_defaults_on() -> None:
-    from dlightrag.config import DoclingSidecarConfig
-
-    assert DoclingSidecarConfig().do_pdf_heading_hierarchy is True
-
-
 def test_do_formula_enrichment_reaches_lightrag_env() -> None:
     from dlightrag.config import DlightragConfig, DoclingSidecarConfig, ParserSidecarsConfig
 
@@ -106,3 +82,14 @@ def test_do_formula_enrichment_reaches_lightrag_env() -> None:
         ),
     )
     assert config._lightrag_sidecar_env_map()["DOCLING_DO_FORMULA_ENRICHMENT"] == "true"
+
+
+def test_force_ocr_reaches_lightrag_env() -> None:
+    from dlightrag.config import DlightragConfig, DoclingSidecarConfig, ParserSidecarsConfig
+
+    config = DlightragConfig(
+        parser_sidecars=ParserSidecarsConfig(
+            docling=DoclingSidecarConfig(force_ocr=False),
+        ),
+    )
+    assert config._lightrag_sidecar_env_map()["DOCLING_FORCE_OCR"] == "false"

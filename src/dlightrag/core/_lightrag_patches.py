@@ -11,8 +11,8 @@ items.
 
 Docling request options: LightRAG's Docling client builds a fixed multipart
 body, so the code/formula preset and PDF heading-level inference are unreachable
-no matter how the parser service is configured. The patch forwards whichever of
-them is configured and is installed only when there is something to forward.
+no matter how the parser service is configured. The patch forwards both and is
+installed only when Docling is the active parser.
 
 Keep this module small and delete patches as upstream covers them.
 """
@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 
 def apply(
     *,
+    docling_active: bool = False,
     docling_code_formula_preset: str | None = None,
-    docling_pdf_heading_hierarchy: bool = False,
 ) -> None:
     """Apply all LightRAG patches. Idempotent."""
     applied = []
@@ -35,9 +35,8 @@ def apply(
         applied.append("mineru_content_list_hygiene")
     from dlightrag.core.ingestion.docling_options import apply_docling_request_options
 
-    if apply_docling_request_options(
+    if docling_active and apply_docling_request_options(
         code_formula_preset=docling_code_formula_preset,
-        do_pdf_heading_hierarchy=docling_pdf_heading_hierarchy,
     ):
         applied.append("docling_request_options")
     if applied:
