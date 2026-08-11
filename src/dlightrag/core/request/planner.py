@@ -5,7 +5,8 @@ Replaces the two-step pipeline (web/routes._rewrite_query + retrieval/query_anal
 with a single QueryPlanner that produces a QueryPlan from one LLM call.
 
 Consumers:
-- ServiceManager -- owns the planner singleton, calls plan() before retrieval
+- ServiceManager -- owns the planner singleton; plans eagerly for `/retrieve`
+    and fast answers, or lazily after an agent selects knowledge-base search
 - Web/API routes -- no longer do query processing, just pass raw history
 """
 
@@ -186,8 +187,11 @@ def _planner_user_payload(
     metadata_schema: str | None = None,
     history: list[dict[str, Any]] | None = None,
     current_images: list[str] | None = None,
+    preserve_query: bool = False,
 ) -> str:
     payload: dict[str, Any] = {"query": query}
+    if preserve_query:
+        payload["preserve_query"] = True
     if metadata_schema:
         payload["metadata_schema"] = metadata_schema
     history_text = _convert_history_to_text(history)
@@ -280,11 +284,13 @@ class QueryPlanner:
         max_tokens: int = 65536,
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
+        preserve_query: bool = False,
     ) -> QueryPlan:
         """Produce a full QueryPlan from one LLM call.
 
-        Handles conversation rewriting, semantic query extraction, and metadata
-        filter extraction in a single prompt.
+        Handles conversation rewriting, lexical query derivation, and metadata
+        filter extraction in one prompt. ``preserve_query`` disables rewriting
+        when a research agent already chose the semantic search query.
         """
 
         if self._llm_func is None:
@@ -307,6 +313,7 @@ class QueryPlanner:
                 metadata_schema=metadata_schema,
                 history=messages,
                 current_images=current_image_descriptions,
+                preserve_query=preserve_query,
             )
 
         system_tokens = estimate_tokens(system_prompt)
@@ -342,6 +349,9 @@ class QueryPlanner:
         plan = self._parse_response(response, query, structured_output=structured_output)
         if plan is None:
             return QueryPlan.fallback(query, "fallback_invalid_response")
+        if preserve_query:
+            plan.original_query = query
+            plan.standalone_query = query
 
         # Merge explicit filter (explicit wins)
         if explicit_filter is not None and not _is_empty_filter(explicit_filter):

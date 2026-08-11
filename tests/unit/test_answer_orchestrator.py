@@ -8,10 +8,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.core.agent.orchestrator import (
-    INITIAL_SCOPE_OUTPUT,
-    AgentProtocolError,
     AnswerOrchestrator,
-    InitialScopeDecision,
     SearchInput,
 )
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
@@ -27,23 +24,16 @@ class ScriptedAgent:
     def __init__(
         self,
         *turns: AssistantTurn,
-        include_web: bool = True,
         final_text: str = "Final answer generation.",
     ) -> None:
         self._turns = list(turns)
-        self.include_web = include_web
         self._final_text = final_text
         self.turn_calls: list[dict[str, Any]] = []
-        self.scope_calls: list[dict[str, Any]] = []
         self.final_calls: list[list[dict[str, Any]]] = []
 
     async def turn(self, **kwargs: Any) -> AssistantTurn:
         self.turn_calls.append(kwargs)
         return self._turns.pop(0)
-
-    async def select_scope(self, **kwargs: Any) -> InitialScopeDecision:
-        self.scope_calls.append(kwargs)
-        return InitialScopeDecision(include_web=self.include_web)
 
     async def final(self, *, messages: list[dict[str, Any]]) -> str:
         """Tools-disabled final text call the orchestrator must route through."""
@@ -124,7 +114,6 @@ def _research(
         retrieve_knowledge_base=retrieve,
         search_web=search,
         model_func=agent.turn,
-        scope_model_func=agent.select_scope,
         stream_model_func=stream_model_func,
         final_text_func=agent.final,
         resource_tools=resource_tools,
@@ -226,7 +215,7 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
     agent = ScriptedAgent(
         _tool(ToolCall(id="r", name="read_resource", arguments={"resource_id": "att-1"})),
         _answer("draft that is not the final answer"),
-        final_text="From the attachment [2-1].",
+        final_text="From the attachment [1-1].",
     )
     orchestrator = AnswerOrchestrator(
         synthesizer=_research_synthesizer(),
@@ -254,8 +243,6 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
 
     result = await orchestrator.answer("Summarize the attachment")
 
-    # No web scope decision is made when Exa is absent.
-    assert agent.scope_calls == []
     assert read_calls == ["att-1"]
     # search_web is never offered; read_resource is a peer tool.
     tool_names = {tool.name for tool in agent.turn_calls[0]["tools"]}
@@ -266,17 +253,75 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
     assert "report.pdf" in control_messages
     # The final answer comes from one distinct tools-disabled synthesis call.
     assert len(agent.final_calls) == 1
-    assert result.answer == "From the attachment [2-1]."
+    assert result.answer == "From the attachment [1-1]."
     assert "cursor=volatile" not in str(agent.final_calls[0])
 
 
-async def test_current_image_manifest_binds_resources_and_discourages_redundant_inspection() -> (
-    None
-):
+async def test_attachment_agent_reads_resource_without_automatic_searches() -> None:
+    corpus_queries: list[str] = []
+    web_queries: list[str] = []
+    read_calls: list[str] = []
+
+    async def retrieve(query: str) -> RetrievalResult:
+        corpus_queries.append(query)
+        return _corpus_result()
+
+    async def search(query: str) -> WebSearchResult:
+        web_queries.append(query)
+        return _web_result()
+
+    agent = ScriptedAgent(
+        _tool(ToolCall(id="read", name="read_resource", arguments={"resource_id": "att-1"})),
+        _answer("ready"),
+        final_text="Attachment summary [1-1].",
+    )
+    result = await _research(
+        agent,
+        retrieve,
+        search,
+        resource_tools=[_fake_read_tool(calls=read_calls)],
+        resource_manifest=(
+            ResourceManifestEntry(
+                resource_id="att-1",
+                filename="report.html",
+                declared_mime="text/html",
+                source="bytes",
+                byte_size=123,
+            ),
+        ),
+    ).answer("Summarize this document")
+
+    assert corpus_queries == []
+    assert web_queries == []
+    assert read_calls == ["att-1"]
+    assert result.answer == "Attachment summary [1-1]."
+
+
+async def test_exa_capability_does_not_search_until_agent_calls_a_tool() -> None:
+    corpus_queries: list[str] = []
+    web_queries: list[str] = []
+
+    async def retrieve(query: str) -> RetrievalResult:
+        corpus_queries.append(query)
+        return _corpus_result()
+
+    async def search(query: str) -> WebSearchResult:
+        web_queries.append(query)
+        return _web_result()
+
+    agent = ScriptedAgent(_answer("ready"), final_text="General answer.")
+    result = await _research(agent, retrieve, search).answer("Explain recursion")
+
+    assert corpus_queries == []
+    assert web_queries == []
+    assert "General answer." in (result.answer or "")
+
+
+async def test_current_image_manifest_binds_resources_and_marks_images_visible() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
 
-    agent = ScriptedAgent(_answer("ready"), final_text="Image answer [1-1].")
+    agent = ScriptedAgent(_answer("ready"), final_text="Image answer.")
     orchestrator = AnswerOrchestrator(
         synthesizer=_research_synthesizer(),
         retrieve_knowledge_base=retrieve,
@@ -331,48 +376,8 @@ async def test_current_image_manifest_binds_resources_and_discourages_redundant_
     assert current_user_content[5]["image_url"]["url"].endswith("def")
     assert "res-image" in str(messages)
     system_prompt = " ".join(messages[0]["content"].split())
-    assert "have informed initial knowledge-base retrieval" in system_prompt
-    assert "Do not inspect them merely for a general description" in system_prompt
-
-
-async def test_initial_decision_runs_fixed_corpus_and_web_wave_in_parallel() -> None:
-    corpus_started = asyncio.Event()
-    web_started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def retrieve(_query: str) -> RetrievalResult:
-        corpus_started.set()
-        await release.wait()
-        return _corpus_result()
-
-    async def search(_query: str) -> WebSearchResult:
-        web_started.set()
-        await release.wait()
-        return _web_result()
-
-    agent = ScriptedAgent(_answer("draft"), final_text="Both agree [1-1][2-1].")
-    task = asyncio.create_task(
-        _research(agent, retrieve, search).answer(
-            "What about it?",
-            retrieval_query="standalone subject",
-        )
-    )
-    await asyncio.wait_for(corpus_started.wait(), timeout=1)
-    await asyncio.wait_for(web_started.wait(), timeout=1)
-    release.set()
-    result = await task
-
-    assert result.answer == "Both agree [1-1][2-1]."
-    assert [source.id for source in result.sources] == ["1", "2"]
-    assert agent.scope_calls[0]["structured_output"] is INITIAL_SCOPE_OUTPUT
-    assert agent.scope_calls[0]["messages"][-1]["content"] == "What about it?"
-    assert [tool.name for tool in agent.turn_calls[0]["tools"]] == [
-        "search_knowledge_base",
-        "search_web",
-    ]
-    payload = str(agent.turn_calls[0]["messages"][-1]["content"])
-    assert "Knowledge-base evidence" in payload
-    assert "Open-web evidence" in payload
+    assert "Current images are already visible" in system_prompt
+    assert "some requests need no tools at all" in system_prompt
 
 
 async def test_search_sources_become_opaque_resources_the_model_can_read() -> None:
@@ -409,6 +414,7 @@ async def test_search_sources_become_opaque_resources_the_model_can_read() -> No
         return "res-web-article"
 
     agent = ScriptedAgent(
+        _tool(_call(query="Research the article", source="web")),
         _tool(
             ToolCall(
                 id="read",
@@ -417,7 +423,7 @@ async def test_search_sources_become_opaque_resources_the_model_can_read() -> No
             )
         ),
         _answer("ready"),
-        final_text="Deep answer [2-3].",
+        final_text="Deep answer [1-3].",
     )
     result = await _research(
         agent,
@@ -440,16 +446,20 @@ async def test_search_sources_become_opaque_resources_the_model_can_read() -> No
 
     assert registered == ["https://example.com/article"]
     assert read_calls == ["res-web-article"]
-    initial_evidence = str(agent.turn_calls[0]["messages"][-1]["content"])
-    assert "res-web-article" in initial_evidence
-    assert result.answer == "Deep answer [2-3]."
+    search_evidence = str(agent.turn_calls[1]["messages"][-1]["content"])
+    assert "res-web-article" in search_evidence
+    assert "reply `READY`" in search_evidence
+    assert result.answer == "Deep answer [1-3]."
     assert [source.source_uri for source in result.sources] == ["https://example.com/article"]
 
 
-async def test_explicit_knowledge_base_decision_never_calls_web() -> None:
+async def test_agent_can_search_knowledge_base_without_calling_web() -> None:
+    corpus_calls = 0
     web_calls = 0
 
     async def retrieve(_query: str) -> RetrievalResult:
+        nonlocal corpus_calls
+        corpus_calls += 1
         return _corpus_result()
 
     async def search(_query: str) -> WebSearchResult:
@@ -457,7 +467,11 @@ async def test_explicit_knowledge_base_decision_never_calls_web() -> None:
         web_calls += 1
         return _web_result()
 
-    agent = ScriptedAgent(_answer("draft"), include_web=False, final_text="Corpus only [1-1].")
+    agent = ScriptedAgent(
+        _tool(_call(query="indexed subject", source="knowledge_base")),
+        _answer("ready"),
+        final_text="Corpus only [1-1].",
+    )
     result = await _research(
         agent,
         retrieve,
@@ -466,18 +480,20 @@ async def test_explicit_knowledge_base_decision_never_calls_web() -> None:
     ).answer("Use only my knowledge base")
 
     assert result.answer == "Corpus only [1-1]."
+    assert corpus_calls == 1
     assert web_calls == 0
-    assert [tool.name for tool in agent.turn_calls[0]["tools"]] == ["search_knowledge_base"]
+    assert {tool.name for tool in agent.turn_calls[0]["tools"]} >= {
+        "search_knowledge_base",
+        "search_web",
+    }
 
 
-def test_source_decisions_are_closed_and_do_not_absorb_future_tools() -> None:
-    initial = InitialScopeDecision.model_json_schema()["properties"]
-    followup = SearchInput.model_json_schema()["properties"]
+def test_search_tool_input_is_closed_and_nonempty() -> None:
+    schema = SearchInput.model_json_schema()["properties"]
 
-    assert set(initial) == {"include_web"}
-    assert set(followup) == {"query"}
-    assert "all" not in str(followup)
-    assert "read_page" not in str(followup)
+    assert set(schema) == {"query"}
+    assert "all" not in str(schema)
+    assert "read_page" not in str(schema)
     with pytest.raises(ValidationError):
         SearchInput.model_validate({"query": "   "})
 
@@ -496,16 +512,16 @@ async def test_followup_search_uses_one_explicit_source_and_can_deepen() -> None
         )
 
     agent = ScriptedAgent(
+        _tool(_call(query="Research this", source="web", call_id="survey")),
         _tool(_call(query="deeper angle", source="web")),
         _answer("draft"),
-        final_text="Deep answer [3-1].",
+        final_text="Deep answer [2-1].",
     )
     result = await _research(agent, retrieve, search).answer("Research this")
 
     assert web_queries == ["Research this", "deeper angle"]
-    assert result.answer == "Deep answer [3-1]."
-    assert [source.id for source in result.sources] == ["3"]
-    # scope + one search turn + one model-stop turn: no fixed round count.
+    assert result.answer == "Deep answer [2-1]."
+    assert [source.id for source in result.sources] == ["2"]
     assert result.trace["agent_turns"] == 3
 
 
@@ -548,39 +564,19 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    # The model repeats the initial web query, adds no new evidence, and the
-    # loop ends into one distinct tools-disabled final answer generation -- there is no
-    # second forced tools-none control turn.
+    # The model repeats its own completed search. The cached second call adds no
+    # evidence, so the host stops without a forced tools-none control turn.
     agent = ScriptedAgent(
         _tool(_call(query="Question", source="web")),
-        final_text="Use available evidence [1-1][2-1].",
+        _tool(_call(query="Question", source="web")),
+        final_text="Use available evidence [1-1].",
     )
     result = await _research(agent, retrieve, search).answer("Question")
 
-    assert len(agent.turn_calls) == 1
+    assert len(agent.turn_calls) == 2
     assert len(agent.final_calls) == 1
-    assert result.answer == "Use available evidence [1-1][2-1]."
+    assert result.answer == "Use available evidence [1-1]."
     assert result.trace["agent_stop_reason"] == "no_new_evidence"
-
-
-async def test_equivalent_search_shares_work_and_reports_no_new_evidence() -> None:
-    web_calls = 0
-
-    async def retrieve(_query: str) -> RetrievalResult:
-        return _corpus_result()
-
-    async def search(_query: str) -> WebSearchResult:
-        nonlocal web_calls
-        web_calls += 1
-        return _web_result()
-
-    agent = ScriptedAgent(
-        _tool(_call(query="Question", source="web")),
-        final_text="Answer [1-1][2-1].",
-    )
-    await _research(agent, retrieve, search).answer("Question")
-
-    assert web_calls == 1
     # The equivalent-call notice lands in the transcript the final generation reads.
     assert "already executed" in str(agent.final_calls[0])
     assert "added 1" not in str(agent.final_calls[0])
@@ -599,11 +595,14 @@ async def test_failed_tool_call_is_evicted_and_can_be_retried() -> None:
             raise RuntimeError("transient web failure")
         return _web_result()
 
-    # The initial wave scope requests web, its search fails, then the model
-    # retries the same web query and it succeeds -- a failed cache entry is
-    # evicted rather than pinned.
+    # A successful peer call keeps the loop alive while the failed Web cache
+    # entry is evicted, allowing the model to retry it on the next turn.
     agent = ScriptedAgent(
-        _tool(_call(query="Question", source="web")),
+        _tool(
+            _call(query="Question", source="knowledge_base", call_id="kb"),
+            _call(query="Question", source="web", call_id="web-fail"),
+        ),
+        _tool(_call(query="Question", source="web", call_id="web-retry")),
         _answer("draft"),
         final_text="Recovered [1-1][2-1].",
     )
@@ -614,18 +613,12 @@ async def test_failed_tool_call_is_evicted_and_can_be_retried() -> None:
 
 
 async def test_knowledge_base_tool_redacts_unexpected_failures() -> None:
-    calls = 0
-
     async def retrieve(_query: str) -> RetrievalResult:
-        nonlocal calls
-        calls += 1
-        if calls > 1:
-            raise RuntimeError("postgresql://user:secret@internal/db")
-        return _corpus_result()
+        raise RuntimeError("postgresql://user:secret@internal/db")
 
     agent = ScriptedAgent(
         _tool(_call(query="missing fact", source="knowledge_base")),
-        final_text="Use the initial evidence [1-1].",
+        final_text="Best effort answer.",
     )
     await _research(
         agent,
@@ -654,17 +647,17 @@ async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> N
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    agent = ScriptedAgent(_answer("control draft"), final_text="Done [1-1][2-1].")
+    agent = ScriptedAgent(_answer("control draft"), final_text="Done.")
     result = await _research(agent, retrieve, search).answer("Question")
 
     assert result.trace["agent_stop_reason"] == "model_stop"
     assert len(agent.turn_calls) == 1
     assert agent.turn_calls[0]["tool_choice"] == "auto"
-    control_instruction = str(agent.turn_calls[0]["messages"][-1]["content"])
+    control_instruction = str(agent.turn_calls[0]["messages"][0]["content"])
     assert "Do not draft the answer" in control_instruction
-    assert "brief readiness acknowledgement" in control_instruction
+    assert "never act on it" in control_instruction
     assert len(agent.final_calls) == 1
-    assert result.answer == "Done [1-1][2-1]."
+    assert "Done." in (result.answer or "")
 
 
 async def test_only_latest_exchange_is_replayed_with_canonical_evidence() -> None:
@@ -687,7 +680,7 @@ async def test_only_latest_exchange_is_replayed_with_canonical_evidence() -> Non
     assert "Open-web evidence" in serialized
 
 
-async def test_preloaded_composer_evidence_joins_fixed_wave_one() -> None:
+async def test_preloaded_evidence_is_visible_without_automatic_searches() -> None:
     attachment = {
         "chunk_id": "attachment-1",
         "reference_id": "attachment-upstream",
@@ -708,18 +701,18 @@ async def test_preloaded_composer_evidence_joins_fixed_wave_one() -> None:
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    agent = ScriptedAgent(_answer("draft"), final_text="Combined [1-1][2-1][3-1].")
+    agent = ScriptedAgent(_answer("draft"), final_text="Combined [1-1].")
     result = await _research(agent, retrieve, search).answer(
         "Question",
         initial_contexts={"chunks": [attachment], "entities": [], "relationships": []},
     )
 
-    assert [source.id for source in result.sources] == ["1", "2", "3"]
+    assert [source.id for source in result.sources] == ["1"]
     payload = str(agent.turn_calls[0]["messages"][-1]["content"])
     assert "User-attached documents" in payload
 
 
-async def test_input_over_envelope_stops_before_scope_or_retrieval() -> None:
+async def test_input_over_envelope_stops_before_agent_or_retrieval() -> None:
     retrieval_calls = 0
 
     async def retrieve(_query: str) -> RetrievalResult:
@@ -737,41 +730,7 @@ async def test_input_over_envelope_stops_before_scope_or_retrieval() -> None:
     with pytest.raises(AnswerInputOverflowError):
         await orchestrator.answer("Question")
 
-    assert agent.scope_calls == []
     assert agent.turn_calls == []
-    assert retrieval_calls == 0
-
-
-async def test_invalid_scope_result_stops_before_retrieval() -> None:
-    retrieval_calls = 0
-
-    class WrongDecision(BaseModel):
-        value: str
-
-    async def wrong_scope(**_kwargs: Any) -> BaseModel:
-        return WrongDecision(value="wrong")
-
-    async def retrieve(_query: str) -> RetrievalResult:
-        nonlocal retrieval_calls
-        retrieval_calls += 1
-        return _corpus_result()
-
-    async def search(_query: str) -> WebSearchResult:
-        return _web_result()
-
-    agent = ScriptedAgent()
-    orchestrator = AnswerOrchestrator(
-        synthesizer=_research_synthesizer(),
-        retrieve_knowledge_base=retrieve,
-        search_web=search,
-        model_func=agent.turn,
-        scope_model_func=wrong_scope,
-        final_text_func=agent.final,
-    )
-
-    with pytest.raises(AgentProtocolError, match="InitialScopeDecision"):
-        await orchestrator.answer("Question")
-
     assert retrieval_calls == 0
 
 
@@ -786,7 +745,7 @@ async def test_research_answer_can_be_cancelled_mid_flight() -> None:
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    agent = ScriptedAgent(_answer("never reached"), include_web=False)
+    agent = ScriptedAgent(_tool(_call(query="Question", source="knowledge_base")))
     task = asyncio.create_task(_research(agent, retrieve, search).answer("Question"))
     await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
@@ -794,14 +753,14 @@ async def test_research_answer_can_be_cancelled_mid_flight() -> None:
         await task
 
 
-async def test_initial_source_cancellation_is_never_downgraded_to_a_failure() -> None:
+async def test_tool_cancellation_is_never_downgraded_to_a_failure() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         raise asyncio.CancelledError
 
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    agent = ScriptedAgent()
+    agent = ScriptedAgent(_tool(_call(query="Question", source="knowledge_base")))
     with pytest.raises(asyncio.CancelledError):
         await _research(agent, retrieve, search).answer("Question")
 
@@ -823,7 +782,13 @@ async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> N
         streamed_messages.append(messages)
         return tokens()
 
-    agent = ScriptedAgent(_answer("control draft"))
+    agent = ScriptedAgent(
+        _tool(
+            _call(query="Question", source="knowledge_base", call_id="kb"),
+            _call(query="Question", source="web", call_id="web"),
+        ),
+        _answer("control draft"),
+    )
     contexts, stream = await _research(
         agent,
         retrieve,
@@ -857,6 +822,10 @@ async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() ->
         return _web_result()
 
     agent = ScriptedAgent(
+        _tool(
+            _call(query="Question", source="knowledge_base", call_id="kb"),
+            _call(query="Question", source="web", call_id="web"),
+        ),
         _answer("DRAFT control-turn text that must never be the final answer"),
         final_text="Synthesized final [1-1][2-1].",
     )
@@ -873,6 +842,12 @@ async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() ->
     # The final call carries the reasoning-bearing tool transcript, no live tools.
     final_messages = agent.final_calls[0]
     assert any(msg.get("role") == "assistant" for msg in final_messages)
+    control_system = str(agent.turn_calls[0]["messages"][0]["content"])
+    final_system = str(final_messages[0]["content"])
+    assert "Citation Contract" not in control_system
+    assert "Do not draft the answer" in control_system
+    assert "Citation Contract" in final_system
+    assert "Do not draft the answer" not in final_system
 
 
 async def test_research_stream_final_flows_through_synthesizer_no_context_and_warnings() -> None:

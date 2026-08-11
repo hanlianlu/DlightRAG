@@ -5,9 +5,8 @@ One owner routes every answer. A request with no registered resources and no
 open-web capability takes the standard-RAG fast path: fixed knowledge-base
 retrieval and one final answer generation, with no control turn. A request with
 attachments/resources or a web-search capability enters the research loop:
-fixed initial retrieval, an optional strict web-scope decision when Exa exists,
-peer tools, evidence-growth convergence, and one additional tools-disabled
-final answer generation.
+the model selects from the available peer tools, evidence-growth convergence,
+and one additional tools-disabled final answer generation.
 """
 
 import asyncio
@@ -15,7 +14,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,9 +35,9 @@ from dlightrag.core.retrieval.web_search import (
     WebSearchUnavailable,
     web_context_rows,
 )
-from dlightrag.models.structured import StructuredOutput
 from dlightrag.models.tool_turn import AssistantTurn
-from dlightrag.prompts.agent import agentic_answer_prompt
+from dlightrag.prompts import answer_core
+from dlightrag.prompts.agent import agent_control_prompt
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.utils.tokens import estimate_messages_tokens
 
@@ -47,31 +46,12 @@ WebSearch = Callable[[str], Awaitable[WebSearchResult]]
 ToolModel = Callable[..., Awaitable[AssistantTurn]]
 StreamModel = Callable[..., AsyncIterator[str]]
 FinalText = Callable[..., Awaitable[str]]
-ScopeModel = Callable[..., Awaitable[BaseModel]]
-
-
-class InitialScopeDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    include_web: bool = Field(
-        description=("Use true unless the user explicitly requires knowledge-base-only evidence.")
-    )
-
-
-INITIAL_SCOPE_OUTPUT = StructuredOutput(
-    name="initial_evidence_scope",
-    schema=InitialScopeDecision,
-)
 
 
 class SearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     query: str = Field(min_length=1)
-
-
-class AgentProtocolError(RuntimeError):
-    """The model violated a required agent turn contract."""
 
 
 @dataclass(slots=True)
@@ -81,7 +61,6 @@ class _RunState:
     trace: dict[str, Any]
     tools: list[AgentTool]
     base_messages: list[dict[str, Any]]
-    initial_query: str
     evidence_message: dict[str, Any] | None = None
     last_exchange: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = "model_stop"
@@ -97,7 +76,6 @@ class AnswerOrchestrator:
         retrieve_knowledge_base: KnowledgeRetrieval,
         search_web: WebSearch | None = None,
         model_func: ToolModel | None = None,
-        scope_model_func: ScopeModel | None = None,
         stream_model_func: StreamModel | None = None,
         final_text_func: FinalText | None = None,
         resource_tools: list[AgentTool] | None = None,
@@ -109,7 +87,6 @@ class AnswerOrchestrator:
         self._retrieve_knowledge_base = retrieve_knowledge_base
         self._search_web = search_web
         self._model_func = model_func
-        self._scope_model_func = scope_model_func
         self._stream_model_func = stream_model_func
         self._final_text_func = final_text_func
         self._resource_tools = list(resource_tools or [])
@@ -150,7 +127,6 @@ class AnswerOrchestrator:
             )
         return await self._run_research(
             query,
-            retrieval_query=retrieval_query,
             conversation_history=conversation_history,
             query_images=query_images,
             initial_contexts=initial_contexts,
@@ -177,7 +153,6 @@ class AnswerOrchestrator:
             )
         return await self._run_research_stream(
             query,
-            retrieval_query=retrieval_query,
             conversation_history=conversation_history,
             query_images=query_images,
             initial_contexts=initial_contexts,
@@ -246,7 +221,6 @@ class AnswerOrchestrator:
         self,
         query: str,
         *,
-        retrieval_query: str | None,
         conversation_history: list[dict[str, Any]] | None,
         query_images: list[dict[str, Any]] | None,
         initial_contexts: RetrievalContexts | None = None,
@@ -255,12 +229,11 @@ class AnswerOrchestrator:
             raise RuntimeError("Research answer requires a tool model")
         state = self._new_state(
             query,
-            retrieval_query=retrieval_query,
             conversation_history=conversation_history,
             query_images=query_images,
             initial_contexts=initial_contexts,
         )
-        await self._run_initial_wave(state)
+        self._prepare_research(state)
         await self._research_until_stopped(state)
 
         if self._final_text_func is None:
@@ -279,7 +252,6 @@ class AnswerOrchestrator:
         self,
         query: str,
         *,
-        retrieval_query: str | None,
         conversation_history: list[dict[str, Any]] | None,
         query_images: list[dict[str, Any]] | None,
         initial_contexts: RetrievalContexts | None = None,
@@ -288,12 +260,11 @@ class AnswerOrchestrator:
             raise RuntimeError("Streaming research answer requires a final text stream")
         state = self._new_state(
             query,
-            retrieval_query=retrieval_query,
             conversation_history=conversation_history,
             query_images=query_images,
             initial_contexts=initial_contexts,
         )
-        await self._run_initial_wave(state)
+        self._prepare_research(state)
         await self._research_until_stopped(state)
 
         final_messages, indexer = self._finalize_transcript(state)
@@ -326,7 +297,8 @@ class AnswerOrchestrator:
         """
         blocks, indexer = self._render_evidence(state, final=True)
         final_messages = [
-            *state.base_messages,
+            {"role": "system", "content": answer_core()},
+            *state.base_messages[1:],
             *state.last_exchange,
             {"role": "user", "content": blocks},
         ]
@@ -341,7 +313,6 @@ class AnswerOrchestrator:
         self,
         query: str,
         *,
-        retrieval_query: str | None,
         conversation_history: list[dict[str, Any]] | None,
         query_images: list[dict[str, Any]] | None,
         initial_contexts: RetrievalContexts | None = None,
@@ -354,7 +325,6 @@ class AnswerOrchestrator:
             "agent_turns": 0,
             "web_search_cost_dollars": 0.0,
         }
-        effective_retrieval_query = retrieval_query or query
 
         async def search_knowledge_base(raw: BaseModel) -> ToolResult:
             args = _as(raw, SearchInput)
@@ -394,7 +364,6 @@ class AnswerOrchestrator:
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
             ),
-            initial_query=effective_retrieval_query,
         )
 
     def _make_web_tool(
@@ -468,10 +437,9 @@ class AnswerOrchestrator:
             instruction = "Answer the original request now from the current evidence above."
         else:
             instruction = (
-                "Use the current evidence above only to decide whether more research is needed. "
-                "Do not draft the answer in this control turn. If the evidence is sufficient, "
-                "make no tool call and return only a brief readiness acknowledgement. Otherwise "
-                "call one or more tools for a concrete missing fact."
+                "Evidence gathered so far is above. Decide only what to do next: call tools for "
+                "a specific missing fact, or reply `READY` when this evidence supports the "
+                "request. Do not draft the answer here."
             )
         return [*blocks, {"type": "text", "text": instruction}], indexer
 
@@ -483,83 +451,11 @@ class AnswerOrchestrator:
                 f"{input_tokens} > {self._input_budget} estimated input tokens"
             )
 
-    async def _run_initial_wave(self, state: _RunState) -> None:
+    def _prepare_research(self, state: _RunState) -> None:
         self._check_envelope(state.base_messages)
-        # Initial retrieval is KB-only unless an available Exa capability is
-        # admitted by the request's strict scope decision.
-        include_web_search = False
-        if self._search_web is not None:
-            decision = await self._require_scope(state)
-            state.trace["agent_turns"] += 1
-            include_web_search = decision.include_web
-            if not include_web_search:
-                unavailable = {"search_web"}
-                if not self._resource_manifest:
-                    unavailable.update(tool.name for tool in self._resource_tools)
-                state.tools = [tool for tool in state.tools if tool.name not in unavailable]
-        sources: tuple[Literal["knowledge_base", "web"], ...] = (
-            ("knowledge_base", "web") if include_web_search else ("knowledge_base",)
-        )
-        await self._search_sources(state.initial_query, sources, state)
-        blocks, _ = self._render_evidence(state)
-        state.evidence_message = {"role": "user", "content": blocks}
-
-    async def _require_scope(self, state: _RunState) -> InitialScopeDecision:
-        if self._scope_model_func is None:
-            raise RuntimeError("Web scope decision requires a scope model")
-        decision = await self._scope_model_func(
-            messages=state.base_messages,
-            structured_output=INITIAL_SCOPE_OUTPUT,
-        )
-        if not isinstance(decision, InitialScopeDecision):
-            raise AgentProtocolError(
-                f"Expected InitialScopeDecision, got {type(decision).__name__}"
-            )
-        return decision
-
-    async def _search_sources(
-        self,
-        query: str,
-        sources: tuple[Literal["knowledge_base", "web"], ...],
-        state: _RunState,
-    ) -> None:
-        operations: list[tuple[str, Awaitable[ToolResult]]] = []
-        if "knowledge_base" in sources:
-            operations.append(
-                (
-                    "Knowledge-base",
-                    state.cache.run(
-                        _call_key("knowledge_base", query),
-                        lambda: self._search_corpus(query, state.session),
-                    ),
-                )
-            )
-        if "web" in sources and self._search_web is not None:
-            operations.append(
-                (
-                    "Open-web",
-                    state.cache.run(
-                        _call_key("web", query),
-                        lambda: self._search_open_web(query, state.session, state.trace),
-                    ),
-                )
-            )
-        results = await asyncio.gather(
-            *(operation for _, operation in operations),
-            return_exceptions=True,
-        )
-        messages: list[str] = []
-        successes = 0
-        for (label, _), result in zip(operations, results, strict=True):
-            if isinstance(result, asyncio.CancelledError):
-                raise result
-            if isinstance(result, ToolResult):
-                messages.append(result.content)
-                successes += 1
-            else:
-                messages.append(f"{label} retrieval failed: {result}")
-        if successes == 0:
-            raise RuntimeError("; ".join(messages))
+        if _evidence_count(state.session):
+            blocks, _ = self._render_evidence(state)
+            state.evidence_message = {"role": "user", "content": blocks}
 
     async def _search_corpus(self, query: str, session: EvidenceLedger) -> ToolResult:
         try:
@@ -645,7 +541,7 @@ def _initial_messages(
     resource_manifest: tuple[ResourceManifestEntry, ...],
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": agentic_answer_prompt()},
+        {"role": "system", "content": agent_control_prompt()},
         *(conversation_history or []),
     ]
     resource_context = _resource_manifest_context(resource_manifest)
@@ -751,9 +647,6 @@ def _as[T: BaseModel](value: BaseModel, expected: type[T]) -> T:
 
 
 __all__ = [
-    "INITIAL_SCOPE_OUTPUT",
-    "AgentProtocolError",
     "AnswerOrchestrator",
-    "InitialScopeDecision",
     "SearchInput",
 ]

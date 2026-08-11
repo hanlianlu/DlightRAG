@@ -80,11 +80,14 @@ answer request (query + optional attachments)
        per read (HTTPS-only, SSRF guard, per/total byte and pixel limits)
   -> AnswerOrchestrator routes by capability
        fast path: no resources and no web-search key
-         -> fixed knowledge-base retrieval -> one AnswerSynthesizer final answer
+               -> QueryPlanner -> fixed knowledge-base retrieval
+               -> one AnswerSynthesizer final answer
        research path: resources present or an Exa web-search key is set
-         -> fixed initial retrieval + optional strict web-scope decision
-         -> peer tools (search_knowledge_base, read_resource, inspect_resource,
-            optional search_web) writing observations into the EvidenceLedger
+               -> agent selects from peer tools (search_knowledge_base,
+                    read_resource, inspect_resource, optional search_web)
+               -> a selected KB search lazily derives BM25/filter hints while
+                    preserving the agent's search query
+               -> selected tools write observations into the EvidenceLedger
          -> evidence-growth convergence
          -> one tools-disabled AnswerSynthesizer final answer
 ```
@@ -99,11 +102,13 @@ canonical image path. Every visual observation is marked as VLM-derived evidence
 with its exact source/page/sheet/cell locator, so the model cites where a claim
 came from and never treats a description as the final answer.
 
-Current image attachments follow both complementary paths: their bounded image
-blocks automatically inform planning, initial visual retrieval, and final
-generation, while the same verified bytes remain request-local resources for
-optional focused evidence. A source-image inspection sends the bounded whole
-image with a concrete focus; it does not crop or zoom an arbitrary region.
+Current image attachments reach the research agent and final generation as
+bounded image blocks, while the same verified bytes remain request-local
+resources for optional focused evidence. If the agent selects a knowledge-base
+search, one VLM description and the raw image feed that retrieval's text and
+direct-visual legs; no KB call means no query-image planning work. A source-image
+inspection sends the bounded whole image with a concrete focus; it does not crop
+or zoom an arbitrary region.
 Structural zoom-in is available for a selected PDF page or an extracted embedded
 visual handle. The control prompt tells the model not to repeat inspection for a
 general description when the current image is already visible.
@@ -114,6 +119,20 @@ configured context window across evidence packing and final answer generation:
 evidence is bounded to a fraction of the window, each tool observation is
 capped, and a fixed final-generation reserve is input-packing headroom, not an
 output cap.
+
+`QueryPlanner` never receives attachment bytes, converted attachment text, or
+resource manifests. On the fast path it rewrites the user request and derives
+BM25/filter inputs before fixed KB retrieval. In research mode the agent already
+owns query formulation; a selected KB tool call preserves the agent's query and
+uses the planner only for BM25 keywords, metadata filters, and optional current-
+image retrieval context.
+
+Research control and final generation also use separate system prompts. Control
+turns receive identity, tool-selection policy, trust boundaries, and stopping
+rules, but not the answer/citation contract. The tools-disabled final call swaps
+in the normal `answer_core` prompt while retaining the original request,
+conversation history, resource manifest, latest native tool exchange, and final
+citable evidence.
 
 When `web_search.api_key` (Exa) is set, Exa Search is an optional peer
 capability. Its passages belong to no workspace and are packed beside corpus

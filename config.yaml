@@ -26,6 +26,9 @@
 #   keyword — LightRAG retrieval keyword extraction
 #   query   — answer generation and optional evidence-agent turns
 #   vlm     — image/table/equation analysis
+# `agentic_model_kwargs` shallow-overrides same-named top-level `model_kwargs`
+# only for research control/final calls; use the field names supported by the
+# configured endpoint.
 
 llm:
   default:
@@ -35,8 +38,11 @@ llm:
     structured_output: json_schema
     temperature: 0.4
     model_kwargs:
-      thinking:
-        type: disabled
+      reasoning:
+        enabled: false
+    agentic_model_kwargs:
+      reasoning:
+        enabled: true
   roles:
     extract:
       provider: openai
@@ -63,11 +69,11 @@ llm:
       structured_output: json_schema
       temperature: 0.4
       model_kwargs:
-        thinking:
-          type: disabled
+        reasoning:
+          enabled: false
       agentic_model_kwargs:
-        thinking:
-          type: enabled
+        reasoning:
+          enabled: true
       # model_kwargs:
       #   chat_template_kwargs:
       #     enable_thinking: false
@@ -78,8 +84,8 @@ llm:
       structured_output: json_schema
       temperature: 0.0
       model_kwargs:
-        thinking:
-          type: disabled
+        reasoning:
+          enabled: false
 
 embedding:
   provider: voyage

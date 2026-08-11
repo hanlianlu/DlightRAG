@@ -170,7 +170,8 @@ class _OrchestratorRun:
     """One request resolved into a capability-driven orchestrator and its inputs."""
 
     orchestrator: AnswerOrchestrator
-    plan: QueryPlan
+    answer_query: str
+    retrieval_query: str | None
     prepared: PreparedQueryImages
     query_images: list[dict[str, Any]] | None
     history: list[dict[str, Any]] | None
@@ -1135,8 +1136,9 @@ class RAGServiceManager:
         text_history: list[dict[str, Any]] | None,
         current_image_descriptions: list[str] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
+        preserve_query: bool = False,
     ) -> QueryPlan:
-        """Plan a server-prepared query with request-local text history."""
+        """Plan one retrieval query, optionally preserving its semantic text."""
         planner = self._get_query_planner()
         from dlightrag.observability import trace_observation
 
@@ -1156,6 +1158,7 @@ class RAGServiceManager:
                 max_turns=self._config.max_conversation_turns,
                 schema=schema,
                 current_image_descriptions=current_image_descriptions,
+                preserve_query=preserve_query,
             )
             trace.update(
                 output={
@@ -1176,9 +1179,9 @@ class RAGServiceManager:
     ) -> tuple[QueryPlan, PreparedQueryImages]:
         """Describe current-turn images, then plan an image-aware query.
 
-        Shared by the stateless /retrieve and /answer paths so both consistently
-        run the planner (BM25 keyword extraction, metadata-filter inference, and
-        image-aware query construction). Describing zero images is a no-op.
+        Used by stateless `/retrieve` and the Answer fast path. Research mode
+        invokes planning lazily inside its knowledge-base tool instead.
+        Describing zero images is a no-op.
         """
 
         async def _plan() -> tuple[QueryPlan, PreparedQueryImages]:
@@ -1391,38 +1394,6 @@ class RAGServiceManager:
             capability=self._answer_image_capability,
         )
 
-        plan, prepared = await self._describe_and_plan(
-            turn.retrieval_query,
-            text_history=history,
-            query_images=current_images,
-            ws_list=ws_list,
-        )
-
-        first_retrieval = True
-
-        async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
-            nonlocal first_retrieval
-            if first_retrieval:
-                first_retrieval = False
-                return await self.aretrieve(
-                    turn.current_query,
-                    plan=plan,
-                    workspaces=ws_list,
-                    top_k=top_k,
-                    chunk_top_k=chunk_top_k,
-                    filters=filters,
-                    query_images=current_images,
-                    scope=scoped,
-                )
-            return await self.aretrieve(
-                search_query,
-                workspaces=ws_list,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                filters=filters,
-                scope=scoped,
-            )
-
         web_search = self._get_web_search()
         registry, resource_tools = self._build_resource_context(
             remaining_resources, web_search=web_search
@@ -1434,9 +1405,77 @@ class RAGServiceManager:
         )
         resource_manifest = registry.manifest() if registry is not None else ()
         research = web_search is not None or bool(resource_manifest)
+        prepared = PreparedQueryImages(descriptions=[], descriptions_by_ordinal={})
+        prepared_task: asyncio.Task[PreparedQueryImages] | None = None
+
+        async def prepare_images_once() -> PreparedQueryImages:
+            nonlocal prepared_task
+
+            async def prepare() -> PreparedQueryImages:
+                if not current_images:
+                    return prepared
+                result = await prepare_query_images(
+                    query_images=current_images,
+                    describer=await self._aget_query_image_describer(),
+                )
+                prepared.descriptions = result.descriptions
+                prepared.descriptions_by_ordinal = result.descriptions_by_ordinal
+                return prepared
+
+            if prepared_task is None:
+                prepared_task = asyncio.create_task(prepare())
+            return await prepared_task
+
+        plan: QueryPlan | None = None
+        if not research:
+            plan, prepared = await self._describe_and_plan(
+                turn.retrieval_query,
+                text_history=history,
+                query_images=current_images,
+                ws_list=ws_list,
+            )
+
+        async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
+            if research:
+
+                async def plan_agent_query() -> QueryPlan:
+                    image_context = await prepare_images_once()
+                    return await self._aplan_query_prepared(
+                        search_query,
+                        text_history=None,
+                        current_image_descriptions=image_context.descriptions or None,
+                        workspaces=ws_list,
+                        preserve_query=True,
+                    )
+
+                tool_plan = await self._overlap_query_service_warmup(
+                    ws_list,
+                    plan_agent_query(),
+                )
+                return await self.aretrieve(
+                    search_query,
+                    plan=tool_plan,
+                    workspaces=ws_list,
+                    top_k=top_k,
+                    chunk_top_k=chunk_top_k,
+                    filters=filters,
+                    query_images=current_images,
+                    scope=scoped,
+                )
+            if plan is None:  # pragma: no cover - construction invariant
+                raise RuntimeError("Fast answer requires a query plan")
+            return await self.aretrieve(
+                turn.current_query,
+                plan=plan,
+                workspaces=ws_list,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                filters=filters,
+                query_images=current_images,
+                scope=scoped,
+            )
 
         model_func: Callable[..., Any] | None = None
-        scope_model_func: Callable[..., Any] | None = None
         stream_model_func: Callable[..., AsyncIterator[str]] | None = None
         final_text_func: Callable[..., Awaitable[str]] | None = None
         if research:
@@ -1445,10 +1484,6 @@ class RAGServiceManager:
             async def _model_func(**kwargs: Any) -> Any:
                 async with self._direct_llm_sem:
                     return await tool_model(**kwargs)
-
-            async def _scope_model_func(**kwargs: Any) -> Any:
-                async with self._direct_llm_sem:
-                    return await tool_model.complete_structured(**kwargs)
 
             async def _final_text_func(**kwargs: Any) -> str:
                 async with self._direct_llm_sem:
@@ -1474,7 +1509,6 @@ class RAGServiceManager:
                 return _bounded()
 
             model_func = _model_func
-            scope_model_func = _scope_model_func
             stream_model_func = _stream_model_func
             final_text_func = _final_text_func
 
@@ -1496,7 +1530,6 @@ class RAGServiceManager:
             retrieve_knowledge_base=retrieve_knowledge_base,
             search_web=web_search.search if web_search is not None else None,
             model_func=model_func,
-            scope_model_func=scope_model_func,
             stream_model_func=stream_model_func,
             final_text_func=final_text_func,
             resource_tools=resource_tools,
@@ -1510,7 +1543,8 @@ class RAGServiceManager:
         )
         return _OrchestratorRun(
             orchestrator=orchestrator,
-            plan=plan,
+            answer_query=turn.current_query if research else cast(QueryPlan, plan).standalone_query,
+            retrieval_query=None if research else cast(QueryPlan, plan).standalone_query,
             prepared=prepared,
             query_images=query_images,
             history=history,
@@ -1693,8 +1727,8 @@ class RAGServiceManager:
                     await self._acquire_answer_slot()
                     try:
                         result = await run.orchestrator.answer(
-                            run.plan.standalone_query,
-                            retrieval_query=run.plan.standalone_query,
+                            run.answer_query,
+                            retrieval_query=run.retrieval_query,
                             conversation_history=run.history,
                             query_images=run.query_images,
                         )
@@ -1773,8 +1807,8 @@ class RAGServiceManager:
                     answer_slot_owned = True
                     try:
                         contexts, stream = await run.orchestrator.answer_stream(
-                            run.plan.standalone_query,
-                            retrieval_query=run.plan.standalone_query,
+                            run.answer_query,
+                            retrieval_query=run.retrieval_query,
                             conversation_history=run.history,
                             query_images=run.query_images,
                         )
@@ -1862,11 +1896,11 @@ class RAGServiceManager:
         """Answer from one or more workspaces through the one answer orchestrator.
 
         Current-turn images and documents are supplied through ``resources``. The
-        manager prepares verified current images as internal image blocks (VLM
-        description informs planning, verified image bytes feed optional direct
-        visual retrieval, and bounded blocks reach the answer model) while also
-        registering every attachment request-locally for agentic reading or
-        focused visual inspection.
+        manager prepares verified current images as internal image blocks and
+        registers every attachment request-locally. Fast answers describe images
+        before fixed KB retrieval; research answers show them directly to the
+        agent and describe them only if it selects KB search. Attachment text is
+        read only through resource tools and never enters query planning.
 
         ``history`` is caller-supplied prior turns (``role``/``content`` dicts).
         It is stateless -- the caller owns persistence and passes it per request.

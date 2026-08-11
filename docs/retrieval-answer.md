@@ -74,6 +74,13 @@ startup error.
 
 ## Query Pipeline
 
+This pipeline is always used by `/retrieve` and by the Answer fast path. In the
+research path it runs lazily only when the agent selects
+`search_knowledge_base`. The agent's tool query remains the semantic search
+query; `QueryPlanner` contributes BM25 terms, metadata filters, and current-image
+retrieval context without rewriting that query. Attachment resources are not
+planner inputs.
+
 ```text
 RAGService.aretrieve(query, query_images, filters)
   |
@@ -272,17 +279,19 @@ picks one of two paths:
   knowledge-base retrieval and one `AnswerSynthesizer` answer-generation LLM
   call, with no control turn. This is the standard-RAG path.
 - **Research path** — the request has attachments (registered as request-local
-  resources) or `web_search.api_key` (Exa) is set. DlightRAG runs fixed initial
-  retrieval, an optional strict web-scope decision when Exa exists, then peer
-  tools (`search_knowledge_base`, `read_resource`, `inspect_resource`, and
-  `search_web` when enabled) that append observations to an `EvidenceLedger`.
+  resources) or `web_search.api_key` (Exa) is set. The agent selects from the
+  available peer tools (`search_knowledge_base`, `read_resource`,
+  `inspect_resource`, and `search_web` when enabled); only the selected tools
+  append observations to an `EvidenceLedger`.
   Evidence-producing Web result URLs receive opaque request-local resource ids,
   allowing a later `read_resource` call to deepen a selected source without a
   raw-URL tool.
   A control turn with no tool calls, or a tool batch that adds no evidence, ends
   research. DlightRAG then makes one additional tools-disabled LLM call through
-  `AnswerSynthesizer` to generate the final answer. Control-turn text is only a
-  readiness signal and is never returned as the answer.
+  `AnswerSynthesizer` to generate the final answer. Control-turn text is always
+  discarded and never returned as the answer. Control turns use a tool-policy
+  system prompt; the final call replaces it with the normal answer/citation
+  prompt while preserving the native tool transcript.
 
 Both paths converge on the same `AnswerSynthesizer` generation and deterministic
 finalization, so citation validation, `sources`, `answer_images`, and

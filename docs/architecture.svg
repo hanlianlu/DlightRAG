@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
   <title id="title">DlightRAG Unified LightRAG Main Architecture</title>
-  <desc id="desc">Layered DlightRAG architecture: one interface boundary with a single answer attachment contract, durable LightRAG ingestion (MinerU/Docling only), an AnswerOrchestrator with fast KB and research paths over a request-local ResourceRegistry/EvidenceLedger with MarkItDown and VLM tools plus optional Exa, a knowledge-base-only retrieve lane, and one PostgreSQL 18 storage ecosystem including a single raw Web answer-attachment table.</desc>
+  <desc id="desc">Layered DlightRAG architecture: one interface boundary with a single answer attachment contract, durable LightRAG ingestion, an AnswerOrchestrator with eager fast retrieval or agent-selected research tools and lazy KB planning, a knowledge-base-only retrieve lane, and one PostgreSQL 18 storage ecosystem.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
@@ -49,7 +49,7 @@
 
   <text class="title" x="64" y="52">DlightRAG Unified LightRAG Main Architecture</text>
   <text class="subtitle" x="64" y="80">One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, doc status (MinerU/Docling are durable ingestion parsers only).</text>
-  <text class="subtitle" x="64" y="98">Answers take one attachment contract across REST/SDK/MCP/Web; the AnswerOrchestrator routes a fast KB path or a research path over request-local resources; /retrieve stays KB-only.</text>
+  <text class="subtitle" x="64" y="98">Answers use one attachment contract; fast mode runs fixed KB retrieval, while research mode lets the agent select peer tools. /retrieve stays KB-only.</text>
 
   <rect class="band-soft" x="64" y="126" width="1152" height="108"/>
   <text class="band-title" x="84" y="151">Interface Boundary</text>
@@ -136,29 +136,31 @@
 
   <rect class="box box-blue" x="884" y="418" width="126" height="106"/>
   <text class="label" text-anchor="middle" x="947" y="440">KB Retrieve</text>
-  <text class="small" text-anchor="middle" x="947" y="458">planner + filters</text>
-  <text class="small" text-anchor="middle" x="947" y="472">mix + BM25 + RRF</text>
-  <text class="small" text-anchor="middle" x="947" y="486">rerank</text>
-  <text class="small" text-anchor="middle" x="947" y="500">/retrieve query images</text>
+  <text class="small" text-anchor="middle" x="947" y="458">fast: planner first</text>
+  <text class="small" text-anchor="middle" x="947" y="472">research: lazy hints</text>
+  <text class="small" text-anchor="middle" x="947" y="486">agent query preserved</text>
+  <text class="small" text-anchor="middle" x="947" y="500">mix + BM25 + visual</text>
+  <text class="small" text-anchor="middle" x="947" y="514">RRF + rerank</text>
 
   <rect class="box box-pink" x="1034" y="418" width="126" height="48"/>
   <text class="label" text-anchor="middle" x="1097" y="437">ResourceRegistry</text>
   <text class="small" text-anchor="middle" x="1097" y="454">+ EvidenceLedger</text>
 
   <rect class="box box-pink" x="1034" y="476" width="126" height="60"/>
-  <text class="label" text-anchor="middle" x="1097" y="493">Peer tools</text>
-  <text class="small" text-anchor="middle" x="1097" y="509">read (MarkItDown)</text>
-  <text class="small" text-anchor="middle" x="1097" y="523">inspect (VLM) &#183; Exa</text>
+  <text class="label" text-anchor="middle" x="1097" y="493">Agent-selected tools</text>
+  <text class="small" text-anchor="middle" x="1097" y="509">optional Exa search</text>
+  <text class="small" text-anchor="middle" x="1097" y="523">read &#183; inspect</text>
 
   <rect class="box" x="884" y="548" width="276" height="46"/>
   <text class="label" text-anchor="middle" x="1022" y="568">AnswerSynthesizer &#8594; Answer/Sources</text>
   <text class="small" text-anchor="middle" x="1022" y="585">one final path, citations + highlights</text>
 
   <path class="line-blue" d="M 947 402 V 418"/>
+  <text class="note" text-anchor="middle" x="934" y="412" fill="#075985">fast / selected</text>
   <path class="line-pink" d="M 1097 402 V 418"/>
+  <path class="line-pink" d="M 1160 377 H 1174 V 506 H 1160"/>
   <path class="line-pink" d="M 1097 466 V 476"/>
   <path class="line-orange" d="M 775 554 H 850 V 486 H 884"/>
-  <text class="note" text-anchor="middle" x="812" y="470" fill="#92400e">chunks + references</text>
   <path class="line" d="M 947 524 V 548"/>
   <path class="line" d="M 1097 536 V 542 H 1022 V 548"/>
 

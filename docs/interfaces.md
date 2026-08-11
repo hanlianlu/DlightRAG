@@ -438,10 +438,11 @@ attachment fresh from its stored bytes. Manual delete and TTL pruning cascade
 attachment bytes through the owning turn and conversation.
 
 `AnswerOrchestrator` owns every answer. A Web turn with attachments or an Exa
-web-search key takes the research path — fixed initial retrieval, peer tools that
-read and inspect the request-local resources, followed by one additional
-tools-disabled LLM call for final answer generation — while a plain query takes
-the fast knowledge-base path and needs only its one answer-generation LLM call.
+web-search key takes the research path: the agent chooses among the available
+knowledge-base search, Web search, resource read, and resource inspection tools,
+then one additional tools-disabled LLM call generates the final answer. A plain
+query with neither capability takes the fixed knowledge-base fast path and needs
+only its one answer-generation LLM call.
 Evidence-producing Exa result URLs are registered as opaque request-local
 resources, so the same `read_resource` tool can deepen a search result without
 accepting an arbitrary model-supplied URL. Reading performs no login, cookie

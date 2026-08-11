@@ -2424,18 +2424,86 @@ class TestAgenticAnswerCapability:
 
         assert _CapturingOrchestrator.last["init"]["search_web"] is not None
         assert "answer_stream" in _CapturingOrchestrator.last
+        manager._describe_and_plan.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_agentic_kb_tool_plans_the_agent_query_lazily(self, test_cfg) -> None:
+        from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+            return_value=["alpha"]
+        )
+        agent_plan = QueryPlan(
+            original_query="agent chosen terms",
+            standalone_query="agent chosen terms",
+            bm25_query="agent terms",
+        )
+        manager._aplan_query_prepared = AsyncMock(return_value=agent_plan)  # type: ignore[method-assign]
+        manager._describe_and_plan = AsyncMock()  # type: ignore[method-assign]
+        manager.aretrieve = AsyncMock(return_value=RetrievalResult())  # type: ignore[method-assign]
+        manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
+        manager._web_search = AsyncMock()
+        model = AsyncMock(
+            side_effect=[
+                AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id="kb",
+                            name="search_knowledge_base",
+                            arguments={"query": "agent chosen terms"},
+                        ),
+                    ),
+                    stop_reason="tool_use",
+                ),
+                AssistantTurn(text="ready", tool_calls=(), stop_reason="stop"),
+            ]
+        )
+        model.complete_text = AsyncMock(return_value="Answer.")
+        manager._query_tool_model = model
+        manager._answer_synthesizer = AnswerSynthesizer(
+            image_max_pixels=40_000_000,
+            model_func=None,
+        )
+
+        await manager.aanswer(
+            "Original request",
+            workspace="alpha",
+            history=[
+                {"role": "user", "content": "Earlier context"},
+                {"role": "assistant", "content": "Earlier answer"},
+            ],
+        )
+
+        manager._describe_and_plan.assert_not_awaited()  # type: ignore[attr-defined]
+        manager._aplan_query_prepared.assert_awaited_once_with(  # type: ignore[attr-defined]
+            "agent chosen terms",
+            text_history=None,
+            current_image_descriptions=None,
+            workspaces=["alpha"],
+            preserve_query=True,
+        )
+        retrieve_call = manager.aretrieve.await_args  # type: ignore[attr-defined]
+        assert retrieve_call is not None
+        assert retrieve_call.args[0] == "agent chosen terms"
+        retrieval_plan = retrieve_call.kwargs["plan"]
+        assert retrieval_plan.original_query == "agent chosen terms"
+        assert retrieval_plan.standalone_query == "agent chosen terms"
+        assert retrieval_plan.bm25_query == agent_plan.bm25_query
 
     async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
-        from dlightrag.core.agent.orchestrator import InitialScopeDecision
         from dlightrag.core.answer.synthesizer import AnswerSynthesizer
         from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-        from dlightrag.models.tool_turn import AssistantTurn
+        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
         plan = QueryPlan(original_query="What about it?", standalone_query="inflation 2026")
-        prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
-        manager._describe_and_plan = AsyncMock(return_value=(plan, prepared))  # type: ignore[method-assign]
+        manager._aplan_query_prepared = AsyncMock(return_value=plan)  # type: ignore[method-assign]
+        manager._describe_and_plan = AsyncMock()  # type: ignore[method-assign]
+        manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
         manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )
@@ -2474,13 +2542,30 @@ class TestAgenticAnswerCapability:
         )
         manager._web_search = web
         model = AsyncMock(
-            return_value=AssistantTurn(
-                text="draft control turn text",
-                tool_calls=(),
-                stop_reason="stop",
-            )
+            side_effect=[
+                AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id="kb",
+                            name="search_knowledge_base",
+                            arguments={"query": "inflation 2026"},
+                        ),
+                        ToolCall(
+                            id="web",
+                            name="search_web",
+                            arguments={"query": "inflation 2026"},
+                        ),
+                    ),
+                    stop_reason="tool_use",
+                ),
+                AssistantTurn(
+                    text="draft control turn text",
+                    tool_calls=(),
+                    stop_reason="stop",
+                ),
+            ]
         )
-        model.complete_structured.return_value = InitialScopeDecision(include_web=True)
         model.complete_text = AsyncMock(return_value="Answer [1-1][2-1].")
         manager._query_tool_model = model
         # A real synthesizer owns the tools-disabled final call for research too.
@@ -2493,22 +2578,44 @@ class TestAgenticAnswerCapability:
         assert result.answer == "Answer [1-1][2-1]."
         assert [source.id for source in result.sources] == ["1", "2"]
         model.complete_text.assert_awaited_once()
-        manager._describe_and_plan.assert_awaited_once()  # type: ignore[attr-defined]
+        manager._describe_and_plan.assert_not_awaited()  # type: ignore[attr-defined]
+        manager._aplan_query_prepared.assert_awaited_once_with(  # type: ignore[attr-defined]
+            "inflation 2026",
+            text_history=None,
+            current_image_descriptions=None,
+            workspaces=["alpha"],
+            preserve_query=True,
+        )
         retrieve_call = manager.aretrieve.await_args  # type: ignore[attr-defined]
         assert retrieve_call is not None
-        assert retrieve_call.args[0] == "What about it?"
-        assert retrieve_call.kwargs["plan"] is plan
+        assert retrieve_call.args[0] == "inflation 2026"
+        assert retrieve_call.kwargs["plan"].standalone_query == "inflation 2026"
         web.search.assert_awaited_once_with("inflation 2026")
 
     async def test_agentic_stream_keeps_slots_until_disconnect(self, test_cfg) -> None:
         from dlightrag.citations.streaming import aclose_answer_stream
-        from dlightrag.core.agent.orchestrator import InitialScopeDecision
         from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-        from dlightrag.models.tool_turn import AssistantTurn
+        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 
         class StreamingToolModel:
             def __init__(self) -> None:
                 self.turns = [
+                    AssistantTurn(
+                        text="",
+                        tool_calls=(
+                            ToolCall(
+                                id="kb",
+                                name="search_knowledge_base",
+                                arguments={"query": "planned question"},
+                            ),
+                            ToolCall(
+                                id="web",
+                                name="search_web",
+                                arguments={"query": "planned question"},
+                            ),
+                        ),
+                        stop_reason="tool_use",
+                    ),
                     AssistantTurn(
                         text="control draft",
                         tool_calls=(),
@@ -2516,9 +2623,6 @@ class TestAgenticAnswerCapability:
                     ),
                 ]
                 self.closed = asyncio.Event()
-
-            async def complete_structured(self, **_kwargs: Any) -> InitialScopeDecision:
-                return InitialScopeDecision(include_web=True)
 
             async def __call__(self, **_kwargs: Any) -> AssistantTurn:
                 return self.turns.pop(0)
@@ -2536,8 +2640,8 @@ class TestAgenticAnswerCapability:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
         plan = QueryPlan(original_query="Question", standalone_query="planned question")
-        prepared = SimpleNamespace(descriptions=[], descriptions_by_ordinal={})
-        manager._describe_and_plan = AsyncMock(return_value=(plan, prepared))  # type: ignore[method-assign]
+        manager._aplan_query_prepared = AsyncMock(return_value=plan)  # type: ignore[method-assign]
+        manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
         manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )

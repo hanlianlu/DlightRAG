@@ -401,18 +401,53 @@ strict JSON schema response formats. Anthropic native does not support the
 lower-confidence `json_object` mode; use `auto` or `json_schema`.
 
 `model_kwargs` apply to ordinary calls. `agentic_model_kwargs` are a shallow
-top-level overlay used only by the optional Exa-enabled evidence agent. This
-keeps ordinary answers inexpensive while allowing explicit provider-native
-thinking for agent turns without guessing a cross-provider flag:
+top-level overlay used by research control and final calls. This keeps fast-path
+answers inexpensive while allowing explicit provider-native thinking for
+research turns without guessing a cross-provider flag:
+
+```yaml
+llm:
+  default:
+    model_kwargs:
+      reasoning: {enabled: false}
+    agentic_model_kwargs:
+      reasoning: {enabled: true}
+  roles:
+    query:
+      model_kwargs:
+        reasoning: {enabled: false}
+      agentic_model_kwargs:
+        reasoning: {enabled: true}
+```
+
+The overlay is unconditional key merging, not fallback selection. DlightRAG
+copies `model_kwargs` and then replaces any same-named top-level key supplied by
+`agentic_model_kwargs`. With the example above, ordinary calls receive
+`reasoning.enabled: false`, while research control/final calls receive
+`reasoning.enabled: true`; unrelated ordinary options remain present.
+The explicit `query` block follows the same shape because it replaces the
+default role as a complete model configuration rather than deep-merging with it.
+
+Research final generation starts with the agentic overlay. If the provider
+finishes without user-visible text, DlightRAG retries once with `model_kwargs`;
+a second empty response fails instead of storing an empty answer. Use the
+endpoint's actual reasoning switch in the ordinary options. For OpenRouter
+reasoning models such as MiMo and GLM, that switch is
+`reasoning: {enabled: false}`; `thinking: {type: disabled}` does not disable
+their reasoning tokens.
+
+Self-hosted Unsloth, llama.cpp, or vLLM deployments commonly expose the switch
+through the chat template instead. Configure the field the endpoint actually
+supports:
 
 ```yaml
 llm:
   roles:
     query:
       model_kwargs:
-        thinking: {type: disabled}
+        chat_template_kwargs: {enable_thinking: false}
       agentic_model_kwargs:
-        thinking: {type: enabled}
+        chat_template_kwargs: {enable_thinking: true}
 ```
 
 If `roles.query` is absent or incomplete, both sets of options come from

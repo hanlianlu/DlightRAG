@@ -242,6 +242,29 @@ class TestPlanWithLLM:
         assert plan.standalone_query == "What is the GDP of France in 2023?"
         assert plan.original_query == "what about GDP in 2023?"
 
+    async def test_preserve_query_mode_only_derives_retrieval_hints(self):
+        captured_messages: list[dict[str, object]] = []
+
+        async def llm_func(**kwargs):
+            captured_messages.extend(kwargs["messages"])
+            return json.dumps(
+                {
+                    "standalone_query": "model tried to rewrite it",
+                    "bm25_query": "agent terms",
+                    "filters": {},
+                }
+            )
+
+        planner = QueryPlanner(llm_func=llm_func)
+
+        plan = await planner.plan("agent chosen terms", preserve_query=True)
+
+        payload = json.loads(str(captured_messages[1]["content"]))
+        assert payload["preserve_query"] is True
+        assert plan.original_query == "agent chosen terms"
+        assert plan.standalone_query == "agent chosen terms"
+        assert plan.bm25_query == "agent terms"
+
     async def test_filter_extraction(self):
         llm = AsyncMock(
             return_value=json.dumps(
