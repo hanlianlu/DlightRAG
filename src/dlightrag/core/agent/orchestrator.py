@@ -94,7 +94,6 @@ class AnswerOrchestrator:
         self,
         query: str,
         *,
-        retrieval_query: str | None = None,
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
     ) -> RetrievalResult:
@@ -103,7 +102,6 @@ class AnswerOrchestrator:
                 raise RuntimeError("Current images require request resources")
             return await self._fast_answer(
                 query,
-                retrieval_query=retrieval_query,
                 conversation_history=conversation_history,
             )
         return await self._run_research(
@@ -116,7 +114,6 @@ class AnswerOrchestrator:
         self,
         query: str,
         *,
-        retrieval_query: str | None = None,
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
@@ -125,7 +122,6 @@ class AnswerOrchestrator:
                 raise RuntimeError("Current images require request resources")
             return await self._fast_answer_stream(
                 query,
-                retrieval_query=retrieval_query,
                 conversation_history=conversation_history,
             )
         return await self._run_research_stream(
@@ -142,10 +138,9 @@ class AnswerOrchestrator:
         self,
         query: str,
         *,
-        retrieval_query: str | None,
         conversation_history: PriorTurns | None,
     ) -> RetrievalResult:
-        retrieval = await self._retrieve_knowledge_base(retrieval_query or query)
+        retrieval = await self._retrieve_knowledge_base(query)
         result = await self._synthesizer.generate(
             query,
             retrieval.contexts,
@@ -158,10 +153,9 @@ class AnswerOrchestrator:
         self,
         query: str,
         *,
-        retrieval_query: str | None,
         conversation_history: PriorTurns | None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        retrieval = await self._retrieve_knowledge_base(retrieval_query or query)
+        retrieval = await self._retrieve_knowledge_base(query)
         contexts, stream = await self._synthesizer.generate_stream(
             query,
             retrieval.contexts,

@@ -47,7 +47,7 @@ async def test_query_image_describer_returns_descriptions() -> None:
 
     descriptions = await describer.describe([_image_block()])
 
-    assert descriptions == {"1": "Image 1: a line chart about revenue"}
+    assert descriptions == ["Image 1: a line chart about revenue"]
     vlm.assert_awaited_once()
     await_args = vlm.await_args
     assert await_args is not None
@@ -61,7 +61,7 @@ async def test_query_image_describer_is_best_effort() -> None:
 
     descriptions = await describer.describe([_image_block()])
 
-    assert descriptions == {}
+    assert descriptions == []
 
 
 async def test_query_image_describer_without_vlm_returns_empty() -> None:
@@ -70,7 +70,7 @@ async def test_query_image_describer_without_vlm_returns_empty() -> None:
 
     descriptions = await describer.describe([_image_block()])
 
-    assert descriptions == {}
+    assert descriptions == []
     vlm.assert_not_called()
 
 
@@ -100,7 +100,7 @@ async def test_query_image_descriptions_keep_sparse_ordinals() -> None:
 
     descriptions = await describer.describe([_image_block(), _image_block()])
 
-    assert descriptions == {"2": "Image 2: second image"}
+    assert descriptions == ["Image 2: second image"]
 
 
 async def test_query_image_vlm_receives_bounded_transport() -> None:
@@ -112,7 +112,7 @@ async def test_query_image_vlm_receives_bounded_transport() -> None:
         [{"type": "image_url", "image_url": {"url": original_uri}}]
     )
 
-    assert descriptions == {"1": "Image 1: bounded image"}
+    assert descriptions == ["Image 1: bounded image"]
     await_args = vlm.await_args
     assert await_args is not None
     content = await_args.kwargs["messages"][0]["content"]
@@ -133,7 +133,7 @@ async def test_query_image_compression_skip_preserves_sparse_ordinal_and_sibling
         [_image_block(too_large.split(",", 1)[1]), _image_block(small.split(",", 1)[1])],
     )
 
-    assert descriptions == {"2": "Image 2: small image"}
+    assert descriptions == ["Image 2: small image"]
     vlm.assert_awaited_once()
 
 
@@ -147,7 +147,7 @@ async def test_query_image_https_url_is_validated_and_passed_to_vlm() -> None:
 
     descriptions = await describer.describe([image])
 
-    assert descriptions == {"1": "Image 1: remote chart"}
+    assert descriptions == ["Image 1: remote chart"]
     await_args = vlm.await_args
     assert await_args is not None
     assert await_args.kwargs["messages"][0]["content"][0] == image
@@ -176,7 +176,7 @@ async def test_query_image_unsafe_urls_are_not_sent_to_vlm(url: str) -> None:
         [{"type": "image_url", "image_url": {"url": url}}],
     )
 
-    assert descriptions == {}
+    assert descriptions == []
     vlm.assert_not_awaited()
 
 
@@ -190,5 +190,5 @@ async def test_query_image_safe_https_hosts_still_reach_vlm(host: str) -> None:
         [{"type": "image_url", "image_url": {"url": url}}],
     )
 
-    assert descriptions == {"1": "Image 1: safe remote image"}
+    assert descriptions == ["Image 1: safe remote image"]
     vlm.assert_awaited_once()

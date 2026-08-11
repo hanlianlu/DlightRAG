@@ -18,7 +18,6 @@ class PreparedAnswerTurn:
     """
 
     current_query: str
-    retrieval_query: str
     text_history: tuple[dict[str, Any], ...] = ()
 
     @classmethod
@@ -35,7 +34,6 @@ class PreparedAnswerTurn:
         """
         return cls(
             current_query=query,
-            retrieval_query=query,
             text_history=tuple(history or ()),
         )
 

@@ -1687,7 +1687,7 @@ class RAGService:
         chunk_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         *,
-        _plan: Any = None,
+        filter_source: str | None = None,
         bm25_query: str | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
@@ -1699,27 +1699,17 @@ class RAGService:
 
         Args:
             filters: Optional MetadataFilter for structured metadata queries.
-            _plan: Pre-computed QueryPlan from QueryPlanner (via ServiceManager).
+            filter_source: Whether filters are explicit or LLM-inferred.
         """
         self._ensure_initialized()
         if self._retrieval_orchestrator is None:
             raise RuntimeError("Retrieval orchestrator not initialized")
 
-        effective_filters = filters
-        filter_source = "explicit" if filters is not None else None
-        if effective_filters is None and _plan is not None:
-            effective_filters = getattr(_plan, "metadata_filter", None)
-            filter_source = getattr(_plan, "metadata_filter_source", None)
-
-        effective_bm25_query = (bm25_query or "").strip() or None
-        if effective_bm25_query is None and _plan is not None:
-            effective_bm25_query = getattr(_plan, "bm25_query", None)
-
         kg_result = await self._retrieval_orchestrator.aretrieve(
             query,
-            metadata_filter=effective_filters,
+            metadata_filter=filters,
             metadata_filter_source=filter_source,
-            bm25_query=effective_bm25_query,
+            bm25_query=(bm25_query or "").strip() or None,
             top_k=top_k,
             chunk_top_k=chunk_top_k,
             **kwargs,

@@ -51,11 +51,8 @@ from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.request.images import (
-    PreparedQueryImages,
-    prepare_query_images,
-)
-from dlightrag.core.request.planner import QueryPlan, QueryPlanner
+from dlightrag.core.request.images import prepare_query_images
+from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.core.request.workspaces import (
     normalize_query_workspaces,
     resolve_query_workspaces,
@@ -171,9 +168,7 @@ class _OrchestratorRun:
     """One request resolved into a capability-driven orchestrator and its inputs."""
 
     orchestrator: AnswerOrchestrator
-    answer_query: str
-    retrieval_query: str | None
-    prepared: PreparedQueryImages
+    image_descriptions: list[str]
     query_images: list[dict[str, Any]] | None
     history: PriorTurns
     current_image_count: int
@@ -339,7 +334,7 @@ class RAGServiceManager:
             self._get_ingest_service,
             input_root=self._config.input_dir_path,
         )
-        self._query_planner: QueryPlanner | None = None
+        self._retrieval_planner: RetrievalPlanner | None = None
         self._query_image_describer: QueryImageDescriber | None = None
         self._web_search: ExaSearch | None = None
         self._query_tool_model: QueryToolModel | None = None
@@ -378,8 +373,8 @@ class RAGServiceManager:
 
         default_ws = normalize_workspace(manager._config.workspace)
 
-        # Bind the planner LLM during startup; this does not make a model call.
-        manager._get_query_planner()
+        # Bind the retrieval-planner LLM during startup; this does not make a model call.
+        manager._get_retrieval_planner()
 
         # ── Vision probe (once at startup, not per workspace) ──────────
         await manager._probe_vision_support()
@@ -1024,18 +1019,18 @@ class RAGServiceManager:
 
         return _bounded
 
-    def _get_query_planner(self) -> QueryPlanner:
-        """Return the manager-owned QueryPlanner, creating it when needed."""
-        if self._query_planner is None:
+    def _get_retrieval_planner(self) -> RetrievalPlanner:
+        """Return the manager-owned RetrievalPlanner, creating it when needed."""
+        if self._retrieval_planner is None:
             from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE
-            from dlightrag.models.llm import get_planner_model_func
+            from dlightrag.models.llm import get_retrieval_planner_model_func
 
             envelope = self._config.answer.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
-            self._query_planner = QueryPlanner(
-                llm_func=self._sem_bound(get_planner_model_func(self._config)),
+            self._retrieval_planner = RetrievalPlanner(
+                llm_func=self._sem_bound(get_retrieval_planner_model_func(self._config)),
                 input_token_envelope=max(1, envelope),
             )
-        return self._query_planner
+        return self._retrieval_planner
 
     def _get_web_search(self) -> ExaSearch | None:
         """Return the manager-owned web search client, or None when unconfigured."""
@@ -1106,21 +1101,20 @@ class RAGServiceManager:
         self._schema_cache[ws_key] = (now, schema)
         return schema
 
-    async def _aplan_query_prepared(
+    async def _plan_retrieval(
         self,
         query: str,
         *,
         text_history: PriorTurns | None,
         current_image_descriptions: list[str] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
-        preserve_query: bool = False,
-    ) -> QueryPlan:
-        """Plan one retrieval query, optionally preserving its semantic text."""
-        planner = self._get_query_planner()
+    ) -> RetrievalPlan:
+        """Plan one retrieval query inside the canonical retrieval operation."""
+        planner = self._get_retrieval_planner()
         from dlightrag.observability import trace_observation
 
         async with trace_observation(
-            "query_planning",
+            "retrieval_planning",
             as_type="chain",
             input={"query": query},
             metadata={
@@ -1134,42 +1128,15 @@ class RAGServiceManager:
                 conversation_history=text_history,
                 schema=schema,
                 current_image_descriptions=current_image_descriptions,
-                preserve_query=preserve_query,
             )
             trace.update(
                 output={
                     "standalone_query": plan.standalone_query,
                     "has_metadata_filter": plan.metadata_filter is not None,
-                    "planner_outcome": plan.planner_outcome,
+                    "planning_outcome": plan.outcome,
                 }
             )
             return plan
-
-    async def _describe_and_plan(
-        self,
-        query: str,
-        *,
-        text_history: PriorTurns | None,
-        query_images: list[dict[str, Any]] | None,
-        ws_list: list[str],
-    ) -> tuple[QueryPlan, PreparedQueryImages]:
-        """Describe current-turn images, then plan an image-aware query.
-
-        Used by stateless `/retrieve` and the Answer fast path. Research mode
-        invokes planning lazily inside its knowledge-base tool instead.
-        Describing zero images is a no-op.
-        """
-        prepared = await prepare_query_images(
-            query_images=list(query_images or []),
-            describer=await self._aget_query_image_describer(),
-        )
-        plan = await self._aplan_query_prepared(
-            query,
-            text_history=text_history,
-            current_image_descriptions=prepared.descriptions or None,
-            workspaces=ws_list,
-        )
-        return plan, prepared
 
     def _start_query_service_warmup(self, workspaces: list[str] | tuple[str, ...]) -> None:
         """Initialize a request's cold workspaces now.
@@ -1256,7 +1223,6 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         all_workspaces: bool = False,
-        plan: QueryPlan | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         bm25_query: str | None = None,
@@ -1269,47 +1235,51 @@ class RAGServiceManager:
         query planning, and verified image blocks are embedded only when optional
         direct visual retrieval is active. Public retrieval is stateless: it
         accepts neither history nor Web attachment documents.
-
-        Args:
-            plan: Pre-computed QueryPlan from QueryPlanner. When provided,
-                uses plan.standalone_query for search and plan.metadata_filter
-                for structured filtering.
         """
-        kwargs: dict[str, Any] = {}
-        requested_top_k = _positive_int_or_none(top_k)
-        requested_chunk_top_k = _positive_int_or_none(chunk_top_k)
         current_images = list(query_images or [])
         image_limit = max(0, int(self._config.query_images.max_current_images))
         if len(current_images) > image_limit:
             raise CurrentImagePayloadError(f"at most {image_limit} current images are allowed")
-        if filters is not None:
-            kwargs["filters"] = filters
-        if bm25_query is not None:
-            kwargs["bm25_query"] = bm25_query
-        kwargs["top_k"] = requested_top_k or self._config.top_k
-        kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
         ws_list = await self._open_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
         )
+        return await self._retrieve(
+            query,
+            workspaces=ws_list,
+            history=None,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            bm25_query=bm25_query,
+            filters=filters,
+            query_images=current_images,
+            image_descriptions=None,
+        )
+
+    async def _retrieve(
+        self,
+        query: str,
+        *,
+        workspaces: list[str],
+        history: PriorTurns | None,
+        top_k: int | None,
+        chunk_top_k: int | None,
+        bm25_query: str | None,
+        filters: MetadataFilter | None,
+        query_images: list[dict[str, Any]] | None,
+        image_descriptions: list[str] | None,
+    ) -> RetrievalResult:
+        """Plan and execute one retrieval over already-resolved workspaces."""
+        requested_top_k = _positive_int_or_none(top_k)
+        requested_chunk_top_k = _positive_int_or_none(chunk_top_k)
+        current_images = list(query_images or [])
+        kwargs: dict[str, Any] = {
+            "top_k": requested_top_k or self._config.top_k,
+            "chunk_top_k": requested_chunk_top_k or self._config.chunk_top_k,
+        }
         if current_images:
             kwargs["query_image_blocks"] = current_images
-        descriptions: list[str] = []
-        if plan is None:
-            # Stateless retrieve always plans so BM25 keyword extraction,
-            # metadata-filter inference, and image-aware query construction match
-            # the answer path. Describing zero images is a free short-circuit.
-            plan, prepared = await self._describe_and_plan(
-                query,
-                text_history=None,
-                query_images=current_images,
-                ws_list=ws_list,
-            )
-            descriptions = prepared.descriptions
-        effective_query = plan.standalone_query if plan is not None else query
-        if plan is not None:
-            kwargs.setdefault("_plan", plan)
         from dlightrag.observability import trace_observation
 
         try:
@@ -1317,21 +1287,45 @@ class RAGServiceManager:
                 async with trace_observation(
                     "retrieve",
                     as_type="retriever",
-                    input={"query": effective_query},
+                    input={"query": query},
                     metadata={
-                        "workspaces": ws_list,
+                        "workspaces": workspaces,
                         "top_k": kwargs["top_k"],
                         "chunk_top_k": kwargs["chunk_top_k"],
-                        "has_filters": "filters" in kwargs,
+                        "has_filters": filters is not None,
                     },
                 ) as trace:
-                    if len(ws_list) == 1:
-                        svc = await self._get_service(ws_list[0])
+                    descriptions = image_descriptions
+                    if descriptions is None:
+                        descriptions = await prepare_query_images(
+                            query_images=current_images,
+                            describer=await self._aget_query_image_describer(),
+                        )
+                    plan = await self._plan_retrieval(
+                        query,
+                        text_history=history,
+                        current_image_descriptions=descriptions or None,
+                        workspaces=workspaces,
+                    )
+                    effective_query = plan.standalone_query
+                    effective_filters = filters if filters is not None else plan.metadata_filter
+                    filter_source = (
+                        "explicit" if filters is not None else plan.metadata_filter_source
+                    )
+                    effective_bm25_query = (bm25_query or "").strip() or plan.bm25_query
+                    if effective_filters is not None:
+                        kwargs["filters"] = effective_filters
+                    if filter_source is not None:
+                        kwargs["filter_source"] = filter_source
+                    if effective_bm25_query is not None:
+                        kwargs["bm25_query"] = effective_bm25_query
+                    if len(workspaces) == 1:
+                        svc = await self._get_service(workspaces[0])
                         result = await svc.aretrieve(effective_query, **kwargs)
                     else:
                         result = await federated_retrieve(
                             effective_query,
-                            ws_list,
+                            workspaces,
                             self._get_service,
                             max_concurrency=_QUERY_WORKSPACE_MAX_CONCURRENCY,
                             **kwargs,
@@ -1341,6 +1335,7 @@ class RAGServiceManager:
                     trace.update(
                         output={
                             **_context_output(result.contexts),
+                            "standalone_query": effective_query,
                             "query_image_description_count": len(descriptions),
                         }
                     )
@@ -1397,69 +1392,38 @@ class RAGServiceManager:
         )
         resource_manifest = registry.manifest() if registry is not None else ()
         research = web_search is not None or bool(resource_manifest)
-        prepared = PreparedQueryImages(descriptions=[], descriptions_by_ordinal={})
-        prepared_task: asyncio.Task[PreparedQueryImages] | None = None
+        image_descriptions: list[str] = []
+        prepared_task: asyncio.Task[list[str]] | None = None
 
-        async def prepare_images_once() -> PreparedQueryImages:
+        async def prepare_images_once() -> list[str]:
             nonlocal prepared_task
 
-            async def prepare() -> PreparedQueryImages:
+            async def prepare() -> list[str]:
                 if not current_images:
-                    return prepared
+                    return image_descriptions
                 result = await prepare_query_images(
                     query_images=current_images,
                     describer=await self._aget_query_image_describer(),
                 )
-                prepared.descriptions = result.descriptions
-                prepared.descriptions_by_ordinal = result.descriptions_by_ordinal
-                return prepared
+                image_descriptions[:] = result
+                return image_descriptions
 
             if prepared_task is None:
                 prepared_task = asyncio.create_task(prepare())
             return await prepared_task
 
-        plan: QueryPlan | None = None
-        if not research:
-            plan, prepared = await self._describe_and_plan(
-                turn.retrieval_query,
-                text_history=history,
-                query_images=current_images,
-                ws_list=ws_list,
-            )
-
         async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
-            if research:
-
-                async def plan_agent_query() -> QueryPlan:
-                    image_context = await prepare_images_once()
-                    return await self._aplan_query_prepared(
-                        search_query,
-                        text_history=None,
-                        current_image_descriptions=image_context.descriptions or None,
-                        workspaces=ws_list,
-                        preserve_query=True,
-                    )
-
-                tool_plan = await plan_agent_query()
-                return await self.aretrieve(
-                    search_query,
-                    plan=tool_plan,
-                    workspaces=ws_list,
-                    top_k=top_k,
-                    chunk_top_k=chunk_top_k,
-                    filters=filters,
-                    query_images=current_images,
-                )
-            if plan is None:  # pragma: no cover - construction invariant
-                raise RuntimeError("Fast answer requires a query plan")
-            return await self.aretrieve(
-                turn.current_query,
-                plan=plan,
+            descriptions = await prepare_images_once() if current_images else image_descriptions
+            return await self._retrieve(
+                search_query,
                 workspaces=ws_list,
+                history=None if research else history,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
+                bm25_query=None,
                 filters=filters,
                 query_images=current_images,
+                image_descriptions=descriptions,
             )
 
         model_func: Callable[..., Any] | None = None
@@ -1533,9 +1497,7 @@ class RAGServiceManager:
         )
         return _OrchestratorRun(
             orchestrator=orchestrator,
-            answer_query=turn.current_query if research else cast(QueryPlan, plan).standalone_query,
-            retrieval_query=None if research else cast(QueryPlan, plan).standalone_query,
-            prepared=prepared,
+            image_descriptions=image_descriptions,
             query_images=query_images,
             history=history,
             current_image_count=len(current_images),
@@ -1716,15 +1678,14 @@ class RAGServiceManager:
                     await self._acquire_answer_slot()
                     try:
                         result = await run.orchestrator.answer(
-                            run.answer_query,
-                            retrieval_query=run.retrieval_query,
+                            turn.current_query,
                             conversation_history=run.history,
                             query_images=run.query_images,
                         )
                     finally:
                         self._answer_stream_sem.release()
-                    result.trace["query_image_description_count"] = len(run.prepared.descriptions)
-                    result.image_descriptions = run.prepared.descriptions
+                    result.trace["query_image_description_count"] = len(run.image_descriptions)
+                    result.image_descriptions = run.image_descriptions
                     if semantic_highlights:
                         from dlightrag.core.answer.highlights import enrich_semantic_highlights
 
@@ -1792,8 +1753,7 @@ class RAGServiceManager:
                     answer_slot_owned = True
                     try:
                         contexts, stream = await run.orchestrator.answer_stream(
-                            run.answer_query,
-                            retrieval_query=run.retrieval_query,
+                            turn.current_query,
                             conversation_history=run.history,
                             query_images=run.query_images,
                         )
@@ -1804,11 +1764,9 @@ class RAGServiceManager:
                         merged_trace = (
                             dict(existing_trace) if isinstance(existing_trace, dict) else {}
                         )
-                        merged_trace["query_image_description_count"] = len(
-                            run.prepared.descriptions
-                        )
+                        merged_trace["query_image_description_count"] = len(run.image_descriptions)
                         stream_meta.trace = merged_trace
-                        stream_meta.image_descriptions = run.prepared.descriptions
+                        stream_meta.image_descriptions = run.image_descriptions
                         wrapped = _ScopedAnswerStream(
                             stream,
                             self._answer_stream_sem,
@@ -1991,7 +1949,7 @@ class RAGServiceManager:
 
         for component in (
             self._answer_synthesizer,
-            self._query_planner,
+            self._retrieval_planner,
             self._query_tool_model,
             self._web_search,
         ):

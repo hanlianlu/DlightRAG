@@ -146,7 +146,7 @@ async def answer_stream(
     downloadable_workspaces = workspace_names(downloadable_records)
 
     # Planning runs lazily inside the stream (under the request-root span), not
-    # here: this keeps query_planning nested in the answer_pipeline trace
+    # here: this keeps retrieval_planning nested in the answer_pipeline trace
     # and lets an already-committed (duplicate) submission replay without
     # re-planning. The handler stays synchronous request gating only.
     return StreamingResponse(

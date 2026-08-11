@@ -70,7 +70,7 @@
         <mxCell id="orchestrator" value="&lt;b&gt;AnswerOrchestrator&lt;/b&gt;&lt;br&gt;fast path vs research path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="352" width="276" height="50" as="geometry"/>
         </mxCell>
-        <mxCell id="kb_retrieve" value="&lt;b&gt;KB Retrieve&lt;/b&gt;&lt;br&gt;fast: planner first&lt;br&gt;research: lazy BM25/filter hints&lt;br&gt;agent query preserved&lt;br&gt;mix + BM25 + visual + rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
+        <mxCell id="kb_retrieve" value="&lt;b&gt;Canonical Retrieve&lt;/b&gt;&lt;br&gt;internal RetrievalPlanner&lt;br&gt;fast: history-aware rewrite&lt;br&gt;agent query preserved&lt;br&gt;mix + BM25 + visual + rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
           <mxGeometry x="884" y="418" width="126" height="106" as="geometry"/>
         </mxCell>
         <mxCell id="resources" value="&lt;b&gt;ResourceRegistry&lt;/b&gt;&lt;br&gt;+ EvidenceLedger&lt;br&gt;request-local" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">

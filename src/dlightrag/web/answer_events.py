@@ -201,7 +201,7 @@ async def stream_answer_events(
 
     The request-root span is opened here, then query planning runs lazily inside
     it (see ``_emit_answer_events``). Planning shares this task and OTEL context,
-    so ``query_planning`` nests under ``answer_pipeline`` and the whole
+    so ``retrieval_planning`` nests under ``answer_pipeline`` and the whole
     turn -- plan, retrieve, generate, highlight -- lands in one trace. An
     already-committed submission replays below without planning at all.
     """
@@ -301,7 +301,6 @@ async def _emit_answer_events(
         # resources. Planning runs inside the manager under this request-root span.
         turn = PreparedAnswerTurn(
             current_query=query,
-            retrieval_query=query,
             text_history=tuple(prepared_conversation.text_history),
         )
         resources = conversation_service.build_answer_resources(

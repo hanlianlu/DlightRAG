@@ -77,14 +77,14 @@ startup error.
 This pipeline is always used by `/retrieve` and by the Answer fast path. In the
 research path it runs lazily only when the agent selects
 `search_knowledge_base`. The agent's tool query remains the semantic search
-query; `QueryPlanner` contributes BM25 terms, metadata filters, and current-image
-retrieval context without rewriting that query. Attachment resources are not
-planner inputs.
+query; `RetrievalPlanner` is an internal retrieval node that contributes BM25
+terms, metadata filters, and current-image retrieval context without rewriting
+that query. Attachment resources are not planner inputs.
 
 ```text
-RAGService.aretrieve(query, query_images, filters)
+RAGServiceManager._retrieve(query, history, query_images, filters)
   |
-  |-- QueryPlanner
+  |-- RetrievalPlanner
   |     built-in metadata fields plus custom_metadata keys
   |     explicit filters are strict
   |     LLM-inferred empty candidates fall back to unfiltered retrieval
@@ -117,6 +117,11 @@ RAGService.aretrieve(query, query_images, filters)
   `-- AnswerSynthesizer
         text excerpts, KG context, source metadata, optional images
 ```
+
+The public manager resolves workspaces and starts cold-service warm-up before
+entering this operation. A multi-workspace request plans once over the selected
+workspace set, then dispatches that one resolved retrieval request to each
+workspace before round-robin merging.
 
 LightRAG's `hybrid` mode is not used as a public downgrade path; the pipeline
 above is the DlightRAG hybrid layer.

@@ -8,9 +8,9 @@ from dlightrag.models.llm import (
     get_embedding_func,
     get_keyword_model_func,
     get_multimodal_embedder,
-    get_planner_model_func,
     get_query_model_func,
     get_rerank_func,
+    get_retrieval_planner_model_func,
     get_vlm_model_func,
 )
 
@@ -21,7 +21,7 @@ __all__ = [
     "get_embedding_func",
     "get_keyword_model_func",
     "get_multimodal_embedder",
-    "get_planner_model_func",
+    "get_retrieval_planner_model_func",
     "get_query_model_func",
     "get_rerank_func",
     "get_vlm_model_func",

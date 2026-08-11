@@ -172,12 +172,12 @@ async def test_pure_knowledge_base_takes_fast_path_with_no_control_turn() -> Non
     )
     assert orchestrator.uses_research_path is False
 
-    result = await orchestrator.answer("what is X?", retrieval_query="standalone X")
+    result = await orchestrator.answer("what is X?")
 
     # Fast path: one fixed KB retrieval, one synthesis, and no control turn.
     assert result.answer is not None
     assert result.answer.startswith("Fast answer")
-    assert retrieved == ["standalone X"]
+    assert retrieved == ["what is X?"]
 
 
 async def test_fast_path_streams_one_synthesis() -> None:
@@ -198,7 +198,7 @@ async def test_fast_path_streams_one_synthesis() -> None:
         return tokens()
 
     orchestrator._synthesizer.model_func = model_func  # type: ignore[attr-defined]
-    contexts, stream = await orchestrator.answer_stream("q", retrieval_query="q")
+    contexts, stream = await orchestrator.answer_stream("q")
 
     assert stream is not None
     assert [token async for token in stream] == ["Fast ", "answer [1-1]."]

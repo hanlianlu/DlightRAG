@@ -3,7 +3,6 @@
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.core.answer.images import AnswerImageBudget
@@ -11,14 +10,6 @@ from dlightrag.utils.concurrency import bounded_map
 from dlightrag.utils.images import image_url_block
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class PreparedQueryImages:
-    """Current-request image inputs described for retrieval planning."""
-
-    descriptions: list[str]
-    descriptions_by_ordinal: dict[str, str]
 
 
 class QueryImageDescriber:
@@ -50,10 +41,10 @@ class QueryImageDescriber:
     async def describe(
         self,
         images: list[dict[str, Any]] | None,
-    ) -> dict[str, str]:
-        """Return concise per-image visual descriptions keyed by 1-based ordinal."""
+    ) -> list[str]:
+        """Return concise per-image visual descriptions in request order."""
         if self._vlm_func is None or not images or self._max_images <= 0:
-            return {}
+            return []
         vlm_func = self._vlm_func
 
         async def _describe(item: tuple[int, dict[str, Any]]) -> tuple[str, str] | None:
@@ -108,29 +99,19 @@ class QueryImageDescriber:
             max_concurrent=max(1, min(self._max_images, len(items))),
             task_name="query-image-description",
         )
-        descriptions: dict[str, str] = {}
-        for item in results:
-            if isinstance(item, tuple):
-                key, text = item
-                descriptions[key] = text
-        return descriptions
+        return [item[1] for item in results if isinstance(item, tuple)]
 
 
 async def prepare_query_images(
     *,
     query_images: list[dict[str, Any]] | None,
     describer: Any,
-) -> PreparedQueryImages:
+) -> list[str]:
     """Describe current-request images for image-aware retrieval planning."""
-    descriptions = await describer.describe(list(query_images or []))
-    return PreparedQueryImages(
-        descriptions=list(descriptions.values()),
-        descriptions_by_ordinal=descriptions,
-    )
+    return list(await describer.describe(list(query_images or [])))
 
 
 __all__ = [
-    "PreparedQueryImages",
     "QueryImageDescriber",
     "prepare_query_images",
 ]

@@ -28,8 +28,9 @@ from dlightrag.config import (
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
-from dlightrag.core.request.planner import QueryPlan, QueryPlanner
+from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.core.resources.models import ResourceInput
+from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.base import SourceDocument
@@ -107,16 +108,9 @@ async def test_prepared_stream_keeps_server_history_internal(
     answer_turn = importlib.import_module("dlightrag.core.answer.turn")
     turn = answer_turn.PreparedAnswerTurn(
         current_query="Follow up",
-        retrieval_query="Standalone follow up",
         text_history=({"role": "user", "content": "Earlier"},),
     )
     manager = RAGServiceManager(config=test_cfg)
-    manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-        return_value=(
-            QueryPlan(original_query="Follow up", standalone_query="Standalone follow up"),
-            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-        )
-    )
     monkeypatch.setattr("dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator)
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
@@ -129,15 +123,14 @@ async def test_prepared_stream_keeps_server_history_internal(
 async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     planner = AsyncMock()
-    planner.plan.return_value = QueryPlan(
-        original_query="follow up",
+    planner.plan.return_value = RetrievalPlan(
         standalone_query="standalone",
     )
-    manager._query_planner = planner
+    manager._retrieval_planner = planner
     manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
     history = PriorTurns([{"role": "user", "content": "Earlier"}])
 
-    await manager._aplan_query_prepared(
+    await manager._plan_retrieval(
         "follow up",
         text_history=history,
         workspaces=["default"],
@@ -150,40 +143,38 @@ async def test_request_scope_starts_workspace_warmup_before_planning(test_cfg) -
     manager = RAGServiceManager(config=test_cfg)
     warm_started = asyncio.Event()
     release_warm = asyncio.Event()
+    plan_started = asyncio.Event()
+    service = AsyncMock()
+    service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
 
     async def get_service(_workspace: str) -> AsyncMock:
         warm_started.set()
         await release_warm.wait()
-        return AsyncMock()
+        return service
 
-    async def plan_query(*_args: object, **_kwargs: object) -> QueryPlan:
+    async def plan_query(*_args: object, **_kwargs: object) -> RetrievalPlan:
         await warm_started.wait()
-        return QueryPlan(original_query="query", standalone_query="planned")
+        plan_started.set()
+        return RetrievalPlan(standalone_query="planned")
 
     manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
     describer = AsyncMock()
-    describer.describe.return_value = {}
+    describer.describe.return_value = []
     manager._aget_query_image_describer = AsyncMock(  # type: ignore[method-assign]
         return_value=describer
     )
-    manager._aplan_query_prepared = AsyncMock(  # type: ignore[method-assign]
+    manager._plan_retrieval = AsyncMock(  # type: ignore[method-assign]
         side_effect=plan_query
     )
 
-    manager._start_query_service_warmup(["reports"])
+    task = asyncio.create_task(manager.aretrieve("query", workspace="reports"))
     try:
-        plan, _prepared = await manager._describe_and_plan(
-            "query",
-            text_history=None,
-            query_images=None,
-            ws_list=["reports"],
-        )
+        await plan_started.wait()
+        assert not task.done()
     finally:
         release_warm.set()
 
-    # Planning completed while the workspace was still initializing.
-    assert plan.standalone_query == "planned"
-    manager._get_service.assert_awaited_once_with("reports")
+    await task
     await asyncio.gather(*manager._warmups, return_exceptions=True)
 
 
@@ -242,13 +233,7 @@ async def test_private_generation_helper_hands_prepared_history_to_engine(test_c
     engine = AsyncMock()
     engine.generate_stream.return_value = ({"chunks": []}, None)
     manager._answer_synthesizer = engine
-    manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-        return_value=(
-            QueryPlan(original_query="follow up", standalone_query="follow up"),
-            SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-        )
-    )
-    manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+    manager._retrieve = AsyncMock(  # type: ignore[method-assign]
         return_value=RetrievalResult(contexts={"chunks": []})
     )
     history = [{"role": "user", "content": "Earlier"}]
@@ -564,15 +549,10 @@ class TestRouting:
 
     @pytest.fixture(autouse=True)
     def _stub_planning(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # aretrieve now always plans; stub the describe+plan helper so routing
-        # tests do not invoke a real planner LLM.
-        async def _fake(self_: object, query: str, **_kwargs: object) -> tuple[object, object]:
-            return (
-                QueryPlan(original_query=query, standalone_query=query),
-                SimpleNamespace(descriptions=[]),
-            )
+        async def _fake(self_: object, query: str, **_kwargs: object) -> RetrievalPlan:
+            return RetrievalPlan(standalone_query=query)
 
-        monkeypatch.setattr(RAGServiceManager, "_describe_and_plan", _fake)
+        monkeypatch.setattr(RAGServiceManager, "_plan_retrieval", _fake)
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aretrieve_single_workspace(self, mock_create, test_cfg) -> None:
@@ -590,8 +570,12 @@ class TestRouting:
     ) -> None:
         mock_fed.return_value = MagicMock()
         manager = RAGServiceManager(config=test_cfg)
+        manager._plan_retrieval = AsyncMock(  # type: ignore[method-assign]
+            return_value=RetrievalPlan(standalone_query="query")
+        )
         await manager.aretrieve("query", workspaces=["ws_a", "ws_b"])
         mock_fed.assert_awaited_once()
+        manager._plan_retrieval.assert_awaited_once()  # type: ignore[attr-defined]
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
     async def test_aretrieve_all_workspaces_expands_registry(
@@ -667,6 +651,67 @@ class TestRouting:
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
         assert retrieve_kwargs["bm25_query"] == "alpha beta"
 
+    async def test_retrieve_uses_inferred_filter_and_lexical_query(self, test_cfg) -> None:
+        inferred = MetadataFilter(author="Ada")
+        plan = RetrievalPlan(
+            standalone_query="report",
+            bm25_query="annual report",
+            metadata_filter=inferred,
+            metadata_filter_source="llm_inferred",
+        )
+        service = AsyncMock()
+        service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
+        manager = RAGServiceManager(config=test_cfg)
+        manager._plan_retrieval = AsyncMock(return_value=plan)  # type: ignore[method-assign]
+        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+
+        await manager._retrieve(
+            "report",
+            workspaces=["alpha"],
+            history=None,
+            top_k=None,
+            chunk_top_k=None,
+            bm25_query=None,
+            filters=None,
+            query_images=None,
+            image_descriptions=[],
+        )
+
+        assert service.aretrieve.await_args.args == ("report",)
+        assert service.aretrieve.await_args.kwargs["filters"] is inferred
+        assert service.aretrieve.await_args.kwargs["filter_source"] == "llm_inferred"
+        assert service.aretrieve.await_args.kwargs["bm25_query"] == "annual report"
+
+    async def test_explicit_retrieval_inputs_override_planner_inference(self, test_cfg) -> None:
+        explicit = MetadataFilter(title="Runbook")
+        plan = RetrievalPlan(
+            standalone_query="report",
+            bm25_query="planner terms",
+            metadata_filter=MetadataFilter(author="Ada"),
+            metadata_filter_source="llm_inferred",
+        )
+        service = AsyncMock()
+        service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
+        manager = RAGServiceManager(config=test_cfg)
+        manager._plan_retrieval = AsyncMock(return_value=plan)  # type: ignore[method-assign]
+        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+
+        await manager._retrieve(
+            "report",
+            workspaces=["alpha"],
+            history=None,
+            top_k=None,
+            chunk_top_k=None,
+            bm25_query="caller terms",
+            filters=explicit,
+            query_images=None,
+            image_descriptions=[],
+        )
+
+        assert service.aretrieve.await_args.kwargs["filters"] is explicit
+        assert service.aretrieve.await_args.kwargs["filter_source"] == "explicit"
+        assert service.aretrieve.await_args.kwargs["bm25_query"] == "caller terms"
+
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aretrieve_threads_query_images_to_backend(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
@@ -697,16 +742,15 @@ class TestRouting:
 
     async def test_query_images_are_current_request_only(self, test_cfg) -> None:
         describer = AsyncMock()
-        describer.describe = AsyncMock(return_value={"1": "Image 1: chart"})
+        describer.describe = AsyncMock(return_value=["Image 1: chart"])
         current = [_image_block()]
 
-        prepared = await prepare_query_images(
+        descriptions = await prepare_query_images(
             query_images=current,
             describer=describer,
         )
 
-        assert prepared.descriptions == ["Image 1: chart"]
-        assert prepared.descriptions_by_ordinal == {"1": "Image 1: chart"}
+        assert descriptions == ["Image 1: chart"]
         describer.describe.assert_awaited_once_with(current)
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
@@ -722,7 +766,7 @@ class TestRouting:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_synthesizer = mock_engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         await manager.aanswer("query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -752,7 +796,7 @@ class TestAnswerViaEngine:
             warm_query_services,
         )
 
-    async def test_aplan_query_emits_query_planning_observation(
+    async def test_retrieval_planning_emits_nested_observation(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def llm_func(*, messages, **kwargs) -> str:
@@ -769,17 +813,15 @@ class TestAnswerViaEngine:
         )
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._query_planner = QueryPlanner(llm_func=llm_func)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=llm_func)
         manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-        plan = await manager._aplan_query_prepared(
-            "raw query", text_history=None, workspaces=["ws_a"]
-        )
+        plan = await manager._plan_retrieval("raw query", text_history=None, workspaces=["ws_a"])
 
-        assert plan.standalone_query == "rewritten query"
+        assert plan.standalone_query == "raw query"
         assert trace_calls == [
             {
-                "name": "query_planning",
+                "name": "retrieval_planning",
                 "as_type": "chain",
                 "input": {"query": "raw query"},
                 "metadata": {
@@ -789,9 +831,9 @@ class TestAnswerViaEngine:
                 "updates": [
                     {
                         "output": {
-                            "standalone_query": "rewritten query",
+                            "standalone_query": "raw query",
                             "has_metadata_filter": False,
-                            "planner_outcome": "planned",
+                            "planning_outcome": "planned",
                         }
                     }
                 ],
@@ -823,7 +865,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_synthesizer = mock_engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         result = await manager.aanswer("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -849,6 +891,7 @@ class TestAnswerViaEngine:
                     "context_chunk_count": 0,
                     "entity_count": 0,
                     "relationship_count": 0,
+                    "standalone_query": "what is X?",
                     "query_image_description_count": 0,
                 }
             }
@@ -884,7 +927,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=cfg)
         manager._answer_synthesizer = mock_engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspace="ws_a")
 
@@ -915,7 +958,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=cfg)
         manager._answer_synthesizer = mock_engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspace="ws_a", chunk_top_k=7)
 
@@ -930,17 +973,15 @@ class TestAnswerViaEngine:
         assert result is expected_result
 
     async def test_aanswer_threads_history_to_planning_and_generation(self, test_cfg) -> None:
-        """Caller history reaches retrieval planning and answer generation."""
+        """Fast answer gives one bounded history to retrieval and final synthesis."""
         manager = RAGServiceManager(config=test_cfg)
-        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                QueryPlan(original_query="follow up", standalone_query="standalone"),
-                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-            )
+        manager._open_query_workspaces = AsyncMock(return_value=["ws_a"])  # type: ignore[method-assign]
+        manager._plan_retrieval = AsyncMock(  # type: ignore[method-assign]
+            return_value=RetrievalPlan(standalone_query="standalone")
         )
-        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
-            return_value=RetrievalResult(contexts={"chunks": []})
-        )
+        service = AsyncMock()
+        service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
+        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
         mock_engine = AsyncMock()
         mock_engine.generate.return_value = RetrievalResult(answer="a", contexts={"chunks": []})
         manager._answer_synthesizer = mock_engine
@@ -948,11 +989,14 @@ class TestAnswerViaEngine:
 
         await manager.aanswer("follow up", workspace="ws_a", history=history)
 
-        plan_call = manager._describe_and_plan.await_args
+        plan_call = manager._plan_retrieval.await_args  # type: ignore[attr-defined]
         assert plan_call is not None
+        assert plan_call.args[0] == "follow up"
         assert plan_call.kwargs["text_history"].messages == history
+        assert service.aretrieve.await_args.args == ("standalone",)
         generate_call = mock_engine.generate.await_args
         assert generate_call is not None
+        assert generate_call.args[0] == "follow up"
         assert generate_call.kwargs["conversation_history"].messages == history
 
     async def test_aanswer_stream_threads_history_to_prepared_turn(self, test_cfg) -> None:
@@ -1017,7 +1061,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_synthesizer = AsyncMock()
         manager._answer_synthesizer.generate.side_effect = [_answer_result(), _answer_result()]
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         plain = await manager.aanswer("query", workspace="ws_a")
         highlighted = await manager.aanswer(
@@ -1055,7 +1099,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_synthesizer = mock_engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -1082,7 +1126,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_synthesizer = mock_engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
@@ -1108,7 +1152,7 @@ class TestAnswerViaEngine:
         manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
         manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
         manager._answer_synthesizer = engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         result = await manager.aanswer("query", all_workspaces=True)
 
@@ -1131,7 +1175,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_synthesizer = mock_engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         contexts, stream = await manager.aanswer_stream("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
@@ -1157,7 +1201,7 @@ class TestAnswerViaEngine:
         manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
         manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
         manager._answer_synthesizer = engine
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
 
         resolved_contexts, stream = await manager.aanswer_stream(
             "query",
@@ -1212,21 +1256,21 @@ class TestAnswerViaEngine:
         assert len(budgets) == 1
         assert budgets[0].max_pixels == 123
 
-    def test_get_query_planner_uses_planner_model_func(self, test_cfg) -> None:
-        """QueryPlanner uses the text planning factory, not the answer/query role."""
+    def test_get_retrieval_planner_uses_retrieval_planner_model_func(self, test_cfg) -> None:
+        """RetrievalPlanner uses the text planning factory, not the answer/query role."""
         manager = RAGServiceManager(config=test_cfg)
         planner_func = MagicMock()
 
         with (
             patch(
-                "dlightrag.models.llm.get_planner_model_func",
+                "dlightrag.models.llm.get_retrieval_planner_model_func",
                 return_value=planner_func,
                 create=True,
             ) as mock_planner,
             patch("dlightrag.models.llm.get_query_model_func") as mock_query,
         ):
-            planner = manager._get_query_planner()
-            planner2 = manager._get_query_planner()
+            planner = manager._get_retrieval_planner()
+            planner2 = manager._get_retrieval_planner()
 
         mock_planner.assert_called_once_with(test_cfg)
         mock_query.assert_not_called()
@@ -1239,13 +1283,7 @@ class TestAnswerViaEngine:
         cfg = test_cfg.model_copy(update={"max_async": 1})
         manager = RAGServiceManager(config=cfg)
         contexts = {"chunks": [], "entities": [], "relationships": []}
-        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                QueryPlan(original_query="q", standalone_query="q"),
-                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-            )
-        )
-        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+        manager._retrieve = AsyncMock(  # type: ignore[method-assign]
             return_value=RetrievalResult(contexts=contexts)
         )
 
@@ -1269,13 +1307,7 @@ class TestAnswerViaEngine:
         cfg = test_cfg.model_copy(update={"max_async": 1, "answer_acquire_timeout": 0.01})
         manager = RAGServiceManager(config=cfg)
         contexts = {"chunks": [], "entities": [], "relationships": []}
-        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                QueryPlan(original_query="q", standalone_query="q"),
-                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-            )
-        )
-        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+        manager._retrieve = AsyncMock(  # type: ignore[method-assign]
             return_value=RetrievalResult(contexts=contexts)
         )
 
@@ -1917,12 +1949,14 @@ class TestDegradedMode:
         # without a running PostgreSQL — that's expected and non-fatal.
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
-    async def test_create_eagerly_initializes_query_planner(self, mock_create, test_cfg) -> None:
+    async def test_create_eagerly_initializes_retrieval_planner(
+        self, mock_create, test_cfg
+    ) -> None:
         mock_create.return_value = AsyncMock()
 
         manager = await RAGServiceManager.acreate(config=test_cfg)
 
-        assert manager._query_planner is not None
+        assert manager._retrieval_planner is not None
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_create_sets_degraded_on_failure(self, mock_create, test_cfg) -> None:
@@ -2072,7 +2106,7 @@ class TestWorkspaceDiscovery:
 
 
 class TestPlannerSchemaScope:
-    async def test_aplan_query_uses_schema_for_requested_workspace(
+    async def test_retrieval_planning_uses_schema_for_requested_workspace(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         manager = RAGServiceManager(config=test_cfg)
@@ -2096,10 +2130,10 @@ class TestPlannerSchemaScope:
         )
 
         llm = AsyncMock(return_value='{"standalone_query": "q", "filters": {}}')
-        manager._query_planner = QueryPlanner(llm_func=llm)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=llm)
 
-        await manager._aplan_query_prepared("q", text_history=None, workspaces=["reports"])
-        await manager._aplan_query_prepared("q", text_history=None, workspaces=["legal"])
+        await manager._plan_retrieval("q", text_history=None, workspaces=["reports"])
+        await manager._plan_retrieval("q", text_history=None, workspaces=["legal"])
 
         first_payload = json.loads(llm.await_args_list[0].kwargs["messages"][1]["content"])
         second_payload = json.loads(llm.await_args_list[1].kwargs["messages"][1]["content"])
@@ -2266,13 +2300,7 @@ class TestAgenticAnswerCapability:
         create = MagicMock(side_effect=AssertionError("tool model must stay absent"))
         monkeypatch.setattr("dlightrag.models.tool_model.create_query_tool_model", create)
         manager = RAGServiceManager(config=test_cfg)
-        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                QueryPlan(original_query="q", standalone_query="q"),
-                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-            )
-        )
-        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+        manager._retrieve = AsyncMock(  # type: ignore[method-assign]
             return_value=RetrievalResult(contexts={"chunks": []})
         )
         engine = AsyncMock()
@@ -2310,12 +2338,6 @@ class TestAgenticAnswerCapability:
     ) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                QueryPlan(original_query="question", standalone_query="question"),
-                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-            )
-        )
         manager._answer_synthesizer = MagicMock()
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
@@ -2347,12 +2369,6 @@ class TestAgenticAnswerCapability:
             base_url=None,
             model="vision-test",
             failure_kind=None,
-        )
-        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                QueryPlan(original_query="inspect", standalone_query="inspect"),
-                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-            )
         )
         manager._answer_synthesizer = MagicMock()
         monkeypatch.setattr(
@@ -2402,7 +2418,7 @@ class TestAgenticAnswerCapability:
         service = AsyncMock()
         service.aretrieve.return_value = RetrievalResult()
         manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
-        manager._query_planner = QueryPlanner(llm_func=None)
+        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
         manager._query_tool_model = AsyncMock()
         manager._web_search = AsyncMock()
 
@@ -2417,12 +2433,6 @@ class TestAgenticAnswerCapability:
     ) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        manager._describe_and_plan = AsyncMock(  # type: ignore[method-assign]
-            return_value=(
-                QueryPlan(original_query="question", standalone_query="question"),
-                SimpleNamespace(descriptions=[], descriptions_by_ordinal={}),
-            )
-        )
         manager._answer_synthesizer = MagicMock()
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
@@ -2434,7 +2444,6 @@ class TestAgenticAnswerCapability:
 
         assert _CapturingOrchestrator.last["init"]["search_web"] is not None
         assert "answer_stream" in _CapturingOrchestrator.last
-        manager._describe_and_plan.assert_not_awaited()  # type: ignore[attr-defined]
 
     async def test_agentic_kb_tool_plans_the_agent_query_lazily(self, test_cfg) -> None:
         from dlightrag.core.answer.synthesizer import AnswerSynthesizer
@@ -2445,14 +2454,7 @@ class TestAgenticAnswerCapability:
         manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )
-        agent_plan = QueryPlan(
-            original_query="agent chosen terms",
-            standalone_query="agent chosen terms",
-            bm25_query="agent terms",
-        )
-        manager._aplan_query_prepared = AsyncMock(return_value=agent_plan)  # type: ignore[method-assign]
-        manager._describe_and_plan = AsyncMock()  # type: ignore[method-assign]
-        manager.aretrieve = AsyncMock(return_value=RetrievalResult())  # type: ignore[method-assign]
+        manager._retrieve = AsyncMock(return_value=RetrievalResult())  # type: ignore[method-assign]
         manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
         manager._web_search = AsyncMock()
         model = AsyncMock(
@@ -2487,21 +2489,102 @@ class TestAgenticAnswerCapability:
             ],
         )
 
-        manager._describe_and_plan.assert_not_awaited()  # type: ignore[attr-defined]
-        manager._aplan_query_prepared.assert_awaited_once_with(  # type: ignore[attr-defined]
-            "agent chosen terms",
-            text_history=None,
-            current_image_descriptions=None,
-            workspaces=["alpha"],
-            preserve_query=True,
-        )
-        retrieve_call = manager.aretrieve.await_args  # type: ignore[attr-defined]
+        retrieve_call = manager._retrieve.await_args  # type: ignore[attr-defined]
         assert retrieve_call is not None
         assert retrieve_call.args[0] == "agent chosen terms"
-        retrieval_plan = retrieve_call.kwargs["plan"]
-        assert retrieval_plan.original_query == "agent chosen terms"
-        assert retrieval_plan.standalone_query == "agent chosen terms"
-        assert retrieval_plan.bm25_query == agent_plan.bm25_query
+        assert retrieve_call.kwargs["history"] is None
+        assert "plan" not in retrieve_call.kwargs
+
+    async def test_agentic_kb_searches_describe_current_images_once(self, test_cfg) -> None:
+        from dlightrag.core.answer.capability import AnswerImageCapability
+        from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=2,
+            effective_max_images=2,
+            provider="test",
+            base_url=None,
+            model="vision-test",
+            failure_kind=None,
+        )
+        manager._open_query_workspaces = AsyncMock(return_value=["alpha"])  # type: ignore[method-assign]
+        rows = [
+            {
+                "chunk_id": f"c{index}",
+                "reference_id": "upstream",
+                "full_doc_id": "doc-1",
+                "file_path": "report.pdf",
+                "content": f"fact {index}",
+                "_workspace": "alpha",
+                "metadata": {
+                    "source_type": "file",
+                    "source_uri": "file:///alpha/report.pdf",
+                    "source_download_locator": "file:///alpha/report.pdf",
+                },
+            }
+            for index in (1, 2)
+        ]
+        manager._retrieve = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                RetrievalResult(contexts={"chunks": [rows[0]]}),
+                RetrievalResult(contexts={"chunks": [rows[1]]}),
+            ]
+        )
+        describer = AsyncMock()
+        describer.describe.return_value = ["Image 1: chart"]
+        manager._aget_query_image_describer = AsyncMock(  # type: ignore[method-assign]
+            return_value=describer
+        )
+        model = AsyncMock(
+            side_effect=[
+                AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id="kb-1", name="search_knowledge_base", arguments={"query": "one"}
+                        ),
+                    ),
+                    stop_reason="tool_use",
+                ),
+                AssistantTurn(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id="kb-2", name="search_knowledge_base", arguments={"query": "two"}
+                        ),
+                    ),
+                    stop_reason="tool_use",
+                ),
+                AssistantTurn(text="ready", tool_calls=(), stop_reason="stop"),
+            ]
+        )
+        model.complete_text = AsyncMock(return_value="Answer [1-1].")
+        manager._query_tool_model = model
+        manager._answer_synthesizer = AnswerSynthesizer(
+            image_max_pixels=40_000_000,
+            model_func=None,
+        )
+
+        await manager.aanswer(
+            "Read this chart",
+            workspace="alpha",
+            resources=[
+                ResourceInput(
+                    filename="chart.png",
+                    content=_png_bytes(),
+                    declared_mime="image/png",
+                )
+            ],
+        )
+
+        describer.describe.assert_awaited_once()
+        assert manager._retrieve.await_count == 2  # type: ignore[attr-defined]
+        for call in manager._retrieve.await_args_list:  # type: ignore[attr-defined]
+            assert call.kwargs["history"] is None
+            assert call.kwargs["image_descriptions"] == ["Image 1: chart"]
 
     async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
         from dlightrag.core.answer.synthesizer import AnswerSynthesizer
@@ -2510,9 +2593,6 @@ class TestAgenticAnswerCapability:
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        plan = QueryPlan(original_query="What about it?", standalone_query="inflation 2026")
-        manager._aplan_query_prepared = AsyncMock(return_value=plan)  # type: ignore[method-assign]
-        manager._describe_and_plan = AsyncMock()  # type: ignore[method-assign]
         manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
         manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
@@ -2538,7 +2618,7 @@ class TestAgenticAnswerCapability:
                 "relationships": [],
             }
         )
-        manager.aretrieve = AsyncMock(return_value=corpus)  # type: ignore[method-assign]
+        manager._retrieve = AsyncMock(return_value=corpus)  # type: ignore[method-assign]
         web = AsyncMock()
         web.search.return_value = WebSearchResult(
             hits=(
@@ -2588,18 +2668,11 @@ class TestAgenticAnswerCapability:
         assert result.answer == "Answer [1-1][2-1]."
         assert [source.id for source in result.sources] == ["1", "2"]
         model.complete_text.assert_awaited_once()
-        manager._describe_and_plan.assert_not_awaited()  # type: ignore[attr-defined]
-        manager._aplan_query_prepared.assert_awaited_once_with(  # type: ignore[attr-defined]
-            "inflation 2026",
-            text_history=None,
-            current_image_descriptions=None,
-            workspaces=["alpha"],
-            preserve_query=True,
-        )
-        retrieve_call = manager.aretrieve.await_args  # type: ignore[attr-defined]
+        retrieve_call = manager._retrieve.await_args  # type: ignore[attr-defined]
         assert retrieve_call is not None
         assert retrieve_call.args[0] == "inflation 2026"
-        assert retrieve_call.kwargs["plan"].standalone_query == "inflation 2026"
+        assert retrieve_call.kwargs["history"] is None
+        assert "plan" not in retrieve_call.kwargs
         web.search.assert_awaited_once_with("inflation 2026")
 
     async def test_agentic_stream_keeps_slots_until_disconnect(self, test_cfg) -> None:
@@ -2649,13 +2722,13 @@ class TestAgenticAnswerCapability:
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        plan = QueryPlan(original_query="Question", standalone_query="planned question")
-        manager._aplan_query_prepared = AsyncMock(return_value=plan)  # type: ignore[method-assign]
+        plan = RetrievalPlan(standalone_query="planned question")
+        manager._plan_retrieval = AsyncMock(return_value=plan)  # type: ignore[method-assign]
         manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
         manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )
-        manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
+        manager._retrieve = AsyncMock(  # type: ignore[method-assign]
             return_value=RetrievalResult(
                 contexts={
                     "chunks": [

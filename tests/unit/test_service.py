@@ -310,29 +310,7 @@ class TestRAGServiceRetrieve:
         call_kwargs = orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["bm25_query"] == "alpha beta"
 
-    async def test_aretrieve_caller_bm25_query_overrides_plan(self, test_config):
-        from types import SimpleNamespace
-
-        service, orchestrator = self._make_retrieval_service(test_config)
-        plan = SimpleNamespace(
-            metadata_filter=None, metadata_filter_source=None, bm25_query="plan terms"
-        )
-        await service.aretrieve("test query", bm25_query="caller terms", _plan=plan)
-        call_kwargs = orchestrator.aretrieve.call_args.kwargs
-        assert call_kwargs["bm25_query"] == "caller terms"
-
-    async def test_aretrieve_blank_bm25_query_falls_back_to_plan(self, test_config):
-        from types import SimpleNamespace
-
-        service, orchestrator = self._make_retrieval_service(test_config)
-        plan = SimpleNamespace(
-            metadata_filter=None, metadata_filter_source=None, bm25_query="plan terms"
-        )
-        await service.aretrieve("test query", bm25_query="   ", _plan=plan)
-        call_kwargs = orchestrator.aretrieve.call_args.kwargs
-        assert call_kwargs["bm25_query"] == "plan terms"
-
-    async def test_aretrieve_without_bm25_query_or_plan_passes_none(self, test_config):
+    async def test_aretrieve_without_bm25_query_passes_none(self, test_config):
         service, orchestrator = self._make_retrieval_service(test_config)
         await service.aretrieve("test query")
         call_kwargs = orchestrator.aretrieve.call_args.kwargs

@@ -1,14 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Unified query understanding -- rewrite + analyze in one LLM call.
-
-Replaces the two-step pipeline (web/routes._rewrite_query + retrieval/query_analyzer)
-with a single QueryPlanner that produces a QueryPlan from one LLM call.
-
-Consumers:
-- ServiceManager -- owns the planner singleton; plans eagerly for `/retrieve`
-    and fast answers, or lazily after an agent selects knowledge-base search
-- Web/API routes -- no longer do query processing, just pass raw history
-"""
+"""Plan one retrieval query: semantic text, lexical text, and metadata scope."""
 
 import asyncio
 import json
@@ -27,8 +18,8 @@ from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
-    PLANNER_IMAGE_CONTEXT_GUIDANCE,
-    PLANNER_SYSTEM_PROMPT,
+    RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE,
+    RETRIEVAL_PLANNER_SYSTEM_PROMPT,
 )
 from dlightrag.utils import log_safe
 from dlightrag.utils.tokens import (
@@ -40,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Planning packs into the same declared answer context window as control and
 # final calls, minus the shared final-generation reserve. There is no separate
 # fixed planner envelope.
-_DEFAULT_PLANNER_INPUT_TOKEN_ENVELOPE = (
+_DEFAULT_RETRIEVAL_PLANNER_INPUT_TOKEN_ENVELOPE = (
     AnswerCapacity(260_000).context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
 )
 
@@ -78,14 +69,14 @@ def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
     return "\n".join(lines)
 
 
-PlannerOutcome = Literal[
+RetrievalPlannerOutcome = Literal[
     "planned",
     "fallback_no_model",
     "fallback_provider_error",
     "fallback_invalid_response",
     "fallback_input_overflow",
 ]
-PlannerFallbackOutcome = Literal[
+RetrievalPlannerFallbackOutcome = Literal[
     "fallback_no_model",
     "fallback_provider_error",
     "fallback_invalid_response",
@@ -94,28 +85,26 @@ PlannerFallbackOutcome = Literal[
 
 
 @dataclass
-class QueryPlan:
-    """Output of QueryPlanner -- full query understanding in one shot."""
+class RetrievalPlan:
+    """The semantic, lexical, and metadata inputs one retrieval will execute."""
 
-    original_query: str  # User's raw input (before rewrite)
     standalone_query: str  # Rewritten standalone query (= original if no history)
     bm25_query: str | None = None
     metadata_filter: MetadataFilter | None = None
     metadata_filter_source: str | None = None
     metadata_filter_confidence: str | None = None
     metadata_filter_evidence: list[dict[str, Any]] | None = None
-    planner_outcome: PlannerOutcome = "planned"
+    outcome: RetrievalPlannerOutcome = "planned"
 
     @classmethod
-    def fallback(cls, query: str, outcome: PlannerFallbackOutcome) -> QueryPlan:
+    def fallback(cls, query: str, outcome: RetrievalPlannerFallbackOutcome) -> RetrievalPlan:
         return cls(
-            original_query=query,
             standalone_query=query,
-            planner_outcome=outcome,
+            outcome=outcome,
         )
 
 
-class QueryPlannerFilterEvidence(BaseModel):
+class RetrievalFilterEvidence(BaseModel):
     """Evidence attached to one LLM-proposed metadata filter."""
 
     model_config = ConfigDict(extra="forbid")
@@ -126,7 +115,7 @@ class QueryPlannerFilterEvidence(BaseModel):
     intent_basis: str = ""
 
 
-class QueryPlannerFilters(BaseModel):
+class RetrievalFilters(BaseModel):
     """Structured filter proposal emitted by the planner LLM."""
 
     model_config = ConfigDict(extra="forbid")
@@ -140,21 +129,21 @@ class QueryPlannerFilters(BaseModel):
     custom: dict[str, str | int | float | bool | None] | None = None
 
 
-class QueryPlannerStructuredResponse(BaseModel):
+class RetrievalPlannerResponse(BaseModel):
     """Pydantic schema for planner structured-output calls."""
 
     model_config = ConfigDict(extra="forbid")
 
     standalone_query: str
     bm25_query: str | None = None
-    filters: QueryPlannerFilters = Field(default_factory=QueryPlannerFilters)
+    filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
     filter_confidence: Literal["high", "low"] = "low"
-    filter_evidence: list[QueryPlannerFilterEvidence] = Field(default_factory=list)
+    filter_evidence: list[RetrievalFilterEvidence] = Field(default_factory=list)
 
 
-QUERY_PLAN_STRUCTURED_OUTPUT = StructuredOutput(
-    name="query_plan",
-    schema=QueryPlannerStructuredResponse,
+RETRIEVAL_PLAN_STRUCTURED_OUTPUT = StructuredOutput(
+    name="retrieval_plan",
+    schema=RetrievalPlannerResponse,
 )
 
 
@@ -222,14 +211,14 @@ def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int
     return ",".join(parts) if parts else "[]"
 
 
-class QueryPlanner:
+class RetrievalPlanner:
     """Unified query understanding -- rewrite + analyze in one LLM call."""
 
     def __init__(
         self,
         llm_func: Callable[..., Any] | None = None,
         *,
-        input_token_envelope: int = _DEFAULT_PLANNER_INPUT_TOKEN_ENVELOPE,
+        input_token_envelope: int = _DEFAULT_RETRIEVAL_PLANNER_INPUT_TOKEN_ENVELOPE,
     ) -> None:
         self._llm_func = llm_func
         self._input_token_envelope = max(1, int(input_token_envelope))
@@ -239,7 +228,7 @@ class QueryPlanner:
         query: str,
         system_prompt: str,
         *,
-        structured_output: StructuredOutput = QUERY_PLAN_STRUCTURED_OUTPUT,
+        structured_output: StructuredOutput = RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
     ) -> str:
         """Call the planner LLM using DlightRAG's messages-first contract."""
         llm_func = self._llm_func
@@ -267,28 +256,28 @@ class QueryPlanner:
         conversation_history: PriorTurns | None = None,
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
-        preserve_query: bool = False,
-    ) -> QueryPlan:
-        """Produce a full QueryPlan from one LLM call.
+    ) -> RetrievalPlan:
+        """Produce one retrieval plan from one LLM call.
 
         Handles conversation rewriting, lexical query derivation, and metadata
-        filter extraction in one prompt. ``preserve_query`` disables rewriting
-        when a research agent already chose the semantic search query.
+        filter extraction in one prompt. Stateless retrieval preserves the
+        caller's semantic query; history enables coreference rewriting.
         """
 
         if self._llm_func is None:
-            return QueryPlan.fallback(query, "fallback_no_model")
+            return RetrievalPlan.fallback(query, "fallback_no_model")
 
         # Truncate history
         history = conversation_history or PriorTurns()
+        preserve_query = not bool(history)
 
         # Schema is fetched and cached by the service manager, then passed in.
         schema_context = _build_schema_context(schema)
-        system_prompt = PLANNER_SYSTEM_PROMPT
+        system_prompt = RETRIEVAL_PLANNER_SYSTEM_PROMPT
 
-        structured_output = QUERY_PLAN_STRUCTURED_OUTPUT
+        structured_output = RETRIEVAL_PLAN_STRUCTURED_OUTPUT
         if current_image_descriptions:
-            system_prompt += "\n\n" + PLANNER_IMAGE_CONTEXT_GUIDANCE
+            system_prompt += "\n\n" + RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE
 
         def render_input(messages: list[dict[str, Any]], metadata_schema: str) -> str:
             return _planner_user_payload(
@@ -320,7 +309,7 @@ class QueryPlanner:
 
         planner_input, fits_envelope = await asyncio.to_thread(fit_to_envelope)
         if not fits_envelope:
-            return QueryPlan.fallback(query, "fallback_input_overflow")
+            return RetrievalPlan.fallback(query, "fallback_input_overflow")
 
         llm_start = time.monotonic()
         response = await self._call_llm_with_retry(
@@ -330,12 +319,11 @@ class QueryPlanner:
             start_time=llm_start,
         )
         if response is None:
-            return QueryPlan.fallback(query, "fallback_provider_error")
+            return RetrievalPlan.fallback(query, "fallback_provider_error")
         plan = self._parse_response(response, query, structured_output=structured_output)
         if plan is None:
-            return QueryPlan.fallback(query, "fallback_invalid_response")
+            return RetrievalPlan.fallback(query, "fallback_invalid_response")
         if preserve_query:
-            plan.original_query = query
             plan.standalone_query = query
 
         logger.info(
@@ -378,7 +366,7 @@ class QueryPlanner:
                 if attempt < _MAX_RETRIES:
                     delay = 2**attempt  # 1s, 2s
                     logger.warning(
-                        "QueryPlanner LLM call failed (attempt %d/%d), retrying in %ds",
+                        "RetrievalPlanner LLM call failed (attempt %d/%d), retrying in %ds",
                         attempt + 1,
                         _MAX_RETRIES + 1,
                         delay,
@@ -387,7 +375,7 @@ class QueryPlanner:
                     await asyncio.sleep(delay)
                 else:
                     logger.warning(
-                        "QueryPlanner LLM call failed after %d attempts (%.1fs)",
+                        "RetrievalPlanner LLM call failed after %d attempts (%.1fs)",
                         _MAX_RETRIES + 1,
                         time.monotonic() - start_time,
                         exc_info=True,
@@ -400,16 +388,16 @@ class QueryPlanner:
         response: str,
         query: str,
         *,
-        structured_output: StructuredOutput = QUERY_PLAN_STRUCTURED_OUTPUT,
-    ) -> QueryPlan | None:
-        """Parse LLM JSON response into a QueryPlan."""
+        structured_output: StructuredOutput = RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
+    ) -> RetrievalPlan | None:
+        """Parse one LLM response into a retrieval plan."""
         if not response:
             return None
         try:
             parsed = structured_output.parse(response)
         except ValidationError, ValueError, TypeError:
             logger.warning(
-                "QueryPlanner: invalid structured output for query: %s",
+                "RetrievalPlanner: invalid structured output for query: %s",
                 log_safe(query, max_length=80),
             )
             return None
@@ -423,9 +411,8 @@ class QueryPlanner:
         # Validate filters
         clean = {k: v for k, v in raw_filters.items() if v is not None}
         if clean and filter_confidence == "low":
-            logger.info("QueryPlanner: ignored low-confidence metadata filter proposal")
-            return QueryPlan(
-                original_query=query,
+            logger.info("RetrievalPlanner: ignored low-confidence metadata filter proposal")
+            return RetrievalPlan(
                 standalone_query=standalone,
                 bm25_query=data.get("bm25_query") or None,
                 metadata_filter=None,
@@ -452,13 +439,12 @@ class QueryPlanner:
                 metadata_filter = mf if not mf.is_empty() else None
             except Exception:
                 logger.warning(
-                    "QueryPlanner: invalid filter values for query: %s",
+                    "RetrievalPlanner: invalid filter values for query: %s",
                     log_safe(query, max_length=80),
                 )
                 metadata_filter = None
 
-        return QueryPlan(
-            original_query=query,
+        return RetrievalPlan(
             standalone_query=standalone,
             bm25_query=data.get("bm25_query") or None,
             metadata_filter=metadata_filter,

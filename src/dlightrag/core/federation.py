@@ -164,12 +164,6 @@ async def federated_retrieve(
         result.trace.setdefault("federated", False)
         return result
 
-    # Query planning belongs to the caller (RAGServiceManager). Federation is
-    # only responsible for parallel workspace retrieval and merge semantics.
-    # This avoids duplicate planner calls and keeps all DlightRAG-owned LLM
-    # calls behind the manager's role-level concurrency budget.
-    shared_plan = kwargs.pop("_plan", None)
-
     # Bounded parallel queries with per-workspace timing + optional timeout.
     # A slow/hanging workspace is treated as a partial failure rather than
     # blocking the merge, matching ArtRAG's federation graceful-degradation
@@ -182,7 +176,6 @@ async def federated_retrieve(
                 query=query,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
-                _plan=shared_plan,
                 **kwargs,
             )
             if per_workspace_timeout is not None:

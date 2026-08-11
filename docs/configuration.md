@@ -934,15 +934,15 @@ that keeps finding new evidence -- an open-web question can always find one more
 page -- and answers from what it already has instead of failing.
 
 `max_conversation_turns` and `max_conversation_tokens` bound the conversation
-window for the whole request: query planning, the research agent's control turns,
-and the final answer all read the same turns. A rewrite that resolved a reference
-against a turn the answer could not see would be worse than no rewrite, so the
-window is decided once and not per node. The complete Planner request is bounded
-to `answer.context_window_tokens` minus the generation reserve. Current query
-text and current image descriptions are fixed inputs. Optional metadata schema
-and old conversation messages yield when the envelope is full: the schema is
-omitted first, then history is evicted oldest first. Each prior image description
-is capped at 512 tokens.
+window once for the whole answer request. Fast retrieval planning, research
+control, and final generation therefore cannot disagree about which prior turns
+exist. Research KB tool queries are already formulated by the agent, so their
+internal RetrievalPlanner receives no history and preserves those queries. The
+complete RetrievalPlanner request is bounded to `answer.context_window_tokens`
+minus the generation reserve. Current query text and current image descriptions
+are fixed inputs. Optional metadata schema and old conversation messages yield
+when the envelope is full: the schema is omitted first, then history is evicted
+oldest first. Each prior image description is capped at 512 tokens.
 
 Three separate limits bound a conversation, and they answer different questions.
 `MAX_HISTORY_MESSAGES` and `MAX_HISTORY_CONTENT_CHARS` are transport contracts

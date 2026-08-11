@@ -80,13 +80,14 @@ answer request (query + optional attachments)
        per read (HTTPS-only, SSRF guard, per/total byte and pixel limits)
   -> AnswerOrchestrator routes by capability
        fast path: no resources and no web-search key
-               -> QueryPlanner -> fixed knowledge-base retrieval
+            -> canonical knowledge-base retrieval (including RetrievalPlanner)
                -> one AnswerSynthesizer final answer
        research path: resources present or an Exa web-search key is set
                -> agent selects from peer tools (search_knowledge_base,
                     read_resource, inspect_resource, optional search_web)
-               -> a selected KB search lazily derives BM25/filter hints while
-                    preserving the agent's search query
+               -> a selected KB search invokes the same canonical retrieval;
+                    RetrievalPlanner preserves the agent query and derives
+                    lexical/filter/image hints inside that operation
                -> selected tools write observations into the EvidenceLedger
                -> each control turn replays the RunEpisode's exchanges
          -> evidence-growth convergence
@@ -121,12 +122,18 @@ evidence is bounded to a fraction of the window, each tool observation is
 capped, and a fixed final-generation reserve is input-packing headroom, not an
 output cap.
 
-`QueryPlanner` never receives attachment bytes, converted attachment text, or
-resource manifests. On the fast path it rewrites the user request and derives
-BM25/filter inputs before fixed KB retrieval. In research mode the agent already
-owns query formulation; a selected KB tool call preserves the agent's query and
-uses the planner only for BM25 keywords, metadata filters, and optional current-
-image retrieval context.
+`RetrievalPlanner` is an internal node of the canonical retrieval operation; the
+answer workflow never creates or injects a plan. It never receives attachment
+bytes, converted attachment text, or resource manifests. Fast answers give
+retrieval the bounded prior turns so the planner can resolve references. Public
+retrieve and research KB tool calls are history-free, so their caller-chosen
+semantic query is preserved while lexical terms, inferred metadata filters, and
+optional current-image hints are derived. Explicit filters and BM25 terms remain
+authoritative.
+
+Workspace resolution stays at the manager request boundary. It starts cold
+workspace initialization before retrieval planning for retrieve-only, fast-answer,
+and research-answer requests; the later retrieval joins those same services.
 
 Research control and final generation also use separate system prompts. Control
 turns receive identity, tool-selection policy, trust boundaries, and stopping

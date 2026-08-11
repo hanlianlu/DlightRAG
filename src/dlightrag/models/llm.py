@@ -174,7 +174,7 @@ def get_keyword_model_func(config: DlightragConfig) -> Callable:
     return _make_completion_func(model_for_role(config, "keyword"))
 
 
-def get_planner_model_func(config: DlightragConfig) -> Callable:
+def get_retrieval_planner_model_func(config: DlightragConfig) -> Callable:
     """Messages-first planner callable (DlightRAG-owned; nests under the request).
 
     Uses ``config.llm.roles.extract`` if set, otherwise ``config.llm.default``.
@@ -387,7 +387,7 @@ __all__ = [
     "get_embedding_func",
     "get_keyword_model_func",
     "get_multimodal_embedder",
-    "get_planner_model_func",
+    "get_retrieval_planner_model_func",
     "get_query_model_func",
     "get_rerank_func",
     "get_vlm_model_func",

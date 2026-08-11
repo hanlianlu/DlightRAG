@@ -148,7 +148,7 @@ class TestMakeCompletionFunc:
 
         assert model_for_role(cfg, "query") is cfg.llm.default
 
-    def test_planner_model_func_prefers_extract_role_direct(self, monkeypatch):
+    def test_retrieval_planner_model_prefers_extract_role_direct(self, monkeypatch):
         from dlightrag.models import llm
 
         captured: dict[str, Any] = {}
@@ -179,7 +179,7 @@ class TestMakeCompletionFunc:
             max_async=7,
         )
 
-        func = llm.get_planner_model_func(cfg)
+        func = llm.get_retrieval_planner_model_func(cfg)
 
         # DlightRAG-owned planner runs inline and inherits the active trace context.
         assert func == "completion:deepseek-v4-flash"
@@ -188,7 +188,7 @@ class TestMakeCompletionFunc:
             "api_key": "sk-extract",
         }
 
-    def test_planner_model_func_uses_default_when_extract_role_is_unset(self, monkeypatch):
+    def test_retrieval_planner_model_uses_default_when_extract_role_is_unset(self, monkeypatch):
         from dlightrag.models import llm
 
         captured: dict[str, Any] = {}
@@ -206,7 +206,7 @@ class TestMakeCompletionFunc:
             embedding=_embedding_config(),
         )
 
-        func = llm.get_planner_model_func(cfg)
+        func = llm.get_retrieval_planner_model_func(cfg)
 
         assert func == "completion:default-model"
         assert captured == {

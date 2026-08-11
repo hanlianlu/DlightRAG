@@ -128,16 +128,16 @@
   <path class="line-orange" d="M 631 472 H 649"/>
 
   <rect class="band-soft" x="858" y="316" width="330" height="290"/>
-  <text class="lane-title" x="878" y="341">Answer Orchestration &amp; KB Retrieve</text>
+  <text class="lane-title" x="878" y="341">Answer Orchestration &amp; Canonical Retrieve</text>
 
   <rect class="box box-indigo" x="884" y="352" width="276" height="50"/>
   <text class="label" text-anchor="middle" x="1022" y="373">AnswerOrchestrator</text>
   <text class="small" text-anchor="middle" x="1022" y="391">fast path vs research path</text>
 
   <rect class="box box-blue" x="884" y="418" width="126" height="106"/>
-  <text class="label" text-anchor="middle" x="947" y="440">KB Retrieve</text>
-  <text class="small" text-anchor="middle" x="947" y="458">fast: planner first</text>
-  <text class="small" text-anchor="middle" x="947" y="472">research: lazy hints</text>
+  <text class="label" text-anchor="middle" x="947" y="440">Canonical Retrieve</text>
+  <text class="small" text-anchor="middle" x="947" y="458">internal RetrievalPlanner</text>
+  <text class="small" text-anchor="middle" x="947" y="472">fast: history-aware</text>
   <text class="small" text-anchor="middle" x="947" y="486">agent query preserved</text>
   <text class="small" text-anchor="middle" x="947" y="500">mix + BM25 + visual</text>
   <text class="small" text-anchor="middle" x="947" y="514">RRF + rerank</text>

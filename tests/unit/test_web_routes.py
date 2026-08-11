@@ -580,7 +580,6 @@ class TestWebAnswer:
         assert await_args is not None
         turn = await_args.args[0]
         assert turn.current_query == "hello"
-        assert turn.retrieval_query == "hello"
         assert turn.text_history == ({"role": "user", "content": "Earlier"},)
 
     async def test_answer_stream_heartbeats_while_research_setup_is_running(
