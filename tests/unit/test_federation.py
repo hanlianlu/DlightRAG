@@ -198,6 +198,7 @@ class TestFederatedRetrieve:
 
         assert len(result.contexts["chunks"]) == 1
         assert result.contexts["chunks"][0]["_workspace"] == "ws-ok"
+        assert result.trace["failed_workspaces"] == ["ws-fail"]
 
     @pytest.mark.asyncio
     async def test_all_workspaces_fail(self) -> None:
@@ -208,9 +209,8 @@ class TestFederatedRetrieve:
         async def get_svc(ws: str):
             return svc
 
-        result = await federated_retrieve("query", ["ws-a", "ws-b"], get_svc)
-
-        assert result.contexts["chunks"] == []
+        with pytest.raises(RuntimeError, match="fail"):
+            await federated_retrieve("query", ["ws-a", "ws-b"], get_svc)
 
     @pytest.mark.asyncio
     async def test_workspace_filter_rbac(self) -> None:

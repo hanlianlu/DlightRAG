@@ -217,6 +217,7 @@ async def federated_retrieve(
     successful_results: list[RetrievalResult] = []
     successful_workspaces: list[str] = []
     failed_workspaces: list[str] = []
+    failures: list[Exception] = []
     for ws, result in zip(workspaces, raw_results, strict=True):
         if isinstance(result, Exception):
             logger.warning(
@@ -225,6 +226,7 @@ async def federated_retrieve(
                 log_safe(result),
             )
             failed_workspaces.append(ws)
+            failures.append(result)
             continue
         successful_results.append(result)
         successful_workspaces.append(ws)
@@ -238,9 +240,9 @@ async def federated_retrieve(
         )
 
     if not successful_results:
-        return RetrievalResult(
-            answer=None,
-            contexts={"chunks": [], "entities": [], "relationships": []},
-        )
+        raise failures[0]
 
-    return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
+    merged = merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
+    if failed_workspaces:
+        merged.trace["failed_workspaces"] = failed_workspaces
+    return merged
