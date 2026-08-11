@@ -350,6 +350,9 @@ class RAGServiceManager:
         # Per-workspace backoff: workspace -> (last_error_ts, retry_interval)
         self._backoff: dict[str, tuple[float, float]] = {}
 
+        # In-flight workspace initializations started when a request resolves its scope.
+        self._warmups: set[asyncio.Task[None]] = set()
+
         self._answer_synthesizer: AnswerSynthesizer | None = None
         self._ingest_jobs = IngestJobCoordinator(
             self._get_ingest_service,
@@ -1188,38 +1191,40 @@ class RAGServiceManager:
         invokes planning lazily inside its knowledge-base tool instead.
         Describing zero images is a no-op.
         """
+        prepared = await prepare_query_images(
+            query_images=list(query_images or []),
+            describer=await self._aget_query_image_describer(),
+        )
+        plan = await self._aplan_query_prepared(
+            query,
+            text_history=text_history,
+            current_image_descriptions=prepared.descriptions or None,
+            workspaces=ws_list,
+        )
+        return plan, prepared
 
-        async def _plan() -> tuple[QueryPlan, PreparedQueryImages]:
-            prepared = await prepare_query_images(
-                query_images=list(query_images or []),
-                describer=await self._aget_query_image_describer(),
-            )
-            plan = await self._aplan_query_prepared(
-                query,
-                text_history=text_history,
-                current_image_descriptions=prepared.descriptions or None,
-                workspaces=ws_list,
-            )
-            return plan, prepared
+    def _start_query_service_warmup(self, workspaces: list[str] | tuple[str, ...]) -> None:
+        """Initialize a request's cold workspaces now.
 
-        return await self._overlap_query_service_warmup(ws_list, _plan())
+        Retrieval reaches the same services through ``_get_service``, whose
+        per-workspace lock lets it join an initialization already running here
+        instead of starting after planning or a control turn finishes.
+        """
+        cold = [ws for ws in _normalize_workspaces(workspaces) if ws not in self._services]
+        if not cold:
+            return
+        task = asyncio.create_task(self._warm_query_services(cold))
+        self._warmups.add(task)
+        task.add_done_callback(self._finish_query_service_warmup)
 
-    async def _overlap_query_service_warmup[T](
-        self,
-        workspaces: list[str] | tuple[str, ...] | None,
-        operation: Awaitable[T],
-    ) -> T:
-        """Run planning work while selected workspace services initialize."""
-        warm_task = asyncio.create_task(self._warm_query_services(workspaces))
-        operation_task = asyncio.ensure_future(operation)
-        try:
-            await asyncio.gather(warm_task, operation_task)
-            return operation_task.result()
-        except BaseException:
-            warm_task.cancel()
-            operation_task.cancel()
-            await asyncio.gather(warm_task, operation_task, return_exceptions=True)
-            raise
+    def _finish_query_service_warmup(self, task: asyncio.Task[None]) -> None:
+        self._warmups.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            # Retrieval raises the same failure to the caller; this only observes it.
+            logger.debug("Workspace warm-up failed", exc_info=error)
 
     async def _warm_query_services(
         self,
@@ -1244,26 +1249,33 @@ class RAGServiceManager:
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
 
-    async def _resolve_manager_query_workspaces(
+    async def _open_query_workspaces(
         self,
         *,
         workspace: str | None,
         workspaces: list[str] | None,
         all_workspaces: bool,
     ) -> list[str]:
+        """Resolve a request's workspace scope and start initializing the cold ones.
+
+        Nothing can warm earlier than this: ``all_workspaces`` is a flag, not a
+        list, so which services to open is unknown until the registry answers.
+        """
         validate_query_workspace_selection(
             all_workspaces=all_workspaces,
             workspace=workspace,
             workspaces=workspaces,
         )
         available = await self.alist_workspaces() if all_workspaces else None
-        return resolve_query_workspaces(
+        resolved = resolve_query_workspaces(
             default_workspace=self._config.workspace,
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
             available_workspaces=available,
         )
+        self._start_query_service_warmup(resolved)
+        return resolved
 
     # --- Read operations (single or federated) ---
 
@@ -1303,7 +1315,7 @@ class RAGServiceManager:
             kwargs["bm25_query"] = bm25_query
         kwargs["top_k"] = requested_top_k or self._config.top_k
         kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
-        ws_list = await self._resolve_manager_query_workspaces(
+        ws_list = await self._open_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
@@ -1380,7 +1392,7 @@ class RAGServiceManager:
         resources: list[ResourceInput] | None,
     ) -> _OrchestratorRun:
         """Resolve one answer request into a capability-driven orchestrator."""
-        ws_list = await self._resolve_manager_query_workspaces(
+        ws_list = await self._open_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
@@ -1453,10 +1465,7 @@ class RAGServiceManager:
                         preserve_query=True,
                     )
 
-                tool_plan = await self._overlap_query_service_warmup(
-                    ws_list,
-                    plan_agent_query(),
-                )
+                tool_plan = await plan_agent_query()
                 return await self.aretrieve(
                     search_query,
                     plan=tool_plan,
@@ -2026,6 +2035,11 @@ class RAGServiceManager:
 
         cancellation: asyncio.CancelledError | None = None
         await self._ingest_jobs.close()
+
+        for warmup in list(self._warmups):
+            warmup.cancel()
+        if self._warmups:
+            await asyncio.gather(*self._warmups, return_exceptions=True)
 
         async with self._query_image_describer_lock:
             self._query_image_describer = None

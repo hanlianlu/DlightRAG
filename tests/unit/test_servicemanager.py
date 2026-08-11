@@ -145,11 +145,10 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
     assert planner.plan.await_args.kwargs["conversation_history"] == history
 
 
-async def test_query_planning_overlaps_workspace_warmup(test_cfg) -> None:
+async def test_request_scope_starts_workspace_warmup_before_planning(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     warm_started = asyncio.Event()
     release_warm = asyncio.Event()
-    plan_finished = asyncio.Event()
 
     async def get_service(_workspace: str) -> AsyncMock:
         warm_started.set()
@@ -158,7 +157,6 @@ async def test_query_planning_overlaps_workspace_warmup(test_cfg) -> None:
 
     async def plan_query(*_args: object, **_kwargs: object) -> QueryPlan:
         await warm_started.wait()
-        plan_finished.set()
         return QueryPlan(original_query="query", standalone_query="planned")
 
     manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
@@ -170,67 +168,47 @@ async def test_query_planning_overlaps_workspace_warmup(test_cfg) -> None:
     manager._aplan_query_prepared = AsyncMock(  # type: ignore[method-assign]
         side_effect=plan_query
     )
-    operation = manager._describe_and_plan(
-        "query",
-        text_history=None,
-        query_images=None,
-        ws_list=["reports"],
-    )
 
-    task = asyncio.create_task(operation)
+    manager._start_query_service_warmup(["reports"])
     try:
-        await asyncio.wait_for(plan_finished.wait(), timeout=0.1)
-        assert not task.done()
+        plan, _prepared = await manager._describe_and_plan(
+            "query",
+            text_history=None,
+            query_images=None,
+            ws_list=["reports"],
+        )
     finally:
         release_warm.set()
-    result = await task
-    plan = result[0] if isinstance(result, tuple) else result
 
+    # Planning completed while the workspace was still initializing.
     assert plan.standalone_query == "planned"
     manager._get_service.assert_awaited_once_with("reports")
+    await asyncio.gather(*manager._warmups, return_exceptions=True)
 
 
-@pytest.mark.parametrize("failed_side", ["warmup", "planner"])
-async def test_query_planning_failure_cancels_peer_and_preserves_error(
-    test_cfg, failed_side: str
-) -> None:
+async def test_warmup_skips_workspaces_that_already_have_a_service(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
-    warm_started = asyncio.Event()
-    operation_started = asyncio.Event()
-    warm_cancelled = asyncio.Event()
-    operation_cancelled = asyncio.Event()
-    expected = RuntimeError(f"{failed_side} failed")
+    manager._services["reports"] = cast(Any, AsyncMock())
+    manager._get_service = AsyncMock()  # type: ignore[method-assign]
 
-    async def warm_services(_workspaces: object) -> None:
-        warm_started.set()
-        if failed_side == "warmup":
-            await operation_started.wait()
-            raise expected
-        try:
-            await asyncio.Event().wait()
-        finally:
-            warm_cancelled.set()
+    manager._start_query_service_warmup(["reports"])
 
-    async def operation() -> None:
-        operation_started.set()
-        if failed_side == "planner":
-            await warm_started.wait()
-            raise expected
-        try:
-            await asyncio.Event().wait()
-        finally:
-            operation_cancelled.set()
+    assert manager._warmups == set()
+    manager._get_service.assert_not_awaited()
 
-    manager._warm_query_services = warm_services  # type: ignore[method-assign]
 
-    with pytest.raises(RuntimeError) as raised:
-        await manager._overlap_query_service_warmup(
-            ["reports"],
-            operation(),
-        )
+async def test_warmup_failure_is_observed_instead_of_escaping_the_task(test_cfg) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    manager._get_service = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("workspace failed")
+    )
 
-    assert raised.value is expected
-    assert (operation_cancelled if failed_side == "warmup" else warm_cancelled).is_set()
+    manager._start_query_service_warmup(["reports"])
+    task = next(iter(manager._warmups))
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert manager._warmups == set()
+    assert isinstance(task.exception(), RuntimeError)
 
 
 async def test_query_workspace_warmup_cancels_siblings_on_failure(test_cfg) -> None:
@@ -2387,7 +2365,7 @@ class TestAgenticAnswerCapability:
     async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+        manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )
         service = AsyncMock()
@@ -2433,7 +2411,7 @@ class TestAgenticAnswerCapability:
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+        manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )
         agent_plan = QueryPlan(
@@ -2505,7 +2483,7 @@ class TestAgenticAnswerCapability:
         manager._aplan_query_prepared = AsyncMock(return_value=plan)  # type: ignore[method-assign]
         manager._describe_and_plan = AsyncMock()  # type: ignore[method-assign]
         manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
-        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+        manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )
         corpus = RetrievalResult(
@@ -2643,7 +2621,7 @@ class TestAgenticAnswerCapability:
         plan = QueryPlan(original_query="Question", standalone_query="planned question")
         manager._aplan_query_prepared = AsyncMock(return_value=plan)  # type: ignore[method-assign]
         manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
-        manager._resolve_manager_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+        manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )
         manager.aretrieve = AsyncMock(  # type: ignore[method-assign]
