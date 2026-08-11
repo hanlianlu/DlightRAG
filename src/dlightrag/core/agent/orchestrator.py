@@ -19,6 +19,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.core.agent.context import ContextAssembler
 from dlightrag.core.agent.episode import RunEpisode
 from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.agent.tool_loop import (
@@ -27,8 +28,7 @@ from dlightrag.core.agent.tool_loop import (
     ToolResult,
     ToolTurnExecutor,
 )
-from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
-from dlightrag.core.answer.errors import AnswerInputOverflowError
+from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
@@ -38,14 +38,6 @@ from dlightrag.core.retrieval.web_search import (
     web_context_rows,
 )
 from dlightrag.models.tool_turn import AssistantTurn
-from dlightrag.prompts import (
-    CONTROL_TURN_INSTRUCTION,
-    FINAL_TURN_INSTRUCTION,
-    agent_control_prompt,
-    answer_core,
-)
-from dlightrag.sourcing.source_contract import safe_source_filename
-from dlightrag.utils.tokens import estimate_messages_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +59,10 @@ class _RunState:
     # Memory: what this run has found, and what it has done.
     evidence: EvidenceLedger
     episode: RunEpisode
-    base_messages: list[dict[str, Any]]
+    opening: list[dict[str, Any]]
     tools: list[AgentTool]
     cache: _ToolCallCache
     trace: dict[str, Any]
-    control_message: dict[str, Any] | None = None
     stop_reason: str = "model_stop"
 
 
@@ -102,10 +93,7 @@ class AnswerOrchestrator:
         self._resource_tools = list(resource_tools or [])
         self._resource_manifest = tuple(resource_manifest)
         self._register_web_source = register_web_source
-        self._capacity = AnswerCapacity(max(1, context_window_tokens))
-        self._input_budget = max(
-            1, self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
-        )
+        self._context = ContextAssembler(AnswerCapacity(max(1, context_window_tokens)))
         self._max_agent_turns = max(1, max_agent_turns)
 
     @property
@@ -244,12 +232,14 @@ class AnswerOrchestrator:
             query_images=query_images,
             initial_contexts=initial_contexts,
         )
-        self._prepare_research(state)
+        self._context.check(state.opening)
         await self._research_until_stopped(state)
 
         if self._final_text_func is None:
             raise RuntimeError("Research answer requires a tools-disabled final model")
-        final_messages, indexer = self._finalize_transcript(state)
+        final_messages, indexer = self._context.answer_turn(
+            opening=state.opening, evidence=state.evidence, episode=state.episode
+        )
         state.trace["agent_stop_reason"] = state.stop_reason
         return await self._synthesizer.synthesize_research(
             final_messages,
@@ -275,10 +265,12 @@ class AnswerOrchestrator:
             query_images=query_images,
             initial_contexts=initial_contexts,
         )
-        self._prepare_research(state)
+        self._context.check(state.opening)
         await self._research_until_stopped(state)
 
-        final_messages, indexer = self._finalize_transcript(state)
+        final_messages, indexer = self._context.answer_turn(
+            opening=state.opening, evidence=state.evidence, episode=state.episode
+        )
         state.trace["agent_stop_reason"] = state.stop_reason
         return await self._synthesizer.synthesize_research_stream(
             final_messages,
@@ -303,23 +295,6 @@ class AnswerOrchestrator:
             "Research stopped at the %d-turn cap; answering from the evidence gathered so far",
             self._max_agent_turns,
         )
-
-    def _finalize_transcript(self, state: _RunState) -> tuple[list[dict[str, Any]], Any]:
-        """Pack the ledger's final citable evidence beside the tool transcript.
-
-        Returns the tools-disabled final message list and the matching citation
-        indexer so the synthesizer finalizes over the same stable identities the
-        transcript's evidence blocks were numbered from.
-        """
-        blocks, indexer = self._render_turn_blocks(state, final=True)
-        final_messages = [
-            {"role": "system", "content": answer_core()},
-            *state.base_messages[1:],
-            *state.episode.last_exchange,
-            {"role": "user", "content": blocks},
-        ]
-        self._check_envelope(final_messages)
-        return final_messages, indexer
 
     # ------------------------------------------------------------------
     # Research helpers
@@ -372,7 +347,7 @@ class AnswerOrchestrator:
         return _RunState(
             evidence=evidence,
             episode=RunEpisode(),
-            base_messages=_initial_messages(
+            opening=self._context.opening_messages(
                 query,
                 conversation_history=conversation_history,
                 query_images=query_images,
@@ -425,11 +400,10 @@ class AnswerOrchestrator:
         state: _RunState,
     ) -> tuple[ExecutedTurn, bool]:
         executor = ToolTurnExecutor(cast(ToolModel, self._model_func))
-        call_messages = [*state.base_messages, *state.episode.messages()]
-        if state.control_message is not None:
-            call_messages.append(state.control_message)
-        self._check_envelope(call_messages)
-        previous_evidence_count = _evidence_count(state.evidence)
+        call_messages = self._context.control_turn(
+            opening=state.opening, evidence=state.evidence, episode=state.episode
+        )
+        previous_rows = state.evidence.row_count
         executed = await executor.run_turn(
             call_messages,
             state.tools,
@@ -437,37 +411,7 @@ class AnswerOrchestrator:
         )
         state.trace["agent_turns"] += 1
         state.episode.record(executed.messages[len(call_messages) :])
-        if executed.assistant.tool_calls:
-            blocks, _ = self._render_turn_blocks(state)
-            state.control_message = {"role": "user", "content": blocks}
-        return executed, _evidence_count(state.evidence) != previous_evidence_count
-
-    def _render_turn_blocks(
-        self,
-        state: _RunState,
-        *,
-        final: bool = False,
-    ) -> tuple[list[dict[str, Any]], Any]:
-        # The answer turn carries one exchange instead of the episode, so it packs more evidence.
-        carried = state.episode.last_exchange if final else state.episode.messages()
-        fixed = estimate_messages_tokens([*state.base_messages, *carried])
-        blocks, indexer = state.evidence.transform(self._capacity, fixed_input_tokens=fixed)
-        instruction = FINAL_TURN_INSTRUCTION if final else CONTROL_TURN_INSTRUCTION
-        return [*blocks, {"type": "text", "text": instruction}], indexer
-
-    def _check_envelope(self, messages: list[dict[str, Any]]) -> None:
-        input_tokens = estimate_messages_tokens(messages)
-        if input_tokens > self._input_budget:
-            raise AnswerInputOverflowError(
-                "Research input does not fit beside the generation reserve: "
-                f"{input_tokens} > {self._input_budget} estimated input tokens"
-            )
-
-    def _prepare_research(self, state: _RunState) -> None:
-        self._check_envelope(state.base_messages)
-        if _evidence_count(state.evidence):
-            blocks, _ = self._render_turn_blocks(state)
-            state.control_message = {"role": "user", "content": blocks}
+        return executed, state.evidence.row_count != previous_rows
 
     async def _search_corpus(self, query: str, evidence: EvidenceLedger) -> ToolResult:
         try:
@@ -515,6 +459,12 @@ class AnswerOrchestrator:
 
 
 class _ToolCallCache:
+    """Run each distinct tool call once, so a repeat costs a turn and not a search.
+
+    This is execution bookkeeping, not memory the model reads: it keys on exact
+    arguments, and the episode is what shows the model which angles are spent.
+    """
+
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._tasks: dict[str, asyncio.Future[ToolResult]] = {}
@@ -543,46 +493,6 @@ class _ToolCallCache:
                 details=result.details,
             )
         return result
-
-
-def _initial_messages(
-    query: str,
-    *,
-    conversation_history: list[dict[str, Any]] | None,
-    query_images: list[dict[str, Any]] | None,
-    resource_manifest: tuple[ResourceManifestEntry, ...],
-) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": agent_control_prompt()},
-        *(conversation_history or []),
-    ]
-    resource_context = _resource_manifest_context(resource_manifest)
-    if query_images or resource_context:
-        content: list[dict[str, Any]] = [{"type": "text", "text": query}]
-        if resource_context:
-            content.append({"type": "text", "text": resource_context})
-        content.extend(query_images or [])
-        messages.append(
-            {
-                "role": "user",
-                "content": content,
-            }
-        )
-    else:
-        messages.append({"role": "user", "content": query})
-    return messages
-
-
-def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:
-    if not manifest:
-        return ""
-    lines = ["## Registered request-local resources"]
-    for entry in manifest:
-        filename = safe_source_filename(entry.filename or "resource")
-        kind = "image" if (entry.declared_mime or "").lower().startswith("image/") else "resource"
-        lines.append(f"- [resource: {entry.resource_id}] {filename} ({kind})")
-    lines.append("Use only these opaque resource ids with read_resource or inspect_resource.")
-    return "\n".join(lines)
 
 
 def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
@@ -616,10 +526,6 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
         "_evidence_key": f"{tool_name}:{identity}",
         "metadata": metadata,
     }
-
-
-def _evidence_count(evidence: EvidenceLedger) -> int:
-    return sum(len(rows) for rows in evidence.contexts.values())
 
 
 def _merge_initial_contexts(

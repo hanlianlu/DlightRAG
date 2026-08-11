@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Request-local evidence identity, rendering, and capacity transform."""
+"""One request's factual memory: the sources its tools actually returned."""
 
 import hashlib
 import json
@@ -49,6 +49,10 @@ class EvidenceLedger:
         self._seen_rows: dict[str, set[str]] = {}
         self._image_budget = image_budget
         self._image_blocks: dict[str, dict[str, Any]] = {}
+
+    @property
+    def row_count(self) -> int:
+        return sum(len(rows) for rows in self.contexts.values())
 
     def add_rows(self, rows: list[ContextRow]) -> EvidenceDelta:
         return self.add_contexts({"chunks": rows})
