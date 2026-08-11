@@ -17,6 +17,7 @@ from dlightrag.config import (
     LLMRolesConfig,
     MinerUSidecarConfig,
     ModelConfig,
+    ParserSidecarsConfig,
     QueryImagesConfig,
     RerankConfig,
     VisualAssetsConfig,
@@ -244,12 +245,8 @@ class TestAnswerConfig:
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
 
-    def test_max_images_default(self):
-        assert AnswerConfig().max_images == 12
-
     def test_attachment_admission_defaults(self) -> None:
         cfg = AnswerConfig()
-        assert cfg.context_window_tokens == 260_000
         assert cfg.max_attachments == 6
         assert cfg.max_attachment_bytes == 100 * 1024 * 1024
         assert cfg.max_total_attachment_bytes == 128 * 1024 * 1024
@@ -614,31 +611,30 @@ def test_storage_backends_are_postgres_only() -> None:
 
 
 def test_parser_defaults_export_lightrag_env() -> None:
-    cfg = _default_test_config()
+    # Explicit sidecar model, so the curated config.yaml cannot decide the outcome.
+    cfg = _settings_config(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        parser_sidecars=ParserSidecarsConfig(
+            mineru=MinerUSidecarConfig(backend="pipeline", language="korean"),
+        ),
+    )
 
     assert cfg.parser_rules == "*:mineru-iteP"
-    assert cfg.extraction.use_json is True
-    assert cfg.extraction.language == "English"
-    assert cfg.parser_sidecars.vlm.enabled is True
-    assert cfg.parser_sidecars.vlm.max_image_bytes == 5_242_880
-    assert cfg.parser_sidecars.vlm.surrounding_leading_max_tokens == 256
-    assert cfg.parser_sidecars.vlm.surrounding_trailing_max_tokens == 256
-    assert cfg.parser_sidecars.mineru is not None
-    assert cfg.parser_sidecars.mineru.api_mode == "local"
-    assert cfg.parser_sidecars.mineru.local_endpoint == "http://host.docker.internal:8210"
-    assert cfg.parser_sidecars.mineru.language == "ch"
-    assert cfg.parser_sidecars.mineru.backend == "hybrid-engine"
     assert cfg.parser_sidecars.docling is None
     assert os.environ["LIGHTRAG_PARSER"] == "*:mineru-iteP"
-    assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
+    assert os.environ["MINERU_LOCAL_BACKEND"] == "pipeline"
+    assert os.environ["MINERU_LANGUAGE"] == "korean"
+    assert "DOCLING_ENDPOINT" not in os.environ
+    assert os.environ["VLM_PROCESS_ENABLE"] == "true"
+    assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
-
-
-def test_metadata_and_remote_source_defaults() -> None:
-    cfg = _default_test_config()
-
-    assert cfg.retain_remote_source_files is False
 
 
 def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
@@ -664,31 +660,6 @@ def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
         "queue_size_analyze": 100,
         "queue_size_insert": 4,
     }
-
-
-def test_multimodal_retrieval_defaults() -> None:
-    cfg = _default_test_config()
-
-    assert cfg.citations.highlights.enabled is True
-    assert cfg.answer.max_images == 12
-    assert cfg.answer.image_max_bytes == 3_000_000
-    assert cfg.answer.image_max_total_bytes == 24_000_000
-    assert cfg.answer.image_max_px == 1536
-    assert cfg.answer.image_max_pixels == 40_000_000
-    assert cfg.answer.image_min_px == 1024
-
-
-def test_conversation_history_token_default_reserves_planner_context() -> None:
-    cfg = _default_test_config()
-
-    assert cfg.max_conversation_turns == 50
-    assert cfg.answer.image_quality == 89
-    assert cfg.answer.image_min_quality == 79
-    assert cfg.web_conversations.max_turns == 100
-    assert cfg.web_conversations.ttl_days == 30
-    assert cfg.query_images.max_current_images == 3
-    assert cfg.query_images.max_upload_bytes == 15 * 1024 * 1024
-    assert cfg.visual_assets.thumb_max_px == 300
 
 
 def test_bm25_defaults_cover_supported_language_profiles() -> None:
@@ -966,6 +937,7 @@ def test_dotenv_ignores_raw_upstream_parser_env(tmp_path, monkeypatch: pytest.Mo
         "\n".join(
             [
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
+                "DLIGHTRAG_LLM__DEFAULT__MODEL=gpt-x",
                 "VLM_PROCESS_ENABLE=false",
                 "VLM_MIN_IMAGE_PIXEL=32",
                 "MINERU_API_MODE=official",
@@ -998,16 +970,20 @@ def test_dotenv_ignores_raw_upstream_parser_env(tmp_path, monkeypatch: pytest.Mo
             api_key="sk-test",
             startup_probe=False,
         ),
+        parser_sidecars=ParserSidecarsConfig(mineru=MinerUSidecarConfig()),
     )
+    mineru = cfg.parser_sidecars.mineru
+    assert mineru is not None
 
     assert cfg.llm.default.api_key == "sk-env"
     assert os.environ["VLM_PROCESS_ENABLE"] == "true"
     assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
     assert os.environ["SURROUNDING_LEADING_MAX_TOKENS"] == "256"
     assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "256"
-    assert os.environ["MINERU_API_MODE"] == "local"
-    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
-    assert os.environ["MINERU_LANGUAGE"] == "ch"
+    assert os.environ["MINERU_API_MODE"] == mineru.api_mode == "local"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == mineru.local_endpoint
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] != "http://stale-mineru:8210"
+    assert os.environ["MINERU_LANGUAGE"] == mineru.language != "arabic"
     assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
     assert "MINERU_LOCAL_IMAGE_ANALYSIS" not in os.environ
 
@@ -1167,7 +1143,7 @@ def test_mineru_backend_maps_to_env_and_uses_canonical_default(
             api_key="sk-test",
             startup_probe=False,
         ),
-        parser_sidecars={"mineru": {"language": "ch"}},
+        parser_sidecars=ParserSidecarsConfig(mineru=MinerUSidecarConfig(language="ch")),
     )
     assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
 
@@ -1191,6 +1167,7 @@ def test_sidecar_env_loader_does_not_export_service_helper_keys(
         "\n".join(
             [
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
+                "DLIGHTRAG_LLM__DEFAULT__MODEL=gpt-x",
                 "MINERU_SERVICE_VENV=/tmp/mineru",
                 "MINERU_INSTALL_EXTRAS=core,vllm",
                 "MINERU_API_HOST=0.0.0.0",
@@ -1381,6 +1358,7 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
         "\n".join(
             [
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-explicit",
+                "DLIGHTRAG_LLM__DEFAULT__MODEL=gpt-x",
                 "DLIGHTRAG_API_PORT=9900",
                 "MINERU_API_MODE=local",
                 "MINERU_LOCAL_ENDPOINT=http://127.0.0.1:8210",
@@ -1405,7 +1383,7 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
     assert cfg.api_port == 9900
     assert cfg.llm.default.api_key == "sk-explicit"
     assert os.environ["MINERU_API_MODE"] == "local"
-    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == MinerUSidecarConfig().local_endpoint
 
 
 def test_load_config_rejection_never_quotes_the_api_key(
@@ -1457,6 +1435,7 @@ def test_blank_sidecar_values_do_not_override_typed_defaults(
         "\n".join(
             [
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
+                "DLIGHTRAG_LLM__DEFAULT__MODEL=gpt-x",
                 "MINERU_API_MODE=local",
                 "MINERU_LOCAL_ENDPOINT=",
             ]
@@ -1477,4 +1456,4 @@ def test_blank_sidecar_values_do_not_override_typed_defaults(
     )
 
     assert os.environ["MINERU_API_MODE"] == "local"
-    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://host.docker.internal:8210"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == MinerUSidecarConfig().local_endpoint

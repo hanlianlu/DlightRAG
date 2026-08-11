@@ -1163,16 +1163,31 @@ def test_context_window_note_explains_model_requirement(wiz):
     assert "final " + "synthesis" not in note
 
 
-def test_render_summary_shows_context_and_attachment_settings(wiz):
+def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
     from rich.console import Console
 
+    # Distinctive values, so the assertions cannot be satisfied by the shipped config.yaml.
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n  default:\n    provider: openai\n    model: gpt-x\n"
+        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
+        "rerank:\n  strategy: chat_llm_reranker\n"
+        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
+        "workspace: default\n"
+        "answer:\n  context_window_tokens: 123456\n  max_attachments: 7\n"
+        "  max_attachment_bytes: 3145728\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+
     console = Console(record=True, width=100)
-    summary = wiz.read_config_summary(wiz.CONFIG_PATH, wiz.ENV_PATH)
-    wiz.render_summary(console, summary)
+    wiz.render_summary(console, wiz.read_config_summary(cfg, env))
     text = console.export_text()
-    assert "260,000" in text or "260000" in text
-    assert "6" in text  # max attachments
-    assert "Visual inspection" in text or "visual inspection" in text.lower()
+    assert "123,456 tokens" in text
+    assert "7 max" in text
+    assert "3 MiB each" in text
+    assert "visual inspection" in text.lower()
 
 
 def test_home_start_brings_up_stack(wiz, monkeypatch):
