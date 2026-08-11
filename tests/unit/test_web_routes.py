@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for WebGUI route endpoints."""
 
+import asyncio
 import datetime
 import html
 import io
@@ -581,6 +582,73 @@ class TestWebAnswer:
         assert turn.current_query == "hello"
         assert turn.retrieval_query == "hello"
         assert turn.text_history == ({"role": "user", "content": "Earlier"},)
+
+    async def test_answer_stream_heartbeats_while_research_setup_is_running(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def mock_tokens():
+            yield "Answer"
+
+        async def delayed_answer(*_args, **_kwargs):
+            await asyncio.sleep(0.03)
+            return {"chunks": []}, mock_tokens()
+
+        manager = SimpleNamespace(
+            config=test_config,
+            answer_image_capability=None,
+            _aanswer_stream_prepared=AsyncMock(side_effect=delayed_answer),
+        )
+        web_app.state.manager = manager
+        monkeypatch.setattr("dlightrag.web.answer_events._SSE_HEARTBEAT_SECONDS", 0.005)
+
+        response = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.text.count('"searching"') >= 2
+
+    async def test_post_done_enrichment_failure_does_not_emit_answer_error(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def mock_tokens():
+            yield "Answer"
+
+        manager = SimpleNamespace(
+            config=test_config,
+            answer_image_capability=None,
+            _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, mock_tokens())),
+        )
+        web_app.state.manager = manager
+        monkeypatch.setattr(
+            "dlightrag.web.answer_events.enrich_semantic_highlights",
+            AsyncMock(side_effect=RuntimeError("highlight backend failed")),
+        )
+
+        response = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
+        )
+
+        assert "event: done" in response.text
+        assert "event: error" not in response.text
 
     async def test_answer_rejects_legacy_conversation_fields(
         self,

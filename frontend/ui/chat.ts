@@ -25,7 +25,6 @@ import {
 let queryInFlight = false;
 let queryStopping = false;
 let currentQueryController: AbortController | null = null;
-const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 /** Abort the in-flight answer request (user stop / navigation), if any. */
 export function cancelQuery(): void {
@@ -74,14 +73,6 @@ export async function submitQuery(query: string): Promise<void> {
 
     const controller = new AbortController();
     currentQueryController = controller;
-    let idleTimer = 0;
-    const armIdleTimeout = (): void => {
-        clearTimeout(idleTimer);
-        idleTimer = window.setTimeout(
-            () => controller.abort(new DOMException('Stream idle timeout', 'TimeoutError')),
-            STREAM_IDLE_TIMEOUT_MS,
-        );
-    };
 
     const pendingAttachments = getPendingAttachments();
     // Render the just-submitted attachments in the user bubble from fresh object
@@ -107,7 +98,6 @@ export async function submitQuery(query: string): Promise<void> {
     const attachmentFiles = pendingAttachments.map(function(item) { return item.file; });
 
     try {
-        armIdleTimeout();
         if (!conversationId) {
             setAnswerError(
                 turn,
@@ -138,64 +128,53 @@ export async function submitQuery(query: string): Promise<void> {
             attachmentFiles,
         );
         clearAttachments();
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-            try {
-                const response = await fetch('/web/answer', {
-                    method: 'POST',
-                    ...(requestHeaders ? {headers: requestHeaders} : {}),
-                    signal: controller.signal,
-                    body: requestBody,
-                });
+        const response = await fetch('/web/answer', {
+            method: 'POST',
+            ...(requestHeaders ? {headers: requestHeaders} : {}),
+            signal: controller.signal,
+            body: requestBody,
+        });
 
-                if (!response.ok) {
-                    if (response.status < 500) pendingSubmissionStore.clear(conversationId);
-                    setAnswerError(turn, 'Service error. Please try again.');
-                    return;
-                }
-
-                const activeRenderer = createAnswerRenderer(turn);
-                await streamSSE(response, function(eventType, data) {
-                    armIdleTimeout();
-                    if (conversationStore.activeConversationId !== conversationId) return;
-                    activeRenderer.handle(eventType, data);
-                });
-                if (activeRenderer.failed || isDefinitiveSaveOutcome(activeRenderer.saveOutcome)) {
-                    pendingSubmissionStore.clear(conversationId);
-                }
-                const saveOutcome = activeRenderer.saveOutcome;
-                if (shouldKeepLiveConversation(saveOutcome)) {
-                    releaseLiveViewport(true);
-                    if (saveOutcome.conversation) {
-                        conversationStore.upsertSummary(saveOutcome.conversation);
-                    }
-                    bus.emit('conversationAnswerSaved', {conversationId});
-                } else if (saveOutcome?.conversation_saved === false) {
-                    renderAnswerSaveOutcome(
-                        turn,
-                        describeConversationSaveOutcome(saveOutcome),
-                        function() {
-                            bus.emit('conversationSaveCheckRequested', {conversationId});
-                        },
-                    );
-                }
-                releaseLiveViewport();
-                return;
-            } catch (error) {
-                if (controller.signal.aborted || attempt === 1) throw error;
-            }
+        if (!response.ok) {
+            if (response.status < 500) pendingSubmissionStore.clear(conversationId);
+            setAnswerError(turn, 'Service error. Please try again.');
+            return;
         }
+
+        const activeRenderer = createAnswerRenderer(turn);
+        await streamSSE(response, function(eventType, data) {
+            if (conversationStore.activeConversationId !== conversationId) return;
+            activeRenderer.handle(eventType, data);
+        });
+        if (activeRenderer.failed || isDefinitiveSaveOutcome(activeRenderer.saveOutcome)) {
+            pendingSubmissionStore.clear(conversationId);
+        }
+        const saveOutcome = activeRenderer.saveOutcome;
+        if (shouldKeepLiveConversation(saveOutcome)) {
+            releaseLiveViewport(true);
+            if (saveOutcome.conversation) {
+                conversationStore.upsertSummary(saveOutcome.conversation);
+            }
+            bus.emit('conversationAnswerSaved', {conversationId});
+        } else if (saveOutcome?.conversation_saved === false) {
+            renderAnswerSaveOutcome(
+                turn,
+                describeConversationSaveOutcome(saveOutcome),
+                function() {
+                    bus.emit('conversationSaveCheckRequested', {conversationId});
+                },
+            );
+        }
+        releaseLiveViewport();
     } catch (_) {
         if (controller.signal.aborted) {
-            // User stopped: keep the partial answer and drop the now-stale
-            // pending submission instead of wiping the turn.
-            if (conversationId) pendingSubmissionStore.clear(conversationId);
+            // Keep the idempotency key: cancellation may race a successful server commit.
             markAnswerStopped(turn);
         } else {
             setAnswerError(turn, 'Connection error. Please try again.');
         }
     } finally {
         releaseLiveViewport();
-        clearTimeout(idleTimer);
         if (currentQueryController === controller) currentQueryController = null;
         queryInFlight = false;
         queryStopping = false;

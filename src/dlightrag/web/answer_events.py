@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
-_PERSISTENCE_HEARTBEAT_SECONDS = 10.0
+_SSE_HEARTBEAT_SECONDS = 10.0
 
 
 def _capability_metrics(manager: RAGServiceManager) -> dict[str, Any]:
@@ -317,12 +317,31 @@ async def _emit_answer_events(
 
         yield sse_event("progress", AnswerProgressEvent(phase="searching"))
 
-        contexts, token_iter = await manager._aanswer_stream_prepared(
-            turn,
-            workspaces=ws_list,
-            scope=scope,
-            resources=resources,
+        answer_task = asyncio.create_task(
+            manager._aanswer_stream_prepared(
+                turn,
+                workspaces=ws_list,
+                scope=scope,
+                resources=resources,
+            )
         )
+        try:
+            while True:
+                try:
+                    contexts, token_iter = await asyncio.wait_for(
+                        asyncio.shield(answer_task),
+                        timeout=_SSE_HEARTBEAT_SECONDS,
+                    )
+                    break
+                except TimeoutError:
+                    yield sse_event("progress", AnswerProgressEvent(phase="searching"))
+        finally:
+            if not answer_task.done():
+                answer_task.cancel()
+                try:
+                    await answer_task
+                except asyncio.CancelledError:
+                    pass
         t1 = time.monotonic()
         logger.info("[SSE] planning+retrieval+stream setup done (%.1fs)", t1 - t0)
 
@@ -388,7 +407,7 @@ async def _emit_answer_events(
                 try:
                     commit = await asyncio.wait_for(
                         asyncio.shield(commit_task),
-                        timeout=_PERSISTENCE_HEARTBEAT_SECONDS,
+                        timeout=_SSE_HEARTBEAT_SECONDS,
                     )
                     break
                 except TimeoutError:
@@ -440,38 +459,43 @@ async def _emit_answer_events(
         yield sse_event("done", done)
 
         # ── Post-done enrichment (trace, highlights) ───────────────
-        trace = getattr(token_iter, "trace", None)
-        if isinstance(trace, dict) and trace:
-            yield sse_event("trace", AnswerTraceEvent(trace=trace))
-        if observation is not None:
-            observation.update(
-                output=answer_trace_output(done.answer, payload.sources, contexts),
-                metadata=_answer_transport_metrics(trace if isinstance(trace, dict) else {}),
-            )
-        highlighted_sources = await enrich_semantic_highlights(
-            payload.sources,
-            answer_text=done.answer,
-            config=cfg,
-        )
-        has_highlights = any(
-            chunk.highlight_phrases
-            for source in highlighted_sources
-            if source.chunks
-            for chunk in source.chunks
-        )
-        if has_highlights:
-            yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
-            if conversation_saved:
-                await conversation_service.update_answer_highlights(
-                    prepared_conversation,
-                    submission_id=submission_id,
-                    answer_sources={
-                        "sources": [
-                            source.model_dump(mode="json") for source in highlighted_sources
-                        ],
-                        "answer_images": payload.done.answer_images,
-                    },
+        try:
+            trace = getattr(token_iter, "trace", None)
+            if isinstance(trace, dict) and trace:
+                yield sse_event("trace", AnswerTraceEvent(trace=trace))
+            if observation is not None:
+                observation.update(
+                    output=answer_trace_output(done.answer, payload.sources, contexts),
+                    metadata=_answer_transport_metrics(trace if isinstance(trace, dict) else {}),
                 )
+            highlighted_sources = await enrich_semantic_highlights(
+                payload.sources,
+                answer_text=done.answer,
+                config=cfg,
+            )
+            has_highlights = any(
+                chunk.highlight_phrases
+                for source in highlighted_sources
+                if source.chunks
+                for chunk in source.chunks
+            )
+            if has_highlights:
+                yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
+                if conversation_saved:
+                    await conversation_service.update_answer_highlights(
+                        prepared_conversation,
+                        submission_id=submission_id,
+                        answer_sources={
+                            "sources": [
+                                source.model_dump(mode="json") for source in highlighted_sources
+                            ],
+                            "answer_images": payload.done.answer_images,
+                        },
+                    )
+        except asyncio.CancelledError, GeneratorExit:
+            raise
+        except Exception:
+            logger.exception("Post-done answer enrichment failed")
 
     except asyncio.CancelledError, GeneratorExit:
         if persistence_started and commit_task is not None:
