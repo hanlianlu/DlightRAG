@@ -9,6 +9,7 @@ import pytest
 
 from dlightrag.core.answer.errors import AnswerInputOverflowError, CurrentImagePayloadError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
+from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 
@@ -556,12 +557,14 @@ class TestAnswerSynthesizerImageBudget:
         prepared = synth._prepare_model_call(
             "prompt",
             {"chunks": []},
-            conversation_history=[
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "previous"}, _image_block()],
-                }
-            ],
+            conversation_history=PriorTurns(
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "previous"}, _image_block()],
+                    }
+                ]
+            ),
         )
 
         history_content = prepared.messages[1]["content"]
@@ -577,12 +580,14 @@ class TestAnswerSynthesizerImageBudget:
             "prompt",
             {"chunks": []},
             query_images=[_image_block()],
-            conversation_history=[
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "previous"}, _image_block()],
-                }
-            ],
+            conversation_history=PriorTurns(
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "previous"}, _image_block()],
+                    }
+                ]
+            ),
         )
 
         history_content = prepared.messages[1]["content"]
@@ -639,9 +644,9 @@ class TestAnswerSynthesizerImageBudget:
             "prompt",
             contexts,
             query_images=[_image_block()],
-            conversation_history=[
-                {"role": "user", "content": [{"type": "text", "text": "prev"}, _image_block()]}
-            ],
+            conversation_history=PriorTurns(
+                [{"role": "user", "content": [{"type": "text", "text": "prev"}, _image_block()]}]
+            ),
         )
 
         total_images = sum(
@@ -704,7 +709,9 @@ class TestAnswerSynthesizerCapacity:
     def test_default_evidence_ceiling_is_156000(self) -> None:
         synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
 
-        prepared = synth._prepare_model_call("question", _text_contexts(), conversation_history=[])
+        prepared = synth._prepare_model_call(
+            "question", _text_contexts(), conversation_history=PriorTurns()
+        )
 
         assert prepared.trace["answer_context_window_tokens"] == 260_000
         assert prepared.trace["answer_evidence_ceiling"] == 156_000
@@ -729,7 +736,7 @@ class TestAnswerSynthesizerCapacity:
         )
 
         with pytest.raises(AnswerInputOverflowError):
-            synth._prepare_model_call("question", contexts, conversation_history=[])
+            synth._prepare_model_call("question", contexts, conversation_history=PriorTurns())
 
         assert contexts["chunks"][0]["content"] == original_content
 
@@ -767,12 +774,14 @@ class TestAnswerSynthesizerCapacity:
         prepared = synth._prepare_model_call(
             "current question",
             contexts,
-            conversation_history=[
-                {"role": "user", "content": "OLD-HISTORY " + ("old " * 200)},
-                {"role": "assistant", "content": "old answer " * 60},
-                {"role": "user", "content": "RECENT-HISTORY follow-up"},
-                {"role": "assistant", "content": "recent answer"},
-            ],
+            conversation_history=PriorTurns(
+                [
+                    {"role": "user", "content": "OLD-HISTORY " + ("old " * 200)},
+                    {"role": "assistant", "content": "old answer " * 60},
+                    {"role": "user", "content": "RECENT-HISTORY follow-up"},
+                    {"role": "assistant", "content": "recent answer"},
+                ]
+            ),
         )
 
         history_text = "\n".join(str(message["content"]) for message in prepared.messages[1:-1])

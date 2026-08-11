@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from PIL import Image
@@ -26,6 +26,7 @@ from dlightrag.config import (
     set_config,
 )
 from dlightrag.core.client_contracts import IngestSpec
+from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
 from dlightrag.core.request.planner import QueryPlan, QueryPlanner
 from dlightrag.core.resources.models import ResourceInput
@@ -120,7 +121,7 @@ async def test_prepared_stream_keeps_server_history_internal(
 
     await manager._aanswer_stream_prepared(turn, workspaces=["default"])
 
-    assert _CapturingOrchestrator.last["answer_stream"]["conversation_history"] == [
+    assert _CapturingOrchestrator.last["answer_stream"]["conversation_history"].messages == [
         {"role": "user", "content": "Earlier"}
     ]
 
@@ -134,7 +135,7 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
     )
     manager._query_planner = planner
     manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
-    history = [{"role": "user", "content": "Earlier"}]
+    history = PriorTurns([{"role": "user", "content": "Earlier"}])
 
     await manager._aplan_query_prepared(
         "follow up",
@@ -142,7 +143,7 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
         workspaces=["default"],
     )
 
-    assert planner.plan.await_args.kwargs["conversation_history"] == history
+    assert planner.plan.await_args.kwargs["conversation_history"] is history
 
 
 async def test_request_scope_starts_workspace_warmup_before_planning(test_cfg) -> None:
@@ -254,7 +255,7 @@ async def test_private_generation_helper_hands_prepared_history_to_engine(test_c
 
     await manager.aanswer_stream("follow up", workspaces=["default"], history=history)
 
-    assert engine.generate_stream.await_args.kwargs["conversation_history"] == history
+    assert engine.generate_stream.await_args.kwargs["conversation_history"].messages == history
 
 
 @pytest.fixture()
@@ -712,7 +713,7 @@ class TestRouting:
             "query",
             mock_contexts,
             query_images=None,
-            conversation_history=None,
+            conversation_history=ANY,
         )
 
 
@@ -814,7 +815,7 @@ class TestAnswerViaEngine:
             "what is X?",
             mock_contexts,
             query_images=None,
-            conversation_history=None,
+            conversation_history=ANY,
         )
         assert result is expected_result
         retrieve = next(call for call in trace_calls if call["name"] == "retrieve")
@@ -879,7 +880,7 @@ class TestAnswerViaEngine:
             "query",
             mock_contexts,
             query_images=None,
-            conversation_history=None,
+            conversation_history=ANY,
         )
         assert result is expected_result
 
@@ -911,7 +912,7 @@ class TestAnswerViaEngine:
             "query",
             mock_contexts,
             query_images=None,
-            conversation_history=None,
+            conversation_history=ANY,
         )
         assert result is expected_result
 
@@ -936,10 +937,10 @@ class TestAnswerViaEngine:
 
         plan_call = manager._describe_and_plan.await_args
         assert plan_call is not None
-        assert plan_call.kwargs["text_history"] == history
+        assert plan_call.kwargs["text_history"].messages == history
         generate_call = mock_engine.generate.await_args
         assert generate_call is not None
-        assert generate_call.kwargs["conversation_history"] == history
+        assert generate_call.kwargs["conversation_history"].messages == history
 
     async def test_aanswer_stream_threads_history_to_prepared_turn(self, test_cfg) -> None:
         """Streaming answer carries caller history on the prepared turn."""
@@ -1049,7 +1050,7 @@ class TestAnswerViaEngine:
             "what is X?",
             mock_contexts,
             query_images=None,
-            conversation_history=None,
+            conversation_history=ANY,
         )
         assert contexts is mock_contexts
         assert stream is not None
@@ -1077,7 +1078,7 @@ class TestAnswerViaEngine:
             "query",
             mock_contexts,
             query_images=None,
-            conversation_history=None,
+            conversation_history=ANY,
         )
         assert result is expected_result
 
@@ -1127,7 +1128,7 @@ class TestAnswerViaEngine:
             "query",
             mock_contexts,
             query_images=None,
-            conversation_history=None,
+            conversation_history=ANY,
         )
         assert contexts is mock_contexts
 

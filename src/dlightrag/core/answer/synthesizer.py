@@ -109,7 +109,7 @@ class AnswerSynthesizer:
         query: str,
         contexts: RetrievalContexts,
         query_images: list[dict[str, Any]] | None = None,
-        conversation_history: list[dict[str, Any]] | None = None,
+        conversation_history: PriorTurns | None = None,
         history_images: list[dict[str, Any]] | None = None,
         warnings: list[str] | None = None,
     ) -> RetrievalResult:
@@ -183,7 +183,7 @@ class AnswerSynthesizer:
         query: str,
         contexts: RetrievalContexts,
         query_images: list[dict[str, Any]] | None = None,
-        conversation_history: list[dict[str, Any]] | None = None,
+        conversation_history: PriorTurns | None = None,
         history_images: list[dict[str, Any]] | None = None,
         warnings: list[str] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
@@ -328,9 +328,9 @@ class AnswerSynthesizer:
         *,
         query_images: list[dict[str, Any]] | None = None,
         history_images: list[dict[str, Any]] | None = None,
-        conversation_history: list[dict[str, Any]] | None = None,
+        conversation_history: PriorTurns | None = None,
     ) -> _PreparedModelCall:
-        original_history = list(conversation_history or [])
+        original_history = list((conversation_history or PriorTurns()).messages)
 
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
             system_prompt = answer_core()

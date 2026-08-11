@@ -50,6 +50,7 @@ from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import (
     PreparedQueryImages,
     prepare_query_images,
@@ -174,7 +175,7 @@ class _OrchestratorRun:
     retrieval_query: str | None
     prepared: PreparedQueryImages
     query_images: list[dict[str, Any]] | None
-    history: list[dict[str, Any]] | None
+    history: PriorTurns
     current_image_count: int
     ws_list: list[str]
     registry: ResourceRegistry | None
@@ -1141,7 +1142,7 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        text_history: list[dict[str, Any]] | None,
+        text_history: PriorTurns | None,
         current_image_descriptions: list[str] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
         preserve_query: bool = False,
@@ -1156,15 +1157,13 @@ class RAGServiceManager:
             input={"query": query},
             metadata={
                 "workspaces": list(workspaces or []),
-                "history_messages": len(text_history or []),
+                "history_messages": len(text_history or PriorTurns()),
             },
         ) as trace:
             schema = await self._get_schema(workspaces)
             plan = await planner.plan(
                 query,
                 conversation_history=text_history,
-                max_turns=self._config.max_conversation_turns,
-                max_tokens=self._config.max_conversation_tokens,
                 schema=schema,
                 current_image_descriptions=current_image_descriptions,
                 preserve_query=preserve_query,
@@ -1182,7 +1181,7 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        text_history: list[dict[str, Any]] | None,
+        text_history: PriorTurns | None,
         query_images: list[dict[str, Any]] | None,
         ws_list: list[str],
     ) -> tuple[QueryPlan, PreparedQueryImages]:
@@ -1399,7 +1398,12 @@ class RAGServiceManager:
             all_workspaces=all_workspaces,
         )
         scoped = _scope_for_workspaces(scope, ws_list)
-        history = list(turn.text_history) or None
+        # One window for the whole request: planning and answering must agree on what
+        # the conversation is, or a rewrite can cite a turn the answer never sees.
+        history = PriorTurns(list(turn.text_history)).recent(
+            max_messages=self._config.max_conversation_turns * 2,
+            max_tokens=self._config.max_conversation_tokens,
+        )
         (
             current_images,
             remaining_resources,

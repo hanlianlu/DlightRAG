@@ -268,10 +268,8 @@ class QueryPlanner:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, Any]] | None = None,
+        conversation_history: PriorTurns | None = None,
         explicit_filter: MetadataFilter | None = None,
-        max_turns: int = 25,
-        max_tokens: int = 65536,
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
         preserve_query: bool = False,
@@ -287,9 +285,7 @@ class QueryPlanner:
             return QueryPlan.fallback(query, "fallback_no_model")
 
         # Truncate history
-        history = PriorTurns(conversation_history).recent(
-            max_messages=max_turns * 2, max_tokens=max_tokens
-        )
+        history = conversation_history or PriorTurns()
 
         # Schema is fetched and cached by the service manager, then passed in.
         schema_context = _build_schema_context(schema)
