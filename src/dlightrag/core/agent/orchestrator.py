@@ -22,6 +22,7 @@ from dlightrag.core.agent.tools import (
     build_run_tools,
 )
 from dlightrag.core.answer.capacity import AnswerCapacity
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode
@@ -63,6 +64,7 @@ class AnswerOrchestrator:
         resource_tools: list[AgentTool] | None = None,
         resource_manifest: tuple[ResourceManifestEntry, ...] = (),
         register_web_source: Callable[[str], str | None] | None = None,
+        image_budget: AnswerImageBudget | None = None,
         context_window_tokens: int = 260_000,
         max_agent_turns: int = 50,
     ) -> None:
@@ -75,6 +77,7 @@ class AnswerOrchestrator:
         self._resource_tools = list(resource_tools or [])
         self._resource_manifest = tuple(resource_manifest)
         self._register_web_source = register_web_source
+        self._image_budget = image_budget
         self._capacity = AnswerCapacity(max(1, context_window_tokens))
         self._max_agent_turns = max(1, max_agent_turns)
 
@@ -288,7 +291,7 @@ class AnswerOrchestrator:
         query_images: list[dict[str, Any]] | None,
         initial_contexts: RetrievalContexts | None = None,
     ) -> _RunState:
-        evidence = EvidenceLedger()
+        evidence = EvidenceLedger(image_budget=self._image_budget)
         if initial_contexts:
             evidence.add_contexts(initial_contexts)
         trace: dict[str, Any] = {

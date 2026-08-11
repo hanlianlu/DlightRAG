@@ -2357,6 +2357,7 @@ class TestAgenticAnswerCapability:
         }
         assert len(init["resource_manifest"]) == 1
         assert init["resource_manifest"][0].filename == "chart.png"
+        assert init["image_budget"].count == 1
         image_blocks = _CapturingOrchestrator.last["answer"]["query_images"]
         assert image_blocks[0]["text"] == (
             f"[current image 1 | resource: {init['resource_manifest'][0].resource_id}]"

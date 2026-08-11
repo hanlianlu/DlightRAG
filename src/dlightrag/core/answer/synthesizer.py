@@ -261,7 +261,7 @@ class AnswerSynthesizer:
 
         collected_warnings = list(warnings or [])
         result_trace = dict(trace or {})
-        no_context = not _has_research_evidence(contexts)
+        no_context = not _has_research_evidence(contexts, messages)
 
         raw = await complete(messages=messages)
         text = str(raw)
@@ -304,7 +304,7 @@ class AnswerSynthesizer:
         """
         collected_warnings = list(warnings or [])
         result_trace = dict(trace or {})
-        no_context = not _has_research_evidence(contexts)
+        no_context = not _has_research_evidence(contexts, messages)
 
         token_iterator: AsyncIterator[str] = stream(messages=messages)
         if no_context:
@@ -657,9 +657,22 @@ async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:
         yield token
 
 
-def _has_research_evidence(contexts: RetrievalContexts) -> bool:
-    """A research answer is grounded when the ledger accumulated any context."""
-    return any(contexts.get(key) for key in ("chunks", "entities", "relationships"))
+def _has_research_evidence(
+    contexts: RetrievalContexts,
+    messages: list[dict[str, Any]],
+) -> bool:
+    """A research answer is grounded by ledger context or an image it can see."""
+    return any(
+        contexts.get(key) for key in ("chunks", "entities", "relationships")
+    ) or _messages_have_images(messages)
+
+
+def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
+    return any(
+        isinstance(content, list)
+        and any(isinstance(block, dict) and block.get("type") == "image_url" for block in content)
+        for content in (message.get("content") for message in messages)
+    )
 
 
 def _has_answer_evidence(
@@ -675,13 +688,7 @@ def _has_answer_evidence(
         return True
     if not conversation_history:
         return False
-    for message in conversation_history:
-        content = message.get("content")
-        if isinstance(content, list) and any(
-            isinstance(block, dict) and block.get("type") == "image_url" for block in content
-        ):
-            return True
-    return False
+    return _messages_have_images(conversation_history)
 
 
 __all__ = ["NO_CONTEXT_DISCLAIMER", "AnswerSynthesizer"]

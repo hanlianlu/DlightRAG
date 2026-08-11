@@ -12,6 +12,7 @@ from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
 from dlightrag.core.agent.tools import SearchInput
 from dlightrag.core.answer.errors import AnswerInputOverflowError
+from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -108,6 +109,7 @@ def _research(
     register_web_source: Any = None,
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
     max_agent_turns: int = 50,
+    image_budget: AnswerImageBudget | None = None,
 ) -> AnswerOrchestrator:
     return AnswerOrchestrator(
         synthesizer=_research_synthesizer(),
@@ -121,6 +123,7 @@ def _research(
         register_web_source=register_web_source,
         context_window_tokens=context_window_tokens,
         max_agent_turns=max_agent_turns,
+        image_budget=image_budget,
     )
 
 
@@ -379,6 +382,41 @@ async def test_current_image_manifest_binds_resources_and_marks_images_visible()
     system_prompt = " ".join(messages[0]["content"].split())
     assert "Current images are already visible" in system_prompt
     assert "some requests need no tools at all" in system_prompt
+
+
+async def test_current_image_only_research_answer_is_grounded() -> None:
+    agent = ScriptedAgent(
+        _answer("READY"),
+        final_text="The image contains a chart.",
+    )
+    orchestrator = _research(
+        agent,
+        _corpus_result,
+        None,
+        resource_manifest=(
+            ResourceManifestEntry(
+                resource_id="res-image",
+                filename="chart.png",
+                declared_mime="image/png",
+                source="bytes",
+                byte_size=456,
+            ),
+        ),
+    )
+
+    result = await orchestrator.answer(
+        "What does this show?",
+        query_images=[
+            {"type": "text", "text": "[current image 1 | resource: res-image]"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,abc"},
+            },
+        ],
+    )
+
+    assert result.answer == "The image contains a chart."
+    assert "answer_no_context" not in result.trace
 
 
 async def test_search_sources_become_opaque_resources_the_model_can_read() -> None:
@@ -710,6 +748,43 @@ async def test_control_turns_replay_the_exchanges_this_run_produced() -> None:
     assert "savings rate" in third_turn
     assert "second angle" in third_turn
     assert "Knowledge base added" in third_turn
+
+
+async def test_research_control_turn_receives_retrieved_evidence_images() -> None:
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        result = _corpus_result("chart evidence")
+        result.contexts["chunks"][0]["image_data"] = png
+        return result
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    budget = AnswerImageBudget(
+        max_images=1,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+    agent = ScriptedAgent(
+        _tool(_call(query="chart", source="knowledge_base")),
+        _answer("READY"),
+        final_text="The chart says so [1-1].",
+    )
+
+    await _research(agent, retrieve, search, image_budget=budget).answer("Read the chart")
+
+    second_turn = agent.turn_calls[1]["messages"][-1]["content"]
+    assert any(block.get("type") == "image_url" for block in second_turn)
+    assert budget.count == 1
 
 
 async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> None:

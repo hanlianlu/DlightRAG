@@ -1531,6 +1531,7 @@ class RAGServiceManager:
             stream_model_func = _stream_model_func
             final_text_func = _final_text_func
 
+        image_budget: AnswerImageBudget | None = None
         if research:
             image_budget = self._new_answer_image_budget()
             query_images = (
@@ -1558,6 +1559,7 @@ class RAGServiceManager:
                 if registry is not None and web_search is not None
                 else None
             ),
+            image_budget=image_budget,
             context_window_tokens=self._config.answer.context_window_tokens,
             max_agent_turns=self._config.max_agent_turns,
         )
