@@ -194,19 +194,6 @@ class TestRAGServiceClose:
         shutdown.assert_awaited_once_with(lightrag)
         lightrag.finalize_storages.assert_awaited_once()
 
-    async def test_warmup_uses_lightrag_query_param(self, test_config: DlightragConfig) -> None:
-        service = RAGService(config=test_config)
-        service._lightrag = MagicMock()
-        service._lightrag.aquery = AsyncMock()
-
-        await service._warmup_lightrag_workers()
-
-        await_args = service._lightrag.aquery.await_args
-        assert await_args is not None
-        kwargs = await_args.kwargs
-        assert kwargs["param"].mode == "naive"
-        assert kwargs["param"].enable_rerank is False
-
     async def test_startup_pipeline_recovery_waits_for_current_owner_then_runs(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:

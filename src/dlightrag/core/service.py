@@ -278,7 +278,6 @@ class RAGService:
         self.config = config or get_config()
         self.enable_vlm = enable_vlm
         self._initialized: bool = False
-        self._warmup_task: asyncio.Task[None] | None = None
         self._pipeline_recovery_task: asyncio.Task[None] | None = None
 
         # Callbacks for decoupled integration
@@ -775,15 +774,6 @@ class RAGService:
         if not config.is_reader:
             self._pipeline_recovery_task = asyncio.create_task(self._resume_lightrag_pipeline())
 
-        # Pre-warm worker pools in background.  LightRAG lazily initializes
-        # LLM keyword (~4 workers) and embedding (~8 workers) pools on first
-        # use, which adds ~100 s to the first query after restart.  Trigger
-        # init now so real users never pay that cost.
-        try:
-            self._warmup_task = asyncio.create_task(self._warmup_lightrag_workers())
-        except RuntimeError:
-            pass  # no event loop running (e.g. sync test setup)
-
     async def _resume_lightrag_pipeline(self) -> None:
         """Run LightRAG's native sweep for pending and interrupted documents."""
         from dlightrag.observability import trace_observation
@@ -806,23 +796,6 @@ class RAGService:
                     await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
         except Exception:
             logger.warning("LightRAG startup pipeline recovery failed", exc_info=True)
-
-    async def _warmup_lightrag_workers(self) -> None:
-        """Pre-initialize LightRAG worker pools in the background."""
-        from dlightrag.observability import trace_observation
-
-        try:
-            from lightrag import QueryParam
-
-            # Named span: the probe embeds a synthetic query, which would otherwise
-            # surface as an unattributed embedding trace.
-            async with trace_observation("worker_warmup", as_type="span"):
-                await self._lightrag.aquery(
-                    "__warmup__", param=QueryParam(mode="naive", enable_rerank=False)
-                )
-            logger.info("LightRAG worker warm-up complete")
-        except Exception:
-            logger.debug("LightRAG worker warm-up failed (non-critical)", exc_info=True)
 
     async def _create_metadata_index(
         self,
@@ -861,19 +834,6 @@ class RAGService:
             except Exception:
                 logger.warning("Pipeline recovery task raised during shutdown", exc_info=True)
             self._pipeline_recovery_task = None
-        # Cancel the background warmup task so it cannot run against
-        # half-closed resources during shutdown.
-        if self._warmup_task is not None:
-            self._warmup_task.cancel()
-            try:
-                await self._warmup_task
-            except asyncio.CancelledError:
-                # Expected: we cancelled the task above and await it only to
-                # observe completion during shutdown.
-                pass
-            except Exception:
-                logger.warning("Warmup task raised during shutdown", exc_info=True)
-            self._warmup_task = None
         # Shutdown LightRAG worker pools first — they hold background asyncio
         # tasks that block asyncio.run() from exiting.
         await self._shutdown_worker_pools()
