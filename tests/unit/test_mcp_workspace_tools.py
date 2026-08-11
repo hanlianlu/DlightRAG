@@ -604,6 +604,24 @@ async def test_mcp_answer_uses_shared_executor(
     mock_mcp_manager.aanswer.assert_not_awaited()
 
 
+async def test_mcp_answer_preserves_answer_input_error_kind(
+    mock_mcp_manager: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlightrag.core.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
+
+    monkeypatch.setattr(
+        mcp_server,
+        "execute_answer",
+        AsyncMock(side_effect=AnswerInputOverflowError("The answer input is too large.")),
+    )
+
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == f"Error [{ANSWER_INPUT_OVERFLOW}]: The answer input is too large."
+
+
 async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
     mock_mcp_manager.adelete_files = AsyncMock(return_value=[{"status": "would_delete"}])
 

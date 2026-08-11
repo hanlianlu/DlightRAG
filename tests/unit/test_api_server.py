@@ -2183,6 +2183,23 @@ class TestAnswerStreamMode:
         assert body["error_type"] == "validation"
         assert body["error_kind"] == CURRENT_IMAGES_UNSUPPORTED
 
+    async def test_answer_input_overflow_maps_to_400(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        from dlightrag.core.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
+
+        mock_manager.aanswer = AsyncMock(
+            side_effect=AnswerInputOverflowError("The answer input exceeds the context window.")
+        )
+        app.state.manager = mock_manager
+
+        response = await client.post("/answer", json={"query": "hi", "stream": False})
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["error_type"] == "validation"
+        assert body["error_kind"] == ANSWER_INPUT_OVERFLOW
+
     async def test_rejected_metadata_is_a_client_error_not_a_500(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:

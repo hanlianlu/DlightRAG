@@ -28,6 +28,7 @@ from dlightrag.access_control import AccessAction, AccessDeniedError, access_con
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
+from dlightrag.core.answer.errors import AnswerInputError
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
@@ -113,8 +114,13 @@ class DlightRAGMCPServer(MCPServer):
             user_error = exc if isinstance(exc, ValueError | PermissionError) else exc.__cause__
             if isinstance(user_error, ValueError | PermissionError):
                 logger.warning("MCP tool '%s' rejected: %s", name, user_error)
+                text = (
+                    f"Error [{user_error.error_kind}]: {user_error.public_message}"
+                    if isinstance(user_error, AnswerInputError)
+                    else f"Error: {user_error}"
+                )
                 return CallToolResult(
-                    content=[TextContent(type="text", text=f"Error: {user_error}")],
+                    content=[TextContent(type="text", text=text)],
                     is_error=True,
                 )
             logger.exception("MCP tool '%s' failed", name)

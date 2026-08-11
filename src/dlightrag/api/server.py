@@ -22,9 +22,7 @@ from dlightrag.api.middleware import (
 from dlightrag.api.models import ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
-from dlightrag.core.answer.errors import (
-    AnswerImageError,
-)
+from dlightrag.core.answer.errors import AnswerInputError
 from dlightrag.core.client_contracts import MAX_HISTORY_CONTENT_CHARS, MAX_HISTORY_MESSAGES
 from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
@@ -136,12 +134,12 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         body = ErrorDetail(detail=str(exc), error_type="auth")
         return JSONResponse(status_code=403, content=body.model_dump())
 
-    @application.exception_handler(AnswerImageError)
-    async def answer_image_error_handler(
+    @application.exception_handler(AnswerInputError)
+    async def answer_input_error_handler(
         request: Request,  # noqa: ARG001
-        exc: AnswerImageError,
+        exc: AnswerInputError,
     ) -> JSONResponse:
-        """Answer-image capability/transport rejection -> 400 with a stable error_kind."""
+        """Answer input rejection -> 400 with a stable error kind."""
         body = ErrorDetail(detail=str(exc), error_type="validation", error_kind=exc.error_kind)
         return JSONResponse(status_code=400, content=body.model_dump())
 
