@@ -36,8 +36,7 @@ from dlightrag.core.retrieval.web_search import (
     web_context_rows,
 )
 from dlightrag.models.tool_turn import AssistantTurn
-from dlightrag.prompts import answer_core
-from dlightrag.prompts.agent import agent_control_prompt
+from dlightrag.prompts import agent_control_prompt, answer_core
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.utils.tokens import estimate_messages_tokens
 
