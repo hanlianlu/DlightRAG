@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for request-local agent evidence (EvidenceLedger)."""
 
-from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.retrieval.web_search import WebSearchHit, web_context_rows
 
 

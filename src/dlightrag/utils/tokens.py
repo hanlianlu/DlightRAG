@@ -101,32 +101,3 @@ def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
             if payload:
                 total += estimate_tokens(json.dumps(payload, ensure_ascii=False, default=str))
     return total
-
-
-def truncate_conversation_history(
-    history: list[dict[str, Any]],
-    *,
-    max_messages: int,
-    max_tokens: int,
-) -> list[dict[str, Any]]:
-    """Return the most recent slice of *history* within budget.
-
-    Walks backwards from the end and stops when either *max_messages* or
-    *max_tokens* is exceeded.  Handles both plain-text and multimodal
-    (content-as-list) messages.
-    """
-    if not history:
-        return []
-
-    if len(history) > max_messages:
-        history = history[-max_messages:]
-
-    total = 0
-    cutoff = 0
-    for i in range(len(history) - 1, -1, -1):
-        total += estimate_content_tokens(history[i].get("content", ""))
-        if total > max_tokens:
-            cutoff = i + 1
-            break
-
-    return history[cutoff:] if cutoff else history

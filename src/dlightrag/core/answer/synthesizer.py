@@ -32,6 +32,7 @@ from dlightrag.core.answer.context import AnswerContextPacker
 from dlightrag.core.answer.errors import AnswerInputOverflowError, CurrentImagePayloadError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import answer_core
 from dlightrag.utils.tokens import estimate_content_tokens, estimate_messages_tokens
@@ -378,12 +379,12 @@ class AnswerSynthesizer:
             )
             return call, evidence_tokens, total_tokens
 
-        kept_history = list(original_history)
+        kept_history = PriorTurns(original_history).fit(
+            self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE,
+            lambda history: build(history)[2],
+        )
         result, evidence_tokens, total_tokens = build(kept_history)
         input_budget = self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
-        while kept_history and total_tokens > input_budget:
-            kept_history = kept_history[_oldest_history_turn_width(kept_history) :]
-            result, evidence_tokens, total_tokens = build(kept_history)
         if total_tokens > input_budget:
             raise AnswerInputOverflowError(
                 "Fixed answer input does not fit beside the generation reserve: "
@@ -681,16 +682,6 @@ def _has_answer_evidence(
         ):
             return True
     return False
-
-
-def _oldest_history_turn_width(messages: list[dict[str, Any]]) -> int:
-    """Drop a user/assistant pair together when the history shape permits."""
-    if len(messages) >= 2:
-        first_role = str(messages[0].get("role") or "")
-        second_role = str(messages[1].get("role") or "")
-        if first_role == "user" and second_role == "assistant":
-            return 2
-    return 1
 
 
 __all__ = ["NO_CONTEXT_DISCLAIMER", "AnswerSynthesizer"]

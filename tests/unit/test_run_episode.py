@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from dlightrag.core.agent.episode import RunEpisode
+from dlightrag.core.memory.episode import RunEpisode
 
 
 def _exchange(call_id: str, *, reasoning: str) -> list[dict[str, Any]]:

@@ -23,6 +23,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
+from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
@@ -32,7 +33,6 @@ from dlightrag.prompts import (
 from dlightrag.utils import log_safe
 from dlightrag.utils.tokens import (
     estimate_tokens,
-    truncate_conversation_history,
 )
 
 logger = logging.getLogger(__name__)
@@ -210,16 +210,6 @@ def _planner_request_tokens(system_tokens: int, user_payload: str) -> int:
     return system_tokens + estimate_tokens(user_payload)
 
 
-def _drop_oldest_history_turn(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if (
-        len(history) >= 2
-        and history[0].get("role") == "user"
-        and history[1].get("role") == "assistant"
-    ):
-        return history[2:]
-    return history[1:]
-
-
 def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int = 3) -> str:
     if not evidence:
         return "[]"
@@ -297,7 +287,9 @@ class QueryPlanner:
             return QueryPlan.fallback(query, "fallback_no_model")
 
         # Truncate history
-        history = self._truncate_history(conversation_history, max_turns, max_tokens)
+        history = PriorTurns(conversation_history).recent(
+            max_messages=max_turns * 2, max_tokens=max_tokens
+        )
 
         # Schema is fetched and cached by the service manager, then passed in.
         schema_context = _build_schema_context(schema)
@@ -321,15 +313,17 @@ class QueryPlanner:
 
         def fit_to_envelope() -> tuple[str, bool]:
             """Drop the schema, then the oldest turns, until the request fits."""
-            messages = history
             metadata_schema = schema_context
-            payload = render_input(messages, metadata_schema)
+            payload = render_input(history.messages, metadata_schema)
             if metadata_schema and _planner_request_tokens(system_tokens, payload) > envelope:
                 metadata_schema = ""
-                payload = render_input(messages, metadata_schema)
-            while messages and _planner_request_tokens(system_tokens, payload) > envelope:
-                messages = _drop_oldest_history_turn(messages)
-                payload = render_input(messages, metadata_schema)
+            kept = history.fit(
+                envelope,
+                lambda messages: _planner_request_tokens(
+                    system_tokens, render_input(messages, metadata_schema)
+                ),
+            )
+            payload = render_input(kept, metadata_schema)
             fits = _planner_request_tokens(system_tokens, payload) <= envelope
             return payload, fits
 
@@ -516,16 +510,3 @@ class QueryPlanner:
             elif llm_val is not None:
                 merged_kwargs[field] = llm_val
         return MetadataFilter(**merged_kwargs)
-
-    @staticmethod
-    def _truncate_history(
-        history: list[dict[str, Any]] | None,
-        max_turns: int,
-        max_tokens: int,
-    ) -> list[dict[str, Any]]:
-        if not history or max_turns <= 0 or max_tokens <= 0:
-            return []
-        max_messages = max_turns * 2
-        return truncate_conversation_history(
-            history, max_messages=max_messages, max_tokens=max_tokens
-        )

@@ -9,8 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
+from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import (
     WebSearchResult,

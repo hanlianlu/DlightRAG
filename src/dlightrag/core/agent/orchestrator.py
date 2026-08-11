@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from dlightrag.core.agent.context import ContextAssembler
-from dlightrag.core.agent.episode import RunEpisode
-from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.agent.tool_loop import AgentTool, ExecutedTurn, ToolTurnExecutor
 from dlightrag.core.agent.tools import (
     KnowledgeRetrieval,
@@ -25,6 +23,9 @@ from dlightrag.core.agent.tools import (
 )
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+from dlightrag.core.memory.conversation import PriorTurns
+from dlightrag.core.memory.episode import RunEpisode
+from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.tool_turn import AssistantTurn
@@ -41,7 +42,7 @@ class _RunState:
     # Memory: what this run has found, and what it has done.
     evidence: EvidenceLedger
     episode: RunEpisode
-    opening: list[dict[str, Any]]
+    context: ContextAssembler
     tools: list[AgentTool]
     trace: dict[str, Any]
     stop_reason: str = "model_stop"
@@ -74,7 +75,7 @@ class AnswerOrchestrator:
         self._resource_tools = list(resource_tools or [])
         self._resource_manifest = tuple(resource_manifest)
         self._register_web_source = register_web_source
-        self._context = ContextAssembler(AnswerCapacity(max(1, context_window_tokens)))
+        self._capacity = AnswerCapacity(max(1, context_window_tokens))
         self._max_agent_turns = max(1, max_agent_turns)
 
     @property
@@ -213,13 +214,12 @@ class AnswerOrchestrator:
             query_images=query_images,
             initial_contexts=initial_contexts,
         )
-        self._context.check(state.opening)
         await self._research_until_stopped(state)
 
         if self._final_text_func is None:
             raise RuntimeError("Research answer requires a tools-disabled final model")
-        final_messages, indexer = self._context.answer_turn(
-            opening=state.opening, evidence=state.evidence, episode=state.episode
+        final_messages, indexer = state.context.answer_turn(
+            evidence=state.evidence, episode=state.episode
         )
         state.trace["agent_stop_reason"] = state.stop_reason
         return await self._synthesizer.synthesize_research(
@@ -246,11 +246,10 @@ class AnswerOrchestrator:
             query_images=query_images,
             initial_contexts=initial_contexts,
         )
-        self._context.check(state.opening)
         await self._research_until_stopped(state)
 
-        final_messages, indexer = self._context.answer_turn(
-            opening=state.opening, evidence=state.evidence, episode=state.episode
+        final_messages, indexer = state.context.answer_turn(
+            evidence=state.evidence, episode=state.episode
         )
         state.trace["agent_stop_reason"] = state.stop_reason
         return await self._synthesizer.synthesize_research_stream(
@@ -299,9 +298,10 @@ class AnswerOrchestrator:
         return _RunState(
             evidence=evidence,
             episode=RunEpisode(),
-            opening=self._context.opening_messages(
-                query,
-                conversation_history=conversation_history,
+            context=ContextAssembler(
+                self._capacity,
+                query=query,
+                history=PriorTurns(conversation_history),
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
             ),
@@ -321,9 +321,7 @@ class AnswerOrchestrator:
         state: _RunState,
     ) -> tuple[ExecutedTurn, bool]:
         executor = ToolTurnExecutor(cast(ToolModel, self._model_func))
-        call_messages = self._context.control_turn(
-            opening=state.opening, evidence=state.evidence, episode=state.episode
-        )
+        call_messages = state.context.control_turn(evidence=state.evidence, episode=state.episode)
         previous_rows = state.evidence.row_count
         executed = await executor.run_turn(
             call_messages,

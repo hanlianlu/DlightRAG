@@ -569,30 +569,3 @@ class TestFilterMerge:
 # ---------------------------------------------------------------------------
 # History truncation
 # ---------------------------------------------------------------------------
-
-
-class TestHistoryTruncation:
-    def test_empty_history(self):
-        result = QueryPlanner._truncate_history(None, max_turns=10, max_tokens=10000)
-        assert result == []
-
-    @pytest.mark.parametrize(
-        ("max_turns", "max_tokens"),
-        ((0, 10_000), (10, 0)),
-    )
-    def test_zero_history_budget_keeps_nothing(self, max_turns, max_tokens):
-        history = [{"role": "user", "content": "message"}]
-        assert (
-            QueryPlanner._truncate_history(
-                history,
-                max_turns=max_turns,
-                max_tokens=max_tokens,
-            )
-            == []
-        )
-
-    def test_truncates_by_turns(self):
-        history = [{"role": "user", "content": f"msg {i}"} for i in range(100)]
-        result = QueryPlanner._truncate_history(history, max_turns=5, max_tokens=100000)
-        # max_turns=5 => max_messages=10
-        assert len(result) <= 10

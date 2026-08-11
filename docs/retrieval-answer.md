@@ -287,6 +287,9 @@ picks one of two paths:
   provider-native reasoning so a thinking model resumes its own chain, while
   older exchanges keep only the call and its result, so a later turn still sees
   which angles are spent without paying for the thinking behind them.
+  When a request will not fit, both paths shed the oldest conversation turns
+  first through `PriorTurns`, since those are the only part that can go without
+  losing evidence or the question itself.
   Evidence-producing Web result URLs receive opaque request-local resource ids,
   allowing a later `read_resource` call to deepen a selected source without a
   raw-URL tool.

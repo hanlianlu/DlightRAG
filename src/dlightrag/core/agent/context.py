@@ -4,10 +4,11 @@
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
-from dlightrag.core.agent.episode import RunEpisode
-from dlightrag.core.agent.evidence import EvidenceLedger
 from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.answer.errors import AnswerInputOverflowError
+from dlightrag.core.memory.conversation import PriorTurns
+from dlightrag.core.memory.episode import RunEpisode
+from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.prompts import (
     CONTROL_TURN_INSTRUCTION,
@@ -20,77 +21,82 @@ from dlightrag.utils.tokens import estimate_messages_tokens
 
 
 class ContextAssembler:
-    """Build each turn's messages from the stores, never by appending to the last turn.
+    """Build each turn of one request from the stores, never by extending the last turn.
 
     A control turn replays the episode and packs the ledger; the answer turn
-    replaces the control prompt, carries one exchange instead of the episode, and
-    therefore packs more evidence into the same window.
+    swaps in the answer prompt and carries one exchange instead of the episode,
+    so it packs more evidence into the same window. Both shed the oldest
+    conversation turns first: those are the only part a request can drop without
+    losing evidence or the question itself.
     """
 
-    def __init__(self, capacity: AnswerCapacity) -> None:
+    def __init__(
+        self,
+        capacity: AnswerCapacity,
+        *,
+        query: str,
+        history: PriorTurns,
+        query_images: list[dict[str, Any]] | None,
+        resource_manifest: tuple[ResourceManifestEntry, ...],
+    ) -> None:
         self._capacity = capacity
         self._input_budget = max(
             1, capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
         )
-
-    def opening_messages(
-        self,
-        query: str,
-        *,
-        conversation_history: list[dict[str, Any]] | None,
-        query_images: list[dict[str, Any]] | None,
-        resource_manifest: tuple[ResourceManifestEntry, ...],
-    ) -> list[dict[str, Any]]:
-        """The head every turn of this run repeats verbatim."""
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": agent_control_prompt()},
-            *(conversation_history or []),
-        ]
-        manifest = _resource_manifest_context(resource_manifest)
-        if not query_images and not manifest:
-            messages.append({"role": "user", "content": query})
-            return messages
-        content: list[dict[str, Any]] = [{"type": "text", "text": query}]
-        if manifest:
-            content.append({"type": "text", "text": manifest})
-        content.extend(query_images or [])
-        messages.append({"role": "user", "content": content})
-        return messages
+        self._history = history
+        self._question = _question_message(query, query_images, resource_manifest)
 
     def control_turn(
         self,
         *,
-        opening: list[dict[str, Any]],
         evidence: EvidenceLedger,
         episode: RunEpisode,
     ) -> list[dict[str, Any]]:
-        replayed = episode.messages()
-        messages = [*opening, *replayed]
+        head = self._head({"role": "system", "content": agent_control_prompt()}, episode.messages())
+        messages = list(head)
         if evidence.row_count:
-            blocks, _ = self._pack(evidence, carried=[*opening, *replayed], final=False)
+            blocks, _ = self._pack(evidence, head=head, final=False)
             messages.append({"role": "user", "content": blocks})
-        self.check(messages)
+        self._check(messages)
         return messages
 
     def answer_turn(
         self,
         *,
-        opening: list[dict[str, Any]],
         evidence: EvidenceLedger,
         episode: RunEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        carried = episode.last_exchange
-        blocks, indexer = self._pack(evidence, carried=[*opening, *carried], final=True)
-        messages = [
-            {"role": "system", "content": answer_core()},
-            *opening[1:],
-            *carried,
-            {"role": "user", "content": blocks},
-        ]
-        self.check(messages)
+        head = self._head({"role": "system", "content": answer_core()}, episode.last_exchange)
+        blocks, indexer = self._pack(evidence, head=head, final=True)
+        messages = [*head, {"role": "user", "content": blocks}]
+        self._check(messages)
         return messages, indexer
 
-    def check(self, messages: list[dict[str, Any]]) -> None:
+    def _head(
+        self,
+        system: dict[str, Any],
+        carried: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        kept = self._history.fit(
+            self._input_budget,
+            lambda history: estimate_messages_tokens([system, *history, self._question, *carried]),
+        )
+        return [system, *kept, self._question, *carried]
+
+    def _pack(
+        self,
+        evidence: EvidenceLedger,
+        *,
+        head: list[dict[str, Any]],
+        final: bool,
+    ) -> tuple[list[dict[str, Any]], CitationIndexer]:
+        blocks, indexer = evidence.transform(
+            self._capacity, fixed_input_tokens=estimate_messages_tokens(head)
+        )
+        instruction = FINAL_TURN_INSTRUCTION if final else CONTROL_TURN_INSTRUCTION
+        return [*blocks, {"type": "text", "text": instruction}], indexer
+
+    def _check(self, messages: list[dict[str, Any]]) -> None:
         input_tokens = estimate_messages_tokens(messages)
         if input_tokens > self._input_budget:
             raise AnswerInputOverflowError(
@@ -98,17 +104,20 @@ class ContextAssembler:
                 f"{input_tokens} > {self._input_budget} estimated input tokens"
             )
 
-    def _pack(
-        self,
-        evidence: EvidenceLedger,
-        *,
-        carried: list[dict[str, Any]],
-        final: bool,
-    ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        fixed = estimate_messages_tokens(carried)
-        blocks, indexer = evidence.transform(self._capacity, fixed_input_tokens=fixed)
-        instruction = FINAL_TURN_INSTRUCTION if final else CONTROL_TURN_INSTRUCTION
-        return [*blocks, {"type": "text", "text": instruction}], indexer
+
+def _question_message(
+    query: str,
+    query_images: list[dict[str, Any]] | None,
+    resource_manifest: tuple[ResourceManifestEntry, ...],
+) -> dict[str, Any]:
+    manifest = _resource_manifest_context(resource_manifest)
+    if not query_images and not manifest:
+        return {"role": "user", "content": query}
+    content: list[dict[str, Any]] = [{"type": "text", "text": query}]
+    if manifest:
+        content.append({"type": "text", "text": manifest})
+    content.extend(query_images or [])
+    return {"role": "user", "content": content}
 
 
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:
