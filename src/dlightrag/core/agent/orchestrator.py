@@ -99,11 +99,12 @@ class AnswerOrchestrator:
         query_images: list[dict[str, Any]] | None = None,
     ) -> RetrievalResult:
         if not self.uses_research_path:
+            if query_images:
+                raise RuntimeError("Current images require request resources")
             return await self._fast_answer(
                 query,
                 retrieval_query=retrieval_query,
                 conversation_history=conversation_history,
-                query_images=query_images,
             )
         return await self._run_research(
             query,
@@ -120,11 +121,12 @@ class AnswerOrchestrator:
         query_images: list[dict[str, Any]] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if not self.uses_research_path:
+            if query_images:
+                raise RuntimeError("Current images require request resources")
             return await self._fast_answer_stream(
                 query,
                 retrieval_query=retrieval_query,
                 conversation_history=conversation_history,
-                query_images=query_images,
             )
         return await self._run_research_stream(
             query,
@@ -142,13 +144,11 @@ class AnswerOrchestrator:
         *,
         retrieval_query: str | None,
         conversation_history: PriorTurns | None,
-        query_images: list[dict[str, Any]] | None,
     ) -> RetrievalResult:
         retrieval = await self._retrieve_knowledge_base(retrieval_query or query)
         result = await self._synthesizer.generate(
             query,
             retrieval.contexts,
-            query_images=query_images,
             conversation_history=conversation_history,
         )
         result.trace.update(retrieval.trace)
@@ -160,13 +160,11 @@ class AnswerOrchestrator:
         *,
         retrieval_query: str | None,
         conversation_history: PriorTurns | None,
-        query_images: list[dict[str, Any]] | None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         retrieval = await self._retrieve_knowledge_base(retrieval_query or query)
         contexts, stream = await self._synthesizer.generate_stream(
             query,
             retrieval.contexts,
-            query_images=query_images,
             conversation_history=conversation_history,
         )
         if stream is not None:

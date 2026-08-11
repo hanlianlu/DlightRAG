@@ -51,7 +51,7 @@ class _AttrStream:
     def __init__(self, tokens: list[str]) -> None:
         self._tokens = tokens
         self.trace: dict[str, Any] = {}
-        self.image_descriptions: dict[str, str] = {}
+        self.image_descriptions: list[str] = []
         self.answer = "".join(tokens)
 
     def __aiter__(self) -> AsyncIterator[str]:
@@ -678,6 +678,23 @@ class TestRouting:
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
         assert retrieve_kwargs["query_image_blocks"] == blocks
 
+    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    async def test_aretrieve_rejects_images_beyond_the_runtime_limit(
+        self, mock_create, test_cfg
+    ) -> None:
+        from dlightrag.core.answer.errors import CurrentImagePayloadError
+
+        test_cfg.query_images.max_current_images = 1
+        manager = RAGServiceManager(config=test_cfg)
+
+        with pytest.raises(CurrentImagePayloadError, match="at most 1 current images"):
+            await manager.aretrieve(
+                "query",
+                workspace="ws_a",
+                query_images=[_image_block(), _image_block()],
+            )
+            mock_create.assert_not_awaited()
+
     async def test_query_images_are_current_request_only(self, test_cfg) -> None:
         describer = AsyncMock()
         describer.describe = AsyncMock(return_value={"1": "Image 1: chart"})
@@ -712,7 +729,6 @@ class TestRouting:
         mock_engine.generate.assert_awaited_once_with(
             "query",
             mock_contexts,
-            query_images=None,
             conversation_history=ANY,
         )
 
@@ -814,7 +830,6 @@ class TestAnswerViaEngine:
         mock_engine.generate.assert_awaited_once_with(
             "what is X?",
             mock_contexts,
-            query_images=None,
             conversation_history=ANY,
         )
         assert result is expected_result
@@ -879,7 +894,6 @@ class TestAnswerViaEngine:
         mock_engine.generate.assert_awaited_once_with(
             "query",
             mock_contexts,
-            query_images=None,
             conversation_history=ANY,
         )
         assert result is expected_result
@@ -911,7 +925,6 @@ class TestAnswerViaEngine:
         mock_engine.generate.assert_awaited_once_with(
             "query",
             mock_contexts,
-            query_images=None,
             conversation_history=ANY,
         )
         assert result is expected_result
@@ -1049,7 +1062,6 @@ class TestAnswerViaEngine:
         mock_engine.generate_stream.assert_awaited_once_with(
             "what is X?",
             mock_contexts,
-            query_images=None,
             conversation_history=ANY,
         )
         assert contexts is mock_contexts
@@ -1077,7 +1089,6 @@ class TestAnswerViaEngine:
         mock_engine.generate.assert_awaited_once_with(
             "query",
             mock_contexts,
-            query_images=None,
             conversation_history=ANY,
         )
         assert result is expected_result
@@ -1127,7 +1138,6 @@ class TestAnswerViaEngine:
         mock_engine.generate_stream.assert_awaited_once_with(
             "query",
             mock_contexts,
-            query_images=None,
             conversation_history=ANY,
         )
         assert contexts is mock_contexts
@@ -2136,9 +2146,25 @@ class TestPlannerSchemaScope:
         schema = await manager._get_schema(["reports", "legal"])
 
         assert schema["custom_keys"] == ["department", "jurisdiction"]
-        get_field_schema.assert_awaited_once_with(workspaces=("reports", "legal"))
+        get_field_schema.assert_awaited_once_with(workspaces=("legal", "reports"))
         manager._get_service.assert_not_awaited()
-        assert ("reports", "legal") in manager._schema_cache
+        assert ("legal", "reports") in manager._schema_cache
+
+    async def test_schema_cache_key_ignores_workspace_order(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        get_field_schema = AsyncMock(return_value={"columns": [], "custom_keys": []})
+        monkeypatch.setattr(
+            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            get_field_schema,
+        )
+
+        first = await manager._get_schema(["reports", "legal"])
+        second = await manager._get_schema(["legal", "reports"])
+
+        assert second is first
+        get_field_schema.assert_awaited_once()
 
 
 class TestWebSearchCapability:
@@ -2333,6 +2359,8 @@ class TestAgenticAnswerCapability:
             "dlightrag.models.llm.get_vlm_model_func",
             MagicMock(return_value=AsyncMock(return_value="visual evidence")),
         )
+        inspector = MagicMock()
+        monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
@@ -2363,6 +2391,7 @@ class TestAgenticAnswerCapability:
             f"[current image 1 | resource: {init['resource_manifest'][0].resource_id}]"
         )
         assert image_blocks[1]["type"] == "image_url"
+        assert inspector.call_args.kwargs["max_images"] == 2
 
     async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})

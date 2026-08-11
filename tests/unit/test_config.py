@@ -1313,7 +1313,6 @@ def test_lightrag_parser_env_follows_active_sidecar(
         {"parser_sidecars": {"mineru": {"max_polls": 0}}},
         {"query_images": {"max_current_images": -1}},
         {"query_images": {"max_upload_bytes": 0}},
-        {"answer": {"max_images": 2}, "query_images": {"max_current_images": 3}},
         {"visual_assets": {"thumb_max_px": 0}},
     ],
 )
@@ -1328,6 +1327,16 @@ def test_config_parsing_rejects_invalid_numeric_bounds(kwargs: dict[str, Any]) -
             ),
             **kwargs,
         )
+
+
+def test_answer_and_retrieve_image_counts_are_independent() -> None:
+    config = _settings_config(
+        answer={"max_images": 2},
+        query_images={"max_current_images": 3},
+    )
+
+    assert config.answer.max_images == 2
+    assert config.query_images.max_current_images == 3
 
 
 def test_dotenv_rejects_unknown_dlightrag_keys(

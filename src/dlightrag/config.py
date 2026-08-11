@@ -1259,16 +1259,7 @@ class DlightragConfig(BaseSettings):
         self._validate_bm25_profiles()
         self._validate_auth_mode()
         self._validate_access_control()
-        self._validate_answer_image_ceiling()
         return self
-
-    def _validate_answer_image_ceiling(self) -> None:
-        """The answer image transport ceiling must admit every current image."""
-        if self.answer.max_images < self.query_images.max_current_images:
-            raise ValueError(
-                "answer.max_images must be >= query_images.max_current_images so current "
-                "images never exceed the answer image transport ceiling"
-            )
 
     def _validate_bm25_profiles(self) -> None:
         """Validate BM25 profile routing configuration."""

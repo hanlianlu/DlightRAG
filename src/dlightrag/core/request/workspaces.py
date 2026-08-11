@@ -31,7 +31,8 @@ def validate_query_workspace_selection(
         )
 
 
-def _normalize_unique(workspaces: Sequence[str]) -> list[str]:
+def normalize_query_workspaces(workspaces: Sequence[str]) -> list[str]:
+    """Normalize and de-duplicate workspace names without changing their order."""
     seen: set[str] = set()
     result: list[str] = []
     for workspace in workspaces:
@@ -59,13 +60,13 @@ def resolve_query_workspaces(
     if all_workspaces:
         if available_workspaces is None:
             raise ValueError("available_workspaces is required when all_workspaces is true")
-        resolved = _normalize_unique(available_workspaces)
+        resolved = normalize_query_workspaces(available_workspaces)
         if not resolved:
             raise NoQueryableWorkspacesError("No workspaces are available for query")
         return resolved
 
     requested = list(workspaces) if workspaces else [workspace or default_workspace]
-    resolved = _normalize_unique(requested)
+    resolved = normalize_query_workspaces(requested)
     if not resolved:
         raise WorkspaceSelectionConflictError("At least one query workspace is required")
     return resolved
@@ -90,6 +91,7 @@ __all__ = [
     "NoQueryableWorkspacesError",
     "QueryWorkspaceSelection",
     "WorkspaceSelectionConflictError",
+    "normalize_query_workspaces",
     "resolve_query_workspaces",
     "validate_query_workspace_selection",
 ]

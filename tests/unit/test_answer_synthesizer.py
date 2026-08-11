@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from dlightrag.core.answer.errors import AnswerInputOverflowError, CurrentImagePayloadError
+from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.protocols import RetrievalContexts
@@ -211,20 +211,6 @@ class TestAnswerSynthesizerGenerate:
         model_func.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_generate_empty_chunks_with_query_image_still_calls_model(self) -> None:
-        model_func = AsyncMock(return_value="The image shows a chart.")
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            model_func=model_func,
-            effective_max_images=3,
-        )
-        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
-
-        await synth.generate("describe this image", contexts, query_images=[_image_block()])
-
-        model_func.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_generate_with_images(self) -> None:
         raw = "ok\n\n### References\n- [1] chart.pdf"
         model_func = AsyncMock(return_value=raw)
@@ -267,46 +253,6 @@ class TestAnswerSynthesizerGenerate:
             {"type": "markdown", "text": "The chart shows growth [1-1]."},
             {"type": "image_ref", "image_id": "c1"},
         ]
-
-    @pytest.mark.asyncio
-    async def test_current_image_and_evidence_share_one_budget(self) -> None:
-        model_func = AsyncMock(return_value="ok")
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            model_func=model_func,
-            effective_max_images=2,
-        )
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "visual-only",
-                    "reference_id": "1",
-                    "file_path": "/docs/chart.pdf",
-                    "content": "",
-                    "image_data": _PNG_B64,
-                    "_workspace": "default",
-                    "metadata": _source_metadata("/docs/chart.pdf"),
-                }
-            ],
-            "entities": [],
-            "relationships": [],
-        }
-
-        result = await synth.generate("describe this", contexts, query_images=[_image_block()])
-
-        assert [chunk["chunk_id"] for chunk in result.contexts["chunks"]] == ["visual-only"]
-        assert result.trace["answer_images_current"] == 1
-        assert result.trace["answer_images_rag"] == 1
-        assert result.trace["answer_context_images_sent"] == 1
-        assert result.trace["answer_context_images_skipped"] == 0
-        assert "answer_composer_image_budget_used_bytes" not in result.trace
-        messages = model_func.call_args.kwargs["messages"]
-        user_content = messages[1]["content"]
-        assert sum(1 for item in user_content if item.get("type") == "image_url") == 2
-        assert any(
-            item.get("type") == "text" and "User-attached images" in item.get("text", "")
-            for item in user_content
-        )
 
     @pytest.mark.asyncio
     async def test_generate_no_response_format(self) -> None:
@@ -542,99 +488,6 @@ class TestAnswerSynthesizerImageBudget:
 
         history_content = prepared.messages[1]["content"]
         assert any(block.get("type") == "image_url" for block in history_content)
-
-    def test_current_query_images_reserve_before_history(self) -> None:
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            effective_max_images=1,
-        )
-
-        prepared = synth._prepare_model_call(
-            "prompt",
-            {"chunks": []},
-            query_images=[_image_block()],
-            conversation_history=PriorTurns(
-                [
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "previous"}, _image_block()],
-                    }
-                ]
-            ),
-        )
-
-        history_content = prepared.messages[1]["content"]
-        final_user_content = prepared.messages[2]["content"]
-        assert not any(block.get("type") == "image_url" for block in history_content)
-        assert sum(1 for block in final_user_content if block.get("type") == "image_url") == 1
-        assert prepared.trace["answer_images_current"] == 1
-
-    def test_current_image_count_overflow_is_strict(self) -> None:
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            effective_max_images=1,
-        )
-
-        with pytest.raises(CurrentImagePayloadError, match="2 current-turn images"):
-            synth._prepare_model_call(
-                "prompt",
-                {"chunks": []},
-                query_images=[_image_block(), _image_block()],
-            )
-
-    def test_current_image_byte_overflow_is_strict(self) -> None:
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            effective_max_images=1,
-            image_max_total_bytes=1,
-        )
-
-        with pytest.raises(CurrentImagePayloadError, match="current image query_image_1"):
-            synth._prepare_model_call(
-                "prompt",
-                {"chunks": []},
-                query_images=[_image_block()],
-            )
-
-    def test_single_budget_allocates_current_then_history_then_evidence(self) -> None:
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "content": "chart",
-                    "image_data": _PNG_B64,
-                    "file_path": "/docs/report.pdf",
-                }
-            ]
-        }
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            effective_max_images=2,
-        )
-
-        prepared = synth._prepare_model_call(
-            "prompt",
-            contexts,
-            query_images=[_image_block()],
-            conversation_history=PriorTurns(
-                [{"role": "user", "content": [{"type": "text", "text": "prev"}, _image_block()]}]
-            ),
-        )
-
-        total_images = sum(
-            1
-            for message in prepared.messages
-            if isinstance(message["content"], list)
-            for block in message["content"]
-            if isinstance(block, dict) and block.get("type") == "image_url"
-        )
-        assert total_images == 2
-        assert prepared.trace["answer_images_current"] == 1
-        assert prepared.trace["answer_images_history"] == 1
-        assert prepared.trace["answer_images_rag"] == 0
-        assert prepared.trace["answer_images_total"] == 2
-        assert "answer_composer_image_budget_used_bytes" not in prepared.trace
 
 
 # ---------------------------------------------------------------------------

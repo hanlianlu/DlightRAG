@@ -29,7 +29,7 @@ from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.answer.context import AnswerContextPacker
-from dlightrag.core.answer.errors import AnswerInputOverflowError, CurrentImagePayloadError
+from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.memory.conversation import PriorTurns
@@ -108,7 +108,6 @@ class AnswerSynthesizer:
         self,
         query: str,
         contexts: RetrievalContexts,
-        query_images: list[dict[str, Any]] | None = None,
         conversation_history: PriorTurns | None = None,
     ) -> RetrievalResult:
         """Non-streaming final answer generation.
@@ -117,9 +116,6 @@ class AnswerSynthesizer:
         ``references``. Uses the same freetext prompt as streaming; references
         are derived from validated inline markers.
 
-        ``query_images`` are user-attached ``image_url`` content blocks inlined
-        ahead of the retrieved-document section, letting the model see the
-        user's input images in addition to retrieved chunks.
         """
         if self.model_func is None:
             logger.info("[AS] generate: no model_func available, returning None answer")
@@ -129,7 +125,6 @@ class AnswerSynthesizer:
             self._prepare_model_call,
             query,
             contexts,
-            query_images=query_images,
             conversation_history=conversation_history,
         )
 
@@ -176,7 +171,6 @@ class AnswerSynthesizer:
         self,
         query: str,
         contexts: RetrievalContexts,
-        query_images: list[dict[str, Any]] | None = None,
         conversation_history: PriorTurns | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming final answer generation.
@@ -193,7 +187,6 @@ class AnswerSynthesizer:
             self._prepare_model_call,
             query,
             contexts,
-            query_images=query_images,
             conversation_history=conversation_history,
         )
 
@@ -295,7 +288,7 @@ class AnswerSynthesizer:
 
         wrapped = AnswerStream(token_iterator, indexer=indexer)
         cast(Any, wrapped).trace = result_trace
-        cast(Any, wrapped).image_descriptions = {}
+        cast(Any, wrapped).image_descriptions = []
         return contexts, wrapped
 
     # ------------------------------------------------------------------
@@ -307,7 +300,6 @@ class AnswerSynthesizer:
         query: str,
         contexts: RetrievalContexts,
         *,
-        query_images: list[dict[str, Any]] | None = None,
         conversation_history: PriorTurns | None = None,
     ) -> _PreparedModelCall:
         original_history = list((conversation_history or PriorTurns()).messages)
@@ -315,19 +307,16 @@ class AnswerSynthesizer:
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
             system_prompt = answer_core()
             budget = self._new_image_budget()
-            current_blocks = self._budget_current_images(query_images, budget)
             history_messages, message_history_blocks = self._build_history_messages(history, budget)
             prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
             no_context = not _has_answer_evidence(
                 prepared.contexts,
-                query_images=query_images,
                 conversation_history=history,
             )
             if no_context:
                 prepared.trace["answer_no_context"] = True
             self._apply_image_trace(
                 prepared.trace,
-                current_count=len(current_blocks),
                 history_count=len(message_history_blocks),
                 budget=budget,
             )
@@ -340,7 +329,6 @@ class AnswerSynthesizer:
                 system_prompt,
                 prepared.user_prompt,
                 excerpt_blocks,
-                current_blocks=current_blocks,
                 history_messages=history_messages,
             )
             evidence_tokens = estimate_content_tokens(excerpt_blocks) + estimate_content_tokens(
@@ -387,34 +375,6 @@ class AnswerSynthesizer:
         )
         return result
 
-    def _budget_current_images(
-        self,
-        query_images: list[dict[str, Any]] | None,
-        budget: AnswerImageBudget,
-    ) -> list[dict[str, Any]]:
-        """Reserve budget for current-turn images; raise on any overflow.
-
-        Current images are explicit user input with no silent fallback: if they
-        exceed the effective count, or a payload cannot fit the byte/quality
-        budget, the request fails and names the offending image.
-        """
-        current = query_images or []
-        if len(current) > self._effective_max_images:
-            raise CurrentImagePayloadError(
-                f"{len(current)} current-turn images exceed the effective "
-                f"answer-image capacity of {self._effective_max_images}"
-            )
-        blocks: list[dict[str, Any]] = []
-        for idx, img in enumerate(current, start=1):
-            label = f"query_image_{idx}"
-            block = budget.add_user_image(img, label=label)
-            if block is None:
-                raise CurrentImagePayloadError(
-                    f"current image {label} could not fit the answer image budget"
-                )
-            blocks.append(block)
-        return blocks
-
     def _build_history_messages(
         self,
         conversation_history: list[dict[str, Any]] | None,
@@ -453,14 +413,10 @@ class AnswerSynthesizer:
         user_prompt: str,
         excerpt_blocks: list[dict[str, Any]],
         *,
-        current_blocks: list[dict[str, Any]],
         history_messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Place budgeted image blocks into the final message structure."""
         content: list[dict[str, Any]] = []
-        if current_blocks:
-            content.append({"type": "text", "text": "## User-attached images\n"})
-            content.extend(current_blocks)
         content.extend(excerpt_blocks)
         content.append({"type": "text", "text": user_prompt})
         messages: list[dict[str, Any]] = [
@@ -475,15 +431,14 @@ class AnswerSynthesizer:
     def _apply_image_trace(
         trace: dict[str, Any],
         *,
-        current_count: int,
         history_count: int,
         budget: AnswerImageBudget,
     ) -> None:
         rag_context = int(trace.get("answer_context_images_sent", 0))
-        trace["answer_images_current"] = current_count
+        trace["answer_images_current"] = 0
         trace["answer_images_history"] = history_count
         trace["answer_images_rag"] = rag_context
-        trace["answer_images_total"] = current_count + history_count + rag_context
+        trace["answer_images_total"] = history_count + rag_context
         trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
     def _new_image_budget(self) -> AnswerImageBudget:
@@ -638,12 +593,9 @@ def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
 def _has_answer_evidence(
     contexts: RetrievalContexts,
     *,
-    query_images: list[dict[str, Any]] | None,
     conversation_history: list[dict[str, Any]] | None,
 ) -> bool:
     if any(contexts.get(key) for key in ("chunks", "entities", "relationships")):
-        return True
-    if query_images:
         return True
     if not conversation_history:
         return False

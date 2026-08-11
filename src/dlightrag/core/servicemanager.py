@@ -57,6 +57,7 @@ from dlightrag.core.request.images import (
 )
 from dlightrag.core.request.planner import QueryPlan, QueryPlanner
 from dlightrag.core.request.workspaces import (
+    normalize_query_workspaces,
     resolve_query_workspaces,
     validate_query_workspace_selection,
 )
@@ -220,17 +221,6 @@ def _iso_or_none(value: Any) -> str | None:
     if callable(isoformat):
         return str(isoformat())
     return str(value)
-
-
-def _normalize_workspaces(workspaces: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for workspace in workspaces or ():
-        normalized = normalize_workspace(workspace)
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            result.append(normalized)
-    return tuple(result)
 
 
 def _context_count(contexts: RetrievalContexts, key: str) -> int:
@@ -1093,7 +1083,10 @@ class RAGServiceManager:
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         """Fetch a metadata schema for the requested workspace set."""
-        ws_key = _normalize_workspaces(workspaces) or (normalize_workspace(self._config.workspace),)
+        normalized = tuple(normalize_query_workspaces(workspaces or ())) or (
+            normalize_workspace(self._config.workspace),
+        )
+        ws_key = tuple(sorted(normalized))
         now = time.monotonic()
         cached = self._schema_cache.get(ws_key)
         if cached is not None and now - cached[0] < 300.0:
@@ -1112,21 +1105,6 @@ class RAGServiceManager:
             return cached[1] if cached is not None else {}
         self._schema_cache[ws_key] = (now, schema)
         return schema
-
-    async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
-        """Describe current-turn images (ordinal -> text) for image-aware planning.
-
-        The web prepare step calls this before ``aplan_query`` so the planner can
-        fold image semantics into the standalone query, bm25, and filters, then
-        carries the descriptions on the turn to avoid re-describing in retrieval.
-        """
-        if not images:
-            return {}
-        prepared = await prepare_query_images(
-            query_images=images,
-            describer=await self._aget_query_image_describer(),
-        )
-        return prepared.descriptions_by_ordinal
 
     async def _aplan_query_prepared(
         self,
@@ -1200,7 +1178,9 @@ class RAGServiceManager:
         per-workspace lock lets it join an initialization already running here
         instead of starting after planning or a control turn finishes.
         """
-        cold = [ws for ws in _normalize_workspaces(workspaces) if ws not in self._services]
+        cold = [
+            ws for ws in normalize_query_workspaces(workspaces or ()) if ws not in self._services
+        ]
         if not cold:
             return
         task = asyncio.create_task(self._warm_query_services(cold))
@@ -1221,7 +1201,7 @@ class RAGServiceManager:
         workspaces: list[str] | tuple[str, ...] | None,
     ) -> None:
         """Initialize only the services selected for an imminent query."""
-        selected = _normalize_workspaces(workspaces) or (
+        selected = tuple(normalize_query_workspaces(workspaces or ())) or (
             normalize_workspace(self._config.workspace),
         )
         semaphore = asyncio.Semaphore(_QUERY_WORKSPACE_MAX_CONCURRENCY)
@@ -1298,6 +1278,10 @@ class RAGServiceManager:
         kwargs: dict[str, Any] = {}
         requested_top_k = _positive_int_or_none(top_k)
         requested_chunk_top_k = _positive_int_or_none(chunk_top_k)
+        current_images = list(query_images or [])
+        image_limit = max(0, int(self._config.query_images.max_current_images))
+        if len(current_images) > image_limit:
+            raise CurrentImagePayloadError(f"at most {image_limit} current images are allowed")
         if filters is not None:
             kwargs["filters"] = filters
         if bm25_query is not None:
@@ -1309,7 +1293,6 @@ class RAGServiceManager:
             workspaces=workspaces,
             all_workspaces=all_workspaces,
         )
-        current_images = list(query_images or [])
         if current_images:
             kwargs["query_image_blocks"] = current_images
         descriptions: list[str] = []
@@ -1668,12 +1651,13 @@ class RAGServiceManager:
         capability = self._answer_image_capability
         visual_supported = capability is not None and capability.status == "supported"
         inspector: ResourceInspector | None = None
-        if visual_supported:
+        if visual_supported and capability is not None:
             from dlightrag.models.llm import get_vlm_model_func
 
             inspector = ResourceInspector(
                 registry,
                 vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
+                max_images=capability.effective_max_images,
                 max_total_bytes=answer.image_max_total_bytes,
                 max_bytes_per_image=answer.image_max_bytes,
                 max_pixels=answer.image_max_pixels,
@@ -1741,7 +1725,6 @@ class RAGServiceManager:
                         self._answer_stream_sem.release()
                     result.trace["query_image_description_count"] = len(run.prepared.descriptions)
                     result.image_descriptions = run.prepared.descriptions
-                    self._set_answer_media(result)
                     if semantic_highlights:
                         from dlightrag.core.answer.highlights import enrich_semantic_highlights
 
@@ -1750,7 +1733,6 @@ class RAGServiceManager:
                             answer_text=result.answer,
                             config=self._config,
                         )
-                        self._set_answer_media(result)
                     pipeline_trace.update(
                         output=answer_trace_output(
                             result.answer,
@@ -1826,7 +1808,7 @@ class RAGServiceManager:
                             run.prepared.descriptions
                         )
                         stream_meta.trace = merged_trace
-                        stream_meta.image_descriptions = run.prepared.descriptions_by_ordinal
+                        stream_meta.image_descriptions = run.prepared.descriptions
                         wrapped = _ScopedAnswerStream(
                             stream,
                             self._answer_stream_sem,
@@ -1860,26 +1842,6 @@ class RAGServiceManager:
             )
         except TimeoutError as exc:
             raise RAGServiceUnavailableError("Every answer slot is busy; retry shortly.") from exc
-
-    @staticmethod
-    def _set_answer_media(result: RetrievalResult) -> None:
-        from dlightrag.core.answer.media import (
-            answer_blocks_from_markdown,
-            answer_images_from_sources,
-        )
-        from dlightrag.models.schemas import Reference
-
-        result.references = [
-            Reference(id=source.id, title=source.title or "Source") for source in result.sources
-        ]
-        result.answer_images = answer_images_from_sources(
-            result.sources,
-            contexts=result.contexts,
-        )
-        result.answer_blocks = answer_blocks_from_markdown(
-            result.answer,
-            result.answer_images,
-        )
 
     async def aanswer(
         self,
