@@ -920,7 +920,7 @@ extraction for every interface.
 
 ```yaml
 max_conversation_turns: 50
-max_conversation_tokens: 81920
+max_conversation_tokens: 65536
 max_upload_bytes: 104857600
 max_upload_size_mb: 512
 ingest_timeout:
@@ -933,13 +933,20 @@ the agent calls no tool or a tool batch adds no evidence. The cap bounds a run
 that keeps finding new evidence -- an open-web question can always find one more
 page -- and answers from what it already has instead of failing.
 
-`max_conversation_tokens` caps recent text history supplied to the query
-planner. The complete Planner request is bounded to 102400 estimated tokens.
-Current query text and current image descriptions are fixed inputs. Optional
-metadata schema and old conversation messages yield when the envelope is full:
-the schema is omitted first, then history is evicted oldest first. Each prior
-image description is capped at 512 tokens. These are internal semantic limits
-rather than additional public settings.
+`max_conversation_turns` and `max_conversation_tokens` bound the recent history
+supplied to the query planner only; the answer call receives the full history and
+sheds turns of its own only when the request will not fit. The complete Planner
+request is bounded to `answer.context_window_tokens` minus the generation
+reserve. Current query text and current image descriptions are fixed inputs.
+Optional metadata schema and old conversation messages yield when the envelope is
+full: the schema is omitted first, then history is evicted oldest first. Each
+prior image description is capped at 512 tokens.
+
+Three separate limits bound a conversation, and they answer different questions.
+`MAX_HISTORY_MESSAGES` and `MAX_HISTORY_CONTENT_CHARS` are transport contracts
+that also size the JSON body limit, so they are a security bound rather than a
+memory policy. `web_conversations.max_turns` decides how many turns are retained
+in PostgreSQL. Only the two settings above decide how much reaches a model.
 
 `max_upload_bytes` is the per-file cap for REST multipart ingest and Web
 workspace/folder uploads. URL ingestion has its own

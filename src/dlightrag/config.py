@@ -1016,6 +1016,7 @@ class DlightragConfig(BaseSettings):
     max_relation_tokens: int = Field(default=8000, ge=1)
     max_total_tokens: int = Field(default=40000, ge=1)
     max_conversation_turns: int = Field(default=50, ge=0)
+    max_conversation_tokens: int = Field(default=65536, ge=1)
 
     # ===== Knowledge Graph =====
     kg_chunk_pick_method: Literal["VECTOR", "WEIGHT"] = Field(

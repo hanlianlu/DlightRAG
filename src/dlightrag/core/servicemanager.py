@@ -1164,6 +1164,7 @@ class RAGServiceManager:
                 query,
                 conversation_history=text_history,
                 max_turns=self._config.max_conversation_turns,
+                max_tokens=self._config.max_conversation_tokens,
                 schema=schema,
                 current_image_descriptions=current_image_descriptions,
                 preserve_query=preserve_query,

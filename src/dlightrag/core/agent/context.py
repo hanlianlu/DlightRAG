@@ -52,7 +52,8 @@ class ContextAssembler:
         evidence: EvidenceLedger,
         episode: RunEpisode,
     ) -> list[dict[str, Any]]:
-        head = self._head({"role": "system", "content": agent_control_prompt()}, episode.messages())
+        system = {"role": "system", "content": agent_control_prompt()}
+        head = self._head(system, episode.messages(), evidence, final=False)
         messages = list(head)
         if evidence.row_count:
             blocks, _ = self._pack(evidence, head=head, final=False)
@@ -66,7 +67,8 @@ class ContextAssembler:
         evidence: EvidenceLedger,
         episode: RunEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        head = self._head({"role": "system", "content": answer_core()}, episode.last_exchange)
+        system = {"role": "system", "content": answer_core()}
+        head = self._head(system, episode.last_exchange, evidence, final=True)
         blocks, indexer = self._pack(evidence, head=head, final=True)
         messages = [*head, {"role": "user", "content": blocks}]
         self._check(messages)
@@ -76,9 +78,16 @@ class ContextAssembler:
         self,
         system: dict[str, Any],
         carried: list[dict[str, Any]],
+        evidence: EvidenceLedger,
+        *,
+        final: bool,
     ) -> list[dict[str, Any]]:
+        # Evidence outranks old chat, so the block it would render with the whole window to
+        # itself is reserved before history is fitted into what remains.
+        wanted, _ = self._pack(evidence, head=[], final=final)
+        reserved = estimate_messages_tokens([{"role": "user", "content": wanted}])
         kept = self._history.fit(
-            self._input_budget,
+            max(1, self._input_budget - reserved),
             lambda history: estimate_messages_tokens([system, *history, self._question, *carried]),
         )
         return [system, *kept, self._question, *carried]
