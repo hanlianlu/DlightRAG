@@ -41,7 +41,11 @@ from dlightrag.citations import finalize_answer
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.config import AnswerConfig
 from dlightrag.core.access import workspace_names
-from dlightrag.core.answer.errors import ANSWER_STREAM_FAILED, classify_answer_error
+from dlightrag.core.answer.errors import (
+    ANSWER_STREAM_FAILED,
+    InvalidToolConfigurationError,
+    classify_answer_error,
+)
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
 from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.client_attachments import answer_link_resources
@@ -465,7 +469,10 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
                 raise
             except Exception as exc:
                 error_kind = classify_answer_error(exc)
-                if error_kind == ANSWER_STREAM_FAILED:
+                if isinstance(exc, InvalidToolConfigurationError):
+                    logger.exception("Answer tool composition is invalid")
+                    message = exc.public_message
+                elif error_kind == ANSWER_STREAM_FAILED:
                     logger.exception("Error during SSE streaming")
                     message = "Internal server error during streaming"
                 else:

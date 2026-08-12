@@ -234,7 +234,7 @@ class ReadinessResponse(ClientContractModel):
 
 class ErrorDetail(ClientContractModel):
     detail: str
-    error_type: str  # "unavailable", "validation", "auth", "internal"
+    error_type: str  # "unavailable", "validation", "auth", "configuration", "internal"
     error_kind: str | None = None  # stable answer-image error kind, if applicable
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:

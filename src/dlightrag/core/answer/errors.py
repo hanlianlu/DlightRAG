@@ -1,9 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Shared answer-input error taxonomy (design §14.2).
+"""Shared answer error taxonomy (design §14.2).
 
 One error-kind vocabulary and classifier consumed by every surface (Web SSE,
 REST, MCP) so callers can branch on a stable, machine-readable ``error_kind``
-instead of parsing free-form messages.
+instead of parsing free-form messages. Caller input rejections derive from
+``AnswerInputError``; server-side failures such as
+``InvalidToolConfigurationError`` stand outside it so no surface reports them as
+validation.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ CURRENT_DOCUMENT_PARSE_FAILED = "CURRENT_DOCUMENT_PARSE_FAILED"
 ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
 ANSWER_INPUT_OVERFLOW = "ANSWER_INPUT_OVERFLOW"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
-INVALID_TOOL_CONFIGURATION = "INVALID_TOOL_CONFIGURATION"
+INVALID_TOOL_CONFIGURATION = "invalid_tool_configuration"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
@@ -69,26 +72,24 @@ class AnswerInputOverflowError(AnswerInputError):
         super().__init__(public_message, error_kind=ANSWER_INPUT_OVERFLOW)
 
 
-class InvalidToolConfigurationError(AnswerInputError):
+class InvalidToolConfigurationError(RuntimeError):
     """A run composed two peer tools that share one model-visible name.
 
-    Tool names are the model's only handle on a tool, so a collision would make
-    dispatch ambiguous. The names are server-defined and already model-visible,
-    so naming them in the message discloses nothing a caller could not see.
+    Tool names are server-defined, so a collision is a server composition
+    failure, not caller input: it never becomes a validation rejection. The
+    exception string names the colliding tools for operators, while
+    ``public_message`` stays generic for every client surface.
     """
 
     def __init__(self, duplicate_names: tuple[str, ...]) -> None:
-        super().__init__(
-            public_message=(
-                f"Answer tools are misconfigured: duplicate tool names {', '.join(duplicate_names)}"
-            ),
-            error_kind=INVALID_TOOL_CONFIGURATION,
-        )
+        super().__init__(f"Duplicate answer tool names: {', '.join(duplicate_names)}")
+        self.error_kind = INVALID_TOOL_CONFIGURATION
+        self.public_message = "Answer tooling is misconfigured."
 
 
 def classify_answer_error(exc: BaseException) -> str:
-    """Map an answer-stream failure to a stable answer-input error kind."""
-    if isinstance(exc, AnswerInputError):
+    """Map an answer-stream failure to a stable answer error kind."""
+    if isinstance(exc, AnswerInputError | InvalidToolConfigurationError):
         return exc.error_kind
     if _IMAGES_NOT_SUPPORTED_MARKER in str(exc):
         return CURRENT_IMAGES_UNSUPPORTED

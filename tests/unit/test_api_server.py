@@ -2236,6 +2236,29 @@ class TestAnswerStreamMode:
         assert body["error_type"] == "validation"
         assert body["error_kind"] == ANSWER_INPUT_OVERFLOW
 
+    async def test_invalid_tool_configuration_maps_to_500_configuration(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        """Duplicate run-tool names are server composition failure, not caller input."""
+        from dlightrag.core.answer.errors import (
+            INVALID_TOOL_CONFIGURATION,
+            InvalidToolConfigurationError,
+        )
+
+        mock_manager.aanswer = AsyncMock(
+            side_effect=InvalidToolConfigurationError(("read_resource",))
+        )
+        app.state.manager = mock_manager
+
+        response = await client.post("/answer", json={"query": "hi", "stream": False})
+
+        assert response.status_code == 500
+        body = response.json()
+        assert body["error_type"] == "configuration"
+        assert body["error_kind"] == INVALID_TOOL_CONFIGURATION == "invalid_tool_configuration"
+        assert body["detail"] == "Answer tooling is misconfigured."
+        assert "read_resource" not in response.text
+
     async def test_rejected_metadata_is_a_client_error_not_a_500(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -2276,6 +2299,36 @@ class TestAnswerStreamMode:
         assert len(error_events) == 1
         assert error_events[0]["error_kind"] == ANSWER_IMAGE_CAPABILITY_UNKNOWN
         assert "Internal server error" not in error_events[0]["message"]
+
+    async def test_stream_invalid_tool_configuration_is_a_configuration_error(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        """A misconfigured run keeps its stable kind without leaking tool names."""
+        import json as json_mod
+
+        from dlightrag.core.answer.errors import (
+            INVALID_TOOL_CONFIGURATION,
+            InvalidToolConfigurationError,
+        )
+
+        mock_manager.aanswer_stream = AsyncMock(
+            side_effect=InvalidToolConfigurationError(("read_resource",))
+        )
+        app.state.manager = mock_manager
+
+        resp = await client.post("/answer", json={"query": "hi", "stream": True})
+
+        assert resp.status_code == 200
+        events = [
+            json_mod.loads(line.removeprefix("data: "))
+            for line in resp.text.split("\n")
+            if line.startswith("data: ")
+        ]
+        error_events = [e for e in events if e["type"] == "error"]
+        assert len(error_events) == 1
+        assert error_events[0]["error_kind"] == INVALID_TOOL_CONFIGURATION
+        assert error_events[0]["message"] == "Answer tooling is misconfigured."
+        assert "read_resource" not in resp.text
 
 
 class TestAPIContracts:

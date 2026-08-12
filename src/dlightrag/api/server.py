@@ -22,7 +22,7 @@ from dlightrag.api.middleware import (
 from dlightrag.api.models import ANSWER_REQUEST_PART_MAX_BYTES, ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
-from dlightrag.core.answer.errors import AnswerInputError
+from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES
 from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
@@ -162,6 +162,20 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         """Answer input rejection -> 400 with a stable error kind."""
         body = ErrorDetail(detail=str(exc), error_type="validation", error_kind=exc.error_kind)
         return JSONResponse(status_code=400, content=body.model_dump())
+
+    @application.exception_handler(InvalidToolConfigurationError)
+    async def invalid_tool_configuration_handler(
+        request: Request,  # noqa: ARG001
+        exc: InvalidToolConfigurationError,
+    ) -> JSONResponse:
+        """Server tool-composition failure -> 500; the colliding names stay in the log."""
+        logger.error("Answer tool composition is invalid", exc_info=exc)
+        body = ErrorDetail(
+            detail=exc.public_message,
+            error_type="configuration",
+            error_kind=exc.error_kind,
+        )
+        return JSONResponse(status_code=500, content=body.model_dump())
 
     @application.exception_handler(MetadataValidationError)
     async def metadata_validation_error_handler(

@@ -15,10 +15,13 @@ from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.answer.errors import (
     CURRENT_DOCUMENT_PARSE_FAILED,
     CURRENT_IMAGES_UNSUPPORTED,
+    INVALID_TOOL_CONFIGURATION,
     AnswerImageError,
     AnswerInputError,
     CurrentDocumentParseError,
     CurrentImagePayloadError,
+    InvalidToolConfigurationError,
+    classify_answer_error,
 )
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.answer_events import stream_answer_events
@@ -207,6 +210,36 @@ def test_current_document_parse_error_builds_its_public_contract_from_filename()
     )
     assert str(error) == error.public_message
     assert error.error_kind == CURRENT_DOCUMENT_PARSE_FAILED
+
+
+def test_invalid_tool_configuration_is_a_server_failure_not_caller_input() -> None:
+    error = InvalidToolConfigurationError(("read_resource", "search_web"))
+
+    assert INVALID_TOOL_CONFIGURATION == "invalid_tool_configuration"
+    assert error.error_kind == INVALID_TOOL_CONFIGURATION
+    assert classify_answer_error(error) == INVALID_TOOL_CONFIGURATION
+    assert not isinstance(error, AnswerInputError)
+    assert error.public_message == "Answer tooling is misconfigured."
+    # Operators keep the colliding names; clients never see them.
+    assert "read_resource" in str(error)
+    assert "search_web" in str(error)
+    assert "read_resource" not in error.public_message
+
+
+async def test_invalid_tool_configuration_streams_a_generic_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events, _captured, service, _prepared_mock = await _collect_stream_error(
+        monkeypatch, InvalidToolConfigurationError(("read_resource",))
+    )
+
+    error_event = next(event for event in events if "event: error" in event)
+    assert json.loads(error_event.split("data: ", 1)[1]) == {
+        "message": "Answer tooling is misconfigured.",
+        "error_kind": INVALID_TOOL_CONFIGURATION,
+    }
+    assert "read_resource" not in "".join(events)
+    service.commit_answer.assert_not_awaited()
 
 
 async def test_successful_stream_commits_once_before_done() -> None:

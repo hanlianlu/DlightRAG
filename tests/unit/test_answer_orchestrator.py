@@ -13,6 +13,7 @@ from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
 from dlightrag.core.agent.tools import SearchInput, build_run_tools
 from dlightrag.core.answer.errors import (
     INVALID_TOOL_CONFIGURATION,
+    AnswerInputError,
     AnswerInputOverflowError,
     InvalidToolConfigurationError,
 )
@@ -775,7 +776,10 @@ async def test_duplicate_tool_names_fail_the_run_before_any_model_call() -> None
         await orchestrator.answer("Question")
 
     assert exc.value.error_kind == INVALID_TOOL_CONFIGURATION
-    assert "read_resource" in exc.value.public_message
+    # Server composition failure, not caller input.
+    assert not isinstance(exc.value, AnswerInputError)
+    assert "read_resource" not in exc.value.public_message
+    assert "read_resource" in str(exc.value)
     assert agent.turn_calls == []
 
 

@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING, Any
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
-from dlightrag.core.answer.errors import AnswerInputError, classify_answer_error
+from dlightrag.core.answer.errors import (
+    AnswerInputError,
+    InvalidToolConfigurationError,
+    classify_answer_error,
+)
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
 from dlightrag.core.answer.media import answer_images_from_sources
 from dlightrag.core.answer.turn import PreparedAnswerTurn
@@ -534,7 +538,7 @@ async def _emit_answer_events(
         logger.exception("Answer streaming failed")
         message = (
             exc.public_message
-            if isinstance(exc, AnswerInputError)
+            if isinstance(exc, AnswerInputError | InvalidToolConfigurationError)
             else "Service error. Please try again."
         )
         yield sse_event(

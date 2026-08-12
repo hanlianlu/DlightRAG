@@ -2,6 +2,7 @@
 """Tests for MCP workspace lifecycle tools."""
 
 import json
+import logging
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -669,6 +670,35 @@ async def test_mcp_answer_preserves_answer_input_error_kind(
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
     assert _tool_text(result) == f"Error [{ANSWER_INPUT_OVERFLOW}]: The answer input is too large."
+
+
+async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
+    mock_mcp_manager: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.core.answer.errors import (
+        INVALID_TOOL_CONFIGURATION,
+        InvalidToolConfigurationError,
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "execute_answer",
+        AsyncMock(side_effect=InvalidToolConfigurationError(("read_resource",))),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == (
+        f"Error [{INVALID_TOOL_CONFIGURATION}]: Answer tooling is misconfigured."
+    )
+    assert "read_resource" not in _tool_text(result)
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert not [record for record in caplog.records if record.levelno == logging.WARNING]
 
 
 async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:

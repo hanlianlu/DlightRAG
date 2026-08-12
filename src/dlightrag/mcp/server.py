@@ -28,7 +28,7 @@ from dlightrag.access_control import AccessAction, AccessDeniedError, access_con
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
-from dlightrag.core.answer.errors import AnswerInputError
+from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
@@ -109,23 +109,26 @@ class DlightRAGMCPServer(MCPServer):
             raise
         except Exception as exc:
             # MCPServer wraps tool-body errors as ToolError(...) from the original, so
-            # inspect __cause__ as well. Surface user-facing validation/authorization
-            # messages; hide unexpected internals behind a generic message.
-            user_error = exc if isinstance(exc, ValueError | PermissionError) else exc.__cause__
-            if isinstance(user_error, ValueError | PermissionError):
-                logger.warning("MCP tool '%s' rejected: %s", name, user_error)
+            # inspect __cause__ as well. Server misconfiguration is a server failure;
+            # user-facing validation/authorization messages are surfaced as rejections;
+            # unexpected internals hide behind a generic message.
+            surfaced = (ValueError, PermissionError, InvalidToolConfigurationError)
+            inner = exc if isinstance(exc, surfaced) else exc.__cause__
+            if isinstance(inner, InvalidToolConfigurationError):
+                logger.exception("MCP tool '%s' failed: %s", name, inner)
+                text = f"Error [{inner.error_kind}]: {inner.public_message}"
+            elif isinstance(inner, ValueError | PermissionError):
+                logger.warning("MCP tool '%s' rejected: %s", name, inner)
                 text = (
-                    f"Error [{user_error.error_kind}]: {user_error.public_message}"
-                    if isinstance(user_error, AnswerInputError)
-                    else f"Error: {user_error}"
+                    f"Error [{inner.error_kind}]: {inner.public_message}"
+                    if isinstance(inner, AnswerInputError)
+                    else f"Error: {inner}"
                 )
-                return CallToolResult(
-                    content=[TextContent(type="text", text=text)],
-                    is_error=True,
-                )
-            logger.exception("MCP tool '%s' failed", name)
+            else:
+                logger.exception("MCP tool '%s' failed", name)
+                text = "Error: internal tool failure"
             return CallToolResult(
-                content=[TextContent(type="text", text="Error: internal tool failure")],
+                content=[TextContent(type="text", text=text)],
                 is_error=True,
             )
 
