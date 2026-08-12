@@ -14,7 +14,6 @@ from dlightrag.storage.answer_runs import (
     RUN_ABANDONED_ERROR_KIND,
     RUN_RETENTION_SECONDS,
     PGAnswerRunStore,
-    new_run_id,
 )
 
 
@@ -49,16 +48,6 @@ class TestMigrationDeclaration:
         statements = _all_statements()
         assert "dlightrag_ingest_jobs" not in statements
         assert "web_conversation" not in statements
-
-
-class TestRunIdentifiers:
-    def test_new_run_id_is_uuid7(self) -> None:
-        assert new_run_id().version == 7
-
-    def test_new_run_ids_sort_by_creation_order(self) -> None:
-        ids = [new_run_id() for _ in range(64)]
-        assert ids == sorted(ids)
-        assert len(set(ids)) == len(ids)
 
 
 class TestFixedRuntimeBounds:

@@ -30,6 +30,8 @@ type AnswerRunEventType = Literal["progress", "token", "reset", "done", "error"]
 type ArtifactReferenceKind = Literal["current_attachment", "history_attachment", "fetched_resource"]
 #: How a graceful shutdown left one owned run.
 type ShutdownOutcome = Literal["requeued", "cancelled", "lease_lost"]
+#: Whether a fenced worker's artifact write landed, or why it was refused.
+type ArtifactAttachOutcome = Literal["attached", "lease_lost", "turn_mismatch"]
 
 ANSWER_RUN_MIGRATION_SCOPE = "answer_runs"
 
@@ -343,7 +345,9 @@ FOR UPDATE
 """
 
 # One fenced terminal transition that also appends the run's single terminal
-# event. $12 withholds success while a cancellation is pending.
+# event. $12 withholds success while a cancellation is pending. A terminal run
+# never resumes, so its checkpoint is dropped rather than retained for the
+# lifetime of a conversation-linked row.
 _FINISH_RUN = """
 WITH bumped AS (
     UPDATE dlightrag_answer_runs
@@ -353,6 +357,7 @@ WITH bumped AS (
         error_kind = $8::text,
         error_message = $9::text,
         phase = NULL,
+        checkpoint_json = NULL,
         lease_owner = NULL,
         lease_expires_at = NULL,
         finished_at = NOW(),
@@ -388,6 +393,7 @@ WITH bumped AS (
         error_kind = $4::text,
         error_message = $5::text,
         phase = NULL,
+        checkpoint_json = NULL,
         lease_owner = NULL,
         lease_expires_at = NULL,
         finished_at = NOW(),
@@ -465,6 +471,39 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
 ON CONFLICT (owner_id, run_id, resource_id) DO NOTHING
 """
 
+# An uncheckpointed read-only tool batch may execute again and fetch different
+# bytes under a new resource id, so (reference_kind, ordinal) is the logical
+# replay slot. Releasing it — and any row already holding the incoming resource
+# id — lets the rebind below replace the whole reference atomically instead of
+# colliding on the ordinal unique index. Only fetched rows are released; an
+# accepted input reference is never rewritten.
+_RELEASE_FETCHED_SLOT = """
+DELETE FROM dlightrag_answer_run_artifacts
+WHERE owner_id = $1 AND run_id = $2 AND reference_kind = 'fetched_resource'
+  AND (ordinal = $3 OR resource_id = $4)
+RETURNING digest
+"""
+
+_INSERT_FETCHED_REFERENCE = """
+INSERT INTO dlightrag_answer_run_artifacts (
+    owner_id, run_id, resource_id, reference_kind, ordinal, digest,
+    filename, mime_type, transform_locator
+)
+VALUES ($1, $2, $3, 'fetched_resource', $4, $5, $6, $7, $8::jsonb)
+"""
+
+# The artifact write fence: it must hold the run row while the blobs and
+# references are written, so a worker that lost its lease mid-write persists
+# nothing.
+_LOCK_RUN_FOR_WORKER = """
+SELECT completed_turns
+FROM dlightrag_answer_runs
+WHERE owner_id = $1 AND run_id = $2
+  AND lease_owner = $3 AND fencing_epoch = $4
+  AND status = 'running' AND lease_expires_at > NOW()
+FOR UPDATE
+"""
+
 _SELECT_ARTIFACT = """
 SELECT content
 FROM dlightrag_answer_artifacts
@@ -516,6 +555,9 @@ WITH candidates AS (
 SELECT count(*)::int FROM deleted
 """
 
+# Task 7/8 must add the conversation-linked exemption here — a succeeded run
+# referenced by a committed web_conversation_turns row is owned by that
+# conversation — once `web_conversation_turns.answer_run_id` exists.
 _SELECT_EXPIRED_RUNS = """
 SELECT owner_id, run_id
 FROM dlightrag_answer_runs
@@ -550,7 +592,7 @@ WHERE (owner_id, run_id) IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
 """
 
 
-def new_run_id() -> uuid.UUID:
+def _new_run_id() -> uuid.UUID:
     """Return a fresh time-ordered UUIDv7 run identifier."""
     return uuid.uuid7()
 
@@ -796,7 +838,7 @@ class PGAnswerRunStore:
         owner = _require_owner(owner_id)
         payload = _canonical_request_json(request)
         fingerprint = _request_fingerprint(request)
-        run_uuid = new_run_id()
+        run_uuid = _new_run_id()
 
         async def _operation(conn: Any) -> RunCreation:
             async with conn.transaction():
@@ -836,14 +878,20 @@ class PGAnswerRunStore:
 
         return await self._run_read(_operation)
 
-    async def read_events(
+    async def read_event_page(
         self,
         *,
         owner_id: str,
         run_id: str,
         after_sequence: int = 0,
     ) -> tuple[AnswerRunEvent, ...]:
-        """Replay one owned run's committed events after ``after_sequence``."""
+        """Replay at most one bounded page of committed events after ``after_sequence``.
+
+        This never returns a complete replay by itself. A subscriber MUST loop,
+        passing the last returned sequence as the next cursor, until it receives
+        an empty page; only then has it seen every committed event, including the
+        terminal one. The page size is a fixed internal bound.
+        """
         owner = _require_owner(owner_id)
         run_uuid = _run_uuid(run_id)
         if run_uuid is None:
@@ -1215,26 +1263,50 @@ class PGAnswerRunStore:
         *,
         owner_id: str,
         run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        expected_completed_turns: int,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
-    ) -> None:
-        """Persist validated bytes and their run references in one transaction."""
+    ) -> ArtifactAttachOutcome:
+        """Persist validated bytes and their references under the worker's fence.
+
+        The run row is locked and its owner, running status, unexpired lease,
+        fencing epoch, and completed-turn count are all validated before anything
+        is written, so a stale, expired, or wrong-turn worker stores no blob and
+        no reference. A ``fetched_resource`` reference rebinds its
+        ``(reference_kind, ordinal)`` replay slot, and bytes the rebind orphaned
+        are cleaned up ownership-safely in the same transaction.
+
+        Accepted input artifacts belong to :meth:`create_run` and need no fence.
+        """
         owner = _require_owner(owner_id)
         run_uuid = _run_uuid(run_id)
         if run_uuid is None:
-            raise ValueError("run_id must be a UUID")
+            return "lease_lost"
+        expected = int(expected_completed_turns)
 
-        async def _operation(conn: Any) -> None:
+        async def _operation(conn: Any) -> ArtifactAttachOutcome:
             async with conn.transaction():
-                await self._write_artifacts(
+                turns = await conn.fetchval(
+                    _LOCK_RUN_FOR_WORKER, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if turns is None:
+                    return "lease_lost"
+                if int(turns) != expected:
+                    return "turn_mismatch"
+                displaced = await self._write_artifacts(
                     conn,
                     owner_id=owner,
                     run_uuid=run_uuid,
                     artifacts=artifacts,
                     references=references,
                 )
+                if displaced:
+                    await _delete_unreferenced(conn, [owner] * len(displaced), displaced)
+                return "attached"
 
-        await self._run_write(_operation)
+        return await self._run_write(_operation)
 
     async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None:
         """Read one owner's stored bytes by content address."""
@@ -1273,7 +1345,7 @@ class PGAnswerRunStore:
             async with conn.transaction():
                 pairs = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_uuids)
                 deleted = await conn.fetchval(_DELETE_RUNS, owners, run_uuids)
-                artifacts = await _delete_unreferenced(conn, pairs)
+                artifacts = await _delete_unreferenced(conn, *_digest_pairs(pairs))
                 return RunDeletion(runs=int(deleted or 0), artifacts=artifacts)
 
         return await self._run_write(_operation)
@@ -1314,7 +1386,7 @@ class PGAnswerRunStore:
                 run_uuids = [row["run_id"] for row in rows]
                 pairs = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_uuids)
                 deleted = await conn.fetchval(_DELETE_RUNS, owners, run_uuids)
-                artifacts = await _delete_unreferenced(conn, pairs)
+                artifacts = await _delete_unreferenced(conn, *_digest_pairs(pairs))
                 return RunDeletion(runs=int(deleted or 0), artifacts=artifacts)
 
         return await self._run_write(_operation)
@@ -1456,7 +1528,8 @@ class PGAnswerRunStore:
         run_uuid: uuid.UUID,
         artifacts: Sequence[PendingArtifact],
         references: Sequence[PendingArtifactReference],
-    ) -> None:
+    ) -> list[str]:
+        """Write blobs and references, returning digests a replay slot released."""
         for artifact in artifacts:
             await conn.execute(
                 _INSERT_ARTIFACT,
@@ -1465,7 +1538,30 @@ class PGAnswerRunStore:
                 len(artifact.content),
                 artifact.content,
             )
+        displaced: list[str] = []
         for reference in references:
+            locator = json.dumps(dict(reference.transform_locator), ensure_ascii=False)
+            if reference.reference_kind == "fetched_resource":
+                released = await conn.fetch(
+                    _RELEASE_FETCHED_SLOT,
+                    owner_id,
+                    run_uuid,
+                    reference.ordinal,
+                    reference.resource_id,
+                )
+                displaced.extend(str(row["digest"]) for row in released)
+                await conn.execute(
+                    _INSERT_FETCHED_REFERENCE,
+                    owner_id,
+                    run_uuid,
+                    reference.resource_id,
+                    reference.ordinal,
+                    reference.digest,
+                    reference.filename,
+                    reference.mime_type,
+                    locator,
+                )
+                continue
             await conn.execute(
                 _INSERT_RUN_ARTIFACT,
                 owner_id,
@@ -1476,8 +1572,9 @@ class PGAnswerRunStore:
                 reference.digest,
                 reference.filename,
                 reference.mime_type,
-                json.dumps(dict(reference.transform_locator), ensure_ascii=False),
+                locator,
             )
+        return displaced
 
 
 async def _finalize_batch(
@@ -1505,14 +1602,23 @@ async def _finalize_batch(
     return int(finalized or 0)
 
 
-async def _delete_unreferenced(conn: Any, pairs: Sequence[Any]) -> int:
-    """Delete blobs no run still references, yielding to concurrent adopters."""
-    if not pairs:
+def _digest_pairs(rows: Sequence[Any]) -> tuple[list[str], list[str]]:
+    return [str(row["owner_id"]) for row in rows], [str(row["digest"]) for row in rows]
+
+
+async def _delete_unreferenced(conn: Any, owners: Sequence[str], digests: Sequence[str]) -> int:
+    """Delete blobs no run still references, yielding to concurrent adopters.
+
+    The delete runs inside its own savepoint. A RESTRICT raised by an adoption
+    that beat the reference check must not abort the caller's transaction, or the
+    run deletion it already performed would silently roll back and retention would
+    never advance past a contended batch.
+    """
+    if not owners:
         return 0
-    owners = [str(pair["owner_id"]) for pair in pairs]
-    digests = [str(pair["digest"]) for pair in pairs]
     try:
-        deleted = await conn.fetchval(_DELETE_UNREFERENCED_ARTIFACTS, owners, digests)
+        async with conn.transaction():
+            deleted = await conn.fetchval(_DELETE_UNREFERENCED_ARTIFACTS, owners, digests)
     except (
         asyncpg.exceptions.RestrictViolationError,
         asyncpg.exceptions.ForeignKeyViolationError,
@@ -1534,7 +1640,7 @@ def _run_uuid(run_id: str) -> uuid.UUID | None:
     """Parse a caller-supplied run id; malformed ids read as unknown, not as errors."""
     try:
         return uuid.UUID(str(run_id))
-    except ValueError, AttributeError, TypeError:
+    except ValueError:
         return None
 
 
@@ -1621,6 +1727,7 @@ __all__ = [
     "AnswerRunPhase",
     "AnswerRunRecord",
     "AnswerRunStatus",
+    "ArtifactAttachOutcome",
     "ArtifactReferenceKind",
     "CancellationOutcome",
     "CheckpointCommit",
@@ -1638,5 +1745,4 @@ __all__ = [
     "SweepOutcome",
     "TerminalOutcome",
     "artifact_digest",
-    "new_run_id",
 ]
