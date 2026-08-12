@@ -4,12 +4,14 @@
 import asyncio
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
+from dlightrag.core.answer.errors import InvalidToolConfigurationError
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import (
@@ -26,7 +28,13 @@ RegisterWebSource = Callable[[str], str | None]
 class SearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    query: str = Field(min_length=1)
+    query: str = Field(
+        min_length=1,
+        description=(
+            "One concrete unresolved question or fact to search for, in natural "
+            "language. Search one angle per call rather than combining several."
+        ),
+    )
 
 
 def build_run_tools(
@@ -75,7 +83,20 @@ def build_run_tools(
             )
         )
     tools.extend(_ledger_backed(tool, evidence, cache) for tool in resource_tools)
+    _reject_duplicate_names(tools)
     return tools, cache
+
+
+def _reject_duplicate_names(tools: list[AgentTool]) -> None:
+    """Fail the run before any model call when two peer tools share a name.
+
+    A tool name is the model's only handle on a tool, so a collision silently
+    hides one of them behind the other.
+    """
+    counts = Counter(tool.name for tool in tools)
+    duplicates = tuple(name for name, count in counts.items() if count > 1)
+    if duplicates:
+        raise InvalidToolConfigurationError(duplicates)
 
 
 def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger, cache: _ToolCallCache) -> AgentTool:
@@ -204,6 +225,7 @@ class _ToolCallCache:
             return ToolResult(
                 content="Equivalent tool call already executed; no new evidence was added.",
                 details=result.details,
+                cached=True,
             )
         return result
 

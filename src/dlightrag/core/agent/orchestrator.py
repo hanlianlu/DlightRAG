@@ -194,7 +194,7 @@ class AnswerOrchestrator:
 
             if self._final_text_func is None:
                 raise RuntimeError("Research answer requires a tools-disabled final model")
-            final_messages, indexer = state.context.answer_turn(
+            final_messages, indexer = await state.context.answer_turn(
                 evidence=state.evidence, episode=state.episode
             )
             state.trace["agent_stop_reason"] = state.stop_reason
@@ -225,7 +225,7 @@ class AnswerOrchestrator:
         try:
             await self._research_until_stopped(state)
 
-            final_messages, indexer = state.context.answer_turn(
+            final_messages, indexer = await state.context.answer_turn(
                 evidence=state.evidence, episode=state.episode
             )
             state.trace["agent_stop_reason"] = state.stop_reason
@@ -240,13 +240,18 @@ class AnswerOrchestrator:
             await state.tool_cache.aclose()
 
     async def _research_until_stopped(self, state: _RunState) -> None:
-        """Run evidence turns until the model stops, adds nothing, or hits the cap."""
+        """Run evidence turns until the model stops, adds nothing, or hits the cap.
+
+        A tool error is not convergence: an invalid, unavailable, or failed result
+        is replayed so the model can correct it, and only ``max_agent_turns``
+        bounds that correction.
+        """
         for _ in range(self._max_agent_turns):
             executed, changed = await self._execute_control_turn(state)
             if not executed.assistant.tool_calls:
                 state.stop_reason = "model_stop"
                 return
-            if not changed:
+            if not changed and not any(result.is_error for result in executed.results):
                 state.stop_reason = "no_new_evidence"
                 return
         state.stop_reason = "turn_limit"
@@ -270,6 +275,7 @@ class AnswerOrchestrator:
         trace: dict[str, Any] = {
             "agent_turns": 0,
             "web_search_cost_dollars": 0.0,
+            "tool_observations": [],
         }
         tools, tool_cache = build_run_tools(
             evidence=evidence,
@@ -299,7 +305,9 @@ class AnswerOrchestrator:
         state: _RunState,
     ) -> tuple[ExecutedTurn, bool]:
         executor = ToolTurnExecutor(cast(ToolModel, self._model_func))
-        call_messages = state.context.control_turn(evidence=state.evidence, episode=state.episode)
+        call_messages = await state.context.control_turn(
+            evidence=state.evidence, episode=state.episode
+        )
         previous_rows = state.evidence.row_count
         executed = await executor.run_turn(
             call_messages,
@@ -307,6 +315,9 @@ class AnswerOrchestrator:
             tool_choice="auto",
         )
         state.trace["agent_turns"] += 1
+        state.trace["tool_observations"].extend(
+            execution.observation.as_dict() for execution in executed.results
+        )
         state.episode.record(executed.messages[len(call_messages) :])
         return executed, state.evidence.row_count != previous_rows
 

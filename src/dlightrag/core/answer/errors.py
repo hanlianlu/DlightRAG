@@ -14,6 +14,7 @@ CURRENT_DOCUMENT_PARSE_FAILED = "CURRENT_DOCUMENT_PARSE_FAILED"
 ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
 ANSWER_INPUT_OVERFLOW = "ANSWER_INPUT_OVERFLOW"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
+INVALID_TOOL_CONFIGURATION = "INVALID_TOOL_CONFIGURATION"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
@@ -68,6 +69,23 @@ class AnswerInputOverflowError(AnswerInputError):
         super().__init__(public_message, error_kind=ANSWER_INPUT_OVERFLOW)
 
 
+class InvalidToolConfigurationError(AnswerInputError):
+    """A run composed two peer tools that share one model-visible name.
+
+    Tool names are the model's only handle on a tool, so a collision would make
+    dispatch ambiguous. The names are server-defined and already model-visible,
+    so naming them in the message discloses nothing a caller could not see.
+    """
+
+    def __init__(self, duplicate_names: tuple[str, ...]) -> None:
+        super().__init__(
+            public_message=(
+                f"Answer tools are misconfigured: duplicate tool names {', '.join(duplicate_names)}"
+            ),
+            error_kind=INVALID_TOOL_CONFIGURATION,
+        )
+
+
 def classify_answer_error(exc: BaseException) -> str:
     """Map an answer-stream failure to a stable answer-input error kind."""
     if isinstance(exc, AnswerInputError):
@@ -84,10 +102,12 @@ __all__ = [
     "CURRENT_DOCUMENT_PARSE_FAILED",
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
+    "INVALID_TOOL_CONFIGURATION",
     "AnswerInputError",
     "AnswerImageError",
     "AnswerInputOverflowError",
     "CurrentDocumentParseError",
     "CurrentImagePayloadError",
+    "InvalidToolConfigurationError",
     "classify_answer_error",
 ]

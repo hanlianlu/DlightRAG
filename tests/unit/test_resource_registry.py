@@ -751,3 +751,40 @@ async def test_inline_read_does_not_double_count() -> None:
     await registry.read(resource_id)
 
     assert registry._total_bytes == before
+
+
+async def test_text_decode_windowing_and_focus_ranking_run_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from dlightrag.core.resources import registry as registry_module
+
+    loop_thread = threading.get_ident()
+    worker_threads: list[int] = []
+
+    def record(real):
+        def wrapper(*args: object, **kwargs: object):
+            worker_threads.append(threading.get_ident())
+            return real(*args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(registry_module, "decode_text", record(registry_module.decode_text))
+    monkeypatch.setattr(
+        registry_module, "build_text_windows", record(registry_module.build_text_windows)
+    )
+    monkeypatch.setattr(registry_module, "bm25_rank", record(registry_module.bm25_rank))
+
+    registry = ResourceRegistry()
+    text = "\n".join(f"line {index} " + "x" * 30 for index in range(2000))
+    resource_id = registry.register(
+        ResourceInput(filename="notes.txt", content=text.encode("utf-8"))
+    )
+
+    result = await registry.read(resource_id, focus="line 1999")
+
+    assert result.content
+    assert len(worker_threads) >= 3
+    assert loop_thread not in worker_threads
+    await registry.aclose()

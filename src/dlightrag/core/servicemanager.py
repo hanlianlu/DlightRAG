@@ -62,6 +62,7 @@ from dlightrag.core.request.workspaces import (
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
+from dlightrag.core.vision_probe import ImageCapabilityStatus, ModelImageCapabilities
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
 from dlightrag.utils import log_safe, normalize_workspace
@@ -267,10 +268,6 @@ class RAGServiceUnavailableError(Exception):
         super().__init__(self.detail)
 
 
-# Lazy re-probe cooldown for an `unknown` answer-image capability (transient recovery).
-_ANSWER_CAPABILITY_REPROBE_COOLDOWN_SECONDS = 30.0
-
-
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:
     from dlightrag.utils.images import image_bytes_to_data_uri, verify_web_image_bytes
 
@@ -312,17 +309,18 @@ class RAGServiceManager:
         self._retrieval_planner: RetrievalPlanner | None = None
         self._vlm_func: Callable[..., Any] | None = None
         self._vlm_closers: list[Callable[[], Awaitable[Any]]] = []
-        self._query_image_describer: QueryImageDescriber | None = None
         self._web_search: ExaSearch | None = None
         self._query_tool_model: QueryToolModel | None = None
-        self._query_image_describer_lock = asyncio.Lock()
+        self._vlm_func_lock = asyncio.Lock()
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+        # Image capability is role-specific but cached per resolved model config,
+        # so roles that share one model share one probe.
+        self._image_capabilities = ModelImageCapabilities()
         self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
-        self._answer_capability_reprobe_lock = asyncio.Lock()
-        self._answer_capability_last_probe: float = 0.0
+        self._vlm_image_status: ImageCapabilityStatus = "unknown"
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
@@ -353,9 +351,8 @@ class RAGServiceManager:
         # Bind the retrieval-planner LLM during startup; this does not make a model call.
         manager._get_retrieval_planner()
 
-        # ── Vision probe (once at startup, not per workspace) ──────────
-        await manager._probe_vision_support()
-        await manager._probe_answer_image_capability()
+        # ── Vision probes (once at startup, not per workspace) ─────────
+        await manager._probe_role_image_capabilities()
 
         default_err: Exception | None = None
         try:
@@ -547,6 +544,12 @@ class RAGServiceManager:
         """Query-role answer-model image capability, discovered at startup."""
         return self._answer_image_capability
 
+    async def _probe_role_image_capabilities(self) -> None:
+        """Resolve the answer, VLM, and rerank image capabilities once at startup."""
+        await self._probe_answer_image_capability()
+        await self._probe_vlm_image_capability()
+        await self._probe_rerank_image_capability()
+
     async def _probe_answer_image_capability(self) -> None:
         """Discover the query-role answer model's image capability once at startup."""
         if self._answer_image_capability is not None:
@@ -560,59 +563,38 @@ class RAGServiceManager:
             synthesizer.set_image_policy(self._answer_image_policy())
 
     async def _maybe_reprobe_answer_image_capability(self) -> None:
-        """Lazily re-probe when the cached capability is ``unknown``.
+        """Lazily re-probe when the cached answer capability is ``unknown``.
 
         ``supported``/``unsupported`` are terminal and never re-probed. An
         ``unknown`` verdict (a transient startup probe failure) is retried on
-        demand -- when an image request actually needs it -- at most once per
-        cooldown window under a single-flight lock, so a genuinely-unreachable
-        model is never hammered.
+        demand -- when an image request actually needs it -- and the shared probe
+        cache bounds that retry to one model call per cooldown window, so a
+        genuinely-unreachable model is never hammered.
         """
         capability = self._answer_image_capability
         if capability is not None and capability.status != "unknown":
             return
-        async with self._answer_capability_reprobe_lock:
-            capability = self._answer_image_capability
-            if capability is not None and capability.status != "unknown":
-                return
-            now = time.monotonic()
-            if (
-                now - self._answer_capability_last_probe
-                < _ANSWER_CAPABILITY_REPROBE_COOLDOWN_SECONDS
-            ):
-                return
-            self._answer_capability_last_probe = now
-            self._cache_answer_image_capability(await self._discover_answer_image_capability())
+        self._cache_answer_image_capability(await self._discover_answer_image_capability())
 
     async def _discover_answer_image_capability(self) -> AnswerImageCapability:
         """Probe ``model_for_role(config, "query")`` and build a tri-state capability.
 
         Probes the model the AnswerSynthesizer actually uses -- not ``llm.default``.
-        Best-effort: failures degrade to ``unknown`` and never block the caller.
+        A non-positive deployment ceiling disables answer images without any model
+        call, and without recording that config choice against a model another
+        role may share. Best-effort otherwise: failures degrade to ``unknown``.
         """
-        from dlightrag.core.vision_probe import ImageProbeOutcome, probe_image_capability
+        from dlightrag.core.vision_probe import ImageProbeOutcome
         from dlightrag.models.llm_roles import model_for_role
-        from dlightrag.models.providers import get_provider
 
         ceiling = int(self._config.answer.max_images)
         cfg = model_for_role(self._config, "query")
-        provider: Any = None
-        try:
-            provider = get_provider(
-                cfg.provider,
-                api_key=cfg.api_key,
-                base_url=cfg.base_url,
-                timeout=cfg.timeout,
-                max_retries=cfg.max_retries,
-            )
-            outcome = await probe_image_capability(provider, model=cfg.model, ceiling=ceiling)
-        except Exception:
-            logger.debug("Answer image capability probe failed", exc_info=True)
-            outcome = ImageProbeOutcome(status="unknown", failure_kind="probe_error")
-        finally:
-            if provider is not None:
-                await provider.aclose()
-        capability = AnswerImageCapability(
+        outcome = (
+            await self._image_capabilities.resolve(cfg)
+            if ceiling > 0
+            else ImageProbeOutcome(status="unsupported", failure_kind="config_disabled")
+        )
+        return AnswerImageCapability(
             status=outcome.status,
             configured_ceiling=ceiling,
             effective_max_images=derive_effective_max_images(outcome.status, ceiling),
@@ -621,65 +603,46 @@ class RAGServiceManager:
             model=cfg.model,
             failure_kind=outcome.failure_kind,
         )
-        logger.info(
-            "Answer image capability: status=%s effective=%d model=%s",
-            capability.status,
-            capability.effective_max_images,
-            cfg.model,
-        )
-        return capability
 
-    async def _probe_vision_support(self) -> None:
-        """Probe the rerank scoring model's image capability once at startup.
+    async def _probe_vlm_image_capability(self) -> None:
+        """Resolve the VLM role's own image capability.
+
+        The VLM role drives query-image description and ``inspect_resource``; it
+        may resolve to a different model than the answer role, so a text-only
+        answer model must not withdraw visual inspection (or the reverse).
+        """
+        from dlightrag.models.llm_roles import model_for_role
+
+        outcome = await self._image_capabilities.resolve(model_for_role(self._config, "vlm"))
+        self._vlm_image_status = outcome.status
+
+    async def _maybe_reprobe_vlm_image_capability(self) -> None:
+        """Lazily re-probe the VLM role while its capability is still ``unknown``."""
+        if self._vlm_image_status != "unknown":
+            return
+        await self._probe_vlm_image_capability()
+
+    async def _probe_rerank_image_capability(self) -> None:
+        """Resolve the rerank scoring model's image capability once at startup.
 
         Only the ``chat_llm_reranker`` strategy sends image blocks to a scoring
         model, so probing is skipped entirely for other strategies (and when
-        reranking is disabled). Uses the same transport-acceptance probe as the
-        answer path. Stored on this manager instance so SDK callers can run
-        multiple managers with different model configs in one process.
+        reranking is disabled). Stored on this manager instance so SDK callers can
+        run multiple managers with different model configs in one process.
         """
         if self._rerank_supports_vision is not None:
-            return  # already probed
+            return
         if not (
             self._config.rerank.enabled and self._config.rerank.strategy == "chat_llm_reranker"
         ):
             return  # no rerank model consumes image input; nothing to probe
 
-        from dlightrag.core.vision_probe import probe_image_capability
         from dlightrag.models.llm import get_chat_rerank_scoring_config
-        from dlightrag.models.providers import get_provider
 
-        rerank_model = get_chat_rerank_scoring_config(self._config)
-        provider: Any = None
-        try:
-            provider = get_provider(
-                rerank_model.provider,
-                api_key=rerank_model.api_key,
-                base_url=rerank_model.base_url,
-                timeout=rerank_model.timeout,
-                max_retries=rerank_model.max_retries,
-            )
-            outcome = await probe_image_capability(
-                provider,
-                model=rerank_model.model,
-                ceiling=1,
-                model_kwargs=rerank_model.model_kwargs,
-            )
-            self._rerank_supports_vision = {"supported": True, "unsupported": False}.get(
-                outcome.status
-            )
-            logger.info(
-                "Rerank model image probe: status=%s (model=%s, provider=%s)",
-                outcome.status,
-                rerank_model.model,
-                rerank_model.provider,
-            )
-        except Exception:
-            logger.debug("Rerank model image probe failed", exc_info=True)
-            self._rerank_supports_vision = None
-        finally:
-            if provider is not None:
-                await provider.aclose()
+        outcome = await self._image_capabilities.resolve(
+            get_chat_rerank_scoring_config(self._config)
+        )
+        self._rerank_supports_vision = {"supported": True, "unsupported": False}.get(outcome.status)
 
     async def astart_ingest_job(
         self,
@@ -940,11 +903,20 @@ class RAGServiceManager:
         return self._answer_synthesizer
 
     def _answer_image_policy(self) -> AnswerImagePolicy:
-        """Compose the one Answer transport policy from config and capability."""
-        answer = self._config.answer
+        """Compose the Answer transport policy for the answer model's own capability."""
         capability = self._answer_image_capability
+        return self._image_policy(capability.effective_max_images if capability is not None else 0)
+
+    def _vlm_image_policy(self) -> AnswerImagePolicy:
+        """Compose the same transport policy for the VLM role's own capability."""
+        return self._image_policy(
+            derive_effective_max_images(self._vlm_image_status, int(self._config.answer.max_images))
+        )
+
+    def _image_policy(self, max_images: int) -> AnswerImagePolicy:
+        answer = self._config.answer
         return AnswerImagePolicy(
-            max_images=capability.effective_max_images if capability is not None else 0,
+            max_images=max_images,
             max_total_bytes=answer.image_max_total_bytes,
             max_bytes_per_image=answer.image_max_bytes,
             max_pixels=answer.image_max_pixels,
@@ -1030,18 +1002,20 @@ class RAGServiceManager:
             self._query_tool_model = create_query_tool_model(self._config)
         return self._query_tool_model
 
-    async def _aget_query_image_describer(self) -> QueryImageDescriber:
-        """Lazy-create the VLM query-image describer."""
-        async with self._query_image_describer_lock:
-            if self._query_image_describer is None:
-                from dlightrag.core.request.images import QueryImageDescriber
+    def _query_image_describer(self) -> QueryImageDescriber:
+        """Build a describer bound to the VLM role's current image capability.
 
-                self._query_image_describer = QueryImageDescriber(
-                    vlm_func=self._get_or_create_vlm_func(),
-                    max_images=MAX_QUERY_IMAGES,
-                    image_policy=self._answer_image_policy(),
-                )
-        return self._query_image_describer
+        The describer holds only the shared VLM callable, a policy, and a count,
+        so it is composed per request instead of cached: a lazy re-probe that
+        settles ``unknown`` then takes effect immediately.
+        """
+        from dlightrag.core.request.images import QueryImageDescriber
+
+        return QueryImageDescriber(
+            vlm_func=self._get_or_create_vlm_func(),
+            max_images=MAX_QUERY_IMAGES if self._vlm_image_status == "supported" else 0,
+            image_policy=self._vlm_image_policy(),
+        )
 
     def _get_or_create_vlm_func(self) -> Callable[..., Any]:
         if self._closed:
@@ -1283,9 +1257,11 @@ class RAGServiceManager:
                 ) as trace:
                     descriptions = image_descriptions
                     if descriptions is None:
+                        if current_images:
+                            await self._maybe_reprobe_vlm_image_capability()
                         descriptions = await prepare_query_images(
                             query_images=current_images,
-                            describer=await self._aget_query_image_describer(),
+                            describer=self._query_image_describer(),
                         )
                     plan = await self._plan_retrieval(
                         query,
@@ -1380,6 +1356,8 @@ class RAGServiceManager:
         )
 
         web_search = self._get_web_search()
+        if resources:
+            await self._maybe_reprobe_vlm_image_capability()
         registry, resource_tools = self._build_resource_context(
             remaining_resources, web_search=web_search
         )
@@ -1401,7 +1379,7 @@ class RAGServiceManager:
                     return image_descriptions
                 result = await prepare_query_images(
                     query_images=current_images,
-                    describer=await self._aget_query_image_describer(),
+                    describer=self._query_image_describer(),
                 )
                 image_descriptions[:] = result
                 return image_descriptions
@@ -1565,10 +1543,10 @@ class RAGServiceManager:
 
     async def _materialize_link_image(self, url: str) -> bytes | None:
         """Fetch a current-image link under SSRF revalidation; None if it fails."""
-        from dlightrag.sourcing.url import afetch_public_https_bytes, validate_public_https_url
+        from dlightrag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
 
         try:
-            validate_public_https_url(url, resolve_host=True)
+            await avalidate_public_https_url(url)
             return await afetch_public_https_bytes(
                 url,
                 max_bytes=self._config.answer.image_max_bytes,
@@ -1608,20 +1586,17 @@ class RAGServiceManager:
         for resource in resources or []:
             registry.register(resource)
 
-        capability = self._answer_image_capability
-        # A zero effective ceiling leaves no image slot, so an inspector built on
-        # that policy could only ever fail -- withhold the tool instead.
-        visual_supported = (
-            capability is not None
-            and capability.status == "supported"
-            and capability.effective_max_images > 0
-        )
+        # Visual inspection is a VLM-role capability: a text-only answer model
+        # must not withdraw it, and a zero effective ceiling leaves no image slot,
+        # so an inspector built on that policy could only ever fail.
+        vlm_policy = self._vlm_image_policy()
+        visual_supported = self._vlm_image_status == "supported" and vlm_policy.max_images > 0
         inspector: ResourceInspector | None = None
         if visual_supported:
             inspector = ResourceInspector(
                 registry,
                 vlm_func=self._get_or_create_vlm_func(),
-                image_policy=self._answer_image_policy(),
+                image_policy=vlm_policy,
             )
         tools = build_resource_tools(
             registry,
@@ -1942,8 +1917,7 @@ class RAGServiceManager:
         if self._warmups:
             await asyncio.gather(*self._warmups, return_exceptions=True)
 
-        async with self._query_image_describer_lock:
-            self._query_image_describer = None
+        async with self._vlm_func_lock:
             self._vlm_func = None
             vlm_closers, self._vlm_closers = self._vlm_closers, []
 

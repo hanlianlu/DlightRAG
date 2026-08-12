@@ -161,7 +161,7 @@ async def test_request_scope_starts_workspace_warmup_before_planning(test_cfg) -
     manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
     describer = AsyncMock()
     describer.describe.return_value = []
-    manager._aget_query_image_describer = AsyncMock(  # type: ignore[method-assign]
+    manager._query_image_describer = MagicMock(  # type: ignore[method-assign]
         return_value=describer
     )
     manager._plan_retrieval = AsyncMock(  # type: ignore[method-assign]
@@ -1861,13 +1861,11 @@ async def test_vision_probe_result_is_manager_scoped(
     monkeypatch.setattr("dlightrag.models.providers.get_provider", MagicMock(return_value=provider))
     monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", probe)
 
-    await second._probe_vision_support()
+    await second._probe_rerank_image_capability()
 
     assert first._rerank_supports_vision is False
     assert second._rerank_supports_vision is True
-    probe.assert_awaited_once_with(
-        provider, model="gpt-5.4-mini", ceiling=1, model_kwargs=model_kwargs
-    )
+    probe.assert_awaited_once_with(provider, model="gpt-5.4-mini", model_kwargs=model_kwargs)
 
 
 async def test_rerank_vision_probe_does_not_borrow_default_key(
@@ -1898,7 +1896,7 @@ async def test_rerank_vision_probe_does_not_borrow_default_key(
         AsyncMock(return_value=ImageProbeOutcome(status="supported")),
     )
 
-    await manager._probe_vision_support()
+    await manager._probe_rerank_image_capability()
 
     provider_factory.assert_called_once_with(
         "openai",
@@ -1924,7 +1922,7 @@ class TestDegradedMode:
         )
         for name in (
             "_start_ingest_job_recovery",
-            "_probe_vision_support",
+            "_probe_role_image_capabilities",
         ):
             monkeypatch.setattr(RAGServiceManager, name, AsyncMock())
 
@@ -2411,13 +2409,14 @@ class TestAgenticAnswerCapability:
             model="vision-test",
             failure_kind=None,
         )
+        manager._vlm_image_status = "supported"
         provider = SimpleNamespace(aclose=AsyncMock())
         provider_factory = MagicMock(return_value=provider)
         inspector = MagicMock()
         monkeypatch.setattr("dlightrag.models.llm.get_provider", provider_factory)
         monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
 
-        describer = await manager._aget_query_image_describer()
+        describer = manager._query_image_describer()
         registry, _tools = manager._build_resource_context(
             [ResourceInput(content=b"payload")],
             web_search=None,
@@ -2527,6 +2526,7 @@ class TestAgenticAnswerCapability:
             model="vision-test",
             failure_kind=None,
         )
+        manager._vlm_image_status = "supported"
         manager._answer_synthesizer = MagicMock()
         monkeypatch.setattr(
             "dlightrag.models.llm.get_vlm_model_func",
@@ -2564,23 +2564,16 @@ class TestAgenticAnswerCapability:
             f"[current image 1 | resource: {init['resource_manifest'][0].resource_id}]"
         )
         assert image_blocks[1]["type"] == "image_url"
-        assert inspector.call_args.kwargs["image_policy"].max_images == 2
+        # Inspection rides the VLM role's own capability and the deployment
+        # ceiling, not the answer model's narrower effective image count.
+        assert inspector.call_args.kwargs["image_policy"].max_images == test_cfg.answer.max_images
 
     def test_supported_with_zero_image_ceiling_withholds_visual_inspection(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from dlightrag.core.answer.capability import AnswerImageCapability
-
+        test_cfg.answer.max_images = 0
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_image_capability = AnswerImageCapability(
-            status="supported",
-            configured_ceiling=0,
-            effective_max_images=0,
-            provider="test",
-            base_url=None,
-            model="vision-test",
-            failure_kind=None,
-        )
+        manager._vlm_image_status = "supported"
         monkeypatch.setattr(
             "dlightrag.models.llm.get_vlm_model_func",
             MagicMock(return_value=AsyncMock(return_value="visual evidence")),
@@ -2725,7 +2718,7 @@ class TestAgenticAnswerCapability:
         )
         describer = AsyncMock()
         describer.describe.return_value = ["Image 1: chart"]
-        manager._aget_query_image_describer = AsyncMock(  # type: ignore[method-assign]
+        manager._query_image_describer = MagicMock(  # type: ignore[method-assign]
             return_value=describer
         )
         model = AsyncMock(

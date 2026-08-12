@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """URL-backed data source for remote document ingestion."""
 
+import asyncio
 import fnmatch
 import inspect
 import ipaddress
@@ -180,7 +181,6 @@ class URLDataSource(AsyncDataSource):
             await _follow_and_consume(
                 client,
                 url,
-                resolve_host=True,
                 allow_private_hosts=self._allow_private_hosts,
                 consume=_consume,
             )
@@ -235,6 +235,29 @@ def _validate_public_https_url(
     resolve_host: bool = False,
     allow_private_hosts: frozenset[str] = frozenset(),
 ) -> str:
+    pending = _static_url_checks(raw_url, allow_private_hosts)
+    if resolve_host and pending is not None:
+        _validate_resolved_public_host(*pending)
+    return raw_url
+
+
+async def _avalidate_public_https_url(
+    raw_url: str,
+    *,
+    allow_private_hosts: frozenset[str] = frozenset(),
+) -> str:
+    """Validate *raw_url* with the blocking DNS lookup on a worker thread."""
+    pending = _static_url_checks(raw_url, allow_private_hosts)
+    if pending is not None:
+        await asyncio.to_thread(_validate_resolved_public_host, *pending)
+    return raw_url
+
+
+def _static_url_checks(
+    raw_url: str,
+    allow_private_hosts: frozenset[str],
+) -> tuple[str, int] | None:
+    """Apply every non-DNS check; return the host/port still needing resolution."""
     parsed = urlparse(raw_url)
     if parsed.scheme.lower() != "https":
         raise ValueError("url ingestion only accepts https URLs")
@@ -245,19 +268,17 @@ def _validate_public_https_url(
 
     host = _normalize_host(parsed.hostname)
     if _host_allowed_private(host, allow_private_hosts):
-        return raw_url
+        return None
     if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
         raise ValueError("url ingestion requires a public host")
 
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        if resolve_host:
-            _validate_resolved_public_host(host, parsed.port or 443)
-        return raw_url
+        return (host, parsed.port or 443)
     if not ip.is_global:
         raise ValueError("url ingestion requires a public host")
-    return raw_url
+    return None
 
 
 def _validate_resolved_public_host(host: str, port: int) -> None:
@@ -273,20 +294,18 @@ def _validate_resolved_public_host(host: str, port: int) -> None:
             raise ValueError("url ingestion requires a public host")
 
 
-def _redirect_target(
+async def _redirect_target(
     current_url: str,
     response: Any,
     *,
-    resolve_host: bool,
     allow_private_hosts: frozenset[str],
 ) -> str:
     headers = getattr(response, "headers", {}) or {}
     location = headers.get("location") or headers.get("Location")
     if not location:
         raise ValueError("url redirect is missing Location header")
-    return _validate_public_https_url(
+    return await _avalidate_public_https_url(
         urljoin(current_url, str(location)),
-        resolve_host=resolve_host,
         allow_private_hosts=allow_private_hosts,
     )
 
@@ -295,7 +314,6 @@ async def _follow_and_consume[T](
     client: Any,
     url: str,
     *,
-    resolve_host: bool,
     allow_private_hosts: frozenset[str],
     consume: Callable[[Any], Awaitable[T]],
 ) -> T:
@@ -308,10 +326,9 @@ async def _follow_and_consume[T](
     for _ in range(_MAX_REDIRECTS + 1):
         async with client.stream("GET", current_url) as response:
             if response.status_code in _REDIRECT_STATUSES:
-                current_url = _redirect_target(
+                current_url = await _redirect_target(
                     current_url,
                     response,
-                    resolve_host=resolve_host,
                     allow_private_hosts=allow_private_hosts,
                 )
                 continue
@@ -342,7 +359,7 @@ async def afetch_public_https_bytes(
     """
     patterns = _normalize_host_patterns(allow_private_hosts or ())
     owns_client = client is None
-    validated = _validate_public_https_url(url, resolve_host=True, allow_private_hosts=patterns)
+    validated = await _avalidate_public_https_url(url, allow_private_hosts=patterns)
     active = client or httpx.AsyncClient(follow_redirects=False, timeout=httpx.Timeout(timeout))
     limit = max(1, int(max_bytes))
 
@@ -353,7 +370,6 @@ async def afetch_public_https_bytes(
         return await _follow_and_consume(
             active,
             validated,
-            resolve_host=True,
             allow_private_hosts=patterns,
             consume=_read,
         )
@@ -413,9 +429,20 @@ def validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> st
 
     Rejects non-HTTPS schemes, embedded credentials, and localhost/``.local``/
     private/non-global IP-literal hosts. With ``resolve_host=True`` the hostname
-    is additionally resolved and every address checked (blocking DNS lookup).
+    is additionally resolved and every address checked (blocking DNS lookup);
+    async callers use :func:`avalidate_public_https_url` instead.
     """
     return _validate_public_https_url(raw_url, resolve_host=resolve_host)
+
+
+async def avalidate_public_https_url(raw_url: str) -> str:
+    """Full public-HTTPS validation for async callers, DNS included.
+
+    Identical policy to :func:`validate_public_https_url` with ``resolve_host``,
+    but the blocking name resolution runs on a worker thread so one slow or
+    unreachable host cannot stall the event loop.
+    """
+    return await _avalidate_public_https_url(raw_url)
 
 
 def validate_public_web_url(raw_url: str) -> str:

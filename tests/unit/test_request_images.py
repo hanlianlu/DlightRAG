@@ -28,6 +28,7 @@ def _describer(vlm, *, max_images: int, max_bytes: int = 10_000, max_px: int = 6
         vlm_func=vlm,
         max_images=max_images,
         image_policy=answer_image_policy(
+            max_images=max_images,
             max_total_bytes=max_bytes,
             max_bytes_per_image=max_bytes,
             max_px=max_px,
@@ -56,8 +57,8 @@ async def test_query_image_describer_returns_descriptions() -> None:
     assert content[0]["type"] == "image_url"
 
 
-async def test_query_image_describer_is_independent_of_the_answer_image_ceiling() -> None:
-    """The VLM role describes images even when the answer model takes none."""
+async def test_query_image_describer_declines_without_an_image_slot() -> None:
+    """A VLM role with no confirmed image capability describes nothing."""
     vlm = AsyncMock(return_value="a line chart")
     describer = QueryImageDescriber(
         vlm_func=vlm,
@@ -67,7 +68,8 @@ async def test_query_image_describer_is_independent_of_the_answer_image_ceiling(
 
     descriptions = await describer.describe([_image_block(), _image_block()])
 
-    assert descriptions == ["Image 1: a line chart", "Image 2: a line chart"]
+    assert descriptions == []
+    vlm.assert_not_awaited()
 
 
 async def test_query_image_describer_is_best_effort() -> None:
@@ -110,10 +112,26 @@ async def test_query_image_describer_describes_images_concurrently() -> None:
 
 
 async def test_query_image_descriptions_keep_sparse_ordinals() -> None:
-    vlm = AsyncMock(side_effect=[RuntimeError("first failed"), "second image"])
+    # Images are described concurrently, so the fake VLM decides by the image it
+    # receives rather than by call order.
+    failing = _image_data_uri(Image.new("RGB", (8, 8), "black"))
+    succeeding = _image_data_uri(Image.new("RGB", (32, 32), "white"))
+
+    async def vlm(*, messages, **_kwargs) -> str:
+        raw, _ = decode_image_base64(messages[0]["content"][0]["image_url"]["url"])
+        with Image.open(io.BytesIO(raw)) as image:
+            if image.size == (8, 8):
+                raise RuntimeError("first failed")
+        return "second image"
+
     describer = _describer(vlm, max_images=2)
 
-    descriptions = await describer.describe([_image_block(), _image_block()])
+    descriptions = await describer.describe(
+        [
+            {"type": "image_url", "image_url": {"url": failing}},
+            {"type": "image_url", "image_url": {"url": succeeding}},
+        ]
+    )
 
     assert descriptions == ["Image 2: second image"]
 

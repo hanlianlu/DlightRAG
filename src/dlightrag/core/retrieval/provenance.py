@@ -177,7 +177,9 @@ async def _provenance_from_block_sidecar(
 
     cache_key = artifact_dir.resolve()
     if cache_key not in block_index_cache:
-        block_index_cache[cache_key] = load_block_provenance_index(cache_key)
+        block_index_cache[cache_key] = await asyncio.to_thread(
+            load_block_provenance_index, cache_key
+        )
     return first_provenance_for_blocks(block_ids, block_index_cache[cache_key])
 
 

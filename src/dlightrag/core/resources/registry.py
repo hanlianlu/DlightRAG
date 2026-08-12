@@ -46,6 +46,7 @@ from dlightrag.core.resources.text import build_text_windows, decode_text
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.sourcing.url import (
     afetch_public_https_bytes,
+    avalidate_public_https_url,
     normalize_https_url_identity,
     validate_public_https_url,
 )
@@ -317,7 +318,7 @@ class ResourceRegistry:
         # Focus reorders the read sequence without changing any window's bytes or
         # the <=16K contract. Visual handles ride the first *returned* window so
         # they are never lost when focus selects a nonzero physical window.
-        order = _focus_order(windows, effective_focus)
+        order = await asyncio.to_thread(_focus_order, windows, effective_focus)
         position = min(position, len(order) - 1)
         locator, chunk = windows[order[position]]
         has_more = position + 1 < len(order)
@@ -351,8 +352,9 @@ class ResourceRegistry:
         if is_convertible(resource.filename, resource.declared_mime):
             converted = await self._ensure_converted(resource, content)
             return converted.windows, converted.handles
-        text = decode_text(content, declared_charset=_charset_of(resource.declared_mime))
-        return build_text_windows(text), ()
+        return await asyncio.to_thread(
+            _decode_to_windows, content, _charset_of(resource.declared_mime)
+        ), ()
 
     async def _read_link_windows(
         self, resource: _Registered
@@ -368,7 +370,7 @@ class ResourceRegistry:
         url = resource.url
         if url is None:  # pragma: no cover - only link resources are routed here
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no link")
-        validate_public_https_url(url, resolve_host=True)
+        await avalidate_public_https_url(url)
         try:
             content = await self._materialize_fetched(
                 resource.resource_id, lambda: self._fetch_link(url)
@@ -405,7 +407,7 @@ class ResourceRegistry:
             self._visual_assets[visual.handle_id] = visual
             handles.append(VisualHandle(handle_id=visual.handle_id, label=visual.anchor))
         entry = _ConvertedResource(
-            windows=build_text_windows(converted.text),
+            windows=await asyncio.to_thread(build_text_windows, converted.text),
             handles=tuple(handles),
         )
         self._converted[resource.resource_id] = entry
@@ -487,7 +489,7 @@ class ResourceRegistry:
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no content")
         # Per-read SSRF revalidation: rerun full scheme/credential/host/DNS checks
         # even when bytes are already cached from an earlier read.
-        validate_public_https_url(url, resolve_host=True)
+        await avalidate_public_https_url(url)
         return await self._materialize_fetched(resource.resource_id, lambda: self._fetch_link(url))
 
     async def _fetch_link(self, url: str) -> bytes:
@@ -580,7 +582,7 @@ class ResourceRegistry:
             self._fallback_tasks.pop(resource_id, None)
             if text and text.strip() and resource_id not in self._text_views:
                 self._text_views[resource_id] = _ConvertedResource(
-                    windows=build_text_windows(text), handles=()
+                    windows=await asyncio.to_thread(build_text_windows, text), handles=()
                 )
             return self._text_views.get(resource_id)
 
@@ -656,6 +658,13 @@ def _charset_of(declared_mime: str | None) -> str | None:
         if key.strip().lower() == "charset" and value:
             return value.strip().strip('"')
     return None
+
+
+def _decode_to_windows(
+    content: bytes, declared_charset: str | None
+) -> list[tuple[TextWindowLocator, str]]:
+    """Decode and window one direct-text resource in a single worker-thread hop."""
+    return build_text_windows(decode_text(content, declared_charset=declared_charset))
 
 
 __all__ = ["InspectionTarget", "ResourceRegistry", "ResourceRegistryClosedError", "UrlTextFallback"]

@@ -1,15 +1,30 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Startup image capability probes for answer and rerank models.
+"""Startup image capability probes for every image-bearing model role.
 
 ``probe_image_capability`` sends one small 16×16 PNG and treats transport
 acceptance as the signal -- a completed request means the model accepts
 ``image_url`` blocks -- returning a tri-state outcome. The reply text is
-deliberately not inspected. Both the answer path and the rerank path use it.
-Results are recorded on the owning ``RAGServiceManager`` (never on the provider).
+deliberately not inspected. ``ModelImageCapabilities`` owns the shared cache:
+answer, VLM, and rerank are separate role facts, but two roles that resolve to
+the same model configuration share one probe. Results are recorded on the owning
+``RAGServiceManager`` (never on the provider) and never persisted.
 """
 
+import asyncio
+import hashlib
+import hmac
+import json
+import logging
+import secrets
+import time
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from dlightrag.config import ModelConfig
+
+logger = logging.getLogger(__name__)
 
 type ImageCapabilityStatus = Literal["supported", "unsupported", "unknown"]
 
@@ -23,9 +38,10 @@ _PROBE_IMAGE_PNG_B64 = (
 )
 _PROBE_IMAGE_DATA_URI = f"data:image/png;base64,{_PROBE_IMAGE_PNG_B64}"
 _VISION_PROBE_MAX_TOKENS = 512
+_REPROBE_COOLDOWN_SECONDS = 60.0
 
 
-__all__ = ["ImageCapabilityStatus", "probe_image_capability"]
+__all__ = ["ImageCapabilityStatus", "ModelImageCapabilities", "probe_image_capability"]
 
 
 _UNSUPPORTED_MARKERS = (
@@ -61,7 +77,6 @@ async def probe_image_capability(
     provider: Any,
     *,
     model: str,
-    ceiling: int,
     model_kwargs: dict[str, Any] | None = None,
 ) -> ImageProbeOutcome:
     """Probe whether *model* accepts ``image_url`` blocks.
@@ -74,11 +89,10 @@ async def probe_image_capability(
     succeeds -- for a harmful false negative that blocks a genuinely capable
     model whose phrasing failed to match. Explicit provider rejections classify
     as ``unsupported``; timeouts / 401 / 429 / 5xx / unclassified errors classify
-    as ``unknown`` (never ``unsupported``). A non-positive ``ceiling`` short
-    circuits to ``unsupported`` with ``config_disabled`` and no model call.
+    as ``unknown`` (never ``unsupported``). The result is a pure model fact: a
+    deployment's own image ceiling is applied by the role that owns it, never
+    here, so a disabled ceiling cannot poison a configuration another role shares.
     """
-    if ceiling <= 0:
-        return ImageProbeOutcome(status="unsupported", failure_kind="config_disabled")
     content: list[dict[str, Any]] = [
         {"type": "text", "text": "This is an image-capability probe."},
         {"type": "image_url", "image_url": {"url": _PROBE_IMAGE_DATA_URI}},
@@ -94,3 +108,92 @@ async def probe_image_capability(
     except Exception as exc:  # noqa: BLE001 - classification is the probe's job
         return _classify_error(exc)
     return ImageProbeOutcome(status="supported")
+
+
+class ModelImageCapabilities:
+    """Probe each distinct resolved model configuration once and share the outcome.
+
+    Answer, VLM, and chat rerank are separate role facts because they may resolve
+    to different models, but a fact is a property of the configuration, not of the
+    role: two roles that resolve to the same provider, endpoint, model, credential,
+    and model kwargs share one probe. ``supported`` and ``unsupported`` are
+    terminal for the process; only ``unknown`` is re-probed, at most once per
+    cooldown window, under a per-configuration single-flight lock.
+    """
+
+    def __init__(self, *, reprobe_cooldown_seconds: float = _REPROBE_COOLDOWN_SECONDS) -> None:
+        self._cooldown_seconds = reprobe_cooldown_seconds
+        # The credential is folded into the identity through a process-local HMAC
+        # so two genuinely different configurations stay distinct without keeping
+        # a reversible copy of the key in this cache.
+        self._identity_secret = secrets.token_bytes(32)
+        self._outcomes: dict[str, ImageProbeOutcome] = {}
+        self._last_probe: dict[str, float] = {}
+        self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+    async def resolve(self, cfg: ModelConfig) -> ImageProbeOutcome:
+        """Return the image capability of *cfg*, probing only when it is not settled."""
+        identity = self._identity(cfg)
+        cached = self._outcomes.get(identity)
+        if cached is not None and cached.status != "unknown":
+            return cached
+        async with self._locks[identity]:
+            cached = self._outcomes.get(identity)
+            if cached is not None and cached.status != "unknown":
+                return cached
+            now = time.monotonic()
+            last = self._last_probe.get(identity)
+            if cached is not None and last is not None and now - last < self._cooldown_seconds:
+                return cached
+            self._last_probe[identity] = now
+            outcome = await self._probe(cfg)
+            self._outcomes[identity] = outcome
+            return outcome
+
+    async def _probe(self, cfg: ModelConfig) -> ImageProbeOutcome:
+        from dlightrag.models.providers import get_provider
+
+        provider: Any = None
+        try:
+            provider = get_provider(
+                cfg.provider,
+                api_key=cfg.api_key,
+                base_url=cfg.base_url,
+                timeout=cfg.timeout,
+                max_retries=cfg.max_retries,
+            )
+            outcome = await probe_image_capability(
+                provider,
+                model=cfg.model,
+                model_kwargs=cfg.model_kwargs or None,
+            )
+        except Exception:
+            logger.debug("Image capability probe failed", exc_info=True)
+            outcome = ImageProbeOutcome(status="unknown", failure_kind="probe_error")
+        finally:
+            if provider is not None:
+                await provider.aclose()
+        logger.info(
+            "Image capability probe: status=%s model=%s provider=%s",
+            outcome.status,
+            cfg.model,
+            cfg.provider,
+        )
+        return outcome
+
+    def _identity(self, cfg: ModelConfig) -> str:
+        payload = json.dumps(
+            [
+                cfg.provider,
+                cfg.base_url,
+                cfg.model,
+                cfg.model_kwargs,
+            ],
+            sort_keys=True,
+            default=str,
+        )
+        return hmac.new(
+            self._identity_secret,
+            f"{payload}\0{cfg.api_key or ''}".encode(),
+            hashlib.sha256,
+        ).hexdigest()

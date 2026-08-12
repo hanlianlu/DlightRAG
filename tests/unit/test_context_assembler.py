@@ -3,6 +3,8 @@
 
 from typing import Any
 
+import pytest
+
 from dlightrag.core.agent.context import ContextAssembler
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.memory.conversation import PriorTurns
@@ -53,19 +55,45 @@ def _ledger(passages: int, *, chars: int = 2_000) -> EvidenceLedger:
     return evidence
 
 
-def test_a_long_conversation_sheds_turns_instead_of_overflowing() -> None:
+async def test_a_long_conversation_sheds_turns_instead_of_overflowing() -> None:
     history = _long_history(40)
-    messages = _assembler(history).control_turn(evidence=_ledger(0), episode=RunEpisode())
+    messages = await _assembler(history).control_turn(evidence=_ledger(0), episode=RunEpisode())
 
     replayed = [message for message in messages if message["role"] in {"user", "assistant"}]
     assert len(replayed) < len(history)
 
 
-def test_evidence_keeps_its_share_when_the_conversation_is_long() -> None:
+async def test_evidence_keeps_its_share_when_the_conversation_is_long() -> None:
     evidence = _ledger(5)
-    messages = _assembler(_long_history(40)).control_turn(evidence=evidence, episode=RunEpisode())
+    messages = await _assembler(_long_history(40)).control_turn(
+        evidence=evidence, episode=RunEpisode()
+    )
 
     packed = str(messages[-1])
     # Old chat turns go first: a long conversation must not squeeze evidence out of the window.
     assert "passage 4" in packed
     assert "Knowledge-base evidence" in packed
+
+
+async def test_research_turn_packing_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from dlightrag.core.agent import context as context_module
+
+    loop_thread = threading.get_ident()
+    estimator_threads: list[int] = []
+    real_estimate = context_module.estimate_messages_tokens
+
+    def estimate(messages: list[dict[str, Any]]) -> int:
+        estimator_threads.append(threading.get_ident())
+        return real_estimate(messages)
+
+    monkeypatch.setattr(context_module, "estimate_messages_tokens", estimate)
+    assembler = _assembler(_long_history(2))
+
+    await assembler.control_turn(evidence=_ledger(3), episode=RunEpisode())
+    await assembler.answer_turn(evidence=_ledger(3), episode=RunEpisode())
+
+    assert estimator_threads and loop_thread not in estimator_threads

@@ -41,9 +41,7 @@ class QueryImageDescriber:
             block = image_url_block(image)
             if block is None:
                 return None
-            # The VLM role describes one image per call, whatever the answer
-            # model's own image capability turned out to be.
-            budget = self._image_policy.new_budget(max_images=1)
+            budget = self._image_policy.new_budget()
             bounded_block = await asyncio.to_thread(
                 budget.add_user_image,
                 block,

@@ -625,7 +625,7 @@ class RAGService:
         )
         self._document_embedder = document_embedder
 
-        # Vision probe lives in RAGServiceManager._probe_vision_support()
+        # Vision probe lives in RAGServiceManager._probe_rerank_image_capability()
         # — it runs once at server startup, not per workspace.
 
         # LightRAG configuration.

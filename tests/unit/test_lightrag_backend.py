@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from PIL import Image
 
 from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
@@ -180,6 +181,60 @@ async def test_provenance_hydrates_text_chunk_page_from_lightrag_block_sidecar(
     assert "page_idx" not in result.contexts["chunks"][0]
     assert "bbox" not in result.contexts["chunks"][0]
     assert result.contexts["chunks"][0]["full_doc_id"] == "doc-1"
+
+
+async def test_sidecar_provenance_index_loading_runs_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from dlightrag.core.retrieval import provenance as provenance_module
+
+    parsed_dir = tmp_path / "sample.parsed"
+    parsed_dir.mkdir()
+    (parsed_dir / "sample.blocks.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "content",
+                "blockid": "block-1",
+                "content": "body",
+                "positions": [{"type": "bbox", "anchor": 1, "range": [1, 2, 3, 4]}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    loop_thread = threading.get_ident()
+    load_threads: list[int] = []
+    real_load = provenance_module.load_block_provenance_index
+
+    def load(*args: object, **kwargs: object) -> object:
+        load_threads.append(threading.get_ident())
+        return real_load(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(provenance_module, "load_block_provenance_index", load)
+    stores = _stores(
+        raw_chunks=[
+            {
+                "id": "txt1",
+                "content": "alpha",
+                "file_path": "/docs/a.pdf",
+                "full_doc_id": "doc-1",
+                "sidecar": {
+                    "type": "block",
+                    "id": "block-1",
+                    "refs": [{"type": "block", "id": "block-1"}],
+                },
+            }
+        ],
+        full_doc={"sidecar_location": parsed_dir.as_uri()},
+    )
+
+    chunks = [{"chunk_id": "txt1", "content": "alpha", "file_path": "/docs/a.pdf"}]
+    await hydrate_lightrag_chunk_provenance(stores, chunks, include_image_data=False)
+
+    assert chunks[0]["page_number"] == 1
+    assert load_threads and loop_thread not in load_threads
 
 
 async def test_provenance_hydrates_multimodal_chunk_page_from_sidecar_item(

@@ -36,23 +36,16 @@ class AnswerImagePolicy:
     min_quality: int
     context_window_tokens: int
 
-    def new_budget(
-        self,
-        *,
-        max_images: int | None = None,
-        max_px: int | None = None,
-    ) -> AnswerImageBudget:
+    def new_budget(self, *, max_px: int | None = None) -> AnswerImageBudget:
         """Create a fresh mutable budget for one run or provider call.
 
-        ``max_images`` and ``max_px`` override this budget's limits explicitly --
-        an override is deliberate, not a clamp, so it may sit above the policy
-        value (``QueryImageDescriber`` runs on the separate VLM role and always
-        describes one image). The policy is frozen and every budget starts with
-        zeroed counters.
+        ``max_px`` lowers the per-image edge for a specific call (a multi-page
+        overview packs more pages by shrinking each one). The policy is frozen and
+        every budget starts with zeroed counters.
         """
         edge = self.max_px if max_px is None else max(1, max_px)
         return AnswerImageBudget(
-            max_images=self.max_images if max_images is None else max(0, max_images),
+            max_images=self.max_images,
             max_total_bytes=self.max_total_bytes,
             max_bytes_per_image=self.max_bytes_per_image,
             max_pixels=self.max_pixels,

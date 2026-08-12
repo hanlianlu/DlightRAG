@@ -453,3 +453,39 @@ async def test_afetch_rejects_redirect_hostname_that_resolves_private(
         )
 
     assert client.urls == ["https://public.example/start.txt"]
+
+
+async def test_public_url_dns_validation_runs_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from dlightrag.sourcing.url import avalidate_public_https_url
+
+    loop_thread = threading.get_ident()
+    resolver_threads: list[int] = []
+
+    def resolver(host: str, port: int, *args: object, **kwargs: object):
+        resolver_threads.append(threading.get_ident())
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+
+    assert await avalidate_public_https_url("https://public.example/doc.pdf") == (
+        "https://public.example/doc.pdf"
+    )
+    assert resolver_threads and loop_thread not in resolver_threads
+
+
+async def test_async_public_url_validation_still_rejects_private_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.sourcing.url import avalidate_public_https_url
+
+    def resolver(host: str, port: int, *args: object, **kwargs: object):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+
+    with pytest.raises(ValueError, match="public"):
+        await avalidate_public_https_url("https://private.example/doc.pdf")

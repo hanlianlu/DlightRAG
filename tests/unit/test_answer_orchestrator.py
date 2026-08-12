@@ -10,8 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
-from dlightrag.core.agent.tools import SearchInput
-from dlightrag.core.answer.errors import AnswerInputOverflowError
+from dlightrag.core.agent.tools import SearchInput, build_run_tools
+from dlightrag.core.answer.errors import (
+    INVALID_TOOL_CONFIGURATION,
+    AnswerInputOverflowError,
+    InvalidToolConfigurationError,
+)
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.resources.models import ResourceManifestEntry
@@ -592,8 +596,7 @@ def test_search_tool_input_is_closed_and_nonempty() -> None:
     schema = SearchInput.model_json_schema()["properties"]
 
     assert set(schema) == {"query"}
-    assert "all" not in str(schema)
-    assert "read_page" not in str(schema)
+    assert schema["query"]["description"]
     with pytest.raises(ValidationError):
         SearchInput.model_validate({"query": "   "})
 
@@ -682,6 +685,144 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
     assert "added 1" not in str(agent.final_calls[0])
 
 
+async def test_every_model_visible_tool_field_describes_itself() -> None:
+    from dlightrag.core.memory.evidence import EvidenceLedger
+    from dlightrag.core.resources.tools import build_resource_tools
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    tools, cache = build_run_tools(
+        evidence=EvidenceLedger(),
+        trace={},
+        retrieve_knowledge_base=retrieve,
+        search_web=search,
+        resource_tools=build_resource_tools(
+            cast(Any, None), inspector=cast(Any, object()), visual_supported=True
+        ),
+        register_web_source=None,
+    )
+    await cache.aclose()
+
+    assert {tool.name for tool in tools} == {
+        "search_knowledge_base",
+        "search_web",
+        "read_resource",
+        "inspect_resource",
+    }
+    for tool in tools:
+        properties = tool.definition.parameters["properties"]
+        assert properties, f"{tool.name} exposes no arguments"
+        for field, schema in properties.items():
+            assert schema.get("description"), f"{tool.name}.{field} has no description"
+
+
+async def test_each_tool_execution_emits_one_safe_observation() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        raise RuntimeError("postgresql://user:secret@internal/db")
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    agent = ScriptedAgent(
+        _tool(
+            _call(query="Question", source="knowledge_base", call_id="kb"),
+            _call(query="Question", source="web", call_id="web"),
+        ),
+        _tool(
+            _call(query="Question", source="web", call_id="web-again"),
+            ToolCall(id="ghost", name="search_moon", arguments={"query": "x"}),
+        ),
+        _answer("done"),
+        final_text="Answer [1-1].",
+    )
+    result = await _research(agent, retrieve, search).answer("Question")
+
+    observations = result.trace["tool_observations"]
+    assert [(o["tool"], o["outcome"]) for o in observations] == [
+        ("search_knowledge_base", "failed"),
+        ("search_web", "ok"),
+        ("search_web", "cached"),
+        ("search_moon", "unknown_tool"),
+    ]
+    assert [o["call_id"] for o in observations] == ["kb", "web", "web-again", "ghost"]
+    assert [o["is_error"] for o in observations] == [True, False, False, True]
+    assert all(o["duration_ms"] >= 0 for o in observations)
+    # An observation is metadata about a call, never the payload it moved.
+    assert "secret" not in str(observations)
+    assert "web fact" not in str(observations)
+
+
+async def test_duplicate_tool_names_fail_the_run_before_any_model_call() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    agent = ScriptedAgent(_answer("never reached"))
+    orchestrator = _research(
+        agent,
+        retrieve,
+        search,
+        resource_tools=[_fake_read_tool(), _fake_read_tool("second reader")],
+    )
+
+    with pytest.raises(InvalidToolConfigurationError) as exc:
+        await orchestrator.answer("Question")
+
+    assert exc.value.error_kind == INVALID_TOOL_CONFIGURATION
+    assert "read_resource" in exc.value.public_message
+    assert agent.turn_calls == []
+
+
+async def test_a_tool_error_is_not_convergence_and_is_replayed_for_correction() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        raise RuntimeError("knowledge base unreachable")
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    # The only call in the turn failed, so the turn added nothing -- but an error
+    # is not agreement that the research is done. The model gets the error back
+    # and decides for itself whether to correct or stop.
+    agent = ScriptedAgent(
+        _tool(_call(query="fact", source="knowledge_base", call_id="broken")),
+        _answer("nothing more to try"),
+        final_text="Best effort answer.",
+    )
+    result = await _research(agent, retrieve, search).answer("Question")
+
+    assert len(agent.turn_calls) == 2
+    assert result.trace["agent_stop_reason"] == "model_stop"
+
+
+async def test_a_tool_error_loop_is_still_bounded_by_the_turn_cap() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        raise RuntimeError("knowledge base unreachable")
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result("web fact")
+
+    # An unrecoverable tool cannot spin forever: max_agent_turns stays the only
+    # error-loop safety cap, and the run still answers from what it has.
+    agent = ScriptedAgent(
+        *(
+            _tool(_call(query=f"attempt {index}", source="knowledge_base", call_id=f"c{index}"))
+            for index in range(3)
+        ),
+        final_text="Answered without the knowledge base.",
+    )
+    result = await _research(agent, retrieve, search, max_agent_turns=3).answer("Question")
+
+    assert len(agent.turn_calls) == 3
+    assert result.trace["agent_stop_reason"] == "turn_limit"
+    assert "Answered without the knowledge base." in (result.answer or "")
+
+
 async def test_failed_tool_call_is_evicted_and_can_be_retried() -> None:
     attempts = 0
 
@@ -718,6 +859,7 @@ async def test_knowledge_base_tool_redacts_unexpected_failures() -> None:
 
     agent = ScriptedAgent(
         _tool(_call(query="missing fact", source="knowledge_base")),
+        _answer("cannot recover"),
         final_text="Best effort answer.",
     )
     await _research(
@@ -735,9 +877,12 @@ async def test_knowledge_base_tool_redacts_unexpected_failures() -> None:
         ),
     ).answer("Question")
 
-    transcript = str(agent.final_calls[0])
-    assert "secret" not in transcript
-    assert "knowledge-base search failed" in transcript
+    # The replayed control turn is where the model reads the failure, and it must
+    # carry the sanitized reason instead of the connection string.
+    replayed = str(agent.turn_calls[1])
+    assert "secret" not in replayed
+    assert "knowledge-base search failed" in replayed
+    assert "secret" not in str(agent.final_calls[0])
 
 
 async def test_tool_failure_reaches_the_operator_log(
@@ -751,6 +896,7 @@ async def test_tool_failure_reaches_the_operator_log(
 
     agent = ScriptedAgent(
         _tool(_call(query="missing fact", source="knowledge_base")),
+        _answer("cannot recover"),
         final_text="Best effort answer.",
     )
     with caplog.at_level(logging.WARNING, logger="dlightrag.core.agent.tool_loop"):

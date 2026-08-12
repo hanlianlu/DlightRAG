@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +30,7 @@ class ToolResult:
 
     content: str
     details: dict[str, Any] | None = None
+    cached: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,9 +52,40 @@ class AgentTool:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolObservation:
+    """What one tool execution did, with nothing it carried.
+
+    Tool payloads can hold attachment text, provider responses, and redacted
+    failure detail, so an observation records only the call's shape: which tool
+    ran, how long it took, whether the run had already answered that exact call,
+    and how it ended.
+    """
+
+    tool: str
+    call_id: str
+    outcome: str
+    duration_ms: float
+    cached: bool
+    is_error: bool
+    content_chars: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "tool": self.tool,
+            "call_id": self.call_id,
+            "outcome": self.outcome,
+            "duration_ms": self.duration_ms,
+            "cached": self.cached,
+            "is_error": self.is_error,
+            "content_chars": self.content_chars,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ToolExecution:
     call: ToolCall
     result: ToolResult
+    observation: ToolObservation
     is_error: bool = False
 
 
@@ -88,15 +121,14 @@ class ToolTurnExecutor:
         tools_by_name = {tool.name: tool for tool in tools}
         if assistant.stop_reason == "length":
             results = tuple(
-                ToolExecution(
-                    call=call,
-                    result=ToolResult(
-                        content=(
-                            f'Tool "{call.name}" was not executed because the model hit its '
-                            "output token limit and the arguments may be truncated."
-                        )
+                _error(
+                    call,
+                    (
+                        f'Tool "{call.name}" was not executed because the model hit its '
+                        "output token limit and the arguments may be truncated."
                     ),
-                    is_error=True,
+                    outcome="truncated_arguments",
+                    started=time.perf_counter(),
                 )
                 for call in assistant.tool_calls
             )
@@ -122,27 +154,102 @@ async def _execute_call(
     call: ToolCall,
     tools: dict[str, AgentTool],
 ) -> ToolExecution:
+    from dlightrag.observability import trace_observation
+
+    started = time.perf_counter()
     tool = tools.get(call.name)
     if tool is None:
-        return _error(call, f'Tool "{call.name}" is not available.')
+        return _error(
+            call,
+            f'Tool "{call.name}" is not available.',
+            outcome="unknown_tool",
+            started=started,
+        )
     if call.argument_error:
-        return _error(call, f'Arguments for tool "{call.name}" are invalid: {call.argument_error}')
+        return _error(
+            call,
+            f'Arguments for tool "{call.name}" are invalid: {call.argument_error}',
+            outcome="invalid_arguments",
+            started=started,
+        )
     try:
         arguments = tool.input_model.model_validate(call.arguments)
     except ValidationError as exc:
-        return _error(call, f'Arguments for tool "{call.name}" are invalid: {exc}')
-    try:
-        return ToolExecution(call=call, result=await tool.execute(arguments))
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        # The model only ever sees the message; the traceback belongs to the operator.
-        logger.warning("Agent tool %r failed", call.name, exc_info=True)
-        return _error(call, f'Tool "{call.name}" failed: {exc}')
+        return _error(
+            call,
+            f'Arguments for tool "{call.name}" are invalid: {exc}',
+            outcome="invalid_arguments",
+            started=started,
+        )
+    async with trace_observation(
+        "agent_tool",
+        as_type="tool",
+        metadata={"tool": call.name, "call_id": call.id},
+    ) as span:
+        try:
+            result = await tool.execute(arguments)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The model only ever sees the message; the traceback belongs to the operator.
+            logger.warning("Agent tool %r failed", call.name, exc_info=True)
+            execution = _error(
+                call,
+                f'Tool "{call.name}" failed: {exc}',
+                outcome="failed",
+                started=started,
+            )
+        else:
+            execution = ToolExecution(
+                call=call,
+                result=result,
+                observation=_observe(
+                    call,
+                    outcome="cached" if result.cached else "ok",
+                    started=started,
+                    cached=result.cached,
+                    is_error=False,
+                    content=result.content,
+                ),
+            )
+        span.update(output=execution.observation.as_dict())
+        return execution
 
 
-def _error(call: ToolCall, message: str) -> ToolExecution:
-    return ToolExecution(call=call, result=ToolResult(content=message), is_error=True)
+def _error(call: ToolCall, message: str, *, outcome: str, started: float) -> ToolExecution:
+    return ToolExecution(
+        call=call,
+        result=ToolResult(content=message),
+        observation=_observe(
+            call,
+            outcome=outcome,
+            started=started,
+            cached=False,
+            is_error=True,
+            content=message,
+        ),
+        is_error=True,
+    )
+
+
+def _observe(
+    call: ToolCall,
+    *,
+    outcome: str,
+    started: float,
+    cached: bool,
+    is_error: bool,
+    content: str,
+) -> ToolObservation:
+    return ToolObservation(
+        tool=call.name,
+        call_id=call.id,
+        outcome=outcome,
+        duration_ms=round((time.perf_counter() - started) * 1000, 3),
+        cached=cached,
+        is_error=is_error,
+        content_chars=len(content),
+    )
 
 
 def _assistant_message(turn: AssistantTurn) -> dict[str, Any]:
@@ -188,6 +295,7 @@ __all__ = [
     "AgentTool",
     "ExecutedTurn",
     "ToolExecution",
+    "ToolObservation",
     "ToolResult",
     "ToolTurnExecutor",
 ]

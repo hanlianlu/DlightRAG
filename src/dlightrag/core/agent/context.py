@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Assemble one research request from the run's memory under one capacity."""
 
+import asyncio
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
@@ -46,9 +47,24 @@ class ContextAssembler:
         self._history = history
         self._question = _question_message(query, query_images, resource_manifest)
 
-    def control_turn(
+    async def control_turn(
         self,
         *,
+        evidence: EvidenceLedger,
+        episode: RunEpisode,
+    ) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self._build_control_turn, evidence, episode)
+
+    async def answer_turn(
+        self,
+        *,
+        evidence: EvidenceLedger,
+        episode: RunEpisode,
+    ) -> tuple[list[dict[str, Any]], CitationIndexer]:
+        return await asyncio.to_thread(self._build_answer_turn, evidence, episode)
+
+    def _build_control_turn(
+        self,
         evidence: EvidenceLedger,
         episode: RunEpisode,
     ) -> list[dict[str, Any]]:
@@ -61,9 +77,8 @@ class ContextAssembler:
         self._check(messages)
         return messages
 
-    def answer_turn(
+    def _build_answer_turn(
         self,
-        *,
         evidence: EvidenceLedger,
         episode: RunEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
