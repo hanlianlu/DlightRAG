@@ -2566,6 +2566,39 @@ class TestAgenticAnswerCapability:
         assert image_blocks[1]["type"] == "image_url"
         assert inspector.call_args.kwargs["image_policy"].max_images == 2
 
+    def test_supported_with_zero_image_ceiling_withholds_visual_inspection(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.core.answer.capability import AnswerImageCapability
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=0,
+            effective_max_images=0,
+            provider="test",
+            base_url=None,
+            model="vision-test",
+            failure_kind=None,
+        )
+        monkeypatch.setattr(
+            "dlightrag.models.llm.get_vlm_model_func",
+            MagicMock(return_value=AsyncMock(return_value="visual evidence")),
+        )
+        inspector = MagicMock()
+        monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
+
+        registry, tools = manager._build_resource_context(
+            [ResourceInput(filename="chart.png", content=_png_bytes(), declared_mime="image/png")],
+            web_search=None,
+        )
+
+        # A zero ceiling means no image block can ever be sent, so an inspector
+        # built on that policy could only fail; the tool must not be advertised.
+        assert registry is not None
+        assert {tool.name for tool in tools} == {"read_resource"}
+        inspector.assert_not_called()
+
     async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)

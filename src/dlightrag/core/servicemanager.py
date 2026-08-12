@@ -1609,7 +1609,13 @@ class RAGServiceManager:
             registry.register(resource)
 
         capability = self._answer_image_capability
-        visual_supported = capability is not None and capability.status == "supported"
+        # A zero effective ceiling leaves no image slot, so an inspector built on
+        # that policy could only ever fail -- withhold the tool instead.
+        visual_supported = (
+            capability is not None
+            and capability.status == "supported"
+            and capability.effective_max_images > 0
+        )
         inspector: ResourceInspector | None = None
         if visual_supported:
             inspector = ResourceInspector(

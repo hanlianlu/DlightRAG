@@ -44,8 +44,11 @@ class AnswerImagePolicy:
     ) -> AnswerImageBudget:
         """Create a fresh mutable budget for one run or provider call.
 
-        ``max_images`` and ``max_px`` narrow that one budget explicitly -- the
-        policy is frozen and every budget starts with zeroed counters.
+        ``max_images`` and ``max_px`` override this budget's limits explicitly --
+        an override is deliberate, not a clamp, so it may sit above the policy
+        value (``QueryImageDescriber`` runs on the separate VLM role and always
+        describes one image). The policy is frozen and every budget starts with
+        zeroed counters.
         """
         edge = self.max_px if max_px is None else max(1, max_px)
         return AnswerImageBudget(
