@@ -6,16 +6,19 @@ entry point. All API/MCP consumers depend on this class only.
 """
 
 import asyncio
+import base64
 import inspect
 import logging
 import time
 from collections import defaultdict
 from collections.abc import (
+    AsyncGenerator,
     AsyncIterable,
     AsyncIterator,
     Awaitable,
     Callable,
     Iterable,
+    Mapping,
     Sequence,
 )
 from dataclasses import dataclass
@@ -46,6 +49,9 @@ from dlightrag.core.answer.errors import (
 from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer.turn import PreparedAnswerTurn
+from dlightrag.core.answer_runs.coordinator import RunSession
+from dlightrag.core.answer_runs.execution import AnswerRunInput
+from dlightrag.core.answer_runs.models import AgentRunState, CheckpointError
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
@@ -64,6 +70,13 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResul
 from dlightrag.core.service import RAGService
 from dlightrag.core.vision_probe import ImageCapabilityStatus, ModelImageCapabilities
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.storage.answer_runs import (
+    AnswerRunEvent,
+    AnswerRunRecord,
+    CancellationOutcome,
+    PGAnswerRunStore,
+    RunCreation,
+)
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
 from dlightrag.utils import log_safe, normalize_workspace
 
@@ -260,6 +273,42 @@ def _cleanup_paths_for_local_ingest(*, source_type: SourceType, path: str | None
     return [path] if is_explicit_upload_batch_dir(Path(path)) else []
 
 
+class _ManagerAnswerExecutor:
+    """Adapt the manager's answer pipeline to the coordinator's executor seam."""
+
+    def __init__(self, manager: RAGServiceManager) -> None:
+        self._manager = manager
+
+    async def execute(self, session: RunSession) -> Mapping[str, Any]:
+        return await self._manager._execute_answer_run(session)
+
+
+def _fetched_bytes_sink(
+    session: RunSession, store: PGAnswerRunStore
+) -> Callable[[Any], Awaitable[None]]:
+    """Persist each validated fetched resource under this worker's live fence."""
+    from dlightrag.storage.answer_runs import PendingArtifact, PendingArtifactReference
+
+    async def _persist(fetched: Any) -> None:
+        artifact = PendingArtifact(content=fetched.content)
+        await session.attach_artifacts(
+            artifacts=[artifact],
+            references=[
+                PendingArtifactReference(
+                    resource_id=fetched.resource_id,
+                    reference_kind="fetched_resource",
+                    ordinal=fetched.ordinal,
+                    digest=artifact.digest,
+                    filename=fetched.filename,
+                    mime_type=fetched.mime_type,
+                    transform_locator={"url": fetched.url},
+                )
+            ],
+        )
+
+    return _persist
+
+
 class RAGServiceUnavailableError(Exception):
     """Raised when the RAG service is not ready."""
 
@@ -323,6 +372,8 @@ class RAGServiceManager:
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
+        self._answer_run_store: PGAnswerRunStore | None = None
+        self._answer_coordinator: Any | None = None
 
     @property
     def config(self) -> DlightragConfig:
@@ -1318,6 +1369,7 @@ class RAGServiceManager:
         chunk_top_k: int | None,
         filters: MetadataFilter | None,
         resources: list[ResourceInput] | None,
+        fetched_bytes_sink: Callable[[Any], Awaitable[None]] | None = None,
     ) -> _OrchestratorRun:
         """Resolve one answer request into a capability-driven orchestrator."""
         ws_list = await self._open_query_workspaces(
@@ -1359,7 +1411,7 @@ class RAGServiceManager:
         if resources:
             await self._maybe_reprobe_vlm_image_capability()
         registry, resource_tools = self._build_resource_context(
-            remaining_resources, web_search=web_search
+            remaining_resources, web_search=web_search, fetched_bytes_sink=fetched_bytes_sink
         )
         current_image_resource_ids = (
             tuple(registry.register(resource) for resource in current_image_resources)
@@ -1561,6 +1613,7 @@ class RAGServiceManager:
         resources: list[ResourceInput] | None,
         *,
         web_search: ExaSearch | None = None,
+        fetched_bytes_sink: Callable[[Any], Awaitable[None]] | None = None,
     ) -> tuple[ResourceRegistry | None, list[AgentTool]]:
         """Register request-local resources and their peer tools.
 
@@ -1582,6 +1635,7 @@ class RAGServiceManager:
             max_attachment_bytes=answer.max_attachment_bytes,
             max_total_attachment_bytes=answer.max_total_attachment_bytes,
             url_text_fallback=_exa_contents_text(web_search) if web_search is not None else None,
+            fetched_bytes_sink=fetched_bytes_sink,
         )
         for resource in resources or []:
             registry.register(resource)
@@ -1773,6 +1827,241 @@ class RAGServiceManager:
         except TimeoutError as exc:
             raise RAGServiceUnavailableError("Every answer slot is busy; retry shortly.") from exc
 
+    # --- Durable answer runs ---
+
+    async def _get_answer_run_store(self) -> PGAnswerRunStore:
+        if self._answer_run_store is None:
+            from dlightrag.storage.answer_runs import PGAnswerRunStore as _Store
+
+            store = _Store()
+            await store.initialize()
+            self._answer_run_store = store
+        return self._answer_run_store
+
+    async def astart_answer_runtime(self) -> None:
+        """Create the durable run schema and begin executing accepted runs."""
+        if self._answer_coordinator is not None:
+            return
+        from dlightrag.core.answer_runs.coordinator import AnswerRunCoordinator
+
+        store = await self._get_answer_run_store()
+        coordinator = AnswerRunCoordinator(
+            store=store,
+            executor=_ManagerAnswerExecutor(self),
+            max_async=int(self._config.max_async),
+        )
+        await coordinator.start()
+        self._answer_coordinator = coordinator
+
+    async def astart_answer_run(
+        self,
+        *,
+        owner_id: str,
+        request: AnswerRunInput,
+        idempotency_key: str | None = None,
+        attachment_bytes: Sequence[bytes] = (),
+    ) -> RunCreation:
+        """Accept one run, its input blobs, and its references in one transaction."""
+        from dlightrag.storage.answer_runs import PendingArtifact, PendingArtifactReference
+
+        store = await self._get_answer_run_store()
+        artifacts = [PendingArtifact(content=content) for content in attachment_bytes]
+        references = [
+            PendingArtifactReference(
+                resource_id=attachment.resource_id,
+                reference_kind="current_attachment",
+                ordinal=attachment.ordinal,
+                digest=attachment.digest,
+                filename=attachment.filename,
+                mime_type=attachment.mime_type,
+            )
+            for attachment in request.attachments
+        ]
+        creation = await store.create_run(
+            owner_id=owner_id,
+            request=request.as_request(),
+            idempotency_key=idempotency_key,
+            artifacts=artifacts,
+            references=references,
+        )
+        if self._answer_coordinator is not None:
+            self._answer_coordinator.wake()
+        return creation
+
+    async def aget_answer_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
+        """Read one owned run; unknown and foreign identifiers both return ``None``."""
+        store = await self._get_answer_run_store()
+        return await store.get_run(owner_id=owner_id, run_id=run_id)
+
+    async def acancel_answer_run(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
+        """Request cancellation; only this mutates a run on a caller's behalf."""
+        store = await self._get_answer_run_store()
+        return await store.request_cancellation(owner_id=owner_id, run_id=run_id)
+
+    async def asubscribe_answer_run(
+        self, *, owner_id: str, run_id: str, after_sequence: int = 0
+    ) -> AsyncGenerator[AnswerRunEvent]:
+        """Follow one run's durable events; detaching never cancels the run."""
+        await self.astart_answer_runtime()
+        coordinator = self._answer_coordinator
+        if coordinator is None:  # pragma: no cover - started above
+            raise RAGServiceUnavailableError("Answer runtime is unavailable")
+        return coordinator.subscribe(
+            owner_id=owner_id, run_id=run_id, after_sequence=after_sequence
+        )
+
+    async def _execute_answer_run(self, session: RunSession) -> Mapping[str, Any]:
+        """Execute one claimed run from its immutable input and last checkpoint."""
+        from dlightrag.citations.finalization import finalize_answer
+        from dlightrag.citations.streaming import aclose_answer_stream
+        from dlightrag.core.answer.media import (
+            answer_blocks_from_markdown,
+            answer_images_from_sources,
+        )
+        from dlightrag.core.answer_runs.checkpoints import (
+            encode_checkpoint_state,
+            restore_agent_state,
+        )
+        from dlightrag.core.answer_runs.execution import (
+            AnswerRunInput as _Input,
+        )
+        from dlightrag.core.answer_runs.execution import (
+            SessionBoundaries,
+            canonical_result,
+        )
+
+        store = await self._get_answer_run_store()
+        request = _Input.from_request(session.request)
+        prepared_turn = PreparedAnswerTurn.stateless(
+            request.query, history=[dict(message) for message in request.history]
+        )
+        run = await self._prepare_orchestrated_run(
+            prepared_turn,
+            workspace=None,
+            workspaces=list(request.workspaces) or None,
+            all_workspaces=False,
+            top_k=request.top_k,
+            chunk_top_k=request.chunk_top_k,
+            filters=cast(MetadataFilter | None, request.filters),
+            resources=self._answer_run_resources(request, owner_id=session.owner_id, store=store),
+            fetched_bytes_sink=_fetched_bytes_sink(session, store),
+        )
+        stream: AsyncIterator[str] | None = None
+        try:
+            prepared = run.orchestrator.prepare_run(
+                request.query,
+                conversation_history=run.history,
+                query_images=run.query_images,
+                registry=run.registry,
+            )
+            if session.checkpoint is not None:
+                await restore_agent_state(
+                    prepared.state,
+                    {
+                        "version": session.checkpoint.version,
+                        "completed_turns": session.checkpoint.completed_turns,
+                        "state": session.checkpoint.state,
+                    },
+                    owner_id=session.owner_id,
+                    run_id=session.run_id,
+                    store=store,
+                    expected_completed_turns=session.completed_turns,
+                    load_corpus_image=self._load_corpus_image,
+                )
+
+            async def _encode(state: AgentRunState) -> Mapping[str, Any]:
+                return await encode_checkpoint_state(
+                    state, owner_id=session.owner_id, run_id=session.run_id, store=store
+                )
+
+            boundaries = SessionBoundaries(session, encode=_encode)
+            contexts, stream = await run.orchestrator.answer_stream(
+                request.query,
+                run=prepared,
+                boundaries=boundaries,
+            )
+            answer_parts: list[str] = []
+            if stream is not None:
+                async for chunk in stream:
+                    answer_parts.append(chunk)
+                    await session.emit_token(chunk)
+            await session.flush_tokens()
+            answer_text = getattr(stream, "answer", "") or "".join(answer_parts)
+            finalized = finalize_answer(answer_text, contexts)
+            if request.semantic_highlights:
+                from dlightrag.core.answer.highlights import enrich_semantic_highlights
+
+                finalized.sources = await enrich_semantic_highlights(
+                    finalized.sources,
+                    answer_text=finalized.answer,
+                    config=self._config,
+                )
+            trace = dict(getattr(stream, "trace", None) or {})
+            trace["query_image_description_count"] = len(run.image_descriptions)
+            images = answer_images_from_sources(finalized.sources, contexts=contexts)
+            return canonical_result(
+                answer=finalized.answer,
+                contexts=contexts,
+                sources=finalized.sources,
+                answer_images=images,
+                answer_blocks=answer_blocks_from_markdown(finalized.answer, images),
+                trace=trace,
+                image_descriptions=run.image_descriptions,
+            )
+        finally:
+            await aclose_answer_stream(stream)
+            if run.registry is not None:
+                await run.registry.aclose()
+
+    def _answer_run_resources(
+        self,
+        request: AnswerRunInput,
+        *,
+        owner_id: str,
+        store: PGAnswerRunStore,
+    ) -> list[ResourceInput] | None:
+        """Rebuild the run's attachments as lazy readers over durable bytes."""
+        from dlightrag.core.resources import ResourceInput as _ResourceInput
+
+        if not request.attachments:
+            return None
+
+        def _loader(digest: str) -> Callable[[], Awaitable[bytes]]:
+            async def _load() -> bytes:
+                content = await store.load_artifact(owner_id=owner_id, digest=digest)
+                if content is None:
+                    raise CheckpointError(
+                        "checkpoint_corrupt",
+                        "Answer run attachment bytes no longer exist.",
+                    )
+                return content
+
+            return _load
+
+        return [
+            _ResourceInput(
+                filename=attachment.filename,
+                declared_mime=attachment.mime_type,
+                loader=_loader(attachment.digest),
+            )
+            for attachment in request.attachments
+        ]
+
+    async def _load_corpus_image(self, workspace: str, chunk_id: str) -> str | None:
+        """Resolve one knowledge-base visual, or ``None`` when it no longer exists."""
+        try:
+            asset = await self.aget_visual_asset(workspace, chunk_id)
+        except Exception:
+            logger.info(
+                "Knowledge-base visual for '%s' no longer resolves; dropping the image block",
+                log_safe(chunk_id),
+            )
+            return None
+        content = getattr(asset, "data", None)
+        if not content:
+            return None
+        return base64.b64encode(content).decode("ascii")
+
     async def aanswer(
         self,
         query: str,
@@ -1911,6 +2200,14 @@ class RAGServiceManager:
         self._closed = True
         cancellation: asyncio.CancelledError | None = None
         await self._ingest_jobs.close()
+        if self._answer_coordinator is not None:
+            coordinator, self._answer_coordinator = self._answer_coordinator, None
+            try:
+                await coordinator.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = _defer_cancellation(cancellation, exc)
+            except Exception:
+                logger.warning("Failed to close the durable answer coordinator", exc_info=True)
 
         for warmup in list(self._warmups):
             warmup.cancel()

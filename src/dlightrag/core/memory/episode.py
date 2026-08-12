@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """One research run's episodic memory: every exchange the loop produced."""
 
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from dlightrag.utils.tokens import estimate_messages_tokens
@@ -23,6 +24,20 @@ class RunEpisode:
 
     def record(self, exchange: list[dict[str, Any]]) -> None:
         self._exchanges.append(exchange)
+
+    def export_state(self) -> dict[str, Any]:
+        """Return every exchange, provider-native state included, in order."""
+        return {"exchanges": [[dict(message) for message in ex] for ex in self._exchanges]}
+
+    def restore_state(self, state: Mapping[str, Any]) -> None:
+        """Replace the episode with a previously exported one."""
+        exchanges = state.get("exchanges")
+        if not isinstance(exchanges, Sequence):
+            raise ValueError("episode state has no exchanges")
+        self._exchanges = [
+            [dict(cast(Mapping[str, Any], message)) for message in cast(Sequence[Any], exchange)]
+            for exchange in exchanges
+        ]
 
     @property
     def last_exchange(self) -> list[dict[str, Any]]:

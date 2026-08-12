@@ -4,8 +4,9 @@
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.utils import context_chunk_key
@@ -56,6 +57,47 @@ class EvidenceLedger:
     @property
     def row_count(self) -> int:
         return sum(len(rows) for rows in self.contexts.values())
+
+    def export_state(self) -> dict[str, Any]:
+        """Return every accumulated row plus the identities that keep citations stable.
+
+        Rendered image blocks are deliberately excluded: they are derived from the
+        rows under a run-local budget, so a restore re-derives them in the same
+        order instead of storing a second copy of every visual.
+        """
+        return {
+            "contexts": {key: [dict(row) for row in rows] for key, rows in self.contexts.items()},
+            "source_ids": [[list(key), value] for key, value in self._source_ids.items()],
+            "seen_chunks": list(self._seen_chunks),
+            "seen_rows": {key: list(values) for key, values in self._seen_rows.items()},
+        }
+
+    def restore_state(self, state: Mapping[str, Any]) -> None:
+        """Replace the ledger with a previously exported one."""
+        contexts = state.get("contexts")
+        if not isinstance(contexts, Mapping):
+            raise ValueError("evidence state has no contexts")
+        restored: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+        for key, rows in cast(Mapping[str, Any], contexts).items():
+            restored[key] = [dict(row) for row in cast(list[Any], rows)]
+        self.contexts = restored
+        self._source_ids = {
+            (str(key[0]), str(key[1]), str(key[2])): str(value)
+            for key, value in cast(list[Any], state.get("source_ids") or [])
+        }
+        self._seen_chunks = {
+            str(value) for value in cast(list[Any], state.get("seen_chunks") or [])
+        }
+        self._seen_rows = {
+            str(key): {str(value) for value in values}
+            for key, values in cast(Mapping[str, Any], state.get("seen_rows") or {}).items()
+        }
+        self._image_blocks = {}
+        self._pending_image_rows = (
+            [row for row in self.contexts["chunks"] if row.get("image_data")]
+            if self._image_budget is not None
+            else []
+        )
 
     def add_rows(self, rows: list[ContextRow]) -> EvidenceDelta:
         return self.add_contexts({"chunks": rows})

@@ -12,23 +12,24 @@ and one additional tools-disabled final answer generation.
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from dlightrag.core.agent.context import ContextAssembler
 from dlightrag.core.agent.tool_loop import AgentTool, ExecutedTurn, ToolTurnExecutor
 from dlightrag.core.agent.tools import (
     KnowledgeRetrieval,
     WebSearch,
-    _ToolCallCache,
     build_run_tools,
 )
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+from dlightrag.core.answer_runs.models import AgentRunState
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceManifestEntry
+from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.tool_turn import AssistantTurn
 
@@ -39,16 +40,36 @@ StreamModel = Callable[..., AsyncIterator[str]]
 FinalText = Callable[..., Awaitable[str]]
 
 
+class RunBoundaries(Protocol):
+    """Durable boundaries a run may observe between agent steps."""
+
+    async def enter_phase(self, phase: str) -> None: ...
+
+    async def turn_completed(self, state: AgentRunState) -> None: ...
+
+    async def check_cancelled(self) -> None: ...
+
+
+class _NoBoundaries:
+    """An in-process answer observes no durable boundary."""
+
+    async def enter_phase(self, phase: str) -> None:
+        return None
+
+    async def turn_completed(self, state: AgentRunState) -> None:
+        return None
+
+    async def check_cancelled(self) -> None:
+        return None
+
+
 @dataclass(slots=True)
-class _RunState:
-    # Memory: what this run has found, and what it has done.
-    evidence: EvidenceLedger
-    episode: RunEpisode
+class PreparedRun:
+    """One run's restorable memory plus the wiring that executes it here."""
+
+    state: AgentRunState
     context: ContextAssembler
     tools: list[AgentTool]
-    tool_cache: _ToolCallCache
-    trace: dict[str, Any]
-    stop_reason: str = "model_stop"
 
 
 class AnswerOrchestrator:
@@ -98,18 +119,26 @@ class AnswerOrchestrator:
         *,
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
+        run: PreparedRun | None = None,
+        boundaries: RunBoundaries | None = None,
     ) -> RetrievalResult:
+        limits = boundaries or _NoBoundaries()
         if not self.uses_research_path:
             if query_images:
                 raise RuntimeError("Current images require request resources")
             return await self._fast_answer(
                 query,
                 conversation_history=conversation_history,
+                boundaries=limits,
             )
         return await self._run_research(
-            query,
-            conversation_history=conversation_history,
-            query_images=query_images,
+            run
+            or self.prepare_run(
+                query,
+                conversation_history=conversation_history,
+                query_images=query_images,
+            ),
+            boundaries=limits,
         )
 
     async def answer_stream(
@@ -118,18 +147,26 @@ class AnswerOrchestrator:
         *,
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
+        run: PreparedRun | None = None,
+        boundaries: RunBoundaries | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
+        limits = boundaries or _NoBoundaries()
         if not self.uses_research_path:
             if query_images:
                 raise RuntimeError("Current images require request resources")
             return await self._fast_answer_stream(
                 query,
                 conversation_history=conversation_history,
+                boundaries=limits,
             )
         return await self._run_research_stream(
-            query,
-            conversation_history=conversation_history,
-            query_images=query_images,
+            run
+            or self.prepare_run(
+                query,
+                conversation_history=conversation_history,
+                query_images=query_images,
+            ),
+            boundaries=limits,
         )
 
     # ------------------------------------------------------------------
@@ -141,8 +178,12 @@ class AnswerOrchestrator:
         query: str,
         *,
         conversation_history: PriorTurns | None,
+        boundaries: RunBoundaries,
     ) -> RetrievalResult:
+        await boundaries.enter_phase("searching")
         retrieval = await self._retrieve_knowledge_base(query)
+        await boundaries.check_cancelled()
+        await boundaries.enter_phase("generating")
         result = await self._synthesizer.generate(
             query,
             retrieval.contexts,
@@ -156,8 +197,12 @@ class AnswerOrchestrator:
         query: str,
         *,
         conversation_history: PriorTurns | None,
+        boundaries: RunBoundaries,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
+        await boundaries.enter_phase("searching")
         retrieval = await self._retrieve_knowledge_base(query)
+        await boundaries.check_cancelled()
+        await boundaries.enter_phase("generating")
         contexts, stream = await self._synthesizer.generate_stream(
             query,
             retrieval.contexts,
@@ -177,24 +222,20 @@ class AnswerOrchestrator:
 
     async def _run_research(
         self,
-        query: str,
+        run: PreparedRun,
         *,
-        conversation_history: PriorTurns | None,
-        query_images: list[dict[str, Any]] | None,
+        boundaries: RunBoundaries,
     ) -> RetrievalResult:
         if self._model_func is None:
             raise RuntimeError("Research answer requires a tool model")
-        state = self._new_state(
-            query,
-            conversation_history=conversation_history,
-            query_images=query_images,
-        )
+        state = run.state
         try:
-            await self._research_until_stopped(state)
+            await self._research_until_stopped(run, boundaries=boundaries)
 
             if self._final_text_func is None:
                 raise RuntimeError("Research answer requires a tools-disabled final model")
-            final_messages, indexer = await state.context.answer_turn(
+            await boundaries.enter_phase("generating")
+            final_messages, indexer = await run.context.answer_turn(
                 evidence=state.evidence, episode=state.episode
             )
             state.trace["agent_stop_reason"] = state.stop_reason
@@ -210,22 +251,18 @@ class AnswerOrchestrator:
 
     async def _run_research_stream(
         self,
-        query: str,
+        run: PreparedRun,
         *,
-        conversation_history: PriorTurns | None,
-        query_images: list[dict[str, Any]] | None,
+        boundaries: RunBoundaries,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if self._stream_model_func is None or self._model_func is None:
             raise RuntimeError("Streaming research answer requires a final text stream")
-        state = self._new_state(
-            query,
-            conversation_history=conversation_history,
-            query_images=query_images,
-        )
+        state = run.state
         try:
-            await self._research_until_stopped(state)
+            await self._research_until_stopped(run, boundaries=boundaries)
 
-            final_messages, indexer = await state.context.answer_turn(
+            await boundaries.enter_phase("generating")
+            final_messages, indexer = await run.context.answer_turn(
                 evidence=state.evidence, episode=state.episode
             )
             state.trace["agent_stop_reason"] = state.stop_reason
@@ -239,15 +276,22 @@ class AnswerOrchestrator:
         finally:
             await state.tool_cache.aclose()
 
-    async def _research_until_stopped(self, state: _RunState) -> None:
+    async def _research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
         """Run evidence turns until the model stops, adds nothing, or hits the cap.
 
         A tool error is not convergence: an invalid, unavailable, or failed result
         is replayed so the model can correct it, and only ``max_agent_turns``
-        bounds that correction.
+        bounds that correction. The cap spans the whole run, not one process
+        lifetime, so a resumed run continues its recorded turn count.
         """
-        for _ in range(self._max_agent_turns):
-            executed, changed = await self._execute_control_turn(state)
+        state = run.state
+        while state.completed_turns < self._max_agent_turns:
+            await boundaries.check_cancelled()
+            await boundaries.enter_phase("researching")
+            executed, changed = await self._execute_control_turn(run)
+            state.completed_turns += 1
+            state.trace["agent_turns"] = state.completed_turns
+            await boundaries.turn_completed(state)
             if not executed.assistant.tool_calls:
                 state.stop_reason = "model_stop"
                 return
@@ -264,13 +308,15 @@ class AnswerOrchestrator:
     # Research helpers
     # ------------------------------------------------------------------
 
-    def _new_state(
+    def prepare_run(
         self,
         query: str,
         *,
-        conversation_history: PriorTurns | None,
-        query_images: list[dict[str, Any]] | None,
-    ) -> _RunState:
+        conversation_history: PriorTurns | None = None,
+        query_images: list[dict[str, Any]] | None = None,
+        registry: ResourceRegistry | None = None,
+    ) -> PreparedRun:
+        """Build one run's memory and the tools bound to it, before any restore."""
         evidence = EvidenceLedger(image_budget=self._image_budget)
         trace: dict[str, Any] = {
             "agent_turns": 0,
@@ -285,9 +331,14 @@ class AnswerOrchestrator:
             resource_tools=self._resource_tools,
             register_web_source=self._register_web_source,
         )
-        return _RunState(
-            evidence=evidence,
-            episode=RunEpisode(),
+        return PreparedRun(
+            state=AgentRunState(
+                evidence=evidence,
+                episode=RunEpisode(),
+                tool_cache=tool_cache,
+                registry=registry,
+                trace=trace,
+            ),
             context=ContextAssembler(
                 self._capacity,
                 query=query,
@@ -296,25 +347,23 @@ class AnswerOrchestrator:
                 resource_manifest=self._resource_manifest,
             ),
             tools=tools,
-            tool_cache=tool_cache,
-            trace=trace,
         )
 
     async def _execute_control_turn(
         self,
-        state: _RunState,
+        run: PreparedRun,
     ) -> tuple[ExecutedTurn, bool]:
+        state = run.state
         executor = ToolTurnExecutor(cast(ToolModel, self._model_func))
-        call_messages = await state.context.control_turn(
+        call_messages = await run.context.control_turn(
             evidence=state.evidence, episode=state.episode
         )
         previous_rows = state.evidence.row_count
         executed = await executor.run_turn(
             call_messages,
-            state.tools,
+            run.tools,
             tool_choice="auto",
         )
-        state.trace["agent_turns"] += 1
         state.trace["tool_observations"].extend(
             execution.observation.as_dict() for execution in executed.results
         )
@@ -322,4 +371,4 @@ class AnswerOrchestrator:
         return executed, state.evidence.row_count != previous_rows
 
 
-__all__ = ["AnswerOrchestrator"]
+__all__ = ["AnswerOrchestrator", "PreparedRun", "RunBoundaries"]

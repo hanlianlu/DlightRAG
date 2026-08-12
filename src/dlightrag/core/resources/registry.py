@@ -18,7 +18,7 @@ import hashlib
 import hmac
 import secrets
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -62,6 +62,22 @@ _PDF_MIME = "application/pdf"
 # a public URL, or ``None`` when it cannot. The manager composition root adapts
 # Exa Contents to this shape; the registry never imports any web-search provider.
 UrlTextFallback = Callable[[str], Awaitable[str | None]]
+
+
+@dataclass(frozen=True, slots=True)
+class FetchedResourceBytes:
+    """Validated run-scoped web bytes plus the replay slot they were bound to."""
+
+    resource_id: str
+    ordinal: int
+    filename: str
+    mime_type: str
+    url: str
+    content: bytes
+
+
+# Persist validated fetched bytes before their tool result may be checkpointed.
+FetchedBytesSink = Callable[[FetchedResourceBytes], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -111,6 +127,7 @@ class ResourceRegistry:
         url_client: Any | None = None,
         url_timeout: float = 120.0,
         url_text_fallback: UrlTextFallback | None = None,
+        fetched_bytes_sink: FetchedBytesSink | None = None,
     ) -> None:
         self._max_attachments = max_attachments
         self._max_attachment_bytes = max(1, int(max_attachment_bytes))
@@ -119,6 +136,7 @@ class ResourceRegistry:
         self._owns_url_client = url_client is None
         self._url_timeout = url_timeout
         self._url_text_fallback = url_text_fallback
+        self._fetched_bytes_sink = fetched_bytes_sink
         self._secret = secrets.token_bytes(32)
 
         self._resources: dict[str, _Registered] = {}
@@ -132,6 +150,11 @@ class ResourceRegistry:
         self._tempdir: tempfile.TemporaryDirectory[str] | None = None
         self._total_bytes = 0
         self._closed = False
+        # Durable replay slots for run-scoped fetched bytes. An ordinal is minted
+        # once per fetched resource and never reused, so a later turn cannot
+        # rebind a slot a previous checkpoint already made durable.
+        self._fetched_ordinals: dict[str, int] = {}
+        self._next_fetched_ordinal = 0
         # Fetched (url/loader) bytes are materialized exactly once per resource
         # and charged against the request-wide total under a lock. A separate
         # single-flight guards the URL text fallback so it runs at most once per
@@ -230,6 +253,113 @@ class ResourceRegistry:
         if byte_size is not None:
             self._total_bytes += byte_size
         return resource_id
+
+    def allocate_fetched_ordinal(self, resource_id: str) -> int:
+        """Return this fetched resource's durable replay slot, minting it once.
+
+        Slots are never handed out twice, and the next slot is checkpointed, so a
+        later turn cannot rebind bytes a committed checkpoint already made
+        durable. Re-executing the same uncheckpointed turn reuses its own slots.
+        """
+        existing = self._fetched_ordinals.get(resource_id)
+        if existing is not None:
+            return existing
+        ordinal = self._next_fetched_ordinal
+        self._next_fetched_ordinal = ordinal + 1
+        self._fetched_ordinals[resource_id] = ordinal
+        return ordinal
+
+    def export_state(self) -> dict[str, Any]:
+        """Return the catalog, cursors, and replay slots a resumed run must reuse."""
+        return {
+            "resources": [
+                {
+                    "resource_id": item.resource_id,
+                    "filename": item.filename,
+                    "declared_mime": item.declared_mime,
+                    "source": item.source,
+                    "url": item.url,
+                    "byte_size": item.byte_size,
+                }
+                for item in self._resources.values()
+            ],
+            "cursors": {
+                token: {
+                    "resource_id": cursor.resource_id,
+                    "focus": cursor.focus,
+                    "window_index": cursor.window_index,
+                }
+                for token, cursor in self._cursors.items()
+            },
+            "fetched_ordinals": dict(self._fetched_ordinals),
+            "next_fetched_ordinal": self._next_fetched_ordinal,
+        }
+
+    def restore_state(self, state: Mapping[str, Any]) -> None:
+        """Adopt a checkpointed catalog after this run's inputs are re-registered.
+
+        Resource ids are minted per process, so a resumed run would otherwise
+        rename every resource the restored episode already names. The immutable
+        request replays its inputs in the original order, so the nth registered
+        input is rebound to the nth checkpointed input id; search-discovered
+        links are recreated outright because nothing replays them.
+        """
+        self._ensure_open()
+        entries = [dict(entry) for entry in state.get("resources") or []]
+        checkpointed_inputs = [
+            entry for entry in entries if str(entry.get("source") or "") != "web_search"
+        ]
+        registered_inputs = [
+            item for item in self._resources.values() if item.source != "web_search"
+        ]
+        if len(registered_inputs) != len(checkpointed_inputs):
+            raise ResourceStateMismatchError(
+                "checkpointed resource inputs do not match the replayed request"
+            )
+
+        renamed = {
+            item.resource_id: str(entry["resource_id"])
+            for item, entry in zip(registered_inputs, checkpointed_inputs, strict=True)
+        }
+        by_id: dict[str, _Registered] = {}
+        for item in registered_inputs:
+            item.resource_id = renamed[item.resource_id]
+            by_id[item.resource_id] = item
+        for entry in entries:
+            resource_id = str(entry["resource_id"])
+            if resource_id in by_id:
+                continue
+            url = str(entry.get("url") or "")
+            by_id[resource_id] = _Registered(
+                resource_id=resource_id,
+                filename=entry.get("filename"),
+                declared_mime=entry.get("declared_mime"),
+                source="web_search",
+                content=None,
+                url=url or None,
+                byte_size=entry.get("byte_size"),
+            )
+            if url:
+                key = ("link", normalize_https_url_identity(url).encode("utf-8"))
+                self._ids_by_dedup[key] = resource_id
+        self._resources = {
+            str(entry["resource_id"]): by_id[str(entry["resource_id"])] for entry in entries
+        }
+        self._ids_by_dedup = {
+            key: renamed.get(value, value) for key, value in self._ids_by_dedup.items()
+        }
+        self._cursors = {
+            str(token): _CursorState(
+                resource_id=str(cursor["resource_id"]),
+                focus=cursor.get("focus"),
+                window_index=int(cursor.get("window_index") or 0),
+            )
+            for token, cursor in (state.get("cursors") or {}).items()
+        }
+        self._fetched_ordinals = {
+            str(key): int(value) for key, value in (state.get("fetched_ordinals") or {}).items()
+        }
+        self._next_fetched_ordinal = int(state.get("next_fetched_ordinal") or 0)
 
     def _admit_caller_key(self, dedup_key: tuple[str, bytes]) -> None:
         if dedup_key in self._caller_dedup:
@@ -544,7 +674,29 @@ class ResourceRegistry:
                 raise ResourceAdmissionError("total attachment bytes exceeded")
             self._total_bytes += len(data)
             self._fetched[resource_id] = data
+        await self._persist_fetched(resource_id, data)
         return data
+
+    async def _persist_fetched(self, resource_id: str, content: bytes) -> None:
+        """Bind validated web bytes to a durable replay slot before they are used.
+
+        The sink runs after every HTTPS, redirect, DNS, SSRF, and byte check has
+        passed and before the tool result can enter a checkpoint, so a resumed
+        run never silently re-fetches a page that changed underneath it.
+        """
+        resource = self._resources.get(resource_id)
+        if self._fetched_bytes_sink is None or resource is None or not resource.url:
+            return
+        await self._fetched_bytes_sink(
+            FetchedResourceBytes(
+                resource_id=resource_id,
+                ordinal=self.allocate_fetched_ordinal(resource_id),
+                filename=safe_source_filename(resource.filename or resource_id),
+                mime_type=resource.declared_mime or "application/octet-stream",
+                url=resource.url,
+                content=content,
+            )
+        )
 
     async def _fallback_text_view(
         self, resource: _Registered, url: str
@@ -621,6 +773,10 @@ class ResourceRegistryClosedError(RuntimeError):
     """Raised when a closed registry is used again."""
 
 
+class ResourceStateMismatchError(RuntimeError):
+    """Raised when a checkpointed catalog cannot describe the replayed request."""
+
+
 def _link_filename(url: str, explicit: str | None) -> str:
     filename = safe_source_filename(explicit or url)
     return filename if Path(filename).suffix else f"{filename}.html"
@@ -667,4 +823,12 @@ def _decode_to_windows(
     return build_text_windows(decode_text(content, declared_charset=declared_charset))
 
 
-__all__ = ["InspectionTarget", "ResourceRegistry", "ResourceRegistryClosedError", "UrlTextFallback"]
+__all__ = [
+    "FetchedBytesSink",
+    "FetchedResourceBytes",
+    "InspectionTarget",
+    "ResourceRegistry",
+    "ResourceRegistryClosedError",
+    "ResourceStateMismatchError",
+    "UrlTextFallback",
+]
