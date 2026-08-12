@@ -12,6 +12,7 @@ from PIL import Image
 
 from dlightrag.core.request.images import QueryImageDescriber
 from dlightrag.utils.images import decode_image_base64
+from tests.unit.conftest import answer_image_policy
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -26,13 +27,12 @@ def _describer(vlm, *, max_images: int, max_bytes: int = 10_000, max_px: int = 6
     return QueryImageDescriber(
         vlm_func=vlm,
         max_images=max_images,
-        max_total_bytes=max_bytes,
-        max_bytes_per_image=max_bytes,
-        max_pixels=40_000_000,
-        max_px=max_px,
-        min_px=max_px,
-        quality=89,
-        min_quality=79,
+        image_policy=answer_image_policy(
+            max_total_bytes=max_bytes,
+            max_bytes_per_image=max_bytes,
+            max_px=max_px,
+            min_px=max_px,
+        ),
     )
 
 
@@ -54,6 +54,20 @@ async def test_query_image_describer_returns_descriptions() -> None:
     assert await_args is not None
     content = await_args.kwargs["messages"][0]["content"]
     assert content[0]["type"] == "image_url"
+
+
+async def test_query_image_describer_is_independent_of_the_answer_image_ceiling() -> None:
+    """The VLM role describes images even when the answer model takes none."""
+    vlm = AsyncMock(return_value="a line chart")
+    describer = QueryImageDescriber(
+        vlm_func=vlm,
+        max_images=2,
+        image_policy=answer_image_policy(max_images=0),
+    )
+
+    descriptions = await describer.describe([_image_block(), _image_block()])
+
+    assert descriptions == ["Image 1: a line chart", "Image 2: a line chart"]
 
 
 async def test_query_image_describer_is_best_effort() -> None:

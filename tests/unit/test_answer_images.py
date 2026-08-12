@@ -3,10 +3,12 @@
 
 import base64
 import io
+from dataclasses import FrozenInstanceError
 
+import pytest
 from PIL import Image
 
-from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.utils.image_budget import ImagePayloadBudget
 from dlightrag.utils.images import (
     bounded_embedding_image_data_uri,
@@ -18,6 +20,30 @@ from dlightrag.utils.images import (
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
+
+
+def test_answer_image_policy_is_frozen_and_creates_fresh_budgets() -> None:
+    policy = AnswerImagePolicy(
+        max_images=1,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+        context_window_tokens=260_000,
+    )
+
+    first = policy.new_budget()
+    second = policy.new_budget()
+
+    assert first.add_base64(_PNG_B64, label="chunk:c1") is not None
+    assert first.count == 1
+    assert second.count == 0
+    assert second.used_bytes == 0
+    with pytest.raises(FrozenInstanceError):
+        policy.max_images = 2  # type: ignore[misc]
 
 
 def test_answer_image_budget_bounds_base64_images() -> None:

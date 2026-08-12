@@ -21,9 +21,9 @@ from typing import Any, Literal
 
 import pypdfium2 as pdfium
 
+from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.resources.models import ResourceNotFoundError, ResourceRegistryError
 from dlightrag.core.resources.registry import ResourceRegistry
-from dlightrag.utils.image_budget import ImagePayloadBudget
 
 type VLMFunc = Callable[..., Awaitable[Any]]
 
@@ -67,14 +67,7 @@ class ResourceInspector:
         registry: ResourceRegistry,
         *,
         vlm_func: VLMFunc,
-        max_total_bytes: int = 24_000_000,
-        max_bytes_per_image: int = 3_000_000,
-        max_pixels: int = 40_000_000,
-        max_px: int = 1536,
-        min_px: int = 512,
-        quality: int = 89,
-        min_quality: int = 79,
-        max_images: int = 8,
+        image_policy: AnswerImagePolicy,
         overview_max_px: int = 900,
         overview_scale: int = 1,
         page_scale: int = 2,
@@ -82,14 +75,7 @@ class ResourceInspector:
     ) -> None:
         self._registry = registry
         self._vlm_func = vlm_func
-        self._max_total_bytes = max(1, int(max_total_bytes))
-        self._max_bytes_per_image = max(1, int(max_bytes_per_image))
-        self._max_pixels = max(1, int(max_pixels))
-        self._max_px = max(1, int(max_px))
-        self._min_px = max(1, int(min_px))
-        self._quality = int(quality)
-        self._min_quality = int(min_quality)
-        self._max_images = max(1, int(max_images))
+        self._image_policy = image_policy
         self._overview_max_px = max(1, int(overview_max_px))
         self._overview_scale = max(1, int(overview_scale))
         self._page_scale = max(1, int(page_scale))
@@ -132,16 +118,16 @@ class ResourceInspector:
     async def _inspect_image(
         self, resource_id: str, focus: str, content: bytes
     ) -> ResourceInspectionResult:
-        budget = self._budget(self._max_px)
-        uri = await asyncio.to_thread(
+        budget = self._image_policy.new_budget()
+        block = await asyncio.to_thread(
             self._bound,
             budget,
             content,
             label=f"{resource_id}:image",
         )
-        if uri is None:
+        if block is None:
             raise ResourceInspectionError("source image is too large to inspect")
-        text = await self._ask_vlm([uri], focus, "image")
+        text = await self._ask_vlm([block], focus, "image")
         return ResourceInspectionResult(resource_id, InspectionLocator(kind="image"), text)
 
     async def _inspect_visual(
@@ -151,16 +137,16 @@ class ResourceInspector:
             asset = await self._registry.visual_asset(resource_id, handle_id)
         except ResourceNotFoundError as exc:
             raise ResourceInspectionError(str(exc)) from exc
-        budget = self._budget(self._max_px)
-        uri = await asyncio.to_thread(
+        budget = self._image_policy.new_budget()
+        block = await asyncio.to_thread(
             self._bound,
             budget,
             asset.data,
             label=f"{resource_id}:{handle_id}",
         )
-        if uri is None:
+        if block is None:
             raise ResourceInspectionError("embedded visual is too large to inspect")
-        text = await self._ask_vlm([uri], focus, "embedded figure")
+        text = await self._ask_vlm([block], focus, "embedded figure")
         locator = InspectionLocator(kind="visual", handle_id=handle_id, anchor=asset.anchor)
         return ResourceInspectionResult(resource_id, locator, text)
 
@@ -178,16 +164,16 @@ class ResourceInspector:
             if page < 1 or page > count:
                 raise ResourceInspectionError(f"page {page} is out of range (1-{count})")
             raw = await asyncio.to_thread(_render_pdf_page, content, page - 1, self._page_scale)
-            budget = self._budget(self._max_px)
-            uri = await asyncio.to_thread(
+            budget = self._image_policy.new_budget()
+            block = await asyncio.to_thread(
                 self._bound,
                 budget,
                 raw,
                 label=f"{resource_id}:p{page}",
             )
-            if uri is None:
+            if block is None:
                 raise ResourceInspectionError("rendered page is too large to inspect")
-            text = await self._ask_vlm([uri], focus, f"page {page}")
+            text = await self._ask_vlm([block], focus, f"page {page}")
             return ResourceInspectionResult(
                 resource_id, InspectionLocator(kind="pdf_page", page=page), text
             )
@@ -197,23 +183,23 @@ class ResourceInspector:
         raws = await asyncio.to_thread(
             _render_pdf_pages, content, list(range(start, end)), self._overview_scale
         )
-        budget = self._budget(self._overview_max_px)
-        uris: list[str] = []
+        budget = self._image_policy.new_budget(max_px=self._overview_max_px)
+        blocks: list[dict[str, Any]] = []
         for offset, raw in enumerate(raws):
-            uri = await asyncio.to_thread(
+            block = await asyncio.to_thread(
                 self._bound,
                 budget,
                 raw,
                 label=f"{resource_id}:overview{start + offset + 1}",
             )
-            if uri is None:
+            if block is None:
                 break
-            uris.append(uri)
-        if not uris:
+            blocks.append(block)
+        if not blocks:
             raise ResourceInspectionError("no page could be rendered for the overview")
-        actual_end = start + len(uris)
+        actual_end = start + len(blocks)
         text = await self._ask_vlm(
-            uris,
+            blocks,
             focus,
             f"pages {start + 1}-{actual_end} of a {count}-page document",
         )
@@ -227,26 +213,13 @@ class ResourceInspector:
             next_cursor=next_cursor,
         )
 
-    def _budget(self, max_px: int) -> ImagePayloadBudget:
-        return ImagePayloadBudget(
-            max_total_bytes=self._max_total_bytes,
-            max_bytes_per_image=self._max_bytes_per_image,
-            max_pixels=self._max_pixels,
-            max_px=max_px,
-            min_px=min(self._min_px, max_px),
-            quality=self._quality,
-            min_quality=self._min_quality,
-            max_images=self._max_images,
-        )
+    def _bound(
+        self, budget: AnswerImageBudget, data: bytes, *, label: str
+    ) -> dict[str, Any] | None:
+        return budget.add_base64(base64.b64encode(data).decode("ascii"), label=label)
 
-    def _bound(self, budget: ImagePayloadBudget, data: bytes, *, label: str) -> str | None:
-        bounded = budget.add_base64(base64.b64encode(data).decode("ascii"), label=label)
-        return bounded[0] if bounded is not None else None
-
-    async def _ask_vlm(self, uris: list[str], focus: str, subject: str) -> str:
-        content: list[dict[str, Any]] = [
-            {"type": "image_url", "image_url": {"url": uri}} for uri in uris
-        ]
+    async def _ask_vlm(self, blocks: list[dict[str, Any]], focus: str, subject: str) -> str:
+        content: list[dict[str, Any]] = [*blocks]
         content.append({"type": "text", "text": _prompt(focus, subject)})
         try:
             response = await self._vlm_func(messages=[{"role": "user", "content": content}])

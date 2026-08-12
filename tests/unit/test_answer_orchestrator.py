@@ -18,6 +18,7 @@ from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
 from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+from tests.unit.conftest import answer_image_policy
 
 
 class ScriptedAgent:
@@ -148,18 +149,14 @@ def _research_synthesizer() -> AnswerSynthesizer:
     final answer through the injected tools-disabled callables, never through
     the synthesizer's fast-path ``generate`` model function.
     """
-    return AnswerSynthesizer(image_max_pixels=40_000_000, model_func=None)
+    return AnswerSynthesizer(image_policy=answer_image_policy(), model_func=None)
 
 
 def _fast_synthesizer(answer_text: str = "Fast answer [1-1].") -> AnswerSynthesizer:
     async def model_func(*, messages: list[dict[str, Any]], **_kwargs: Any) -> str:
         return answer_text
 
-    return AnswerSynthesizer(
-        image_max_pixels=40_000_000,
-        model_func=model_func,
-        effective_max_images=0,
-    )
+    return AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
 
 def _research(

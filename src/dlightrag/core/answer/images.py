@@ -22,6 +22,44 @@ logger = logging.getLogger(__name__)
 _ALLOWED_SCHEMES = frozenset({"data", "https"})
 
 
+@dataclass(frozen=True, slots=True)
+class AnswerImagePolicy:
+    """Immutable Answer transport policy shared by image-bearing consumers."""
+
+    max_images: int
+    max_total_bytes: int
+    max_bytes_per_image: int
+    max_pixels: int
+    max_px: int
+    min_px: int
+    quality: int
+    min_quality: int
+    context_window_tokens: int
+
+    def new_budget(
+        self,
+        *,
+        max_images: int | None = None,
+        max_px: int | None = None,
+    ) -> AnswerImageBudget:
+        """Create a fresh mutable budget for one run or provider call.
+
+        ``max_images`` and ``max_px`` narrow that one budget explicitly -- the
+        policy is frozen and every budget starts with zeroed counters.
+        """
+        edge = self.max_px if max_px is None else max(1, max_px)
+        return AnswerImageBudget(
+            max_images=self.max_images if max_images is None else max(0, max_images),
+            max_total_bytes=self.max_total_bytes,
+            max_bytes_per_image=self.max_bytes_per_image,
+            max_pixels=self.max_pixels,
+            max_px=edge,
+            min_px=min(self.min_px, edge),
+            quality=self.quality,
+            min_quality=self.min_quality,
+        )
+
+
 def _is_unsafe_host(host: str | None) -> bool:
     """Return True if *host* is an IP literal in a dangerous range.
 
@@ -202,4 +240,4 @@ class AnswerImageBudget:
         return block
 
 
-__all__ = ["AnswerImageBudget"]
+__all__ = ["AnswerImageBudget", "AnswerImagePolicy"]

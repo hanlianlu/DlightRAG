@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -14,6 +15,11 @@ from dlightrag.core.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.resources.tools import build_resource_tools
 from dlightrag.core.resources.visual import ResourceInspectionError, ResourceInspector
+from tests.unit.conftest import answer_image_policy
+
+
+def _inspector(registry: ResourceRegistry, vlm: Any) -> ResourceInspector:
+    return ResourceInspector(registry, vlm_func=vlm, image_policy=answer_image_policy(max_images=8))
 
 
 class _RecordingVLM:
@@ -47,7 +53,7 @@ def test_read_resource_registered_without_inspector() -> None:
 
 def test_inspect_resource_absent_when_capability_unverified() -> None:
     registry = ResourceRegistry()
-    inspector = ResourceInspector(registry, vlm_func=_RecordingVLM())
+    inspector = _inspector(registry, _RecordingVLM())
     names = {
         tool.name
         for tool in build_resource_tools(registry, inspector=inspector, visual_supported=False)
@@ -57,7 +63,7 @@ def test_inspect_resource_absent_when_capability_unverified() -> None:
 
 def test_inspect_resource_registered_only_for_verified_capability() -> None:
     registry = ResourceRegistry()
-    inspector = ResourceInspector(registry, vlm_func=_RecordingVLM())
+    inspector = _inspector(registry, _RecordingVLM())
     names = {
         tool.name
         for tool in build_resource_tools(registry, inspector=inspector, visual_supported=True)
@@ -85,7 +91,7 @@ def test_read_resource_tool_schema_is_exact() -> None:
 
 def test_inspect_resource_tool_schema_is_exact() -> None:
     registry = ResourceRegistry()
-    inspector = ResourceInspector(registry, vlm_func=_RecordingVLM())
+    inspector = _inspector(registry, _RecordingVLM())
     tools = _tools_by_name(
         build_resource_tools(registry, inspector=inspector, visual_supported=True)
     )
@@ -141,7 +147,7 @@ async def test_inspect_resource_tool_returns_derived_evidence() -> None:
                 filename="chart.png", content=_png((200, 30, 30)), declared_mime="image/png"
             )
         )
-        inspector = ResourceInspector(registry, vlm_func=_RecordingVLM("Ascending bars."))
+        inspector = _inspector(registry, _RecordingVLM("Ascending bars."))
         tools = _tools_by_name(
             build_resource_tools(registry, inspector=inspector, visual_supported=True)
         )
@@ -161,7 +167,7 @@ async def test_inspect_resource_tool_propagates_vlm_failure() -> None:
         resource_id = registry.register(
             ResourceInput(filename="chart.png", content=_png((1, 2, 3)), declared_mime="image/png")
         )
-        inspector = ResourceInspector(registry, vlm_func=_FailingVLM())
+        inspector = _inspector(registry, _FailingVLM())
         tools = _tools_by_name(
             build_resource_tools(registry, inspector=inspector, visual_supported=True)
         )

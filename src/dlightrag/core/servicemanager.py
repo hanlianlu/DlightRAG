@@ -43,7 +43,7 @@ from dlightrag.core.answer.capability import (
 from dlightrag.core.answer.errors import (
     CurrentImagePayloadError,
 )
-from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec, SourceType
@@ -557,7 +557,7 @@ class RAGServiceManager:
         self._answer_image_capability = capability
         synthesizer = getattr(self, "_answer_synthesizer", None)
         if synthesizer is not None:
-            synthesizer.set_effective_max_images(capability.effective_max_images)
+            synthesizer.set_image_policy(self._answer_image_policy())
 
     async def _maybe_reprobe_answer_image_capability(self) -> None:
         """Lazily re-probe when the cached capability is ``unknown``.
@@ -933,27 +933,17 @@ class RAGServiceManager:
         if self._answer_synthesizer is None:
             from dlightrag.models.llm import get_query_model_func
 
-            answer_cfg = self._config.answer
-            capability = self._answer_image_capability
-            effective_max_images = capability.effective_max_images if capability is not None else 0
             self._answer_synthesizer = AnswerSynthesizer(
                 model_func=get_query_model_func(self._config),
-                effective_max_images=effective_max_images,
-                image_max_bytes=answer_cfg.image_max_bytes,
-                image_max_total_bytes=answer_cfg.image_max_total_bytes,
-                image_max_pixels=answer_cfg.image_max_pixels,
-                image_max_px=answer_cfg.image_max_px,
-                image_min_px=answer_cfg.image_min_px,
-                image_quality=answer_cfg.image_quality,
-                image_min_quality=answer_cfg.image_min_quality,
-                context_window_tokens=answer_cfg.context_window_tokens,
+                image_policy=self._answer_image_policy(),
             )
         return self._answer_synthesizer
 
-    def _new_answer_image_budget(self) -> AnswerImageBudget:
+    def _answer_image_policy(self) -> AnswerImagePolicy:
+        """Compose the one Answer transport policy from config and capability."""
         answer = self._config.answer
         capability = self._answer_image_capability
-        return AnswerImageBudget(
+        return AnswerImagePolicy(
             max_images=capability.effective_max_images if capability is not None else 0,
             max_total_bytes=answer.image_max_total_bytes,
             max_bytes_per_image=answer.image_max_bytes,
@@ -962,6 +952,7 @@ class RAGServiceManager:
             min_px=answer.image_min_px,
             quality=answer.image_quality,
             min_quality=answer.image_min_quality,
+            context_window_tokens=answer.context_window_tokens,
         )
 
     @staticmethod
@@ -1045,17 +1036,10 @@ class RAGServiceManager:
             if self._query_image_describer is None:
                 from dlightrag.core.request.images import QueryImageDescriber
 
-                transport = self._config.answer
                 self._query_image_describer = QueryImageDescriber(
                     vlm_func=self._get_or_create_vlm_func(),
                     max_images=MAX_QUERY_IMAGES,
-                    max_total_bytes=transport.image_max_total_bytes,
-                    max_bytes_per_image=transport.image_max_bytes,
-                    max_pixels=transport.image_max_pixels,
-                    max_px=transport.image_max_px,
-                    min_px=transport.image_min_px,
-                    quality=transport.image_quality,
-                    min_quality=transport.image_min_quality,
+                    image_policy=self._answer_image_policy(),
                 )
         return self._query_image_describer
 
@@ -1479,7 +1463,7 @@ class RAGServiceManager:
 
         image_budget: AnswerImageBudget | None = None
         if research:
-            image_budget = self._new_answer_image_budget()
+            image_budget = self._answer_image_policy().new_budget()
             query_images = (
                 await self._budget_agent_images(
                     current_images,
@@ -1627,18 +1611,11 @@ class RAGServiceManager:
         capability = self._answer_image_capability
         visual_supported = capability is not None and capability.status == "supported"
         inspector: ResourceInspector | None = None
-        if visual_supported and capability is not None:
+        if visual_supported:
             inspector = ResourceInspector(
                 registry,
                 vlm_func=self._get_or_create_vlm_func(),
-                max_images=capability.effective_max_images,
-                max_total_bytes=answer.image_max_total_bytes,
-                max_bytes_per_image=answer.image_max_bytes,
-                max_pixels=answer.image_max_pixels,
-                max_px=answer.image_max_px,
-                min_px=answer.image_min_px,
-                quality=answer.image_quality,
-                min_quality=answer.image_min_quality,
+                image_policy=self._answer_image_policy(),
             )
         tools = build_resource_tools(
             registry,

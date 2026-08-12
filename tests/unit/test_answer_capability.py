@@ -175,10 +175,7 @@ async def test_reprobe_updates_cached_synthesizer_image_budget(
     }
     manager = RAGServiceManager(config=_reprobe_config())
     manager._answer_image_capability = _capability("unknown", 0)
-    synthesizer = AnswerSynthesizer(
-        image_max_pixels=40_000_000,
-        effective_max_images=0,
-    )
+    synthesizer = AnswerSynthesizer(image_policy=manager._answer_image_policy())
     manager._answer_synthesizer = synthesizer
 
     async def fake_discover() -> AnswerImageCapability:

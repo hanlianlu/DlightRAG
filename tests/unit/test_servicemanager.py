@@ -1225,10 +1225,9 @@ class TestAnswerViaEngine:
             engine2 = manager._get_answer_synthesizer()
             assert engine2 is engine
 
-    def test_get_answer_synthesizer_threads_pixel_limit_to_one_image_budget(
+    def test_get_answer_synthesizer_threads_config_policy_to_fresh_budgets(
         self,
         test_cfg,
-        monkeypatch,
     ) -> None:
         test_cfg.answer.image_max_pixels = 123
         manager = RAGServiceManager(config=test_cfg)
@@ -1236,25 +1235,15 @@ class TestAnswerViaEngine:
         with patch("dlightrag.models.llm.get_query_model_func", return_value=MagicMock()):
             engine = manager._get_answer_synthesizer()
 
-        budgets = []
-        new_image_budget = engine._new_image_budget
+        policy = engine._image_policy
+        assert policy.max_pixels == 123
+        assert policy.context_window_tokens == test_cfg.answer.context_window_tokens
 
-        def capture_image_budget():
-            budget = new_image_budget()
-            budgets.append(budget)
-            return budget
-
-        monkeypatch.setattr(engine, "_new_image_budget", capture_image_budget)
-
-        engine._prepare_model_call(
-            "query",
-            {"chunks": [], "entities": [], "relationships": []},
-        )
-
-        # One evidence image budget carries the configured pixel ceiling; there
-        # are no separate composer/rag lanes.
-        assert len(budgets) == 1
-        assert budgets[0].max_pixels == 123
+        # One immutable policy, one fresh budget per call -- never shared state.
+        first = policy.new_budget()
+        first.count = 1
+        assert policy.new_budget().count == 0
+        assert policy.new_budget().max_pixels == 123
 
     def test_get_retrieval_planner_uses_retrieval_planner_model_func(self, test_cfg) -> None:
         """RetrievalPlanner uses the text planning factory, not the answer/query role."""
@@ -2484,7 +2473,7 @@ class TestAgenticAnswerCapability:
             model="vision-test",
             failure_kind=None,
         )
-        budget = manager._new_answer_image_budget()
+        budget = manager._answer_image_policy().new_budget()
         add_user_image = budget.add_user_image
 
         def capture_budget(value, *, label):
@@ -2575,7 +2564,7 @@ class TestAgenticAnswerCapability:
             f"[current image 1 | resource: {init['resource_manifest'][0].resource_id}]"
         )
         assert image_blocks[1]["type"] == "image_url"
-        assert inspector.call_args.kwargs["max_images"] == 2
+        assert inspector.call_args.kwargs["image_policy"].max_images == 2
 
     async def test_with_exa_raw_retrieve_remains_knowledge_base_only(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
@@ -2644,7 +2633,7 @@ class TestAgenticAnswerCapability:
         model.complete_text = AsyncMock(return_value="Answer.")
         manager._query_tool_model = model
         manager._answer_synthesizer = AnswerSynthesizer(
-            image_max_pixels=40_000_000,
+            image_policy=manager._answer_image_policy(),
             model_func=None,
         )
 
@@ -2732,7 +2721,7 @@ class TestAgenticAnswerCapability:
         model.complete_text = AsyncMock(return_value="Answer [1-1].")
         manager._query_tool_model = model
         manager._answer_synthesizer = AnswerSynthesizer(
-            image_max_pixels=40_000_000,
+            image_policy=manager._answer_image_policy(),
             model_func=None,
         )
 
@@ -2828,7 +2817,7 @@ class TestAgenticAnswerCapability:
         manager._query_tool_model = model
         # A real synthesizer owns the tools-disabled final call for research too.
         manager._answer_synthesizer = AnswerSynthesizer(
-            image_max_pixels=40_000_000, model_func=None
+            image_policy=manager._answer_image_policy(), model_func=None
         )
 
         result = await manager.aanswer("What about it?", workspace="alpha")

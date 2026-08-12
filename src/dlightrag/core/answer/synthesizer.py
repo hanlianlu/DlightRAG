@@ -31,7 +31,7 @@ from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, An
 from dlightrag.core.answer.context import AnswerContextPacker
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
-from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import answer_core
@@ -78,31 +78,19 @@ class AnswerSynthesizer:
     def __init__(
         self,
         *,
-        image_max_pixels: int,
+        image_policy: AnswerImagePolicy,
         model_func: Callable[..., Any] | None = None,
-        effective_max_images: int = 0,
-        image_max_bytes: int = 3_000_000,
-        image_max_total_bytes: int = 24_000_000,
-        image_max_px: int = 1536,
-        image_min_px: int = 1024,
-        image_quality: int = 89,
-        image_min_quality: int = 79,
-        context_window_tokens: int = 260_000,
     ) -> None:
         self.model_func = model_func
-        self._effective_max_images = effective_max_images
-        self._image_max_bytes = image_max_bytes
-        self._image_max_total_bytes = image_max_total_bytes
-        self._image_max_pixels = image_max_pixels
-        self._image_max_px = image_max_px
-        self._image_min_px = image_min_px
-        self._image_quality = image_quality
-        self._image_min_quality = image_min_quality
-        self._capacity = AnswerCapacity(max(1, context_window_tokens))
+        self._image_policy = image_policy
 
-    def set_effective_max_images(self, value: int) -> None:
-        """Apply a refreshed query-model image capability to future calls."""
-        self._effective_max_images = max(0, int(value))
+    def set_image_policy(self, policy: AnswerImagePolicy) -> None:
+        """Adopt a refreshed transport policy -- e.g. after a capability probe."""
+        self._image_policy = policy
+
+    @property
+    def _capacity(self) -> AnswerCapacity:
+        return AnswerCapacity(max(1, self._image_policy.context_window_tokens))
 
     # ------------------------------------------------------------------
     # Public API
@@ -310,7 +298,7 @@ class AnswerSynthesizer:
 
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
             system_prompt = answer_core()
-            budget = self._new_image_budget()
+            budget = self._image_policy.new_budget()
             prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
             no_context = not any(
                 prepared.contexts.get(key) for key in ("chunks", "entities", "relationships")
@@ -405,19 +393,6 @@ class AnswerSynthesizer:
         trace["answer_images_total"] = rag_context
         trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
-    def _new_image_budget(self) -> AnswerImageBudget:
-        """Create one fresh transport budget shared by every answer visual lane."""
-        return AnswerImageBudget(
-            max_images=self._effective_max_images,
-            max_total_bytes=self._image_max_total_bytes,
-            max_bytes_per_image=self._image_max_bytes,
-            max_pixels=self._image_max_pixels,
-            max_px=self._image_max_px,
-            min_px=self._image_min_px,
-            quality=self._image_quality,
-            min_quality=self._image_min_quality,
-        )
-
     async def aclose(self) -> None:
         """Release model-function worker resources owned by this synthesizer."""
         from dlightrag.utils.concurrency import shutdown_async_callable
@@ -432,7 +407,7 @@ class AnswerSynthesizer:
         image_budget: AnswerImageBudget | None = None,
     ) -> _PreparedAnswerPrompt:
         if image_budget is None:
-            image_budget = self._new_image_budget()
+            image_budget = self._image_policy.new_budget()
         packed = AnswerContextPacker().pack(contexts, image_budget=image_budget)
         indexer = self._build_citation_indexer(packed.contexts)
         kg_context = self._format_kg_context(packed.contexts, indexer=indexer)

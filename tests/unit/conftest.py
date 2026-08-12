@@ -13,6 +13,8 @@ import pytest
 
 from dlightrag import config as config_module
 from dlightrag.config import DlightragConfig
+from dlightrag.core.answer.images import AnswerImagePolicy
+from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 
 _REPO_CONFIG_YAML = Path(__file__).resolve().parents[2] / "config.yaml"
 # Bound before the fixture patches the name, otherwise the wrapper recurses.
@@ -25,6 +27,22 @@ def _yaml_config_ignoring_repo_file() -> Path | None:
     if found is not None and found.resolve() == _REPO_CONFIG_YAML:
         return None
     return found
+
+
+def answer_image_policy(**overrides: int) -> AnswerImagePolicy:
+    """Shipped answer transport policy for tests; images off unless opted in."""
+    fields: dict[str, int] = {
+        "max_images": 0,
+        "max_total_bytes": 24_000_000,
+        "max_bytes_per_image": 3_000_000,
+        "max_pixels": MODEL_IMAGE_MAX_PIXELS,
+        "max_px": 1536,
+        "min_px": 1024,
+        "quality": 89,
+        "min_quality": 79,
+        "context_window_tokens": 260_000,
+    }
+    return AnswerImagePolicy(**(fields | overrides))
 
 
 @pytest.fixture(autouse=True)

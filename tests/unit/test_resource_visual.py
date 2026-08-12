@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import threading
+from typing import Any
 
 import openpyxl
 import pytest
@@ -19,9 +20,21 @@ from dlightrag.core.resources.visual import (
     ResourceInspector,
 )
 from dlightrag.utils.images import decode_image_base64
+from tests.unit.conftest import answer_image_policy
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _inspector(
+    registry: ResourceRegistry, vlm: Any, *, max_images: int = 8, **overrides: Any
+) -> ResourceInspector:
+    return ResourceInspector(
+        registry,
+        vlm_func=vlm,
+        image_policy=answer_image_policy(max_images=max_images),
+        **overrides,
+    )
 
 
 class _RecordingVLM:
@@ -96,7 +109,7 @@ async def test_inspect_source_image_returns_vlm_evidence() -> None:
                 filename="chart.png", content=_png((200, 30, 30)), declared_mime="image/png"
             )
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         result = await inspector.inspect(resource_id, "What does the chart show?")
 
@@ -129,7 +142,7 @@ async def test_inspection_image_budgeting_runs_off_event_loop(
                 declared_mime="image/png",
             )
         )
-        inspector = ResourceInspector(registry, vlm_func=_RecordingVLM())
+        inspector = _inspector(registry, _RecordingVLM())
 
         await inspector.inspect(resource_id, "Read the chart")
 
@@ -143,7 +156,7 @@ async def test_inspect_pdf_overview_is_bounded_and_low_resolution() -> None:
         resource_id = registry.register(
             ResourceInput(filename="deck.pdf", content=_pdf_bytes([(300, 400)] * 3))
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         result = await inspector.inspect(resource_id, "Which page has the revenue table?")
 
@@ -162,7 +175,7 @@ async def test_inspect_pdf_selected_full_page_is_higher_resolution() -> None:
         resource_id = registry.register(
             ResourceInput(filename="deck.pdf", content=_pdf_bytes([(300, 400)] * 3))
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         result = await inspector.inspect(resource_id, "Read the table", locator="2")
 
@@ -179,7 +192,7 @@ async def test_inspect_pdf_missing_page_raises() -> None:
         resource_id = registry.register(
             ResourceInput(filename="deck.pdf", content=_pdf_bytes([(300, 400)]))
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         with pytest.raises(ResourceInspectionError):
             await inspector.inspect(resource_id, "Read page 9", locator="9")
@@ -192,7 +205,7 @@ async def test_inspect_rejects_invalid_or_conflicting_locators() -> None:
         resource_id = registry.register(
             ResourceInput(filename="deck.pdf", content=_pdf_bytes([(300, 400)]))
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         with pytest.raises(ResourceInspectionError, match="page number"):
             await inspector.inspect(resource_id, "Read the page", locator="page nope")
@@ -208,7 +221,7 @@ async def test_inspect_source_image_rejects_page_cursor() -> None:
         resource_id = registry.register(
             ResourceInput(filename="chart.png", content=_png((2, 3, 4)), declared_mime="image/png")
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         with pytest.raises(ResourceInspectionError, match="source image"):
             await inspector.inspect(resource_id, "Read the chart", cursor="cursor")
@@ -222,7 +235,7 @@ async def test_inspect_pdf_overview_paginates() -> None:
         resource_id = registry.register(
             ResourceInput(filename="deck.pdf", content=_pdf_bytes([(200, 260)] * 3))
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm, overview_page_limit=2)
+        inspector = _inspector(registry, vlm, overview_page_limit=2)
 
         first = await inspector.inspect(resource_id, "Find the chart")
         assert first.locator.page_start == 1
@@ -242,9 +255,9 @@ async def test_inspect_pdf_overview_locator_only_claims_pages_sent_to_vlm() -> N
         resource_id = registry.register(
             ResourceInput(filename="deck.pdf", content=_pdf_bytes([(200, 260)] * 3))
         )
-        inspector = ResourceInspector(
+        inspector = _inspector(
             registry,
-            vlm_func=vlm,
+            vlm,
             max_images=1,
             overview_page_limit=3,
         )
@@ -269,7 +282,7 @@ async def test_inspect_docx_embedded_visual_handle() -> None:
         )
         read = await registry.read(resource_id)
         handle_id = read.visual_handles[0].handle_id
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         result = await inspector.inspect(resource_id, "Describe the image", locator=handle_id)
 
@@ -291,7 +304,7 @@ async def test_inspect_xlsx_sheet_cell_handle_carries_anchor() -> None:
         )
         read = await registry.read(resource_id)
         handle_id = read.visual_handles[0].handle_id
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         result = await inspector.inspect(resource_id, "Describe the image", locator=handle_id)
 
@@ -304,7 +317,7 @@ async def test_inspect_vlm_failure_surfaces_as_inspection_error() -> None:
         resource_id = registry.register(
             ResourceInput(filename="chart.png", content=_png((1, 2, 3)), declared_mime="image/png")
         )
-        inspector = ResourceInspector(registry, vlm_func=_FailingVLM())
+        inspector = _inspector(registry, _FailingVLM())
 
         with pytest.raises(ResourceInspectionError, match="visual inspection failed") as failure:
             await inspector.inspect(resource_id, "What is this?")
@@ -318,7 +331,7 @@ async def test_inspect_text_resource_without_handle_raises() -> None:
         resource_id = registry.register(
             ResourceInput(filename="notes.txt", content=b"just text", declared_mime="text/plain")
         )
-        inspector = ResourceInspector(registry, vlm_func=vlm)
+        inspector = _inspector(registry, vlm)
 
         with pytest.raises(ResourceInspectionError):
             await inspector.inspect(resource_id, "Look at it")

@@ -10,7 +10,7 @@ from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.protocols import RetrievalContexts
-from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
+from tests.unit.conftest import answer_image_policy
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -122,7 +122,7 @@ class TestAnswerSynthesizerGenerate:
     async def test_generate_with_freetext_response(self) -> None:
         raw = "AI is artificial intelligence [1-1].\n\n### References\n- [1] AI Overview"
         model_func = AsyncMock(return_value=raw)
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         result = await synth.generate("What is AI?", _text_contexts())
 
@@ -137,7 +137,7 @@ class TestAnswerSynthesizerGenerate:
     @pytest.mark.asyncio
     async def test_generate_preserves_citation_reference_ids(self) -> None:
         model_func = AsyncMock(return_value="The other document applies here [2-1].")
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         result = await synth.generate("Which document applies?", _multi_doc_contexts())
 
@@ -180,7 +180,7 @@ class TestAnswerSynthesizerGenerate:
         monkeypatch.setattr("dlightrag.citations.finalize_answer", finalize_answer)
 
         model_func = AsyncMock(return_value="raw answer")
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         await synth.generate("query", _text_contexts())
 
@@ -192,7 +192,7 @@ class TestAnswerSynthesizerGenerate:
 
     @pytest.mark.asyncio
     async def test_generate_no_model_func(self) -> None:
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=None)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=None)
         contexts: RetrievalContexts = {"chunks": []}
         result = await synth.generate("test", contexts)
         assert result.answer is None
@@ -201,7 +201,7 @@ class TestAnswerSynthesizerGenerate:
     @pytest.mark.asyncio
     async def test_generate_empty_context_disclaims_general_knowledge(self) -> None:
         model_func = AsyncMock(return_value="The capital of France is Paris.")
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
         contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
 
         result = await synth.generate("what is the capital of France?", contexts)
@@ -215,9 +215,8 @@ class TestAnswerSynthesizerGenerate:
         raw = "ok\n\n### References\n- [1] chart.pdf"
         model_func = AsyncMock(return_value=raw)
         synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            image_policy=answer_image_policy(max_images=6),
             model_func=model_func,
-            effective_max_images=6,
         )
 
         await synth.generate("describe", _image_contexts())
@@ -228,12 +227,36 @@ class TestAnswerSynthesizerGenerate:
         assert any(item.get("type") == "text" for item in user_content)
 
     @pytest.mark.asyncio
+    async def test_each_generate_call_gets_a_fresh_budget_from_one_policy(self) -> None:
+        model_func = AsyncMock(return_value="The chart shows growth [1-1].")
+        policy = answer_image_policy(max_images=1)
+        synth = AnswerSynthesizer(image_policy=policy, model_func=model_func)
+
+        first = await synth.generate("describe", _image_contexts())
+        second = await synth.generate("describe", _image_contexts())
+
+        assert first.trace["answer_images_total"] == 1
+        assert second.trace["answer_images_total"] == 1
+        assert policy.max_images == 1
+
+    @pytest.mark.asyncio
+    async def test_replacing_the_policy_applies_a_refreshed_capability(self) -> None:
+        model_func = AsyncMock(return_value="ok [1-1].")
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
+
+        blind = await synth.generate("describe", _image_contexts())
+        synth.set_image_policy(answer_image_policy(max_images=4))
+        sighted = await synth.generate("describe", _image_contexts())
+
+        assert blind.trace["answer_images_total"] == 0
+        assert sighted.trace["answer_images_total"] == 1
+
+    @pytest.mark.asyncio
     async def test_generate_returns_structured_answer_images_for_sdk(self) -> None:
         model_func = AsyncMock(return_value="The chart shows growth [1-1].")
         synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            image_policy=answer_image_policy(max_images=6),
             model_func=model_func,
-            effective_max_images=6,
         )
 
         result = await synth.generate("describe", _image_contexts())
@@ -258,7 +281,7 @@ class TestAnswerSynthesizerGenerate:
     async def test_generate_no_response_format(self) -> None:
         raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         await synth.generate("query", _text_contexts())
 
@@ -269,9 +292,8 @@ class TestAnswerSynthesizerGenerate:
         raw = "answer\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
         synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            image_policy=answer_image_policy(max_images=0),
             model_func=model_func,
-            effective_max_images=0,
         )
         contexts: RetrievalContexts = {
             "chunks": [
@@ -312,7 +334,7 @@ class TestAnswerSynthesizerGenerate:
             raising=False,
         )
         model_func = AsyncMock(return_value="answer")
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         await synth.generate("query", _image_contexts())
 
@@ -322,7 +344,7 @@ class TestAnswerSynthesizerGenerate:
     async def test_generate_strips_model_generated_references_tail(self) -> None:
         raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         result = await synth.generate("query", _text_contexts())
 
@@ -346,7 +368,7 @@ class TestAnswerSynthesizerStream:
                 yield token
 
         model_func = AsyncMock(return_value=mock_tokens())
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         _ctx, token_iter = await synth.generate_stream("test", _text_contexts())
 
@@ -356,7 +378,7 @@ class TestAnswerSynthesizerStream:
 
     @pytest.mark.asyncio
     async def test_generate_stream_no_model_func(self) -> None:
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=None)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=None)
         contexts: RetrievalContexts = {"chunks": []}
         ctx, token_iter = await synth.generate_stream("test", contexts)
         assert token_iter is None
@@ -368,7 +390,7 @@ class TestAnswerSynthesizerStream:
             yield "I am DlightRAG."
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
         contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
 
         ctx, token_iter = await synth.generate_stream("who are u", contexts)
@@ -387,7 +409,7 @@ class TestAnswerSynthesizerStream:
                 yield token
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         result_contexts, token_iter = await synth.generate_stream("query", _text_contexts())
 
@@ -401,7 +423,7 @@ class TestAnswerSynthesizerStream:
             yield "text"
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         await synth.generate_stream("query", _text_contexts())
 
@@ -415,7 +437,7 @@ class TestAnswerSynthesizerStream:
             yield "token"
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, model_func=model_func)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
         _, token_iter = await synth.generate_stream("query", _text_contexts())
 
@@ -445,16 +467,14 @@ class TestAnswerSynthesizerStream:
         contexts = _multi_doc_contexts()
 
         synth_a = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            image_policy=answer_image_policy(max_images=6),
             model_func=capture_nonstream,
-            effective_max_images=6,
         )
         await synth_a.generate("compare", contexts)
 
         synth_b = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            image_policy=answer_image_policy(max_images=6),
             model_func=capture_stream,
-            effective_max_images=6,
         )
         await synth_b.generate_stream("compare", contexts)
 
@@ -468,7 +488,7 @@ class TestAnswerSynthesizerStream:
 
 class TestAnswerSynthesizerCapacity:
     def test_default_evidence_ceiling_is_156000(self) -> None:
-        synth = AnswerSynthesizer(image_max_pixels=MODEL_IMAGE_MAX_PIXELS)
+        synth = AnswerSynthesizer(image_policy=answer_image_policy())
 
         prepared = synth._prepare_model_call(
             "question", _text_contexts(), conversation_history=PriorTurns()
@@ -491,10 +511,7 @@ class TestAnswerSynthesizerCapacity:
             "relationships": [],
         }
         original_content = contexts["chunks"][0]["content"]
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            context_window_tokens=200,
-        )
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(context_window_tokens=200))
 
         with pytest.raises(AnswerInputOverflowError):
             synth._prepare_model_call("question", contexts, conversation_history=PriorTurns())
@@ -527,10 +544,7 @@ class TestAnswerSynthesizerCapacity:
         }
         original_chunks = [dict(contexts["chunks"][0])]
         # A window whose input budget only fits recent history plus fixed input.
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            context_window_tokens=33_000,
-        )
+        synth = AnswerSynthesizer(image_policy=answer_image_policy(context_window_tokens=33_000))
 
         prepared = synth._prepare_model_call(
             "current question",

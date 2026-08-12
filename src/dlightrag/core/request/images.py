@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from dlightrag.core.answer.images import AnswerImageBudget
+from dlightrag.core.answer.images import AnswerImagePolicy
 from dlightrag.utils.concurrency import bounded_map
 from dlightrag.utils.images import image_url_block
 
@@ -20,24 +20,12 @@ class QueryImageDescriber:
         self,
         *,
         vlm_func: Callable[..., Any] | None,
+        image_policy: AnswerImagePolicy,
         max_images: int = 3,
-        max_total_bytes: int,
-        max_bytes_per_image: int,
-        max_pixels: int,
-        max_px: int,
-        min_px: int,
-        quality: int,
-        min_quality: int,
     ) -> None:
         self._vlm_func = vlm_func
+        self._image_policy = image_policy
         self._max_images = max(0, int(max_images))
-        self._max_total_bytes = max(1, int(max_total_bytes))
-        self._max_bytes_per_image = max(1, int(max_bytes_per_image))
-        self._max_pixels = max(1, int(max_pixels))
-        self._max_px = max(1, int(max_px))
-        self._min_px = max(1, int(min_px))
-        self._quality = max(1, int(quality))
-        self._min_quality = max(1, int(min_quality))
 
     async def describe(
         self,
@@ -53,16 +41,9 @@ class QueryImageDescriber:
             block = image_url_block(image)
             if block is None:
                 return None
-            budget = AnswerImageBudget(
-                max_images=1,
-                max_total_bytes=self._max_total_bytes,
-                max_bytes_per_image=self._max_bytes_per_image,
-                max_pixels=self._max_pixels,
-                max_px=self._max_px,
-                min_px=self._min_px,
-                quality=self._quality,
-                min_quality=self._min_quality,
-            )
+            # The VLM role describes one image per call, whatever the answer
+            # model's own image capability turned out to be.
+            budget = self._image_policy.new_budget(max_images=1)
             bounded_block = await asyncio.to_thread(
                 budget.add_user_image,
                 block,
