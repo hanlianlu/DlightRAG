@@ -307,6 +307,14 @@ class RunSession:
                 references=references,
             )
         )
+        if outcome == "turn_mismatch":
+            # The run advanced a turn without this worker; its replay slots no
+            # longer describe the durable state, so the run terminalizes here
+            # instead of being handed back to crash recovery.
+            raise CheckpointError(
+                "checkpoint_corrupt",
+                "Answer run artifacts no longer match its authoritative turn count.",
+            )
         if outcome != "attached":
             self._lease_lost = True
             raise LeaseLostError
@@ -486,19 +494,41 @@ class AnswerRunCoordinator:
             await self._finish_failure(session, classify_answer_error(exc), _FAILED_MESSAGE)
         finally:
             heartbeat.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await heartbeat
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                # A dead heartbeat is never this run's outcome.
+                logger.warning(
+                    "Answer run %s heartbeat ended in failure", session.run_id, exc_info=True
+                )
 
     async def _heartbeat_forever(self, session: RunSession) -> None:
-        """Renew an unexpired fenced lease and surface pending cancellation."""
+        """Renew an unexpired fenced lease and surface pending cancellation.
+
+        A store that fails to answer is a transient fault, not lease loss: the
+        renewal is retried on the next cadence and the run stays owned until the
+        store authoritatively refuses to renew.
+        """
         while True:
             await asyncio.sleep(self._heartbeat_seconds)
-            renewal = await self._store.heartbeat(
-                owner_id=session.owner_id,
-                run_id=session.run_id,
-                worker_id=session.worker_id,
-                fencing_epoch=session.fencing_epoch,
-            )
+            try:
+                renewal = await self._store.heartbeat(
+                    owner_id=session.owner_id,
+                    run_id=session.run_id,
+                    worker_id=session.worker_id,
+                    fencing_epoch=session.fencing_epoch,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Answer run %s heartbeat failed; retrying next cadence",
+                    session.run_id,
+                    exc_info=True,
+                )
+                continue
             if not renewal.renewed:
                 session.observe_lease_loss()
                 task = self._runs.get(session.run_id)

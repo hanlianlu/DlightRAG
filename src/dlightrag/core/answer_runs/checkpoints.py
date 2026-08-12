@@ -6,7 +6,9 @@ joins those exports, replaces image payloads with stable references, and
 enforces the versioned envelope and its compact size bound. Raw, data-URI, and
 base64 image bytes never reach checkpoint JSON: a caller attachment becomes an
 owner artifact digest plus its run ordinal, and a knowledge-base visual becomes
-workspace, chunk, and sidecar identity.
+workspace, chunk, and sidecar identity. Fetched web bytes stay in the owner's
+artifact store and are handed back to the registry on restore, so a resumed run
+reads what it originally fetched rather than whatever the page serves now.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import binascii
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from dlightrag.core.answer_runs.models import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -24,6 +26,9 @@ from dlightrag.core.answer_runs.models import (
     AgentRunState,
     CheckpointError,
 )
+
+if TYPE_CHECKING:
+    from dlightrag.core.resources.registry import ResourceRegistry
 
 #: Resolve one knowledge-base visual by workspace and chunk, or ``None`` when it
 #: no longer exists. A missing corpus visual never fails a run.
@@ -138,8 +143,50 @@ async def restore_agent_state(
         raise CheckpointError(
             "checkpoint_corrupt", "Answer run checkpoint is not restorable state."
         ) from exc
+    if state.registry is not None:
+        await _restore_fetched_bytes(state.registry, owner_id=owner_id, run_id=run_id, store=store)
     state.completed_turns = completed_turns
     state.trace["agent_turns"] = completed_turns
+
+
+async def _restore_fetched_bytes(
+    registry: ResourceRegistry,
+    *,
+    owner_id: str,
+    run_id: str,
+    store: ArtifactReader,
+) -> None:
+    """Give every checkpointed fetch back the bytes the run actually read.
+
+    Fetched web bytes are durable run state, so a slot the checkpoint names but
+    the store can no longer produce is corruption -- unlike a knowledge-base
+    visual, which a run may lose without changing what it already concluded.
+    """
+    slots = registry.fetched_replay_slots()
+    if not slots:
+        return
+    references = await store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
+    stored = {
+        str(reference.resource_id): str(reference.digest)
+        for reference in references
+        if str(reference.reference_kind) == "fetched_resource"
+    }
+    for resource_id in slots:
+        digest = stored.get(resource_id)
+        content = (
+            None if digest is None else await store.load_artifact(owner_id=owner_id, digest=digest)
+        )
+        if content is None:
+            raise CheckpointError(
+                "checkpoint_corrupt",
+                "Answer run checkpoint references fetched bytes that no longer exist.",
+            )
+        try:
+            registry.restore_fetched_bytes(resource_id, content)
+        except RuntimeError as exc:
+            raise CheckpointError(
+                "checkpoint_corrupt", "Answer run checkpoint is not restorable state."
+            ) from exc
 
 
 def _substitute_images(node: Any, *, ordinals: Mapping[str, int]) -> None:

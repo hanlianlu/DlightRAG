@@ -33,6 +33,7 @@ from dlightrag.core.resources.registry import ResourceRegistry, ResourceStateMis
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 _ATTACHMENT_BYTES = b"\x89PNG\r\n\x1a\nfake-attachment"
 _ATTACHMENT_B64 = base64.b64encode(_ATTACHMENT_BYTES).decode("ascii")
+_FETCHED_BYTES = b"<html>the page as it was when the run fetched it</html>"
 
 
 class _FakeStore:
@@ -440,6 +441,74 @@ class TestCheckpointFailureKinds:
         assert MAX_CHECKPOINT_BYTES == 8 * 1024 * 1024
 
 
+class TestFetchedResourceRestore:
+    """Durable web bytes are run state, so a resume reads them, never the network."""
+
+    async def test_restored_fetched_bytes_are_read_without_touching_the_network(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.core.resources import registry as registry_module
+
+        state = _empty_state()
+        registry = _registry(state)
+        resource_id = registry.register_discovered_link("https://example.com/a.html")
+        assert resource_id is not None
+        ordinal = registry.allocate_fetched_ordinal(resource_id)
+        store = _FakeStore(artifacts={_sha256(_FETCHED_BYTES): _FETCHED_BYTES})
+        store.references.append(
+            _Reference(
+                digest=_sha256(_FETCHED_BYTES),
+                ordinal=ordinal,
+                reference_kind="fetched_resource",
+                resource_id=resource_id,
+            )
+        )
+        encoded = await encode_checkpoint_state(state, owner_id="owner", run_id="run", store=store)
+
+        monkeypatch.setattr(registry_module, "avalidate_public_https_url", _no_network)
+        monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _no_network)
+        resumed = _empty_state()
+        await restore_agent_state(resumed, encoded, owner_id="owner", run_id="run", store=store)
+
+        assert await _registry(resumed).materialize(resource_id) == _FETCHED_BYTES
+        await state.tool_cache.aclose()
+        await resumed.tool_cache.aclose()
+        await registry.aclose()
+        await _registry(resumed).aclose()
+
+    async def test_a_missing_fetched_blob_is_checkpoint_corrupt(self) -> None:
+        state = _empty_state()
+        registry = _registry(state)
+        resource_id = registry.register_discovered_link("https://example.com/a.html")
+        assert resource_id is not None
+        ordinal = registry.allocate_fetched_ordinal(resource_id)
+        store = _FakeStore(artifacts={_sha256(_FETCHED_BYTES): _FETCHED_BYTES})
+        store.references.append(
+            _Reference(
+                digest=_sha256(_FETCHED_BYTES),
+                ordinal=ordinal,
+                reference_kind="fetched_resource",
+                resource_id=resource_id,
+            )
+        )
+        encoded = await encode_checkpoint_state(state, owner_id="owner", run_id="run", store=store)
+        store.artifacts.clear()
+
+        resumed = _empty_state()
+        with pytest.raises(CheckpointError) as raised:
+            await restore_agent_state(resumed, encoded, owner_id="owner", run_id="run", store=store)
+
+        assert raised.value.kind == "checkpoint_corrupt"
+        await state.tool_cache.aclose()
+        await resumed.tool_cache.aclose()
+        await registry.aclose()
+        await _registry(resumed).aclose()
+
+
+async def _no_network(url: str, **kwargs: Any) -> bytes:
+    raise AssertionError(f"a restored run must not reach the network for {url}")
+
+
 def _empty_state() -> AgentRunState:
     return AgentRunState(
         evidence=EvidenceLedger(),
@@ -463,7 +532,15 @@ def _sha256(payload: bytes) -> str:
 
 
 class _Reference:
-    def __init__(self, *, digest: str, ordinal: int, reference_kind: str) -> None:
+    def __init__(
+        self,
+        *,
+        digest: str,
+        ordinal: int,
+        reference_kind: str,
+        resource_id: str = "",
+    ) -> None:
         self.digest = digest
         self.ordinal = ordinal
         self.reference_kind = reference_kind
+        self.resource_id = resource_id

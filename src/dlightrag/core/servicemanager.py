@@ -374,6 +374,10 @@ class RAGServiceManager:
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._answer_run_store: PGAnswerRunStore | None = None
         self._answer_coordinator: Any | None = None
+        # Separate locks: starting the runtime needs the store, so one lock for
+        # both would deadlock on itself.
+        self._answer_store_lock = asyncio.Lock()
+        self._answer_runtime_lock = asyncio.Lock()
 
     @property
     def config(self) -> DlightragConfig:
@@ -1830,28 +1834,48 @@ class RAGServiceManager:
     # --- Durable answer runs ---
 
     async def _get_answer_run_store(self) -> PGAnswerRunStore:
-        if self._answer_run_store is None:
-            from dlightrag.storage.answer_runs import PGAnswerRunStore as _Store
+        if self._answer_run_store is not None:
+            return self._answer_run_store
+        async with self._answer_store_lock:
+            if self._answer_run_store is None:
+                from dlightrag.storage.answer_runs import PGAnswerRunStore as _Store
 
-            store = _Store()
-            await store.initialize()
-            self._answer_run_store = store
-        return self._answer_run_store
+                store = _Store()
+                await store.initialize()
+                self._answer_run_store = store
+            return self._answer_run_store
 
     async def astart_answer_runtime(self) -> None:
-        """Create the durable run schema and begin executing accepted runs."""
+        """Create the durable run schema and begin executing accepted runs.
+
+        Idempotent and safe to call concurrently: every caller ends up sharing
+        the one store and the one coordinator this process owns, so no orphaned
+        worker identity can claim runs that ``aclose`` would never join.
+        """
         if self._answer_coordinator is not None:
             return
+        if self._closed:
+            raise RAGServiceUnavailableError("Answer runtime is shutting down")
         from dlightrag.core.answer_runs.coordinator import AnswerRunCoordinator
 
-        store = await self._get_answer_run_store()
-        coordinator = AnswerRunCoordinator(
-            store=store,
-            executor=_ManagerAnswerExecutor(self),
-            max_async=int(self._config.max_async),
-        )
-        await coordinator.start()
-        self._answer_coordinator = coordinator
+        async with self._answer_runtime_lock:
+            if self._answer_coordinator is not None:
+                return
+            if self._closed:
+                raise RAGServiceUnavailableError("Answer runtime is shutting down")
+            store = await self._get_answer_run_store()
+            coordinator = AnswerRunCoordinator(
+                store=store,
+                executor=_ManagerAnswerExecutor(self),
+                max_async=int(self._config.max_async),
+            )
+            await coordinator.start()
+            if self._closed:
+                # The manager closed while the store was initializing; publishing
+                # now would leave a claiming worker that ``aclose`` never joins.
+                await coordinator.aclose()
+                raise RAGServiceUnavailableError("Answer runtime is shutting down")
+            self._answer_coordinator = coordinator
 
     async def astart_answer_run(
         self,
@@ -1861,9 +1885,14 @@ class RAGServiceManager:
         idempotency_key: str | None = None,
         attachment_bytes: Sequence[bytes] = (),
     ) -> RunCreation:
-        """Accept one run, its input blobs, and its references in one transaction."""
+        """Accept one run, its input blobs, and its references in one transaction.
+
+        The runtime is started first, so an accepted run executes even when no
+        caller ever subscribes to its events.
+        """
         from dlightrag.storage.answer_runs import PendingArtifact, PendingArtifactReference
 
+        await self.astart_answer_runtime()
         store = await self._get_answer_run_store()
         artifacts = [PendingArtifact(content=content) for content in attachment_bytes]
         references = [
@@ -1929,6 +1958,7 @@ class RAGServiceManager:
             SessionBoundaries,
             canonical_result,
         )
+        from dlightrag.core.client_payloads import project_contexts_for_client
 
         store = await self._get_answer_run_store()
         request = _Input.from_request(session.request)
@@ -2001,7 +2031,10 @@ class RAGServiceManager:
             images = answer_images_from_sources(finalized.sources, contexts=contexts)
             return canonical_result(
                 answer=finalized.answer,
-                contexts=contexts,
+                # Answer images are derived from the raw contexts first; only the
+                # client-safe projection is durable, so no inline image payload or
+                # internal source locator is stored twice.
+                contexts=project_contexts_for_client(contexts, image_url_prefix=None),
                 sources=finalized.sources,
                 answer_images=images,
                 answer_blocks=answer_blocks_from_markdown(finalized.answer, images),

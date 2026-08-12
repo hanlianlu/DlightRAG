@@ -13,21 +13,37 @@ Requires PostgreSQL at localhost:5432 (dlightrag/dlightrag); skipped otherwise.
 """
 
 import asyncio
+import base64
+import json
 import uuid
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, cast
+from unittest.mock import MagicMock
 
 import asyncpg
 import pytest
 
+from dlightrag.citations.streaming import AnswerStream
+from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.agent.tools import _ToolCallCache
+from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer_runs.checkpoints import encode_checkpoint_state, restore_agent_state
 from dlightrag.core.answer_runs.coordinator import AnswerRunCoordinator, RunSession
+from dlightrag.core.answer_runs.execution import AnswerRunInput
 from dlightrag.core.answer_runs.models import AgentRunState
+from dlightrag.core.answer_runs.subscription import RunEventBroker
+from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
+from dlightrag.core.resources import registry as registry_module
 from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.resources.registry import ResourceRegistry
+from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.servicemanager import (
+    RAGServiceManager,
+    _fetched_bytes_sink,
+    _OrchestratorRun,
+)
 from dlightrag.storage.answer_runs import PGAnswerRunStore
 
 pytestmark = [
@@ -45,6 +61,7 @@ _PG_CONN_KWARGS: dict[str, Any] = dict(
 
 _OWNER = "owner-alpha"
 _REQUEST: dict[str, Any] = {"query": "why", "workspaces": ["default"]}
+_VISUAL_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 
 
 async def _pg_available() -> bool:
@@ -321,3 +338,243 @@ async def test_checkpoint_round_trips_through_jsonb(store: PGAnswerRunStore) -> 
     await resumed.tool_cache.aclose()
     await registry.aclose()
     await resumed_registry.aclose()
+
+
+async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
+    store: PGAnswerRunStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Durable web bytes survive a restart even when the page no longer resolves."""
+    creation = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    run_id = creation.run.run_id
+    claimed = await store.claim_next(worker_id="worker-1")
+    assert claimed is not None
+    session = RunSession(store, claimed, broker=RunEventBroker())
+
+    reached: list[str] = []
+
+    async def _validate(url: str, **kwargs: Any) -> None:
+        reached.append(url)
+
+    async def _fetch_original(url: str, **kwargs: Any) -> bytes:
+        reached.append(url)
+        return b"<html>the page as the run first read it</html>"
+
+    monkeypatch.setattr(registry_module, "avalidate_public_https_url", _validate)
+    monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _fetch_original)
+
+    registry = ResourceRegistry(fetched_bytes_sink=_fetched_bytes_sink(session, store))
+    resource_id = registry.register_discovered_link("https://example.com/a.html")
+    assert resource_id is not None
+    original = await registry.materialize(resource_id)
+    assert original == b"<html>the page as the run first read it</html>"
+
+    state = AgentRunState(
+        evidence=EvidenceLedger(),
+        episode=RunEpisode(),
+        tool_cache=_ToolCallCache(),
+        registry=registry,
+        trace={},
+        completed_turns=1,
+    )
+    envelope = await encode_checkpoint_state(state, owner_id=_OWNER, run_id=run_id, store=store)
+    commit = await store.commit_checkpoint(
+        owner_id=_OWNER,
+        run_id=run_id,
+        worker_id="worker-1",
+        fencing_epoch=claimed.run.fencing_epoch,
+        expected_completed_turns=0,
+        version=int(envelope["version"]),
+        state=envelope["state"],
+    )
+    assert commit.outcome == "committed"
+    before = await _references_by_resource(store, run_id)
+
+    await store.release_for_shutdown(
+        owner_id=_OWNER,
+        run_id=run_id,
+        worker_id="worker-1",
+        fencing_epoch=claimed.run.fencing_epoch,
+    )
+    reclaimed = await store.claim_next(worker_id="worker-2")
+    assert reclaimed is not None
+    assert reclaimed.checkpoint is not None
+    resumed_session = RunSession(store, reclaimed, broker=RunEventBroker())
+
+    async def _dead(url: str, **kwargs: Any) -> Any:
+        reached.append(url)
+        raise AssertionError(f"a restored run must not reach the network for {url}")
+
+    reached.clear()
+    monkeypatch.setattr(registry_module, "avalidate_public_https_url", _dead)
+    monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _dead)
+
+    resumed_registry = ResourceRegistry(
+        fetched_bytes_sink=_fetched_bytes_sink(resumed_session, store)
+    )
+    resumed = AgentRunState(
+        evidence=EvidenceLedger(),
+        episode=RunEpisode(),
+        tool_cache=_ToolCallCache(),
+        registry=resumed_registry,
+        trace={},
+    )
+    await restore_agent_state(
+        resumed,
+        {
+            "version": reclaimed.checkpoint.version,
+            "completed_turns": reclaimed.checkpoint.completed_turns,
+            "state": reclaimed.checkpoint.state,
+        },
+        owner_id=_OWNER,
+        run_id=run_id,
+        store=store,
+        expected_completed_turns=1,
+    )
+
+    assert await resumed_registry.materialize(resource_id) == original
+    assert reached == []
+    assert await _references_by_resource(store, run_id) == before
+
+    monkeypatch.setattr(registry_module, "avalidate_public_https_url", _validate)
+
+    async def _fetch_later(url: str, **kwargs: Any) -> bytes:
+        return b"<html>a page discovered after the resume</html>"
+
+    monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _fetch_later)
+    later_id = resumed_registry.register_discovered_link("https://example.com/b.html")
+    assert later_id is not None
+    await resumed_registry.materialize(later_id)
+
+    after = await _references_by_resource(store, run_id)
+    assert after[resource_id] == before[resource_id]
+    assert after[later_id][1] > after[resource_id][1]
+
+    await state.tool_cache.aclose()
+    await resumed.tool_cache.aclose()
+    await registry.aclose()
+    await resumed_registry.aclose()
+
+
+async def _references_by_resource(
+    store: PGAnswerRunStore, run_id: str
+) -> dict[str, tuple[str, int]]:
+    references = await store.list_run_artifacts(owner_id=_OWNER, run_id=run_id)
+    return {
+        reference.resource_id: (reference.digest, reference.ordinal)
+        for reference in references
+        if reference.reference_kind == "fetched_resource"
+    }
+
+
+async def test_accepted_run_executes_and_stores_a_projected_result_without_a_subscriber(
+    store: PGAnswerRunStore,
+) -> None:
+    """A descriptor-only caller still gets a finished run and a safe canonical result."""
+    manager = _answer_manager(store)
+    creation = await manager.astart_answer_run(
+        owner_id=_OWNER, request=AnswerRunInput(query="why", workspaces=("default",))
+    )
+    run_id = creation.run.run_id
+    try:
+        await _settle(_status_is(store, run_id, "succeeded"))
+    finally:
+        coordinator = manager._answer_coordinator
+        manager._answer_coordinator = None
+        if coordinator is not None:
+            await coordinator.aclose()
+
+    run = await manager.aget_answer_run(owner_id=_OWNER, run_id=run_id)
+    assert run is not None
+    result = run.result
+    assert result is not None
+    chunk = result["contexts"]["chunks"][0]
+    assert "image_data" not in chunk
+    assert "_evidence_key" not in chunk
+    assert "source_uri" not in chunk["metadata"]
+    assert "source_download_locator" not in chunk["metadata"]
+
+    events = await store.read_event_page(owner_id=_OWNER, run_id=run_id)
+    done = events[-1]
+    assert done.event_type == "done"
+    assert done.payload["status"] == "succeeded"
+    assert done.payload["result"] == result
+
+    serialized = json.dumps(dict(result))
+    assert _VISUAL_B64 not in serialized
+    assert "data:image" not in serialized
+    assert "/srv/private/book.pdf" not in serialized
+    assert result["sources"][0]["source_uri"] == "corpus://book.pdf"
+    assert result["answer_images"][0]["chunk_id"] == "c1"
+    assert result["trace"]["retrieval"] == "ok"
+
+
+def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
+    """The manager surface a durable run needs, bound to the throwaway database."""
+    config = MagicMock()
+    config.max_async = 1
+    manager = RAGServiceManager.__new__(RAGServiceManager)
+    manager._config = config
+    manager._closed = False
+    manager._answer_run_store = store
+    manager._answer_coordinator = None
+    manager._answer_store_lock = asyncio.Lock()
+    manager._answer_runtime_lock = asyncio.Lock()
+    orchestrator = AnswerOrchestrator(
+        synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
+        retrieve_knowledge_base=_retrieve_visual,
+    )
+
+    async def _prepare(turn: Any, **kwargs: Any) -> _OrchestratorRun:
+        return _OrchestratorRun(
+            orchestrator=orchestrator,
+            image_descriptions=[],
+            query_images=None,
+            history=PriorTurns(),
+            current_image_count=0,
+            ws_list=["default"],
+            registry=None,
+        )
+
+    manager._prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
+    return manager
+
+
+class _CitingSynthesizer:
+    async def generate_stream(
+        self,
+        query: str,
+        contexts: Any,
+        *,
+        conversation_history: PriorTurns | None = None,
+    ) -> tuple[Any, AsyncIterator[str]]:
+        async def _stream() -> AsyncIterator[str]:
+            yield "the drawing shows it [1]"
+
+        return contexts, AnswerStream(_stream())
+
+
+async def _retrieve_visual(query: str) -> RetrievalResult:
+    return RetrievalResult(
+        contexts={
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "content": "evidence",
+                    "reference_id": "1",
+                    "file_path": "book.pdf",
+                    "_workspace": "default",
+                    "_evidence_key": "search_knowledge_base:c1",
+                    "image_data": _VISUAL_B64,
+                    "metadata": {
+                        "source_type": "corpus",
+                        "source_uri": "corpus://book.pdf",
+                        "source_download_locator": "/srv/private/book.pdf",
+                        "title": "book.pdf",
+                    },
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        },
+        trace={"retrieval": "ok"},
+    )

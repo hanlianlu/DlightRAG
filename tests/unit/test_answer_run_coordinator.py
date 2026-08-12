@@ -10,7 +10,7 @@ event. Subscribers replay durable events and detach without touching the run.
 import asyncio
 import datetime
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -47,6 +47,9 @@ class _MemoryStore:
         self.claims = 0
         self.artifact_writes: list[dict[str, Any]] = []
         self.claim_gate: asyncio.Event | None = None
+        self.heartbeats = 0
+        self.heartbeat_failures = 0
+        self.heartbeat_result: Any = None
 
     # -- test helpers -------------------------------------------------
     def add_run(self, run_id: str, **overrides: Any) -> None:
@@ -151,6 +154,12 @@ class _MemoryStore:
     async def heartbeat(
         self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
     ) -> LeaseRenewal:
+        self.heartbeats += 1
+        if self.heartbeat_failures > 0:
+            self.heartbeat_failures -= 1
+            raise RuntimeError("transient heartbeat failure")
+        if self.heartbeat_result is not None:
+            return cast(LeaseRenewal, self.heartbeat_result)
         row = self.runs[run_id]
         if not self._owns(row, worker_id, fencing_epoch):
             return LeaseRenewal(renewed=False, cancel_requested=False)
@@ -653,6 +662,122 @@ class TestDurableProgress:
         assert write["epoch"] == 1
         assert write["expected_completed_turns"] == 0
         assert write["references"][0].reference_kind == "fetched_resource"
+
+    async def test_attaching_against_a_stale_turn_fails_the_run_as_corrupt(self) -> None:
+        store = _MemoryStore()
+        store.add_run("run-a")
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            store.runs["run-a"]["completed_turns"] = 5
+            await session.attach_artifacts(
+                artifacts=[PendingArtifact(content=b"page-bytes")],
+                references=[
+                    PendingArtifactReference(
+                        resource_id="res-1",
+                        reference_kind="fetched_resource",
+                        ordinal=0,
+                        digest=artifact_digest(b"page-bytes"),
+                        filename="page.html",
+                        mime_type="text/html",
+                    )
+                ],
+            )
+            return {"answer": "never"}
+
+        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
+        finally:
+            await coordinator.aclose()
+
+        assert store.runs["run-a"]["error_kind"] == "checkpoint_corrupt"
+
+
+class TestHeartbeatResilience:
+    """A store hiccup is not lease loss, and a dead heartbeat is not an outcome."""
+
+    async def test_transient_heartbeat_failures_never_end_the_run(self) -> None:
+        store = _MemoryStore()
+        store.add_run("run-a")
+        store.heartbeat_failures = 3
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            await _settle(lambda: store.heartbeats >= 5)
+            await session.check_cancelled()
+            return {"answer": "survived"}
+
+        coordinator = AnswerRunCoordinator(
+            store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
+        )
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
+        finally:
+            await coordinator.aclose()
+
+        assert store.runs["run-a"]["result"] == {"answer": "survived"}
+
+    async def test_an_authoritative_non_renewal_still_stops_the_run(self) -> None:
+        store = _MemoryStore()
+        store.add_run("run-a")
+        store.heartbeat_failures = 2
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            await _settle(lambda: store.heartbeats >= 3)
+            row = store.runs["run-a"]
+            row["lease_owner"] = "another-worker"
+            row["fencing_epoch"] = int(row["fencing_epoch"]) + 1
+            await asyncio.sleep(5)
+            return {"answer": "never"}
+
+        executor = _Executor(body)
+        coordinator = AnswerRunCoordinator(
+            store=store, executor=executor, max_async=1, heartbeat_seconds=0.01
+        )
+        await coordinator.start()
+        try:
+            await _settle(lambda: bool(executor.sessions) and executor.sessions[0].lease_lost)
+            await _settle(lambda: coordinator.active_runs == ())
+        finally:
+            await coordinator.aclose()
+
+        assert store.runs["run-a"]["status"] == "running"
+        assert store.events["run-a"] == []
+
+    async def test_a_failing_heartbeat_task_never_replaces_the_run_outcome(self) -> None:
+        store = _MemoryStore()
+        store.add_run("run-a")
+        store.heartbeat_result = _UnreadableRenewal()
+        executions: list[asyncio.Task[Any]] = []
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            task = asyncio.current_task()
+            assert task is not None
+            executions.append(task)
+            await _settle(lambda: store.heartbeats >= 1)
+            return {"answer": "kept"}
+
+        coordinator = AnswerRunCoordinator(
+            store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
+        )
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
+            await _settle(lambda: bool(executions) and executions[0].done())
+        finally:
+            await coordinator.aclose()
+
+        assert executions[0].exception() is None
+        assert store.runs["run-a"]["result"] == {"answer": "kept"}
+
+
+class _UnreadableRenewal:
+    """A renewal this worker cannot interpret; reading it must not kill the run."""
+
+    @property
+    def renewed(self) -> bool:
+        raise RuntimeError("lease renewal could not be interpreted")
 
 
 class TestCancellationAndShutdown:

@@ -124,8 +124,10 @@ def canonical_result(
 ) -> dict[str, Any]:
     """Project one finished run into the transport-neutral canonical result.
 
-    Source identities are stored, never authorization-dependent download URLs;
-    each authenticated read projects fresh URLs from these identities.
+    ``contexts`` must already be the client-safe projection: a durable result
+    never stores inline image bytes or internal source locators. Source
+    identities are stored, never authorization-dependent download URLs; each
+    authenticated read projects fresh URLs from these identities.
     """
     return {
         "answer": answer,

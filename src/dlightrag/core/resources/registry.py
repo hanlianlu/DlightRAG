@@ -155,6 +155,9 @@ class ResourceRegistry:
         # rebind a slot a previous checkpoint already made durable.
         self._fetched_ordinals: dict[str, int] = {}
         self._next_fetched_ordinal = 0
+        # Fetched bytes a checkpoint restored. They are already durable, so they
+        # are never refetched, revalidated, or persisted again.
+        self._durable_fetched: set[str] = set()
         # Fetched (url/loader) bytes are materialized exactly once per resource
         # and charged against the request-wide total under a lock. A separate
         # single-flight guards the URL text fallback so it runs at most once per
@@ -268,6 +271,29 @@ class ResourceRegistry:
         self._next_fetched_ordinal = ordinal + 1
         self._fetched_ordinals[resource_id] = ordinal
         return ordinal
+
+    def fetched_replay_slots(self) -> dict[str, int]:
+        """Return each fetched resource's durable replay slot."""
+        return dict(self._fetched_ordinals)
+
+    def restore_fetched_bytes(self, resource_id: str, content: bytes) -> None:
+        """Adopt one checkpointed fetch so a resumed read never repeats it.
+
+        These bytes are durable run state, not a cache: they are charged once
+        against the request total and their replay slot is frozen, so a resumed
+        run can neither read a page that changed underneath it nor rebind the
+        slot a committed checkpoint depends on.
+        """
+        self._ensure_open()
+        if resource_id not in self._resources:
+            raise ResourceStateMismatchError(
+                "checkpointed fetched bytes name a resource the catalog does not describe"
+            )
+        self._durable_fetched.add(resource_id)
+        if resource_id in self._fetched:
+            return
+        self._fetched[resource_id] = content
+        self._total_bytes += len(content)
 
     def export_state(self) -> dict[str, Any]:
         """Return the catalog, cursors, and replay slots a resumed run must reuse."""
@@ -500,6 +526,9 @@ class ResourceRegistry:
         url = resource.url
         if url is None:  # pragma: no cover - only link resources are routed here
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no link")
+        restored = self._restored_bytes(resource.resource_id)
+        if restored is not None:
+            return await self._windows_from_content(resource, restored)
         await avalidate_public_https_url(url)
         try:
             content = await self._materialize_fetched(
@@ -612,6 +641,9 @@ class ResourceRegistry:
             # Inline bytes were charged against the total at registration and are
             # never re-counted on read.
             return resource.content
+        restored = self._restored_bytes(resource.resource_id)
+        if restored is not None:
+            return restored
         if resource.loader is not None:
             return await self._materialize_fetched(resource.resource_id, resource.loader)
         url = resource.url
@@ -621,6 +653,16 @@ class ResourceRegistry:
         # even when bytes are already cached from an earlier read.
         await avalidate_public_https_url(url)
         return await self._materialize_fetched(resource.resource_id, lambda: self._fetch_link(url))
+
+    def _restored_bytes(self, resource_id: str) -> bytes | None:
+        """Return checkpointed bytes, which never re-enter the network path.
+
+        Revalidation guards a fetch; a restored read makes no request at all, so
+        a host that stopped resolving cannot fail a run whose bytes are durable.
+        """
+        if resource_id not in self._durable_fetched:
+            return None
+        return self._fetched.get(resource_id)
 
     async def _fetch_link(self, url: str) -> bytes:
         return await afetch_public_https_bytes(
@@ -686,6 +728,9 @@ class ResourceRegistry:
         """
         resource = self._resources.get(resource_id)
         if self._fetched_bytes_sink is None or resource is None or not resource.url:
+            return
+        if resource_id in self._durable_fetched:
+            # Rebinding a checkpointed slot could delete the bytes it depends on.
             return
         await self._fetched_bytes_sink(
             FetchedResourceBytes(
