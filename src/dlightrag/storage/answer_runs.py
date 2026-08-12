@@ -22,7 +22,7 @@ from typing import Any, Literal
 
 import asyncpg
 
-from dlightrag.storage.migrations import Migration, apply_migrations
+from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
 
 type AnswerRunStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 type AnswerRunPhase = Literal["planning", "searching", "researching", "generating"]
@@ -801,12 +801,19 @@ class PGAnswerRunStore:
 
         return await pg_pool.run_once(operation)
 
-    async def initialize(self) -> None:
-        """Create the durable Answer run schema."""
+    async def initialize(self, *, validate_only: bool = False) -> None:
+        """Create the durable Answer run schema, or validate it (reader)."""
         if self._initialized:
             return
 
         async def _operation(conn: Any) -> None:
+            if validate_only:
+                await verify_migrations(
+                    conn,
+                    scope=ANSWER_RUN_MIGRATION_SCOPE,
+                    migrations=ANSWER_RUN_MIGRATIONS,
+                )
+                return
             await apply_migrations(
                 conn,
                 scope=ANSWER_RUN_MIGRATION_SCOPE,

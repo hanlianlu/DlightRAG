@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from dlightrag.storage.migrations import Migration, apply_migrations
+from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
 
 _CREATE_CONVERSATIONS = """
 CREATE TABLE IF NOT EXISTS web_conversations (
@@ -541,12 +541,19 @@ class PGWebConversationStore:
 
         return await pg_pool.run_once(operation)
 
-    async def initialize(self) -> None:
-        """Create the Web conversation schema and apply the raw-attachment reset."""
+    async def initialize(self, *, validate_only: bool = False) -> None:
+        """Create the Web conversation schema, or validate it (reader)."""
         if self._initialized:
             return
 
         async def _operation(conn: Any) -> None:
+            if validate_only:
+                await verify_migrations(
+                    conn,
+                    scope="web_conversations",
+                    migrations=WEB_CONVERSATION_MIGRATIONS,
+                )
+                return
             await apply_migrations(
                 conn,
                 scope="web_conversations",

@@ -70,12 +70,6 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
 
     cfg = get_config()
 
-    # Readers still serve REST Answer, including agentic resource and Web-search
-    # capabilities. Only the bundled browser app is writer-only because its
-    # /web routes own durable conversation and attachment persistence.
-    if cfg.is_reader:
-        include_web_app = False
-
     application = FastAPI(
         title="dlightrag",
         description="DlightRAG - LightRAG-main unified multimodal RAG service",
@@ -206,6 +200,7 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
             max_turns=cfg.web_conversations.max_turns,
             ttl_days=cfg.web_conversations.ttl_days,
             max_attachments=cfg.answer.max_attachments,
+            validate_schema_only=cfg.is_reader,
         )
 
         @application.exception_handler(WebConversationUnavailableError)

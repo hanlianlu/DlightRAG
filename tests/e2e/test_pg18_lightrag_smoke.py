@@ -160,16 +160,16 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A reader attaches to an existing schema read-only, serves reads, rejects writes.
+    """A reader attaches read-only to the corpus, serves reads, and owns run state.
 
     Writer and reader run sequentially in one process (fully closing between
-    phases resets the process-wide LightRAG client and domain pool). This
-    validates DlightRAG's reader code against a real PostgreSQL under a read-only
-    session; physical streaming replication itself is an infrastructure
-    guarantee and is out of scope for this test.
+    phases resets the process-wide LightRAG client and domain pool). The reader
+    reads the corpus through read-only sessions while its DlightRAG domain pool
+    stays writable for durable Answer run state.
     """
     from dlightrag.config import reset_config, set_config
     from dlightrag.core.service import RAGService
+    from dlightrag.storage.answer_runs import PGAnswerRunStore
     from dlightrag.storage.pool import pg_pool
 
     conn_kwargs = pg_conn_kwargs_from_env()
@@ -200,14 +200,16 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         )
         doc_id = result["doc_id"]
         chunk_id = result["chunks"][0]
+        await PGAnswerRunStore().initialize()
     finally:
         await writer.aclose()
         await pg_pool.close()
         reset_config()
 
-    # ── Reader: read-only attach + retrieve + write rejection ──────────
+    # ── Reader: read-only corpus, writable operational state ───────────
     reader_cfg = writer_cfg.model_copy(update={"service_role": "reader"})
     set_config(reader_cfg)
+    pg_pool.bind(reader_cfg)
     reader = await RAGService.acreate(config=reader_cfg)
     try:
         assert reader.config.is_reader
@@ -220,6 +222,17 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
 
         metadata = await reader.aget_metadata(doc_id)
         assert metadata["title"] == "Reader Smoke"
+
+        # Corpus reads run read-only; the domain pool still accepts run state.
+        store = PGAnswerRunStore()
+        await store.initialize(validate_only=True)
+        creation = await store.create_run(
+            owner_id="reader-owner",
+            request={"query": "reader operational write", "workspaces": [workspace]},
+        )
+        assert (
+            await store.get_run(owner_id="reader-owner", run_id=creation.run.run_id)
+        ) is not None
 
         with pytest.raises(PermissionError):
             await reader.areset()
@@ -234,6 +247,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
 
     # ── Cleanup: remove the workspace via a writer ─────────────────────
     set_config(writer_cfg)
+    pg_pool.bind(writer_cfg)
     cleanup = await RAGService.acreate(config=writer_cfg)
     try:
         await cleanup.areset(keep_files=False)

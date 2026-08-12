@@ -143,7 +143,7 @@ def _install_store_class(
             self.initializations = 0
             created.append(self)
 
-        async def initialize(self) -> None:
+        async def initialize(self, *, validate_only: bool = False) -> None:
             self.initializations += 1
             if on_initialize is not None:
                 await on_initialize()

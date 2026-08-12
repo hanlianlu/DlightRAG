@@ -25,6 +25,8 @@ WHERE scope = $1
 ORDER BY version
 """
 
+_LEDGER_EXISTS = "SELECT to_regclass('dlightrag_schema_migrations') IS NOT NULL"
+
 
 @dataclass(frozen=True)
 class Migration:
@@ -33,6 +35,14 @@ class Migration:
     version: str
     description: str
     statements: tuple[str, ...]
+
+
+class SchemaValidationError(RuntimeError):
+    """A required schema is absent or incompatible with this software revision.
+
+    Raised only by validation paths. It is terminal for startup: no process can
+    repair it by staying up, so it must never degrade into partial readiness.
+    """
 
 
 _LOCK_NAMESPACE = "dlightrag_schema_migration"
@@ -89,6 +99,37 @@ async def apply_migrations(
 async def _applied_versions_for_scope(conn: Any, scope: str) -> set[str]:
     rows = await conn.fetch(_SELECT_APPLIED, scope)
     return {_version_from_row(row) for row in rows}
+
+
+async def verify_migrations(
+    conn: Any,
+    *,
+    scope: str,
+    migrations: tuple[Migration, ...],
+) -> None:
+    """Confirm this revision's declared versions are already applied, issuing no DDL.
+
+    Reader processes do not own schema: they must attach to a schema a writer
+    already migrated. The ledger is the authority, so one read per scope proves
+    every table, column, and index that revision declares is present, and a
+    reader whose deployment ran ahead of its writer fails startup by name
+    instead of serving traffic against an older schema.
+    """
+    _validate_unique_versions(migrations)
+    if not await conn.fetchval(_LEDGER_EXISTS):
+        raise SchemaValidationError(
+            "dlightrag_schema_migrations is missing; apply DlightRAG migrations "
+            "on a writer instance before starting a reader"
+        )
+    applied_versions = await _applied_versions_for_scope(conn, scope)
+    missing = [
+        migration.version for migration in migrations if migration.version not in applied_versions
+    ]
+    if missing:
+        raise SchemaValidationError(
+            f"Schema migration scope '{scope}' is missing versions: {', '.join(missing)}; "
+            "apply DlightRAG migrations on a writer instance before starting a reader"
+        )
 
 
 def _version_from_row(row: Any) -> str:

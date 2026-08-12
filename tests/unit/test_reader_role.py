@@ -2,9 +2,11 @@
 """Unit tests for the read-only replica reader role."""
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
@@ -56,26 +58,32 @@ class TestServiceRoleConfig:
             _config(service_role="reader").require_writer("ingest")
 
 
-class TestReaderReadOnlyGuc:
-    def test_reader_forces_read_only_on_both_pools(self) -> None:
-        cfg = _config(service_role="reader")
-        assert cfg.postgres_server_settings_dict()["default_transaction_read_only"] == "on"
-        assert cfg.pg_connection_kwargs()["server_settings"] == {
-            "default_transaction_read_only": "on"
-        }
+class TestReaderPoolSessionModes:
+    """A reader is corpus-read-only: only the LightRAG pool runs read-only sessions."""
 
-    def test_writer_has_no_read_only_guc(self) -> None:
-        cfg = _config()
-        assert "default_transaction_read_only" not in cfg.postgres_server_settings_dict()
+    def test_reader_domain_pool_stays_writable(self) -> None:
+        cfg = _config(service_role="reader")
+        assert "default_transaction_read_only" not in cfg.domain_pool_server_settings()
         assert "server_settings" not in cfg.pg_connection_kwargs()
 
-    def test_reader_read_only_cannot_be_overridden_by_session_setting(self) -> None:
+    def test_reader_corpus_pool_is_read_only(self) -> None:
+        cfg = _config(service_role="reader")
+        assert cfg.lightrag_pool_server_settings()["default_transaction_read_only"] == "on"
+        assert "default_transaction_read_only=on" in cfg.postgres_server_settings_env_value()
+
+    def test_writer_has_no_read_only_guc_on_either_pool(self) -> None:
+        cfg = _config()
+        assert "default_transaction_read_only" not in cfg.domain_pool_server_settings()
+        assert "default_transaction_read_only" not in cfg.lightrag_pool_server_settings()
+        assert "server_settings" not in cfg.pg_connection_kwargs()
+
+    def test_reader_corpus_read_only_cannot_be_overridden_by_session_setting(self) -> None:
         cfg = _config(
             service_role="reader",
             postgres_session_settings={"default_transaction_read_only": "off"},
         )
-        # Reader invariant is applied last and wins.
-        assert cfg.postgres_server_settings_dict()["default_transaction_read_only"] == "on"
+        # Reader invariant is applied last and wins on the corpus pool.
+        assert cfg.lightrag_pool_server_settings()["default_transaction_read_only"] == "on"
 
 
 class TestPgPoolBinding:
@@ -115,6 +123,7 @@ _MANAGER_WRITE_CALLS = [
     ("astart_ingest_job", ("ws", None), {}),
     ("aget_ingest_job", ("job-1",), {}),
     ("ajoin_ingest_job", ("job-1",), {}),
+    ("acancel_ingest_job", ("job-1",), {}),
     ("acreate_workspace", ("ws",), {}),
     ("areset", (), {}),
 ]
@@ -149,6 +158,263 @@ async def test_service_write_guards_reject_reader(method, args, kwargs) -> None:
     service.config = _config(service_role="reader")
     with pytest.raises(PermissionError):
         await getattr(service, method)(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Validation-only reader startup
+# ---------------------------------------------------------------------------
+
+
+class _LedgerConn:
+    """Fake connection that answers migration-ledger reads and records writes."""
+
+    def __init__(self, applied: set[tuple[str, str]], *, ledger_exists: bool = True) -> None:
+        self.applied = applied
+        self.ledger_exists = ledger_exists
+        self.executed: list[str] = []
+
+    async def fetchval(self, sql: str, *args: Any) -> Any:
+        if "to_regclass" in sql:
+            return self.ledger_exists
+        raise AssertionError(f"unexpected fetchval: {sql}")
+
+    async def fetch(self, sql: str, *args: Any) -> list[dict[str, str]]:
+        scope = str(args[0])
+        return [
+            {"version": version}
+            for applied_scope, version in sorted(self.applied)
+            if applied_scope == scope
+        ]
+
+    async def execute(self, sql: str, *args: Any) -> str:
+        self.executed.append(sql)
+        return "OK"
+
+
+def _required_domain_scopes() -> list[tuple[str, tuple[Any, ...], Any]]:
+    from dlightrag.storage import answer_runs, pg_metadata_index, web_conversations, workspaces
+
+    return [
+        (
+            "workspace_registry",
+            workspaces._SCHEMA_MIGRATIONS,
+            workspaces.PGWorkspaceRegistry,
+        ),
+        (
+            "doc_metadata",
+            pg_metadata_index._SCHEMA_MIGRATIONS,
+            pg_metadata_index.PGMetadataIndex,
+        ),
+        (
+            "answer_runs",
+            answer_runs.ANSWER_RUN_MIGRATIONS,
+            answer_runs.PGAnswerRunStore,
+        ),
+        (
+            "web_conversations",
+            web_conversations.WEB_CONVERSATION_MIGRATIONS,
+            web_conversations.PGWebConversationStore,
+        ),
+    ]
+
+
+@contextmanager
+def _domain_pool_routed_to(conn: _LedgerConn) -> Iterator[None]:
+    """Route every domain-store operation at ``conn`` without a real pool."""
+    from dlightrag.storage.pool import pg_pool
+
+    async def _run(operation: Any) -> Any:
+        return await operation(conn)
+
+    with (
+        patch.object(pg_pool, "run", _run),
+        patch.object(pg_pool, "run_once", _run),
+    ):
+        yield
+
+
+@pytest.mark.parametrize("scope_index", range(4))
+async def test_reader_startup_validates_domain_schema_without_ddl(scope_index: int) -> None:
+    scope, migrations, store_cls = _required_domain_scopes()[scope_index]
+    conn = _LedgerConn({(scope, migration.version) for migration in migrations})
+
+    with _domain_pool_routed_to(conn):
+        await store_cls().initialize(validate_only=True)
+
+    assert conn.executed == []
+
+
+@pytest.mark.parametrize("scope_index", range(4))
+async def test_reader_startup_fails_on_incompatible_domain_schema(scope_index: int) -> None:
+    from dlightrag.storage.migrations import SchemaValidationError
+
+    scope, _migrations, store_cls = _required_domain_scopes()[scope_index]
+    conn = _LedgerConn(set())
+
+    with _domain_pool_routed_to(conn), pytest.raises(SchemaValidationError, match=scope):
+        await store_cls().initialize(validate_only=True)
+
+    assert conn.executed == []
+
+
+@pytest.mark.parametrize("scope_index", range(4))
+async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_index: int) -> None:
+    from dlightrag.storage.migrations import SchemaValidationError
+
+    _scope, _migrations, store_cls = _required_domain_scopes()[scope_index]
+    conn = _LedgerConn(set(), ledger_exists=False)
+
+    with (
+        _domain_pool_routed_to(conn),
+        pytest.raises(SchemaValidationError, match="dlightrag_schema_migrations"),
+    ):
+        await store_cls().initialize(validate_only=True)
+
+    assert conn.executed == []
+
+
+async def test_reader_workspace_registry_schema_failure_stops_startup() -> None:
+    from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.storage.migrations import SchemaValidationError
+
+    manager = object.__new__(RAGServiceManager)
+    manager._config = _config(service_role="reader")
+    manager._startup_warnings = []
+
+    with pytest.raises(SchemaValidationError):
+        await _initialize_registry(manager, SchemaValidationError("workspace_registry"))
+
+    assert manager._startup_warnings == []
+
+
+async def test_transient_workspace_registry_failure_only_warns() -> None:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+    manager = object.__new__(RAGServiceManager)
+    manager._config = _config()
+    manager._startup_warnings = []
+
+    await _initialize_registry(manager, RuntimeError("transient"))
+
+    assert manager._startup_warnings == ["Workspace registry unavailable"]
+
+
+async def _initialize_registry(manager: Any, failure: Exception) -> None:
+    import dlightrag.storage.workspaces as workspaces_module
+
+    class _FailingRegistry:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def initialize(self, *, validate_only: bool = False) -> None:
+            raise failure
+
+    original = workspaces_module.PGWorkspaceRegistry
+    workspaces_module.PGWorkspaceRegistry = _FailingRegistry  # type: ignore[misc]
+    try:
+        await manager._initialize_workspace_registry()
+    finally:
+        workspaces_module.PGWorkspaceRegistry = original  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("failing_step", ["_initialize_workspace_registry", "_get_service"])
+async def test_reader_startup_never_degrades_past_a_schema_failure(
+    failing_step: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dlightrag.observability as observability
+    from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.storage.migrations import SchemaValidationError
+    from dlightrag.storage.pool import pg_pool
+
+    monkeypatch.setattr(observability, "init_tracing", lambda _config: None)
+    monkeypatch.setattr(pg_pool, "bind", lambda _config: None)
+    monkeypatch.setattr(RAGServiceManager, "_initialize_workspace_registry", AsyncMock())
+    monkeypatch.setattr(RAGServiceManager, "_probe_role_image_capabilities", AsyncMock())
+    monkeypatch.setattr(RAGServiceManager, "_get_retrieval_planner", lambda self: None)
+    monkeypatch.setattr(RAGServiceManager, "_get_service", AsyncMock())
+    recovery = AsyncMock()
+    monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", recovery)
+    monkeypatch.setattr(
+        RAGServiceManager,
+        failing_step,
+        AsyncMock(side_effect=SchemaValidationError("doc_metadata is missing versions")),
+    )
+    closed = AsyncMock()
+    monkeypatch.setattr(RAGServiceManager, "aclose", closed)
+
+    with pytest.raises(SchemaValidationError, match="doc_metadata"):
+        await RAGServiceManager.acreate(config=_config(service_role="reader"))
+
+    closed.assert_awaited_once_with()
+    recovery.assert_not_awaited()
+
+
+async def test_reader_answer_run_store_starts_in_validation_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dlightrag.storage.answer_runs as answer_runs_module
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+    seen: list[bool] = []
+
+    class _Store:
+        async def initialize(self, *, validate_only: bool = False) -> None:
+            seen.append(validate_only)
+
+    monkeypatch.setattr(answer_runs_module, "PGAnswerRunStore", _Store, raising=False)
+
+    manager = object.__new__(RAGServiceManager)
+    manager._config = _config(service_role="reader")
+    manager._answer_run_store = None
+    manager._answer_store_lock = asyncio.Lock()
+
+    await manager._get_answer_run_store()
+
+    assert seen == [True]
+
+
+async def test_reader_serves_web_routes() -> None:
+    import dlightrag.config as config_module
+    from dlightrag.api.server import create_app
+
+    original = config_module._config
+    config_module._config = _config(service_role="reader")
+    try:
+        app = create_app()
+    finally:
+        config_module._config = original
+
+    assert "/web/answer" in set(app.openapi()["paths"])
+    assert app.state.web_conversation_service is not None
+
+
+async def test_reader_does_not_recover_ingest_jobs() -> None:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+    manager = object.__new__(RAGServiceManager)
+    manager._config = _config(service_role="reader")
+    manager._startup_warnings = []
+    recovery = AsyncMock()
+    manager._ingest_jobs = cast(Any, SimpleNamespace(start_recovery=recovery))
+
+    await manager._start_ingest_job_recovery()
+
+    recovery.assert_not_awaited()
+
+
+async def test_writer_recovers_ingest_jobs() -> None:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+    manager = object.__new__(RAGServiceManager)
+    manager._config = _config()
+    manager._startup_warnings = []
+    recovery = AsyncMock()
+    manager._ingest_jobs = cast(Any, SimpleNamespace(start_recovery=recovery))
+
+    await manager._start_ingest_job_recovery()
+
+    recovery.assert_awaited_once_with()
 
 
 class TestReadOnlyAdapter:

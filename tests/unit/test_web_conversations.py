@@ -1070,9 +1070,28 @@ async def test_initialize_applies_schema_then_global_prune(
 ) -> None:
     await service_under_test.initialize()
 
-    conversation_store.initialize.assert_awaited_once_with()
+    conversation_store.initialize.assert_awaited_once_with(validate_only=False)
     conversation_store.prune_expired.assert_awaited_once_with(ttl_days=30, batch_size=500)
     await service_under_test.aclose()
+
+
+async def test_reader_initialize_validates_schema_without_migrating(
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.web.conversations import WebConversationService
+
+    service = WebConversationService(
+        store=conversation_store,
+        max_turns=30,
+        ttl_days=30,
+        max_attachments=4,
+        validate_schema_only=True,
+    )
+
+    await service.initialize()
+
+    conversation_store.initialize.assert_awaited_once_with(validate_only=True)
+    await service.aclose()
 
 
 async def test_initialize_runs_periodic_prune_until_closed(

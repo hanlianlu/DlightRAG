@@ -206,8 +206,8 @@ class FilteredVectorStorage:
         """Index full_doc_id so document-scoped exact scans avoid a seq scan.
 
         LightRAG only indexes (workspace, id) on the vector table; metadata
-        filtering looks rows up by document instead. Writer-only — a reader
-        attaches to a replica and must never issue DDL.
+        filtering looks rows up by document instead. Writer-only — a reader owns
+        no corpus schema and must never issue DDL.
         """
         table = self._original.table_name
         table_name = pg_qualified_identifier(table)

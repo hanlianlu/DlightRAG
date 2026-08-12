@@ -490,9 +490,9 @@ class RAGService:
             await self._check_postgres_concurrency_sanity(conn)
 
             if self.config.is_reader:
-                # Readers attach to an already-provisioned schema: no advisory
-                # lock, no extension creation, no migrations, no DDL.
-                logger.info("Initializing RAG pipelines in read-only reader role")
+                # Readers attach to an already-migrated corpus schema: no
+                # advisory lock, no extension creation, no migrations, no DDL.
+                logger.info("Initializing RAG pipelines in corpus-read-only reader role")
                 await self._do_initialize()
                 return
 
@@ -708,7 +708,9 @@ class RAGService:
         )
 
         # Initialize metadata index
-        self._metadata_index = await self._create_metadata_index(config, read_only=config.is_reader)
+        self._metadata_index = await self._create_metadata_index(
+            config, validate_only=config.is_reader
+        )
         from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
         from dlightrag.core.retrieval.bm25 import create_postgres_bm25, profiles_from_config
         from dlightrag.core.retrieval.bm25_language import BM25LanguageClassifier
@@ -801,16 +803,16 @@ class RAGService:
         self,
         config: DlightragConfig,
         *,
-        read_only: bool = False,
+        validate_only: bool = False,
     ) -> MetadataIndexProtocol:
-        """Create (or read-only verify) the PostgreSQL metadata index backend."""
+        """Create (or validate) the PostgreSQL metadata index backend."""
         from dlightrag.storage.pg_metadata_index import PGMetadataIndex
 
         idx = PGMetadataIndex(workspace=config.workspace)
-        await idx.initialize(read_only=read_only)
+        await idx.initialize(validate_only=validate_only)
         logger.info(
             "Metadata index: PGMetadataIndex (PostgreSQL%s)",
-            ", read-only" if read_only else "",
+            ", validated" if validate_only else "",
         )
         return idx
 

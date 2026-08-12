@@ -87,16 +87,22 @@ class WebConversationService:
         max_turns: int,
         ttl_days: int,
         max_attachments: int,
+        validate_schema_only: bool = False,
     ) -> None:
         self._store = store
         self._max_turns = max_turns
         self._ttl_days = ttl_days
         self._max_attachments = max_attachments
+        self._validate_schema_only = validate_schema_only
         self._prune_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
-        """Apply schema migrations and start bounded global retention."""
-        await self._store.initialize()
+        """Establish the schema and start bounded global retention.
+
+        Readers write conversations but own no schema, so they validate the
+        migrated schema instead of applying it.
+        """
+        await self._store.initialize(validate_only=self._validate_schema_only)
         await self._prune_expired_batch()
         if self._prune_task is None:
             self._prune_task = asyncio.create_task(self._prune_expired_loop())

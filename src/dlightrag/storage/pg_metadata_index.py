@@ -11,7 +11,7 @@ from dlightrag.core.retrieval.metadata_fields import (
     canonical_metadata_key,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.storage.migrations import Migration, apply_migrations
+from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
 from dlightrag.storage.sql_identifiers import pg_identifier
 
 logger = logging.getLogger(__name__)
@@ -244,31 +244,23 @@ class PGMetadataIndex:
 
         return await pg_pool.run(operation)
 
-    async def initialize(self, *, read_only: bool = False) -> None:
-        """Create table and indexes, or verify them (read-only reader)."""
-        if read_only:
-            await self._verify_schema()
-            return
+    async def initialize(self, *, validate_only: bool = False) -> None:
+        """Create table and indexes, or validate them (reader)."""
 
         async def _operation(conn: Any) -> None:
+            if validate_only:
+                await verify_migrations(
+                    conn,
+                    scope="doc_metadata",
+                    migrations=_SCHEMA_MIGRATIONS,
+                )
+                return
             await apply_migrations(
                 conn,
                 scope="doc_metadata",
                 migrations=_SCHEMA_MIGRATIONS,
                 require_applied_prefix=False,
             )
-
-        await self._run(_operation)
-
-    async def _verify_schema(self) -> None:
-        """Confirm the metadata table exists without emitting DDL."""
-
-        async def _operation(conn: Any) -> None:
-            exists = await conn.fetchval("SELECT to_regclass('dlightrag_doc_metadata') IS NOT NULL")
-            if not exists:
-                raise RuntimeError(
-                    "dlightrag_doc_metadata is missing; initialize it on the writer first"
-                )
 
         await self._run(_operation)
 

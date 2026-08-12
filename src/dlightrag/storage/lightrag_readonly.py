@@ -1,13 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Read-only LightRAG PostgreSQL attach for replica reader processes.
+"""Read-only LightRAG PostgreSQL attach for corpus-read-only reader processes.
 
 LightRAG's normal ``PostgreSQLDB.initdb()`` bootstraps the vector extension,
-tables, and indexes, and ``check_tables()`` runs schema
-migrations. A reader process connected to a physical hot standby must never run
-that path -- even after a transient pool reset/reconnect. ``ReadOnlyPostgreSQLDB``
-overrides only pool bootstrap: it creates the asyncpg pool with the pgvector
-codec, SSL, statement cache, server settings, and VCHORDRQ session setup, but
-issues no DDL. All of LightRAG's query-time retry/reconnect machinery
+tables, and indexes, and ``check_tables()`` runs schema migrations. A reader
+owns no corpus schema and must never run that path -- even after a transient
+pool reset/reconnect. ``ReadOnlyPostgreSQLDB`` overrides only pool bootstrap: it
+creates the asyncpg pool with the pgvector codec, SSL, statement cache, server
+settings, and VCHORDRQ session setup, but issues no DDL. All of LightRAG's
+query-time retry/reconnect machinery
 (``_ensure_pool``/``_reset_pool``/``_run_with_retry``) is inherited unchanged, so
 reconnect re-enters this read-only bootstrap and can never fall back to DDL.
 """
@@ -30,6 +30,7 @@ from lightrag.kg.shared_storage import (
 from lightrag.lightrag import StoragesStatus
 from pgvector.asyncpg import register_vector
 
+from dlightrag.storage.migrations import SchemaValidationError
 from dlightrag.storage.sql_identifiers import pg_qualified_identifier
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,10 @@ READ_ONLY_STORAGE_ATTRS = (
 # (workspace, namespace). LightRAG's namespace_to_table_name() has no entry
 # for the graph namespace, so the reader names them here.
 GRAPH_TABLES = ("lightrag_graph_nodes", "lightrag_graph_edges")
+
+# Every retrieval leg resolves chunks through this table, so it is the cheapest
+# proof that a reader still sees the corpus it attached to.
+CORPUS_PROBE_TABLE = namespace_to_table_name("text_chunks") or "LIGHTRAG_DOC_CHUNKS"
 
 
 def parse_postgres_server_settings(raw: Any) -> dict[str, str]:
@@ -246,7 +251,7 @@ def _required_tables(storages: list[Any]) -> set[str]:
 async def _verify_reader_session(conn: asyncpg.Connection) -> None:
     read_only = await conn.fetchval("SHOW transaction_read_only")
     if str(read_only).lower() != "on":
-        raise RuntimeError(
+        raise SchemaValidationError(
             "LightRAG reader pool is not read-only; expected default_transaction_read_only=on"
         )
 
@@ -262,7 +267,7 @@ async def _verify_required_tables(
                 f"SELECT 1 FROM {pg_qualified_identifier(table)} LIMIT 1"  # noqa: S608
             )
         except Exception as exc:
-            raise RuntimeError(
+            raise SchemaValidationError(
                 f"LightRAG table {table} is missing or unreadable; initialize it on the writer first"
             ) from exc
 
@@ -279,6 +284,22 @@ async def verify_lightrag_read_only_schema(
     async with db.pool.acquire() as conn:
         await _verify_reader_session(conn)
         await _verify_required_tables(conn, tables=_required_tables(storages))
+
+
+async def verify_reader_corpus_session() -> None:
+    """Confirm the attached corpus pool is still read-only and still sees the corpus.
+
+    Readiness must fail rather than let a reader answer from a corpus it can no
+    longer read, or from a session that lost its read-only default.
+    """
+    db = ClientManager._instances["db"]
+    pool = getattr(db, "pool", None)
+    if pool is None:
+        raise RuntimeError("LightRAG reader corpus pool is not attached")
+
+    async with pool.acquire() as conn:
+        await _verify_reader_session(conn)
+        await _verify_required_tables(conn, tables={CORPUS_PROBE_TABLE})
 
 
 def _bind_default_workspace(lightrag: Any) -> None:
@@ -319,8 +340,10 @@ async def attach_lightrag_storages_read_only(
 
 
 __all__ = [
+    "CORPUS_PROBE_TABLE",
     "ReadOnlyPostgreSQLDB",
     "attach_lightrag_storages_read_only",
     "parse_postgres_server_settings",
     "verify_lightrag_read_only_schema",
+    "verify_reader_corpus_session",
 ]

@@ -8,7 +8,7 @@ this table owns the user-facing workspace list, including empty workspaces.
 
 from typing import Any
 
-from dlightrag.storage.migrations import Migration, apply_migrations
+from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
 from dlightrag.utils import normalize_workspace
 
 _CREATE = """
@@ -70,23 +70,17 @@ class PGWorkspaceRegistry:
 
         return await pg_pool.run(operation)
 
-    async def initialize(self, *, read_only: bool = False) -> None:
-        """Create/migrate the registry table, or verify it (read-only reader)."""
-        if read_only:
-
-            async def _verify(conn: Any) -> None:
-                exists = await conn.fetchval(
-                    "SELECT to_regclass('dlightrag_workspace_meta') IS NOT NULL"
-                )
-                if not exists:
-                    raise RuntimeError(
-                        "dlightrag_workspace_meta is missing; initialize it on the writer first"
-                    )
-
-            await self._run(_verify)
-            return
+    async def initialize(self, *, validate_only: bool = False) -> None:
+        """Create/migrate the registry table, or validate it (reader)."""
 
         async def _operation(conn: Any) -> None:
+            if validate_only:
+                await verify_migrations(
+                    conn,
+                    scope="workspace_registry",
+                    migrations=_SCHEMA_MIGRATIONS,
+                )
+                return
             await apply_migrations(
                 conn,
                 scope="workspace_registry",

@@ -78,6 +78,7 @@ from dlightrag.storage.answer_runs import (
     RunCreation,
 )
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
+from dlightrag.storage.migrations import SchemaValidationError
 from dlightrag.utils import log_safe, normalize_workspace
 
 logger = logging.getLogger(__name__)
@@ -393,33 +394,39 @@ class RAGServiceManager:
         init_tracing(manager._config)
 
         # Bind the process-wide domain pool to this service config so the
-        # reader read-only invariant (and endpoint) cannot silently diverge
-        # from a caller-supplied SDK config that never called set_config().
+        # endpoint and role cannot silently diverge from a caller-supplied SDK
+        # config that never called set_config().
         from dlightrag.storage.pool import pg_pool
 
         pg_pool.bind(manager._config)
 
-        await manager._initialize_workspace_registry()
-
         default_ws = normalize_workspace(manager._config.workspace)
-
-        # Bind the retrieval-planner LLM during startup; this does not make a model call.
-        manager._get_retrieval_planner()
-
-        # ── Vision probes (once at startup, not per workspace) ─────────
-        await manager._probe_role_image_capabilities()
-
         default_err: Exception | None = None
         try:
-            await manager._get_service(default_ws)
-            logger.info("Warmed up default workspace service '%s'", default_ws)
-        except Exception as exc:
-            default_err = exc
-            logger.warning("Failed to warm up default workspace '%s'", default_ws, exc_info=True)
+            await manager._initialize_workspace_registry()
 
-        # Readers attach to a replica and do not recover ingest jobs.
-        if not manager._config.is_reader:
-            await manager._start_ingest_job_recovery()
+            # Bind the retrieval-planner LLM during startup; this does not make a model call.
+            manager._get_retrieval_planner()
+
+            # ── Vision probes (once at startup, not per workspace) ─────────
+            await manager._probe_role_image_capabilities()
+
+            try:
+                await manager._get_service(default_ws)
+                logger.info("Warmed up default workspace service '%s'", default_ws)
+            except SchemaValidationError:
+                raise
+            except Exception as exc:
+                default_err = exc
+                logger.warning(
+                    "Failed to warm up default workspace '%s'", default_ws, exc_info=True
+                )
+        except SchemaValidationError:
+            # No process repairs a schema by staying up, so never degrade into it.
+            await manager.aclose()
+            raise
+
+        await manager._start_ingest_job_recovery()
         if default_ws in manager._services:
             manager._ready = True
         else:
@@ -430,18 +437,20 @@ class RAGServiceManager:
         return manager
 
     async def _initialize_workspace_registry(self) -> None:
-        """Initialize the durable workspace registry."""
+        """Migrate the durable workspace registry, or validate it on a reader."""
         from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
         self._workspace_registry = PGWorkspaceRegistry()
         try:
-            await self._workspace_registry.initialize(read_only=self._config.is_reader)
+            await self._workspace_registry.initialize(validate_only=self._config.is_reader)
             if not self._config.is_reader:
                 await self._workspace_registry.upsert(
                     workspace=normalize_workspace(self._config.workspace),
                     display_name=self._config.workspace,
                     embedding_model=self._config.embedding.model,
                 )
+        except SchemaValidationError:
+            raise
         except Exception as exc:
             self._startup_warnings.append("Workspace registry unavailable")
             logger.warning("Workspace registry initialization failed: %s", exc)
@@ -588,6 +597,9 @@ class RAGServiceManager:
         )
 
     async def _start_ingest_job_recovery(self) -> None:
+        # Recovery resumes corpus writes, so it stays with the writer role.
+        if self._config.is_reader:
+            return
         try:
             await self._ingest_jobs.start_recovery()
         except Exception:
@@ -1841,7 +1853,7 @@ class RAGServiceManager:
                 from dlightrag.storage.answer_runs import PGAnswerRunStore as _Store
 
                 store = _Store()
-                await store.initialize()
+                await store.initialize(validate_only=self._config.is_reader)
                 self._answer_run_store = store
             return self._answer_run_store
 

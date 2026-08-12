@@ -29,7 +29,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = None
         mock_config.postgres_command_timeout = None
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "testhost",
             "port": 5432,
@@ -72,7 +72,7 @@ class TestPGPoolGet:
         mock_config.postgres_password = "p"
         mock_config.postgres_database = "db"
         mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "localhost",
             "port": 5432,
@@ -133,7 +133,7 @@ class TestPGPoolGet:
         mock_config.postgres_password = "p"
         mock_config.postgres_database = "db"
         mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "localhost",
             "port": 5432,
@@ -170,7 +170,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = 128
         mock_config.postgres_command_timeout = None
-        mock_config.postgres_server_settings_dict.return_value = {
+        mock_config.domain_pool_server_settings.return_value = {
             "hnsw.ef_search": "384",
             "application_name": "dlightrag",
         }
@@ -219,7 +219,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = None
         mock_config.postgres_command_timeout = None
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "primary",
             "port": 5432,
@@ -267,7 +267,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_min_size = 2
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = None
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.postgres_connection_retries = 2
         mock_config.postgres_connection_retry_backoff = 0
         mock_config.postgres_connection_retry_backoff_max = 0
@@ -319,7 +319,7 @@ class TestPGPoolGet:
         mock_config.postgres_statement_cache_size = None
         mock_config.postgres_command_timeout = None
         mock_config.postgres_acquire_timeout = 12.5
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
 
         calls = 0
@@ -359,7 +359,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = None
         mock_config.postgres_command_timeout = 60.0
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "primary",
             "port": 5432,
@@ -392,7 +392,7 @@ class TestPGPoolGet:
         mock_config.postgres_command_timeout = None
         mock_config.postgres_acquire_timeout = 12.5
         mock_config.postgres_connection_retries = 1
-        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.domain_pool_server_settings.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
 
         async def operation(conn):  # noqa: ANN001, ANN202

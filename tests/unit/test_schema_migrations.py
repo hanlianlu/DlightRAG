@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.storage.migrations import Migration, apply_migrations
+from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
 
 
 class _Tx:
@@ -33,16 +33,23 @@ class _Record:
 
 
 class _Conn:
-    def __init__(self, *, row_shape: str = "dict") -> None:
+    def __init__(self, *, row_shape: str = "dict", ledger_exists: bool = True) -> None:
         self.applied: set[tuple[str, str]] = set()
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
         self.fetches: list[tuple[str, tuple[Any, ...]]] = []
         self.transaction_events: list[str] = []
         self.failures: dict[str, int] = {}
         self.row_shape = row_shape
+        self.ledger_exists = ledger_exists
 
     def transaction(self) -> _Tx:
         return _Tx(self)
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        self.fetches.append((query, args))
+        if "to_regclass" in query:
+            return self.ledger_exists
+        raise AssertionError(f"unexpected fetchval: {query}")
 
     async def fetch(self, query: str, *args: Any) -> Sequence[dict[str, str] | _Record]:
         self.fetches.append((query, args))
@@ -234,6 +241,43 @@ async def test_apply_migrations_rejects_duplicate_versions_before_mutating_db() 
 
     with pytest.raises(ValueError, match="Duplicate schema migration version: 0001"):
         await apply_migrations(conn, scope="example", migrations=duplicate)
+
+    assert conn.executed == []
+
+
+async def test_verify_migrations_accepts_a_fully_applied_scope_without_any_ddl() -> None:
+    conn = _Conn()
+    migrations = _example_migrations()
+    await apply_migrations(conn, scope="example", migrations=migrations)
+    conn.executed.clear()
+
+    await verify_migrations(conn, scope="example", migrations=migrations)
+
+    assert conn.executed == []
+
+
+async def test_verify_migrations_tolerates_unknown_historical_versions() -> None:
+    conn = _Conn(row_shape="record")
+    conn.applied.update({("example", "0001"), ("example", "0002"), ("example", "0999")})
+
+    await verify_migrations(conn, scope="example", migrations=_example_migrations())
+
+
+async def test_verify_migrations_reports_every_missing_version() -> None:
+    conn = _Conn()
+    conn.applied.add(("example", "0001"))
+
+    with pytest.raises(RuntimeError, match=r"scope 'example'.*0002, 0003"):
+        await verify_migrations(conn, scope="example", migrations=_three_migrations())
+
+    assert conn.executed == []
+
+
+async def test_verify_migrations_reports_a_missing_ledger() -> None:
+    conn = _Conn(ledger_exists=False)
+
+    with pytest.raises(RuntimeError, match="dlightrag_schema_migrations"):
+        await verify_migrations(conn, scope="example", migrations=_example_migrations())
 
     assert conn.executed == []
 

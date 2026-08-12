@@ -1108,7 +1108,7 @@ class TestHealthEndpoint:
 
         from dlightrag.storage.pool import pg_pool
 
-        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value=1))
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         app.state.manager = mock_manager
         resp = await client.get("/health")
         assert resp.status_code == 200
@@ -1153,7 +1153,7 @@ class TestHealthEndpointEnhanced:
 
         from dlightrag.storage.pool import pg_pool
 
-        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value=1))
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         mock_manager.is_degraded = lambda: False
         mock_manager.get_warnings = lambda: []
         app.state.manager = mock_manager
@@ -1182,7 +1182,7 @@ class TestReadinessEndpoint:
 
         mock_config_no_auth_override.auth_mode = "simple"
         mock_config_no_auth_override.api_auth_token = "required-elsewhere"
-        probe = AsyncMock(return_value=1)
+        probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
         app.state.manager = mock_manager
 
@@ -1202,7 +1202,7 @@ class TestReadinessEndpoint:
         from dlightrag.storage.pool import pg_pool
 
         mock_manager.is_ready = lambda: False
-        probe = AsyncMock(return_value=1)
+        probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
         app.state.manager = mock_manager
 
@@ -1216,7 +1216,7 @@ class TestReadinessEndpoint:
         }
         probe.assert_not_awaited()
 
-    async def test_reader_requires_read_only_database_session(
+    async def test_reader_requires_writable_domain_session(
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
@@ -1226,7 +1226,7 @@ class TestReadinessEndpoint:
         from dlightrag.storage.pool import pg_pool
 
         mock_config.service_role = "reader"
-        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
         app.state.manager = mock_manager
 
         response = await client.get("/ready")
@@ -1235,8 +1235,79 @@ class TestReadinessEndpoint:
         assert response.json() == {
             "status": "not_ready",
             "service_role": "reader",
-            "detail": "Reader database session is not read-only",
+            "detail": "DlightRAG domain database session is not writable",
         }
+
+    async def test_writer_requires_writable_domain_session(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.storage.pool import pg_pool
+
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
+        app.state.manager = mock_manager
+
+        response = await client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "service_role": "writer",
+            "detail": "DlightRAG domain database session is not writable",
+        }
+
+    async def test_reader_requires_read_only_corpus_session(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import dlightrag.api.routes.status as status_module
+        from dlightrag.storage.pool import pg_pool
+
+        mock_config.service_role = "reader"
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
+        monkeypatch.setattr(
+            status_module,
+            "verify_reader_corpus_session",
+            AsyncMock(side_effect=RuntimeError("corpus pool is not read-only")),
+        )
+        app.state.manager = mock_manager
+
+        response = await client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "service_role": "reader",
+            "detail": "Reader corpus database session is not read-only or is unavailable",
+        }
+
+    async def test_reader_is_ready_with_writable_domain_and_read_only_corpus(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import dlightrag.api.routes.status as status_module
+        from dlightrag.storage.pool import pg_pool
+
+        mock_config.service_role = "reader"
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
+        corpus_probe = AsyncMock()
+        monkeypatch.setattr(status_module, "verify_reader_corpus_session", corpus_probe)
+        app.state.manager = mock_manager
+
+        response = await client.get("/ready")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ready", "service_role": "reader"}
+        corpus_probe.assert_awaited_once_with()
 
 
 # ---------------------------------------------------------------------------

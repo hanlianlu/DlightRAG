@@ -69,7 +69,7 @@ class PGPool:
             config.postgres_database,
             config.service_role,
             config.postgres_ssl_mode,
-            tuple(sorted(config.postgres_server_settings_dict().items())),
+            tuple(sorted(config.domain_pool_server_settings().items())),
         )
 
     def bind(self, config: Any) -> None:
@@ -121,7 +121,7 @@ class PGPool:
                 pool_kwargs["statement_cache_size"] = int(statement_cache_size)
             if config.postgres_command_timeout is not None:
                 pool_kwargs["command_timeout"] = config.postgres_command_timeout
-            server_settings = config.postgres_server_settings_dict()
+            server_settings = config.domain_pool_server_settings()
             if server_settings:
                 pool_kwargs["server_settings"] = server_settings
             pool = await asyncpg.create_pool(**pool_kwargs)

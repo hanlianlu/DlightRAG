@@ -647,7 +647,7 @@ def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
     assert cfg.postgres_pool_max_size == 16
     assert os.environ["POSTGRES_VECTOR_INDEX_TYPE"] == "HNSW_HALFVEC"
     assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "16"
-    assert cfg.postgres_server_settings_dict() == {"hnsw.ef_search": "256"}
+    assert cfg.domain_pool_server_settings() == {"hnsw.ef_search": "256"}
     assert cfg.lightrag_pipeline_kwargs() == {
         "max_parallel_insert": 3,
         "max_parallel_parse_native": 5,
@@ -1229,7 +1229,7 @@ def test_postgres_session_settings_merge_hnsw_defaults(
         postgres_lightrag_pool_max_size=18,
     )
 
-    assert cfg.postgres_server_settings_dict() == {
+    assert cfg.domain_pool_server_settings() == {
         "hnsw.ef_search": "384",
         "application_name": "dlightrag api",
         "statement_timeout": "60000",

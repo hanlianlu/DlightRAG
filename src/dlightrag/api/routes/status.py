@@ -8,8 +8,10 @@ from fastapi.responses import JSONResponse
 
 from dlightrag.api.models import HealthResponse, ReadinessResponse
 from dlightrag.app_state import request_config
+from dlightrag.config import DlightragConfig
 from dlightrag.contracts import ServiceRole
 from dlightrag.core.answer.capability import answer_image_capability_summary
+from dlightrag.storage.lightrag_readonly import verify_reader_corpus_session
 
 from .deps import get_manager
 
@@ -25,6 +27,35 @@ def _not_ready(*, service_role: ServiceRole, detail: str) -> JSONResponse:
         detail=detail,
     )
     return JSONResponse(status_code=503, content=payload.model_dump(exclude_none=True))
+
+
+async def _postgres_not_ready_detail(config: DlightragConfig) -> str | None:
+    """Return why PostgreSQL is unusable for this role, or ``None`` when it is usable.
+
+    Both roles write DlightRAG operational state, so the domain session must be
+    writable. Probing the session default avoids a destructive write. A reader
+    additionally proves its corpus session is still read-only and still resolves
+    the corpus. Details are fixed strings: ``/ready`` is unauthenticated.
+    """
+    from dlightrag.storage.pool import pg_pool
+
+    try:
+        read_only = await pg_pool.run_once(lambda conn: conn.fetchval("SHOW transaction_read_only"))
+        if str(read_only).lower() != "off":
+            raise RuntimeError("domain pool session is read-only")
+    except Exception:
+        logger.warning("Domain PostgreSQL readiness probe failed", exc_info=True)
+        return "DlightRAG domain database session is not writable"
+
+    if not config.is_reader:
+        return None
+
+    try:
+        await verify_reader_corpus_session()
+    except Exception:
+        logger.warning("Reader corpus PostgreSQL readiness probe failed", exc_info=True)
+        return "Reader corpus database session is not read-only or is unavailable"
+    return None
 
 
 @router.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
@@ -54,22 +85,10 @@ async def health(request: Request) -> dict[str, object]:
 
     # Check PostgreSQL connectivity through the shared pool rather than opening a
     # fresh connection per request -- the latter is wasteful and lets unauthenticated
-    # health traffic exhaust the server's connection slots. Readers additionally
-    # confirm the domain pool holds the read-only session invariant.
-    try:
-        from dlightrag.storage.pool import pg_pool
-
-        if config.is_reader:
-            read_only = await pg_pool.run_once(
-                lambda conn: conn.fetchval("SHOW transaction_read_only")
-            )
-            if str(read_only).lower() != "on":
-                raise RuntimeError("reader domain pool is not read-only")
-        else:
-            await pg_pool.run_once(lambda conn: conn.fetchval("SELECT 1"))
+    # health traffic exhaust the server's connection slots.
+    if await _postgres_not_ready_detail(config) is None:
         status["postgres"] = "connected"
-    except Exception:
-        logger.warning("Health check: PostgreSQL probe failed", exc_info=True)
+    else:
         status["postgres"] = "error"
         status["status"] = "degraded"
 
@@ -92,25 +111,8 @@ async def readiness(request: Request) -> ReadinessResponse | JSONResponse:
             detail="RAG service is not ready",
         )
 
-    try:
-        from dlightrag.storage.pool import pg_pool
-
-        if config.is_reader:
-            read_only = await pg_pool.run_once(
-                lambda conn: conn.fetchval("SHOW transaction_read_only")
-            )
-            if str(read_only).lower() != "on":
-                return _not_ready(
-                    service_role=config.service_role,
-                    detail="Reader database session is not read-only",
-                )
-        else:
-            await pg_pool.run_once(lambda conn: conn.fetchval("SELECT 1"))
-    except Exception:
-        logger.warning("Readiness check: PostgreSQL probe failed", exc_info=True)
-        return _not_ready(
-            service_role=config.service_role,
-            detail="PostgreSQL readiness check failed",
-        )
+    detail = await _postgres_not_ready_detail(config)
+    if detail is not None:
+        return _not_ready(service_role=config.service_role, detail=detail)
 
     return ReadinessResponse(status="ready", service_role=config.service_role)

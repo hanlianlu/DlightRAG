@@ -690,11 +690,12 @@ class DlightragConfig(BaseSettings):
     service_role: ServiceRole = Field(
         default="writer",
         description=(
-            "Process role. 'writer' serves ingest plus all APIs against a "
-            "write-capable endpoint. 'reader' serves stateless query/read APIs "
-            "against an infra-provided read endpoint (physical replica) under "
-            "eventual consistency; it performs no schema writes and rejects "
-            "mutating APIs. Both roles use one single endpoint per process."
+            "Process role against one shared write-capable endpoint. 'writer' "
+            "serves ingest plus all APIs and owns schema migrations. 'reader' is "
+            "corpus-read-only: it serves query, Answer, and Web traffic and writes "
+            "DlightRAG operational state, but reads the LightRAG corpus through "
+            "read-only sessions, applies no schema changes, and rejects "
+            "corpus-mutating APIs."
         ),
     )
     postgres_host: str = Field(default="localhost")
@@ -1332,20 +1333,21 @@ class DlightragConfig(BaseSettings):
 
     @property
     def is_reader(self) -> bool:
-        """Whether this process runs as a read-only replica reader."""
+        """Whether this process runs as a corpus-read-only reader."""
         return self.service_role == "reader"
 
     def require_writer(self, operation: str) -> None:
-        """Reject a mutating operation on a read-only reader process.
+        """Reject a corpus-mutating operation on a reader process.
 
-        Fail-closed guard shared by every write facade (REST/MCP/SDK) so a
-        reader rejects writes at the boundary instead of erroring deep in a
-        read-only transaction.
+        Fail-closed guard shared by every corpus-write facade (REST/MCP/SDK) so a
+        reader rejects ingestion, workspace, and metadata mutation at the boundary
+        instead of erroring deep inside a read-only corpus transaction. It does not
+        restrict DlightRAG operational state, which readers own.
         """
         if self.is_reader:
             raise PermissionError(
-                f"{operation} is not available on a read-only reader instance; "
-                "route writes to a writer instance connected to the primary endpoint."
+                f"{operation} is not available on a reader instance; "
+                "route corpus writes to a writer instance."
             )
 
     def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
@@ -1383,10 +1385,9 @@ class DlightragConfig(BaseSettings):
     def pg_connection_kwargs(self) -> dict[str, Any]:
         """Return asyncpg connection kwargs for DlightRAG's PostgreSQL endpoint.
 
-        Reader processes carry ``default_transaction_read_only=on`` in the
-        startup packet so every direct connection is read-only regardless of the
-        endpoint it resolves to. The GUC survives asyncpg pool ``RESET ALL``
-        because startup-packet settings become the session default.
+        Both roles connect to the same write-capable endpoint: a reader is
+        corpus-read-only, and its DlightRAG operational state (Answer runs,
+        events, artifacts, Web conversations) must be writable.
         """
         kwargs: dict[str, Any] = {
             "host": self.postgres_host,
@@ -1398,8 +1399,6 @@ class DlightragConfig(BaseSettings):
         ssl_value = self._pg_ssl_value()
         if ssl_value is not None:
             kwargs["ssl"] = ssl_value
-        if self.is_reader:
-            kwargs["server_settings"] = {"default_transaction_read_only": "on"}
         return kwargs
 
     @staticmethod
@@ -1411,22 +1410,35 @@ class DlightragConfig(BaseSettings):
         text = str(value).strip()
         return text or None
 
-    def postgres_server_settings_dict(self) -> dict[str, str]:
-        """Return asyncpg server_settings for both LightRAG and DlightRAG pools."""
+    def domain_pool_server_settings(self) -> dict[str, str]:
+        """Return asyncpg server_settings for the DlightRAG domain pool.
+
+        Writable for every role: readers own their Answer run, event, artifact,
+        and Web conversation state.
+        """
         settings: dict[str, str] = {"hnsw.ef_search": str(self.pg_hnsw_ef_search)}
         for key, value in self.postgres_session_settings.items():
             rendered = self._env_value(value)
             if rendered is not None:
                 settings[str(key)] = rendered
+        return settings
+
+    def lightrag_pool_server_settings(self) -> dict[str, str]:
+        """Return asyncpg server_settings for the LightRAG corpus pool.
+
+        A reader's corpus sessions are read-only in PostgreSQL itself, not only
+        behind method guards. The GUC ships in the startup packet, so it survives
+        asyncpg's pool ``RESET ALL`` and every LightRAG reconnect.
+        """
+        settings = self.domain_pool_server_settings()
         if self.is_reader:
-            # Reader defense-in-depth: force read-only sessions on both pools.
             # Applied last so no operator session setting can weaken it.
             settings["default_transaction_read_only"] = "on"
         return settings
 
     def postgres_server_settings_env_value(self) -> str:
         """Return LightRAG's POSTGRES_SERVER_SETTINGS query-string format."""
-        return urlencode(self.postgres_server_settings_dict())
+        return urlencode(self.lightrag_pool_server_settings())
 
     def lightrag_pipeline_kwargs(self) -> LightRAGPipelineKwargs:
         """Return LightRAG staged ingestion pipeline controls.
