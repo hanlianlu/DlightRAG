@@ -37,35 +37,13 @@ _DEFAULT_RETRIEVAL_PLANNER_INPUT_TOKEN_ENVELOPE = (
 
 
 def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
-    """Convert multimodal conversation_history to plain text for the planner LLM.
-
-    Text content is preserved inline.  ``image_url`` blocks are replaced
-    with ``[user shared N image(s)]`` placeholders so the planner can
-    understand referential context without needing vision capability.
-    """
+    """Convert text conversation history to a planner transcript."""
     if not history:
         return ""
     lines: list[str] = []
     for msg in history:
         role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            text = content
-        else:
-            text_parts: list[str] = []
-            image_count = 0
-            for block in content:
-                if isinstance(block, str):
-                    text_parts.append(block)
-                elif block.get("type") == "text":
-                    text_parts.append(str(block.get("text", "")))
-                elif block.get("type") == "image_url":
-                    image_count += 1
-            text = "".join(text_parts)
-            if image_count > 0:
-                s = "s" if image_count > 1 else ""
-                text += f" [user shared {image_count} image{s}]"
-        lines.append(f"{role}: {text}")
+        lines.append(f"{role}: {msg.get('content', '')}")
     return "\n".join(lines)
 
 

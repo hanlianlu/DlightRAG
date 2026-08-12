@@ -9,6 +9,8 @@ from urllib.parse import quote, unquote, urlsplit
 
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.source_builder import build_sources
+from dlightrag.core.access import can_project_workspace_visual
+from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
@@ -54,12 +56,20 @@ def project_contexts_for_client(
     contexts: RetrievalContexts,
     *,
     image_url_prefix: str | None = "/images",
+    visual_workspaces: set[str] | None = None,
 ) -> RetrievalContexts:
     """Return client-safe contexts without inline base64 image data."""
     chunks = [
         chunk
         for item in contexts.get("chunks", [])
-        if (chunk := _project_chunk_context(item, image_url_prefix=image_url_prefix)) is not None
+        if (
+            chunk := _project_chunk_context(
+                item,
+                image_url_prefix=image_url_prefix,
+                visual_workspaces=visual_workspaces,
+            )
+        )
+        is not None
     ]
     return {
         "chunks": chunks,
@@ -72,6 +82,7 @@ def _project_chunk_context(
     item: dict[str, Any],
     *,
     image_url_prefix: str | None,
+    visual_workspaces: set[str] | None,
 ) -> dict[str, Any] | None:
     row = dict(item)
     chunk_id = row.get("chunk_id") or row.get("id")
@@ -98,8 +109,14 @@ def _project_chunk_context(
             payload["metadata"] = public_metadata
         else:
             payload.pop("metadata")
+    can_read_visual = can_project_workspace_visual(row.get("_workspace"), visual_workspaces)
+    if not can_read_visual:
+        payload.pop("image_url", None)
+        payload.pop("thumbnail_url", None)
+        payload.pop("image_mime_type", None)
     if (
-        image_url_prefix
+        can_read_visual
+        and image_url_prefix
         and row.get("_workspace")
         and chunk_id
         and (row.get("image_data") or _is_visual_chunk(row))
@@ -138,6 +155,7 @@ def project_source_payloads(
     *,
     resolver: SourceDownloadLinkBuilder | None,
     downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
 ) -> list[SourceReferencePayload]:
     """Convert internal sources into the strict public source contract."""
     projected: list[SourceReferencePayload] = []
@@ -180,6 +198,12 @@ def project_source_payloads(
                 "source_download_projection_outcome",
                 extra={"outcome": "unauthorized", "source_id": safe_source_id},
             )
+        chunks = source.chunks
+        if chunks and not can_project_workspace_visual(source.workspace, visual_workspaces):
+            chunks = [
+                chunk.model_copy(update={"image_url": None, "thumbnail_url": None})
+                for chunk in chunks
+            ]
         projected.append(
             SourceReferencePayload(
                 id=source.id,
@@ -188,7 +212,7 @@ def project_source_payloads(
                 source_uri=source.source_uri,
                 download_url=download_url,
                 cited_chunk_ids=source.cited_chunk_ids,
-                chunks=source.chunks,
+                chunks=chunks,
             )
         )
     return projected
@@ -199,6 +223,7 @@ def retrieval_payload(
     *,
     source_link_builder: SourceDownloadLinkBuilder | None = None,
     downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
     image_url_prefix: str | None = "/images",
 ) -> dict[str, Any]:
     """Project retrieval results into a client-safe response dictionary."""
@@ -210,10 +235,14 @@ def retrieval_payload(
         sources,
         resolver=source_link_builder,
         downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
     )
-    contexts = project_contexts_for_client(result.contexts, image_url_prefix=image_url_prefix)
+    contexts = project_contexts_for_client(
+        result.contexts,
+        image_url_prefix=image_url_prefix,
+        visual_workspaces=visual_workspaces,
+    )
     return {
-        "answer": result.answer,
         "contexts": contexts,
         "sources": [source.model_dump() for source in source_payloads],
         "trace": result.trace,
@@ -226,6 +255,7 @@ def answer_payload(
     *,
     source_link_builder: SourceDownloadLinkBuilder | None = None,
     downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
     image_url_prefix: str | None = "/images",
 ) -> dict[str, Any]:
     """Project generated answer results into a client-safe response dictionary."""
@@ -233,17 +263,28 @@ def answer_payload(
         result.sources,
         resolver=source_link_builder,
         downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
     )
+    answer_images = result.answer_images
+    answer_blocks = result.answer_blocks
+    if visual_workspaces is not None:
+        answer_images = answer_images_from_sources(
+            result.sources,
+            contexts=result.contexts,
+            visual_workspaces=visual_workspaces,
+        )
+        answer_blocks = answer_blocks_from_markdown(result.answer, answer_images)
     return {
         "answer": result.answer,
         "contexts": project_contexts_for_client(
             result.contexts,
             image_url_prefix=image_url_prefix,
+            visual_workspaces=visual_workspaces,
         ),
         "references": [{"id": ref.id, "title": ref.title} for ref in result.references],
         "sources": [source.model_dump() for source in source_payloads],
-        "answer_images": result.answer_images,
-        "answer_blocks": result.answer_blocks,
+        "answer_images": answer_images,
+        "answer_blocks": answer_blocks,
         "trace": result.trace,
         "image_descriptions": result.image_descriptions,
     }

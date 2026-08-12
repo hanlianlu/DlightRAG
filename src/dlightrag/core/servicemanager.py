@@ -35,17 +35,18 @@ if TYPE_CHECKING:
 from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.agent.tool_loop import AgentTool
-from dlightrag.core.answer.capability import AnswerImageCapability, derive_effective_max_images
+from dlightrag.core.answer.capability import (
+    AnswerImageCapability,
+    check_answer_image_capability,
+    derive_effective_max_images,
+)
 from dlightrag.core.answer.errors import (
-    ANSWER_IMAGE_CAPABILITY_UNKNOWN,
-    CURRENT_IMAGES_UNSUPPORTED,
-    AnswerImageError,
     CurrentImagePayloadError,
 )
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer.turn import PreparedAnswerTurn
-from dlightrag.core.client_contracts import IngestSpec, SourceType
+from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
@@ -69,6 +70,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_RETRY_INTERVAL: float = 300.0
 _QUERY_WORKSPACE_MAX_CONCURRENCY = 8
+_SCHEMA_CACHE_MAX_ENTRIES = 128
 
 
 def _defer_cancellation(
@@ -265,43 +267,15 @@ class RAGServiceUnavailableError(Exception):
         super().__init__(self.detail)
 
 
-_ERROR_IMAGES_NOT_SUPPORTED = (
-    "Current model does not support image input. Use a vision-capable model or remove query_images."
-)
-_ERROR_CAPABILITY_UNKNOWN = (
-    "Answer-model image capability is unknown: the startup probe did not confirm image support. "
-    "Provide a vision-capable query model or retry once the model is reachable."
-)
 # Lazy re-probe cooldown for an `unknown` answer-image capability (transient recovery).
 _ANSWER_CAPABILITY_REPROBE_COOLDOWN_SECONDS = 30.0
 
 
-def _check_answer_image_capability(
-    *,
-    query_images: list[dict[str, Any]] | None,
-    capability: AnswerImageCapability | None,
-) -> None:
-    """Reject current images unless the query-role answer model is confirmed to accept them.
+def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:
+    from dlightrag.utils.images import image_bytes_to_data_uri, verify_web_image_bytes
 
-    Gates on the capability of ``model_for_role(config, "query")`` -- the model that
-    actually receives the images -- not ``llm.default``. Fail-closed: only a confirmed
-    ``supported`` verdict is admitted; ``unsupported`` raises
-    ``CURRENT_IMAGES_UNSUPPORTED`` and ``unknown``/unprobed raises
-    ``ANSWER_IMAGE_CAPABILITY_UNKNOWN``, so every surface returns the same clear error
-    instead of a late provider or transport-budget failure.
-    """
-    if not query_images:
-        return
-    if capability is None or capability.status == "unknown":
-        raise AnswerImageError(
-            f"[ANSWER_IMAGE_CAPABILITY_UNKNOWN] {_ERROR_CAPABILITY_UNKNOWN}",
-            error_kind=ANSWER_IMAGE_CAPABILITY_UNKNOWN,
-        )
-    if capability.status == "unsupported":
-        raise AnswerImageError(
-            f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}",
-            error_kind=CURRENT_IMAGES_UNSUPPORTED,
-        )
+    mime = verify_web_image_bytes(data, max_pixels=max_pixels)
+    return mime, image_bytes_to_data_uri(data, fallback_mime=mime)
 
 
 class RAGServiceManager:
@@ -321,6 +295,7 @@ class RAGServiceManager:
         # Health/error tracking
         self._ready: bool = False
         self._degraded: bool = False
+        self._closed: bool = False
         self._startup_warnings: list[str] = []
 
         # Per-workspace backoff: workspace -> (last_error_ts, retry_interval)
@@ -335,6 +310,8 @@ class RAGServiceManager:
             input_root=self._config.input_dir_path,
         )
         self._retrieval_planner: RetrievalPlanner | None = None
+        self._vlm_func: Callable[..., Any] | None = None
+        self._vlm_closers: list[Callable[[], Awaitable[Any]]] = []
         self._query_image_describer: QueryImageDescriber | None = None
         self._web_search: ExaSearch | None = None
         self._query_tool_model: QueryToolModel | None = None
@@ -574,7 +551,13 @@ class RAGServiceManager:
         """Discover the query-role answer model's image capability once at startup."""
         if self._answer_image_capability is not None:
             return
-        self._answer_image_capability = await self._discover_answer_image_capability()
+        self._cache_answer_image_capability(await self._discover_answer_image_capability())
+
+    def _cache_answer_image_capability(self, capability: AnswerImageCapability) -> None:
+        self._answer_image_capability = capability
+        synthesizer = getattr(self, "_answer_synthesizer", None)
+        if synthesizer is not None:
+            synthesizer.set_effective_max_images(capability.effective_max_images)
 
     async def _maybe_reprobe_answer_image_capability(self) -> None:
         """Lazily re-probe when the cached capability is ``unknown``.
@@ -599,7 +582,7 @@ class RAGServiceManager:
             ):
                 return
             self._answer_capability_last_probe = now
-            self._answer_image_capability = await self._discover_answer_image_capability()
+            self._cache_answer_image_capability(await self._discover_answer_image_capability())
 
     async def _discover_answer_image_capability(self) -> AnswerImageCapability:
         """Probe ``model_for_role(config, "query")`` and build a tri-state capability.
@@ -982,27 +965,32 @@ class RAGServiceManager:
         )
 
     @staticmethod
-    def _budget_agent_images(
+    async def _budget_agent_images(
         current_images: list[dict[str, Any]],
         budget: AnswerImageBudget,
         resource_ids: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
-        blocks: list[dict[str, Any]] = []
-        for index, image in enumerate(current_images, start=1):
-            block = budget.add_user_image(image, label=f"query_image_{index}")
-            if block is None:
-                raise CurrentImagePayloadError(
-                    f"current image query_image_{index} could not fit the answer image budget"
-                )
-            if index <= len(resource_ids):
-                blocks.append(
-                    {
-                        "type": "text",
-                        "text": f"[current image {index} | resource: {resource_ids[index - 1]}]",
-                    }
-                )
-            blocks.append(block)
-        return blocks
+        def build() -> list[dict[str, Any]]:
+            blocks: list[dict[str, Any]] = []
+            for index, image in enumerate(current_images, start=1):
+                block = budget.add_user_image(image, label=f"query_image_{index}")
+                if block is None:
+                    raise CurrentImagePayloadError(
+                        f"current image query_image_{index} could not fit the answer image budget"
+                    )
+                if index <= len(resource_ids):
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": (
+                                f"[current image {index} | resource: {resource_ids[index - 1]}]"
+                            ),
+                        }
+                    )
+                blocks.append(block)
+            return blocks
+
+        return await asyncio.to_thread(build)
 
     def _sem_bound(self, func: Callable[..., Any]) -> Callable[..., Any]:
         """Cap a DlightRAG-owned LLM callable by the direct-LLM concurrency semaphore.
@@ -1056,13 +1044,11 @@ class RAGServiceManager:
         async with self._query_image_describer_lock:
             if self._query_image_describer is None:
                 from dlightrag.core.request.images import QueryImageDescriber
-                from dlightrag.models.llm import get_vlm_model_func
 
-                cfg = self._config.query_images
                 transport = self._config.answer
                 self._query_image_describer = QueryImageDescriber(
-                    vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
-                    max_images=cfg.max_current_images,
+                    vlm_func=self._get_or_create_vlm_func(),
+                    max_images=MAX_QUERY_IMAGES,
                     max_total_bytes=transport.image_max_total_bytes,
                     max_bytes_per_image=transport.image_max_bytes,
                     max_pixels=transport.image_max_pixels,
@@ -1072,6 +1058,17 @@ class RAGServiceManager:
                     min_quality=transport.image_min_quality,
                 )
         return self._query_image_describer
+
+    def _get_or_create_vlm_func(self) -> Callable[..., Any]:
+        if self._closed:
+            raise RAGServiceUnavailableError("RAG service manager is closed")
+        if self._vlm_func is None:
+            from dlightrag.models.llm import get_vlm_model_func
+
+            self._vlm_func = self._sem_bound(
+                get_vlm_model_func(self._config, owner_closers=self._vlm_closers)
+            )
+        return self._vlm_func
 
     async def _get_schema(
         self,
@@ -1098,6 +1095,12 @@ class RAGServiceManager:
             # Never cache a failed lookup. Prefer the last-known-good entry
             # even when stale, and otherwise retry on the next request.
             return cached[1] if cached is not None else {}
+        if (
+            ws_key not in self._schema_cache
+            and len(self._schema_cache) >= _SCHEMA_CACHE_MAX_ENTRIES
+        ):
+            oldest = min(self._schema_cache, key=lambda key: self._schema_cache[key][0])
+            self._schema_cache.pop(oldest, None)
         self._schema_cache[ws_key] = (now, schema)
         return schema
 
@@ -1237,9 +1240,8 @@ class RAGServiceManager:
         accepts neither history nor Web attachment documents.
         """
         current_images = list(query_images or [])
-        image_limit = max(0, int(self._config.query_images.max_current_images))
-        if len(current_images) > image_limit:
-            raise CurrentImagePayloadError(f"at most {image_limit} current images are allowed")
+        if len(current_images) > MAX_QUERY_IMAGES:
+            raise CurrentImagePayloadError(f"at most {MAX_QUERY_IMAGES} current images are allowed")
         ws_list = await self._open_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
@@ -1369,15 +1371,27 @@ class RAGServiceManager:
             max_messages=self._config.max_conversation_turns * 2,
             max_tokens=self._config.max_conversation_tokens,
         )
+        declared_image_count = sum(
+            1
+            for resource in resources or ()
+            if resource.loader is None
+            and (resource.declared_mime or "").lower().startswith("image/")
+        )
+        if declared_image_count:
+            await self._maybe_reprobe_answer_image_capability()
+            check_answer_image_capability(
+                image_count=declared_image_count,
+                capability=self._answer_image_capability,
+            )
         (
             current_images,
             remaining_resources,
             current_image_resources,
         ) = await self._prepare_current_images(resources)
-        if current_images:
+        if current_images and not declared_image_count:
             await self._maybe_reprobe_answer_image_capability()
-        _check_answer_image_capability(
-            query_images=current_images,
+        check_answer_image_capability(
+            image_count=len(current_images),
             capability=self._answer_image_capability,
         )
 
@@ -1467,7 +1481,7 @@ class RAGServiceManager:
         if research:
             image_budget = self._new_answer_image_budget()
             query_images = (
-                self._budget_agent_images(
+                await self._budget_agent_images(
                     current_images,
                     image_budget,
                     current_image_resource_ids,
@@ -1522,7 +1536,6 @@ class RAGServiceManager:
         if not resources:
             return [], [], []
         from dlightrag.core.resources import ResourceInput
-        from dlightrag.utils.images import image_bytes_to_data_uri, verify_web_image_bytes
 
         max_pixels = self._config.answer.image_max_pixels
         images: list[dict[str, Any]] = []
@@ -1543,14 +1556,18 @@ class RAGServiceManager:
                 remaining.append(resource)
                 continue
             try:
-                mime = verify_web_image_bytes(data, max_pixels=max_pixels)
+                mime, data_uri = await asyncio.to_thread(
+                    _verified_current_image_data_uri,
+                    data,
+                    max_pixels=max_pixels,
+                )
             except ValueError:
                 remaining.append(resource)
                 continue
             images.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": image_bytes_to_data_uri(data, fallback_mime=mime)},
+                    "image_url": {"url": data_uri},
                 }
             )
             image_resource = ResourceInput(
@@ -1560,9 +1577,6 @@ class RAGServiceManager:
             )
             remaining.append(image_resource)
             image_resources.append(image_resource)
-        limit = max(0, int(self._config.query_images.max_current_images))
-        if len(images) > limit:
-            raise CurrentImagePayloadError(f"at most {limit} current images are allowed")
         return images, remaining, image_resources
 
     async def _materialize_link_image(self, url: str) -> bytes | None:
@@ -1614,11 +1628,9 @@ class RAGServiceManager:
         visual_supported = capability is not None and capability.status == "supported"
         inspector: ResourceInspector | None = None
         if visual_supported and capability is not None:
-            from dlightrag.models.llm import get_vlm_model_func
-
             inspector = ResourceInspector(
                 registry,
-                vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
+                vlm_func=self._get_or_create_vlm_func(),
                 max_images=capability.effective_max_images,
                 max_total_bytes=answer.image_max_total_bytes,
                 max_bytes_per_image=answer.image_max_bytes,
@@ -1650,18 +1662,19 @@ class RAGServiceManager:
     ) -> RetrievalResult:
         from dlightrag.observability import trace_observation
 
-        run = await self._prepare_orchestrated_run(
-            turn,
-            workspace=workspace,
-            workspaces=workspaces,
-            all_workspaces=all_workspaces,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            filters=filters,
-            resources=resources,
-        )
+        run: _OrchestratorRun | None = None
         try:
             async with asyncio.timeout(self._config.request_timeout):
+                run = await self._prepare_orchestrated_run(
+                    turn,
+                    workspace=workspace,
+                    workspaces=workspaces,
+                    all_workspaces=all_workspaces,
+                    top_k=top_k,
+                    chunk_top_k=chunk_top_k,
+                    filters=filters,
+                    resources=resources,
+                )
                 async with trace_observation(
                     "answer_orchestration",
                     as_type="chain",
@@ -1707,7 +1720,7 @@ class RAGServiceManager:
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from exc
         finally:
-            if run.registry is not None:
+            if run is not None and run.registry is not None:
                 await run.registry.aclose()
 
     async def _aanswer_stream_orchestrated(
@@ -1724,19 +1737,20 @@ class RAGServiceManager:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         from dlightrag.observability import trace_observation
 
-        run = await self._prepare_orchestrated_run(
-            turn,
-            workspace=workspace,
-            workspaces=workspaces,
-            all_workspaces=all_workspaces,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            filters=filters,
-            resources=resources,
-        )
+        run: _OrchestratorRun | None = None
         registry_transferred = False
         try:
             async with asyncio.timeout(self._config.request_timeout):
+                run = await self._prepare_orchestrated_run(
+                    turn,
+                    workspace=workspace,
+                    workspaces=workspaces,
+                    all_workspaces=all_workspaces,
+                    top_k=top_k,
+                    chunk_top_k=chunk_top_k,
+                    filters=filters,
+                    resources=resources,
+                )
                 async with trace_observation(
                     "answer_orchestration",
                     as_type="chain",
@@ -1789,7 +1803,7 @@ class RAGServiceManager:
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from exc
         finally:
-            if run.registry is not None and not registry_transferred:
+            if run is not None and run.registry is not None and not registry_transferred:
                 await run.registry.aclose()
 
     async def _acquire_answer_slot(self) -> None:
@@ -1936,6 +1950,7 @@ class RAGServiceManager:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
 
+        self._closed = True
         cancellation: asyncio.CancelledError | None = None
         await self._ingest_jobs.close()
 
@@ -1946,6 +1961,16 @@ class RAGServiceManager:
 
         async with self._query_image_describer_lock:
             self._query_image_describer = None
+            self._vlm_func = None
+            vlm_closers, self._vlm_closers = self._vlm_closers, []
+
+        for close_vlm in vlm_closers:
+            try:
+                await close_vlm()
+            except asyncio.CancelledError as exc:
+                cancellation = _defer_cancellation(cancellation, exc)
+            except Exception:
+                logger.warning("Failed to close manager VLM provider", exc_info=True)
 
         for component in (
             self._answer_synthesizer,

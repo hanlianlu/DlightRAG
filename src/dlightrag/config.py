@@ -464,7 +464,7 @@ class AnswerConfig(BaseModel):
     max_images: int = Field(
         default=12,
         ge=0,
-        description="Maximum image blocks sent to the answer LLM (current + history + RAG).",
+        description="Maximum current and retrieved image blocks sent to the answer LLM.",
     )
 
     # Vision support is runtime manager state, not config. Users do not set it
@@ -515,23 +515,6 @@ class WebConversationsConfig(BaseModel):
 
     max_turns: int = Field(default=100, ge=1)
     ttl_days: int = Field(default=30, ge=1)
-
-
-class QueryImagesConfig(BaseModel):
-    """Retrieve-only current-request image validation and enhancement controls.
-
-    ``query_images`` is the retrieve visual path; unified answers admit visual
-    evidence through ``answer`` attachments instead.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    max_current_images: int = Field(default=3, ge=0)
-    max_upload_bytes: int = Field(
-        default=15 * 1024 * 1024,
-        ge=1,
-        description="Maximum durable bytes accepted for each current Web image.",
-    )
 
 
 class WebSearchConfig(BaseModel):
@@ -854,7 +837,6 @@ class DlightragConfig(BaseSettings):
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
     answer: AnswerConfig = Field(default_factory=AnswerConfig)
     web_conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
-    query_images: QueryImagesConfig = Field(default_factory=QueryImagesConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
     access_control: AccessControlConfig = Field(default_factory=AccessControlConfig)
@@ -1165,9 +1147,11 @@ class DlightragConfig(BaseSettings):
     max_upload_size_mb: int = Field(
         default=512,
         ge=1,
-        description="Per-request upload cap for /web/files/upload (MB). Reject the "
-        "whole request when Content-Length exceeds this so we don't fill the temp "
-        "directory before noticing.",
+        description=(
+            "Receive-layer cap for multipart upload requests and total cap for multi-file "
+            "Web workspace uploads (MB). Answer uploads use their tighter answer policy; "
+            "/ingest/blob uses the tighter max_upload_bytes cap."
+        ),
     )
 
     # ===== Operational =====

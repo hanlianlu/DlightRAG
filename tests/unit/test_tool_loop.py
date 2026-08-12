@@ -4,6 +4,7 @@
 import asyncio
 from typing import Any
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult, ToolTurnExecutor
@@ -69,6 +70,76 @@ async def test_valid_calls_execute_in_parallel_and_results_replay_in_source_orde
         "result:first",
         "result:second",
     ]
+
+
+async def test_cancelled_tool_call_cancels_and_joins_siblings() -> None:
+    sibling_started = asyncio.Event()
+    sibling_finished = asyncio.Event()
+    release_sibling = asyncio.Event()
+
+    async def execute(args: BaseModel) -> ToolResult:
+        assert isinstance(args, SearchArgs)
+        if args.query == "cancel":
+            await sibling_started.wait()
+            raise asyncio.CancelledError
+        sibling_started.set()
+        try:
+            await release_sibling.wait()
+            return ToolResult(content="late")
+        finally:
+            sibling_finished.set()
+
+    model = ScriptedModel(
+        _turn(
+            ToolCall(id="1", name="search", arguments={"query": "cancel"}),
+            ToolCall(id="2", name="search", arguments={"query": "wait"}),
+        )
+    )
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await ToolTurnExecutor(model.complete_turn).run_turn(
+                [{"role": "user", "content": "q"}],
+                [AgentTool("search", "Search.", SearchArgs, execute)],
+            )
+        assert sibling_finished.is_set()
+    finally:
+        release_sibling.set()
+        await asyncio.sleep(0)
+
+
+async def test_base_exception_tool_call_cancels_and_joins_siblings() -> None:
+    class ToolAbort(BaseException):
+        pass
+
+    sibling_started = asyncio.Event()
+    sibling_finished = asyncio.Event()
+
+    async def execute(args: BaseModel) -> ToolResult:
+        assert isinstance(args, SearchArgs)
+        if args.query == "abort":
+            await sibling_started.wait()
+            raise ToolAbort
+        sibling_started.set()
+        try:
+            await asyncio.Event().wait()
+            return ToolResult(content="unreachable")
+        finally:
+            sibling_finished.set()
+
+    model = ScriptedModel(
+        _turn(
+            ToolCall(id="1", name="search", arguments={"query": "abort"}),
+            ToolCall(id="2", name="search", arguments={"query": "wait"}),
+        )
+    )
+
+    with pytest.raises(ToolAbort):
+        await ToolTurnExecutor(model.complete_turn).run_turn(
+            [{"role": "user", "content": "q"}],
+            [AgentTool("search", "Search.", SearchArgs, execute)],
+        )
+    assert sibling_finished.is_set()
 
 
 async def test_invalid_arguments_are_returned_to_the_model_without_execution() -> None:

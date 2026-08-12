@@ -420,3 +420,75 @@ def test_answer_payload_serializes_result_answer_images_and_blocks() -> None:
 
     assert payload["answer_images"] == result.answer_images
     assert payload["answer_blocks"] == result.answer_blocks
+
+
+def test_answer_payload_projects_visuals_only_for_authorized_workspaces() -> None:
+    from dlightrag.core.answer.media import (
+        answer_blocks_from_markdown,
+        answer_images_from_sources,
+    )
+    from dlightrag.core.client_payloads import answer_payload
+
+    def source(source_id: str, workspace: str) -> SourceReference:
+        return SourceReference(
+            id=source_id,
+            title=f"{source_id}.pdf",
+            source_uri=f"local://{workspace}/{source_id}.pdf",
+            workspace=workspace,
+            document_id=f"doc-{source_id}",
+            download_locator=f"/{source_id}.pdf",
+            chunks=[
+                ChunkSnippet(
+                    chunk_id=f"figure-{source_id}",
+                    chunk_idx=1,
+                    content=f"{source_id} figure",
+                    image_url=f"/images/{workspace}/figure-{source_id}?size=full",
+                    thumbnail_url=f"/images/{workspace}/figure-{source_id}?size=thumb",
+                )
+            ],
+        )
+
+    sources = [source("legal", "legal"), source("finance", "finance")]
+    answer = "Allowed [legal-1]. Hidden [finance-1]."
+    images = answer_images_from_sources(sources)
+    result = RetrievalResult(
+        answer=answer,
+        contexts={
+            "chunks": [
+                {
+                    "chunk_id": "figure-legal",
+                    "reference_id": "legal",
+                    "file_path": "legal.pdf",
+                    "content": "legal figure",
+                    "image_data": "bytes",
+                    "_workspace": "legal",
+                },
+                {
+                    "chunk_id": "figure-finance",
+                    "reference_id": "finance",
+                    "file_path": "finance.pdf",
+                    "content": "finance figure",
+                    "image_data": "bytes",
+                    "_workspace": "finance",
+                },
+            ],
+            "entities": [],
+            "relationships": [],
+        },
+        sources=sources,
+        answer_images=images,
+        answer_blocks=answer_blocks_from_markdown(answer, images),
+    )
+
+    payload = answer_payload(result, visual_workspaces={"legal"})
+
+    assert "image_url" in payload["contexts"]["chunks"][0]
+    assert "image_url" not in payload["contexts"]["chunks"][1]
+    assert payload["sources"][0]["chunks"][0]["image_url"] is not None
+    assert payload["sources"][1]["chunks"][0]["image_url"] is None
+    assert [image["chunk_id"] for image in payload["answer_images"]] == ["figure-legal"]
+    assert payload["answer_blocks"] == [
+        {"type": "markdown", "text": "Allowed [legal-1]."},
+        {"type": "image_ref", "image_id": "figure-legal"},
+        {"type": "markdown", "text": " Hidden [finance-1]."},
+    ]

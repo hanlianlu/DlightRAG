@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import threading
 
 import openpyxl
 import pytest
@@ -104,6 +105,36 @@ async def test_inspect_source_image_returns_vlm_evidence() -> None:
     assert result.locator.kind == "image"
     assert len(vlm.calls) == 1
     assert len(_sent_image_sizes(vlm.calls[0])) == 1
+
+
+async def test_inspection_image_budgeting_runs_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.utils.image_budget import ImagePayloadBudget
+
+    loop_thread = threading.get_ident()
+    budget_threads: list[int] = []
+    add_base64 = ImagePayloadBudget.add_base64
+
+    def capture_budget(self, value, *, label):
+        budget_threads.append(threading.get_ident())
+        return add_base64(self, value, label=label)
+
+    monkeypatch.setattr(ImagePayloadBudget, "add_base64", capture_budget)
+    async with ResourceRegistry() as registry:
+        resource_id = registry.register(
+            ResourceInput(
+                filename="chart.png",
+                content=_png((200, 30, 30)),
+                declared_mime="image/png",
+            )
+        )
+        inspector = ResourceInspector(registry, vlm_func=_RecordingVLM())
+
+        await inspector.inspect(resource_id, "Read the chart")
+
+    assert budget_threads
+    assert all(thread_id != loop_thread for thread_id in budget_threads)
 
 
 async def test_inspect_pdf_overview_is_bounded_and_low_resolution() -> None:

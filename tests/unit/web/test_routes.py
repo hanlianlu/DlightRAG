@@ -7,9 +7,10 @@ from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture()
-def app():
+def app(test_config):
     from dlightrag.api.server import create_app
 
+    assert test_config is not None
     real_app = create_app(include_web_app=True)
 
     mock_manager = MagicMock()
@@ -40,6 +41,7 @@ def app():
     real_app.state.manager = mock_manager
 
     mock_manager.answer_image_capability = None
+    mock_manager._maybe_reprobe_answer_image_capability = AsyncMock()
 
     return real_app
 

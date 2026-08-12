@@ -1,6 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for request-local agent evidence (EvidenceLedger)."""
 
+import asyncio
+import threading
+
+import pytest
+
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.memory.evidence import EvidenceLedger
@@ -139,7 +144,9 @@ def test_images_are_never_rendered_without_an_explicit_transport_budget() -> Non
     assert all(block["type"] != "image_url" for block in blocks)
 
 
-def test_evidence_images_consume_the_single_supplied_budget_once() -> None:
+async def test_evidence_images_consume_the_single_supplied_budget_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     png = (
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
         "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -157,14 +164,112 @@ def test_evidence_images_consume_the_single_supplied_budget_once() -> None:
     row = _corpus_row()
     row["image_data"] = png
     ledger = EvidenceLedger(image_budget=budget)
+    loop_thread = threading.get_ident()
+    budget_threads: list[int] = []
+    add_base64 = budget.add_base64
+
+    def capture_budget(value: str, *, label: str):
+        budget_threads.append(threading.get_ident())
+        return add_base64(value, label=label)
+
+    budget.add_base64 = capture_budget  # type: ignore[method-assign]
 
     ledger.add_rows([row])
+    await ledger.aflush_images()
     first, _ = ledger.render_blocks()
     second, _ = ledger.render_blocks()
 
     assert len([block for block in first if block["type"] == "image_url"]) == 1
     assert len([block for block in second if block["type"] == "image_url"]) == 1
     assert budget.count == 1
+    assert budget_threads
+    assert all(thread_id != loop_thread for thread_id in budget_threads)
+
+
+async def test_failed_evidence_image_worker_restores_pending_rows() -> None:
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    budget = AnswerImageBudget(
+        max_images=1,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+    add_base64 = budget.add_base64
+    first = True
+
+    def fail_once(value: str, *, label: str):
+        nonlocal first
+        if first:
+            first = False
+            raise RuntimeError("worker failed")
+        return add_base64(value, label=label)
+
+    budget.add_base64 = fail_once  # type: ignore[method-assign]
+    row = _corpus_row()
+    row["image_data"] = png
+    ledger = EvidenceLedger(image_budget=budget)
+    ledger.add_rows([row])
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        await ledger.aflush_images()
+    await ledger.aflush_images()
+    blocks, _ = ledger.render_blocks()
+
+    assert len([block for block in blocks if block["type"] == "image_url"]) == 1
+
+
+async def test_cancelled_evidence_flush_restores_rows_before_join() -> None:
+    png = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    budget = AnswerImageBudget(
+        max_images=1,
+        max_total_bytes=10_000,
+        max_bytes_per_image=10_000,
+        max_pixels=40_000_000,
+        max_px=64,
+        min_px=32,
+        quality=85,
+        min_quality=72,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    add_base64 = budget.add_base64
+
+    def blocked_budget(value: str, *, label: str):
+        started.set()
+        release.wait()
+        return add_base64(value, label=label)
+
+    budget.add_base64 = blocked_budget  # type: ignore[method-assign]
+    row = _corpus_row()
+    row["image_data"] = png
+    ledger = EvidenceLedger(image_budget=budget)
+    ledger.add_rows([row])
+    flush = asyncio.create_task(ledger.aflush_images())
+    await asyncio.wait_for(asyncio.to_thread(started.wait), timeout=1)
+
+    try:
+        flush.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await flush
+        await ledger.aflush_images()
+        blocks, _ = ledger.render_blocks()
+
+        assert len([block for block in blocks if block["type"] == "image_url"]) == 1
+        assert budget.count == 1
+    finally:
+        release.set()
+        await asyncio.gather(flush, return_exceptions=True)
 
 
 def test_transform_keeps_recent_evidence_and_collapses_older_to_handles() -> None:

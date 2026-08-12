@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """One request's factual memory: the sources its tools actually returned."""
 
+import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
@@ -49,6 +50,8 @@ class EvidenceLedger:
         self._seen_rows: dict[str, set[str]] = {}
         self._image_budget = image_budget
         self._image_blocks: dict[str, dict[str, Any]] = {}
+        self._pending_image_rows: list[ContextRow] = []
+        self._image_budget_lock = asyncio.Lock()
 
     @property
     def row_count(self) -> int:
@@ -65,7 +68,8 @@ class EvidenceLedger:
                 continue
             self._seen_chunks.add(identity)
             self.contexts["chunks"].append(normalized)
-            self._budget_image(normalized)
+            if normalized.get("image_data") and self._image_budget is not None:
+                self._pending_image_rows.append(normalized)
             new_chunks += 1
 
         counts: dict[str, int] = {}
@@ -88,6 +92,25 @@ class EvidenceLedger:
             new_entities=counts.get("entities", 0),
             new_relationships=counts.get("relationships", 0),
         )
+
+    async def aflush_images(self) -> None:
+        """Budget newly admitted evidence images without blocking the event loop."""
+        if self._image_budget is None:
+            return
+        async with self._image_budget_lock:
+            rows, self._pending_image_rows = self._pending_image_rows, []
+            if not rows:
+                return
+            task = asyncio.create_task(asyncio.to_thread(self._budget_images, rows))
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                self._pending_image_rows = [*rows, *self._pending_image_rows]
+                await asyncio.gather(task, return_exceptions=True)
+                raise
+            except Exception:
+                self._pending_image_rows = [*rows, *self._pending_image_rows]
+                raise
 
     def render_blocks(
         self,
@@ -196,6 +219,10 @@ class EvidenceLedger:
         )
         if block is not None:
             self._image_blocks[key] = block
+
+    def _budget_images(self, rows: list[ContextRow]) -> None:
+        for row in rows:
+            self._budget_image(row)
 
     @staticmethod
     def _chunk_identity(row: ContextRow) -> str:

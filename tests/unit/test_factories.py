@@ -264,7 +264,7 @@ class TestMakeCompletionFunc:
 
         models: list[str] = []
 
-        def fake_make_completion_func(cfg):
+        def fake_make_completion_func(cfg, **_kwargs):
             models.append(cfg.model)
             return f"completion:{cfg.model}"
 

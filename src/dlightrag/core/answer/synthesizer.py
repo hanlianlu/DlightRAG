@@ -100,6 +100,10 @@ class AnswerSynthesizer:
         self._image_min_quality = image_min_quality
         self._capacity = AnswerCapacity(max(1, context_window_tokens))
 
+    def set_effective_max_images(self, value: int) -> None:
+        """Apply a refreshed query-model image capability to future calls."""
+        self._effective_max_images = max(0, int(value))
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -307,19 +311,13 @@ class AnswerSynthesizer:
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
             system_prompt = answer_core()
             budget = self._new_image_budget()
-            history_messages, message_history_blocks = self._build_history_messages(history, budget)
             prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
-            no_context = not _has_answer_evidence(
-                prepared.contexts,
-                conversation_history=history,
+            no_context = not any(
+                prepared.contexts.get(key) for key in ("chunks", "entities", "relationships")
             )
             if no_context:
                 prepared.trace["answer_no_context"] = True
-            self._apply_image_trace(
-                prepared.trace,
-                history_count=len(message_history_blocks),
-                budget=budget,
-            )
+            self._apply_image_trace(prepared.trace, budget=budget)
             excerpt_blocks = self._build_excerpt_blocks(
                 prepared.contexts,
                 prepared.indexer,
@@ -329,7 +327,7 @@ class AnswerSynthesizer:
                 system_prompt,
                 prepared.user_prompt,
                 excerpt_blocks,
-                history_messages=history_messages,
+                history_messages=history,
             )
             evidence_tokens = estimate_content_tokens(excerpt_blocks) + estimate_content_tokens(
                 prepared.kg_context
@@ -375,38 +373,6 @@ class AnswerSynthesizer:
         )
         return result
 
-    def _build_history_messages(
-        self,
-        conversation_history: list[dict[str, Any]] | None,
-        budget: AnswerImageBudget,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Budget history-turn images into leftover slots, keeping turn text.
-
-        History images that miss a slot are dropped from transport while their
-        surrounding text is preserved, so overflow images still contribute
-        their stored descriptions.
-        """
-        history_messages: list[dict[str, Any]] = []
-        history_blocks: list[dict[str, Any]] = []
-        if not conversation_history:
-            return history_messages, history_blocks
-        for hmsg in conversation_history:
-            hcontent = hmsg.get("content")
-            if not isinstance(hcontent, list):
-                history_messages.append(hmsg)
-                continue
-            budgeted: list[Any] = []
-            for block in hcontent:
-                if isinstance(block, str) or block.get("type") != "image_url":
-                    budgeted.append(block)
-                    continue
-                bounded = budget.add_user_image(block, label=f"history_img_{budget.count + 1}")
-                if bounded is not None:
-                    budgeted.append(bounded)
-                    history_blocks.append(bounded)
-            history_messages.append({"role": hmsg["role"], "content": budgeted})
-        return history_messages, history_blocks
-
     def _compose_user_messages(
         self,
         system_prompt: str,
@@ -431,14 +397,12 @@ class AnswerSynthesizer:
     def _apply_image_trace(
         trace: dict[str, Any],
         *,
-        history_count: int,
         budget: AnswerImageBudget,
     ) -> None:
         rag_context = int(trace.get("answer_context_images_sent", 0))
         trace["answer_images_current"] = 0
-        trace["answer_images_history"] = history_count
         trace["answer_images_rag"] = rag_context
-        trace["answer_images_total"] = history_count + rag_context
+        trace["answer_images_total"] = rag_context
         trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
     def _new_image_budget(self) -> AnswerImageBudget:
@@ -588,18 +552,6 @@ def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
         and any(isinstance(block, dict) and block.get("type") == "image_url" for block in content)
         for content in (message.get("content") for message in messages)
     )
-
-
-def _has_answer_evidence(
-    contexts: RetrievalContexts,
-    *,
-    conversation_history: list[dict[str, Any]] | None,
-) -> bool:
-    if any(contexts.get(key) for key in ("chunks", "entities", "relationships")):
-        return True
-    if not conversation_history:
-        return False
-    return _messages_have_images(conversation_history)
 
 
 __all__ = ["NO_CONTEXT_DISCLAIMER", "AnswerSynthesizer"]

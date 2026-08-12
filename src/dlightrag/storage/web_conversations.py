@@ -121,6 +121,11 @@ WEB_CONVERSATION_MIGRATIONS = (
             _CREATE_ATTACHMENT_INDEX,
         ),
     ),
+    Migration(
+        "0003_canonical_answer_sources",
+        "Reset Web conversations before storing canonical answer source snapshots",
+        (_RESET_WEB_CONVERSATIONS,),
+    ),
 )
 
 _SUMMARY_COLUMNS = """
@@ -305,6 +310,7 @@ SELECT
     t.turn_id::text AS turn_id,
     t.assistant_text,
     t.answer_sources,
+    t.queried_workspaces,
     {_ATTACHMENT_MANIFEST_SUBQUERY.format(turn_id_expr="t.turn_id")}
 FROM web_conversation_turns AS t
 JOIN web_conversations AS c
@@ -445,6 +451,7 @@ class CommitTurnResult:
     assistant_text: str | None = None
     answer_sources: dict[str, Any] | None = None
     replayed: bool = False
+    queried_workspaces: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,6 +499,9 @@ def _committed_result(row: Any, *, replayed: bool) -> CommitTurnResult:
         assistant_text=str(value["assistant_text"]),
         answer_sources=answer_sources,
         replayed=replayed,
+        queried_workspaces=tuple(
+            str(workspace) for workspace in _json_value(value.get("queried_workspaces", []))
+        ),
     )
 
 
@@ -849,6 +859,7 @@ class PGWebConversationStore:
                     ),
                     assistant_text=assistant_text,
                     answer_sources=answer_sources,
+                    queried_workspaces=tuple(queried_workspaces),
                 )
 
         return await self._run_write(_operation)

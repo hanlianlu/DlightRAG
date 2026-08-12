@@ -62,6 +62,8 @@ def conversation_service() -> AsyncMock:
 async def conversation_client(conversation_service: AsyncMock):
     application = create_app(include_web_app=True)
     application.state.web_conversation_service = conversation_service
+    application.state.manager = AsyncMock()
+    application.state.manager.alist_workspace_records.return_value = [{"workspace": "default"}]
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
@@ -625,10 +627,11 @@ def _conversation_snapshot() -> ConversationSnapshot:
                             "title": "Report",
                             "type": "document",
                             "source_uri": "local://report.pdf",
-                            "download_url": "/web/files/raw/report?workspace=default",
+                            "workspace": "default",
+                            "document_id": "report",
+                            "chunks": [],
                         }
-                    ],
-                    "answer_images": [],
+                    ]
                 },
                 "queried_workspaces": ["default"],
                 "created_at": now,
@@ -725,8 +728,10 @@ async def test_history_projects_safe_attachments_sources_and_rendered_answer(
     assert attachment.kind == "image"
     assert attachment.thumbnail_url == expected_url + "/thumbnail"
     assert attachment.label == "Turn 1, attachment 1"
-    assert turn.answer_sources["sources"][0]["download_url"].startswith("/web/")
+    assert "/web/files/raw/report?workspace=default" in turn.answer_html
     assert "citation-badge" in turn.answer_html
+    assert "answer_sources" not in turn.model_dump()
+    assert "queried_workspaces" not in turn.model_dump()
     assert "attachment_bytes" not in turn.model_dump_json()
     assert "principal_id" not in turn.model_dump_json()
     conversation_store.list_conversations.assert_not_awaited()
@@ -875,7 +880,8 @@ async def test_build_answer_resources_orders_current_then_history_attachments(
     (current,) = validate_web_attachments(
         [("now.png", "image/png", image_buffer.getvalue())],
         max_attachments=6,
-        image_max_bytes=15 * 1024 * 1024,
+        max_attachment_bytes=15 * 1024 * 1024,
+        max_total_attachment_bytes=128 * 1024 * 1024,
     )
 
     resources = service_under_test.build_answer_resources(prepared, (current,))
@@ -912,7 +918,8 @@ async def test_build_answer_resources_caps_history_by_configured_limit(
     (current,) = validate_web_attachments(
         [("now.png", "image/png", image_buffer.getvalue())],
         max_attachments=2,
-        image_max_bytes=15 * 1024 * 1024,
+        max_attachment_bytes=15 * 1024 * 1024,
+        max_total_attachment_bytes=128 * 1024 * 1024,
     )
 
     resources = service.build_answer_resources(prepared, (current,))
@@ -948,7 +955,8 @@ async def test_commit_answer_maps_validated_attachments_and_revision(
     (attachment,) = validate_web_attachments(
         [("chart.png", "image/png", raw)],
         max_attachments=6,
-        image_max_bytes=15 * 1024 * 1024,
+        max_attachment_bytes=15 * 1024 * 1024,
+        max_total_attachment_bytes=128 * 1024 * 1024,
     )
 
     result = await service_under_test.commit_answer(

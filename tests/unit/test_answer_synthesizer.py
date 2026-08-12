@@ -462,35 +462,6 @@ class TestAnswerSynthesizerStream:
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerSynthesizerImageBudget
-# ---------------------------------------------------------------------------
-
-
-class TestAnswerSynthesizerImageBudget:
-    def test_history_image_blocks_are_budgeted(self) -> None:
-        synth = AnswerSynthesizer(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            effective_max_images=3,
-        )
-
-        prepared = synth._prepare_model_call(
-            "prompt",
-            {"chunks": []},
-            conversation_history=PriorTurns(
-                [
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": "previous"}, _image_block()],
-                    }
-                ]
-            ),
-        )
-
-        history_content = prepared.messages[1]["content"]
-        assert any(block.get("type") == "image_url" for block in history_content)
-
-
-# ---------------------------------------------------------------------------
 # TestAnswerSynthesizerCapacity
 # ---------------------------------------------------------------------------
 

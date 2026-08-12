@@ -688,12 +688,12 @@ vector scoring inside a small metadata candidate set.
 
 `answer.max_images` and the answer byte/geometry fields define one image
 transport budget for every answer, across REST, SDK, MCP, and Web. That single
-budget covers current attachment images, focused VLM inspection previews, and
-retrieved workspace visuals together; there is no separate per-lane instance.
+budget covers current attachment images and retrieved workspace visuals.
+Focused VLM inspection is a separate model call: each inspection applies the
+same byte/geometry limits independently and does not consume the final answer
+transport budget.
 At startup the configured shape is clamped to the query-role model's discovered
-image capability. `answer.max_images` must remain `>= query_images.max_current_images`
-so the retrieve-only current images always fit the shared ceiling. Compression
-budgets are advanced model transport limits:
+image capability. Compression budgets are advanced model transport limits:
 
 `chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
 those are omitted, it reuses `llm.default`.
@@ -726,12 +726,6 @@ rerank:
   # score_threshold: 0.5
   max_concurrency: 8
   batch_size: 8
-  image_max_bytes: 1500000
-  image_max_total_bytes: 8000000
-  image_max_px: 1280
-  image_min_px: 768
-  image_quality: 86
-  image_min_quality: 76
 
 answer:
   max_images: 12
@@ -771,20 +765,19 @@ on every channel. Attachments are read on demand — deterministic UTF-8/CSV
 decoding and MarkItDown conversion of HTML/PDF/DOCX/PPTX/XLSX first, then focused
 VLM inspection of figures — and their full bytes never enter model context.
 
-`query_images` is a separate, retrieve-only current-image path used by
-`/retrieve` for knowledge-base visual search. Current-request images are
-described with the VLM before retrieval when a VLM is configured. Public REST,
-MCP, CLI, and Python answer/retrieve calls are stateless; durable conversation
-attachments belong only to the Web conversation store. `max_upload_bytes` is the
-decoded per-image Web admission limit for those retrieve images, not the
-answer-model compression budget. Its default is 15 MiB and the backend and
-browser consume the same value:
+`query_images` is a separate, retrieve-only current-image path. `/retrieve`
+accepts at most three current-request query images, a fixed public
+contract shared by REST and MCP. Those images are described with the VLM for
+text retrieval and embedded directly for the visual retrieval leg. They do not
+share an answer budget.
+
+Answer images arrive only as attachments/resources. `answer.max_attachment_bytes`
+governs original upload admission, `answer.max_images` is capability-clamped at
+runtime, and the `answer.image_*` fields bound the compressed payload sent to a
+model. Public REST, MCP, CLI, and Python answer/retrieve calls remain stateless;
+durable conversation attachments belong only to the Web conversation store:
 
 ```yaml
-query_images:
-  max_current_images: 3
-  max_upload_bytes: 15728640  # 15 MiB per current Web image
-
 web_conversations:
   max_turns: 100
   ttl_days: 30
@@ -803,11 +796,13 @@ turns and their raw answer attachments without touching ingest documents,
 chunks, vectors, graph data, source files, visual assets, or jobs.
 
 The Web store persists uploaded answer attachments verbatim in one raw table and
-re-registers historical attachments lazily as request-local resources when a
-follow-up turn needs them. `visual_assets` controls browser thumbnails derived
-on demand from those attachments. There is no answer-time parse cache, no
-attachment chunk table, and no vector cache; the answer research path reads every
-resource fresh from its stored bytes.
+re-registers the newest historical attachments that fit the attachment-count
+limit as lazy request-local resources on every follow-up. Consequently, a Web
+conversation that contains an attachment remains on the research path.
+`visual_assets` controls browser thumbnails derived on demand from those
+attachments. There is no answer-time parse cache, no attachment chunk table, and
+no vector cache; the answer research path reads every resource fresh from its
+stored bytes.
 
 ## Web Search (optional)
 
@@ -951,15 +946,17 @@ memory policy. `web_conversations.max_turns` decides how many turns are retained
 in PostgreSQL. Only the two settings above decide how much reaches a model.
 
 `max_upload_bytes` is the per-file cap for REST multipart ingest and Web
-workspace/folder uploads. URL ingestion has its own
+workspace/folder uploads. It also supplies the tighter receive-layer cap for
+`/ingest/blob`, with fixed multipart framing allowance. URL ingestion has its own
 `url_ingest_max_bytes` download cap. Answer attachments use the separate
 `answer.max_attachment_bytes` (100 MiB) per-attachment ceiling, not this ingest
-cap. `max_upload_size_mb` is the additional per-request total cap for multi-file
-Web workspace uploads (a temp-directory guard). `ingest_timeout` limits how long
-the SDK convenience method `RAGServiceManager.aingest()` waits for its durable
-job. When it expires, the job keeps running and the method returns its current
-row instead of cancelling it. REST, Web, and MCP start jobs immediately and are
-not governed by this wait setting.
+cap. `max_upload_size_mb` is the general receive-layer cap for multipart uploads
+and the per-request total cap for multi-file Web workspace uploads. Answer routes
+use their tighter answer attachment policy instead. `ingest_timeout` limits how
+long the SDK convenience method `RAGServiceManager.aingest()` waits for its
+durable job. When it expires, the job keeps running and the method returns its
+current row instead of cancelling it. REST, Web, and MCP start jobs immediately
+and are not governed by this wait setting.
 
 Ingest job state is stored in `dlightrag_ingest_jobs` as operational state, not
 user-facing configuration. A sweeper runs every 30 minutes and on startup: it

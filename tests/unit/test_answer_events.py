@@ -230,11 +230,45 @@ async def test_successful_stream_commits_once_before_done() -> None:
 
     service.commit_answer.assert_awaited_once()
     answer_sources = service.commit_answer.await_args.kwargs["answer_sources"]
-    assert answer_sources["answer_images"] == []
+    assert answer_sources == {"sources": []}
     assert "composer_" not in json.dumps(answer_sources)
     done = next(event for event in events if "event: done" in event)
     assert '"conversation_saved": true' in done
-    assert "durable-attachment" in done
+
+
+async def test_commit_persists_canonical_sources_for_later_reprojection() -> None:
+    service = _make_service()
+    service.commit_answer.return_value = CommitTurnResult(True, None, None, "turn-id")
+    contexts = {
+        "chunks": [
+            {
+                "chunk_id": "figure-1",
+                "reference_id": "1",
+                "full_doc_id": "doc-report",
+                "file_path": "report.pdf",
+                "content": "Figure evidence",
+                "image_data": "bytes",
+                "_workspace": "finance",
+                "metadata": {
+                    "source_uri": "local://finance/report.pdf",
+                    "source_download_locator": "/private/report.pdf",
+                },
+            }
+        ]
+    }
+
+    await _collect(
+        service=service,
+        contexts=contexts,
+        tokens=("Evidence [1-1].",),
+    )
+
+    snapshot = service.commit_answer.await_args.kwargs["answer_sources"]
+    assert set(snapshot) == {"sources"}
+    assert snapshot["sources"][0]["workspace"] == "finance"
+    assert snapshot["sources"][0]["document_id"] == "doc-report"
+    assert "download_url" not in json.dumps(snapshot)
+    assert "answer_images" not in snapshot
 
 
 async def test_committed_submission_replays_without_regenerating() -> None:
@@ -257,7 +291,7 @@ async def test_committed_submission_replays_without_regenerating() -> None:
         turn_id="turn-id",
         current_attachment_ids=("prior-attachment",),
         assistant_text="Prior answer",
-        answer_sources={"sources": [], "answer_images": []},
+        answer_sources={"sources": []},
         replayed=True,
     )
 
@@ -279,7 +313,6 @@ async def test_committed_submission_replays_without_regenerating() -> None:
     done = next(event for event in events if "event: done" in event)
     assert '"conversation_saved": true' in done
     assert "Prior answer" in done
-    assert "prior-attachment" in done
     service.commit_answer.assert_not_awaited()
 
 
@@ -298,7 +331,7 @@ async def test_revision_conflict_is_visible_and_not_appended() -> None:
     assert '"conversation_saved": false' in done
     assert '"conversation_save_reason": "conversation_changed"' in done
     assert "ephemeral-image" not in done
-    assert '"current_attachment_ids": []' in done
+    assert "current_attachment_ids" not in done
 
 
 async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
@@ -499,6 +532,91 @@ async def test_cancellation_propagates_without_committing(
     }
 
 
+async def test_cancellation_closes_completed_unclaimed_setup_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _record_observations(monkeypatch)
+    setup_completed = asyncio.Event()
+    unclaimed_stream = SimpleNamespace(aclose=AsyncMock())
+
+    async def prepare_stream(*_args, **_kwargs):
+        setup_completed.set()
+        return {"chunks": []}, unclaimed_stream
+
+    service = _make_service()
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        _aanswer_stream_prepared=prepare_stream,
+    )
+    stream = stream_answer_events(
+        manager=manager,
+        cfg=SimpleNamespace(),
+        query="hello",
+        workspaces=["default"],
+        workspace="default",
+        conversation_service=service,
+        prepared_conversation=_prepared(),
+        validated_attachments=(),
+        submission_id=_SUBMISSION_ID,
+    )
+
+    await anext(stream)  # planning
+    await anext(stream)  # searching
+    setup_event = asyncio.create_task(anext(stream))
+    await setup_completed.wait()
+    setup_event.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await setup_event
+    await stream.aclose()
+
+    unclaimed_stream.aclose.assert_awaited_once()
+    service.commit_answer.assert_not_awaited()
+
+
+async def test_cancellation_closes_setup_stream_when_inner_suppresses_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _record_observations(monkeypatch)
+    setup_started = asyncio.Event()
+    unclaimed_stream = SimpleNamespace(aclose=AsyncMock())
+
+    async def prepare_stream(*_args, **_kwargs):
+        setup_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return {"chunks": []}, unclaimed_stream
+
+    service = _make_service()
+    manager = _fake_manager(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        _aanswer_stream_prepared=prepare_stream,
+    )
+    stream = stream_answer_events(
+        manager=manager,
+        cfg=SimpleNamespace(),
+        query="hello",
+        workspaces=["default"],
+        workspace="default",
+        conversation_service=service,
+        prepared_conversation=_prepared(),
+        validated_attachments=(),
+        submission_id=_SUBMISSION_ID,
+    )
+
+    await anext(stream)  # planning
+    await anext(stream)  # searching
+    setup_event = asyncio.create_task(anext(stream))
+    await setup_started.wait()
+    setup_event.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await setup_event
+    await stream.aclose()
+
+    unclaimed_stream.aclose.assert_awaited_once()
+    service.commit_answer.assert_not_awaited()
+
+
 async def _run_failing_stream(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     captured = _record_observations(monkeypatch)
 
@@ -599,7 +717,7 @@ async def test_completed_stream_records_terminal_save_outcome(
     assert terminal["conversation_save_reason"] == expected_reason
 
 
-async def test_storage_failure_records_unsaved_and_exposes_no_attachment_ids(
+async def test_storage_failure_records_unsaved_without_ephemeral_attachment_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _record_observations(monkeypatch)
@@ -609,7 +727,7 @@ async def test_storage_failure_records_unsaved_and_exposes_no_attachment_ids(
     events = await _collect(service=service, validated_attachments=(_image_attachment(),))
 
     done = next(event for event in events if "event: done" in event)
-    assert '"current_attachment_ids": []' in done
+    assert "current_attachment_ids" not in done
     assert "ephemeral-image" not in done
     updates = captured["updates"]
     assert isinstance(updates, list)
@@ -763,7 +881,8 @@ async def test_attachments_thread_into_commit_and_surface_attachment_ids() -> No
     (document,) = validate_web_attachments(
         [("notes.md", "text/markdown", b"# Termination clause")],
         max_attachments=6,
-        image_max_bytes=15 * 1024 * 1024,
+        max_attachment_bytes=15 * 1024 * 1024,
+        max_total_attachment_bytes=128 * 1024 * 1024,
     )
     service = _make_service()
     now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
@@ -787,5 +906,4 @@ async def test_attachments_thread_into_commit_and_surface_attachment_ids() -> No
     assert service.build_answer_resources.call_args.args[1] == (document,)
     service.commit_answer.assert_awaited_once()
     assert service.commit_answer.await_args.kwargs["attachments"] == (document,)
-    done = next(event for event in events if "event: done" in event)
-    assert "durable-doc" in done
+    assert any("event: done" in event for event in events)

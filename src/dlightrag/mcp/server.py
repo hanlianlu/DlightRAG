@@ -249,6 +249,16 @@ async def _filter_workspace_records(records: list[dict[str, Any]]) -> list[dict[
     )
 
 
+async def _authorized_workspace_names(action: str, workspaces: list[str]) -> set[str]:
+    records = await core_access.filter_workspace_records(
+        access_control_from_config(_get_config()),
+        current_request_scope(),
+        action,
+        [{"workspace": workspace} for workspace in workspaces],
+    )
+    return core_access.workspace_names(records)
+
+
 async def _resolve_authorized_query_workspaces(
     manager: RAGServiceManager,
     *,
@@ -328,7 +338,11 @@ async def retrieve_tool(
         payload=args,
         resolved_workspaces=resolved_workspaces,
     )
-    return retrieval_payload(result)
+    visual_workspaces = await _authorized_workspace_names(
+        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+        resolved_workspaces,
+    )
+    return retrieval_payload(result, visual_workspaces=visual_workspaces)
 
 
 @mcp_app.tool(
@@ -386,7 +400,11 @@ async def answer_tool(
         payload=args,
         resolved_workspaces=resolved_workspaces,
     )
-    return answer_payload(result)
+    visual_workspaces = await _authorized_workspace_names(
+        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+        resolved_workspaces,
+    )
+    return answer_payload(result, visual_workspaces=visual_workspaces)
 
 
 @mcp_app.tool(

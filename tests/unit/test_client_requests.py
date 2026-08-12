@@ -6,7 +6,6 @@ from pydantic import ValidationError
 
 from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
-from dlightrag.config import QueryImagesConfig
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,
@@ -30,9 +29,6 @@ def test_per_interface_current_image_admission() -> None:
         for index in range(4)
     ]
 
-    web_policy = QueryImagesConfig(max_current_images=4)
-    assert web_policy.max_current_images == 4
-
     # Retrieve interfaces gate current query images through their own contract.
     for model in (RetrieveRequest, RetrieveInput):
         with pytest.raises(ValidationError):
@@ -42,6 +38,13 @@ def test_per_interface_current_image_admission() -> None:
     # ordered attachments/resources at the request boundary, never a query field.
     for model in (AnswerRequest, AnswerInput):
         assert "query_images" not in set(model.model_fields)
+
+
+@pytest.mark.parametrize("model", [RetrieveRequest, RetrieveInput, AnswerRequest, AnswerInput])
+@pytest.mark.parametrize("field", ["top_k", "chunk_top_k"])
+def test_query_limits_must_be_positive(model, field: str) -> None:
+    with pytest.raises(ValidationError):
+        model.model_validate({"query": "q", field: 0})
 
 
 def test_public_requests_reject_conversation_fields() -> None:

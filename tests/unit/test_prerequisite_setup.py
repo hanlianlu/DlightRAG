@@ -1063,7 +1063,6 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "answer:\n  context_window_tokens: 260000\n  max_attachments: 6\n"
         "  max_attachment_bytes: 104857600\n  max_total_attachment_bytes: 134217728\n"
         "  max_images: 12\n"
-        "query_images:\n  max_current_images: 3\n"
         "parser_sidecars:\n  mineru:\n    api_mode: local\n"
         "  docling:\n    endpoint: http://docling:5001\n"
         "workspace: default\n",
@@ -1101,7 +1100,6 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "max_total_attachment_bytes": 134217728,
         "max_images": 12,
     }
-    assert s["query_images"] == {"max_current_images": 3}
     # No dedicated VLM role: the default LLM performs answer visual inspection.
     assert s["visual_inspection"] == {
         "role": "default",
@@ -1151,7 +1149,6 @@ def test_read_config_summary_uses_answer_defaults_when_absent(wiz, tmp_path):
     assert s["answer"]["max_attachments"] == 6
     assert s["answer"]["max_attachment_bytes"] == 100 * 1024 * 1024
     assert s["answer"]["max_total_attachment_bytes"] == 128 * 1024 * 1024
-    assert s["query_images"]["max_current_images"] == 3
 
 
 def test_context_window_note_explains_model_requirement(wiz):

@@ -2,6 +2,7 @@
 """Tests for context-aware multimodal embedding."""
 
 import io
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -270,6 +271,84 @@ async def test_embed_query_images_batches_with_query_context() -> None:
     payload = embedder._client.post.call_args.kwargs["json"]
     assert payload["input_type"] == "query"
     assert len(payload["inputs"]) == 2  # both images in ONE batched request
+
+
+async def test_embed_query_images_builds_payload_off_event_loop(monkeypatch) -> None:
+    from dlightrag.models import multimodal_embedding
+
+    provider = VoyageEmbedProvider()
+    loop_thread = threading.get_ident()
+    preparation_threads: list[int] = []
+    original_build_payload = provider.build_payload
+
+    def encode_image(_image: Image.Image) -> str:
+        preparation_threads.append(threading.get_ident())
+        return "data:image/png;base64,AA=="
+
+    def build_payload(*args, **kwargs):
+        preparation_threads.append(threading.get_ident())
+        return original_build_payload(*args, **kwargs)
+
+    monkeypatch.setattr(multimodal_embedding, "bounded_embedding_image_data_uri", encode_image)
+    monkeypatch.setattr(provider, "build_payload", build_payload)
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=provider,
+    )
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+    embedder._client.post = AsyncMock(return_value=response)
+
+    try:
+        await embedder.embed_query_images([Image.new("RGB", (2, 2), "white")])
+    finally:
+        await embedder.aclose()
+
+    assert preparation_threads
+    assert all(thread_id != loop_thread for thread_id in preparation_threads)
+
+
+async def test_embed_index_fused_builds_payload_off_event_loop(monkeypatch) -> None:
+    from dlightrag.models import multimodal_embedding
+
+    provider = VoyageEmbedProvider()
+    loop_thread = threading.get_ident()
+    preparation_threads: list[int] = []
+    original_build_payload = provider.build_payload
+
+    def encode_image(_image: Image.Image) -> str:
+        preparation_threads.append(threading.get_ident())
+        return "data:image/png;base64,AA=="
+
+    def build_payload(*args, **kwargs):
+        preparation_threads.append(threading.get_ident())
+        return original_build_payload(*args, **kwargs)
+
+    monkeypatch.setattr(multimodal_embedding, "bounded_embedding_image_data_uri", encode_image)
+    monkeypatch.setattr(provider, "build_payload", build_payload)
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=provider,
+    )
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+    embedder._client.post = AsyncMock(return_value=response)
+
+    try:
+        await embedder.embed_index_fused([("chart", Image.new("RGB", (2, 2), "white"))])
+    finally:
+        await embedder.aclose()
+
+    assert preparation_threads
+    assert all(thread_id != loop_thread for thread_id in preparation_threads)
 
 
 async def test_text_only_embedder_keeps_text_embedding_and_rejects_images() -> None:

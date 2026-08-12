@@ -28,10 +28,13 @@ import pytest
 from playwright.sync_api import Browser, Page, sync_playwright
 
 from dlightrag.api.server import create_app
-from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.core.answer.media import answer_images_from_sources
+from dlightrag.core.client_payloads import project_source_payloads
+from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.storage.web_conversations import CommitTurnResult, StoredConversationAttachment
 from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
+from dlightrag.web.answer_snapshots import load_answer_snapshot
 from dlightrag.web.conversation_models import (
     ConversationAttachmentReference,
     ConversationHistory,
@@ -222,13 +225,11 @@ class E2EConversationService:
                             label=f"Turn {index}, attachment 1",
                         )
                     ],
-                    answer_sources={},
                     answer_html=safe_answer_done(
                         answer=f"Image answer {index}",
                         sources=[],
                         answer_images=[],
                     ),
-                    queried_workspaces=["default"],
                     created_at=now,
                 )
             )
@@ -283,9 +284,12 @@ class E2EConversationService:
                         label=f"Turn {turn_number}, attachment {attachment.ordinal}",
                     )
                 )
-            source_values = answer_sources.get("sources", [])
-            sources = [SourceReferencePayload.model_validate(item) for item in source_values]
-            answer_images = answer_sources.get("answer_images", [])
+            internal_sources = load_answer_snapshot(answer_sources)
+            sources = project_source_payloads(
+                internal_sources,
+                resolver=SourceDownloadLinkBuilder(base_url="/web/files/raw"),
+            )
+            answer_images = answer_images_from_sources(internal_sources)
             value["turns"].append(
                 ConversationTurn(
                     turn_id=turn_id,
@@ -293,13 +297,11 @@ class E2EConversationService:
                     user_text=user_text,
                     assistant_text=assistant_text,
                     user_attachments=attachment_references,
-                    answer_sources=answer_sources,
                     answer_html=safe_answer_done(
                         answer=assistant_text,
                         sources=sources,
                         answer_images=answer_images,
                     ),
-                    queried_workspaces=queried_workspaces,
                     created_at=now,
                 )
             )
@@ -321,6 +323,7 @@ class E2EConversationService:
                 current_attachment_ids=tuple(item.attachment_id for item in attachments),
                 assistant_text=assistant_text,
                 answer_sources=answer_sources,
+                queried_workspaces=tuple(queried_workspaces),
             )
 
 
@@ -348,10 +351,10 @@ def e2e_base_url(
         answer_stream_idle_timeout=120.0,
         citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
         embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
-        answer=SimpleNamespace(image_max_pixels=MODEL_IMAGE_MAX_PIXELS, max_attachments=6),
-        query_images=SimpleNamespace(
-            max_current_images=3,
-            max_upload_bytes=15 * 1024 * 1024,
+        answer=SimpleNamespace(
+            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
+            max_attachments=6,
+            max_attachment_bytes=100 * 1024 * 1024,
         ),
     )
 

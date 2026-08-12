@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """VLM-assisted query-image description for retrieval planning."""
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -62,7 +63,11 @@ class QueryImageDescriber:
                 quality=self._quality,
                 min_quality=self._min_quality,
             )
-            bounded_block = budget.add_user_image(block, label=f"query_image_{idx}")
+            bounded_block = await asyncio.to_thread(
+                budget.add_user_image,
+                block,
+                label=f"query_image_{idx}",
+            )
             if bounded_block is None:
                 return None
             try:

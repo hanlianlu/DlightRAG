@@ -77,7 +77,7 @@ class TestRetrievalPlan:
 
 
 # ---------------------------------------------------------------------------
-# RetrievalPlanner web-variant image selection
+# RetrievalPlanner planning
 # ---------------------------------------------------------------------------
 
 
@@ -136,23 +136,6 @@ class TestStatelessPlan:
         assert payload["query"].endswith("QUERY-END")
         assert payload["metadata_schema"].endswith("SCHEMA-END")
         assert payload["current_images"][0].endswith("IMAGE-END")
-
-
-def test_history_text_uses_placeholder_for_uncaptioned_images():
-    from dlightrag.core.request.retrieval_planner import _convert_history_to_text
-
-    history = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "look at this"},
-                {"type": "image_url", "image_url": {"url": "..."}},
-            ],
-        }
-    ]
-    # History image semantics reach the planner through the scoped catalog, not
-    # the transcript; the transcript keeps a neutral placeholder.
-    assert "[user shared 1 image]" in _convert_history_to_text(history)
 
 
 # ---------------------------------------------------------------------------

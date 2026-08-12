@@ -10,11 +10,11 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from dlightrag.citations import finalize_answer
-from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.core.answer.errors import AnswerInputError, classify_answer_error
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
-from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
+from dlightrag.core.answer.media import answer_images_from_sources
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
@@ -22,6 +22,7 @@ from dlightrag.core.servicemanager import answer_trace_output
 from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils import log_safe
+from dlightrag.web.answer_snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import ConversationSummary
 from dlightrag.web.conversations import (
@@ -32,9 +33,7 @@ from dlightrag.web.conversations import (
 from dlightrag.web.events import (
     AnswerDoneEvent,
     AnswerErrorEvent,
-    AnswerMetaEvent,
     AnswerProgressEvent,
-    AnswerTraceEvent,
 )
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
@@ -81,6 +80,7 @@ def _answer_transport_metrics(trace: dict[str, Any]) -> dict[str, Any]:
 class _AnswerPayload:
     done: AnswerDoneEvent
     sources: list[SourceReferencePayload]
+    internal_sources: list[SourceReference]
     flat_contexts: list[dict[str, Any]]
 
 
@@ -110,26 +110,29 @@ async def _finish_persistence_task(
             continue
 
 
-def _done_from_committed_turn(commit: CommitTurnResult) -> AnswerDoneEvent:
+def _done_from_committed_turn(
+    commit: CommitTurnResult,
+    *,
+    downloadable_workspaces: set[str] | None,
+    visual_workspaces: set[str] | None,
+) -> AnswerDoneEvent:
     answer = commit.assistant_text or ""
-    snapshot = commit.answer_sources or {}
-    source_values = snapshot.get("sources", [])
-    sources: list[SourceReferencePayload] = []
-    for value in source_values:
-        source = SourceReferencePayload.model_validate(value)
-        if source.chunks is None:
-            source = source.model_copy(update={"chunks": []})
-        sources.append(source)
-    answer_images = snapshot.get("answer_images", [])
-    if not isinstance(answer_images, list):
-        answer_images = []
+    internal_sources = load_answer_snapshot(commit.answer_sources or {"sources": []})
+    sources = project_source_payloads(
+        internal_sources,
+        resolver=SourceDownloadLinkBuilder(base_url="/web/files/raw"),
+        downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
+    )
+    answer_images = answer_images_from_sources(
+        internal_sources,
+        visual_workspaces=visual_workspaces,
+    )
     summary = _conversation_summary(commit.summary)
     return AnswerDoneEvent(
         html=safe_answer_done(answer=answer, sources=sources, answer_images=answer_images),
         answer=answer,
-        current_attachment_ids=list(commit.current_attachment_ids),
         answer_images=answer_images,
-        answer_blocks=answer_blocks_from_markdown(answer, answer_images),
         conversation_saved=True,
         conversation=summary,
     )
@@ -144,6 +147,7 @@ async def _build_answer_done_payload(
     workspace: str,
     conversation_id: str,
     downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
 ) -> _AnswerPayload:
     """Build the done-event payload from retrieval contexts and LLM output."""
     resolver = SourceDownloadLinkBuilder(base_url="/web/files/raw")
@@ -156,15 +160,15 @@ async def _build_answer_done_payload(
     cited_images = answer_images_from_sources(
         finalized.sources,
         contexts={"chunks": finalized.flat_contexts},
+        visual_workspaces=visual_workspaces,
     )
     source_payloads = project_source_payloads(
         finalized.sources,
         resolver=resolver,
         downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
     )
     answer_images = cited_images
-    answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
-
     done = AnswerDoneEvent(
         html=safe_answer_done(
             answer=finalized.answer,
@@ -173,10 +177,9 @@ async def _build_answer_done_payload(
         ),
         answer=finalized.answer,
         answer_images=answer_images,
-        answer_blocks=answer_blocks,
         conversation_saved=False,
     )
-    return _AnswerPayload(done, source_payloads, finalized.flat_contexts)
+    return _AnswerPayload(done, source_payloads, finalized.sources, finalized.flat_contexts)
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +195,7 @@ async def stream_answer_events(
     workspaces: list[str] | None,
     workspace: str,
     downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
     validated_attachments: tuple[ValidatedWebAttachment, ...] = (),
@@ -205,7 +209,12 @@ async def stream_answer_events(
     turn -- plan, retrieve, generate, highlight -- lands in one trace. An
     already-committed submission replays below without planning at all.
     """
-    ws_list = workspaces or [workspace or manager.config.workspace]
+    committed = prepared_conversation.committed_submission
+    ws_list = (
+        list(committed.queried_workspaces)
+        if committed is not None and committed.queried_workspaces
+        else workspaces or [workspace or manager.config.workspace]
+    )
     if trace_sensitive_enabled():
         conversation_ref = prepared_conversation.conversation_id
         identity = {
@@ -235,7 +244,11 @@ async def stream_answer_events(
         session_id=conversation_ref,
     ) as observation:
         if prepared_conversation.committed_submission is not None:
-            done = _done_from_committed_turn(prepared_conversation.committed_submission)
+            done = _done_from_committed_turn(
+                prepared_conversation.committed_submission,
+                downloadable_workspaces=downloadable_workspaces,
+                visual_workspaces=visual_workspaces,
+            )
             observation.update(
                 metadata={
                     "conversation_saved": True,
@@ -252,6 +265,7 @@ async def stream_answer_events(
             ws_list=ws_list,
             workspace=workspace,
             downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
             validated_attachments=validated_attachments,
@@ -273,6 +287,7 @@ async def _emit_answer_events(
     ws_list: list[str],
     workspace: str,
     downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
     conversation_service: WebConversationService,
     prepared_conversation: PreparedWebConversation,
     validated_attachments: tuple[ValidatedWebAttachment, ...] = (),
@@ -287,9 +302,6 @@ async def _emit_answer_events(
     persistence_started = False
     commit_task: asyncio.Task[CommitTurnResult] | None = None
     try:
-        history_kept = len(prepared_conversation.text_history)
-        yield sse_event("meta", AnswerMetaEvent(history_kept=history_kept))
-
         t0 = time.monotonic()
         logger.debug("[SSE] query received: %s", log_safe(query))
 
@@ -330,12 +342,20 @@ async def _emit_answer_events(
                 except TimeoutError:
                     yield sse_event("progress", AnswerProgressEvent(phase="searching"))
         finally:
-            if not answer_task.done():
-                answer_task.cancel()
+            if token_iter is None:
+                if not answer_task.done():
+                    answer_task.cancel()
                 try:
-                    await answer_task
+                    _contexts, unclaimed_stream = await answer_task
                 except asyncio.CancelledError:
                     pass
+                except Exception:
+                    logger.debug(
+                        "Unclaimed answer stream setup failed during consumer cancellation",
+                        exc_info=True,
+                    )
+                else:
+                    await aclose_answer_stream(unclaimed_stream)
         t1 = time.monotonic()
         logger.info("[SSE] planning+retrieval+stream setup done (%.1fs)", t1 - t0)
 
@@ -378,11 +398,9 @@ async def _emit_answer_events(
             workspace=effective_workspace,
             conversation_id=prepared_conversation.conversation_id,
             downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
         )
-        answer_sources = {
-            "sources": [source.model_dump(mode="json") for source in payload.sources],
-            "answer_images": payload.done.answer_images,
-        }
+        answer_sources = dump_answer_snapshot(payload.internal_sources)
         cancellation_pending = False
         try:
             persistence_started = True
@@ -411,14 +429,15 @@ async def _emit_answer_events(
                     commit = await _finish_persistence_task(commit_task)
                     break
             if commit.saved and commit.replayed:
-                done = _done_from_committed_turn(commit)
+                done = _done_from_committed_turn(
+                    commit,
+                    downloadable_workspaces=downloadable_workspaces,
+                    visual_workspaces=visual_workspaces,
+                )
             else:
                 summary = _conversation_summary(commit.summary)
                 done = payload.done.model_copy(
                     update={
-                        "current_attachment_ids": (
-                            list(commit.current_attachment_ids) if commit.saved else []
-                        ),
                         "conversation_saved": commit.saved,
                         "conversation_save_reason": commit.reason,
                         "conversation": summary,
@@ -430,7 +449,6 @@ async def _emit_answer_events(
             logger.exception("Conversation storage unavailable after answer completion")
             done = payload.done.model_copy(
                 update={
-                    "current_attachment_ids": [],
                     "conversation_saved": False,
                     "conversation_save_reason": "storage_unavailable",
                 }
@@ -440,7 +458,6 @@ async def _emit_answer_events(
             logger.exception("Conversation persistence failed after answer completion")
             done = payload.done.model_copy(
                 update={
-                    "current_attachment_ids": [],
                     "conversation_saved": False,
                     "conversation_save_reason": "persistence_failed",
                 }
@@ -455,17 +472,21 @@ async def _emit_answer_events(
         # ── Post-done enrichment (trace, highlights) ───────────────
         try:
             trace = getattr(token_iter, "trace", None)
-            if isinstance(trace, dict) and trace:
-                yield sse_event("trace", AnswerTraceEvent(trace=trace))
             if observation is not None:
                 observation.update(
                     output=answer_trace_output(done.answer, payload.sources, contexts),
                     metadata=_answer_transport_metrics(trace if isinstance(trace, dict) else {}),
                 )
-            highlighted_sources = await enrich_semantic_highlights(
-                payload.sources,
+            highlighted_internal_sources = await enrich_semantic_highlights(
+                payload.internal_sources,
                 answer_text=done.answer,
                 config=cfg,
+            )
+            highlighted_sources = project_source_payloads(
+                highlighted_internal_sources,
+                resolver=SourceDownloadLinkBuilder(base_url="/web/files/raw"),
+                downloadable_workspaces=downloadable_workspaces,
+                visual_workspaces=visual_workspaces,
             )
             has_highlights = any(
                 chunk.highlight_phrases
@@ -479,12 +500,7 @@ async def _emit_answer_events(
                     await conversation_service.update_answer_highlights(
                         prepared_conversation,
                         submission_id=submission_id,
-                        answer_sources={
-                            "sources": [
-                                source.model_dump(mode="json") for source in highlighted_sources
-                            ],
-                            "answer_images": payload.done.answer_images,
-                        },
+                        answer_sources=dump_answer_snapshot(highlighted_internal_sources),
                     )
         except asyncio.CancelledError, GeneratorExit:
             raise

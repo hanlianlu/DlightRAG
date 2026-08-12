@@ -204,11 +204,15 @@ def test_unified_attachment_table_stores_raw_resources_only() -> None:
     assert "idx_web_conversation_attachments_catalog" in sql
 
 
-def test_next_migration_resets_rows_and_drops_superseded_tables() -> None:
+def test_attachment_migration_resets_rows_and_drops_superseded_tables() -> None:
     versions = [migration.version for migration in WEB_CONVERSATION_MIGRATIONS]
     assert versions == sorted(versions)
     assert len(versions) >= 2
-    reset = WEB_CONVERSATION_MIGRATIONS[-1]
+    reset = next(
+        migration
+        for migration in WEB_CONVERSATION_MIGRATIONS
+        if migration.version == "0002_unified_web_conversation_attachments"
+    )
     statements = list(reset.statements)
     joined = "\n".join(statements)
 
@@ -227,6 +231,13 @@ def test_next_migration_resets_rows_and_drops_superseded_tables() -> None:
     # No compatibility view or renamed-column bridge.
     assert "CREATE VIEW" not in joined
     assert "CREATE OR REPLACE VIEW" not in joined
+
+
+def test_canonical_answer_snapshot_migration_resets_incompatible_rows() -> None:
+    migration = WEB_CONVERSATION_MIGRATIONS[-1]
+
+    assert migration.version == "0003_canonical_answer_sources"
+    assert migration.statements == ("DELETE FROM web_conversations",)
 
 
 def test_migrations_touch_only_web_conversation_storage() -> None:
@@ -528,6 +539,7 @@ async def test_commit_turn_is_revision_guarded_and_trims_old_turns() -> None:
         turn_id="t1",
         assistant_text="Answer",
         answer_sources={"sources": [], "answer_images": []},
+        queried_workspaces=("default",),
     )
     statements = "\n".join(query for query, _ in conn.calls)
     assert "content_revision = $3" in statements

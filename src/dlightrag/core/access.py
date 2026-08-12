@@ -40,6 +40,13 @@ def workspace_names(records: list[dict[str, Any]]) -> set[str]:
     return {normalize_workspace(str(record["workspace"])) for record in records}
 
 
+def can_project_workspace_visual(workspace: str | None, allowed: set[str] | None) -> bool:
+    """Allow trusted calls and request-owned synthetic evidence; otherwise require workspace ACL."""
+    return allowed is None or bool(
+        workspace and (workspace.startswith("__") or workspace in allowed)
+    )
+
+
 async def resolve_authorized_query_workspaces(
     access_control: AccessControl,
     subject: Any,
@@ -80,6 +87,7 @@ async def resolve_authorized_query_workspaces(
 
 __all__ = [
     "WorkspaceRecordLister",
+    "can_project_workspace_visual",
     "filter_workspace_records",
     "resolve_authorized_query_workspaces",
 ]

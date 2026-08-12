@@ -9,25 +9,30 @@ import pytest
 from PIL import Image
 
 from dlightrag.web.attachment_models import (
-    MAX_ATTACHMENT_BYTES,
     SUPPORTED_DOCUMENT_EXTENSIONS,
     ValidatedWebAttachment,
     classify_web_attachment,
     validate_web_attachments,
 )
 
-_LARGE_IMAGE_BYTES = 15 * 1024 * 1024
+_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
 
 
 def _validate(
     items: Sequence[tuple[str, str | None, bytes]],
     *,
     max_attachments: int = 6,
-    image_max_bytes: int = _LARGE_IMAGE_BYTES,
+    max_attachment_bytes: int = _MAX_ATTACHMENT_BYTES,
+    max_total_attachment_bytes: int = _MAX_TOTAL_ATTACHMENT_BYTES,
     **kwargs: int,
 ) -> tuple[ValidatedWebAttachment, ...]:
     return validate_web_attachments(
-        items, max_attachments=max_attachments, image_max_bytes=image_max_bytes, **kwargs
+        items,
+        max_attachments=max_attachments,
+        max_attachment_bytes=max_attachment_bytes,
+        max_total_attachment_bytes=max_total_attachment_bytes,
+        **kwargs,
     )
 
 
@@ -43,6 +48,21 @@ def test_classify_web_attachment_separates_images_and_documents() -> None:
     assert classify_web_attachment("report.pdf", "application/pdf") == "document"
     assert classify_web_attachment("notes.md", "text/markdown") == "document"
     assert classify_web_attachment("archive.zip", "application/zip") == "unsupported"
+
+
+def test_validate_rejects_total_attachment_bytes_before_processing() -> None:
+    items = [
+        ("first.txt", "text/plain", b"1234"),
+        ("second.txt", "text/plain", b"5678"),
+    ]
+
+    with pytest.raises(ValueError, match="total attachment bytes exceed 7"):
+        validate_web_attachments(
+            items,
+            max_attachments=6,
+            max_attachment_bytes=10,
+            max_total_attachment_bytes=7,
+        )
     assert classify_web_attachment("payload.bin", None) == "unsupported"
 
 
@@ -92,18 +112,6 @@ def test_validate_enforces_a_lowered_attachment_count_limit() -> None:
         _validate(items, max_attachments=2)
 
 
-def test_validate_enforces_current_image_sublimit() -> None:
-    png = _png_bytes()
-    items = [
-        ("a.png", "image/png", png),
-        ("b.png", "image/png", png),
-        ("notes.md", "text/markdown", b"# ok"),
-    ]
-
-    with pytest.raises(ValueError, match="at most 1 current images"):
-        _validate(items, image_max_count=1)
-
-
 def test_validate_image_uses_detected_mime_over_declared() -> None:
     png = _png_bytes()
 
@@ -117,7 +125,7 @@ def test_validate_rejects_image_over_byte_limit() -> None:
     png = _png_bytes()
 
     with pytest.raises(ValueError, match="exceeds"):
-        _validate([("chart.png", "image/png", png)], image_max_bytes=len(png) - 1)
+        _validate([("chart.png", "image/png", png)], max_attachment_bytes=len(png) - 1)
 
 
 def test_validate_rejects_image_over_pixel_limit() -> None:
@@ -135,8 +143,8 @@ def test_validate_rejects_corrupt_image_bytes() -> None:
 def test_validate_rejects_document_over_byte_limit() -> None:
     with pytest.raises(ValueError, match="size limit"):
         _validate(
-            [("huge.pdf", "application/pdf", b"x" * (MAX_ATTACHMENT_BYTES + 1))],
-            document_max_bytes=MAX_ATTACHMENT_BYTES,
+            [("huge.pdf", "application/pdf", b"x" * (_MAX_ATTACHMENT_BYTES + 1))],
+            max_attachment_bytes=_MAX_ATTACHMENT_BYTES,
         )
 
 

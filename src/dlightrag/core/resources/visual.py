@@ -133,7 +133,12 @@ class ResourceInspector:
         self, resource_id: str, focus: str, content: bytes
     ) -> ResourceInspectionResult:
         budget = self._budget(self._max_px)
-        uri = self._bound(budget, content, label=f"{resource_id}:image")
+        uri = await asyncio.to_thread(
+            self._bound,
+            budget,
+            content,
+            label=f"{resource_id}:image",
+        )
         if uri is None:
             raise ResourceInspectionError("source image is too large to inspect")
         text = await self._ask_vlm([uri], focus, "image")
@@ -147,7 +152,12 @@ class ResourceInspector:
         except ResourceNotFoundError as exc:
             raise ResourceInspectionError(str(exc)) from exc
         budget = self._budget(self._max_px)
-        uri = self._bound(budget, asset.data, label=f"{resource_id}:{handle_id}")
+        uri = await asyncio.to_thread(
+            self._bound,
+            budget,
+            asset.data,
+            label=f"{resource_id}:{handle_id}",
+        )
         if uri is None:
             raise ResourceInspectionError("embedded visual is too large to inspect")
         text = await self._ask_vlm([uri], focus, "embedded figure")
@@ -169,7 +179,12 @@ class ResourceInspector:
                 raise ResourceInspectionError(f"page {page} is out of range (1-{count})")
             raw = await asyncio.to_thread(_render_pdf_page, content, page - 1, self._page_scale)
             budget = self._budget(self._max_px)
-            uri = self._bound(budget, raw, label=f"{resource_id}:p{page}")
+            uri = await asyncio.to_thread(
+                self._bound,
+                budget,
+                raw,
+                label=f"{resource_id}:p{page}",
+            )
             if uri is None:
                 raise ResourceInspectionError("rendered page is too large to inspect")
             text = await self._ask_vlm([uri], focus, f"page {page}")
@@ -185,7 +200,12 @@ class ResourceInspector:
         budget = self._budget(self._overview_max_px)
         uris: list[str] = []
         for offset, raw in enumerate(raws):
-            uri = self._bound(budget, raw, label=f"{resource_id}:overview{start + offset + 1}")
+            uri = await asyncio.to_thread(
+                self._bound,
+                budget,
+                raw,
+                label=f"{resource_id}:overview{start + offset + 1}",
+            )
             if uri is None:
                 break
             uris.append(uri)

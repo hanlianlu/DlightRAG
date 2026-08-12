@@ -1,9 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit tests for answer-model image capability derivation."""
 
+import base64
 import dataclasses
+import io
 
 import pytest
+from PIL import Image
 
 from dlightrag.config import (
     DlightragConfig,
@@ -149,6 +152,46 @@ async def test_unknown_capability_lazily_reprobes_to_supported(
     assert calls == 1
     assert cap is not None and cap.status == "supported"
     assert cap.effective_max_images == 8
+
+
+async def test_reprobe_updates_cached_synthesizer_image_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), "white").save(buffer, format="PNG")
+    contexts = {
+        "chunks": [
+            {
+                "chunk_id": "visual-1",
+                "file_path": "chart.png",
+                "content": "chart",
+                "image_data": base64.b64encode(buffer.getvalue()).decode("ascii"),
+            }
+        ],
+        "entities": [],
+        "relationships": [],
+    }
+    manager = RAGServiceManager(config=_reprobe_config())
+    manager._answer_image_capability = _capability("unknown", 0)
+    synthesizer = AnswerSynthesizer(
+        image_max_pixels=40_000_000,
+        effective_max_images=0,
+    )
+    manager._answer_synthesizer = synthesizer
+
+    async def fake_discover() -> AnswerImageCapability:
+        return _capability("supported", 8)
+
+    monkeypatch.setattr(manager, "_discover_answer_image_capability", fake_discover)
+
+    before = synthesizer._prepare_prompt_context("question", contexts)
+    await manager._maybe_reprobe_answer_image_capability()
+    after = synthesizer._prepare_prompt_context("question", contexts)
+
+    assert before.trace["answer_context_images_sent"] == 0
+    assert after.trace["answer_context_images_sent"] == 1
 
 
 @pytest.mark.parametrize(

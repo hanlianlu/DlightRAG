@@ -19,6 +19,7 @@ from dlightrag.core.agent.tool_loop import AgentTool, ExecutedTurn, ToolTurnExec
 from dlightrag.core.agent.tools import (
     KnowledgeRetrieval,
     WebSearch,
+    _ToolCallCache,
     build_run_tools,
 )
 from dlightrag.core.answer.capacity import AnswerCapacity
@@ -45,6 +46,7 @@ class _RunState:
     episode: RunEpisode
     context: ContextAssembler
     tools: list[AgentTool]
+    tool_cache: _ToolCallCache
     trace: dict[str, Any]
     stop_reason: str = "model_stop"
 
@@ -187,21 +189,24 @@ class AnswerOrchestrator:
             conversation_history=conversation_history,
             query_images=query_images,
         )
-        await self._research_until_stopped(state)
+        try:
+            await self._research_until_stopped(state)
 
-        if self._final_text_func is None:
-            raise RuntimeError("Research answer requires a tools-disabled final model")
-        final_messages, indexer = state.context.answer_turn(
-            evidence=state.evidence, episode=state.episode
-        )
-        state.trace["agent_stop_reason"] = state.stop_reason
-        return await self._synthesizer.synthesize_research(
-            final_messages,
-            state.evidence.contexts,
-            complete=self._final_text_func,
-            indexer=indexer,
-            trace=state.trace,
-        )
+            if self._final_text_func is None:
+                raise RuntimeError("Research answer requires a tools-disabled final model")
+            final_messages, indexer = state.context.answer_turn(
+                evidence=state.evidence, episode=state.episode
+            )
+            state.trace["agent_stop_reason"] = state.stop_reason
+            return await self._synthesizer.synthesize_research(
+                final_messages,
+                state.evidence.contexts,
+                complete=self._final_text_func,
+                indexer=indexer,
+                trace=state.trace,
+            )
+        finally:
+            await state.tool_cache.aclose()
 
     async def _run_research_stream(
         self,
@@ -217,19 +222,22 @@ class AnswerOrchestrator:
             conversation_history=conversation_history,
             query_images=query_images,
         )
-        await self._research_until_stopped(state)
+        try:
+            await self._research_until_stopped(state)
 
-        final_messages, indexer = state.context.answer_turn(
-            evidence=state.evidence, episode=state.episode
-        )
-        state.trace["agent_stop_reason"] = state.stop_reason
-        return await self._synthesizer.synthesize_research_stream(
-            final_messages,
-            state.evidence.contexts,
-            stream=self._stream_model_func,
-            indexer=indexer,
-            trace=state.trace,
-        )
+            final_messages, indexer = state.context.answer_turn(
+                evidence=state.evidence, episode=state.episode
+            )
+            state.trace["agent_stop_reason"] = state.stop_reason
+            return await self._synthesizer.synthesize_research_stream(
+                final_messages,
+                state.evidence.contexts,
+                stream=self._stream_model_func,
+                indexer=indexer,
+                trace=state.trace,
+            )
+        finally:
+            await state.tool_cache.aclose()
 
     async def _research_until_stopped(self, state: _RunState) -> None:
         """Run evidence turns until the model stops, adds nothing, or hits the cap."""
@@ -263,6 +271,14 @@ class AnswerOrchestrator:
             "agent_turns": 0,
             "web_search_cost_dollars": 0.0,
         }
+        tools, tool_cache = build_run_tools(
+            evidence=evidence,
+            trace=trace,
+            retrieve_knowledge_base=self._retrieve_knowledge_base,
+            search_web=self._search_web,
+            resource_tools=self._resource_tools,
+            register_web_source=self._register_web_source,
+        )
         return _RunState(
             evidence=evidence,
             episode=RunEpisode(),
@@ -273,14 +289,8 @@ class AnswerOrchestrator:
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
             ),
-            tools=build_run_tools(
-                evidence=evidence,
-                trace=trace,
-                retrieve_knowledge_base=self._retrieve_knowledge_base,
-                search_web=self._search_web,
-                resource_tools=self._resource_tools,
-                register_web_source=self._register_web_source,
-            ),
+            tools=tools,
+            tool_cache=tool_cache,
             trace=trace,
         )
 

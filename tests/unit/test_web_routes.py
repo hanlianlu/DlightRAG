@@ -20,6 +20,7 @@ from PIL import Image
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
 from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.core.answer.errors import ANSWER_IMAGE_CAPABILITY_UNKNOWN
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from dlightrag.web.conversations import PreparedWebConversation
@@ -453,10 +454,10 @@ class TestWebIndex:
         assert active_match is not None
         assert json.loads(html.unescape(active_match.group(1))) == ["test_ws"]
 
-    async def test_index_projects_configured_query_image_policy(
+    async def test_index_projects_answer_attachment_byte_policy(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
-        test_config.query_images.max_upload_bytes = 12_345
+        test_config.answer.max_attachment_bytes = 12_345
         web_app.state.manager.config = test_config
 
         resp = await client.get("/web/")
@@ -467,7 +468,6 @@ class TestWebIndex:
     async def test_index_projects_supported_capability_effective_limit(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
-        test_config.query_images.max_current_images = 3
         web_app.state.manager.config = test_config
         web_app.state.manager.answer_image_capability = AnswerImageCapability(
             status="supported",
@@ -483,10 +483,9 @@ class TestWebIndex:
 
         assert resp.status_code == 200
         assert 'data-attachment-image-capability="supported"' in resp.text
-        # min(max_current_images=3, effective_max_images=2) == 2
         assert 'data-attachment-image-limit="2"' in resp.text
 
-    async def test_index_unknown_capability_disables_upload(
+    async def test_index_reprobes_unknown_capability_before_projecting_uploads(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
         web_app.state.manager.config = test_config
@@ -500,11 +499,27 @@ class TestWebIndex:
             failure_kind="timeout",
         )
 
+        async def recover_capability() -> None:
+            web_app.state.manager.answer_image_capability = AnswerImageCapability(
+                status="supported",
+                configured_ceiling=8,
+                effective_max_images=2,
+                provider="test",
+                base_url=None,
+                model="test-model",
+                failure_kind=None,
+            )
+
+        web_app.state.manager._maybe_reprobe_answer_image_capability = AsyncMock(
+            side_effect=recover_capability
+        )
+
         resp = await client.get("/web/")
 
         assert resp.status_code == 200
-        assert 'data-attachment-image-capability="unknown"' in resp.text
-        assert 'data-attachment-image-limit="0"' in resp.text
+        assert 'data-attachment-image-capability="supported"' in resp.text
+        assert 'data-attachment-image-limit="2"' in resp.text
+        web_app.state.manager._maybe_reprobe_answer_image_capability.assert_awaited_once()
 
     async def test_chat_template_projects_document_attachment_limits(
         self, client: AsyncClient
@@ -686,13 +701,14 @@ class TestWebAnswer:
             return keyword_llm
 
         async def fake_extract_highlights_for_sources(*, sources, answer_text, llm_func, **kwargs):
-            from dlightrag.citations.schemas import SourceReferencePayload
+            from dlightrag.citations.schemas import SourceReference
 
             nonlocal highlights_called
             highlights_called = True
             assert llm_func is keyword_llm
-            assert isinstance(sources[0], SourceReferencePayload)
-            assert sources[0].download_url == "/web/files/raw/doc-report?workspace=default"
+            assert isinstance(sources[0], SourceReference)
+            assert sources[0].workspace == "default"
+            assert sources[0].document_id == "doc-report"
             sources[0].chunks[0].highlight_phrases = ["Evidence"]
             return sources
 
@@ -756,7 +772,7 @@ class TestWebAnswer:
         assert keyword_called is True
         assert highlights_called is True
 
-    async def test_query_only_user_does_not_receive_download_affordance(
+    async def test_query_only_user_does_not_receive_download_or_visual_affordances(
         self,
         client: AsyncClient,
         test_config: DlightragConfig,
@@ -790,6 +806,7 @@ class TestWebAnswer:
                                 "full_doc_id": "doc-report",
                                 "content": "Evidence",
                                 "file_path": "report.pdf",
+                                "image_data": "bytes",
                                 "_workspace": "default",
                                 "metadata": {
                                     "source_uri": "local://default/report.pdf",
@@ -818,6 +835,7 @@ class TestWebAnswer:
         assert "event: done" in response.text
         assert "source-action-icon" not in response.text
         assert "/web/files/raw" not in response.text
+        assert "/web/images" not in response.text
 
 
 class TestWebSSEBoundary:
@@ -837,9 +855,7 @@ class TestWebSSEBoundary:
         assert json.loads(data_line.removeprefix("data: ")) == {
             "html": "<b>x</b>",
             "answer": "x",
-            "current_attachment_ids": [],
             "answer_images": [],
-            "answer_blocks": [],
             "conversation_saved": False,
         }
 
@@ -1091,11 +1107,16 @@ class TestWebAnswerAdapter:
     async def test_answer_rejects_over_image_sublimit_before_model(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
-        # Lower the configured current-image sublimit; admission must reject the
-        # over-limit image count with a pre-stream 4xx instead of the late
-        # mid-stream synthesizer error.
-        test_config.query_images.max_current_images = 1
         web_app.state.manager.config = test_config
+        web_app.state.manager.answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=1,
+            effective_max_images=1,
+            provider="test",
+            base_url=None,
+            model="test-model",
+            failure_kind=None,
+        )
         image_buffer = io.BytesIO()
         Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
         raw = image_buffer.getvalue()
@@ -1110,9 +1131,69 @@ class TestWebAnswerAdapter:
             files=[("attachments", (f"chart{i}.png", raw, "image/png")) for i in range(2)],
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         assert "at most 1 current images" in response.text
         web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
+
+    async def test_answer_unknown_image_capability_uses_shared_error_taxonomy(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        web_app.state.manager.config = test_config
+        web_app.state.manager.answer_image_capability = AnswerImageCapability(
+            status="unknown",
+            configured_ceiling=8,
+            effective_max_images=0,
+            provider="test",
+            base_url=None,
+            model="test-model",
+            failure_kind="timeout",
+        )
+        web_app.state.manager._maybe_reprobe_answer_image_capability = AsyncMock()
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
+
+        response = await client.post(
+            "/web/answer",
+            data={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
+            files=[("attachments", ("chart.png", image_buffer.getvalue(), "image/png"))],
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error_kind"] == ANSWER_IMAGE_CAPABILITY_UNKNOWN
+        web_app.state.manager._maybe_reprobe_answer_image_capability.assert_awaited_once()
+        web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
+
+    async def test_answer_checks_unknown_capability_before_decoding_image(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        web_app.state.manager.config = test_config
+        web_app.state.manager.answer_image_capability = AnswerImageCapability(
+            status="unknown",
+            configured_ceiling=8,
+            effective_max_images=0,
+            provider="test",
+            base_url=None,
+            model="test-model",
+            failure_kind="timeout",
+        )
+        web_app.state.manager._maybe_reprobe_answer_image_capability = AsyncMock()
+
+        response = await client.post(
+            "/web/answer",
+            data={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
+            files=[("attachments", ("chart.png", b"not an image", "image/png"))],
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error_kind"] == ANSWER_IMAGE_CAPABILITY_UNKNOWN
 
     async def test_answer_image_validation_uses_configured_exact_byte_limit(
         self, client: AsyncClient, test_config: DlightragConfig, web_app, monkeypatch
@@ -1128,7 +1209,7 @@ class TestWebAnswerAdapter:
         image_buffer = io.BytesIO()
         Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
         raw = image_buffer.getvalue()
-        test_config.query_images.max_upload_bytes = len(raw)
+        test_config.answer.max_attachment_bytes = len(raw)
         web_app.state.manager.config = test_config
 
         exact = await client.post(
@@ -1140,7 +1221,7 @@ class TestWebAnswerAdapter:
             },
             files=[("attachments", ("chart.png", raw, "image/png"))],
         )
-        test_config.query_images.max_upload_bytes = len(raw) - 1
+        test_config.answer.max_attachment_bytes = len(raw) - 1
         over = await client.post(
             "/web/answer",
             data={
@@ -1152,7 +1233,7 @@ class TestWebAnswerAdapter:
         )
 
         assert exact.status_code == 200
-        assert over.status_code == 422
+        assert over.status_code == 413
 
     @pytest.mark.parametrize(
         ("source_id", "citation_ref"),
@@ -1170,7 +1251,6 @@ class TestWebAnswerAdapter:
     ) -> None:
         attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
         source_uri = f"web-attachment://{attachment_id}"
-        download_url = f"/web/conversations/{CONVERSATION_ID}/attachments/{attachment_id}"
         web_app.state.manager.config = test_config
         committed_submission = CommitTurnResult(
             saved=True,
@@ -1185,16 +1265,17 @@ class TestWebAnswerAdapter:
                         "id": source_id,
                         "title": "report.pdf",
                         "source_uri": source_uri,
-                        "download_url": download_url,
+                        "workspace": "__attachment__",
+                        "document_id": None,
                         "chunks": [
                             {
                                 "chunk_id": "attachment-chunk-1",
                                 "content": "Attachment evidence",
+                                "has_visual": False,
                             }
                         ],
                     }
-                ],
-                "answer_images": [],
+                ]
             },
             replayed=True,
         )
@@ -1219,7 +1300,6 @@ class TestWebAnswerAdapter:
 
         assert response.status_code == 200
         assert "Stored answer" in response.text
-        assert "stored-image" in response.text
         replay_payload = json.loads(
             next(
                 line.removeprefix("data: ")
@@ -1233,8 +1313,7 @@ class TestWebAnswerAdapter:
         assert committed_submission.answer_sources is not None
         stored_source = committed_submission.answer_sources["sources"][0]
         assert stored_source["source_uri"] == source_uri
-        assert stored_source["download_url"] == download_url
-        assert download_url in replay_html
+        assert "download_url" not in stored_source
         web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
 
 
@@ -1676,8 +1755,14 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
 
     calls: list[str] = []
 
-    def capture_images(sources, *, contexts):  # noqa: ANN001, ANN202
+    def capture_images(  # noqa: ANN001, ANN202
+        sources,
+        *,
+        contexts,
+        visual_workspaces=None,
+    ):
         assert isinstance(sources[0], SourceReference)
+        assert visual_workspaces == {"default"}
         calls.append("images")
         return []
 
@@ -1686,9 +1771,11 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
         *,
         resolver,
         downloadable_workspaces=None,
+        visual_workspaces=None,
     ):
         assert isinstance(sources[0], SourceReference)
         assert downloadable_workspaces is None
+        assert visual_workspaces == {"default"}
         calls.append("projection")
         return [
             SourceReferencePayload(
@@ -1728,6 +1815,7 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
         cfg=cfg,
         workspace="default",
         conversation_id="conv-1",
+        visual_workspaces={"default"},
     )
 
     assert calls == ["images", "projection"]

@@ -4,6 +4,7 @@
 import asyncio
 import base64
 import io
+import threading
 from unittest.mock import AsyncMock
 
 import pytest
@@ -121,6 +122,28 @@ async def test_query_image_vlm_receives_bounded_transport() -> None:
     assert len(bounded_raw) <= 5_000
     with Image.open(io.BytesIO(bounded_raw)) as bounded_image:
         assert max(bounded_image.size) <= 96
+
+
+async def test_query_image_budgeting_runs_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.core.answer.images import AnswerImageBudget
+
+    loop_thread = threading.get_ident()
+    budget_threads: list[int] = []
+    add_user_image = AnswerImageBudget.add_user_image
+
+    def capture_budget(self, value, *, label):
+        budget_threads.append(threading.get_ident())
+        return add_user_image(self, value, label=label)
+
+    monkeypatch.setattr(AnswerImageBudget, "add_user_image", capture_budget)
+    describer = _describer(AsyncMock(return_value="bounded"), max_images=1)
+
+    await describer.describe([_image_block()])
+
+    assert budget_threads
+    assert all(thread_id != loop_thread for thread_id in budget_threads)
 
 
 async def test_query_image_compression_skip_preserves_sparse_ordinal_and_sibling() -> None:

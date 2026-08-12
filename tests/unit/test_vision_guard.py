@@ -1,17 +1,17 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the answer-image capability guard."""
 
-from typing import Any, cast
-
 import pytest
 
-from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.core.answer.capability import (
+    AnswerImageCapability,
+    check_answer_image_capability,
+)
 from dlightrag.core.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
 )
-from dlightrag.core.servicemanager import _check_answer_image_capability
 from dlightrag.core.vision_probe import ImageCapabilityStatus
 
 
@@ -28,24 +28,24 @@ def _capability(status: ImageCapabilityStatus) -> AnswerImageCapability:
 
 
 class TestAnswerImageCapabilityGuard:
-    def test_raises_when_query_images_and_unsupported(self) -> None:
+    def test_raises_when_images_are_unsupported(self) -> None:
         with pytest.raises(AnswerImageError) as exc:
-            _check_answer_image_capability(
-                query_images=cast(Any, ["data:..."]),
+            check_answer_image_capability(
+                image_count=1,
                 capability=_capability("unsupported"),
             )
         assert exc.value.error_kind == CURRENT_IMAGES_UNSUPPORTED
         assert "[IMAGES_NOT_SUPPORTED_BY_MODEL]" in str(exc.value)
 
-    def test_passes_when_query_images_and_supported(self) -> None:
-        _check_answer_image_capability(
-            query_images=cast(Any, ["data:..."]),
+    def test_passes_when_images_are_supported(self) -> None:
+        check_answer_image_capability(
+            image_count=1,
             capability=_capability("supported"),
         )
 
     def test_passes_when_no_images_at_all(self) -> None:
-        _check_answer_image_capability(
-            query_images=None,
+        check_answer_image_capability(
+            image_count=0,
             capability=_capability("unsupported"),
         )
 
@@ -53,16 +53,16 @@ class TestAnswerImageCapabilityGuard:
         # Fail-closed: an unconfirmed capability rejects with a clear kind rather
         # than a late provider or transport-budget failure.
         with pytest.raises(AnswerImageError) as exc:
-            _check_answer_image_capability(
-                query_images=cast(Any, ["data:..."]),
+            check_answer_image_capability(
+                image_count=1,
                 capability=_capability("unknown"),
             )
         assert exc.value.error_kind == ANSWER_IMAGE_CAPABILITY_UNKNOWN
 
     def test_unprobed_none_fails_closed(self) -> None:
         with pytest.raises(AnswerImageError) as exc:
-            _check_answer_image_capability(
-                query_images=cast(Any, ["data:..."]),
+            check_answer_image_capability(
+                image_count=1,
                 capability=None,
             )
         assert exc.value.error_kind == ANSWER_IMAGE_CAPABILITY_UNKNOWN

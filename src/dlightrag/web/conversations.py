@@ -11,8 +11,10 @@ from typing import Any, TypeVar
 import asyncpg
 
 from dlightrag.api.auth import UserContext
-from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.core.answer.media import answer_images_from_sources
+from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.resources.models import ResourceInput
+from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     CommitTurnResult,
@@ -22,6 +24,7 @@ from dlightrag.storage.web_conversations import (
     StoredConversationAttachment,
 )
 from dlightrag.utils.images import thumbnail_bytes
+from dlightrag.web.answer_snapshots import load_answer_snapshot
 from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import (
     ConversationAttachmentReference,
@@ -143,6 +146,9 @@ class WebConversationService:
         self,
         user: UserContext | None,
         conversation_id: str,
+        *,
+        downloadable_workspaces: set[str] | None = None,
+        visual_workspaces: set[str] | None = None,
     ) -> ConversationHistory | None:
         principal_id = principal_id_from_user(user)
         snapshot = await self._snapshot(principal_id, conversation_id)
@@ -151,7 +157,15 @@ class WebConversationService:
 
         return ConversationHistory(
             conversation=_snapshot_summary(snapshot),
-            turns=[_conversation_turn(conversation_id, row) for row in snapshot.history],
+            turns=[
+                _conversation_turn(
+                    conversation_id,
+                    row,
+                    downloadable_workspaces=downloadable_workspaces,
+                    visual_workspaces=visual_workspaces,
+                )
+                for row in snapshot.history
+            ],
         )
 
     async def rename(
@@ -466,30 +480,29 @@ def _snapshot_summary(snapshot: ConversationSnapshot) -> ConversationSummary:
     )
 
 
-def _answer_snapshot(value: Any) -> tuple[dict[str, Any], list[SourceReferencePayload], list[Any]]:
-    raw = dict(value) if isinstance(value, dict) else {}
-    sources_value = raw.get("sources", [])
-    sources = []
-    for source_value in sources_value:
-        source = SourceReferencePayload.model_validate(source_value)
-        if source.chunks is None:
-            source = source.model_copy(update={"chunks": []})
-        sources.append(source)
-    answer_images = raw.get("answer_images", [])
-    if not isinstance(answer_images, list):
-        answer_images = []
-    raw["sources"] = [source.model_dump(mode="json") for source in sources]
-    raw["answer_images"] = answer_images
-    return raw, sources, answer_images
-
-
-def _conversation_turn(conversation_id: str, row: dict[str, Any]) -> ConversationTurn:
+def _conversation_turn(
+    conversation_id: str,
+    row: dict[str, Any],
+    *,
+    downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
+) -> ConversationTurn:
     turn_number = int(row["turn_number"])
     attachments = [
         _attachment_reference(conversation_id, turn_number, attachment)
         for attachment in row.get("attachments", [])
     ]
-    answer_sources, sources, answer_images = _answer_snapshot(row.get("answer_sources"))
+    internal_sources = load_answer_snapshot(row.get("answer_sources") or {"sources": []})
+    sources = project_source_payloads(
+        internal_sources,
+        resolver=SourceDownloadLinkBuilder(base_url="/web/files/raw"),
+        downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
+    )
+    answer_images = answer_images_from_sources(
+        internal_sources,
+        visual_workspaces=visual_workspaces,
+    )
     assistant_text = str(row["assistant_text"])
     return ConversationTurn(
         turn_id=str(row["turn_id"]),
@@ -497,13 +510,11 @@ def _conversation_turn(conversation_id: str, row: dict[str, Any]) -> Conversatio
         user_text=str(row["user_text"]),
         assistant_text=assistant_text,
         user_attachments=attachments,
-        answer_sources=answer_sources,
         answer_html=safe_answer_done(
             answer=assistant_text,
             sources=sources,
             answer_images=answer_images,
         ),
-        queried_workspaces=[str(workspace) for workspace in row.get("queried_workspaces", [])],
         created_at=row["created_at"],
     )
 

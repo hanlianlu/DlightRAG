@@ -11,7 +11,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from dlightrag.core.answer.errors import (
+    ANSWER_IMAGE_CAPABILITY_UNKNOWN,
+    CURRENT_IMAGES_UNSUPPORTED,
+    AnswerImageError,
+    CurrentImagePayloadError,
+)
 from dlightrag.core.vision_probe import ImageCapabilityStatus
+
+_ERROR_IMAGES_NOT_SUPPORTED = (
+    "Current model does not support image input. Use a vision-capable model or remove images."
+)
+_ERROR_CAPABILITY_UNKNOWN = (
+    "Answer-model image capability is unknown: the startup probe did not confirm image support. "
+    "Provide a vision-capable query model or retry once the model is reachable."
+)
 
 
 def derive_effective_max_images(
@@ -42,6 +56,30 @@ class AnswerImageCapability:
     failure_kind: str | None
 
 
+def check_answer_image_capability(
+    *,
+    image_count: int,
+    capability: AnswerImageCapability | None,
+) -> None:
+    """Reject images unless the query-role answer model is confirmed to accept them."""
+    if image_count <= 0:
+        return
+    if capability is None or capability.status == "unknown":
+        raise AnswerImageError(
+            f"[ANSWER_IMAGE_CAPABILITY_UNKNOWN] {_ERROR_CAPABILITY_UNKNOWN}",
+            error_kind=ANSWER_IMAGE_CAPABILITY_UNKNOWN,
+        )
+    if capability.status == "unsupported":
+        raise AnswerImageError(
+            f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}",
+            error_kind=CURRENT_IMAGES_UNSUPPORTED,
+        )
+    if image_count > capability.effective_max_images:
+        raise CurrentImagePayloadError(
+            f"at most {capability.effective_max_images} current images are allowed"
+        )
+
+
 def answer_image_capability_summary(
     capability: AnswerImageCapability | None,
 ) -> dict[str, object]:
@@ -70,5 +108,6 @@ def answer_image_capability_summary(
 __all__ = [
     "AnswerImageCapability",
     "answer_image_capability_summary",
+    "check_answer_image_capability",
     "derive_effective_max_images",
 ]

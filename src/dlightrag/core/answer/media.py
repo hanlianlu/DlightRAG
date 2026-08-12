@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from dlightrag.citations.parser import CITATION_PATTERN, DOC_CITATION_PATTERN
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.citations.utils import context_chunk_key
+from dlightrag.core.access import can_project_workspace_visual
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 
@@ -15,6 +16,7 @@ def answer_images_from_sources(
     sources: list[SourceReference],
     *,
     contexts: RetrievalContexts | None = None,
+    visual_workspaces: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return cited visual assets in a transport-neutral shape."""
     sent = _answer_image_sent_by_chunk(contexts)
@@ -24,6 +26,8 @@ def answer_images_from_sources(
     seen: set[str] = set()
     images: list[dict[str, Any]] = []
     for source in sources:
+        if not can_project_workspace_visual(source.workspace, visual_workspaces):
+            continue
         source_id = source.id
         base_label = source.title or source_id
         for chunk in source.chunks or []:

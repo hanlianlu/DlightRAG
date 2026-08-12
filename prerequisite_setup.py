@@ -34,7 +34,7 @@ MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / ".env.mineru.example"
 API_READY_URL = "http://localhost:8100/ready"
 WEB_URL = "http://localhost:8100/web/"
 
-# Mirror of the shipped AnswerConfig/QueryImagesConfig defaults (see
+# Mirror of the shipped AnswerConfig defaults (see
 # src/dlightrag/config.py), used only to display sensible values when a
 # hand-edited config.yaml omits an Answer block. The runtime remains the sole
 # source of truth; these never write config.
@@ -43,7 +43,6 @@ DEFAULT_MAX_ATTACHMENTS = 6
 DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
 DEFAULT_MAX_ANSWER_IMAGES = 12
-DEFAULT_MAX_CURRENT_IMAGES = 3
 
 
 # ---------------------------------------------------------------------------
@@ -817,7 +816,6 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
     embedding = data.get("embedding", {}) or {}
     rerank = data.get("rerank", {}) or {}
     answer = data.get("answer", {}) or {}
-    query_images = data.get("query_images", {}) or {}
     parser_sidecars = data.get("parser_sidecars", {}) or {}
     mineru = parser_sidecars.get("mineru", {}) or {}
     docling = parser_sidecars.get("docling", {}) or {}
@@ -866,11 +864,6 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
                 "max_total_attachment_bytes", DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES
             ),
             "max_images": answer.get("max_images", DEFAULT_MAX_ANSWER_IMAGES),
-        },
-        "query_images": {
-            "max_current_images": query_images.get(
-                "max_current_images", DEFAULT_MAX_CURRENT_IMAGES
-            ),
         },
         "visual_inspection": {
             "role": "vlm" if roles.get("vlm") else "default",
@@ -923,7 +916,7 @@ def render_summary(console, summary: dict) -> None:
     )
     table.add_row(
         "Answer images",
-        f"{answer['max_images']} max · retrieve query images {summary['query_images']['max_current_images']}",
+        f"{answer['max_images']} max",
     )
     inspection = summary["visual_inspection"]
     table.add_row(

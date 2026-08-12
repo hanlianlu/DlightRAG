@@ -11,7 +11,6 @@ from dlightrag.core.access import workspace_names
 from dlightrag.utils import normalize_workspace
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.attachment_models import (
-    MAX_ATTACHMENT_BYTES,
     SUPPORTED_DOCUMENT_EXTENSIONS,
 )
 from dlightrag.web.attachment_requests import parse_web_answer_request
@@ -35,6 +34,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     """Main page."""
 
     manager = get_manager(request)
+    await manager._maybe_reprobe_answer_image_capability()
     try:
         workspaces = await manager.alist_workspace_records()
     except Exception:
@@ -69,10 +69,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
         effective_current_upload_limit = 0
     else:
         capability_status = capability.status
-        effective_current_upload_limit = min(
-            manager.config.query_images.max_current_images,
-            capability.effective_max_images,
-        )
+        effective_current_upload_limit = capability.effective_max_images
     document_extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
 
     return templates.TemplateResponse(
@@ -84,8 +81,8 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "primary_workspace": primary,
             "active_workspaces": active,
             "query_attachment_count_limit": manager.config.answer.max_attachments,
-            "query_attachment_image_max_bytes": manager.config.query_images.max_upload_bytes,
-            "query_attachment_document_max_bytes": MAX_ATTACHMENT_BYTES,
+            "query_attachment_image_max_bytes": manager.config.answer.max_attachment_bytes,
+            "query_attachment_document_max_bytes": manager.config.answer.max_attachment_bytes,
             "query_attachment_extensions": document_extensions,
             "query_attachment_image_capability": capability_status,
             "query_attachment_image_limit": effective_current_upload_limit,
@@ -105,20 +102,17 @@ async def answer_stream(
     """Stream answer via SSE, then swap in enriched citations."""
     manager = get_manager(request)
     cfg = manager.config
-    # Enforce the current-image sublimit at admission (pre-stream 4xx) instead of
-    # deferring to the mid-stream synthesizer check. Capability may cap it below
-    # the configured ``query_images.max_current_images``; when unprobed we fall
-    # back to the configured limit, matching the late synthesizer enforcement.
+    # Enforce the probed answer capability at admission (pre-stream 4xx).
+    if "multipart/form-data" in request.headers.get("content-type", "").lower():
+        await manager._maybe_reprobe_answer_image_capability()
     capability = manager.answer_image_capability
-    image_max_count = cfg.query_images.max_current_images
-    if capability is not None:
-        image_max_count = min(image_max_count, capability.effective_max_images)
     body = await parse_web_answer_request(
         request,
         max_attachments=cfg.answer.max_attachments,
-        image_max_bytes=cfg.query_images.max_upload_bytes,
+        max_attachment_bytes=cfg.answer.max_attachment_bytes,
+        max_total_attachment_bytes=cfg.answer.max_total_attachment_bytes,
         image_max_pixels=cfg.answer.image_max_pixels,
-        image_max_count=max(0, image_max_count),
+        answer_image_capability=capability,
     )
 
     query = body.query
@@ -138,12 +132,22 @@ async def answer_stream(
     target_workspaces = workspaces or [workspace]
     for ws in target_workspaces:
         await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
+    projection_workspaces = target_workspaces
+    committed = prepared_conversation.committed_submission
+    if committed is not None and committed.queried_workspaces:
+        projection_workspaces = list(committed.queried_workspaces)
     downloadable_records = await filter_web_workspace_records(
         request,
         AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
-        [{"workspace": ws} for ws in target_workspaces],
+        [{"workspace": ws} for ws in projection_workspaces],
     )
     downloadable_workspaces = workspace_names(downloadable_records)
+    visual_records = await filter_web_workspace_records(
+        request,
+        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+        [{"workspace": ws} for ws in projection_workspaces],
+    )
+    visual_workspaces = workspace_names(visual_records)
 
     # Planning runs lazily inside the stream (under the request-root span), not
     # here: this keeps retrieval_planning nested in the answer_pipeline trace
@@ -157,6 +161,7 @@ async def answer_stream(
             workspaces=workspaces,
             workspace=workspace,
             downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
             validated_attachments=body.attachments,

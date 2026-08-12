@@ -101,11 +101,19 @@ class ToolTurnExecutor:
                 for call in assistant.tool_calls
             )
         else:
-            results = tuple(
-                await asyncio.gather(
-                    *(_execute_call(call, tools_by_name) for call in assistant.tool_calls)
-                )
-            )
+            tasks = [
+                asyncio.create_task(_execute_call(call, tools_by_name))
+                for call in assistant.tool_calls
+            ]
+            completed = False
+            try:
+                results = tuple(await asyncio.gather(*tasks))
+                completed = True
+            finally:
+                if not completed:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
         transcript.extend(_tool_message(result) for result in results)
         return ExecutedTurn(assistant=assistant, results=results, messages=transcript)
 

@@ -5,6 +5,7 @@ import asyncio
 import importlib
 import io
 import json
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -724,21 +725,20 @@ class TestRouting:
         assert retrieve_kwargs["query_image_blocks"] == blocks
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
-    async def test_aretrieve_rejects_images_beyond_the_runtime_limit(
+    async def test_aretrieve_rejects_images_beyond_the_public_contract(
         self, mock_create, test_cfg
     ) -> None:
         from dlightrag.core.answer.errors import CurrentImagePayloadError
 
-        test_cfg.query_images.max_current_images = 1
         manager = RAGServiceManager(config=test_cfg)
 
-        with pytest.raises(CurrentImagePayloadError, match="at most 1 current images"):
+        with pytest.raises(CurrentImagePayloadError, match="at most 3 current images"):
             await manager.aretrieve(
                 "query",
                 workspace="ws_a",
-                query_images=[_image_block(), _image_block()],
+                query_images=[_image_block() for _ in range(4)],
             )
-            mock_create.assert_not_awaited()
+        mock_create.assert_not_awaited()
 
     async def test_query_images_are_current_request_only(self, test_cfg) -> None:
         describer = AsyncMock()
@@ -2029,6 +2029,52 @@ class TestRequestTimeout:
         with pytest.raises(RAGServiceUnavailableError, match="timed out"):
             await manager.aretrieve("test query", workspace="default")
 
+    async def test_answer_timeout_includes_request_preparation(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg.model_copy(update={"request_timeout": 0.01}))
+
+        async def slow_prepare(*_args, **_kwargs):
+            await asyncio.sleep(0.05)
+            raise AssertionError("preparation escaped the request timeout")
+
+        manager._prepare_orchestrated_run = slow_prepare  # type: ignore[method-assign]
+
+        with pytest.raises(RAGServiceUnavailableError, match="timed out"):
+            await manager.aanswer("question", workspace="default")
+
+
+async def test_unsupported_image_link_is_rejected_before_materialization(test_cfg) -> None:
+    from dlightrag.core.answer.capability import AnswerImageCapability
+    from dlightrag.core.answer.errors import AnswerImageError
+
+    manager = RAGServiceManager(config=test_cfg)
+    manager._answer_image_capability = AnswerImageCapability(
+        status="unsupported",
+        configured_ceiling=2,
+        effective_max_images=0,
+        provider="test",
+        base_url=None,
+        model="text-only",
+        failure_kind=None,
+    )
+    manager._materialize_link_image = AsyncMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("image link was fetched before capability rejection")
+    )
+
+    with pytest.raises(AnswerImageError):
+        await manager.aanswer(
+            "inspect",
+            workspace="default",
+            resources=[
+                ResourceInput(
+                    filename="chart.png",
+                    url="https://example.com/chart.png",
+                    declared_mime="image/png",
+                )
+            ],
+        )
+
+    manager._materialize_link_image.assert_not_awaited()  # type: ignore[attr-defined]
+
 
 class TestClose:
     """Test cleanup."""
@@ -2044,6 +2090,19 @@ class TestClose:
         svc_b.aclose.assert_awaited_once()
         assert manager._services == {}
         assert not manager._ready
+
+    async def test_close_prevents_recreating_vlm_provider(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        factory = MagicMock()
+        monkeypatch.setattr("dlightrag.models.llm.get_vlm_model_func", factory)
+
+        await manager.aclose()
+
+        with pytest.raises(RAGServiceUnavailableError):
+            manager._get_or_create_vlm_func()
+        factory.assert_not_called()
 
 
 class TestWorkspaceDiscovery:
@@ -2200,6 +2259,21 @@ class TestPlannerSchemaScope:
         assert second is first
         get_field_schema.assert_awaited_once()
 
+    async def test_schema_cache_stays_bounded(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        get_field_schema = AsyncMock(return_value={"columns": [], "custom_keys": []})
+        monkeypatch.setattr(
+            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            get_field_schema,
+        )
+
+        for index in range(140):
+            await manager._get_schema([f"workspace-{index}"])
+
+        assert len(manager._schema_cache) <= 128
+
 
 class TestWebSearchCapability:
     """A key present is the capability; without one the path does not exist."""
@@ -2332,6 +2406,100 @@ class TestAgenticAnswerCapability:
         await manager.aclose()
 
         model.aclose.assert_awaited_once()
+
+    async def test_describer_and_inspector_share_one_closed_vlm_callable(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dlightrag.core.answer.capability import AnswerImageCapability
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=2,
+            effective_max_images=2,
+            provider="test",
+            base_url=None,
+            model="vision-test",
+            failure_kind=None,
+        )
+        provider = SimpleNamespace(aclose=AsyncMock())
+        provider_factory = MagicMock(return_value=provider)
+        inspector = MagicMock()
+        monkeypatch.setattr("dlightrag.models.llm.get_provider", provider_factory)
+        monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
+
+        describer = await manager._aget_query_image_describer()
+        registry, _tools = manager._build_resource_context(
+            [ResourceInput(content=b"payload")],
+            web_search=None,
+        )
+        await manager.aclose()
+
+        assert registry is not None
+        provider_factory.assert_called_once()
+        assert inspector.call_args.kwargs["vlm_func"] is describer._vlm_func
+        provider.aclose.assert_awaited_once()
+
+    async def test_current_image_verification_and_encoding_run_off_event_loop(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        loop_thread = threading.get_ident()
+        preparation_threads: list[int] = []
+
+        def verify(_data: bytes, *, max_pixels: int) -> str:
+            assert max_pixels == test_cfg.answer.image_max_pixels
+            preparation_threads.append(threading.get_ident())
+            return "image/png"
+
+        def encode(_data: bytes, *, fallback_mime: str) -> str:
+            assert fallback_mime == "image/png"
+            preparation_threads.append(threading.get_ident())
+            return "data:image/png;base64,AA=="
+
+        monkeypatch.setattr("dlightrag.utils.images.verify_web_image_bytes", verify)
+        monkeypatch.setattr("dlightrag.utils.images.image_bytes_to_data_uri", encode)
+        manager = RAGServiceManager(config=test_cfg)
+
+        images, _resources, _image_resources = await manager._prepare_current_images(
+            [ResourceInput(filename="chart.png", content=b"raw", declared_mime="image/png")]
+        )
+
+        assert len(images) == 1
+        assert preparation_threads
+        assert all(thread_id != loop_thread for thread_id in preparation_threads)
+
+    async def test_agent_image_budgeting_runs_off_event_loop(self, test_cfg) -> None:
+        from dlightrag.core.answer.capability import AnswerImageCapability
+        from dlightrag.utils.images import image_bytes_to_data_uri
+
+        loop_thread = threading.get_ident()
+        budget_threads: list[int] = []
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=2,
+            effective_max_images=2,
+            provider="test",
+            base_url=None,
+            model="vision-test",
+            failure_kind=None,
+        )
+        budget = manager._new_answer_image_budget()
+        add_user_image = budget.add_user_image
+
+        def capture_budget(value, *, label):
+            budget_threads.append(threading.get_ident())
+            return add_user_image(value, label=label)
+
+        budget.add_user_image = capture_budget  # type: ignore[method-assign]
+        image = _image_block(image_bytes_to_data_uri(_png_bytes()))
+
+        result = manager._budget_agent_images([image], budget)
+        if asyncio.iscoroutine(result):
+            await result
+
+        assert budget_threads
+        assert all(thread_id != loop_thread for thread_id in budget_threads)
 
     async def test_with_exa_aanswer_uses_agentic_path(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch

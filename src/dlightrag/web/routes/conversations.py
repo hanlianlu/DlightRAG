@@ -6,13 +6,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
+from dlightrag.access_control import AccessAction
+from dlightrag.core.access import workspace_names
 from dlightrag.web.conversation_models import (
     ConversationHistory,
     ConversationSummary,
     RenameConversationRequest,
 )
 from dlightrag.web.conversations import WebConversationService
-from dlightrag.web.deps import get_web_conversation_service
+from dlightrag.web.deps import (
+    filter_web_workspace_records,
+    get_manager,
+    get_web_conversation_service,
+)
 
 router = APIRouter()
 
@@ -78,7 +84,23 @@ async def conversation_history(
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> ConversationHistory:
-    history = await service.history(_user(request), str(conversation_id))
+    records = await get_manager(request).alist_workspace_records()
+    downloadable = await filter_web_workspace_records(
+        request,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+        records,
+    )
+    visual = await filter_web_workspace_records(
+        request,
+        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+        records,
+    )
+    history = await service.history(
+        _user(request),
+        str(conversation_id),
+        downloadable_workspaces=workspace_names(downloadable),
+        visual_workspaces=workspace_names(visual),
+    )
     if history is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return history

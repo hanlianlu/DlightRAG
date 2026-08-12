@@ -237,13 +237,6 @@ async def upload_files(
     batch_max_bytes = cfg.max_upload_size_mb * 1024 * 1024
     per_file_max_mb = per_file_max_bytes // (1024 * 1024)
 
-    content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > batch_max_bytes:
-        return error_response(
-            f"Upload exceeds limit ({cfg.max_upload_size_mb} MB per request)",
-            status_code=413,
-        )
-
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         return _stale_workspace_response()

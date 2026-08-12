@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Normalize JSON and multipart Web answer requests."""
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -9,10 +10,15 @@ from uuid import UUID
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from dlightrag.core.answer.capability import (
+    AnswerImageCapability,
+    check_answer_image_capability,
+)
 from dlightrag.web.attachment_models import (
-    MAX_ATTACHMENT_BYTES,
     ValidatedWebAttachment,
+    classify_web_attachment,
     validate_web_attachments,
 )
 from dlightrag.web.requests import WebAnswerRequest
@@ -24,6 +30,7 @@ from dlightrag.web.requests import WebAnswerRequest
 # covers the handful of non-file form fields (query/workspaces/conversation_id/
 # submission_id) plus slack.
 _MAX_FORM_FIELDS = 16
+_MAX_FORM_FIELD_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,9 +58,10 @@ async def parse_web_answer_request(
     request: Request,
     *,
     max_attachments: int,
-    image_max_bytes: int,
+    max_attachment_bytes: int,
+    max_total_attachment_bytes: int,
     image_max_pixels: int,
-    image_max_count: int | None = None,
+    answer_image_capability: AnswerImageCapability | None,
 ) -> ParsedWebAnswerRequest:
     content_type = request.headers.get("content-type", "").lower()
     if "multipart/form-data" not in content_type:
@@ -69,46 +77,84 @@ async def parse_web_answer_request(
             attachments=(),
         )
 
-    form = await request.form(
-        max_files=max_attachments + 1,
-        max_fields=_MAX_FORM_FIELDS,
-        max_part_size=MAX_ATTACHMENT_BYTES,
-    )
-    files = form.getlist("attachments")
-    attachment_parts = [item for item in files if isinstance(item, UploadFile) and item.filename]
-    if len(attachment_parts) > max_attachments:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Web answer accepts at most {max_attachments} attachments per message",
-        )
-    attachment_inputs: list[tuple[str, str | None, bytes]] = []
-    for item in attachment_parts:
-        payload = await item.read()
-        attachment_inputs.append((str(item.filename), item.content_type, payload))
     try:
-        attachments = validate_web_attachments(
-            attachment_inputs,
-            max_attachments=max_attachments,
-            image_max_bytes=image_max_bytes,
-            image_max_pixels=image_max_pixels,
-            image_max_count=image_max_count,
+        form = await request.form(
+            max_files=max_attachments + 1,
+            max_fields=_MAX_FORM_FIELDS,
+            max_part_size=_MAX_FORM_FIELD_BYTES,
         )
-        workspaces_raw = _json_list(form.get("workspaces"), field="workspaces")
-        body = WebAnswerRequest(
-            query=str(form.get("query") or ""),
-            workspaces=[str(item) for item in workspaces_raw] or None,
-            conversation_id=UUID(str(form.get("conversation_id"))),
-            submission_id=UUID(str(form.get("submission_id"))),
+    except StarletteHTTPException as exc:
+        detail = str(exc.detail)
+        if exc.status_code == 400 and detail.startswith(
+            ("Too many files.", "Too many fields.", "Part exceeded maximum size")
+        ):
+            raise HTTPException(status_code=413, detail=detail) from exc
+        raise
+    try:
+        files = form.getlist("attachments")
+        attachment_parts = [
+            item for item in files if isinstance(item, UploadFile) and item.filename
+        ]
+        if len(attachment_parts) > max_attachments:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Web answer accepts at most {max_attachments} attachments per message",
+            )
+        attachment_inputs: list[tuple[str, str | None, bytes]] = []
+        total_bytes = 0
+        for item in attachment_parts:
+            if item.size is not None and item.size > max_attachment_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Attachment exceeds the {max_attachment_bytes}-byte limit",
+                )
+            payload = await item.read(max_attachment_bytes + 1)
+            if len(payload) > max_attachment_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Attachment exceeds the {max_attachment_bytes}-byte limit",
+                )
+            total_bytes += len(payload)
+            if total_bytes > max_total_attachment_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Attachments exceed the total size limit",
+                )
+            attachment_inputs.append((str(item.filename), item.content_type, payload))
+        check_answer_image_capability(
+            image_count=sum(
+                classify_web_attachment(filename, mime_type) == "image"
+                for filename, mime_type, _payload in attachment_inputs
+            ),
+            capability=answer_image_capability,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ParsedWebAnswerRequest(
-        query=body.query,
-        workspaces=body.workspaces,
-        conversation_id=body.conversation_id,
-        submission_id=body.submission_id,
-        attachments=attachments,
-    )
+        try:
+            attachments = await asyncio.to_thread(
+                validate_web_attachments,
+                attachment_inputs,
+                max_attachments=max_attachments,
+                max_attachment_bytes=max_attachment_bytes,
+                max_total_attachment_bytes=max_total_attachment_bytes,
+                image_max_pixels=image_max_pixels,
+            )
+            workspaces_raw = _json_list(form.get("workspaces"), field="workspaces")
+            body = WebAnswerRequest(
+                query=str(form.get("query") or ""),
+                workspaces=[str(item) for item in workspaces_raw] or None,
+                conversation_id=UUID(str(form.get("conversation_id"))),
+                submission_id=UUID(str(form.get("submission_id"))),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return ParsedWebAnswerRequest(
+            query=body.query,
+            workspaces=body.workspaces,
+            conversation_id=body.conversation_id,
+            submission_id=body.submission_id,
+            attachments=attachments,
+        )
+    finally:
+        await form.close()
 
 
 __all__ = ["ParsedWebAnswerRequest", "parse_web_answer_request"]

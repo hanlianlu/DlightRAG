@@ -9,10 +9,6 @@ from dlightrag.core.client_contracts import ClientContractModel
 from dlightrag.web.conversation_models import ConversationSummary
 
 
-class AnswerMetaEvent(ClientContractModel):
-    history_kept: int
-
-
 class AnswerProgressEvent(ClientContractModel):
     phase: Literal["planning", "searching", "generating", "saving"]
 
@@ -20,16 +16,10 @@ class AnswerProgressEvent(ClientContractModel):
 class AnswerDoneEvent(ClientContractModel):
     html: str
     answer: str
-    current_attachment_ids: list[str] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
-    answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
     conversation_saved: bool
     conversation_save_reason: str | None = None
     conversation: ConversationSummary | None = None
-
-
-class AnswerTraceEvent(ClientContractModel):
-    trace: dict[str, Any]
 
 
 class AnswerErrorEvent(ClientContractModel):
@@ -40,7 +30,5 @@ class AnswerErrorEvent(ClientContractModel):
 __all__ = [
     "AnswerDoneEvent",
     "AnswerErrorEvent",
-    "AnswerMetaEvent",
     "AnswerProgressEvent",
-    "AnswerTraceEvent",
 ]

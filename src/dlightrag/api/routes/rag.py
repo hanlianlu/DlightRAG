@@ -6,11 +6,11 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
-from starlette.formparsers import MultiPartException
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
@@ -25,6 +25,7 @@ from dlightrag.api.events import (
     sse_data_event,
 )
 from dlightrag.api.models import (
+    ANSWER_REQUEST_PART_MAX_BYTES,
     AnswerRequest,
     AnswerResponse,
     IngestJobStatusResponse,
@@ -80,15 +81,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _downloadable_workspaces(
+async def _authorized_workspaces(
     request: Request,
     user: UserContext,
     workspaces: list[str],
+    action: str,
 ) -> set[str]:
     records = await filter_workspace_records(
         request,
         user,
-        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+        action,
         [{"workspace": workspace} for workspace in workspaces],
     )
     return workspace_names(records)
@@ -190,10 +192,17 @@ async def retrieve(
         workspaces=body.workspaces,
         all_workspaces=body.all_workspaces,
     )
-    downloadable_workspaces = await _downloadable_workspaces(
+    downloadable_workspaces = await _authorized_workspaces(
         request,
         user,
         resolved_workspaces,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+    )
+    visual_workspaces = await _authorized_workspaces(
+        request,
+        user,
+        resolved_workspaces,
+        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
     )
     result = await execute_retrieve(
         manager=manager,
@@ -205,16 +214,18 @@ async def retrieve(
         result,
         source_link_builder=link_builder,
         downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
     )
 
 
 _ALLOWED_ANSWER_PARTS = {"request", "attachments"}
 _MAX_ANSWER_FORM_FIELDS = 8
+_ALLOWED_INGEST_PARTS = {"file", "workspace", "title", "author", "metadata"}
+_MAX_INGEST_FORM_FIELDS = 8
+_INGEST_FORM_FIELD_MAX_BYTES = 1024 * 1024
 # Comfortably holds the JSON `request` part (query, history, filters, links) so a
 # small per-attachment cap never truncates the request envelope.
-_ANSWER_REQUEST_PART_CEILING = 2 * 1024 * 1024
-# Slack over the total attachment budget for multipart boundaries and headers.
-_MULTIPART_ENVELOPE_OVERHEAD = 64 * 1024
+_ANSWER_REQUEST_PART_CEILING = ANSWER_REQUEST_PART_MAX_BYTES
 
 
 def _enforce_answer_attachment_count(count: int, max_attachments: int) -> None:
@@ -250,19 +261,19 @@ async def _parse_answer_body(
     max_attachments = answer_cfg.max_attachments
     max_item = max(1, answer_cfg.max_attachment_bytes)
     max_total = answer_cfg.max_total_attachment_bytes
-    declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > max_total + _MULTIPART_ENVELOPE_OVERHEAD:
-        raise HTTPException(status_code=413, detail="Attachments exceed the total size limit")
     try:
         form = await request.form(
             max_files=max_attachments + 2,
             max_fields=_MAX_ANSWER_FORM_FIELDS,
-            max_part_size=max(max_item, _ANSWER_REQUEST_PART_CEILING),
+            max_part_size=_ANSWER_REQUEST_PART_CEILING,
         )
-    except MultiPartException as exc:
-        raise HTTPException(
-            status_code=413, detail=f"Invalid or oversized attachment upload: {exc}"
-        ) from exc
+    except StarletteHTTPException as exc:
+        detail = str(exc.detail)
+        if exc.status_code == 400 and detail.startswith(
+            ("Too many files.", "Too many fields.", "Part exceeded maximum size")
+        ):
+            raise HTTPException(status_code=413, detail=detail) from exc
+        raise
     try:
         unexpected = sorted({key for key, _ in form.multi_items()} - _ALLOWED_ANSWER_PARTS)
         if unexpected:
@@ -277,11 +288,14 @@ async def _parse_answer_body(
                 detail="multipart answer requires exactly one 'request' part",
             )
         raw_request = request_parts[0]
-        request_json = (
-            await raw_request.read()
-            if isinstance(raw_request, StarletteUploadFile)
-            else raw_request
-        )
+        if isinstance(raw_request, StarletteUploadFile):
+            if raw_request.size is not None and raw_request.size > _ANSWER_REQUEST_PART_CEILING:
+                raise HTTPException(status_code=413, detail="Answer request part is too large")
+            request_json = await raw_request.read(_ANSWER_REQUEST_PART_CEILING + 1)
+            if len(request_json) > _ANSWER_REQUEST_PART_CEILING:
+                raise HTTPException(status_code=413, detail="Answer request part is too large")
+        else:
+            request_json = raw_request
         try:
             body = AnswerRequest.model_validate_json(request_json)
         except ValidationError as exc:
@@ -294,7 +308,11 @@ async def _parse_answer_body(
                 raise HTTPException(
                     status_code=400, detail="'attachments' parts must be uploaded files"
                 )
-            data = await part.read()
+            if part.size is not None and part.size > max_item:
+                raise HTTPException(
+                    status_code=413, detail="An attachment exceeds the per-attachment size limit"
+                )
+            data = await part.read(max_item + 1)
             if len(data) > max_item:
                 raise HTTPException(
                     status_code=413, detail="An attachment exceeds the per-attachment size limit"
@@ -334,10 +352,17 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
         workspaces=body.workspaces,
         all_workspaces=body.all_workspaces,
     )
-    downloadable_workspaces = await _downloadable_workspaces(
+    downloadable_workspaces = await _authorized_workspaces(
         request,
         user,
         resolved_workspaces,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+    )
+    visual_workspaces = await _authorized_workspaces(
+        request,
+        user,
+        resolved_workspaces,
+        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
     )
     history = conversation_history_as_dicts(body.history)
 
@@ -353,6 +378,7 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
             result,
             source_link_builder=link_builder,
             downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
         )
 
     async def event_generator() -> AsyncIterator[str]:
@@ -376,7 +402,10 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
                     resources=resources,
                     **kwargs,
                 )
-                public_contexts = project_contexts_for_client(contexts)
+                public_contexts = project_contexts_for_client(
+                    contexts,
+                    visual_workspaces=visual_workspaces,
+                )
                 yield sse_data_event(AnswerContextStreamEvent(data=public_contexts))
                 answer_parts: list[str] = []
                 async for chunk in iter_answer_tokens(
@@ -403,6 +432,7 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
                     finalized.sources,
                     resolver=_link_builder,
                     downloadable_workspaces=downloadable_workspaces,
+                    visual_workspaces=visual_workspaces,
                 )
                 observation.update(
                     output=answer_trace_output(finalized.answer, finalized.sources, contexts)
@@ -418,7 +448,11 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
                             image_descriptions=image_descriptions or [],
                         )
                     )
-                answer_images = answer_images_from_sources(finalized.sources, contexts=contexts)
+                answer_images = answer_images_from_sources(
+                    finalized.sources,
+                    contexts=contexts,
+                    visual_workspaces=visual_workspaces,
+                )
                 yield sse_data_event(
                     AnswerDoneStreamEvent(
                         answer=finalized.answer,
@@ -456,11 +490,6 @@ async def answer(request: Request, user: UserContext = Depends(get_current_user)
 )
 async def ingest_blob(
     request: Request,
-    file: UploadFile = File(...),
-    workspace: str | None = Form(None),
-    title: str | None = Form(None),
-    author: str | None = Form(None),
-    metadata: str | None = Form(None),
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Direct file upload ingestion via multipart/form-data.
@@ -471,29 +500,67 @@ async def ingest_blob(
     import json as _json
 
     manager = get_manager(request)
-    ws = resolve_workspace(workspace, request)
     cfg = request_config(request)
-    await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
-
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Filename is required")
-
     try:
-        safe_name = safe_upload_basename(file.filename)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid filename") from None
-
-    target_dir = cfg.input_dir_path / ws
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / safe_name
-
+        form = await request.form(
+            max_files=2,
+            max_fields=_MAX_INGEST_FORM_FIELDS,
+            max_part_size=_INGEST_FORM_FIELD_MAX_BYTES,
+        )
+    except StarletteHTTPException as exc:
+        detail = str(exc.detail)
+        if exc.status_code == 400 and detail.startswith(
+            ("Too many files.", "Too many fields.", "Part exceeded maximum size")
+        ):
+            raise HTTPException(status_code=413, detail=detail) from exc
+        raise
     try:
-        await write_upload_stream(file, target_path, max_bytes=cfg.max_upload_bytes)
-    except UploadTooLargeError:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds maximum size of {cfg.max_upload_bytes} bytes",
-        ) from None
+        unexpected = sorted({key for key, _ in form.multi_items()} - _ALLOWED_INGEST_PARTS)
+        if unexpected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unexpected multipart field(s): {', '.join(unexpected)}",
+            )
+        files = form.getlist("file")
+        if len(files) != 1 or not isinstance(files[0], StarletteUploadFile):
+            raise HTTPException(status_code=400, detail="Exactly one file is required")
+        file = files[0]
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Filename is required")
+
+        def optional_text(name: str) -> str | None:
+            value = form.get(name)
+            if value in (None, ""):
+                return None
+            if not isinstance(value, str):
+                raise HTTPException(status_code=400, detail=f"{name} must be a text field")
+            return value
+
+        workspace = optional_text("workspace")
+        title = optional_text("title")
+        author = optional_text("author")
+        metadata = optional_text("metadata")
+        ws = resolve_workspace(workspace, request)
+        await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
+
+        try:
+            safe_name = safe_upload_basename(file.filename)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid filename") from None
+
+        target_dir = cfg.input_dir_path / ws
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / safe_name
+
+        try:
+            await write_upload_stream(file, target_path, max_bytes=cfg.max_upload_bytes)
+        except UploadTooLargeError:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {cfg.max_upload_bytes} bytes",
+            ) from None
+    finally:
+        await form.close()
 
     # Parse optional metadata JSON
     meta_dict: dict[str, Any] | None = None

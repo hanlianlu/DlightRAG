@@ -15,15 +15,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from dlightrag.api.middleware import (
-    JsonBodyLimitMiddleware,
+    RequestBodyLimitMiddleware,
     RequestIdMiddleware,
     install_request_id_log_record_factory,
 )
-from dlightrag.api.models import ErrorDetail
+from dlightrag.api.models import ANSWER_REQUEST_PART_MAX_BYTES, ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
 from dlightrag.core.answer.errors import AnswerInputError
-from dlightrag.core.client_contracts import MAX_HISTORY_CONTENT_CHARS, MAX_HISTORY_MESSAGES
+from dlightrag.core.client_contracts import MAX_QUERY_IMAGES
 from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
@@ -31,8 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Room for the query, workspace list and identifiers that travel beside the images.
 _JSON_BODY_OVERHEAD_BYTES = 64 * 1024
-# A Unicode code point costs at most four UTF-8 bytes on the wire.
-_JSON_CHAR_MAX_BYTES = 4
+_MULTIPART_ENVELOPE_BYTES = 2 * 1024 * 1024 + 64 * 1024
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -84,6 +83,27 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         lifespan=lifespan,
     )
     application.state.config = cfg
+
+    # Install the body limiter before response middleware so its 413 replies still
+    # receive CORS and request-ID headers. Base64 inflates an image by 4/3.
+    encoded_image_bytes = ((cfg.answer.image_max_bytes + 2) // 3) * 4
+    retrieve_image_bytes = MAX_QUERY_IMAGES * encoded_image_bytes
+    answer_multipart_max = (
+        cfg.answer.max_total_attachment_bytes + ANSWER_REQUEST_PART_MAX_BYTES + 64 * 1024
+    )
+    application.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=max(
+            _JSON_BODY_OVERHEAD_BYTES + retrieve_image_bytes,
+            ANSWER_REQUEST_PART_MAX_BYTES,
+        ),
+        multipart_path_max_bytes={
+            "/answer": answer_multipart_max,
+            "/web/answer": answer_multipart_max,
+            "/ingest/blob": cfg.max_upload_bytes + _MULTIPART_ENVELOPE_BYTES,
+            "/web/files/upload": (cfg.max_upload_size_mb * 1024 * 1024 + _MULTIPART_ENVELOPE_BYTES),
+        },
+    )
 
     # -- Request ID middleware --
     application.add_middleware(RequestIdMiddleware)
@@ -191,19 +211,6 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
                 NoCacheStaticFiles(directory=str(_static_dir)),
                 name="static",
             )
-
-    # Added last so it wraps everything else: an oversized body is refused before
-    # auth or routing has a chance to buffer it. Base64 inflates an image by 4/3.
-    encoded_image_bytes = ((cfg.query_images.max_upload_bytes + 2) // 3) * 4
-    retrieve_image_bytes = max(0, cfg.query_images.max_current_images) * encoded_image_bytes
-    # Answer JSON carries no images, only history text: the shared cap must also
-    # admit a full conversation history so disabling query images cannot reject a
-    # legitimate Answer request.
-    answer_history_bytes = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * _JSON_CHAR_MAX_BYTES
-    application.add_middleware(
-        JsonBodyLimitMiddleware,
-        max_bytes=_JSON_BODY_OVERHEAD_BYTES + max(retrieve_image_bytes, answer_history_bytes),
-    )
 
     return application
 

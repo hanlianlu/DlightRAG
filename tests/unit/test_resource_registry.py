@@ -399,6 +399,68 @@ async def test_cancellation_during_fetch_propagates_and_cleans_up(
     await registry.aclose()
 
 
+async def test_cancelled_waiter_does_not_cancel_shared_loader() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def loader() -> bytes:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return b"shared text"
+
+    registry = ResourceRegistry()
+    resource_id = registry.register(ResourceInput(loader=loader))
+    cancelled_waiter = asyncio.create_task(registry.read(resource_id))
+    surviving_waiter = asyncio.create_task(registry.read(resource_id))
+    await started.wait()
+
+    try:
+        cancelled_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_waiter
+        release.set()
+        result = await surviving_waiter
+
+        assert result.content == "shared text"
+        assert calls == 1
+    finally:
+        release.set()
+        await asyncio.gather(cancelled_waiter, surviving_waiter, return_exceptions=True)
+        await registry.aclose()
+
+
+async def test_aclose_cancels_and_joins_pending_loader() -> None:
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def loader() -> bytes:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+            return b"unreachable"
+        finally:
+            stopped.set()
+
+    registry = ResourceRegistry()
+    resource_id = registry.register(ResourceInput(loader=loader))
+    read_task = asyncio.create_task(registry.read(resource_id))
+    await started.wait()
+
+    try:
+        await registry.aclose()
+
+        assert stopped.is_set()
+        assert read_task.done()
+        with pytest.raises(asyncio.CancelledError):
+            await read_task
+    finally:
+        read_task.cancel()
+        await asyncio.gather(read_task, return_exceptions=True)
+
+
 async def test_async_context_manager_closes_owned_resources() -> None:
     registry = ResourceRegistry()
     async with registry as active:

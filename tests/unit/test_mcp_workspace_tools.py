@@ -262,6 +262,55 @@ async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
     mock_mcp_manager.aretrieve.assert_not_awaited()
 
 
+async def test_mcp_query_permission_does_not_imply_visual_asset_permission(
+    mock_mcp_manager,
+    test_config: DlightragConfig,
+) -> None:
+    test_config.access_control = AccessControlConfig(
+        mode="jwt_claims",
+        rules=[
+            AccessControlRuleConfig(
+                claim="groups",
+                value="finance-rag-readers",
+                workspaces=["default"],
+                actions=["workspace.query"],
+            )
+        ],
+    )
+    mock_mcp_manager.aretrieve.return_value = RetrievalResult(
+        contexts={
+            "chunks": [
+                {
+                    "chunk_id": "figure-1",
+                    "reference_id": "1",
+                    "file_path": "report.pdf",
+                    "content": "Evidence",
+                    "image_data": "bytes",
+                    "_workspace": "default",
+                    "metadata": {
+                        "source_uri": "local://default/report.pdf",
+                        "source_download_locator": "report.pdf",
+                    },
+                }
+            ]
+        }
+    )
+
+    with request_scope_context(
+        RequestScope(
+            user_id="alice",
+            auth_mode="jwt",
+            claims={"groups": ["finance-rag-readers"]},
+        )
+    ):
+        result = await mcp_server.mcp_app.call_tool("retrieve", {"query": "x"})
+
+    chunk = _tool_json(result)["contexts"]["chunks"][0]
+    assert chunk["content"] == "Evidence"
+    assert "image_url" not in chunk
+    assert "thumbnail_url" not in chunk
+
+
 async def test_mcp_retrieve_all_workspaces_uses_visible_records(mock_mcp_manager) -> None:
     mock_mcp_manager.alist_workspace_records.return_value = [
         {"workspace": "default"},

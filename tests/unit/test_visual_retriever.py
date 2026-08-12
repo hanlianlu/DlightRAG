@@ -11,9 +11,9 @@ from PIL import Image
 from dlightrag.core.retrieval.visual import DirectVisualRetriever
 
 
-def _image_block() -> dict[str, Any]:
+def _image_block(*, size: tuple[int, int] = (2, 2), mode: str = "RGB") -> dict[str, Any]:
     buf = io.BytesIO()
-    Image.new("RGB", (2, 2), "white").save(buf, format="PNG")
+    Image.new(mode, size, "white").save(buf, format="PNG")
     payload = base64.b64encode(buf.getvalue()).decode("ascii")
     return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
 
@@ -85,6 +85,16 @@ async def test_visual_leg_degrades_to_empty_when_embedding_fails() -> None:
 
     assert await retriever.search([_image_block()]) == []
     stores.chunks_vdb.query.assert_not_awaited()
+
+
+async def test_visual_leg_rejects_images_above_decode_pixel_ceiling() -> None:
+    stores = _stores([])
+    embedder = MagicMock()
+    embedder.embed_query_images = AsyncMock(return_value=[[0.1]])
+    retriever = DirectVisualRetriever(embedder=embedder, stores=stores, top_k=5)
+
+    assert await retriever.search([_image_block(size=(8_000, 5_001), mode="1")]) == []
+    embedder.embed_query_images.assert_not_awaited()
 
 
 async def test_visual_leg_disabled_by_zero_top_k() -> None:

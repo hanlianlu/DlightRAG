@@ -25,9 +25,7 @@ export interface ConversationTurn {
   user_text: string;
   assistant_text: string;
   user_attachments: ConversationAttachmentReference[];
-  answer_sources: Record<string, unknown>;
   answer_html: string;
-  queried_workspaces: string[];
   created_at: string;
 }
 

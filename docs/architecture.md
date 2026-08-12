@@ -155,11 +155,13 @@ The browser channel wraps the same orchestrator with a principal-scoped
 conversation lifecycle. Uploaded answer attachments are persisted verbatim in one
 raw table, `web_conversation_attachments`, keyed by principal, conversation, and
 turn; there is no parsed-chunk table and no vector cache. Historical attachments
-are re-registered lazily as request-local resources when a follow-up turn needs
-them, and browser thumbnails are derived on demand. Manual deletion and
-inactivity-TTL pruning cascade attachment bytes through the owning turn and
-conversation. Answer attachments are the only durable answer inputs the Web store
-keeps; no answer-time parse or embedding artifact is retained.
+are re-registered lazily as request-local resources on every follow-up, newest
+first up to the available attachment-count limit. An attachment-bearing
+conversation therefore remains on the research path. Browser thumbnails are
+derived on demand. Manual deletion and inactivity-TTL pruning cascade attachment
+bytes through the owning turn and conversation. Answer attachments are the only
+durable answer inputs the Web store keeps; no answer-time parse or embedding
+artifact is retained.
 
 ## Retrieval And Answer Flow
 

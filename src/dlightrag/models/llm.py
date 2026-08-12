@@ -194,14 +194,18 @@ def get_query_model_func(config: DlightragConfig) -> Callable:
     return _make_completion_func(cfg)
 
 
-def get_vlm_model_func(config: DlightragConfig) -> Callable:
+def get_vlm_model_func(
+    config: DlightragConfig,
+    *,
+    owner_closers: list[Callable[[], Awaitable[Any]]] | None = None,
+) -> Callable:
     """Messages-first VLM callable for the query image enhancer (DlightRAG-owned; nests).
 
     Uses ``config.llm.roles.vlm`` if set, otherwise ``config.llm.default``.
     Concurrency is bounded by the caller's semaphore (RAGServiceManager).
     """
     cfg = model_for_role(config, "vlm")
-    return _make_completion_func(cfg)
+    return _make_completion_func(cfg, owner_closers=owner_closers)
 
 
 def normalized_endpoint_fingerprint(value: Any) -> str | None:

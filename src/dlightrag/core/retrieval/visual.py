@@ -10,7 +10,11 @@ from PIL import Image
 
 from dlightrag.core.retrieval.protocols import ContextRow
 from dlightrag.utils.concurrency import bounded_map
-from dlightrag.utils.images import decode_image_base64, image_url_block
+from dlightrag.utils.images import (
+    decode_image_base64,
+    image_url_block,
+    verify_web_image_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +110,7 @@ def _extract_images(blocks: list[dict[str, Any]] | None) -> list[Image.Image]:
             continue
         try:
             raw, _ = decode_image_base64(url)
+            verify_web_image_bytes(raw)
             images.append(Image.open(io.BytesIO(raw)))
         except Exception:
             logger.warning("Failed to decode direct visual query image", exc_info=True)

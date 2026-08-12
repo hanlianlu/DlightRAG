@@ -9,12 +9,18 @@ from pydantic import ConfigDict, Field
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.contracts import ServiceRole
 from dlightrag.core.client_contracts import (
+    MAX_HISTORY_CONTENT_CHARS,
+    MAX_HISTORY_MESSAGES,
     AnswerRequestContract,
     ClientContractModel,
     IngestPayload,
     RetrieveRequestContract,
 )
 from dlightrag.core.request.workspaces import QueryWorkspaceSelection
+
+# Maximum UTF-8 history payload plus query/workspace/JSON framing. Shared by the
+# REST multipart parser and its receive-layer body cap.
+ANSWER_REQUEST_PART_MAX_BYTES = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4 + 64 * 1024
 
 # ═══════════════════════════════════════════════════════════════════
 # Request Models
@@ -86,7 +92,6 @@ class ReferenceSummary(ClientContractModel):
 
 
 class RetrievalResponse(ClientContractModel):
-    answer: str | None = None
     contexts: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     sources: list[SourceReferencePayload] = Field(default_factory=list)
     trace: dict[str, Any] = Field(default_factory=dict)
@@ -94,6 +99,7 @@ class RetrievalResponse(ClientContractModel):
 
 
 class AnswerResponse(RetrievalResponse):
+    answer: str | None = None
     references: list[ReferenceSummary] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
     answer_blocks: list[dict[str, Any]] = Field(default_factory=list)

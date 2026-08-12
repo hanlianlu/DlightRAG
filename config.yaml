@@ -174,7 +174,7 @@ embedding_batch_num: 64       # texts per embedding request (provider cap varies
 # ─────────────────────────────────────────────────────────────────
 
 # top_k and chunk_top_k are LightRAG QueryParam controls (names mirror LightRAG).
-# direct_visual_top_k, answer.*, and query_images.* are DlightRAG-native.
+# direct_visual_top_k and answer.* are DlightRAG-native.
 top_k: 60        # LightRAG QueryParam: KG entity/relationship breadth.
 chunk_top_k: 30  # LightRAG QueryParam: chunk/BM25 candidate breadth (not a final /retrieve cap).
 # bm25_enabled: true  # Workspace PostgreSQL BM25 lane; answer attachments use request-local resources.
@@ -186,10 +186,6 @@ answer:
   max_attachments: 6
   max_attachment_bytes: 104857600      # 100 MiB per answer attachment.
   max_total_attachment_bytes: 134217728  # 128 MiB total across answer attachments.
-
-query_images:                          # Retrieve-only current-image path.
-  max_current_images: 3
-  max_upload_bytes: 15728640  # 15 MiB per durable current Web image.
 
 web_conversations:
   max_turns: 100

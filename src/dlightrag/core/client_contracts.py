@@ -89,8 +89,8 @@ class QueryRequestContract(ClientContractModel):
     """Shared transport-neutral fields for client query requests."""
 
     query: str
-    top_k: int | None = None
-    chunk_top_k: int | None = None
+    top_k: int | None = Field(default=None, ge=1)
+    chunk_top_k: int | None = Field(default=None, ge=1)
 
 
 class RetrieveRequestContract(QueryRequestContract):

@@ -37,7 +37,7 @@ def build_run_tools(
     search_web: WebSearch | None,
     resource_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
-) -> list[AgentTool]:
+) -> tuple[list[AgentTool], _ToolCallCache]:
     """Bind one run's tools to its ledger; every observation lands there, not in a reply."""
     cache = _ToolCallCache()
 
@@ -45,7 +45,7 @@ def build_run_tools(
         args = _as(raw, SearchInput)
         return await cache.run(
             _call_key("knowledge_base", args.query),
-            lambda: _search_corpus(retrieve_knowledge_base, args.query, evidence),
+            lambda: _search_corpus(retrieve_knowledge_base, args.query, evidence, trace),
         )
 
     tools = [
@@ -75,7 +75,7 @@ def build_run_tools(
             )
         )
     tools.extend(_ledger_backed(tool, evidence, cache) for tool in resource_tools)
-    return tools
+    return tools, cache
 
 
 def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger, cache: _ToolCallCache) -> AgentTool:
@@ -87,6 +87,7 @@ def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger, cache: _ToolCallCa
             row = _resource_row(tool.name, result)
             if row is not None:
                 evidence.add_rows([row])
+                await evidence.aflush_images()
             return result
 
         return await cache.run(_resource_call_key(tool.name, raw), run_once)
@@ -98,12 +99,17 @@ async def _search_corpus(
     retrieve: KnowledgeRetrieval,
     query: str,
     evidence: EvidenceLedger,
+    trace: dict[str, Any],
 ) -> ToolResult:
     try:
         result = await retrieve(query)
     except Exception as exc:
         raise RuntimeError("knowledge-base search failed") from exc
     delta = evidence.add_contexts(result.contexts)
+    await evidence.aflush_images()
+    retrievals = trace.setdefault("knowledge_base_retrievals", [])
+    if isinstance(retrievals, list):
+        retrievals.append({**result.trace, "query": query})
     return ToolResult(content=f"Knowledge base added {delta.new_chunks} new passages.")
 
 
@@ -134,6 +140,7 @@ async def _search_open_web(
                 metadata["resource_id"] = resource_id
                 readable_sources.setdefault(resource_id, str(metadata.get("title") or "Source"))
     delta = evidence.add_rows(rows)
+    await evidence.aflush_images()
     trace["web_search_cost_dollars"] += result.cost_dollars
     content = f"Open web added {delta.new_chunks} new passages."
     if delta.new_chunks and readable_sources:
@@ -154,6 +161,18 @@ class _ToolCallCache:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._tasks: dict[str, asyncio.Future[ToolResult]] = {}
+        self._closed = False
+
+    async def aclose(self) -> None:
+        async with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            tasks, self._tasks = list(self._tasks.values()), {}
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def run(
         self,
@@ -161,13 +180,21 @@ class _ToolCallCache:
         operation: Callable[[], Awaitable[ToolResult]],
     ) -> ToolResult:
         async with self._lock:
+            if self._closed:
+                raise RuntimeError("tool-call cache is closed")
             task = self._tasks.get(key)
             repeated = task is not None
             if task is None:
                 task = asyncio.ensure_future(operation())
                 self._tasks[key] = task
         try:
-            result = await task
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                async with self._lock:
+                    if self._tasks.get(key) is task:
+                        self._tasks.pop(key, None)
+            raise
         except BaseException:
             async with self._lock:
                 if self._tasks.get(key) is task:

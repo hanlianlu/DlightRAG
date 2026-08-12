@@ -397,10 +397,12 @@ request-local resources, not durable IDs. They are computed per answer from the
 resources registered for that request; nothing about them is persisted as a
 parsed chunk or vector.
 
-Answer generation uses one image transport budget for current attachment images,
-focused-inspection previews, and retrieved workspace visuals together, bounded by
-`answer.max_images` and the answer byte/geometry fields. Budgeted JPEG, PNG, and
-WebP payloads are preserved as-is. When recompression is needed, DlightRAG
+Answer generation uses one image transport budget for current attachment images
+and retrieved workspace visuals, bounded by `answer.max_images` and the answer
+byte/geometry fields. Focused inspection is a separate VLM call; every inspection
+uses the same byte/geometry fields as per-call limits without consuming the final
+answer budget. Budgeted JPEG, PNG, and WebP payloads are preserved as-is. When
+recompression is needed, DlightRAG
 enforces both a long-edge floor and a JPEG quality floor; an image that cannot
 fit within those limits is skipped instead of being degraded into a low-quality
 preview, and its text observation remains.
@@ -524,7 +526,9 @@ retrying every turn.
 The Web channel persists uploaded answer attachments verbatim in one raw table,
 `web_conversation_attachments`, scoped by principal, conversation, and turn.
 There is no parsed-chunk table and no vector cache. Historical attachments are
-re-registered lazily as request-local resources when a follow-up turn needs them,
-and browser thumbnails are derived on demand from the stored bytes. Manual delete
-and TTL pruning cascade attachment bytes through the owning turn and conversation;
-nothing crosses a conversation or principal boundary.
+re-registered as lazy request-local resources on every follow-up, newest first up
+to the available attachment-count limit. An attachment-bearing conversation
+therefore remains on the research path. Browser thumbnails are derived on demand
+from the stored bytes. Manual delete and TTL pruning cascade attachment bytes
+through the owning turn and conversation; nothing crosses a conversation or
+principal boundary.

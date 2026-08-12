@@ -2,7 +2,6 @@
 """Browser-safe contracts for durable Web conversations."""
 
 import datetime
-from typing import Any
 
 from pydantic import Field, field_validator
 
@@ -34,9 +33,7 @@ class ConversationTurn(ClientContractModel):
     user_text: str
     assistant_text: str
     user_attachments: list[ConversationAttachmentReference] = Field(default_factory=list)
-    answer_sources: dict[str, Any] = Field(default_factory=dict)
     answer_html: str
-    queried_workspaces: list[str] = Field(default_factory=list)
     created_at: datetime.datetime
 
 

@@ -968,7 +968,7 @@ class TestRetrieveEndpoint:
         resp = await client.post("/retrieve", json={"query": "What is RAG?"})
         assert resp.status_code == 200
         body = resp.json()
-        assert "answer" in body
+        assert "answer" not in body
         assert "contexts" in body
         assert "sources" in body
         assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] is None
@@ -992,7 +992,7 @@ class TestRetrieveEndpoint:
         assert source["download_url"] == "/files/raw/doc-report?workspace=finance"
         assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
 
-    async def test_retrieve_omits_download_link_without_download_permission(
+    async def test_retrieve_omits_download_and_visual_links_without_permissions(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         class QueryOnlyAccess:
@@ -1000,12 +1000,14 @@ class TestRetrieveEndpoint:
                 return None
 
             async def filter_workspaces(self, user, action, workspaces):
-                if action == "workspace.download_source":
+                if action in {"workspace.download_source", "workspace.read_visual_asset"}:
                     return []
                 return list(workspaces)
 
         mock_manager.aretrieve = AsyncMock(
-            return_value=RetrievalResult(contexts={"chunks": [_finance_source_context()]})
+            return_value=RetrievalResult(
+                contexts={"chunks": [{**_finance_source_context(), "image_data": "bytes"}]}
+            )
         )
         app.state.manager = mock_manager
         app.state.access_control = QueryOnlyAccess()
@@ -1020,6 +1022,7 @@ class TestRetrieveEndpoint:
 
         assert response.status_code == 200
         assert response.json()["sources"][0]["download_url"] is None
+        assert "image_url" not in response.json()["contexts"]["chunks"][0]
 
     async def test_retrieve_all_workspaces_uses_all_visible_records(
         self,
@@ -1639,6 +1642,39 @@ class TestAnswerMultipart:
         assert "text/event-stream" in resp.headers["content-type"]
         resources = mock_manager.aanswer_stream.call_args.kwargs["resources"]
         assert resources[0].content == b"hello"
+
+    async def test_multipart_accepts_maximum_unicode_history(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        import json as json_mod
+
+        from dlightrag.core.client_contracts import (
+            MAX_HISTORY_CONTENT_CHARS,
+            MAX_HISTORY_MESSAGES,
+        )
+
+        app.state.manager = mock_manager
+        history = [
+            {
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": "\U0001f642" * MAX_HISTORY_CONTENT_CHARS,
+            }
+            for index in range(MAX_HISTORY_MESSAGES)
+        ]
+
+        response = await client.post(
+            "/answer",
+            data={
+                "request": json_mod.dumps(
+                    {"query": "continue", "stream": False, "history": history},
+                    ensure_ascii=False,
+                )
+            },
+            files=[("attachments", ("note.txt", b"evidence", "text/plain"))],
+        )
+
+        assert response.status_code == 200
+        assert len(mock_manager.aanswer.call_args.kwargs["history"]) == MAX_HISTORY_MESSAGES
 
     async def test_multipart_requires_exactly_one_request_part(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -2344,14 +2380,14 @@ class TestMetadataAPI:
 
 
 # ---------------------------------------------------------------------------
-# JSON body limit
+# Request body limits
 # ---------------------------------------------------------------------------
 
 
 def _echo_length_app(max_bytes: int) -> FastAPI:
     from starlette.requests import Request
 
-    from dlightrag.api.middleware import JsonBodyLimitMiddleware
+    from dlightrag.api.middleware import RequestBodyLimitMiddleware
 
     application = FastAPI()
 
@@ -2359,13 +2395,22 @@ def _echo_length_app(max_bytes: int) -> FastAPI:
     async def probe(request: Request) -> dict[str, int]:
         return {"received": len(await request.body())}
 
-    application.add_middleware(JsonBodyLimitMiddleware, max_bytes=max_bytes)
+    @application.post("/answer")
+    @application.post("/web/answer")
+    async def answer(request: Request) -> dict[str, int]:
+        return {"received": len(await request.body())}
+
+    application.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_bytes=max_bytes,
+        multipart_path_max_bytes={"/answer": max_bytes, "/web/answer": max_bytes},
+    )
     return application
 
 
-async def _post(app: FastAPI, **kwargs: Any) -> Response:
+async def _post(app: FastAPI, path: str = "/probe", **kwargs: Any) -> Response:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
-        return await client.post("/probe", **kwargs)
+        return await client.post(path, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -2376,12 +2421,12 @@ async def test_a_declared_oversize_body_is_refused_before_the_route_runs() -> No
         headers={"content-type": "application/json"},
     )
 
-    assert response.status_code == 413
+    assert response.status_code == 413, response.text
     assert response.json()["error_type"] == "validation"
 
 
 @pytest.mark.asyncio
-async def test_an_undeclared_body_stops_at_the_cap_instead_of_growing() -> None:
+async def test_an_undeclared_body_returns_413_at_the_cap() -> None:
     async def chunks():
         for _ in range(10):
             yield b"x" * 50
@@ -2392,26 +2437,193 @@ async def test_an_undeclared_body_stops_at_the_cap_instead_of_growing() -> None:
         headers={"content-type": "application/json"},
     )
 
-    assert response.json()["received"] == 100
+    assert response.status_code == 413
+    assert response.json()["error_type"] == "validation"
 
 
 @pytest.mark.asyncio
-async def test_a_multipart_upload_is_left_to_its_own_limits() -> None:
+async def test_an_undeclared_mislabeled_body_still_returns_413_at_the_cap() -> None:
+    async def chunks():
+        for _ in range(10):
+            yield b"x" * 50
+
+    response = await _post(
+        _echo_length_app(100),
+        content=chunks(),
+        headers={"content-type": "text/plain"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error_type"] == "validation"
+
+
+@pytest.mark.asyncio
+async def test_an_unmapped_multipart_upload_uses_the_default_cap() -> None:
     response = await _post(
         _echo_length_app(100),
         files={"f": ("big.bin", b"x" * 400)},
     )
 
-    assert response.json()["received"] > 100
+    assert response.status_code == 413
+    assert response.json()["error_type"] == "validation"
 
 
 @pytest.mark.asyncio
-async def test_the_app_admits_answer_history_when_images_are_disabled(
+@pytest.mark.parametrize("path", ["/answer", "/web/answer"])
+async def test_a_chunked_answer_multipart_is_refused_at_receive_layer(path: str) -> None:
+    async def chunks():
+        for _ in range(10):
+            yield b"x" * 50
+
+    response = await _post(
+        _echo_length_app(100),
+        path,
+        content=chunks(),
+        headers={"content-type": "multipart/form-data; boundary=test"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error_type"] == "validation"
+
+
+@pytest.mark.asyncio
+async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
     mock_config: DlightragConfig,
 ) -> None:
-    # Answer JSON carries no images, only history text. Disabling query images
-    # must not shrink the cap below a legitimate Answer history body.
-    mock_config.query_images.max_current_images = 0
+    mock_config.answer.max_total_attachment_bytes = 64
+    set_config(mock_config)
+
+    async def chunks():
+        yield (
+            b"--test\r\n"
+            b'Content-Disposition: form-data; name="attachments"; filename="huge.bin"\r\n'
+            b"Content-Type: application/octet-stream\r\n\r\n"
+        )
+        for _ in range(105):
+            yield b"x" * 65_536
+        yield b"\r\n--test--\r\n"
+
+    application = create_app(include_web_app=False)
+    manager = AsyncMock()
+    manager.astart_ingest_job.return_value = {
+        "job_id": "job-overflow",
+        "workspace": "default",
+        "source_type": "local",
+        "status": "queued",
+        "lease_owner": None,
+        "lease_expires_at": None,
+    }
+    application.state.manager = manager
+    response = await _post(
+        application,
+        "/answer",
+        content=chunks(),
+        headers={
+            "content-type": "multipart/form-data; boundary=test",
+            "origin": "https://example.test",
+            "x-request-id": "body-limit-test",
+        },
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error_type"] == "validation"
+    assert response.headers["x-request-id"] == "body-limit-test"
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+@pytest.mark.asyncio
+async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
+    mock_config: DlightragConfig,
+) -> None:
+    mock_config.max_upload_size_mb = 8
+    mock_config.max_upload_bytes = 1024 * 1024
+    set_config(mock_config)
+
+    async def chunks():
+        yield (
+            b"--test\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="huge.bin"\r\n'
+            b"Content-Type: application/octet-stream\r\n\r\n"
+        )
+        for _ in range(50):
+            yield b"x" * 65_536
+        yield b"\r\n--test--\r\n"
+
+    application = create_app(include_web_app=False)
+    manager = AsyncMock()
+    manager.astart_ingest_job.return_value = {
+        "job_id": "job-overflow",
+        "workspace": "default",
+        "source_type": "local",
+        "status": "queued",
+        "lease_owner": None,
+        "lease_expires_at": None,
+    }
+    application.state.manager = manager
+    response = await _post(
+        application,
+        "/ingest/blob",
+        content=chunks(),
+        headers={"content-type": "multipart/form-data; boundary=test"},
+    )
+
+    assert response.status_code == 413, response.text
+    assert response.json()["error_type"] == "validation"
+    assert response.json()["detail"] == "Request body is too large"
+    manager.astart_ingest_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_blob_authenticates_before_parsing_multipart(
+    mock_config: DlightragConfig,
+) -> None:
+    mock_config.auth_mode = "simple"
+    mock_config.api_auth_token = "secret-token"
+    set_config(mock_config)
+    application = create_app(include_web_app=False)
+    application.state.manager = AsyncMock()
+
+    response = await _post(
+        application,
+        "/ingest/blob",
+        content=b"malformed multipart body",
+        headers={"content-type": "multipart/form-data; boundary=missing"},
+    )
+
+    assert response.status_code == 401
+    assert "Authorization" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_multipart_header_does_not_raise_json_route_body_cap(
+    mock_config: DlightragConfig,
+) -> None:
+    mock_config.max_upload_size_mb = 32
+    set_config(mock_config)
+
+    async def chunks():
+        yield b'--test\r\nContent-Disposition: form-data; name="junk"\r\n\r\n'
+        for _ in range(200):
+            yield b"x" * 65_536
+        yield b"\r\n--test--\r\n"
+
+    application = create_app(include_web_app=False)
+    application.state.manager = AsyncMock()
+    response = await _post(
+        application,
+        "/retrieve",
+        content=chunks(),
+        headers={"content-type": "multipart/form-data; boundary=test"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Request body is too large"
+
+
+@pytest.mark.asyncio
+async def test_the_app_admits_answer_history_with_the_shared_body_cap(
+    mock_config: DlightragConfig,
+) -> None:
     set_config(mock_config)
 
     response = await _post(
@@ -2424,17 +2636,19 @@ async def test_the_app_admits_answer_history_when_images_are_disabled(
 
 
 @pytest.mark.asyncio
-async def test_the_app_still_refuses_a_body_over_the_answer_history_budget(
+async def test_the_app_still_refuses_a_body_over_the_shared_json_budget(
     mock_config: DlightragConfig,
 ) -> None:
     from dlightrag.core.client_contracts import (
         MAX_HISTORY_CONTENT_CHARS,
         MAX_HISTORY_MESSAGES,
+        MAX_QUERY_IMAGES,
     )
 
-    mock_config.query_images.max_current_images = 0
     set_config(mock_config)
-    over_budget = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4 + 2 * 1024 * 1024
+    history_bytes = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4
+    image_bytes = MAX_QUERY_IMAGES * (((mock_config.answer.image_max_bytes + 2) // 3) * 4)
+    over_budget = max(history_bytes, image_bytes) + 2 * 1024 * 1024
 
     response = await _post(
         create_app(include_web_app=False),
@@ -2446,13 +2660,15 @@ async def test_the_app_still_refuses_a_body_over_the_answer_history_budget(
 
 
 @pytest.mark.asyncio
-async def test_the_app_expands_the_cap_for_configured_query_images(
+async def test_the_app_admits_the_fixed_retrieve_image_contract(
     mock_config: DlightragConfig,
 ) -> None:
-    # The retrieve query-image allowance still enlarges the shared cap.
-    mock_config.query_images.max_current_images = 3
+    from dlightrag.core.client_contracts import MAX_QUERY_IMAGES
+
     set_config(mock_config)
-    image_sized_body = 3 * (((mock_config.query_images.max_upload_bytes + 2) // 3) * 4) - 4096
+    image_sized_body = (
+        MAX_QUERY_IMAGES * (((mock_config.answer.image_max_bytes + 2) // 3) * 4) - 4096
+    )
 
     response = await _post(
         create_app(include_web_app=False),
@@ -2478,3 +2694,28 @@ async def test_a_route_that_rejects_an_oversized_upload_is_not_reported_as_an_au
 
     assert response.status_code == 413
     assert response.json()["error_type"] == "validation"
+
+
+def test_body_limit_split_preserves_non_limit_exception_group_members() -> None:
+    from dlightrag.api.middleware import _RequestBodyTooLarge, _split_body_too_large
+
+    matched, remainder = _split_body_too_large(
+        ExceptionGroup(
+            "mixed",
+            [_RequestBodyTooLarge(), ExceptionGroup("server", [RuntimeError("boom")])],
+        )
+    )
+
+    assert matched is not None
+    assert isinstance(remainder, BaseExceptionGroup)
+    server_group = remainder.exceptions[0]
+    assert isinstance(server_group, BaseExceptionGroup)
+    assert isinstance(server_group.exceptions[0], RuntimeError)
+    assert str(server_group.exceptions[0]) == "boom"
+
+
+def test_body_limit_strips_root_path_only_at_segment_boundary() -> None:
+    from dlightrag.api.middleware import _request_path
+
+    assert _request_path({"path": "/answer", "root_path": "/a"}) == "/answer"
+    assert _request_path({"path": "/api/answer", "root_path": "/api"}) == "/answer"

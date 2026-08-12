@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Context-aware text and image embedding over DlightRAG's provider registry."""
 
+import asyncio
 import logging
 import math
 
@@ -139,7 +140,7 @@ class MultimodalEmbedder:
         self._ensure_image_support()
         if not items:
             return []
-        payload = self._build_fused_payload(items, context="document")
+        payload = await asyncio.to_thread(self._build_fused_payload, items, context="document")
         data = await self._post(payload)
         vectors = self.provider.parse_response(data)
         self._validate_vectors(vectors, expected_count=len(items))
@@ -158,21 +159,24 @@ class MultimodalEmbedder:
         self._ensure_image_support()
         if not images:
             return []
+        payload = await asyncio.to_thread(self._build_query_image_payload, images)
+        data = await self._post(payload)
+        vectors = self.provider.parse_response(data)
+        self._validate_vectors(vectors, expected_count=len(images))
+        return vectors
+
+    def _build_query_image_payload(self, images: list[Image.Image]) -> dict:
         inputs: list[EmbeddingInput] = [
             ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image))
             for image in images
         ]
-        payload = self.provider.build_payload(
+        return self.provider.build_payload(
             self.model,
             inputs,
             context="query",
             asymmetric=self.asymmetric,
             output_dimension=self.dim,
         )
-        data = await self._post(payload)
-        vectors = self.provider.parse_response(data)
-        self._validate_vectors(vectors, expected_count=len(images))
-        return vectors
 
     async def probe_image_embedding(self) -> None:
         """Probe that the provider can embed an image (gates the direct-visual leg)."""

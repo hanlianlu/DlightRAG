@@ -15,8 +15,6 @@ from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS, verify_web_image_byte
 # manager extracts verified images into current-image blocks and registers the
 # rest as request-local resources. The admitted count is owned at runtime by
 # ``config.answer.max_attachments`` and threaded in by callers.
-MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
-
 SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
     {
         "pdf",
@@ -90,16 +88,17 @@ def validate_web_attachments(
     items: Sequence[tuple[str, str | None, bytes]],
     *,
     max_attachments: int,
-    image_max_bytes: int,
+    max_attachment_bytes: int,
+    max_total_attachment_bytes: int,
     image_max_pixels: int = MODEL_IMAGE_MAX_PIXELS,
-    document_max_bytes: int = MAX_ATTACHMENT_BYTES,
-    image_max_count: int | None = None,
 ) -> tuple[ValidatedWebAttachment, ...]:
     """Admit one ordered mixed collection of current-turn image/document uploads."""
     if len(items) > max_attachments:
         raise ValueError(f"Web answer accepts at most {max_attachments} attachments per message")
+    total_bytes = sum(len(payload) for _, _, payload in items)
+    if total_bytes > max_total_attachment_bytes:
+        raise ValueError(f"total attachment bytes exceed {max_total_attachment_bytes}")
     validated: list[ValidatedWebAttachment] = []
-    image_count = 0
     for ordinal, (filename, mime_type, payload) in enumerate(items, start=1):
         safe_name = safe_upload_basename(filename)
         suffix = _suffix(safe_name)
@@ -107,17 +106,14 @@ def validate_web_attachments(
             raise ValueError(f"Attachment is empty: {safe_name}")
         kind = classify_web_attachment(safe_name, mime_type)
         if kind == "image":
-            image_count += 1
-            if image_max_count is not None and image_count > image_max_count:
-                raise ValueError(f"Web answer accepts at most {image_max_count} current images")
-            if len(payload) > image_max_bytes:
-                raise ValueError(f"image {safe_name} exceeds the {image_max_bytes}-byte limit")
+            if len(payload) > max_attachment_bytes:
+                raise ValueError(f"image {safe_name} exceeds the {max_attachment_bytes}-byte limit")
             try:
                 detected_mime = verify_web_image_bytes(payload, max_pixels=image_max_pixels)
             except ValueError as exc:
                 raise ValueError(f"image {safe_name} {exc}") from exc
         elif kind == "document":
-            if len(payload) > document_max_bytes:
+            if len(payload) > max_attachment_bytes:
                 raise ValueError(f"document {safe_name} exceeds the size limit")
             detected_mime = (
                 mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
@@ -140,7 +136,6 @@ def validate_web_attachments(
 
 
 __all__ = [
-    "MAX_ATTACHMENT_BYTES",
     "SUPPORTED_DOCUMENT_EXTENSIONS",
     "ValidatedWebAttachment",
     "classify_web_attachment",

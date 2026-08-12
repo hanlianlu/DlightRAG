@@ -10,9 +10,9 @@ from dlightrag.utils.tokens import estimate_content_tokens
 class PriorTurns:
     """Earlier turns a request replays and never appends to.
 
-    Every caller renders these differently -- the planner as plain text, an
-    answer call with budgeted images, a control turn verbatim -- but they shed
-    them the same way: drop the oldest turn until the request fits.
+    Every caller renders these text turns differently -- the planner as a
+    transcript and answer/control calls as role/content messages -- but they
+    shed them the same way: drop the oldest turn until the request fits.
     """
 
     def __init__(self, messages: list[dict[str, Any]] | None = None) -> None:

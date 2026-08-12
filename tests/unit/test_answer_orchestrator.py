@@ -49,6 +49,70 @@ def _call(*, query: str, source: str, call_id: str = "search") -> ToolCall:
     return ToolCall(id=call_id, name=f"search_{source}", arguments={"query": query})
 
 
+async def test_cancelled_waiter_does_not_cancel_shared_tool_operation() -> None:
+    from dlightrag.core.agent.tools import _ToolCallCache
+
+    cache = _ToolCallCache()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def operation() -> ToolResult:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return ToolResult(content="evidence", details={"id": "shared"})
+
+    cancelled_waiter = asyncio.create_task(cache.run("same", operation))
+    surviving_waiter = asyncio.create_task(cache.run("same", operation))
+    await started.wait()
+
+    try:
+        cancelled_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_waiter
+        release.set()
+        result = await surviving_waiter
+
+        assert calls == 1
+        assert "already executed" in result.content
+        assert result.details == {"id": "shared"}
+    finally:
+        release.set()
+        await asyncio.gather(cancelled_waiter, surviving_waiter, return_exceptions=True)
+
+
+async def test_tool_call_cache_close_cancels_and_joins_operations() -> None:
+    from dlightrag.core.agent.tools import _ToolCallCache
+
+    cache = _ToolCallCache()
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def operation() -> ToolResult:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+            return ToolResult(content="unreachable")
+        finally:
+            stopped.set()
+
+    waiter = asyncio.create_task(cache.run("same", operation))
+    await started.wait()
+
+    try:
+        await cache.aclose()
+
+        assert stopped.is_set()
+        assert waiter.done()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
 def _answer(text: str) -> AssistantTurn:
     return AssistantTurn(text=text, tool_calls=(), stop_reason="stop")
 
@@ -748,6 +812,31 @@ async def test_control_turns_replay_the_exchanges_this_run_produced() -> None:
     assert "savings rate" in third_turn
     assert "second angle" in third_turn
     assert "Knowledge base added" in third_turn
+
+
+async def test_research_trace_keeps_each_knowledge_base_retrieval() -> None:
+    async def retrieve(query: str) -> RetrievalResult:
+        result = _corpus_result(query)
+        result.contexts["chunks"][0]["chunk_id"] = f"chunk-{query}"
+        result.trace = {"workspace": "alpha", "bm25_chunk_count": 3}
+        return result
+
+    async def search(_query: str) -> WebSearchResult:
+        return _web_result()
+
+    agent = ScriptedAgent(
+        _tool(_call(query="first", source="knowledge_base", call_id="first")),
+        _tool(_call(query="second", source="knowledge_base", call_id="second")),
+        _answer("READY"),
+        final_text="Answer [1-1].",
+    )
+
+    result = await _research(agent, retrieve, search).answer("Question")
+
+    assert result.trace["knowledge_base_retrievals"] == [
+        {"query": "first", "workspace": "alpha", "bm25_chunk_count": 3},
+        {"query": "second", "workspace": "alpha", "bm25_chunk_count": 3},
+    ]
 
 
 async def test_research_control_turn_receives_retrieved_evidence_images() -> None:

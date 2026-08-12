@@ -432,10 +432,12 @@ Web conversations retain up to 100 complete turns with 30-day inactivity
 retention. Uploaded answer attachments are persisted verbatim in one raw table,
 `web_conversation_attachments`, keyed by principal, conversation, and turn.
 Historical attachments are re-registered lazily as request-local resources when a
-follow-up turn needs them, and browser thumbnails are derived on demand. There is
-no parsed-chunk table and no vector cache: the answer research path reads each
-attachment fresh from its stored bytes. Manual delete and TTL pruning cascade
-attachment bytes through the owning turn and conversation.
+follow-up is answered, newest first up to the available attachment-count limit.
+An attachment-bearing conversation therefore remains on the research path, and
+browser thumbnails are derived on demand. There is no parsed-chunk table and no
+vector cache: the answer research path reads each attachment fresh from its stored
+bytes. Manual delete and TTL pruning cascade attachment bytes through the owning
+turn and conversation.
 
 `AnswerOrchestrator` owns every answer. A Web turn with attachments or an Exa
 web-search key takes the research path: the agent chooses among the available
@@ -748,7 +750,9 @@ workspace visible to the current MCP caller:
 
 ## Contexts Object
 
-All modes return `contexts` as a `RetrievalContexts` TypedDict with three arrays. Chunks are the primary retrieval unit; entities and relationships come from the knowledge graph.
+All modes return `contexts` as a `RetrievalContexts` mapping with three arrays.
+Each row is a `ContextRow` dictionary. Chunks are the primary retrieval unit;
+entities and relationships come from the knowledge graph.
 
 REST and Web responses never expose inline base64 page/image payloads. When a
 retrieved chunk has a visual sidecar, DlightRAG projects it to
@@ -773,12 +777,7 @@ they are read as request-local resources and never returned as durable image
 identifiers. Public answer/retrieve requests do not persist either.
 
 ```python
-from dlightrag.core.retrieval.protocols import (
-    RetrievalContexts,
-    ChunkContext,
-    EntityContext,
-    RelationshipContext,
-)
+from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
 ```
 
 ### chunks

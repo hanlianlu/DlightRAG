@@ -441,6 +441,14 @@ class ResourceRegistry:
         if self._closed:
             return
         self._closed = True
+        tasks: list[asyncio.Future[Any]] = [
+            *self._fetch_tasks.values(),
+            *self._fallback_tasks.values(),
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         try:
             if self._owns_url_client and self._url_client is not None:
                 await self._url_client.aclose()
@@ -497,7 +505,8 @@ class ResourceRegistry:
 
         Concurrent reads of the same resource share a single fetch task, so the
         bytes are produced and charged exactly once. A failed or over-limit fetch
-        is neither cached nor charged. Cancellation of a waiter propagates.
+        is neither cached nor charged. Cancelling one waiter does not cancel the
+        shared producer needed by other readers.
         """
         cached = self._fetched.get(resource_id)
         if cached is not None:
@@ -511,11 +520,12 @@ class ResourceRegistry:
                 task = asyncio.ensure_future(self._fetch_and_charge(resource_id, producer))
                 self._fetch_tasks[resource_id] = task
         try:
-            data = await task
+            data = await asyncio.shield(task)
         except BaseException:
-            async with self._fetch_lock:
-                if self._fetch_tasks.get(resource_id) is task:
-                    self._fetch_tasks.pop(resource_id, None)
+            if task.done():
+                async with self._fetch_lock:
+                    if self._fetch_tasks.get(resource_id) is task:
+                        self._fetch_tasks.pop(resource_id, None)
             raise
         async with self._fetch_lock:
             self._fetch_tasks.pop(resource_id, None)
@@ -558,11 +568,12 @@ class ResourceRegistry:
                 task = asyncio.ensure_future(self._url_text_fallback(url))
                 self._fallback_tasks[resource_id] = task
         try:
-            text = await task
+            text = await asyncio.shield(task)
         except BaseException:
-            async with self._fallback_lock:
-                if self._fallback_tasks.get(resource_id) is task:
-                    self._fallback_tasks.pop(resource_id, None)
+            if task.done():
+                async with self._fallback_lock:
+                    if self._fallback_tasks.get(resource_id) is task:
+                        self._fallback_tasks.pop(resource_id, None)
             raise
         async with self._fallback_lock:
             self._fallback_done.add(resource_id)
