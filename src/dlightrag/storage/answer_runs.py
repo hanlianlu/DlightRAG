@@ -22,7 +22,13 @@ from typing import Any, Literal
 
 import asyncpg
 
-from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.migrations import (
+    ForeignKeyRequirement,
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
 
 type AnswerRunStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 type AnswerRunPhase = Literal["planning", "searching", "researching", "generating"]
@@ -191,6 +197,114 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_RUN_ARTIFACTS,
             *_CREATE_INDEXES,
         ),
+    ),
+)
+
+ANSWER_RUN_SCHEMA_TABLES = (
+    TableRequirement(
+        name="dlightrag_answer_runs",
+        columns=(
+            "owner_id",
+            "run_id",
+            "idempotency_key",
+            "request_json",
+            "request_fingerprint",
+            "status",
+            "phase",
+            "stop_reason",
+            "completed_turns",
+            "cancel_requested_at",
+            "lease_owner",
+            "lease_expires_at",
+            "fencing_epoch",
+            "recovery_count",
+            "next_event_sequence",
+            "events_trimmed_at",
+            "checkpoint_json",
+            "result_json",
+            "error_kind",
+            "error_message",
+            "created_at",
+            "updated_at",
+            "started_at",
+            "finished_at",
+        ),
+        primary_key=("owner_id", "run_id"),
+        checks=(
+            "dlightrag_answer_runs_status_check",
+            "dlightrag_answer_runs_phase_check",
+            "dlightrag_answer_runs_counter_check",
+            "dlightrag_answer_runs_lease_check",
+            "dlightrag_answer_runs_terminal_check",
+            "dlightrag_answer_runs_result_check",
+            "dlightrag_answer_runs_error_check",
+        ),
+        indexes=(
+            "idx_dlightrag_answer_runs_claim",
+            "idx_dlightrag_answer_runs_idempotency",
+            "idx_dlightrag_answer_runs_retention",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_run_events",
+        columns=(
+            "owner_id",
+            "run_id",
+            "event_sequence",
+            "event_type",
+            "payload",
+            "created_at",
+        ),
+        primary_key=("owner_id", "run_id", "event_sequence"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
+            ),
+        ),
+        checks=(
+            "dlightrag_answer_run_events_type_check",
+            "dlightrag_answer_run_events_sequence_check",
+        ),
+        indexes=("idx_dlightrag_answer_run_events_terminal",),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_artifacts",
+        columns=("owner_id", "digest", "byte_size", "content", "created_at"),
+        primary_key=("owner_id", "digest"),
+        checks=(
+            "dlightrag_answer_artifacts_digest_check",
+            "dlightrag_answer_artifacts_size_check",
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_run_artifacts",
+        columns=(
+            "owner_id",
+            "run_id",
+            "resource_id",
+            "reference_kind",
+            "ordinal",
+            "digest",
+            "filename",
+            "mime_type",
+            "transform_locator",
+            "created_at",
+        ),
+        primary_key=("owner_id", "run_id", "resource_id"),
+        unique=(("owner_id", "run_id", "reference_kind", "ordinal"),),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
+            ),
+            ForeignKeyRequirement(
+                columns=("owner_id", "digest"), references="dlightrag_answer_artifacts"
+            ),
+        ),
+        checks=(
+            "dlightrag_answer_run_artifacts_kind_check",
+            "dlightrag_answer_run_artifacts_ordinal_check",
+        ),
+        indexes=("idx_dlightrag_answer_run_artifacts_digest",),
     ),
 )
 
@@ -812,6 +926,7 @@ class PGAnswerRunStore:
                     conn,
                     scope=ANSWER_RUN_MIGRATION_SCOPE,
                     migrations=ANSWER_RUN_MIGRATIONS,
+                    tables=ANSWER_RUN_SCHEMA_TABLES,
                 )
                 return
             await apply_migrations(
@@ -1726,6 +1841,7 @@ __all__ = [
     "ANSWER_RUN_LEASE_SECONDS",
     "ANSWER_RUN_MIGRATIONS",
     "ANSWER_RUN_MIGRATION_SCOPE",
+    "ANSWER_RUN_SCHEMA_TABLES",
     "MAX_CONSECUTIVE_RECOVERIES",
     "RUN_ABANDONED_ERROR_KIND",
     "RUN_RETENTION_SECONDS",

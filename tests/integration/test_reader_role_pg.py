@@ -15,18 +15,27 @@ Requires PostgreSQL at localhost:5432 (dlightrag/dlightrag); skipped otherwise.
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
 from typing import Any, cast
 
 import asyncpg
 import pytest
 
 from dlightrag.config import DlightragConfig, EmbeddingConfig
+from dlightrag.storage import pg_metadata_index, web_conversations, workspaces
 from dlightrag.storage.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
+    ANSWER_RUN_SCHEMA_TABLES,
     PGAnswerRunStore,
 )
-from dlightrag.storage.migrations import apply_migrations, verify_migrations
+from dlightrag.storage.migrations import (
+    Migration,
+    SchemaValidationError,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -218,6 +227,234 @@ async def test_reader_startup_fails_when_a_declared_version_is_missing(database:
                     conn,
                     scope=ANSWER_RUN_MIGRATION_SCOPE,
                     migrations=ANSWER_RUN_MIGRATIONS,
+                    tables=ANSWER_RUN_SCHEMA_TABLES,
                 )
+    finally:
+        await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# Required schema objects, not just the ledger
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Scope:
+    """One DlightRAG-owned migration scope and the objects it requires."""
+
+    name: str
+    migrations: tuple[Migration, ...]
+    tables: tuple[TableRequirement, ...]
+    require_applied_prefix: bool = True
+
+
+_SCOPES = (
+    _Scope("workspace_registry", workspaces._SCHEMA_MIGRATIONS, workspaces._SCHEMA_TABLES),
+    _Scope(
+        "doc_metadata",
+        pg_metadata_index._SCHEMA_MIGRATIONS,
+        pg_metadata_index._SCHEMA_TABLES,
+        require_applied_prefix=False,
+    ),
+    _Scope(ANSWER_RUN_MIGRATION_SCOPE, ANSWER_RUN_MIGRATIONS, ANSWER_RUN_SCHEMA_TABLES),
+    _Scope(
+        "web_conversations",
+        web_conversations.WEB_CONVERSATION_MIGRATIONS,
+        web_conversations.WEB_CONVERSATION_SCHEMA_TABLES,
+    ),
+)
+
+# Drops an auto-named constraint without building SQL from a catalog value.
+_DROP_TURN_UNIQUE_KEY = """
+DO $$
+DECLARE target text;
+BEGIN
+    SELECT conname INTO STRICT target
+    FROM pg_catalog.pg_constraint
+    WHERE conrelid = 'web_conversation_turns'::regclass AND contype = 'u';
+    EXECUTE format('ALTER TABLE web_conversation_turns DROP CONSTRAINT %I', target);
+END $$;
+"""
+
+_DAMAGE_CASES = [
+    pytest.param(
+        "workspace_registry",
+        "DROP TABLE dlightrag_workspace_meta",
+        ["table dlightrag_workspace_meta"],
+        id="workspace-table",
+    ),
+    pytest.param(
+        "doc_metadata",
+        "ALTER TABLE dlightrag_doc_metadata DROP COLUMN title",
+        ["column dlightrag_doc_metadata.title"],
+        id="doc-column",
+    ),
+    pytest.param(
+        "doc_metadata",
+        "DROP INDEX idx_dm_author",
+        ["index idx_dm_author"],
+        id="doc-index",
+    ),
+    pytest.param(
+        ANSWER_RUN_MIGRATION_SCOPE,
+        "DROP TABLE dlightrag_answer_run_artifacts",
+        ["table dlightrag_answer_run_artifacts"],
+        id="answer-table",
+    ),
+    pytest.param(
+        ANSWER_RUN_MIGRATION_SCOPE,
+        "DROP INDEX idx_dlightrag_answer_runs_idempotency",
+        ["index idx_dlightrag_answer_runs_idempotency"],
+        id="answer-index",
+    ),
+    pytest.param(
+        ANSWER_RUN_MIGRATION_SCOPE,
+        "ALTER TABLE dlightrag_answer_runs DROP CONSTRAINT dlightrag_answer_runs_status_check",
+        ["constraint dlightrag_answer_runs_status_check"],
+        id="answer-check",
+    ),
+    pytest.param(
+        ANSWER_RUN_MIGRATION_SCOPE,
+        "ALTER TABLE dlightrag_answer_artifacts "
+        "DROP CONSTRAINT dlightrag_answer_artifacts_pkey CASCADE",
+        [
+            "primary key dlightrag_answer_artifacts (owner_id, digest)",
+            "foreign key dlightrag_answer_run_artifacts (owner_id, digest) "
+            "-> dlightrag_answer_artifacts",
+        ],
+        id="answer-primary-and-foreign-key",
+    ),
+    pytest.param(
+        "web_conversations",
+        "DROP TABLE web_conversation_attachments",
+        ["table web_conversation_attachments"],
+        id="web-table",
+    ),
+    pytest.param(
+        "web_conversations",
+        "DROP INDEX idx_web_conversation_turns_submission",
+        ["index idx_web_conversation_turns_submission"],
+        id="web-index",
+    ),
+    pytest.param(
+        "web_conversations",
+        _DROP_TURN_UNIQUE_KEY,
+        ["unique key web_conversation_turns (principal_id, conversation_id, turn_number)"],
+        id="web-unique-key",
+    ),
+]
+
+
+async def _migrate_every_scope(conn: Any) -> None:
+    for scope in _SCOPES:
+        await apply_migrations(
+            conn,
+            scope=scope.name,
+            migrations=scope.migrations,
+            require_applied_prefix=scope.require_applied_prefix,
+        )
+
+
+async def _ledger_snapshot(conn: Any) -> list[tuple[str, str]]:
+    rows = await conn.fetch("SELECT scope, version FROM dlightrag_schema_migrations")
+    return sorted((str(row["scope"]), str(row["version"])) for row in rows)
+
+
+async def test_writer_migrations_satisfy_every_declared_schema_requirement(database: str) -> None:
+    """The writer's DDL and the reader's requirement descriptors must not drift."""
+    config = _config(database, service_role="writer")
+    pool = await _pool(config, config.domain_pool_server_settings())
+    try:
+        async with pool.acquire() as conn:
+            await _migrate_every_scope(conn)
+            # Re-running must stay idempotent for a writer that restarts.
+            await _migrate_every_scope(conn)
+    finally:
+        await pool.close()
+
+    reader_config = _config(database, service_role="reader")
+    # A read-only session proves validation issues no DDL and no ledger write.
+    reader_pool = await _pool(reader_config, reader_config.lightrag_pool_server_settings())
+    try:
+        async with reader_pool.acquire() as conn:
+            for scope in _SCOPES:
+                await verify_migrations(
+                    conn,
+                    scope=scope.name,
+                    migrations=scope.migrations,
+                    tables=scope.tables,
+                )
+    finally:
+        await reader_pool.close()
+
+
+@pytest.mark.parametrize(("scope_name", "damage", "expected"), _DAMAGE_CASES)
+async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
+    database: str, scope_name: str, damage: str, expected: list[str]
+) -> None:
+    scope = next(candidate for candidate in _SCOPES if candidate.name == scope_name)
+    writer_config = _config(database, service_role="writer")
+    writer_pool = await _pool(writer_config, writer_config.domain_pool_server_settings())
+    try:
+        async with writer_pool.acquire() as conn:
+            await _migrate_every_scope(conn)
+            await conn.execute(damage)
+            before = await _ledger_snapshot(conn)
+    finally:
+        await writer_pool.close()
+
+    reader_config = _config(database, service_role="reader")
+    reader_pool = await _pool(reader_config, reader_config.lightrag_pool_server_settings())
+    try:
+        async with reader_pool.acquire() as conn:
+            with pytest.raises(SchemaValidationError) as excinfo:
+                await verify_migrations(
+                    conn,
+                    scope=scope.name,
+                    migrations=scope.migrations,
+                    tables=scope.tables,
+                )
+            message = str(excinfo.value)
+            assert scope.name in message
+            for fragment in expected:
+                assert fragment in message
+    finally:
+        await reader_pool.close()
+
+    verify_config = _config(database, service_role="writer")
+    verify_pool = await _pool(verify_config, verify_config.domain_pool_server_settings())
+    try:
+        async with verify_pool.acquire() as conn:
+            assert await _ledger_snapshot(conn) == before
+    finally:
+        await verify_pool.close()
+
+
+async def test_reader_tolerates_historical_objects_and_versions(database: str) -> None:
+    config = _config(database, service_role="writer")
+    pool = await _pool(config, config.domain_pool_server_settings())
+    try:
+        async with pool.acquire() as conn:
+            await _migrate_every_scope(conn)
+            await conn.execute(
+                "CREATE INDEX idx_legacy_answer_runs_status ON dlightrag_answer_runs (status)"
+            )
+            await conn.execute(
+                "ALTER TABLE dlightrag_answer_runs ADD COLUMN legacy_note TEXT",
+            )
+            await conn.execute(
+                "INSERT INTO dlightrag_schema_migrations (scope, version, description) "
+                "VALUES ($1, $2, $3)",
+                ANSWER_RUN_MIGRATION_SCOPE,
+                "9999_from_a_newer_revision",
+                "historical",
+            )
+
+            await verify_migrations(
+                conn,
+                scope=ANSWER_RUN_MIGRATION_SCOPE,
+                migrations=ANSWER_RUN_MIGRATIONS,
+                tables=ANSWER_RUN_SCHEMA_TABLES,
+            )
     finally:
         await pool.close()

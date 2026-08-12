@@ -11,7 +11,12 @@ from dlightrag.core.retrieval.metadata_fields import (
     canonical_metadata_key,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.migrations import (
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
 from dlightrag.storage.sql_identifiers import pg_identifier
 
 logger = logging.getLogger(__name__)
@@ -108,6 +113,18 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
 
 
 _SCHEMA_MIGRATIONS = _build_schema_migrations()
+
+_SCHEMA_TABLES = (
+    TableRequirement(
+        name="dlightrag_doc_metadata",
+        columns=("workspace", "doc_id", *(f.field_id for f in METADATA_FIELDS)),
+        primary_key=("workspace", "doc_id"),
+        indexes=(
+            "idx_dm_workspace_download_locator",
+            *(f"idx_dm_{f.field_id}" for f in METADATA_FIELDS if f.indexed),
+        ),
+    ),
+)
 
 _CUSTOM = "custom_metadata"
 _UPSERT_FIELD_IDS = tuple(f.field_id for f in METADATA_FIELDS if f.field_id != "ingested_at")
@@ -253,6 +270,7 @@ class PGMetadataIndex:
                     conn,
                     scope="doc_metadata",
                     migrations=_SCHEMA_MIGRATIONS,
+                    tables=_SCHEMA_TABLES,
                 )
                 return
             await apply_migrations(

@@ -8,7 +8,12 @@ this table owns the user-facing workspace list, including empty workspaces.
 
 from typing import Any
 
-from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.migrations import (
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
 from dlightrag.utils import normalize_workspace
 
 _CREATE = """
@@ -54,6 +59,14 @@ _SCHEMA_MIGRATIONS = (
     ),
 )
 
+_SCHEMA_TABLES = (
+    TableRequirement(
+        name="dlightrag_workspace_meta",
+        columns=("workspace", "display_name", "embedding_model", "created_at", "updated_at"),
+        primary_key=("workspace",),
+    ),
+)
+
 
 class PGWorkspaceRegistry:
     """Durable workspace registry backed by PostgreSQL."""
@@ -79,6 +92,7 @@ class PGWorkspaceRegistry:
                     conn,
                     scope="workspace_registry",
                     migrations=_SCHEMA_MIGRATIONS,
+                    tables=_SCHEMA_TABLES,
                 )
                 return
             await apply_migrations(

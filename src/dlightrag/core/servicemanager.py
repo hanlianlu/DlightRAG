@@ -404,6 +404,7 @@ class RAGServiceManager:
         default_err: Exception | None = None
         try:
             await manager._initialize_workspace_registry()
+            await manager._initialize_answer_run_store()
 
             # Bind the retrieval-planner LLM during startup; this does not make a model call.
             manager._get_retrieval_planner()
@@ -454,6 +455,21 @@ class RAGServiceManager:
         except Exception as exc:
             self._startup_warnings.append("Workspace registry unavailable")
             logger.warning("Workspace registry initialization failed: %s", exc)
+
+    async def _initialize_answer_run_store(self) -> None:
+        """Migrate the durable Answer run schema, or validate it on a reader.
+
+        Answer runs are startup state, not first-request state: a process whose
+        run schema is absent must fail before readiness rather than accept runs
+        it cannot durably record.
+        """
+        try:
+            await self._get_answer_run_store()
+        except SchemaValidationError:
+            raise
+        except Exception as exc:
+            self._startup_warnings.append("Answer run store unavailable")
+            logger.warning("Answer run store initialization failed: %s", exc)
 
     async def _get_workspace_registry(self) -> PGWorkspaceRegistry:
         if self._workspace_registry is None:
@@ -526,6 +542,10 @@ class RAGServiceManager:
 
                 logger.info("Created RAGService for workspace '%s'", log_safe(workspace))
                 return svc
+            except SchemaValidationError:
+                # Terminal: no backoff or retry can repair an absent schema, and
+                # startup must see the exact failure, not a generic unavailable.
+                raise
             except Exception as e:
                 error_msg = self._actionable_error(e)
                 # Per-workspace exponential backoff

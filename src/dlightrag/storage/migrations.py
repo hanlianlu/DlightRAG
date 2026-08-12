@@ -27,6 +27,48 @@ ORDER BY version
 
 _LEDGER_EXISTS = "SELECT to_regclass('dlightrag_schema_migrations') IS NOT NULL"
 
+# Structured catalog reads: every required object is resolved through the same
+# search_path the migration DDL used, then looked up by relation OID.
+_TABLE_OID = """SELECT c.oid
+FROM pg_catalog.pg_class c
+WHERE c.oid = to_regclass($1) AND c.relkind IN ('r', 'p')
+"""
+
+_TABLE_COLUMNS = """SELECT a.attname AS name
+FROM pg_catalog.pg_attribute a
+WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
+"""
+
+_TABLE_INDEXES = """SELECT c.relname AS name
+FROM pg_catalog.pg_index i
+JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+WHERE i.indrelid = $1 AND i.indisvalid AND i.indisready
+"""
+
+_TABLE_CHECKS = """SELECT con.conname AS name
+FROM pg_catalog.pg_constraint con
+WHERE con.conrelid = $1 AND con.contype = 'c' AND con.convalidated
+"""
+
+_TABLE_KEYS = """SELECT con.contype::text AS contype,
+       array_agg(a.attname ORDER BY k.ord) AS columns
+FROM pg_catalog.pg_constraint con
+JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+WHERE con.conrelid = $1 AND con.contype IN ('p', 'u')
+GROUP BY con.oid, con.contype
+"""
+
+_TABLE_FOREIGN_KEYS = """SELECT cf.relname AS referenced,
+       array_agg(a.attname ORDER BY k.ord) AS columns
+FROM pg_catalog.pg_constraint con
+JOIN pg_catalog.pg_class cf ON cf.oid = con.confrelid
+JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+WHERE con.conrelid = $1 AND con.contype = 'f'
+GROUP BY con.oid, cf.relname
+"""
+
 
 @dataclass(frozen=True)
 class Migration:
@@ -35,6 +77,31 @@ class Migration:
     version: str
     description: str
     statements: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ForeignKeyRequirement:
+    """Local columns that must still reference ``references``."""
+
+    columns: tuple[str, ...]
+    references: str
+
+
+@dataclass(frozen=True)
+class TableRequirement:
+    """Schema objects one revision requires on one table.
+
+    Only declared objects are checked, so historical columns, indexes, and
+    constraints an older revision left behind stay acceptable.
+    """
+
+    name: str
+    columns: tuple[str, ...] = ()
+    primary_key: tuple[str, ...] = ()
+    unique: tuple[tuple[str, ...], ...] = ()
+    foreign_keys: tuple[ForeignKeyRequirement, ...] = ()
+    checks: tuple[str, ...] = ()
+    indexes: tuple[str, ...] = ()
 
 
 class SchemaValidationError(RuntimeError):
@@ -106,14 +173,15 @@ async def verify_migrations(
     *,
     scope: str,
     migrations: tuple[Migration, ...],
+    tables: tuple[TableRequirement, ...],
 ) -> None:
-    """Confirm this revision's declared versions are already applied, issuing no DDL.
+    """Confirm this revision's schema is already present, issuing no DDL.
 
     Reader processes do not own schema: they must attach to a schema a writer
-    already migrated. The ledger is the authority, so one read per scope proves
-    every table, column, and index that revision declares is present, and a
-    reader whose deployment ran ahead of its writer fails startup by name
-    instead of serving traffic against an older schema.
+    already migrated. The ledger alone cannot prove that, because a recorded
+    version survives a table, column, index, or constraint that was later
+    dropped, so each scope also names the objects it requires and they are read
+    back from the PostgreSQL catalog.
     """
     _validate_unique_versions(migrations)
     if not await conn.fetchval(_LEDGER_EXISTS):
@@ -130,6 +198,66 @@ async def verify_migrations(
             f"Schema migration scope '{scope}' is missing versions: {', '.join(missing)}; "
             "apply DlightRAG migrations on a writer instance before starting a reader"
         )
+
+    absent: list[str] = []
+    for table in tables:
+        absent.extend(await _absent_table_objects(conn, table))
+    if absent:
+        raise SchemaValidationError(
+            f"Schema migration scope '{scope}' records every version but is missing: "
+            f"{'; '.join(absent)}; apply DlightRAG migrations on a writer instance "
+            "before starting a reader"
+        )
+
+
+async def _absent_table_objects(conn: Any, table: TableRequirement) -> list[str]:
+    """Name every declared object of ``table`` the catalog does not report."""
+    oid = await conn.fetchval(_TABLE_OID, table.name)
+    if oid is None:
+        return [f"table {table.name}"]
+
+    absent: list[str] = []
+    if table.columns:
+        present = await _names(conn, _TABLE_COLUMNS, oid)
+        absent += [f"column {table.name}.{name}" for name in table.columns if name not in present]
+    if table.indexes:
+        present = await _names(conn, _TABLE_INDEXES, oid)
+        absent += [f"index {name}" for name in table.indexes if name not in present]
+    if table.checks:
+        present = await _names(conn, _TABLE_CHECKS, oid)
+        absent += [f"constraint {name}" for name in table.checks if name not in present]
+    if table.primary_key or table.unique:
+        keys = [
+            (str(row["contype"]), tuple(row["columns"]))
+            for row in await conn.fetch(_TABLE_KEYS, oid)
+        ]
+        if table.primary_key and ("p", table.primary_key) not in keys:
+            absent.append(f"primary key {_columns(table.name, table.primary_key)}")
+        unique_keys = {columns for _contype, columns in keys}
+        absent += [
+            f"unique key {_columns(table.name, columns)}"
+            for columns in table.unique
+            if columns not in unique_keys
+        ]
+    if table.foreign_keys:
+        present_keys = {
+            (tuple(row["columns"]), str(row["referenced"]))
+            for row in await conn.fetch(_TABLE_FOREIGN_KEYS, oid)
+        }
+        absent += [
+            f"foreign key {_columns(table.name, key.columns)} -> {key.references}"
+            for key in table.foreign_keys
+            if (key.columns, key.references) not in present_keys
+        ]
+    return absent
+
+
+async def _names(conn: Any, query: str, oid: Any) -> set[str]:
+    return {str(row["name"]) for row in await conn.fetch(query, oid)}
+
+
+def _columns(table: str, columns: tuple[str, ...]) -> str:
+    return f"{table} ({', '.join(columns)})"
 
 
 def _version_from_row(row: Any) -> str:

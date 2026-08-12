@@ -1923,6 +1923,7 @@ class TestDegradedMode:
         for name in (
             "_start_ingest_job_recovery",
             "_probe_role_image_capabilities",
+            "_initialize_answer_run_store",
         ):
             monkeypatch.setattr(RAGServiceManager, name, AsyncMock())
 

@@ -15,7 +15,13 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.migrations import (
+    ForeignKeyRequirement,
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
 
 _CREATE_CONVERSATIONS = """
 CREATE TABLE IF NOT EXISTS web_conversations (
@@ -125,6 +131,77 @@ WEB_CONVERSATION_MIGRATIONS = (
         "0003_canonical_answer_sources",
         "Reset Web conversations before storing canonical answer source snapshots",
         (_RESET_WEB_CONVERSATIONS,),
+    ),
+)
+
+WEB_CONVERSATION_SCHEMA_TABLES = (
+    TableRequirement(
+        name="web_conversations",
+        columns=(
+            "principal_id",
+            "conversation_id",
+            "title",
+            "content_revision",
+            "created_at",
+            "updated_at",
+        ),
+        primary_key=("principal_id", "conversation_id"),
+        indexes=(
+            "idx_web_conversations_principal_updated",
+            "idx_web_conversations_updated",
+        ),
+    ),
+    TableRequirement(
+        name="web_conversation_turns",
+        columns=(
+            "turn_id",
+            "principal_id",
+            "conversation_id",
+            "turn_number",
+            "submission_id",
+            "user_text",
+            "assistant_text",
+            "answer_sources",
+            "queried_workspaces",
+            "created_at",
+        ),
+        primary_key=("principal_id", "conversation_id", "turn_id"),
+        unique=(("principal_id", "conversation_id", "turn_number"),),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("principal_id", "conversation_id"), references="web_conversations"
+            ),
+        ),
+        indexes=(
+            "idx_web_conversation_turns_principal_conversation",
+            "idx_web_conversation_turns_submission",
+        ),
+    ),
+    TableRequirement(
+        name="web_conversation_attachments",
+        columns=(
+            "attachment_id",
+            "principal_id",
+            "conversation_id",
+            "turn_id",
+            "ordinal",
+            "filename",
+            "mime_type",
+            "suffix",
+            "attachment_bytes",
+            "byte_size",
+            "content_sha256",
+            "created_at",
+        ),
+        primary_key=("principal_id", "conversation_id", "attachment_id"),
+        unique=(("principal_id", "conversation_id", "turn_id", "ordinal"),),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("principal_id", "conversation_id", "turn_id"),
+                references="web_conversation_turns",
+            ),
+        ),
+        indexes=("idx_web_conversation_attachments_catalog",),
     ),
 )
 
@@ -552,6 +629,7 @@ class PGWebConversationStore:
                     conn,
                     scope="web_conversations",
                     migrations=WEB_CONVERSATION_MIGRATIONS,
+                    tables=WEB_CONVERSATION_SCHEMA_TABLES,
                 )
                 return
             await apply_migrations(
@@ -914,6 +992,7 @@ class PGWebConversationStore:
 
 __all__ = [
     "WEB_CONVERSATION_MIGRATIONS",
+    "WEB_CONVERSATION_SCHEMA_TABLES",
     "CommitTurnResult",
     "ConversationSnapshot",
     "PGWebConversationStore",

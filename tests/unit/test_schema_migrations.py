@@ -6,7 +6,13 @@ from typing import Any
 
 import pytest
 
-from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.migrations import (
+    ForeignKeyRequirement,
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
 
 
 class _Tx:
@@ -33,7 +39,13 @@ class _Record:
 
 
 class _Conn:
-    def __init__(self, *, row_shape: str = "dict", ledger_exists: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        row_shape: str = "dict",
+        ledger_exists: bool = True,
+        catalog: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.applied: set[tuple[str, str]] = set()
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
         self.fetches: list[tuple[str, tuple[Any, ...]]] = []
@@ -41,18 +53,25 @@ class _Conn:
         self.failures: dict[str, int] = {}
         self.row_shape = row_shape
         self.ledger_exists = ledger_exists
+        self.catalog = dict(catalog or {})
+        self._oids = {name: 900 + index for index, name in enumerate(self.catalog)}
+        self._by_oid = {oid: name for name, oid in self._oids.items()}
 
     def transaction(self) -> _Tx:
         return _Tx(self)
 
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.fetches.append((query, args))
-        if "to_regclass" in query:
+        if "dlightrag_schema_migrations" in query:
             return self.ledger_exists
+        if "pg_catalog.pg_class" in query:
+            return self._oids.get(str(args[0]))
         raise AssertionError(f"unexpected fetchval: {query}")
 
-    async def fetch(self, query: str, *args: Any) -> Sequence[dict[str, str] | _Record]:
+    async def fetch(self, query: str, *args: Any) -> Sequence[dict[str, Any] | _Record]:
         self.fetches.append((query, args))
+        if "pg_catalog" in query:
+            return self._catalog_rows(query, self.catalog[self._by_oid[int(args[0])]])
         scope = str(args[0])
         versions = sorted(
             version for applied_scope, version in self.applied if applied_scope == scope
@@ -60,6 +79,26 @@ class _Conn:
         if self.row_shape == "record":
             return [_Record(version) for version in versions]
         return [{"version": version} for version in versions]
+
+    @staticmethod
+    def _catalog_rows(query: str, table: dict[str, Any]) -> list[dict[str, Any]]:
+        if "attisdropped" in query:
+            return [{"name": name} for name in table.get("columns", ())]
+        if "pg_index" in query:
+            return [{"name": name} for name in table.get("indexes", ())]
+        if "contype = 'c'" in query:
+            return [{"name": name} for name in table.get("checks", ())]
+        if "contype IN ('p', 'u')" in query:
+            return [
+                {"contype": contype, "columns": list(columns)}
+                for contype, columns in table.get("keys", ())
+            ]
+        if "contype = 'f'" in query:
+            return [
+                {"columns": list(columns), "referenced": referenced}
+                for columns, referenced in table.get("fks", ())
+            ]
+        raise AssertionError(f"unexpected catalog fetch: {query}")
 
     async def execute(self, query: str, *args: Any) -> str:
         self.executed.append((query, args))
@@ -245,22 +284,51 @@ async def test_apply_migrations_rejects_duplicate_versions_before_mutating_db() 
     assert conn.executed == []
 
 
+def _example_table() -> TableRequirement:
+    return TableRequirement(
+        name="example",
+        columns=("id", "name"),
+        primary_key=("id",),
+        unique=(("name",),),
+        foreign_keys=(ForeignKeyRequirement(columns=("id",), references="parent"),),
+        checks=("example_name_check",),
+        indexes=("example_name_idx",),
+    )
+
+
+def _example_catalog() -> dict[str, dict[str, Any]]:
+    """A migrated ``example`` table, plus historical objects nothing requires."""
+    return {
+        "example": {
+            "columns": ["id", "name", "legacy_column"],
+            "indexes": ["example_name_idx", "example_legacy_idx"],
+            "checks": ["example_name_check", "example_legacy_check"],
+            "keys": [("p", ["id"]), ("u", ["name"]), ("u", ["legacy_column"])],
+            "fks": [(["id"], "parent")],
+        }
+    }
+
+
 async def test_verify_migrations_accepts_a_fully_applied_scope_without_any_ddl() -> None:
-    conn = _Conn()
+    conn = _Conn(catalog=_example_catalog())
     migrations = _example_migrations()
     await apply_migrations(conn, scope="example", migrations=migrations)
     conn.executed.clear()
 
-    await verify_migrations(conn, scope="example", migrations=migrations)
+    await verify_migrations(
+        conn, scope="example", migrations=migrations, tables=(_example_table(),)
+    )
 
     assert conn.executed == []
 
 
 async def test_verify_migrations_tolerates_unknown_historical_versions() -> None:
-    conn = _Conn(row_shape="record")
+    conn = _Conn(row_shape="record", catalog=_example_catalog())
     conn.applied.update({("example", "0001"), ("example", "0002"), ("example", "0999")})
 
-    await verify_migrations(conn, scope="example", migrations=_example_migrations())
+    await verify_migrations(
+        conn, scope="example", migrations=_example_migrations(), tables=(_example_table(),)
+    )
 
 
 async def test_verify_migrations_reports_every_missing_version() -> None:
@@ -268,7 +336,7 @@ async def test_verify_migrations_reports_every_missing_version() -> None:
     conn.applied.add(("example", "0001"))
 
     with pytest.raises(RuntimeError, match=r"scope 'example'.*0002, 0003"):
-        await verify_migrations(conn, scope="example", migrations=_three_migrations())
+        await verify_migrations(conn, scope="example", migrations=_three_migrations(), tables=())
 
     assert conn.executed == []
 
@@ -277,8 +345,62 @@ async def test_verify_migrations_reports_a_missing_ledger() -> None:
     conn = _Conn(ledger_exists=False)
 
     with pytest.raises(RuntimeError, match="dlightrag_schema_migrations"):
-        await verify_migrations(conn, scope="example", migrations=_example_migrations())
+        await verify_migrations(conn, scope="example", migrations=_example_migrations(), tables=())
 
+    assert conn.executed == []
+
+
+_DAMAGED_CATALOGS: list[tuple[str, str]] = [
+    ("table", "table example"),
+    ("column", "column example.name"),
+    ("index", "index example_name_idx"),
+    ("check", "constraint example_name_check"),
+    ("primary_key", "primary key example (id)"),
+    ("unique", "unique key example (name)"),
+    ("foreign_key", "foreign key example (id) -> parent"),
+]
+
+
+def _damaged_catalog(kind: str) -> dict[str, dict[str, Any]]:
+    catalog = _example_catalog()
+    if kind == "table":
+        return {}
+    table = catalog["example"]
+    if kind == "column":
+        table["columns"] = ["id", "legacy_column"]
+    elif kind == "index":
+        table["indexes"] = ["example_legacy_idx"]
+    elif kind == "check":
+        table["checks"] = ["example_legacy_check"]
+    elif kind == "primary_key":
+        table["keys"] = [("u", ["name"]), ("u", ["legacy_column"])]
+    elif kind == "unique":
+        table["keys"] = [("p", ["id"]), ("u", ["legacy_column"])]
+    elif kind == "foreign_key":
+        table["fks"] = []
+    return catalog
+
+
+@pytest.mark.parametrize(("kind", "expected"), _DAMAGED_CATALOGS)
+async def test_verify_migrations_rejects_a_fully_recorded_ledger_missing_an_object(
+    kind: str, expected: str
+) -> None:
+    """A ledger row survives a dropped object, so the ledger alone cannot be trusted."""
+    from dlightrag.storage.migrations import SchemaValidationError
+
+    conn = _Conn(catalog=_damaged_catalog(kind))
+    conn.applied.update({("example", "0001"), ("example", "0002")})
+
+    with pytest.raises(SchemaValidationError) as excinfo:
+        await verify_migrations(
+            conn,
+            scope="example",
+            migrations=_example_migrations(),
+            tables=(_example_table(),),
+        )
+
+    assert expected in str(excinfo.value)
+    assert "example" in str(excinfo.value)
     assert conn.executed == []
 
 
