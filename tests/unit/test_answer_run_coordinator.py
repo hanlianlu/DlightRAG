@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 
+import dlightrag.core.answer_runs.coordinator as coordinator_module
 from dlightrag.core.answer_runs.coordinator import (
     AnswerRunCoordinator,
     LeaseLostError,
@@ -414,6 +415,14 @@ def _coordinator(store: _MemoryStore, executor: _Executor, *, max_async: int = 2
     return AnswerRunCoordinator(store=store, executor=executor, max_async=max_async)
 
 
+def _traceback_depth(exc: BaseException) -> int:
+    depth, frame = 0, exc.__traceback__
+    while frame is not None:
+        depth += 1
+        frame = frame.tb_next
+    return depth
+
+
 class TestSchedulingAndLease:
     async def test_reserves_a_local_slot_before_it_claims_a_row(self) -> None:
         store = _MemoryStore()
@@ -536,15 +545,36 @@ class TestRetentionMaintenance:
         finally:
             await coordinator.aclose()
 
-    async def test_full_batches_drain_before_the_next_cadence(self) -> None:
+    async def test_one_pass_drains_full_batches(self) -> None:
         store = _MemoryStore()
         store.trim_batches = [200, 200, 0]
         store.prune_batches = [200, 0]
-        coordinator = await self._running(store, maintenance_seconds=30.0)
+        coordinator = AnswerRunCoordinator(
+            store=store,
+            executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
+            max_async=1,
+        )
+
+        await coordinator._maintain_once()
+
+        assert (store.trims, store.prunes) == (3, 2)
+
+    async def test_the_first_pass_waits_out_a_bounded_startup_jitter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fleet that restarts together must not align every trim on one instant."""
+        monkeypatch.setattr(coordinator_module, "_startup_jitter", lambda _cadence: 5.0)
+        store = _MemoryStore()
+        coordinator = await self._running(store, maintenance_seconds=0.01)
         try:
-            await _settle(lambda: store.trims >= 3 and store.prunes >= 2)
+            await asyncio.sleep(0.05)
+            assert store.trims == 0
         finally:
             await coordinator.aclose()
+
+    @pytest.mark.parametrize("cadence", [0.0, 0.01, 3600.0])
+    def test_startup_jitter_never_outlasts_a_share_of_the_cadence(self, cadence: float) -> None:
+        assert all(0.0 <= coordinator_module._startup_jitter(cadence) <= cadence for _ in range(50))
 
     async def test_a_transient_retention_fault_is_retried_not_fatal(self) -> None:
         store = _MemoryStore()
@@ -717,6 +747,26 @@ class TestDurableProgress:
         assert payload["kind"] == "ANSWER_STREAM_FAILED"
         assert payload["message"] == "Answer run failed."
 
+    async def test_a_foreign_public_message_attribute_never_reaches_a_client(self) -> None:
+        """Only the answer taxonomy vets a client-safe message; the shape does not."""
+        store = _MemoryStore()
+
+        class _Impostor(RuntimeError):
+            public_message = "postgres://user:secret@host/db is unreachable"
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            raise _Impostor("boom")
+
+        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
+        finally:
+            await coordinator.aclose()
+
+        assert store.events["run-a"][-1].payload["message"] == "Answer run failed."
+
     async def test_missing_checkpoint_for_a_resumed_turn_is_incompatible(self) -> None:
         store = _MemoryStore()
         store.add_run("run-a", completed_turns=2, checkpoint=None)
@@ -800,6 +850,36 @@ class TestDurableProgress:
             await coordinator.aclose()
 
         assert store.runs["run-a"]["error_kind"] == "checkpoint_corrupt"
+
+    async def test_the_latched_corruption_raises_a_fresh_error_at_every_boundary(self) -> None:
+        """Re-raising one instance grows its traceback for the rest of the doomed turn."""
+        store = _MemoryStore()
+        store.add_run("run-a")
+        seen: list[BaseException] = []
+        depths: list[int] = []
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            store.runs["run-a"]["completed_turns"] = 5
+            for _ in range(3):
+                try:
+                    # A tool boundary swallows this the way the tool loop does.
+                    await session.attach_artifacts(artifacts=[PendingArtifact(content=b"x")])
+                except CheckpointError as exc:
+                    seen.append(exc)
+                    depths.append(_traceback_depth(exc))
+            await session.check_cancelled()  # the next control boundary terminalizes
+            return {"answer": "never"}
+
+        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
+        finally:
+            await coordinator.aclose()
+
+        assert store.runs["run-a"]["error_kind"] == "checkpoint_corrupt"
+        assert len({id(exc) for exc in seen}) == 3
+        assert depths[1] == depths[2]
 
 
 class TestHeartbeatResilience:

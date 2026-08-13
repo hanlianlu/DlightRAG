@@ -8,6 +8,7 @@ seconds, which bounds that load without hiding a role, schema, or session-mode
 change for more than the cache window.
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -33,20 +34,34 @@ READINESS_CACHE_SECONDS = 2.0
 
 
 class ReadinessProbeCache:
-    """Short-lived memo of one process's database and corpus readiness verdict."""
+    """Short-lived memo of one process's database and corpus readiness verdict.
+
+    Concurrent polls that find the memo cold share one probe, so a burst costs a
+    single round trip, and the probe is shielded: a client that disconnects while
+    waiting cannot cancel the probe its peers are still waiting on.
+    """
 
     def __init__(self, ttl_seconds: float) -> None:
         self._ttl = ttl_seconds
         self._deadline = 0.0
         self._detail: str | None = None
+        self._probe: asyncio.Task[str | None] | None = None
 
     async def detail(self, probe: Callable[[], Awaitable[str | None]]) -> str | None:
-        now = time.monotonic()
-        if now < self._deadline:
+        if time.monotonic() < self._deadline:
             return self._detail
-        self._detail = await probe()
-        self._deadline = now + self._ttl
-        return self._detail
+        probing = self._probe
+        if probing is None:
+            probing = self._probe = asyncio.ensure_future(probe())
+            probing.add_done_callback(self._memoize)
+        return await asyncio.shield(probing)
+
+    def _memoize(self, probing: asyncio.Task[str | None]) -> None:
+        self._probe = None
+        if probing.cancelled() or probing.exception() is not None:
+            return
+        self._detail = probing.result()
+        self._deadline = time.monotonic() + self._ttl
 
     def invalidate(self) -> None:
         """Drop the memo so the next probe reflects a completed transition."""

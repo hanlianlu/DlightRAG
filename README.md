@@ -238,9 +238,11 @@ with the run's status, events, and cancel URLs; the run outlives its creating
 request, so a disconnected client only detaches. Events are reconnectable SSE
 resumed by durable sequence, a process restart resumes from the latest completed
 control turn, and `DELETE /answer/{run_id}` is the only client action that
-cancels. Terminal runs and their event logs expire after 30 days, except a
-succeeded run a Web conversation still shows. See
-[docs/durable-answer-runs.md](docs/durable-answer-runs.md).
+cancels. Event logs are always trimmed 30 days after a run finishes, and the
+events endpoint then answers 410 while the result stays readable from the status
+endpoint; the terminal run row is pruned at the same age, except a succeeded run
+a Web conversation still shows, whose row survives while that conversation does.
+See [docs/durable-answer-runs.md](docs/durable-answer-runs.md).
 
 ### REST
 

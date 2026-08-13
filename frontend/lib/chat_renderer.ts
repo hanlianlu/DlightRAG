@@ -83,6 +83,14 @@ const MATH_DELIMITER = /\$|\\\(|\\\[/;
 // answer is derived once, from the run's canonical result, when it finishes.
 const STREAM_TAIL_CLASS = 'stream-tail';
 
+// Marks the recoverable-reconnect offer so exactly one can ever be live.
+const RECONNECT_CLASS = 'answer-reconnect';
+
+/** Retire the reconnect offer: the run is being followed again, or has settled. */
+function clearAnswerReconnect(turn: ChatTurn): void {
+  turn.contentDiv.querySelectorAll('.' + RECONNECT_CLASS).forEach((node) => node.remove());
+}
+
 function isDonePayload(value: unknown): value is DonePayload {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
@@ -262,6 +270,7 @@ export function renderConversationHistory(
 
 /** Render one stored turn from its run's state: pending, terminal, or answered. */
 export function renderStoredTurn(turn: ChatTurn, stored: ConversationTurn): void {
+  clearAnswerReconnect(turn);
   if (stored.status === 'succeeded') {
     applyFinalAnswerHtml(turn, stored.answer_html);
     return;
@@ -325,11 +334,15 @@ export function setAnswerError(turn: ChatTurn, message: unknown): void {
 /** A recoverable connection failure: the run continues, so offer a reattach. */
 export function setAnswerRetryable(turn: ChatTurn, message: string, onRetry: () => void): void {
   // The run keeps producing, so this is a status rather than the terminal error
-  // style, and the live progress indicator must not sit beside the notice.
+  // style, and neither the live progress indicator nor an earlier offer may sit
+  // beside the notice.
+  clearAnswerReconnect(turn);
   turn.contentDiv
     .querySelectorAll('.' + chatStyles.streamingDot + ', .' + chatStyles.progressPhase)
     .forEach((node) => node.remove());
   turn.contentDiv.classList.remove(chatStyles.textError);
+  const offer = document.createElement('span');
+  offer.className = RECONNECT_CLASS;
   const notice = document.createElement('span');
   notice.setAttribute('role', 'status');
   notice.textContent = message;
@@ -338,7 +351,8 @@ export function setAnswerRetryable(turn: ChatTurn, message: string, onRetry: () 
   retry.textContent = 'Reconnect';
   retry.setAttribute('aria-label', 'Reconnect to this answer');
   retry.addEventListener('click', onRetry);
-  turn.contentDiv.append(notice, document.createTextNode(' '), retry);
+  offer.append(notice, document.createTextNode(' '), retry);
+  turn.contentDiv.appendChild(offer);
 }
 
 export function markAnswerStopped(turn: ChatTurn): void {
@@ -450,6 +464,8 @@ export function createAnswerRenderer(turn: ChatTurn) {
 
   return {
     handle(eventType: string, data: string): void {
+      // Any durable event proves the reattach worked, so retire its offer.
+      clearAnswerReconnect(turn);
       if (eventType === 'token') handleToken(data);
       else if (eventType === 'reset') handleReset();
       else if (eventType === 'done') handleDone(data);

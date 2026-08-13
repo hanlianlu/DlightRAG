@@ -34,7 +34,10 @@ if TYPE_CHECKING:
 type CorpusImageLoader = Callable[[str, str], Awaitable[str | None]]
 
 _DATA_URI_PREFIX = "data:"
-_IMAGE_KEYS = ("image_data", "url")
+#: Where an image payload may sit. Only ``image_data`` is a corpus row's own
+#: visual; a provider block reaches a checkpoint as a ``data:`` URI under ``url``.
+_CORPUS_IMAGE_KEY = "image_data"
+_IMAGE_KEYS = (_CORPUS_IMAGE_KEY, "url")
 
 
 class ArtifactReader(Protocol):
@@ -198,7 +201,7 @@ def _substitute_images(node: Any, *, ordinals: Mapping[str, int]) -> None:
             payload = typed.get(key)
             if not isinstance(payload, str) or not payload:
                 continue
-            reference = _reference_for(typed, payload, ordinals=ordinals)
+            reference = _reference_for(key, typed, payload, ordinals=ordinals)
             if reference is not None:
                 node[key] = reference
         for value in typed.values():
@@ -210,20 +213,21 @@ def _substitute_images(node: Any, *, ordinals: Mapping[str, int]) -> None:
 
 
 def _reference_for(
-    owner: Mapping[str, Any], payload: str, *, ordinals: Mapping[str, int]
+    key: str, owner: Mapping[str, Any], payload: str, *, ordinals: Mapping[str, int]
 ) -> dict[str, Any] | None:
     """Durable reference for one image payload, or ``None`` to leave it alone.
 
-    An evidence row keeps a knowledge-base visual as raw base64, so that case is
-    recognized by the row's workspace and chunk identity. Every model-visible
-    image block is normalized to a ``data:`` URI before it reaches an episode, so
-    any other string is ordinary text or a plain link and is never rewritten;
-    guessing at base64 shape would turn a digest into a reference to bytes no
-    artifact holds and fail the resumed run.
+    An evidence row keeps a knowledge-base visual as raw base64 under
+    ``image_data``, so that case is recognized by the row's workspace and chunk
+    identity -- which says nothing about the row's other fields, and never turns
+    its source link into a reference to bytes no artifact holds. Every
+    model-visible image block is normalized to a ``data:`` URI before it reaches
+    an episode, so any other string is ordinary text or a plain link and is never
+    rewritten; guessing at base64 shape would fail the resumed run.
     """
     chunk_id = owner.get("chunk_id")
     workspace = owner.get("_workspace")
-    if chunk_id and workspace:
+    if key == _CORPUS_IMAGE_KEY and chunk_id and workspace:
         return {
             "kind": "corpus",
             "workspace": str(workspace),

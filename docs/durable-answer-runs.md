@@ -1,7 +1,7 @@
 # Durable Answer Runs
 
-This document defines the target Answer runtime. It is a product contract, not
-a Web-only workflow: REST, MCP, Web, and the Python manager all use the same
+This document defines the Answer runtime. It is a product contract, not a
+Web-only workflow: REST, MCP, Web, and the Python manager all use the same
 durable run coordinator.
 
 ## Goals
@@ -12,12 +12,10 @@ durable run coordinator.
 - REST, MCP, Web, and Python use the same run state, artifacts, events, and
   final result.
 - Durability does not change retrieval, citation, workspace, or round-robin
-  semantics. The query-time cleanup below is the only intentional answer
-  behavior change.
-- The implementation adds no orchestration framework and reuses the existing
-  ingest-job lease, recovery, sweep, and prune mechanics. DlightRAG keeps its
-  custom agent loop, `EvidenceLedger`, `RunEpisode`, and tools-disabled final
-  synthesis.
+  semantics.
+- Durability adds no orchestration framework and reuses the ingest-job lease,
+  recovery, sweep, and prune mechanics. DlightRAG keeps its custom agent loop,
+  `EvidenceLedger`, `RunEpisode`, and tools-disabled final synthesis.
 
 ## Non-Goals
 
@@ -27,9 +25,9 @@ durable run coordinator.
 - Human-in-the-loop, steering queues, sub-agents, or a global tool registry.
 - An object-storage shim for LightRAG parser sidecars.
 
-## Runtime Cleanup Before Persistence
+## Query-Time Core
 
-The durable runtime builds on a smaller query-time core.
+The durable runtime rests on these query-time rules.
 
 ### Model image capabilities
 
@@ -67,9 +65,8 @@ worker thread:
 - sidecar provenance index loading;
 - existing image, PDF, conversion, embedding-payload, and Markdown work.
 
-No new executor or concurrency setting is introduced unless measurement shows
-the default executor is saturated after these duplicate computations are
-removed.
+There is no executor or concurrency setting for them; they share the default
+executor.
 
 ### Answer image policy
 
@@ -97,7 +94,7 @@ different providers and request contracts.
 An idempotent replay also returns 202 with the run's current status rather than
 forcing it back to `queued`.
 
-The old `stream` request field is removed. There is no temporary Answer mode.
+There is no `stream` request field and no temporary Answer mode.
 
 ### Execution
 
@@ -147,13 +144,13 @@ indeterminate checkpoint-commit procedure below is the only zero-row retry
 exception. Blocking CPU work remains cancellation-cooperative at its existing
 result-commit boundary; the stale worker cannot persist that result.
 
-A durable Answer run has no wall-clock execution deadline. The existing
-`request_timeout` continues to bound non-durable Retrieve and Query operations
-but no longer wraps Answer execution. Each external LLM, embedding, rerank,
-URL-fetch, resource, and parser-sidecar call retains its existing provider,
-request, or stream-idle timeout, so one stalled awaited call cannot hold a slot
-forever. A run releases its slot on terminal transition, lease loss, or process
-shutdown; no new run-timeout setting is introduced.
+A durable Answer run has no wall-clock execution deadline. `request_timeout`
+bounds non-durable Retrieve and Query operations and does not wrap Answer
+execution. Each external LLM, embedding, rerank, URL-fetch, resource, and
+parser-sidecar call keeps its own provider, request, or stream-idle timeout, so
+one stalled awaited call cannot hold a slot forever. A run releases its slot on
+terminal transition, lease loss, or process shutdown; there is no run-timeout
+setting.
 
 On graceful shutdown the coordinator stops claiming rows first. Active workers
 may finish an in-flight terminal transition or control-turn checkpoint during
@@ -169,11 +166,10 @@ interruption was a crash or graceful shutdown.
 
 If every process is busy, an accepted row remains `queued` until a worker has a
 slot or the caller cancels it. Queue age never turns an accepted run into a
-capacity failure, and queue depth is not capped in this design. POST may fail
-before acceptance for validation, authorization, or persistence errors, but
-execution-slot exhaustion is not one of them. The obsolete
-`answer_acquire_timeout` setting and capacity error are removed; no queue
-timeout, queue-depth, retry, or sweep-interval setting replaces them.
+capacity failure, and queue depth is not capped. POST may fail before acceptance
+for validation, authorization, or persistence errors, but execution-slot
+exhaustion is not one of them. No queue timeout, queue-depth, retry, or
+sweep-interval setting exists.
 
 `GET /answer/{run_id}` returns:
 
@@ -223,18 +219,22 @@ Cancelling a waiting convenience call or closing any event subscriber detaches
 that caller only. Explicit run cancellation is the sole client action that sets
 `cancel_requested_at`.
 
-The Web POST creates a core run and returns its descriptor; the browser then
-subscribes to the same owner-scoped core `GET /answer/{run_id}/events` endpoint.
+`POST /web/answer` creates a core run and returns its descriptor; the browser
+then subscribes to its own owner-scoped `/web/answer/{run_id}/events`. That
+stream follows the same durable event log with the same sequence, resume, 410,
+and detach semantics as the REST stream, and differs only in projection: a
+browser `done` frame carries rendered presentation (`html`, `answer`,
+`answer_images`) instead of the canonical stored result REST serves.
 Disconnecting the browser only closes that subscriber, and reconnecting resumes
 from the durable event sequence.
 
-One new async helper in `dlightrag.client` owns REST create-and-wait behavior. It
+One async helper in `dlightrag.client` owns REST create-and-wait behavior. It
 creates the run, follows durable events, and falls back to status reads after a
 reconnect or an expired event log. The synchronous CLI invokes that helper
-through `asyncio.run`; the async evaluation script awaits it directly. Those
-callers do not retain a legacy synchronous endpoint or implement independent
-polling loops. The manager's `aanswer()` and `aanswer_stream()` convenience
-methods use the same coordinator semantics in process.
+through `asyncio.run`; the async evaluation script awaits it directly. Neither
+retains a synchronous endpoint nor implements an independent polling loop. The
+manager's `aanswer()` and `aanswer_stream()` convenience methods use the same
+coordinator semantics in process.
 
 MCP `answer` is deliberately descriptor-only and returns immediately. The
 separate MCP status tool returns the canonical result after success, and the
@@ -242,10 +242,10 @@ cancel tool requests cancellation; MCP does not hold one tool call open for a
 tens-of-minutes run.
 
 Every transport derives the owner through one transport-neutral principal
-projection moved from the current Web adapter into core. `auth_mode="none"` and
-`auth_mode="simple"` intentionally collapse callers into one deployment owner;
-`auth_mode="jwt"` is the tenant boundary. Direct in-process manager calls
-without a user use that same deployment owner.
+projection in core. `auth_mode="none"` and `auth_mode="simple"` intentionally
+collapse callers into one deployment owner; `auth_mode="jwt"` is the tenant
+boundary. Direct in-process manager calls without a user use that same
+deployment owner.
 
 ### Reader role
 
@@ -262,23 +262,20 @@ Reader safeguards remain at the corpus boundary:
 - LightRAG LLM cache writes remain disabled;
 - ingest pipeline recovery remains writer-only.
 
-The DlightRAG domain pool is writable for both roles. The supported reader
-topology therefore uses the same primary PostgreSQL endpoint; the old promise
-that a reader process may point every pool at a physical hot standby is removed.
-Read-replica routing would require a separate corpus endpoint and is outside
-this design.
+The DlightRAG domain pool is writable for both roles, so the supported reader
+topology uses the same primary PostgreSQL endpoint. A reader process does not
+point its pools at a physical standby; routing corpus reads elsewhere would
+require a separate corpus endpoint and is outside this contract.
 
-This changes the current reader implementation and documentation explicitly:
+Concretely:
 
-- domain-pool connection setup no longer applies session read-only mode to a
-  reader, while LightRAG pool setup still does;
+- domain-pool connection setup does not apply session read-only mode to a
+  reader, while LightRAG pool setup does;
 - writer startup owns schema migrations; reader startup validates that the
   current domain and LightRAG schemas already exist without issuing DDL;
 - readiness permits Answer and Web operational writes on a reader and still
   rejects corpus-mutating operations through `require_writer()`;
-- Web is enabled for readers; and
-- configuration, PostgreSQL, operations, and architecture documentation remove
-  physical-standby and whole-process-read-only claims.
+- Web is enabled for readers.
 
 A reader with a missing or incompatible schema fails startup with a diagnostic
 and serves no traffic. It does not retry DDL or run partially ready. Deployment
@@ -545,34 +542,30 @@ workers can no longer append after the run row disappears. Cascades remove
 events and run-artifact references, and unreferenced artifact blobs are removed
 by the same ownership-safe cleanup path.
 
-The current raw Web attachment table and duplicated turn answer payload are
-superseded. The migration resets existing Web conversations; no compatibility
-view or dual-write path is retained.
+Web conversations own no raw attachment table and no duplicated turn answer
+payload; both are read from the run. The reset migration establishes that shape
+with no compatibility view and no dual-write path.
 
 ## Artifact Topology
 
-LightRAG currently creates parser artifacts under `INPUT_DIR/__parsed__` and
-stores `file://` sidecar URIs. Its installed resolver returns `None` for remote
-schemes; `s3://` is documented upstream as future support, not an active storage
-backend.
+LightRAG creates parser artifacts under `INPUT_DIR/__parsed__` and stores
+`file://` sidecar URIs. Its installed resolver returns `None` for remote schemes;
+`s3://` is documented upstream as future support, not an active storage backend.
 
-Therefore the supported topology is:
+The supported topology is therefore:
 
-- default: the existing local `working_dir` volume;
-- multi-process, one host: the existing shared named volume;
+- default: the local `working_dir` volume;
+- multi-process, one host: a shared named volume;
 - multi-host: one shared POSIX mount such as EFS, NFS, or Azure Files mounted at
   the same configured `working_dir` path in every process.
 
-`working_dir` is already configurable, so no new public storage switch is
-needed. Direct object-storage support would require a LightRAG sidecar resolver
-or a DlightRAG materialization cache and is outside this design.
+`working_dir` is configurable, so there is no separate storage switch. Direct
+object-storage support would require a LightRAG sidecar resolver or a DlightRAG
+materialization cache and is outside this contract.
 
-Startup and operations documentation must state that every process serving KB
-images or source downloads sees the same POSIX artifact tree at the same
-absolute path. The implementation replaces the current reader-replica section
-with `postgresql.md#service-roles-and-shared-artifacts` and updates README,
-configuration, interfaces, retrieval/answer, operations, security, and
-architecture documentation to the durable API and topology.
+Every process serving KB images or source downloads sees the same POSIX artifact
+tree at the same absolute path; `postgresql.md#service-roles-and-shared-artifacts`
+is the operational reference.
 
 ## Failure And Security Rules
 
@@ -597,15 +590,13 @@ architecture documentation to the durable API and topology.
 
 ## Verification
 
-Implementation is complete only when it has:
+This contract is held by:
 
-- red/green unit tests for every status transition and recovery boundary named
-  in this document;
+- unit tests for every status transition and recovery boundary named in this
+  document;
 - PostgreSQL integration tests for claim, lease loss, checkpoint, event replay,
   cancellation, pruning, and artifact ownership;
 - transport contract tests for REST, MCP, Web, and Python;
 - a process-restart test that resumes after a completed control turn;
 - reconnect tests that replay events without duplicate sequence numbers;
-- the full local GitHub Actions equivalent (`make ci`);
-- a final read-only architecture review with no Critical, High, or Medium
-  findings.
+- the full local GitHub Actions equivalent (`make ci`).

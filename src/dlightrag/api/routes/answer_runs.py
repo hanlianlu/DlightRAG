@@ -7,12 +7,9 @@ another owner's run are indistinguishable. Stored results carry transport-neutra
 identities only, and each authenticated read projects fresh URLs from them.
 """
 
-import asyncio
-import contextlib
-import json
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -22,6 +19,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dlightrag.access_control import AccessAction
+from dlightrag.api.answer_stream import follow_run_frames, resume_cursor, sse_frame
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import (
     ANSWER_REQUEST_PART_MAX_BYTES,
@@ -38,7 +36,7 @@ from dlightrag.core.answer_runs.execution import (
     LinkReference,
 )
 from dlightrag.core.answer_runs.results import project_answer_result
-from dlightrag.core.client_contracts import conversation_history_as_dicts, model_dump_json_safe
+from dlightrag.core.client_contracts import conversation_history_as_dicts
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.storage.answer_runs import (
@@ -52,10 +50,6 @@ from .deps import authorized_workspaces, get_manager, resolve_authorized_query_w
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-#: A queued or quiet run keeps its connection alive with comments, not events.
-SSE_KEEPALIVE_SECONDS = 10.0
-_KEEPALIVE_FRAME = ": keepalive\n\n"
 
 _ALLOWED_ANSWER_PARTS = {"request", "attachments"}
 _MAX_ANSWER_FORM_FIELDS = 8
@@ -356,7 +350,7 @@ async def stream_answer_run_events(
 ) -> StreamingResponse:
     """Replay this run's durable events from a cursor, then follow it live."""
     manager = get_manager(request)
-    cursor = _resume_cursor(request)
+    cursor = resume_cursor(request)
     owner_id = owner_id_from_user(user)
     record = await manager.aget_answer_run(owner_id=owner_id, run_id=run_id)
     if record is None:
@@ -377,83 +371,26 @@ async def stream_answer_run_events(
         owner_id=owner_id, run_id=run_id, after_sequence=cursor
     )
     return StreamingResponse(
-        _sse_frames(events, downloadable_workspaces=downloadable, visual_workspaces=visual),
+        follow_run_frames(
+            events,
+            partial(
+                answer_run_frame,
+                downloadable_workspaces=downloadable,
+                visual_workspaces=visual,
+            ),
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-def _resume_cursor(request: Request) -> int:
-    """Resolve the durable sequence this subscriber resumes after.
-
-    An empty ``Last-Event-ID`` is how a browser reports "no cursor yet"; an
-    explicitly supplied ``after`` is always parsed strictly.
-    """
-    header = request.headers.get("Last-Event-ID")
-    query = request.query_params.get("after")
-    from_header = _parse_cursor(header) if header else None
-    from_query = _parse_cursor(query) if query is not None else None
-    if from_header is not None and from_query is not None and from_header != from_query:
-        raise HTTPException(
-            status_code=400, detail="Last-Event-ID and 'after' request different cursors"
-        )
-    if from_query is not None:
-        return from_query
-    return from_header or 0
-
-
-def _parse_cursor(value: str | None) -> int:
-    if value is None or not value.isdigit():
-        raise HTTPException(status_code=400, detail="Event cursor must be a non-negative integer")
-    return int(value)
-
-
-async def _sse_frames(
-    events: AsyncIterator[AnswerRunEvent],
-    *,
-    downloadable_workspaces: set[str] | None,
-    visual_workspaces: set[str] | None,
-) -> AsyncGenerator[str]:
-    """Serialize durable events, keeping a quiet run's connection alive.
-
-    Closing this generator detaches one subscriber. It never cancels the run and
-    never writes durable state.
-    """
-    iterator = events.__aiter__()
-    pending: asyncio.Task[AnswerRunEvent] | None = None
-    try:
-        while True:
-            if pending is None:
-                pending = asyncio.ensure_future(anext(iterator))
-            try:
-                event = await asyncio.wait_for(asyncio.shield(pending), SSE_KEEPALIVE_SECONDS)
-            except TimeoutError:
-                yield _KEEPALIVE_FRAME
-                continue
-            except StopAsyncIteration:
-                pending = None
-                return
-            pending = None
-            yield _sse_frame(
-                event,
-                downloadable_workspaces=downloadable_workspaces,
-                visual_workspaces=visual_workspaces,
-            )
-    finally:
-        if pending is not None:
-            pending.cancel()
-            with contextlib.suppress(BaseException):
-                await pending
-        with contextlib.suppress(Exception):
-            await events.aclose()  # pyright: ignore[reportAttributeAccessIssue]
-
-
-def _sse_frame(
+def answer_run_frame(
     event: AnswerRunEvent,
     *,
     downloadable_workspaces: set[str] | None,
     visual_workspaces: set[str] | None,
 ) -> str:
+    """Render one durable event for REST: stored identities, freshly projected URLs."""
     payload = dict(event.payload)
     stored = payload.get("result")
     if isinstance(stored, dict):
@@ -463,8 +400,7 @@ def _sse_frame(
             downloadable_workspaces=downloadable_workspaces,
             visual_workspaces=visual_workspaces,
         )
-    data = json.dumps(model_dump_json_safe(payload), ensure_ascii=False)
-    return f"id: {event.sequence}\nevent: {event.event_type}\ndata: {data}\n\n"
+    return sse_frame(sequence=event.sequence, event_type=event.event_type, payload=payload)
 
 
-__all__ = ["SSE_KEEPALIVE_SECONDS", "router"]
+__all__ = ["answer_run_frame", "router"]

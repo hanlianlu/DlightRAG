@@ -4,17 +4,19 @@
 import logging
 from collections.abc import Mapping
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.access_control import AccessAction
+from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.api.principal import owner_id_from_user
 from dlightrag.core.access import workspace_names
 from dlightrag.storage.answer_runs import IdempotencyKeyConflict
 from dlightrag.utils import normalize_workspace
-from dlightrag.web.answer_events import stream_answer_events
+from dlightrag.web.answer_events import browser_frame
 from dlightrag.web.attachment_models import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
 )
@@ -221,13 +223,16 @@ async def answer_run_events(
     events = await get_manager(request).asubscribe_answer_run(
         owner_id=owner_id_from_user(user),
         run_id=run_id,
-        after_sequence=_resume_cursor(request),
+        after_sequence=resume_cursor(request),
     )
     return StreamingResponse(
-        stream_answer_events(
+        follow_run_frames(
             events,
-            downloadable_workspaces=downloadable,
-            visual_workspaces=visual,
+            partial(
+                browser_frame,
+                downloadable_workspaces=downloadable,
+                visual_workspaces=visual,
+            ),
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -249,31 +254,6 @@ def answer_run_descriptor(submission: WebAnswerSubmission) -> AnswerRunDescripto
         cancel_url=f"/web/answer/{run_id}",
         conversation=submission.conversation,
     )
-
-
-def _resume_cursor(request: Request) -> int:
-    """Resolve the durable sequence this subscriber resumes after.
-
-    An empty ``Last-Event-ID`` is how a browser reports "no cursor yet"; an
-    explicitly supplied ``after`` is always parsed strictly.
-    """
-    header = request.headers.get("Last-Event-ID")
-    query = request.query_params.get("after")
-    from_header = _parse_cursor(header) if header else None
-    from_query = _parse_cursor(query) if query is not None else None
-    if from_header is not None and from_query is not None and from_header != from_query:
-        raise HTTPException(
-            status_code=400, detail="Last-Event-ID and 'after' request different cursors"
-        )
-    if from_query is not None:
-        return from_query
-    return from_header or 0
-
-
-def _parse_cursor(value: str | None) -> int:
-    if value is None or not value.isdigit():
-        raise HTTPException(status_code=400, detail="Event cursor must be a non-negative integer")
-    return int(value)
 
 
 async def _projection_workspaces(

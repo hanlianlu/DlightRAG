@@ -470,16 +470,20 @@ conversation ID, so another principal receives the same 404 as a missing
 conversation.
 
 `POST /web/answer` creates a core run and returns its 202 descriptor; the browser
-then subscribes to the same owner-scoped `GET /answer/{run_id}/events`. The run
-and its conversation turn are inserted in one transaction before the 202
-response, so no subscriber, finalizer, or reconnect commits history afterwards.
-Disconnecting the browser closes that subscriber only, and reconnecting resumes
-from the durable event sequence. Conversation reads return every linked turn in
-order: queued and running turns are pending entries carrying `answer_run_id`,
-status, and cancellation state, so a reloaded tab can resubscribe without
-remembering the original 202. Failed and cancelled turns stay visible with their
-public terminal error until their run is pruned; only succeeded turns become
-model history.
+then subscribes to its own owner-scoped `GET /web/answer/{run_id}/events`. That
+stream follows the same durable event log as the REST stream, with the same
+sequence, `Last-Event-ID` resume, 410-on-trim, and detach semantics, and differs
+only in projection: a browser `done` frame carries rendered presentation
+(`html`, `answer`, `answer_images`), not the canonical result payload REST
+serves. The run and its conversation turn are inserted in one transaction before
+the 202 response, so no subscriber, finalizer, or reconnect commits history
+afterwards. Disconnecting the browser closes that subscriber only, and
+reconnecting resumes from the durable event sequence. Conversation reads return
+every linked turn in order: queued and running turns are pending entries carrying
+`answer_run_id`, status, and cancellation state, so a reloaded tab can
+resubscribe without remembering the original 202. Failed and cancelled turns stay
+visible with their public terminal error until their run is pruned; only
+succeeded turns become model history.
 
 Answer attachment admission completes before `/web/answer` returns. Unsupported,
 empty, unsafe-name, per-attachment oversized, and over-count uploads return HTTP

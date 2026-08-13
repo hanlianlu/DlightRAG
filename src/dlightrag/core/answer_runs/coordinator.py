@@ -14,12 +14,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
-from dlightrag.core.answer.errors import classify_answer_error
-from dlightrag.core.answer_runs.models import CheckpointError
+from dlightrag.core.answer.errors import (
+    AnswerInputError,
+    InvalidToolConfigurationError,
+    classify_answer_error,
+)
+from dlightrag.core.answer_runs.models import CheckpointError, CheckpointErrorKind
 from dlightrag.core.answer_runs.subscription import RunEventBroker, follow_run_events
 from dlightrag.storage.answer_runs import (
     ANSWER_RUN_HEARTBEAT_SECONDS,
@@ -40,6 +45,12 @@ SWEEP_SECONDS = 1.0
 #: Every pass is bounded, ``SKIP LOCKED``, and idempotent, so running it on every
 #: run-owning process needs no leader election and exposes no operator knob.
 MAINTENANCE_SECONDS = 3600.0
+#: Share of one cadence a process may defer its first retention pass by, so a
+#: fleet that restarts together does not trim on the same instant.
+_MAINTENANCE_JITTER_FRACTION = 0.1
+#: Pause between drained retention batches, so a large backlog stays background
+#: work rather than a burst against the pool.
+_MAINTENANCE_BATCH_PAUSE_SECONDS = 0.05
 #: How long a graceful shutdown waits for writes that were already in flight.
 SHUTDOWN_WRITE_GRACE_SECONDS = 5.0
 #: Coalescing bounds for durable token batches.
@@ -49,14 +60,20 @@ TOKEN_BATCH_SECONDS = 0.25
 _FAILED_MESSAGE = "Answer run failed."
 
 
+def _startup_jitter(cadence: float) -> float:
+    return random.uniform(0.0, max(0.0, cadence) * _MAINTENANCE_JITTER_FRACTION)  # noqa: S311
+
+
 def _public_message(exc: BaseException) -> str:
     """Keep the actionable message the answer taxonomy already vetted for clients.
 
-    Only ``public_message`` is client-safe; an unclassified exception's text may
-    carry provider or filesystem detail, so it degrades to the generic message.
+    Only the taxonomy's own errors are trusted: an arbitrary exception may carry
+    a ``public_message`` attribute that nothing sanitized, and an unclassified
+    one may carry provider or filesystem detail in its text.
     """
-    message = getattr(exc, "public_message", None)
-    return message if isinstance(message, str) and message else _FAILED_MESSAGE
+    if isinstance(exc, AnswerInputError | InvalidToolConfigurationError):
+        return exc.public_message or _FAILED_MESSAGE
+    return _FAILED_MESSAGE
 
 
 class RunCancelledError(Exception):
@@ -232,7 +249,7 @@ class RunSession:
         self._notify = notify
         self._cancel_requested = run.cancel_requested
         self._lease_lost = False
-        self._corrupt: CheckpointError | None = None
+        self._corrupt: tuple[CheckpointErrorKind, str] | None = None
         self._pending_tokens: list[str] = []
         self._pending_chars = 0
         self._flush_deadline: float | None = None
@@ -264,7 +281,9 @@ class RunSession:
     def _guard(self) -> None:
         """Refuse every further durable write once this session lost coherence."""
         if self._corrupt is not None:
-            raise self._corrupt
+            # A fresh error each time: re-raising one latched instance appends a
+            # traceback for every boundary the doomed turn still crosses.
+            raise CheckpointError(*self._corrupt)
         if self._lease_lost:
             raise LeaseLostError
 
@@ -371,11 +390,11 @@ class RunSession:
             # longer describe the durable state. Latching that here stops the
             # rest of the turn from appending events for state it no longer owns,
             # even though a tool boundary swallows this raise as a tool failure.
-            self._corrupt = CheckpointError(
+            self._corrupt = (
                 "checkpoint_corrupt",
                 "Answer run artifacts no longer match its authoritative turn count.",
             )
-            raise self._corrupt
+            raise CheckpointError(*self._corrupt)
         if outcome != "attached":
             self._lease_lost = True
             raise LeaseLostError
@@ -534,21 +553,30 @@ class AnswerRunCoordinator:
     async def _maintain_forever(self) -> None:
         """Apply 30-day retention without reserving an execution slot.
 
-        Both passes are bounded batches that strictly shrink their own candidate
-        set, so draining them is finite and a transient store fault only defers
-        the remainder to the next cadence.
+        The first pass is deferred by a bounded share of the cadence so a fleet
+        that restarts together spreads its trims out instead of aligning them.
         """
+        await asyncio.sleep(_startup_jitter(self._maintenance_seconds))
         while True:
             try:
-                while await self._store.trim_expired_event_logs() > 0:
-                    await asyncio.sleep(0)
-                while (await self._store.prune_expired_runs()).runs > 0:
-                    await asyncio.sleep(0)
+                await self._maintain_once()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.warning("Answer run retention failed", exc_info=True)
             await asyncio.sleep(self._maintenance_seconds)
+
+    async def _maintain_once(self) -> None:
+        """Drain both retention passes.
+
+        Each pass is a bounded batch that strictly shrinks its own candidate set,
+        so draining is finite; pausing between batches keeps a large backlog from
+        monopolizing the pool, and a transient fault defers only the remainder.
+        """
+        while await self._store.trim_expired_event_logs() > 0:
+            await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
+        while (await self._store.prune_expired_runs()).runs > 0:
+            await asyncio.sleep(_MAINTENANCE_BATCH_PAUSE_SECONDS)
 
     # -- execution ------------------------------------------------------
     async def _execute(self, claimed: ClaimedRun) -> None:

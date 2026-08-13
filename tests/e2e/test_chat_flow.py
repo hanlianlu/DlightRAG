@@ -187,6 +187,14 @@ _DONE = _frame(
     '{"status": "succeeded", "html": "<p>DlightRAG is a multimodal RAG system.</p>",'
     ' "answer": "DlightRAG is a multimodal RAG system.", "answer_images": []}',
 )
+#: What the server actually renders: the answer inside its ``#answer-content`` host.
+_DONE_RENDERED = _frame(
+    4,
+    "done",
+    '{"status": "succeeded", "html": "<div id=\\"answer-content\\">'
+    '<p>DlightRAG is a multimodal RAG system.</p></div>",'
+    ' "answer": "DlightRAG is a multimodal RAG system.", "answer_images": []}',
+)
 
 
 def _install_event_transport(
@@ -322,3 +330,39 @@ def test_a_run_still_pending_after_the_budget_offers_an_explicit_reconnect(page:
     page.get_by_role("button", name="Reconnect").wait_for(timeout=20000)
     page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
     assert transport["cancelled"] == 0
+
+
+@pytest.mark.e2e
+def test_a_second_failed_reconnect_replaces_the_offer_instead_of_stacking_it(
+    page: Page,
+    e2e_conversation_service: Any,
+) -> None:
+    """One offer at a time, and a reconnect that succeeds leaves none behind."""
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+    # Six barren attempts exhaust the budget, so the first twelve strand the run
+    # twice; the thirteenth delivers the run's terminal event.
+    _install_event_transport(
+        page, [*([[]] * 12), [_PROGRESS, _DONE_RENDERED]], e2e_conversation_service
+    )
+
+    _submit(page, "What is DlightRAG?")
+
+    reconnect = page.get_by_role("button", name="Reconnect")
+    reconnect.wait_for(timeout=20000)
+    reconnect.click()
+    page.wait_for_selector(".composer-send.is-stop", timeout=10000)
+    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=20000)
+    assert reconnect.count() == 1
+    assert page.get_by_text("Connection lost. This answer is still running.").count() == 1
+
+    reconnect.click()
+    page.wait_for_function(
+        """
+        () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
+            .some(node => node.textContent.includes('DlightRAG is a multimodal RAG system.'))
+        """,
+        timeout=20000,
+    )
+    assert page.get_by_role("button", name="Reconnect").count() == 0
+    assert page.get_by_text("Connection lost. This answer is still running.").count() == 0

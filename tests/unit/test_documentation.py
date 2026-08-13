@@ -26,6 +26,7 @@ _PRODUCT_DOCS = (
     "docs/operations.md",
     "docs/security.md",
     "docs/postgresql.md",
+    "docs/durable-answer-runs.md",
     "docs/evaluation.md",
 )
 
@@ -47,6 +48,8 @@ _STALE_PHRASES = (
     "read-replica",
     "streaming replication",
     "hot standby",
+    # The browser follows its own rendered projection, not the REST event stream.
+    "subscribes to the same owner-scoped",
 )
 
 
@@ -138,6 +141,14 @@ def test_durable_answer_run_contract_is_documented() -> None:
         assert term in interfaces, f"durable run term {term!r} missing from interfaces.md"
     # The ephemeral answer mode and its request field are gone.
     assert "stream: true" not in interfaces
+
+
+def test_the_browser_subscribes_to_its_own_event_endpoint() -> None:
+    """The browser follows a rendered done payload, not the canonical REST result."""
+    for name in ("docs/interfaces.md", "docs/durable-answer-runs.md"):
+        text = _doc_text(name)
+        assert "/web/answer/{run_id}/events" in text, name
+        assert "answer_images" in text, name
 
 
 def test_reader_role_is_corpus_read_only_not_process_read_only() -> None:

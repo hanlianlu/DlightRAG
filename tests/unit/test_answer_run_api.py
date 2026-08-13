@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """REST contract for the durable Answer run: create, status, events, cancel."""
 
-import asyncio
 import datetime
 import json
 from collections.abc import AsyncIterator, Iterator
@@ -570,24 +569,6 @@ class TestEvents:
 
         assert response.status_code == 410
 
-    async def test_quiet_stream_keeps_alive_and_detaches_on_close(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import dlightrag.api.routes.answer_runs as routes
-
-        monkeypatch.setattr(routes, "SSE_KEEPALIVE_SECONDS", 0.01)
-        quiet = _QuietSubscription()
-
-        frames = routes._sse_frames(
-            quiet.events(), downloadable_workspaces=None, visual_workspaces=None
-        )
-        first = await anext(frames)
-        second = await anext(frames)
-        await frames.aclose()
-
-        assert first == second == ": keepalive\n\n"
-        assert quiet.closed is True
-
     async def test_following_events_never_cancels_the_run(
         self, client: AsyncClient, run_manager: _RunManager
     ) -> None:
@@ -600,20 +581,6 @@ class TestEvents:
 
         assert run_manager.cancelled == []
         assert run_manager.closed_subscribers == 1
-
-
-class _QuietSubscription:
-    """A run that has committed no event yet and never terminates on its own."""
-
-    def __init__(self) -> None:
-        self.closed = False
-
-    async def events(self) -> AsyncIterator[AnswerRunEvent]:
-        try:
-            await asyncio.Event().wait()
-            yield _event(1, "token", {"text": "unreachable"})
-        finally:
-            self.closed = True
 
 
 # ---------------------------------------------------------------------------

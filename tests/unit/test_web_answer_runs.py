@@ -16,10 +16,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.api.answer_stream import follow_run_frames
 from dlightrag.api.server import create_app
 from dlightrag.storage.answer_runs import AnswerRunEvent, IdempotencyKeyConflict
 from dlightrag.storage.web_conversations import ConversationSubmissionConflict
-from dlightrag.web.answer_events import render_done_event, stream_answer_events
+from dlightrag.web.answer_events import browser_frame, render_done_event
 from dlightrag.web.conversations import WebConversationService, project_conversation_turn
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
@@ -358,7 +359,7 @@ async def _frames(events: list[AnswerRunEvent]) -> list[str]:
         for event in events:
             yield event
 
-    return [frame async for frame in stream_answer_events(_iterate())]
+    return [frame async for frame in follow_run_frames(_iterate(), browser_frame)]
 
 
 async def test_every_frame_carries_its_durable_sequence_as_the_sse_id() -> None:
@@ -392,28 +393,6 @@ async def test_a_token_frame_carries_only_the_text() -> None:
     (frame,) = await _frames([_event(1, "token", {"text": "Rev"})])
 
     assert json.loads(frame.split("data: ", 1)[1].strip()) == "Rev"
-
-
-async def test_a_quiet_run_keeps_its_connection_alive_until_the_next_event(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A queued or silent run yields comments, and the next real event still follows."""
-    monkeypatch.setattr("dlightrag.web.answer_events.SSE_KEEPALIVE_SECONDS", 0.01)
-    released = asyncio.Event()
-
-    async def _iterate():
-        await released.wait()
-        yield _event(1, "token", {"text": "Rev"})
-
-    stream = stream_answer_events(_iterate())
-    keepalive = await anext(stream)
-    released.set()
-    event = await anext(stream)
-    await stream.aclose()
-
-    assert keepalive == ": keepalive\n\n"
-    assert keepalive.startswith(":")  # a comment consumes no durable sequence
-    assert event.startswith("id: 1\nevent: token\n")
 
 
 async def test_closing_the_event_stream_detaches_without_cancelling(

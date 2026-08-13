@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for FastAPI REST server endpoints and auth middleware."""
 
+import asyncio
+import contextlib
 import datetime
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -1355,6 +1357,70 @@ class TestReadinessEndpoint:
             assert (await client.get("/ready")).status_code == 200
 
         probe.assert_awaited_once()
+
+    async def test_concurrent_cold_polls_share_one_probe(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A burst against a cold cache costs one round trip, not one per caller."""
+        from dlightrag.storage.pool import pg_pool
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _slow_probe(*_args: object, **_kwargs: object) -> str:
+            started.set()
+            await release.wait()
+            return "off"
+
+        probe = AsyncMock(side_effect=_slow_probe)
+        monkeypatch.setattr(pg_pool, "run_once", probe)
+        app.state.manager = mock_manager
+
+        polls = [asyncio.create_task(client.get("/ready")) for _ in range(5)]
+        await started.wait()
+        release.set()
+        responses = await asyncio.gather(*polls)
+
+        assert [response.status_code for response in responses] == [200] * 5
+        probe.assert_awaited_once()
+
+    async def test_one_abandoned_poller_never_cancels_the_shared_probe(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.storage.pool import pg_pool
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        completed = False
+
+        async def _slow_probe(*_args: object, **_kwargs: object) -> str:
+            nonlocal completed
+            started.set()
+            await release.wait()
+            completed = True
+            return "off"
+
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(side_effect=_slow_probe))
+        app.state.manager = mock_manager
+
+        abandoned = asyncio.create_task(client.get("/ready"))
+        waiting = asyncio.create_task(client.get("/ready"))
+        await started.wait()
+        abandoned.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await abandoned
+        release.set()
+
+        assert (await waiting).status_code == 200
+        assert completed is True
 
     async def test_the_cached_verdict_expires(
         self,

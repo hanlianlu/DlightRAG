@@ -296,6 +296,22 @@ class TestCheckpointCodec:
         await state.tool_cache.aclose()
         await _registry(state).aclose()
 
+    async def test_a_corpus_rows_source_url_stays_a_link(self) -> None:
+        """Corpus identity names the row's visual, not every string beside it."""
+        state = _empty_state()
+        row = _corpus_row()
+        row["url"] = "https://example.com/book.pdf"
+        state.evidence.add_contexts({"chunks": [row]})
+        store = _FakeStore()
+
+        encoded = await encode_checkpoint_state(state, owner_id="owner", run_id="run", store=store)
+
+        stored = encoded["state"]["evidence"]["contexts"]["chunks"][0]
+        assert stored["url"] == "https://example.com/book.pdf"
+        assert stored["image_data"]["kind"] == "corpus"
+        await state.tool_cache.aclose()
+        await _registry(state).aclose()
+
     async def test_missing_corpus_visual_drops_only_the_image_block(self) -> None:
 
         state = await _state_with_evidence()

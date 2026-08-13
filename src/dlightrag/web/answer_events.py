@@ -2,32 +2,26 @@
 """Project one durable Answer run's events into browser SSE frames.
 
 The browser subscribes to a run it already owns, so this module holds no
-execution state: it renames nothing, commits nothing, and cancels nothing.
-Closing the response detaches one subscriber. Each frame carries the run's
-durable sequence as its SSE ``id``, so a reconnect resumes with
-``Last-Event-ID`` and sees neither a gap nor a duplicate.
+execution state: it renames nothing, commits nothing, and cancels nothing. It
+contributes only the projection; replay, keepalive, and detach belong to
+``dlightrag.api.answer_stream``. Each frame carries the run's durable sequence as
+its SSE ``id``, so a reconnect resumes with ``Last-Event-ID`` and sees neither a
+gap nor a duplicate.
+
+Unlike the REST projection, a browser ``done`` frame carries rendered
+presentation -- sanitized ``html``, the answer text, and answer images -- instead
+of the canonical stored result.
 """
 
-import asyncio
-import contextlib
-import json
-import logging
-from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
+from dlightrag.api.answer_stream import sse_frame
 from dlightrag.core.answer_runs.results import project_answer_result
-from dlightrag.core.client_contracts import model_dump_json_safe
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.storage.answer_runs import AnswerRunEvent
 from dlightrag.web.conversations import WEB_SOURCE_DOWNLOAD_BASE
 from dlightrag.web.events import AnswerDoneEvent, AnswerErrorEvent, AnswerProgressEvent
 from dlightrag.web.safe_html import safe_answer_done
-
-logger = logging.getLogger(__name__)
-
-#: A queued or quiet run keeps its connection alive with comments, not events.
-SSE_KEEPALIVE_SECONDS = 10.0
-_KEEPALIVE_FRAME = ": keepalive\n\n"
 
 
 def render_done_event(
@@ -85,49 +79,22 @@ def _browser_payload(
             )
 
 
-def _frame(sequence: int, event_type: str, payload: Any) -> str:
-    data = json.dumps(model_dump_json_safe(payload), ensure_ascii=False)
-    return f"id: {sequence}\nevent: {event_type}\ndata: {data}\n\n"
-
-
-async def stream_answer_events(
-    events: AsyncIterator[AnswerRunEvent],
+def browser_frame(
+    event: AnswerRunEvent,
     *,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
-) -> AsyncGenerator[str]:
-    """Replay and follow one run's durable events as browser SSE frames."""
-    iterator = events.__aiter__()
-    pending: asyncio.Task[AnswerRunEvent] | None = None
-    try:
-        while True:
-            if pending is None:
-                pending = asyncio.ensure_future(anext(iterator))
-            try:
-                event = await asyncio.wait_for(asyncio.shield(pending), SSE_KEEPALIVE_SECONDS)
-            except TimeoutError:
-                yield _KEEPALIVE_FRAME
-                continue
-            except StopAsyncIteration:
-                pending = None
-                return
-            pending = None
-            yield _frame(
-                event.sequence,
-                event.event_type,
-                _browser_payload(
-                    event,
-                    downloadable_workspaces=downloadable_workspaces,
-                    visual_workspaces=visual_workspaces,
-                ),
-            )
-    finally:
-        if pending is not None:
-            pending.cancel()
-            with contextlib.suppress(BaseException):
-                await pending
-        with contextlib.suppress(Exception):
-            await events.aclose()  # pyright: ignore[reportAttributeAccessIssue]
+) -> str:
+    """Render one durable event as the frame this browser session reads."""
+    return sse_frame(
+        sequence=event.sequence,
+        event_type=event.event_type,
+        payload=_browser_payload(
+            event,
+            downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
+        ),
+    )
 
 
-__all__ = ["SSE_KEEPALIVE_SECONDS", "render_done_event", "stream_answer_events"]
+__all__ = ["browser_frame", "render_done_event"]
