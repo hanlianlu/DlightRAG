@@ -261,10 +261,13 @@ The layering checks are part of local and CI verification:
 uv run lint-imports
 ```
 
-`lint-imports` enforces four contracts: `api`/`mcp`/`web` stay out of the
-internal packages; foundation packages never import domain code; the lower
-stack is ordered `models → config → observability → prompts`/`utils`; and the
-core coordination stack is ordered `servicemanager → service → reset`. Shared
-contract modules (`core.retrieval.protocols`/`models`, `models.schemas`) are
-imported across several layers, so the full table above is a design guide rather
-than a single machine-checked chain.
+`lint-imports` enforces six contracts: `api`/`mcp`/`web` stay out of the
+internal packages and operator-only maintenance commands; foundation packages
+never import domain code; the lower stack is ordered
+`models → config → observability → prompts`/`utils`; the core coordination stack
+is ordered `servicemanager → service → reset`; the resource domain never imports
+the model-visible tool package; and model-visible tools never import the agent
+orchestrator, durable run host, or maintenance commands. Shared contract modules
+(`core.retrieval.protocols`/`models`, `models.schemas`) are imported across
+several layers, so the full table above is a design guide rather than a single
+machine-checked chain.

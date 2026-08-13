@@ -80,7 +80,7 @@ class _InspectResourceArgs(BaseModel):
     )
 
 
-def read_resource_tool(registry: ResourceRegistry) -> AgentTool:
+def _read_resource_tool(registry: ResourceRegistry) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         read_args = cast(_ReadResourceArgs, args)
         try:
@@ -107,7 +107,7 @@ def read_resource_tool(registry: ResourceRegistry) -> AgentTool:
     )
 
 
-def inspect_resource_tool(inspector: ResourceInspector) -> AgentTool:
+def _inspect_resource_tool(inspector: ResourceInspector) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         inspect_args = cast(_InspectResourceArgs, args)
         try:
@@ -144,9 +144,9 @@ def build_resource_tools(
     visual_supported: bool = False,
 ) -> list[AgentTool]:
     """Return the resource peer tools; inspect only for a verified capability."""
-    tools = [read_resource_tool(registry)]
+    tools = [_read_resource_tool(registry)]
     if inspector is not None and visual_supported:
-        tools.append(inspect_resource_tool(inspector))
+        tools.append(_inspect_resource_tool(inspector))
     return tools
 
 
@@ -192,8 +192,4 @@ def _describe_inspection_locator(locator: InspectionLocator) -> str:
     return f"{handle} @ {locator.anchor}" if locator.anchor else handle
 
 
-__all__ = [
-    "build_resource_tools",
-    "inspect_resource_tool",
-    "read_resource_tool",
-]
+__all__ = ["build_resource_tools"]

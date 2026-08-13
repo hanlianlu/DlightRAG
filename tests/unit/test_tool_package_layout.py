@@ -5,7 +5,6 @@ One package owns every tool contract, its runtime, and its adapters; the
 resource domain and the operator commands stay on their own side of that line.
 """
 
-import ast
 import importlib
 import tomllib
 from pathlib import Path
@@ -13,16 +12,6 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-_SRC = _REPO / "src" / "dlightrag"
-
-_TOOL_MODULES = (
-    "dlightrag.core.tools.models",
-    "dlightrag.core.tools.executor",
-    "dlightrag.core.tools.cache",
-    "dlightrag.core.tools.composition",
-    "dlightrag.core.tools.search",
-    "dlightrag.core.tools.resources",
-)
 
 _RETIRED_MODULES = (
     "dlightrag.core.agent.tool_loop",
@@ -30,22 +19,6 @@ _RETIRED_MODULES = (
     "dlightrag.core.resources.tools",
     "dlightrag.tools",
 )
-
-
-def _imported_modules(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module)
-    return names
-
-
-@pytest.mark.parametrize("module", _TOOL_MODULES)
-def test_tool_package_owns_every_model_visible_module(module: str) -> None:
-    assert importlib.import_module(module).__name__ == module
 
 
 @pytest.mark.parametrize("module", _RETIRED_MODULES)
@@ -63,24 +36,28 @@ def test_tool_package_exports_the_run_contract() -> None:
     )
 
 
-def test_agent_package_keeps_only_orchestration() -> None:
-    modules = {path.stem for path in (_SRC / "core" / "agent").glob("*.py")}
+def test_resource_tool_module_exports_only_composition_factory() -> None:
+    resources = importlib.import_module("dlightrag.core.tools.resources")
 
-    assert modules == {"__init__", "context", "orchestrator"}
+    assert resources.__all__ == ["build_resource_tools"]
 
 
-def test_resource_domain_has_no_tool_back_edge() -> None:
-    offenders = {
-        path.name: back_edges
-        for path in (_SRC / "core" / "resources").glob("*.py")
-        if (
-            back_edges := sorted(
-                name for name in _imported_modules(path) if name.startswith("dlightrag.core.tools")
-            )
-        )
-    }
+def test_maintenance_package_is_covered_by_transport_boundary() -> None:
+    config = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    contracts = config["tool"]["importlinter"]["contracts"]
+    no_transport = next(
+        contract for contract in contracts if contract["id"] == "no-transport-internals"
+    )
 
-    assert offenders == {}
+    assert "dlightrag.maintenance" in no_transport["source_modules"]
+
+
+def test_architecture_documents_all_import_contracts() -> None:
+    architecture = (_REPO / "docs" / "architecture.md").read_text(encoding="utf-8")
+
+    assert "`lint-imports` enforces six contracts" in architecture
+    assert "resource domain" in architecture
+    assert "model-visible tool" in architecture
 
 
 def test_maintenance_owns_the_operator_console_scripts() -> None:

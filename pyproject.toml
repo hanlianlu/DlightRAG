@@ -137,6 +137,7 @@ source_modules = [
     "dlightrag.storage",
     "dlightrag.sourcing",
     "dlightrag.observability",
+    "dlightrag.maintenance",
 ]
 forbidden_modules = [
     "dlightrag.web",
