@@ -11,8 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.citations import finalize_answer
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
-from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
-from dlightrag.core.agent.tools import SearchInput, build_run_tools
 from dlightrag.core.answer.errors import (
     INVALID_TOOL_CONFIGURATION,
     AnswerInputError,
@@ -24,6 +22,7 @@ from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynth
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
+from dlightrag.core.tools import AgentTool, SearchInput, ToolResult, compose_research_tools
 from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 from tests.unit.conftest import answer_image_policy
 
@@ -84,9 +83,9 @@ def _call(*, query: str, source: str, call_id: str = "search") -> ToolCall:
 
 
 async def test_cancelled_waiter_does_not_cancel_shared_tool_operation() -> None:
-    from dlightrag.core.agent.tools import _ToolCallCache
+    from dlightrag.core.tools import ExactCallCache
 
-    cache = _ToolCallCache()
+    cache = ExactCallCache()
     started = asyncio.Event()
     release = asyncio.Event()
     calls = 0
@@ -118,9 +117,9 @@ async def test_cancelled_waiter_does_not_cancel_shared_tool_operation() -> None:
 
 
 async def test_tool_call_cache_close_cancels_and_joins_operations() -> None:
-    from dlightrag.core.agent.tools import _ToolCallCache
+    from dlightrag.core.tools import ExactCallCache
 
-    cache = _ToolCallCache()
+    cache = ExactCallCache()
     started = asyncio.Event()
     stopped = asyncio.Event()
 
@@ -718,7 +717,7 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
 
 async def test_every_model_visible_tool_field_describes_itself() -> None:
     from dlightrag.core.memory.evidence import EvidenceLedger
-    from dlightrag.core.resources.tools import build_resource_tools
+    from dlightrag.core.tools.resources import build_resource_tools
 
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
@@ -726,7 +725,7 @@ async def test_every_model_visible_tool_field_describes_itself() -> None:
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    tools, cache = build_run_tools(
+    tools, cache = compose_research_tools(
         evidence=EvidenceLedger(),
         trace={},
         retrieve_knowledge_base=retrieve,
@@ -933,7 +932,7 @@ async def test_tool_failure_reaches_the_operator_log(
         _answer("cannot recover"),
         final_text="Best effort answer.",
     )
-    with caplog.at_level(logging.WARNING, logger="dlightrag.core.agent.tool_loop"):
+    with caplog.at_level(logging.WARNING, logger="dlightrag.core.tools.executor"):
         await _research(agent, retrieve, search).answer("Question")
 
     failures = [

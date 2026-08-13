@@ -25,7 +25,6 @@ import pytest
 
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
-from dlightrag.core.agent.tools import _ToolCallCache
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer_runs.checkpoints import encode_checkpoint_state, restore_agent_state
 from dlightrag.core.answer_runs.coordinator import (
@@ -48,6 +47,7 @@ from dlightrag.core.servicemanager import (
     _fetched_bytes_sink,
     _OrchestratorRun,
 )
+from dlightrag.core.tools import ExactCallCache
 from dlightrag.storage.answer_runs import PGAnswerRunStore
 from dlightrag.storage.web_conversations import PGWebConversationStore
 
@@ -338,7 +338,7 @@ async def test_checkpoint_round_trips_through_jsonb(store: PGAnswerRunStore) -> 
     state = AgentRunState(
         evidence=evidence,
         episode=episode,
-        tool_cache=_ToolCallCache(),
+        tool_cache=ExactCallCache(),
         registry=registry,
         trace={"agent_turns": 1},
         completed_turns=1,
@@ -370,7 +370,7 @@ async def test_checkpoint_round_trips_through_jsonb(store: PGAnswerRunStore) -> 
     resumed = AgentRunState(
         evidence=EvidenceLedger(),
         episode=RunEpisode(),
-        tool_cache=_ToolCallCache(),
+        tool_cache=ExactCallCache(),
         registry=resumed_registry,
         trace={},
     )
@@ -430,7 +430,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     state = AgentRunState(
         evidence=EvidenceLedger(),
         episode=RunEpisode(),
-        tool_cache=_ToolCallCache(),
+        tool_cache=ExactCallCache(),
         registry=registry,
         trace={},
         completed_turns=1,
@@ -473,7 +473,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     resumed = AgentRunState(
         evidence=EvidenceLedger(),
         episode=RunEpisode(),
-        tool_cache=_ToolCallCache(),
+        tool_cache=ExactCallCache(),
         registry=resumed_registry,
         trace={},
     )

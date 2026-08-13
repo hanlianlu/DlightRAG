@@ -15,12 +15,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from dlightrag.core.agent.context import ContextAssembler
-from dlightrag.core.agent.tool_loop import AgentTool, ExecutedTurn, ToolTurnExecutor
-from dlightrag.core.agent.tools import (
-    KnowledgeRetrieval,
-    WebSearch,
-    build_run_tools,
-)
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
@@ -31,6 +25,14 @@ from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag.core.tools import (
+    AgentTool,
+    ExecutedTurn,
+    KnowledgeRetrieval,
+    ToolTurnExecutor,
+    WebSearch,
+    compose_research_tools,
+)
 from dlightrag.models.tool_turn import AssistantTurn
 
 logger = logging.getLogger(__name__)
@@ -244,7 +246,7 @@ class AnswerOrchestrator:
             "web_search_cost_dollars": 0.0,
             "tool_observations": [],
         }
-        tools, tool_cache = build_run_tools(
+        tools, tool_cache = compose_research_tools(
             evidence=evidence,
             trace=trace,
             retrieve_knowledge_base=self._retrieve_knowledge_base,

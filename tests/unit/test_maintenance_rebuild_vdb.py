@@ -9,7 +9,7 @@ import pytest
 
 
 def test_parser_defaults_to_check_only() -> None:
-    from dlightrag.tools.rebuild_vdb import build_parser
+    from dlightrag.maintenance.rebuild_vdb import build_parser
 
     args = build_parser().parse_args([])
 
@@ -19,7 +19,7 @@ def test_parser_defaults_to_check_only() -> None:
 
 
 def test_rebuild_targets_require_yes() -> None:
-    from dlightrag.tools.rebuild_vdb import build_parser, validate_args
+    from dlightrag.maintenance.rebuild_vdb import build_parser, validate_args
 
     args = build_parser().parse_args(["--target", "chunks"])
 
@@ -34,18 +34,18 @@ def test_pyproject_exposes_rebuild_console_script() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["scripts"]["dlightrag-rebuild-vdb"] == (
-        "dlightrag.tools.rebuild_vdb:main"
+        "dlightrag.maintenance.rebuild_vdb:main"
     )
 
 
 def test_rebuild_vdb_exports_are_resolvable() -> None:
-    from dlightrag.tools import rebuild_vdb
+    from dlightrag.maintenance import rebuild_vdb
 
     assert all(hasattr(rebuild_vdb, name) for name in rebuild_vdb.__all__)
 
 
 async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    from dlightrag.tools import rebuild_vdb as module
+    from dlightrag.maintenance import rebuild_vdb as module
 
     fake_embedding = object()
     config = _fake_config()
@@ -87,7 +87,7 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
 async def test_chunks_rebuild_restores_sidecar_image_vectors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.tools import rebuild_vdb as module
+    from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
     lightrag = SimpleNamespace(
@@ -142,7 +142,7 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
 async def test_chunks_rebuild_relabels_bm25_languages_after_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.tools import rebuild_vdb as module
+    from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
     config.bm25_enabled = True
@@ -197,7 +197,7 @@ async def test_chunks_rebuild_relabels_bm25_languages_after_success(
 async def test_graph_rebuild_does_not_restore_sidecar_alignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.tools import rebuild_vdb as module
+    from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
@@ -230,7 +230,7 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
 async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.tools import rebuild_vdb as module
+    from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
     embedder = AsyncMock()
@@ -272,7 +272,7 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
 async def test_chunks_rebuild_closes_domain_pool_when_embedder_close_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.tools import rebuild_vdb as module
+    from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
     config.bm25_enabled = True

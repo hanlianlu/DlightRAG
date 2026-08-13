@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 
 from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
-from dlightrag.core.agent.tool_loop import AgentTool
 from dlightrag.core.answer.capability import (
     AnswerImageCapability,
     check_answer_image_capability,
@@ -80,6 +79,7 @@ from dlightrag.core.request.workspaces import (
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
+from dlightrag.core.tools import AgentTool
 from dlightrag.core.vision_probe import ImageCapabilityStatus, ModelImageCapabilities
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import safe_source_filename
@@ -1626,8 +1626,8 @@ class RAGServiceManager:
         if not resources and web_search is None:
             return None, []
         from dlightrag.core.resources import ResourceRegistry
-        from dlightrag.core.resources.tools import build_resource_tools
         from dlightrag.core.resources.visual import ResourceInspector
+        from dlightrag.core.tools.resources import build_resource_tools
 
         answer = self._config.answer
         registry = ResourceRegistry(

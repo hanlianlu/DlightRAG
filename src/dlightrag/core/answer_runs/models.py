@@ -12,10 +12,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from dlightrag.core.agent.tools import _ToolCallCache
     from dlightrag.core.memory.episode import RunEpisode
     from dlightrag.core.memory.evidence import EvidenceLedger
     from dlightrag.core.resources.registry import ResourceRegistry
+    from dlightrag.core.tools import ExactCallCache
 
 #: Every worker sharing a database writes and reads this checkpoint schema.
 CHECKPOINT_SCHEMA_VERSION = 1
@@ -65,7 +65,7 @@ class AgentRunState:
 
     evidence: EvidenceLedger
     episode: RunEpisode
-    tool_cache: _ToolCallCache
+    tool_cache: ExactCallCache
     registry: ResourceRegistry | None = None
     trace: dict[str, Any] = field(default_factory=dict)
     completed_turns: int = 0

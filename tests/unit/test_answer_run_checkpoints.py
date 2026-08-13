@@ -12,8 +12,6 @@ from typing import Any
 
 import pytest
 
-from dlightrag.core.agent.tool_loop import ToolResult
-from dlightrag.core.agent.tools import _ToolCallCache
 from dlightrag.core.answer_runs.checkpoints import (
     CheckpointError,
     decode_checkpoint_state,
@@ -29,6 +27,7 @@ from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.resources.registry import ResourceRegistry, ResourceStateMismatchError
+from dlightrag.core.tools import ExactCallCache, ToolResult
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 _ATTACHMENT_BYTES = b"\x89PNG\r\n\x1a\nfake-attachment"
@@ -93,7 +92,7 @@ async def _state_with_evidence() -> AgentRunState:
             {"role": "tool", "tool_call_id": "call-1", "name": "kb", "content": "found"},
         ]
     )
-    cache = _ToolCallCache()
+    cache = ExactCallCache()
     await cache.run("kb\x00{}", lambda: _ok("found"))
     registry = ResourceRegistry()
     registry.register(ResourceInput(content=b"doc-bytes", filename="a.txt"))
@@ -149,11 +148,11 @@ class TestOwnerExports:
         assert restored.messages()[0]["tool_calls"][0]["thought_signature"] == "sig-1"
 
     async def test_tool_cache_export_replays_completed_results_only(self) -> None:
-        cache = _ToolCallCache()
+        cache = ExactCallCache()
         await cache.run("kb\x00{}", lambda: _ok("found"))
         exported = cache.export_results()
 
-        restored = _ToolCallCache()
+        restored = ExactCallCache()
         restored.restore_results(exported)
         replayed = await restored.run("kb\x00{}", lambda: _ok("should not run"))
 
@@ -232,7 +231,7 @@ class TestCheckpointCodec:
         resumed = AgentRunState(
             evidence=EvidenceLedger(),
             episode=RunEpisode(),
-            tool_cache=_ToolCallCache(),
+            tool_cache=ExactCallCache(),
             registry=ResourceRegistry(),
             trace={"agent_turns": 0, "tool_observations": []},
         )
@@ -555,7 +554,7 @@ def _empty_state() -> AgentRunState:
     return AgentRunState(
         evidence=EvidenceLedger(),
         episode=RunEpisode(),
-        tool_cache=_ToolCallCache(),
+        tool_cache=ExactCallCache(),
         registry=ResourceRegistry(),
         trace={"agent_turns": 0, "tool_observations": []},
     )

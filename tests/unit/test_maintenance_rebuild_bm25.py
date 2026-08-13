@@ -34,7 +34,7 @@ def _config(*, enabled: bool = True, reader: bool = False) -> SimpleNamespace:
 
 
 def test_bm25_rebuild_parser_defaults() -> None:
-    from dlightrag.tools.rebuild_bm25 import build_parser
+    from dlightrag.maintenance.rebuild_bm25 import build_parser
 
     args = build_parser().parse_args([])
 
@@ -43,7 +43,7 @@ def test_bm25_rebuild_parser_defaults() -> None:
 
 
 def test_bm25_rebuild_requires_yes() -> None:
-    from dlightrag.tools.rebuild_bm25 import build_parser, validate_args
+    from dlightrag.maintenance.rebuild_bm25 import build_parser, validate_args
 
     args = build_parser().parse_args([])
 
@@ -57,7 +57,7 @@ def test_pyproject_exposes_bm25_rebuild_console_script() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["scripts"]["dlightrag-rebuild-bm25"] == (
-        "dlightrag.tools.rebuild_bm25:main"
+        "dlightrag.maintenance.rebuild_bm25:main"
     )
 
 
@@ -72,7 +72,7 @@ async def test_bm25_rebuild_rejects_incompatible_config(
     config: SimpleNamespace,
     message: str,
 ) -> None:
-    from dlightrag.tools.rebuild_bm25 import run_rebuild_bm25
+    from dlightrag.maintenance.rebuild_bm25 import run_rebuild_bm25
 
     with pytest.raises(SystemExit, match=message):
         await run_rebuild_bm25(config=cast(Any, config), assume_yes=True)
@@ -82,7 +82,7 @@ async def test_bm25_prerequisites_provision_extensions_and_close_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dlightrag.core.retrieval.bm25 import BM25Profile
-    from dlightrag.tools import rebuild_bm25 as module
+    from dlightrag.maintenance import rebuild_bm25 as module
 
     conn = AsyncMock()
     connect = AsyncMock(return_value=conn)
@@ -107,7 +107,7 @@ async def test_bm25_prerequisites_provision_extensions_and_close_connection(
 async def test_bm25_rebuild_provisions_indexes_then_relabels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.tools import rebuild_bm25 as module
+    from dlightrag.maintenance import rebuild_bm25 as module
 
     config = _config()
     events: list[object] = []

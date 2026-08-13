@@ -10,11 +10,11 @@ import pytest
 from PIL import Image
 from pydantic import ValidationError
 
-from dlightrag.core.agent.tool_loop import AgentTool
 from dlightrag.core.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.core.resources.registry import ResourceRegistry
-from dlightrag.core.resources.tools import build_resource_tools
 from dlightrag.core.resources.visual import ResourceInspectionError, ResourceInspector
+from dlightrag.core.tools import AgentTool
+from dlightrag.core.tools.resources import build_resource_tools
 from tests.unit.conftest import answer_image_policy
 
 

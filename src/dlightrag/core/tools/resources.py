@@ -4,7 +4,8 @@
 ``read_resource`` returns bounded deterministic text; ``inspect_resource``
 returns bounded VLM-derived visual evidence. The inspect tool is registered only
 when a verified visual capability exists, so a text-only deployment never
-advertises a tool it cannot serve.
+advertises a tool it cannot serve. These adapters depend inward on the resource
+domain; that domain knows nothing about tools.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
 from dlightrag.core.resources.models import (
     ResourceReadResult,
     ResourceRegistryError,
@@ -26,6 +26,7 @@ from dlightrag.core.resources.visual import (
     ResourceInspectionResult,
     ResourceInspector,
 )
+from dlightrag.core.tools.models import AgentTool, ToolResult
 
 _READ_DESCRIPTION = (
     "Read bounded text (at most 16K tokens) from a registered resource. An "

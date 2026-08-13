@@ -91,8 +91,8 @@ Issues = "https://github.com/hanlianlu/dlightrag/issues"
 [project.scripts]
 dlightrag-mcp = "dlightrag.mcp.cli:main"
 dlightrag-api = "dlightrag.api.server:main"
-dlightrag-rebuild-bm25 = "dlightrag.tools.rebuild_bm25:main"
-dlightrag-rebuild-vdb = "dlightrag.tools.rebuild_vdb:main"
+dlightrag-rebuild-bm25 = "dlightrag.maintenance.rebuild_bm25:main"
+dlightrag-rebuild-vdb = "dlightrag.maintenance.rebuild_vdb:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -182,4 +182,22 @@ layers = [
     "servicemanager",
     "service",
     "reset",
+]
+
+[[tool.importlinter.contracts]]
+id = "resources-below-tools"
+name = "The resource domain must not import the tool package"
+type = "forbidden"
+source_modules = ["dlightrag.core.resources"]
+forbidden_modules = ["dlightrag.core.tools"]
+
+[[tool.importlinter.contracts]]
+id = "tools-below-agent"
+name = "Tools are composed per run, never by importing the orchestrator"
+type = "forbidden"
+source_modules = ["dlightrag.core.tools"]
+forbidden_modules = [
+    "dlightrag.core.agent",
+    "dlightrag.core.answer_runs",
+    "dlightrag.maintenance",
 ]

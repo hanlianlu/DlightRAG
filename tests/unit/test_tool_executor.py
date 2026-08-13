@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from dlightrag.core.agent.tool_loop import AgentTool, ToolResult, ToolTurnExecutor
+from dlightrag.core.tools import AgentTool, ToolResult, ToolTurnExecutor
 from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 
 
