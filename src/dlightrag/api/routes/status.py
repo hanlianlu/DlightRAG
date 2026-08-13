@@ -1,7 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""System status and health API routes."""
+"""System status and health API routes.
+
+``/health`` is liveness only: it answers from in-process state and never touches
+PostgreSQL, so an unauthenticated poll loop cannot turn it into database load.
+``/ready`` owns the database and corpus verdict and memoizes it for a few
+seconds, which bounds that load without hiding a role, schema, or session-mode
+change for more than the cache window.
+"""
 
 import logging
+import time
+from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -18,6 +27,38 @@ from .deps import get_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+#: How long one process reuses its last readiness verdict.
+READINESS_CACHE_SECONDS = 2.0
+
+
+class ReadinessProbeCache:
+    """Short-lived memo of one process's database and corpus readiness verdict."""
+
+    def __init__(self, ttl_seconds: float) -> None:
+        self._ttl = ttl_seconds
+        self._deadline = 0.0
+        self._detail: str | None = None
+
+    async def detail(self, probe: Callable[[], Awaitable[str | None]]) -> str | None:
+        now = time.monotonic()
+        if now < self._deadline:
+            return self._detail
+        self._detail = await probe()
+        self._deadline = now + self._ttl
+        return self._detail
+
+    def invalidate(self) -> None:
+        """Drop the memo so the next probe reflects a completed transition."""
+        self._deadline = 0.0
+
+
+def _readiness_cache(request: Request) -> ReadinessProbeCache:
+    cache = getattr(request.app.state, "readiness_cache", None)
+    if cache is None:
+        cache = ReadinessProbeCache(READINESS_CACHE_SECONDS)
+        request.app.state.readiness_cache = cache
+    return cache
 
 
 def _not_ready(*, service_role: ServiceRole, detail: str) -> JSONResponse:
@@ -60,15 +101,13 @@ async def _postgres_not_ready_detail(config: DlightragConfig) -> str | None:
 
 @router.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
 async def health(request: Request) -> dict[str, object]:
-    """Health check including RAG service status."""
+    """Report process liveness and the capabilities this build exposes."""
     config = request_config(request)
     manager = get_manager(request)
 
-    is_degraded = manager.is_degraded()
     warnings = manager.get_warnings()
-
     status: dict[str, object] = {
-        "status": "degraded" if is_degraded else "healthy",
+        "status": "degraded" if manager.is_degraded() else "healthy",
         "rag_initialized": manager.is_ready(),
         "service_role": config.service_role,
         "crafted_by": "hllyu",
@@ -82,16 +121,6 @@ async def health(request: Request) -> dict[str, object]:
     }
     if warnings:
         status["warnings"] = warnings
-
-    # Check PostgreSQL connectivity through the shared pool rather than opening a
-    # fresh connection per request -- the latter is wasteful and lets unauthenticated
-    # health traffic exhaust the server's connection slots.
-    if await _postgres_not_ready_detail(config) is None:
-        status["postgres"] = "connected"
-    else:
-        status["postgres"] = "error"
-        status["status"] = "degraded"
-
     return status
 
 
@@ -105,13 +134,17 @@ async def readiness(request: Request) -> ReadinessResponse | JSONResponse:
     """Return whether this process can accept query traffic."""
     config = request_config(request)
     manager = get_manager(request)
+    cache = _readiness_cache(request)
     if not manager.is_ready():
+        # Startup and schema transitions must never be answered from a verdict
+        # this process reached before the manager finished coming up.
+        cache.invalidate()
         return _not_ready(
             service_role=config.service_role,
             detail="RAG service is not ready",
         )
 
-    detail = await _postgres_not_ready_detail(config)
+    detail = await cache.detail(lambda: _postgres_not_ready_detail(config))
     if detail is not None:
         return _not_ready(service_role=config.service_role, detail=detail)
 

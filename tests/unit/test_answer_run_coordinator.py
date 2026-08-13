@@ -30,6 +30,7 @@ from dlightrag.storage.answer_runs import (
     PendingArtifact,
     PendingArtifactReference,
     RunCheckpoint,
+    RunDeletion,
     TerminalOutcome,
     artifact_digest,
 )
@@ -45,6 +46,11 @@ class _MemoryStore:
         self.events: dict[str, list[AnswerRunEvent]] = {}
         self.sweeps = 0
         self.claims = 0
+        self.trims = 0
+        self.prunes = 0
+        self.trim_batches: list[int] = []
+        self.prune_batches: list[int] = []
+        self.trim_failures = 0
         self.artifact_writes: list[dict[str, Any]] = []
         self.claim_gate: asyncio.Event | None = None
         self.heartbeats = 0
@@ -323,6 +329,17 @@ class _MemoryStore:
         self.sweeps += 1
         return None
 
+    async def trim_expired_event_logs(self) -> int:
+        self.trims += 1
+        if self.trim_failures > 0:
+            self.trim_failures -= 1
+            raise RuntimeError("trim unavailable")
+        return self.trim_batches.pop(0) if self.trim_batches else 0
+
+    async def prune_expired_runs(self) -> Any:
+        self.prunes += 1
+        return RunDeletion(runs=self.prune_batches.pop(0) if self.prune_batches else 0, artifacts=0)
+
     async def read_event_page(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0
     ) -> tuple[AnswerRunEvent, ...]:
@@ -497,6 +514,58 @@ class TestSchedulingAndLease:
             await coordinator.aclose()
 
 
+class TestRetentionMaintenance:
+    """Retention runs on every run-owning process, needs no slot, and leaks no task."""
+
+    async def _running(self, store: _MemoryStore, **kwargs: Any) -> AnswerRunCoordinator:
+        coordinator = AnswerRunCoordinator(
+            store=store,
+            executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
+            max_async=1,
+            sweep_seconds=60.0,
+            **kwargs,
+        )
+        await coordinator.start()
+        return coordinator
+
+    async def test_the_scheduler_trims_events_and_prunes_runs_on_its_cadence(self) -> None:
+        store = _MemoryStore()
+        coordinator = await self._running(store, maintenance_seconds=0.01)
+        try:
+            await _settle(lambda: store.trims >= 2 and store.prunes >= 2)
+        finally:
+            await coordinator.aclose()
+
+    async def test_full_batches_drain_before_the_next_cadence(self) -> None:
+        store = _MemoryStore()
+        store.trim_batches = [200, 200, 0]
+        store.prune_batches = [200, 0]
+        coordinator = await self._running(store, maintenance_seconds=30.0)
+        try:
+            await _settle(lambda: store.trims >= 3 and store.prunes >= 2)
+        finally:
+            await coordinator.aclose()
+
+    async def test_a_transient_retention_fault_is_retried_not_fatal(self) -> None:
+        store = _MemoryStore()
+        store.trim_failures = 1
+        coordinator = await self._running(store, maintenance_seconds=0.01)
+        try:
+            await _settle(lambda: store.trims >= 2 and store.prunes >= 1)
+        finally:
+            await coordinator.aclose()
+
+    async def test_closing_leaves_no_retention_task_behind(self) -> None:
+        store = _MemoryStore()
+        coordinator = await self._running(store, maintenance_seconds=0.01)
+        await _settle(lambda: store.trims >= 1)
+        await coordinator.aclose()
+
+        settled = store.trims
+        await asyncio.sleep(0.05)
+        assert store.trims == settled
+
+
 class TestDurableProgress:
     async def test_tokens_are_coalesced_in_order_with_one_terminal_event(self) -> None:
         store = _MemoryStore()
@@ -608,6 +677,45 @@ class TestDurableProgress:
 
         assert store.runs["run-a"]["error_kind"] == "checkpoint_too_large"
         assert store.events["run-a"][-1].payload["kind"] == "checkpoint_too_large"
+
+    async def test_a_sanitized_input_rejection_keeps_its_actionable_message(self) -> None:
+        """The taxonomy already vetted ``public_message``; a generic one helps nobody."""
+        from dlightrag.core.answer.errors import CurrentDocumentParseError
+
+        store = _MemoryStore()
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            raise CurrentDocumentParseError("report.pdf")
+
+        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
+        finally:
+            await coordinator.aclose()
+
+        payload = store.events["run-a"][-1].payload
+        assert payload["kind"] == "CURRENT_DOCUMENT_PARSE_FAILED"
+        assert "report.pdf" in payload["message"]
+
+    async def test_an_unclassified_failure_never_leaks_its_exception_text(self) -> None:
+        store = _MemoryStore()
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            raise RuntimeError("postgres://user:secret@host/db is unreachable")
+
+        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        store.add_run("run-a")
+        await coordinator.start()
+        try:
+            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
+        finally:
+            await coordinator.aclose()
+
+        payload = store.events["run-a"][-1].payload
+        assert payload["kind"] == "ANSWER_STREAM_FAILED"
+        assert payload["message"] == "Answer run failed."
 
     async def test_missing_checkpoint_for_a_resumed_turn_is_incompatible(self) -> None:
         store = _MemoryStore()
@@ -857,6 +965,37 @@ class TestCancellationAndShutdown:
         await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
         await coordinator.aclose()
 
+        leaked = {task for task in asyncio.all_tasks() if task not in before and not task.done()}
+        assert leaked == set()
+
+    async def test_shutdown_joins_a_shielded_write_it_already_started(self) -> None:
+        """A shielded write must land before shutdown returns, not run detached."""
+        store = _MemoryStore()
+        started = asyncio.Event()
+        finished = asyncio.Event()
+        original = store.finish_success
+
+        async def slow_finish(**kwargs: Any) -> Any:
+            started.set()
+            await asyncio.sleep(0.05)
+            outcome = await original(**kwargs)
+            finished.set()
+            return outcome
+
+        store.finish_success = slow_finish  # type: ignore[method-assign]
+
+        async def body(session: RunSession) -> Mapping[str, Any]:
+            return {"answer": "done"}
+
+        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        store.add_run("run-a")
+        before = {task for task in asyncio.all_tasks()}
+        await coordinator.start()
+        await started.wait()
+
+        await coordinator.aclose()
+
+        assert finished.is_set()
         leaked = {task for task in asyncio.all_tasks() if task not in before and not task.done()}
         assert leaked == set()
 

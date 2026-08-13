@@ -149,19 +149,47 @@ handles that the model may deep-read with `read_resource`. Exa Contents is not a
 peer tool: it is a bounded internal fallback only when a selected public URL
 cannot be read directly. A missing key removes both capabilities.
 
-## Web Attachment Storage
+## Durable Answer Runs
 
-The browser channel wraps the same orchestrator with a principal-scoped
-conversation lifecycle. Uploaded answer attachments are persisted verbatim in one
-raw table, `web_conversation_attachments`, keyed by principal, conversation, and
-turn; there is no parsed-chunk table and no vector cache. Historical attachments
-are re-registered lazily as request-local resources on every follow-up, newest
-first up to the available attachment-count limit. An attachment-bearing
-conversation therefore remains on the research path. Browser thumbnails are
-derived on demand. Manual deletion and inactivity-TTL pruning cascade attachment
-bytes through the owning turn and conversation. Answer attachments are the only
-durable answer inputs the Web store keeps; no answer-time parse or embedding
-artifact is retained.
+Every answer — REST, MCP, Web, Python SDK, CLI, and evaluation — is one durable
+run with one identifier and one lifecycle owned by PostgreSQL. `POST /answer`
+validates, persists, and returns HTTP 202; the run outlives its creating request,
+and a disconnected client only detaches.
+
+```text
+create (202)  -> dlightrag_answer_runs row + input blobs + references (one txn)
+claim         -> FOR UPDATE SKIP LOCKED, fencing epoch++, lease heartbeat
+execute       -> phase progress, coalesced token batches, per-turn checkpoint
+finish        -> canonical result + exactly one terminal event, same txn
+recover       -> expired lease reclaimed, resumed from the latest checkpoint
+```
+
+A process restart resumes from the latest completed control turn; generation
+interrupted mid-stream emits `reset` and regenerates. Four tables own that state:
+`dlightrag_answer_runs`, `dlightrag_answer_run_events`,
+`dlightrag_answer_artifacts`, and `dlightrag_answer_run_artifacts`. See
+[durable-answer-runs.md](durable-answer-runs.md) for the full contract and
+[postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
+
+## Web Conversation Boundary
+
+The browser channel wraps the same durable runs with a principal-scoped
+conversation lifecycle. A conversation owns navigation and history only: each
+turn is one row linking to the Answer run that owns the request input, the
+uploaded bytes, the streamed events, and the canonical result. The turn is
+inserted inside the run's own creation transaction, so history exists before the
+202 response.
+
+Uploaded answer attachments are stored once as owner-scoped content-addressed
+blobs in `dlightrag_answer_artifacts` and referenced by
+`dlightrag_answer_run_artifacts`; there is no Web-owned raw attachment table, no
+parsed-chunk table, and no vector cache. Historical attachments are re-registered
+lazily as request-local resources on every follow-up, newest first up to the
+available attachment-count limit. An attachment-bearing conversation therefore
+remains on the research path. Browser thumbnails are derived on demand. Manual
+deletion, conversation TTL pruning, and 30-day run retention all delete the
+linked runs, cascade their events and references, and release blobs no surviving
+run references.
 
 ## Retrieval And Answer Flow
 
@@ -185,12 +213,14 @@ filtering, reranking, citation, and multimodal-answer behavior.
 
 ## PostgreSQL Topology
 
-DlightRAG uses one PostgreSQL endpoint per service process. A writer process
-(the default) serves REST, Web, MCP, and SDK operations against a write-capable
-endpoint. Optional reader processes serve stateless read/query APIs against an
-infrastructure-provided read endpoint; they disable Web conversations and reject
-mutations. LightRAG's staged pipeline supports ingest and query together in the
-writer process.
+DlightRAG uses one PostgreSQL endpoint per service process. A writer process (the
+default) serves REST, Web, MCP, and SDK operations and owns schema migrations.
+A `reader` process is **corpus-read-only, not process-read-only**: it may create
+and execute answer runs and write DlightRAG operational state (runs, events,
+artifacts, Web conversations), while `require_writer()` still rejects ingestion,
+workspace creation/reset, metadata mutation, retry, and deletion. Both roles
+therefore use the same primary endpoint; DlightRAG makes no physical-standby or
+read-endpoint promise.
 
 Core storage is PostgreSQL 18:
 
@@ -202,10 +232,10 @@ Core storage is PostgreSQL 18:
 | Document status | `PGDocStatusStorage` |
 | BM25 | pg_textsearch |
 
-Replica routing, credentials, lag, and failover remain infrastructure concerns;
-DlightRAG exposes only the process-level `service_role: writer | reader`. See
-[postgresql.md](postgresql.md#reader-role-and-read-replicas) for the complete
-read-only attachment and deployment contract.
+Every process serving KB images or source downloads must see the same POSIX
+artifact tree at the same absolute `working_dir` path. See
+[postgresql.md](postgresql.md#service-roles-and-shared-artifacts) for the
+complete role, migration-order, and shared-artifact contract.
 
 ## Code Layering
 

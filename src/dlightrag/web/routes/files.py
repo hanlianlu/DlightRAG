@@ -234,7 +234,7 @@ async def upload_files(
     # The larger per-request cap is a temp-directory guard for multi-file
     # (folder) uploads.
     per_file_max_bytes = cfg.max_upload_bytes
-    batch_max_bytes = cfg.max_upload_size_mb * 1024 * 1024
+    batch_max_bytes = cfg.max_upload_batch_bytes
     per_file_max_mb = per_file_max_bytes // (1024 * 1024)
 
     selected_workspace = _resolve_workspace(workspace_name, workspace)

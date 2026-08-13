@@ -241,9 +241,9 @@ ANSWER_RUN_SCHEMA_TABLES = (
         ),
         indexes=(
             "idx_dlightrag_answer_runs_claim",
-            "idx_dlightrag_answer_runs_idempotency",
             "idx_dlightrag_answer_runs_retention",
         ),
+        unique_indexes=("idx_dlightrag_answer_runs_idempotency",),
     ),
     TableRequirement(
         name="dlightrag_answer_run_events",
@@ -265,7 +265,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "dlightrag_answer_run_events_type_check",
             "dlightrag_answer_run_events_sequence_check",
         ),
-        indexes=("idx_dlightrag_answer_run_events_terminal",),
+        unique_indexes=("idx_dlightrag_answer_run_events_terminal",),
     ),
     TableRequirement(
         name="dlightrag_answer_artifacts",
@@ -1017,6 +1017,9 @@ class PGAnswerRunStore:
         durable together.
         """
         owner = _require_owner(owner_id)
+        if any(reference.reference_kind == "fetched_resource" for reference in references):
+            # A fetched resource is worker-fenced run state, never accepted input.
+            raise ValueError("fetched_resource references cannot be run creation inputs")
         payload = _canonical_request_json(request)
         fingerprint = answer_run_request_fingerprint(request)
         run_uuid = _new_run_id()
@@ -1796,13 +1799,30 @@ def _digest_pairs(rows: Sequence[Any]) -> tuple[list[str], list[str]]:
 async def _delete_unreferenced(conn: Any, owners: Sequence[str], digests: Sequence[str]) -> int:
     """Delete blobs no run still references, yielding to concurrent adopters.
 
-    The delete runs inside its own savepoint. A RESTRICT raised by an adoption
+    Each delete runs inside its own savepoint. A RESTRICT raised by an adoption
     that beat the reference check must not abort the caller's transaction, or the
     run deletion it already performed would silently roll back and retention would
-    never advance past a contended batch.
+    never advance past a contended batch. One contended blob must not shield the
+    rest either, so a failed batch is retried digest by digest; the adopting run
+    now owns that blob and releases it when it is itself deleted.
     """
     if not owners:
         return 0
+    deleted = await _try_delete_unreferenced(conn, owners, digests)
+    if deleted is not None:
+        return deleted
+    if len(owners) == 1:
+        return 0
+    survivors = 0
+    for owner, digest in zip(owners, digests, strict=True):
+        survivors += await _try_delete_unreferenced(conn, [owner], [digest]) or 0
+    return survivors
+
+
+async def _try_delete_unreferenced(
+    conn: Any, owners: Sequence[str], digests: Sequence[str]
+) -> int | None:
+    """Delete one savepointed batch, or ``None`` when an adopter refused it."""
     try:
         async with conn.transaction():
             deleted = await conn.fetchval(_DELETE_UNREFERENCED_ARTIFACTS, owners, digests)
@@ -1810,9 +1830,7 @@ async def _delete_unreferenced(conn: Any, owners: Sequence[str], digests: Sequen
         asyncpg.exceptions.RestrictViolationError,
         asyncpg.exceptions.ForeignKeyViolationError,
     ):
-        # A run adopted one of these digests between the reference check and the
-        # delete; a later cleanup pass retries the blobs that survived.
-        return 0
+        return None
     return int(deleted or 0)
 
 

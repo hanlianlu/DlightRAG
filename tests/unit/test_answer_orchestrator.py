@@ -3,11 +3,13 @@
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from dlightrag.citations import finalize_answer
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.agent.tool_loop import AgentTool, ToolResult
 from dlightrag.core.agent.tools import SearchInput, build_run_tools
@@ -41,10 +43,36 @@ class ScriptedAgent:
         self.turn_calls.append(kwargs)
         return self._turns.pop(0)
 
-    async def final(self, *, messages: list[dict[str, Any]]) -> str:
-        """Tools-disabled final text call the orchestrator must route through."""
+    def stream_final(self, *, messages: list[dict[str, Any]]) -> AsyncIterator[str]:
+        """Tools-disabled final stream the orchestrator must route through."""
         self.final_calls.append(messages)
-        return self._final_text
+        text = self._final_text
+
+        async def tokens() -> AsyncIterator[str]:
+            yield text
+
+        return tokens()
+
+
+class _DrainedOrchestrator(AnswerOrchestrator):
+    """Test view that settles the one streaming path into a finalized result.
+
+    The durable worker does exactly this: stream every token, then finalize
+    citations over the ledger's contexts. Keeping it here lets the agent tests
+    assert on one settled answer without a second production execution path.
+    """
+
+    async def answer(self, query: str, **kwargs: Any) -> RetrievalResult:
+        contexts, stream = await self.answer_stream(query, **kwargs)
+        parts = [chunk async for chunk in stream] if stream is not None else []
+        text = getattr(stream, "answer", "") or "".join(parts)
+        finalized = finalize_answer(text, contexts)
+        return RetrievalResult(
+            answer=finalized.answer,
+            contexts=contexts,
+            sources=finalized.sources,
+            trace=dict(getattr(stream, "trace", None) or {}),
+        )
 
 
 def _tool(*calls: ToolCall) -> AssistantTurn:
@@ -158,8 +186,11 @@ def _research_synthesizer() -> AnswerSynthesizer:
 
 
 def _fast_synthesizer(answer_text: str = "Fast answer [1-1].") -> AnswerSynthesizer:
-    async def model_func(*, messages: list[dict[str, Any]], **_kwargs: Any) -> str:
-        return answer_text
+    async def model_func(*, messages: list[dict[str, Any]], **_kwargs: Any) -> AsyncIterator[str]:
+        async def tokens() -> AsyncIterator[str]:
+            yield answer_text
+
+        return tokens()
 
     return AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
 
@@ -176,14 +207,13 @@ def _research(
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
     max_agent_turns: int = 50,
     image_budget: AnswerImageBudget | None = None,
-) -> AnswerOrchestrator:
-    return AnswerOrchestrator(
+) -> _DrainedOrchestrator:
+    return _DrainedOrchestrator(
         synthesizer=_research_synthesizer(),
         retrieve_knowledge_base=retrieve,
         search_web=search,
         model_func=agent.turn,
-        stream_model_func=stream_model_func,
-        final_text_func=agent.final,
+        stream_model_func=stream_model_func or agent.stream_final,
         resource_tools=resource_tools,
         resource_manifest=resource_manifest,
         register_web_source=register_web_source,
@@ -231,7 +261,7 @@ async def test_pure_knowledge_base_takes_fast_path_with_no_control_turn() -> Non
         retrieved.append(query)
         return _corpus_result()
 
-    orchestrator = AnswerOrchestrator(
+    orchestrator = _DrainedOrchestrator(
         synthesizer=_fast_synthesizer(),
         retrieve_knowledge_base=retrieve,
         search_web=None,
@@ -250,7 +280,7 @@ async def test_fast_path_streams_one_synthesis() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
 
-    orchestrator = AnswerOrchestrator(
+    orchestrator = _DrainedOrchestrator(
         synthesizer=_fast_synthesizer(),
         retrieve_knowledge_base=retrieve,
         search_web=None,
@@ -287,12 +317,12 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
         _answer("draft that is not the final answer"),
         final_text="From the attachment [1-1].",
     )
-    orchestrator = AnswerOrchestrator(
+    orchestrator = _DrainedOrchestrator(
         synthesizer=_research_synthesizer(),
         retrieve_knowledge_base=retrieve,
         search_web=None,
         model_func=agent.turn,
-        final_text_func=agent.final,
+        stream_model_func=agent.stream_final,
         resource_tools=[
             _fake_read_tool(
                 "attachment evidence\n[more text available; cursor=volatile]",
@@ -392,11 +422,11 @@ async def test_current_image_manifest_binds_resources_and_marks_images_visible()
         return _corpus_result()
 
     agent = ScriptedAgent(_answer("ready"), final_text="Image answer.")
-    orchestrator = AnswerOrchestrator(
+    orchestrator = _DrainedOrchestrator(
         synthesizer=_research_synthesizer(),
         retrieve_knowledge_base=retrieve,
         model_func=agent.turn,
-        final_text_func=agent.final,
+        stream_model_func=agent.stream_final,
         resource_tools=[_fake_read_tool()],
         resource_manifest=(
             ResourceManifestEntry(
@@ -1182,13 +1212,11 @@ async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() ->
     result = await _research(agent, retrieve, search).answer("Question")
 
     # The control turn only signals a stop; a distinct tools-disabled synthesis
-    # produces the answer and the synthesizer owns finalization + answer media.
+    # produces the answer that citation finalization then settles.
     assert len(agent.final_calls) == 1
     assert result.answer == "Synthesized final [1-1][2-1]."
     assert "DRAFT control-turn text" not in (result.answer or "")
     assert [source.id for source in result.sources] == ["1", "2"]
-    assert result.references
-    assert result.answer_blocks
     # The final call carries the reasoning-bearing tool transcript, no live tools.
     final_messages = agent.final_calls[0]
     assert any(msg.get("role") == "assistant" for msg in final_messages)

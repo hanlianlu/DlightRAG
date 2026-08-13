@@ -64,18 +64,30 @@ async def _pg_available() -> bool:
 
 
 @pytest.fixture
-async def pool() -> AsyncIterator[Any]:
-    """Provision an isolated throwaway database and yield a pool bound to it."""
+async def db_name() -> AsyncIterator[str]:
+    """Provision an isolated throwaway database and yield its name."""
     if not await _pg_available():
         pytest.skip("PostgreSQL not available")
 
-    db_name = f"dlightrag_weblink_{uuid.uuid4().hex[:12]}"
+    name = f"dlightrag_weblink_{uuid.uuid4().hex[:12]}"
     admin = await asyncpg.connect(**_PG_CONN_KWARGS)
     try:
-        await admin.execute(f'CREATE DATABASE "{db_name}"')
+        await admin.execute(f'CREATE DATABASE "{name}"')
     finally:
         await admin.close()
+    try:
+        yield name
+    finally:
+        admin = await asyncpg.connect(**_PG_CONN_KWARGS)
+        try:
+            await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        finally:
+            await admin.close()
 
+
+@pytest.fixture
+async def pool(db_name: str) -> AsyncIterator[Any]:
+    """Yield a pool bound to this test's throwaway database."""
     created = await asyncpg.create_pool(
         **{**_PG_CONN_KWARGS, "database": db_name}, min_size=1, max_size=8
     )
@@ -83,11 +95,6 @@ async def pool() -> AsyncIterator[Any]:
         yield created
     finally:
         await created.close()
-        admin = await asyncpg.connect(**_PG_CONN_KWARGS)
-        try:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
-        finally:
-            await admin.close()
 
 
 @pytest.fixture
@@ -709,6 +716,60 @@ async def test_trimming_the_conversation_window_removes_the_oldest_runs(
 
     assert await _count(pool, "web_conversation_turns") == 2
     assert await _count(pool, "dlightrag_answer_runs") == 2
+
+
+# ---------------------------------------------------------------------------
+# Retention/deletion lock order
+# ---------------------------------------------------------------------------
+
+
+async def test_conversation_deletion_takes_the_same_lock_order_as_run_retention(
+    store: PGWebConversationStore, db_name: str, pool: Any
+) -> None:
+    """Both deletion paths must lock the run row before its conversation turn.
+
+    Retention now runs on every process, so a conversation delete racing a prune
+    is ordinary traffic. The blocking connection reproduces exactly what
+    ``prune_expired_runs`` does: lock the expired run, then delete it and let the
+    cascade take its turn. If conversation deletion removed the turn first, the
+    two transactions would hold each other's next lock and PostgreSQL would abort
+    one of them.
+    """
+    conversation_id = await _conversation(store)
+    creation = await _submit(store, conversation_id)
+    assert creation is not None
+    run_uuid = uuid.UUID(creation.turn.answer_run_id)
+
+    blocker = await asyncpg.connect(**{**_PG_CONN_KWARGS, "database": db_name})
+    try:
+        transaction = blocker.transaction()
+        await transaction.start()
+        await blocker.fetchrow(
+            "SELECT run_id FROM dlightrag_answer_runs "
+            "WHERE owner_id = $1 AND run_id = $2 FOR UPDATE",
+            _OWNER,
+            run_uuid,
+        )
+
+        deleting = asyncio.create_task(
+            store.delete_conversation(_OWNER, conversation_id, ttl_days=_TTL_DAYS)
+        )
+        await asyncio.sleep(0.3)
+        assert not deleting.done()
+
+        await blocker.execute(
+            "DELETE FROM dlightrag_answer_runs WHERE owner_id = $1 AND run_id = $2",
+            _OWNER,
+            run_uuid,
+        )
+        await transaction.commit()
+
+        assert await asyncio.wait_for(deleting, timeout=10) is True
+    finally:
+        await blocker.close()
+
+    assert await _count(pool, "web_conversations") == 0
+    assert await _count(pool, "web_conversation_turns") == 0
 
 
 # ---------------------------------------------------------------------------

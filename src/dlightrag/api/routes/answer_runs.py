@@ -59,9 +59,6 @@ _KEEPALIVE_FRAME = ": keepalive\n\n"
 
 _ALLOWED_ANSWER_PARTS = {"request", "attachments"}
 _MAX_ANSWER_FORM_FIELDS = 8
-# Comfortably holds the JSON `request` part (query, history, filters, links) so a
-# small per-attachment cap never truncates the request envelope.
-_ANSWER_REQUEST_PART_CEILING = ANSWER_REQUEST_PART_MAX_BYTES
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +111,7 @@ async def _parse_answer_body(
         form = await request.form(
             max_files=max_attachments + 2,
             max_fields=_MAX_ANSWER_FORM_FIELDS,
-            max_part_size=_ANSWER_REQUEST_PART_CEILING,
+            max_part_size=ANSWER_REQUEST_PART_MAX_BYTES,
         )
     except StarletteHTTPException as exc:
         detail = str(exc.detail)
@@ -138,10 +135,10 @@ async def _parse_answer_body(
             )
         raw_request = request_parts[0]
         if isinstance(raw_request, StarletteUploadFile):
-            if raw_request.size is not None and raw_request.size > _ANSWER_REQUEST_PART_CEILING:
+            if raw_request.size is not None and raw_request.size > ANSWER_REQUEST_PART_MAX_BYTES:
                 raise HTTPException(status_code=413, detail="Answer request part is too large")
-            request_json = await raw_request.read(_ANSWER_REQUEST_PART_CEILING + 1)
-            if len(request_json) > _ANSWER_REQUEST_PART_CEILING:
+            request_json = await raw_request.read(ANSWER_REQUEST_PART_MAX_BYTES + 1)
+            if len(request_json) > ANSWER_REQUEST_PART_MAX_BYTES:
                 raise HTTPException(status_code=413, detail="Answer request part is too large")
         else:
             request_json = raw_request

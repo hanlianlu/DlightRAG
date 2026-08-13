@@ -1285,19 +1285,23 @@ class TestRetention:
 # ---------------------------------------------------------------------------
 
 
-async def _force_blob_delete_restrict(pool: Any) -> None:
-    """Make every blob delete raise SQLSTATE 23001, exactly as an adopted blob does.
+async def _force_blob_delete_restrict(pool: Any, *, only_digest: str | None = None) -> None:
+    """Make blob deletes raise SQLSTATE 23001, exactly as an adopted blob does.
 
     A real adopter usually loses to ``FOR UPDATE SKIP LOCKED``, so the surviving
     window is too narrow to schedule. The trigger reproduces the identical
     ``RestrictViolationError`` inside a real transaction, which is what decides
-    whether the caller's run deletion survives.
+    whether the caller's run deletion survives. ``only_digest`` contends exactly
+    one blob so a mixed batch can be observed.
     """
+    guard = "IF OLD.digest = $q$" + only_digest + "$q$ THEN" if only_digest else "IF true THEN"
     async with pool.acquire() as conn:
         await conn.execute(
             "CREATE FUNCTION dlightrag_test_restrict() RETURNS trigger "
             "LANGUAGE plpgsql AS $$ BEGIN "
+            f"{guard} "
             "RAISE EXCEPTION 'blob adopted concurrently' USING ERRCODE = '23001'; "
+            "END IF; RETURN OLD; "
             "END; $$"
         )
         await conn.execute(
@@ -1362,6 +1366,36 @@ class TestBlobCleanupFailureIsolation:
         assert (await store.prune_expired_runs()).runs == 0
         for digest in digests:
             assert await store.load_artifact(owner_id=_OWNER, digest=digest) is not None
+
+    async def test_one_contended_digest_does_not_shield_unrelated_orphans(
+        self, store, pool
+    ) -> None:
+        """A mixed batch must not let one adopted blob keep every other orphan alive."""
+        digests: list[str] = []
+        run_ids: list[str] = []
+        for index in range(3):
+            artifact = PendingArtifact(content=f"mixed bytes {index}".encode())
+            creation = await store.create_run(
+                owner_id=_OWNER,
+                request=_request(f"mixed-{index}"),
+                artifacts=[artifact],
+                references=[_reference(artifact.digest)],
+            )
+            await _succeed_and_expire(store, pool, creation.run.run_id)
+            digests.append(artifact.digest)
+            run_ids.append(creation.run.run_id)
+        contended = digests[1]
+        await _force_blob_delete_restrict(pool, only_digest=contended)
+
+        outcome = await store.prune_expired_runs()
+
+        assert outcome.runs == 3
+        assert outcome.artifacts == 2
+        for run_id in run_ids:
+            assert await store.get_run(owner_id=_OWNER, run_id=run_id) is None
+        assert await store.load_artifact(owner_id=_OWNER, digest=contended) is not None
+        for digest in (digests[0], digests[2]):
+            assert await store.load_artifact(owner_id=_OWNER, digest=digest) is None
 
 
 # ---------------------------------------------------------------------------

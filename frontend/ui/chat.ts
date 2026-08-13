@@ -49,10 +49,6 @@ export function cancelQuery(): void {
     });
 }
 
-export function isQueryInFlight(): boolean {
-    return queryInFlight;
-}
-
 /** True only until the server has accepted the submission as a durable run. */
 export function isSubmissionPending(): boolean {
     return submissionPending;

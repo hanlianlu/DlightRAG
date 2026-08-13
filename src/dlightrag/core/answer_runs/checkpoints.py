@@ -14,7 +14,6 @@ reads what it originally fetched rather than whatever the page serves now.
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
@@ -167,14 +166,16 @@ async def _restore_fetched_bytes(
         return
     references = await store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
     stored = {
-        str(reference.resource_id): str(reference.digest)
+        str(reference.resource_id): (str(reference.digest), int(reference.ordinal))
         for reference in references
         if str(reference.reference_kind) == "fetched_resource"
     }
-    for resource_id in slots:
-        digest = stored.get(resource_id)
+    for resource_id, ordinal in slots.items():
+        reference = stored.get(resource_id)
         content = (
-            None if digest is None else await store.load_artifact(owner_id=owner_id, digest=digest)
+            None
+            if reference is None or reference[1] != ordinal
+            else await store.load_artifact(owner_id=owner_id, digest=reference[0])
         )
         if content is None:
             raise CheckpointError(
@@ -195,8 +196,11 @@ def _substitute_images(node: Any, *, ordinals: Mapping[str, int]) -> None:
         typed = dict[str, Any](node)
         for key in _IMAGE_KEYS:
             payload = typed.get(key)
-            if isinstance(payload, str) and _looks_like_image(payload):
-                node[key] = _reference_for(typed, payload, ordinals=ordinals)
+            if not isinstance(payload, str) or not payload:
+                continue
+            reference = _reference_for(typed, payload, ordinals=ordinals)
+            if reference is not None:
+                node[key] = reference
         for value in typed.values():
             _substitute_images(value, ordinals=ordinals)
         return
@@ -207,7 +211,16 @@ def _substitute_images(node: Any, *, ordinals: Mapping[str, int]) -> None:
 
 def _reference_for(
     owner: Mapping[str, Any], payload: str, *, ordinals: Mapping[str, int]
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    """Durable reference for one image payload, or ``None`` to leave it alone.
+
+    An evidence row keeps a knowledge-base visual as raw base64, so that case is
+    recognized by the row's workspace and chunk identity. Every model-visible
+    image block is normalized to a ``data:`` URI before it reaches an episode, so
+    any other string is ordinary text or a plain link and is never rewritten;
+    guessing at base64 shape would turn a digest into a reference to bytes no
+    artifact holds and fail the resumed run.
+    """
     chunk_id = owner.get("chunk_id")
     workspace = owner.get("_workspace")
     if chunk_id and workspace:
@@ -217,6 +230,8 @@ def _reference_for(
             "chunk_id": str(chunk_id),
             "sidecar": str(owner.get("sidecar_location") or ""),
         }
+    if not _is_image_data_uri(payload):
+        return None
     media_type, raw = _decode_image(payload)
     digest = hashlib.sha256(raw).hexdigest()
     return {
@@ -290,26 +305,14 @@ async def _restore_image(
     return f"data:{media_type};base64,{encoded}" if media_type else encoded
 
 
-def _looks_like_image(payload: str) -> bool:
-    if payload.startswith(_DATA_URI_PREFIX):
-        return ";base64," in payload
-    return len(payload) > 32 and _decodes_as_base64(payload)
-
-
-def _decodes_as_base64(payload: str) -> bool:
-    try:
-        base64.b64decode(payload, validate=True)
-    except binascii.Error, ValueError:
-        return False
-    return True
+def _is_image_data_uri(payload: str) -> bool:
+    return payload.startswith(_DATA_URI_PREFIX) and ";base64," in payload
 
 
 def _decode_image(payload: str) -> tuple[str | None, bytes]:
-    if payload.startswith(_DATA_URI_PREFIX):
-        header, _, encoded = payload.partition(",")
-        media_type = header[len(_DATA_URI_PREFIX) :].removesuffix(";base64") or None
-        return media_type, base64.b64decode(encoded, validate=False)
-    return None, base64.b64decode(payload, validate=False)
+    header, _, encoded = payload.partition(",")
+    media_type = header[len(_DATA_URI_PREFIX) :].removesuffix(";base64") or None
+    return media_type, base64.b64decode(encoded, validate=False)
 
 
 __all__ = [

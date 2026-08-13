@@ -154,9 +154,26 @@ async def _execute_call(
     call: ToolCall,
     tools: dict[str, AgentTool],
 ) -> ToolExecution:
+    """Execute one model tool call under exactly one observation span."""
     from dlightrag.observability import trace_observation
 
     started = time.perf_counter()
+    async with trace_observation(
+        "agent_tool",
+        as_type="tool",
+        metadata={"tool": call.name, "call_id": call.id},
+    ) as span:
+        execution = await _dispatch_call(call, tools, started=started)
+        span.update(output=execution.observation.as_dict())
+        return execution
+
+
+async def _dispatch_call(
+    call: ToolCall,
+    tools: dict[str, AgentTool],
+    *,
+    started: float,
+) -> ToolExecution:
     tool = tools.get(call.name)
     if tool is None:
         return _error(
@@ -181,39 +198,31 @@ async def _execute_call(
             outcome="invalid_arguments",
             started=started,
         )
-    async with trace_observation(
-        "agent_tool",
-        as_type="tool",
-        metadata={"tool": call.name, "call_id": call.id},
-    ) as span:
-        try:
-            result = await tool.execute(arguments)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # The model only ever sees the message; the traceback belongs to the operator.
-            logger.warning("Agent tool %r failed", call.name, exc_info=True)
-            execution = _error(
-                call,
-                f'Tool "{call.name}" failed: {exc}',
-                outcome="failed",
-                started=started,
-            )
-        else:
-            execution = ToolExecution(
-                call=call,
-                result=result,
-                observation=_observe(
-                    call,
-                    outcome="cached" if result.cached else "ok",
-                    started=started,
-                    cached=result.cached,
-                    is_error=False,
-                    content=result.content,
-                ),
-            )
-        span.update(output=execution.observation.as_dict())
-        return execution
+    try:
+        result = await tool.execute(arguments)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # The model only ever sees the message; the traceback belongs to the operator.
+        logger.warning("Agent tool %r failed", call.name, exc_info=True)
+        return _error(
+            call,
+            f'Tool "{call.name}" failed: {exc}',
+            outcome="failed",
+            started=started,
+        )
+    return ToolExecution(
+        call=call,
+        result=result,
+        observation=_observe(
+            call,
+            outcome="cached" if result.cached else "ok",
+            started=started,
+            cached=result.cached,
+            is_error=False,
+            content=result.content,
+        ),
+    )
 
 
 def _error(call: ToolCall, message: str, *, outcome: str, started: float) -> ToolExecution:

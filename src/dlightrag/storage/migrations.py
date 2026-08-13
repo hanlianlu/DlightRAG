@@ -45,6 +45,12 @@ JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
 WHERE i.indrelid = $1 AND i.indisvalid AND i.indisready
 """
 
+_TABLE_UNIQUE_INDEXES = """SELECT c.relname AS name
+FROM pg_catalog.pg_index i
+JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+WHERE i.indrelid = $1 AND i.indisvalid AND i.indisready AND i.indisunique
+"""
+
 _TABLE_CHECKS = """SELECT con.conname AS name
 FROM pg_catalog.pg_constraint con
 WHERE con.conrelid = $1 AND con.contype = 'c' AND con.convalidated
@@ -92,7 +98,10 @@ class TableRequirement:
     """Schema objects one revision requires on one table.
 
     Only declared objects are checked, so historical columns, indexes, and
-    constraints an older revision left behind stay acceptable.
+    constraints an older revision left behind stay acceptable. ``unique_indexes``
+    names the partial unique indexes that enforce an invariant no constraint can
+    express; the catalog must report them as unique, because a same-named index
+    rebuilt without uniqueness would silently retire that invariant.
     """
 
     name: str
@@ -102,6 +111,7 @@ class TableRequirement:
     foreign_keys: tuple[ForeignKeyRequirement, ...] = ()
     checks: tuple[str, ...] = ()
     indexes: tuple[str, ...] = ()
+    unique_indexes: tuple[str, ...] = ()
 
 
 class SchemaValidationError(RuntimeError):
@@ -223,6 +233,9 @@ async def _absent_table_objects(conn: Any, table: TableRequirement) -> list[str]
     if table.indexes:
         present = await _names(conn, _TABLE_INDEXES, oid)
         absent += [f"index {name}" for name in table.indexes if name not in present]
+    if table.unique_indexes:
+        present = await _names(conn, _TABLE_UNIQUE_INDEXES, oid)
+        absent += [f"unique index {name}" for name in table.unique_indexes if name not in present]
     if table.checks:
         present = await _names(conn, _TABLE_CHECKS, oid)
         absent += [f"constraint {name}" for name in table.checks if name not in present]

@@ -10,7 +10,6 @@ from urllib.parse import quote, unquote, urlsplit
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.core.access import can_project_workspace_visual
-from dlightrag.core.answer.media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
@@ -250,49 +249,8 @@ def retrieval_payload(
     }
 
 
-def answer_payload(
-    result: RetrievalResult,
-    *,
-    source_link_builder: SourceDownloadLinkBuilder | None = None,
-    downloadable_workspaces: set[str] | None = None,
-    visual_workspaces: set[str] | None = None,
-    image_url_prefix: str | None = "/images",
-) -> dict[str, Any]:
-    """Project generated answer results into a client-safe response dictionary."""
-    source_payloads = project_source_payloads(
-        result.sources,
-        resolver=source_link_builder,
-        downloadable_workspaces=downloadable_workspaces,
-        visual_workspaces=visual_workspaces,
-    )
-    answer_images = result.answer_images
-    answer_blocks = result.answer_blocks
-    if visual_workspaces is not None:
-        answer_images = answer_images_from_sources(
-            result.sources,
-            contexts=result.contexts,
-            visual_workspaces=visual_workspaces,
-        )
-        answer_blocks = answer_blocks_from_markdown(result.answer, answer_images)
-    return {
-        "answer": result.answer,
-        "contexts": project_contexts_for_client(
-            result.contexts,
-            image_url_prefix=image_url_prefix,
-            visual_workspaces=visual_workspaces,
-        ),
-        "references": [{"id": ref.id, "title": ref.title} for ref in result.references],
-        "sources": [source.model_dump() for source in source_payloads],
-        "answer_images": answer_images,
-        "answer_blocks": answer_blocks,
-        "trace": result.trace,
-        "image_descriptions": result.image_descriptions,
-    }
-
-
 __all__ = [
     "SourceDownloadInvariantError",
-    "answer_payload",
     "metadata_filter_from_payload",
     "project_contexts_for_client",
     "project_source_payloads",

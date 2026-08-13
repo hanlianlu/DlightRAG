@@ -9,6 +9,7 @@ middleware, exception handlers, and router mounting.
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,11 +29,46 @@ from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.storage.migrations import SchemaValidationError
 
+if TYPE_CHECKING:
+    from dlightrag.config import DlightragConfig
+
 logger = logging.getLogger(__name__)
 
 # Room for the query, workspace list and identifiers that travel beside the images.
 _JSON_BODY_OVERHEAD_BYTES = 64 * 1024
-_MULTIPART_ENVELOPE_BYTES = 2 * 1024 * 1024 + 64 * 1024
+# Multipart framing: boundaries, part headers, and the small text fields beside files.
+_MULTIPART_FRAMING_BYTES = 64 * 1024
+# Ingest and Web workspace uploads additionally carry a per-request metadata envelope.
+_MULTIPART_ENVELOPE_BYTES = 2 * 1024 * 1024 + _MULTIPART_FRAMING_BYTES
+
+
+def _request_body_limits(cfg: DlightragConfig) -> tuple[int, dict[str, int]]:
+    """Derive the receive-layer caps once, before any body is parsed.
+
+    These are transport ceilings that keep an oversized or chunked body out of
+    memory and temporary storage. They deliberately sit above each route's
+    semantic limits — attachment count, per-item bytes, total bytes, pixels —
+    which stay in the routes because only the route knows what the parts mean.
+    """
+    # Base64 inflates an image by 4/3.
+    encoded_image_bytes = ((cfg.answer.image_max_bytes + 2) // 3) * 4
+    answer_multipart_max = (
+        cfg.answer.max_total_attachment_bytes
+        + ANSWER_REQUEST_PART_MAX_BYTES
+        + _MULTIPART_FRAMING_BYTES
+    )
+    return (
+        max(
+            _JSON_BODY_OVERHEAD_BYTES + MAX_QUERY_IMAGES * encoded_image_bytes,
+            ANSWER_REQUEST_PART_MAX_BYTES,
+        ),
+        {
+            "/answer": answer_multipart_max,
+            "/web/answer": answer_multipart_max,
+            "/ingest/blob": cfg.max_upload_bytes + _MULTIPART_ENVELOPE_BYTES,
+            "/web/files/upload": cfg.max_upload_batch_bytes + _MULTIPART_ENVELOPE_BYTES,
+        },
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -80,24 +116,12 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
     application.state.config = cfg
 
     # Install the body limiter before response middleware so its 413 replies still
-    # receive CORS and request-ID headers. Base64 inflates an image by 4/3.
-    encoded_image_bytes = ((cfg.answer.image_max_bytes + 2) // 3) * 4
-    retrieve_image_bytes = MAX_QUERY_IMAGES * encoded_image_bytes
-    answer_multipart_max = (
-        cfg.answer.max_total_attachment_bytes + ANSWER_REQUEST_PART_MAX_BYTES + 64 * 1024
-    )
+    # receive CORS and request-ID headers.
+    max_body_bytes, multipart_path_max_bytes = _request_body_limits(cfg)
     application.add_middleware(
         RequestBodyLimitMiddleware,
-        max_bytes=max(
-            _JSON_BODY_OVERHEAD_BYTES + retrieve_image_bytes,
-            ANSWER_REQUEST_PART_MAX_BYTES,
-        ),
-        multipart_path_max_bytes={
-            "/answer": answer_multipart_max,
-            "/web/answer": answer_multipart_max,
-            "/ingest/blob": cfg.max_upload_bytes + _MULTIPART_ENVELOPE_BYTES,
-            "/web/files/upload": (cfg.max_upload_size_mb * 1024 * 1024 + _MULTIPART_ENVELOPE_BYTES),
-        },
+        max_bytes=max_body_bytes,
+        multipart_path_max_bytes=multipart_path_max_bytes,
     )
 
     # -- Request ID middleware --

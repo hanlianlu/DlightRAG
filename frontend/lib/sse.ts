@@ -60,28 +60,3 @@ export function createSSEParser(onEvent: SSEEventHandler): SSEParser {
     },
   };
 }
-
-export async function streamSSE(
-  response: Response,
-  onEvent: SSEEventHandler,
-): Promise<void> {
-  if (!response.body) {
-    throw new Error('Response body is not streamable');
-  }
-  const parser = createSSEParser(onEvent);
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-
-  try {
-    while (true) {
-      const result = await reader.read();
-      if (result.done) break;
-      parser.push(decoder.decode(result.value, {stream: true}));
-    }
-    parser.push(decoder.decode());
-    parser.flush();
-  } finally {
-    // Release the underlying connection on any exit (completion, error, abort).
-    reader.cancel().catch(() => {});
-  }
-}

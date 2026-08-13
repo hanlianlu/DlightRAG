@@ -336,6 +336,38 @@ def _recording_probe(sink: list[str], status: ImageCapabilityStatus):
     return probe
 
 
+async def test_a_slow_probe_does_not_spend_its_own_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreachable model must not be re-probed the moment its timeout returns."""
+    import asyncio
+
+    from dlightrag.core.vision_probe import ModelImageCapabilities
+
+    probed: list[str] = []
+
+    async def slow_probe(_provider, *, model, model_kwargs=None):
+        probed.append(model)
+        await asyncio.sleep(0.05)
+        return ImageProbeOutcome(status="unknown", failure_kind="TimeoutError")
+
+    class _StubProvider:
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "dlightrag.models.providers.get_provider", lambda *_a, **_k: _StubProvider()
+    )
+    monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", slow_probe)
+    capabilities = ModelImageCapabilities(reprobe_cooldown_seconds=0.04)
+    cfg = ModelConfig(model="unreachable", api_key="k")
+
+    await capabilities.resolve(cfg)
+    await capabilities.resolve(cfg)
+
+    assert probed == ["unreachable"]
+
+
 async def test_concurrent_resolution_of_one_configuration_probes_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -433,6 +465,21 @@ async def test_zero_configured_ceiling_disables_answer_images_without_a_model_ca
     assert capability.status == "unsupported"
     assert capability.failure_kind == "config_disabled"
     assert capability.effective_max_images == 0
+
+
+async def test_zero_configured_ceiling_settles_the_vlm_role_without_a_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No role has an image slot under a zero ceiling, so the probe buys nothing."""
+    probed = _probed_models(monkeypatch, "supported")
+    config = _role_config()
+    config.answer.max_images = 0
+    manager = RAGServiceManager(config=config)
+
+    await manager._probe_vlm_image_capability()
+
+    assert probed == []
+    assert manager._vlm_image_status == "unsupported"
 
 
 async def test_rerank_capability_is_probed_from_the_rerank_scoring_model(

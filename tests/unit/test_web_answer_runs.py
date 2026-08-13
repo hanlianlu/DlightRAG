@@ -112,7 +112,7 @@ async def test_replaying_a_submission_returns_the_authoritative_run(
     client: AsyncClient, service: AsyncMock
 ) -> None:
     service.start_answer.return_value = web_answer_submission(
-        conversation_id=_CID, run=answer_run(status="running"), replayed=True
+        conversation_id=_CID, run=answer_run(status="running")
     )
 
     response = await client.post("/web/answer", json=_BODY)

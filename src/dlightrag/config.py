@@ -1328,6 +1328,11 @@ class DlightragConfig(BaseSettings):
         """Whether this process runs as a corpus-read-only reader."""
         return self.service_role == "reader"
 
+    @property
+    def max_upload_batch_bytes(self) -> int:
+        """Total byte cap for one multi-file Web upload request."""
+        return self.max_upload_size_mb * 1024 * 1024
+
     def require_writer(self, operation: str) -> None:
         """Reject a corpus-mutating operation on a reader process.
 

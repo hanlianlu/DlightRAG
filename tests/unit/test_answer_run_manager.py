@@ -173,6 +173,7 @@ def _runtime_tasks() -> list[str]:
 
 
 _ONE_RUNTIME = [
+    "AnswerRunCoordinator._maintain_forever",
     "AnswerRunCoordinator._schedule_forever",
     "AnswerRunCoordinator._sweep_forever",
 ]
@@ -384,7 +385,7 @@ class TestRunExecution:
         result = await manager._execute_answer_run(cast(RunSession, session))
 
         assert session.tokens == ["hello world"]
-        assert session.phases == ["searching", "generating"]
+        assert session.phases == ["planning", "searching", "generating"]
         assert result["answer"] == "hello world"
         assert result["trace"]["query_image_description_count"] == 0
         assert "sources" in result and "contexts" in result

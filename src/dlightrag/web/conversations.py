@@ -84,7 +84,6 @@ class WebAnswerSubmission:
     turn_id: str
     turn_number: int
     conversation: ConversationSummary
-    replayed: bool
 
 
 class WebConversationService:
@@ -372,7 +371,6 @@ def _submission(creation: AnswerTurnCreation) -> WebAnswerSubmission:
         turn_id=creation.turn.turn_id,
         turn_number=creation.turn.turn_number,
         conversation=_conversation_summary(creation.summary),
-        replayed=creation.replayed,
     )
 
 

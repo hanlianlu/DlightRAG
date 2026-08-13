@@ -225,10 +225,22 @@ channels take the same answer inputs: a query plus optional **attachments**
 become request-local resources read on demand — deterministic text decoding and
 conversion first, focused VLM inspection for figures — and are bounded by
 `answer.max_attachments` (default 6), a per-attachment size cap (100 MiB), and a
-per-request total (128 MiB). The Web store persists uploaded attachments verbatim
-per turn and re-registers historical ones lazily on follow-ups. The separate
-`/retrieve` path keeps its own `query_images` current-image inputs for
-knowledge-base visual search.
+per-request total (128 MiB). Uploaded bytes are stored once as owner-scoped
+content-addressed artifacts owned by the run, and historical ones are
+re-registered lazily on follow-ups. The separate `/retrieve` path keeps its own
+`query_images` current-image inputs for knowledge-base visual search.
+
+### Durable answers
+
+Every answer is one durable run with one identifier and one lifecycle, shared by
+REST, MCP, Web, the SDK, the CLI, and evaluation. `POST /answer` returns HTTP 202
+with the run's status, events, and cancel URLs; the run outlives its creating
+request, so a disconnected client only detaches. Events are reconnectable SSE
+resumed by durable sequence, a process restart resumes from the latest completed
+control turn, and `DELETE /answer/{run_id}` is the only client action that
+cancels. Terminal runs and their event logs expire after 30 days, except a
+succeeded run a Web conversation still shows. See
+[docs/durable-answer-runs.md](docs/durable-answer-runs.md).
 
 ### REST
 
@@ -241,9 +253,13 @@ curl -X POST http://localhost:8100/ingest \
 
 curl http://localhost:8100/ingest/jobs/<job_id>
 
-curl -X POST http://localhost:8100/answer \
+# Answers are durable runs: POST returns 202 with the run's URLs.
+RUN=$(curl -sS -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
-  -d '{"query": "What are the key findings?", "stream": false}'
+  -d '{"query": "What are the key findings?"}' | jq -r .run_id)
+
+curl -N "http://localhost:8100/answer/$RUN/events"   # follow, resumable by id
+curl "http://localhost:8100/answer/$RUN"             # status + canonical result
 ```
 
 All SDK, REST, MCP, Web contracts and response shapes are in
@@ -386,8 +402,10 @@ deployments should enable auth:
 
 DlightRAG verifies bearer tokens and can enforce workspace/action access
 control. It does not issue OAuth tokens or manage users. Use an external IdP or
-gateway for login and token issuance. Full guidance is in
-[docs/security.md](docs/security.md).
+gateway for login and token issuance. Generic request-rate limiting, WAF rules,
+DDoS protection, TLS termination, and connection caps belong to your ingress
+(Front Door, Application Gateway, APIM, NGINX); DlightRAG ships no in-process
+rate limiter. Full guidance is in [docs/security.md](docs/security.md).
 
 ## Operations And Development
 
@@ -433,6 +451,7 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 - [docs/configuration.md](docs/configuration.md) - configuration precedence, fields, and defaults.
 - [docs/retrieval-answer.md](docs/retrieval-answer.md) - retrieval, filters, BM25, fusion, rerank, answers, citations, and highlights.
 - [docs/postgresql.md](docs/postgresql.md) - PostgreSQL requirements and tuning.
+- [docs/durable-answer-runs.md](docs/durable-answer-runs.md) - the durable Answer run contract.
 - [docs/operations.md](docs/operations.md) - maintenance commands and recovery workflows.
 - [docs/evaluation.md](docs/evaluation.md) - RAGAS evaluation workflow.
 - [docs/web-theme-design.md](docs/web-theme-design.md) - current Web appearance state, tokens, interaction, and accessibility design.

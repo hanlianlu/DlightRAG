@@ -324,13 +324,21 @@ export function setAnswerError(turn: ChatTurn, message: unknown): void {
 
 /** A recoverable connection failure: the run continues, so offer a reattach. */
 export function setAnswerRetryable(turn: ChatTurn, message: string, onRetry: () => void): void {
-  setAnswerError(turn, message);
+  // The run keeps producing, so this is a status rather than the terminal error
+  // style, and the live progress indicator must not sit beside the notice.
+  turn.contentDiv
+    .querySelectorAll('.' + chatStyles.streamingDot + ', .' + chatStyles.progressPhase)
+    .forEach((node) => node.remove());
+  turn.contentDiv.classList.remove(chatStyles.textError);
+  const notice = document.createElement('span');
+  notice.setAttribute('role', 'status');
+  notice.textContent = message;
   const retry = document.createElement('button');
   retry.type = 'button';
   retry.textContent = 'Reconnect';
   retry.setAttribute('aria-label', 'Reconnect to this answer');
   retry.addEventListener('click', onRetry);
-  turn.contentDiv.append(document.createTextNode(' '), retry);
+  turn.contentDiv.append(notice, document.createTextNode(' '), retry);
 }
 
 export function markAnswerStopped(turn: ChatTurn): void {

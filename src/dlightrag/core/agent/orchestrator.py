@@ -30,14 +30,13 @@ from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.resources.registry import ResourceRegistry
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.models.tool_turn import AssistantTurn
 
 logger = logging.getLogger(__name__)
 
 ToolModel = Callable[..., Awaitable[AssistantTurn]]
 StreamModel = Callable[..., AsyncIterator[str]]
-FinalText = Callable[..., Awaitable[str]]
 
 
 class RunBoundaries(Protocol):
@@ -83,7 +82,6 @@ class AnswerOrchestrator:
         search_web: WebSearch | None = None,
         model_func: ToolModel | None = None,
         stream_model_func: StreamModel | None = None,
-        final_text_func: FinalText | None = None,
         resource_tools: list[AgentTool] | None = None,
         resource_manifest: tuple[ResourceManifestEntry, ...] = (),
         register_web_source: Callable[[str], str | None] | None = None,
@@ -96,7 +94,6 @@ class AnswerOrchestrator:
         self._search_web = search_web
         self._model_func = model_func
         self._stream_model_func = stream_model_func
-        self._final_text_func = final_text_func
         self._resource_tools = list(resource_tools or [])
         self._resource_manifest = tuple(resource_manifest)
         self._register_web_source = register_web_source
@@ -112,34 +109,6 @@ class AnswerOrchestrator:
     # ------------------------------------------------------------------
     # Public entry points
     # ------------------------------------------------------------------
-
-    async def answer(
-        self,
-        query: str,
-        *,
-        conversation_history: PriorTurns | None = None,
-        query_images: list[dict[str, Any]] | None = None,
-        run: PreparedRun | None = None,
-        boundaries: RunBoundaries | None = None,
-    ) -> RetrievalResult:
-        limits = boundaries or _NoBoundaries()
-        if not self.uses_research_path:
-            if query_images:
-                raise RuntimeError("Current images require request resources")
-            return await self._fast_answer(
-                query,
-                conversation_history=conversation_history,
-                boundaries=limits,
-            )
-        return await self._run_research(
-            run
-            or self.prepare_run(
-                query,
-                conversation_history=conversation_history,
-                query_images=query_images,
-            ),
-            boundaries=limits,
-        )
 
     async def answer_stream(
         self,
@@ -173,25 +142,6 @@ class AnswerOrchestrator:
     # Fast path
     # ------------------------------------------------------------------
 
-    async def _fast_answer(
-        self,
-        query: str,
-        *,
-        conversation_history: PriorTurns | None,
-        boundaries: RunBoundaries,
-    ) -> RetrievalResult:
-        await boundaries.enter_phase("searching")
-        retrieval = await self._retrieve_knowledge_base(query)
-        await boundaries.check_cancelled()
-        await boundaries.enter_phase("generating")
-        result = await self._synthesizer.generate(
-            query,
-            retrieval.contexts,
-            conversation_history=conversation_history,
-        )
-        result.trace.update(retrieval.trace)
-        return result
-
     async def _fast_answer_stream(
         self,
         query: str,
@@ -219,35 +169,6 @@ class AnswerOrchestrator:
     # ------------------------------------------------------------------
     # Research path
     # ------------------------------------------------------------------
-
-    async def _run_research(
-        self,
-        run: PreparedRun,
-        *,
-        boundaries: RunBoundaries,
-    ) -> RetrievalResult:
-        if self._model_func is None:
-            raise RuntimeError("Research answer requires a tool model")
-        state = run.state
-        try:
-            await self._research_until_stopped(run, boundaries=boundaries)
-
-            if self._final_text_func is None:
-                raise RuntimeError("Research answer requires a tools-disabled final model")
-            await boundaries.enter_phase("generating")
-            final_messages, indexer = await run.context.answer_turn(
-                evidence=state.evidence, episode=state.episode
-            )
-            state.trace["agent_stop_reason"] = state.stop_reason
-            return await self._synthesizer.synthesize_research(
-                final_messages,
-                state.evidence.contexts,
-                complete=self._final_text_func,
-                indexer=indexer,
-                trace=state.trace,
-            )
-        finally:
-            await state.tool_cache.aclose()
 
     async def _run_research_stream(
         self,

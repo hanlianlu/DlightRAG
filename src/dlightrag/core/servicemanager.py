@@ -593,6 +593,15 @@ class RAGServiceManager:
         await self._probe_answer_image_capability()
         await self._probe_vlm_image_capability()
         await self._probe_rerank_image_capability()
+        answer = self._answer_image_capability
+        logger.info(
+            "Image capability by role: answer=%s (ceiling=%s, effective=%s) vlm=%s rerank=%s",
+            answer.status if answer is not None else "unknown",
+            answer.configured_ceiling if answer is not None else 0,
+            answer.effective_max_images if answer is not None else 0,
+            self._vlm_image_status,
+            "not probed" if self._rerank_supports_vision is None else self._rerank_supports_vision,
+        )
 
     async def _probe_answer_image_capability(self) -> None:
         """Discover the query-role answer model's image capability once at startup."""
@@ -653,10 +662,15 @@ class RAGServiceManager:
 
         The VLM role drives query-image description and ``inspect_resource``; it
         may resolve to a different model than the answer role, so a text-only
-        answer model must not withdraw visual inspection (or the reverse).
+        answer model must not withdraw visual inspection (or the reverse). A
+        non-positive deployment ceiling leaves no image slot for any role, so it
+        settles the role without spending a model call.
         """
         from dlightrag.models.llm_roles import model_for_role
 
+        if int(self._config.answer.max_images) <= 0:
+            self._vlm_image_status = "unsupported"
+            return
         outcome = await self._image_capabilities.resolve(model_for_role(self._config, "vlm"))
         self._vlm_image_status = outcome.status
 
@@ -1449,17 +1463,12 @@ class RAGServiceManager:
 
         model_func: Callable[..., Any] | None = None
         stream_model_func: Callable[..., AsyncIterator[str]] | None = None
-        final_text_func: Callable[..., Awaitable[str]] | None = None
         if research:
             tool_model = self._get_query_tool_model()
 
             async def _model_func(**kwargs: Any) -> Any:
                 async with self._direct_llm_sem:
                     return await tool_model(**kwargs)
-
-            async def _final_text_func(**kwargs: Any) -> str:
-                async with self._direct_llm_sem:
-                    return await tool_model.complete_text(**kwargs)
 
             def _stream_model_func(**kwargs: Any) -> AsyncIterator[str]:
                 async def _bounded() -> AsyncIterator[str]:
@@ -1482,7 +1491,6 @@ class RAGServiceManager:
 
             model_func = _model_func
             stream_model_func = _stream_model_func
-            final_text_func = _final_text_func
 
         image_budget: AnswerImageBudget | None = None
         if research:
@@ -1504,7 +1512,6 @@ class RAGServiceManager:
             search_web=web_search.search if web_search is not None else None,
             model_func=model_func,
             stream_model_func=stream_model_func,
-            final_text_func=final_text_func,
             resource_tools=resource_tools,
             resource_manifest=resource_manifest,
             register_web_source=(
@@ -1657,6 +1664,8 @@ class RAGServiceManager:
     async def _get_answer_run_store(self) -> PGAnswerRunStore:
         if self._answer_run_store is not None:
             return self._answer_run_store
+        if self._closed:
+            raise RAGServiceUnavailableError("Answer runtime is shutting down")
         async with self._answer_store_lock:
             if self._answer_run_store is None:
                 from dlightrag.storage.answer_runs import PGAnswerRunStore as _Store
@@ -1793,6 +1802,10 @@ class RAGServiceManager:
 
         store = await self._get_answer_run_store()
         request = _Input.from_request(session.request)
+        # Retrieval planning, resource admission, and image description all run
+        # before the first retrieval, so the run reports the planning phase the
+        # durable contract names rather than opening on `searching`.
+        await session.enter_phase("planning")
         prepared_turn = PreparedAnswerTurn.stateless(
             request.query, history=[dict(message) for message in request.history]
         )

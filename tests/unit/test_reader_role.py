@@ -206,7 +206,9 @@ class _SchemaConn:
         if "attisdropped" in sql:
             return [{"name": name} for name in table.columns]
         if "pg_index" in sql:
-            return [{"name": name} for name in table.indexes]
+            if "indisunique" in sql:
+                return [{"name": name} for name in table.unique_indexes]
+            return [{"name": name} for name in (*table.indexes, *table.unique_indexes)]
         if "contype = 'c'" in sql:
             return [{"name": name} for name in table.checks]
         if "contype IN ('p', 'u')" in sql:
@@ -555,6 +557,7 @@ async def test_reader_answer_run_store_starts_in_validation_mode(
     manager._config = _config(service_role="reader")
     manager._answer_run_store = None
     manager._answer_store_lock = asyncio.Lock()
+    manager._closed = False
 
     await manager._get_answer_run_store()
 

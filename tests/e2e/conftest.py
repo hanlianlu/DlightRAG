@@ -197,7 +197,6 @@ class E2EConversationService:
                         turn_id=turn.turn_id,
                         turn_number=turn.turn_number,
                         conversation=self._summary(value),
-                        replayed=True,
                     )
             run_id = str(uuid4())
             request = {
@@ -236,7 +235,6 @@ class E2EConversationService:
                 turn_id=turn.turn_id,
                 turn_number=turn.turn_number,
                 conversation=self._summary(value),
-                replayed=False,
             )
 
     async def turn_for_run(self, _user: Any, run_id: str) -> LinkedTurn | None:

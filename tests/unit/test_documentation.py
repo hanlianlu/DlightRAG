@@ -36,11 +36,17 @@ _STALE_PHRASES = (
     "ComposerModelBundle",
     "Web Composer",
     "Composer document",
-    "web_conversation_attachment_chunks",
     "web_conversation_images",
     "24,576",
     "context_top_k",
     "answer_context_top_k",
+    "web_conversation_attachments",
+    # Superseded by the durable Answer run contract.
+    "answer_acquire_timeout",
+    "read replica",
+    "read-replica",
+    "streaming replication",
+    "hot standby",
 )
 
 
@@ -117,9 +123,45 @@ def test_orchestrator_fast_and_research_paths_documented() -> None:
     assert "research" in lowered
 
 
-def test_web_uses_one_raw_attachment_table() -> None:
+def test_web_turns_link_to_durable_runs_instead_of_copying_answers() -> None:
     postgresql = _doc_text("docs/postgresql.md")
-    assert "web_conversation_attachments" in postgresql
+    assert "dlightrag_answer_runs" in postgresql
+    assert "dlightrag_answer_run_events" in postgresql
+    assert "dlightrag_answer_artifacts" in postgresql
+    assert "dlightrag_answer_run_artifacts" in postgresql
+    assert "answer_run_id" in postgresql
+
+
+def test_durable_answer_run_contract_is_documented() -> None:
+    interfaces = _doc_text("docs/interfaces.md")
+    for term in ("202", "Last-Event-ID", "Idempotency-Key", "410", "run_id"):
+        assert term in interfaces, f"durable run term {term!r} missing from interfaces.md"
+    # The ephemeral answer mode and its request field are gone.
+    assert "stream: true" not in interfaces
+
+
+def test_reader_role_is_corpus_read_only_not_process_read_only() -> None:
+    postgresql = _doc_text("docs/postgresql.md")
+    assert "corpus-read-only" in postgresql
+    assert "same primary endpoint" in postgresql
+
+
+def test_multi_host_requires_one_shared_posix_working_dir() -> None:
+    postgresql = _doc_text("docs/postgresql.md")
+    assert "same absolute `working_dir` path" in postgresql
+
+
+def test_ingress_owns_rate_limiting_and_the_application_does_not() -> None:
+    security = _doc_text("docs/security.md")
+    assert "ships no in-process rate limiter" in security
+    assert "not the inline WAF" in security
+
+
+def test_error_contract_names_its_stable_kinds() -> None:
+    interfaces = _doc_text("docs/interfaces.md")
+    for kind in ("invalid_tool_configuration", "checkpoint_corrupt", "run_abandoned"):
+        assert kind in interfaces, f"error kind {kind!r} missing from interfaces.md"
+    assert "`configuration`" in interfaces
 
 
 def test_optional_web_search_is_exa() -> None:

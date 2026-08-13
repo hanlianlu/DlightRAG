@@ -137,17 +137,55 @@ remain managed by LightRAG.
 DlightRAG ensures these idempotent DDL migrations on startup and records their
 versions in the ledger.
 
-The Web conversation store keeps answer attachments as raw resources in one
-table, `web_conversation_attachments`: each row holds the original
-`attachment_bytes`, `mime_type`, `suffix`, `byte_size`, and `content_sha256`,
-keyed by principal, conversation, and turn. There is no parsed-chunk table and no
-vector cache; answer attachments are re-read as request-local resources when a
-turn needs them. The unifying migration is an intentional one-time reset: it
-deletes every existing Web conversation (cascading to turns and children), drops
-the superseded parsed-attachment and image tables, and recreates the single
-raw-attachment table. There is no compatibility view or renamed-column bridge, so
-a deployment upgrades once and existing Web chat history is cleared deliberately
-rather than migrated in place.
+## Durable Answer Run State
+
+Every answer is one durable run. Four DlightRAG-owned tables hold that state
+under the `answer_runs` migration scope:
+
+| Table | Key | Holds |
+| --- | --- | --- |
+| `dlightrag_answer_runs` | `(owner_id, run_id)` | status, phase, completed turns, stop reason, cancellation request, lease owner/expiry, fencing epoch, consecutive-recovery count, next event sequence, event-trim timestamp, latest checkpoint, canonical result or terminal error |
+| `dlightrag_answer_run_events` | `(owner_id, run_id, event_sequence)` | gap-free `progress` / `token` / `reset` / `done` / `error` events |
+| `dlightrag_answer_artifacts` | `(owner_id, digest)` | immutable content-addressed bytes within one owner |
+| `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered run inputs and fetched resources, referencing a digest |
+
+`run_id` is a UUIDv7. A partial unique index makes one idempotency key unique per
+owner, and a second one allows exactly one terminal event per run. The
+run-artifact join carries `ON DELETE CASCADE` to the run and `ON DELETE RESTRICT`
+to the blob, so adopting a digest takes the key-share lock that serializes
+against cleanup. Deleting a run removes its events and references, never shared
+bytes; a blob is deleted only once no reference for that owner survives.
+
+Web conversation turns link to a run with `(principal_id, answer_run_id)` and
+`ON DELETE CASCADE`. The turn carries conversation order and the run link only:
+request content, answer text, sources, and uploaded bytes all live in the run, so
+nothing about one answer is stored twice. The `0004_answer_run_turns` migration
+is an intentional one-time reset — it deletes every existing Web conversation,
+drops the superseded duplicated-answer, image, and raw-attachment tables, and
+recreates turns as pure run links. There is no compatibility view, dual write, or
+backfill.
+
+### Retention
+
+Retention is fixed internal maintenance with no operator knob. Every run-owning
+process runs it hourly in bounded `SKIP LOCKED` batches, so it is safe on every
+host at once and needs no leader election:
+
+- **Event logs** are deleted 30 days after `finished_at` for every terminal run,
+  even one a conversation still shows. That transaction sets `events_trimmed_at`,
+  after which the run's event endpoint returns HTTP 410 and clients read the
+  canonical result from the status endpoint instead.
+- **Terminal run rows** are pruned 30 days after `finished_at`, except a
+  `succeeded` run a committed Web turn still references — its lifetime belongs to
+  that conversation. Failed and cancelled linked runs prune normally and their
+  visible terminal turn cascades away with them.
+- **Blobs** are released in the same transaction once no run-artifact row
+  references the digest for that owner. A digest a concurrent run adopted is left
+  alone and released when that run is itself deleted.
+
+Conversation deletion, conversation-TTL pruning, and window trimming all delete
+the linked runs before the conversation rows, which is the same lock order run
+retention takes; the reverse order deadlocks against a concurrent prune.
 
 ## Graph Storage
 
@@ -178,13 +216,12 @@ workspace is a `DELETE`, and orphaned workspaces leave no schemas behind.
 ## PG Pool Architecture
 
 DlightRAG uses one configured PostgreSQL endpoint per service process, selected
-by `service_role`. A **writer** process (the default) targets a write-capable
-endpoint because startup may apply DlightRAG schema migrations, LightRAG may
-initialize storage, and operational APIs can mutate workspace state. A
-**reader** process targets an infra-provided read endpoint and never writes (see
-[Reader role and read replicas](#reader-role-and-read-replicas)). LightRAG's
-staged pipeline already supports ingest and query in the same writer process;
-local query-while-ingest behavior should be tuned through
+by `service_role`. Both roles target the **same primary endpoint**: a writer
+applies DlightRAG schema migrations and mutates the corpus, and a reader still
+writes DlightRAG operational state (see
+[Service roles and shared artifacts](#service-roles-and-shared-artifacts)).
+LightRAG's staged pipeline already supports ingest and query in the same writer
+process; local query-while-ingest behavior should be tuned through
 parser/analyze/insert/model concurrency before changing database topology.
 
 DlightRAG uses two asyncpg pools:
@@ -198,49 +235,48 @@ The dedicated DlightRAG pool avoids contention between LightRAG internals and
 metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
 and session-level PostgreSQL tuning.
 
-## Reader role and read replicas
+## Service roles and shared artifacts
 
-To scale read/query load horizontally, run additional processes with
-`service_role: reader` (or `DLIGHTRAG_SERVICE_ROLE=reader`) whose
-`DLIGHTRAG_POSTGRES_HOST`
-points at an infra-managed **read endpoint**. Replica routing, health, and
-failover stay entirely in the infrastructure layer; DlightRAG accepts no replica
-credentials, no app-level routing, and no read-after-write replay policy.
+`service_role: reader` (or `DLIGHTRAG_SERVICE_ROLE=reader`) means
+**corpus-read-only, not process-read-only**. A reader may create and execute
+answer runs and may write DlightRAG operational state: runs, events, artifacts,
+and Web conversations. Web is enabled on readers.
 
 A reader:
 
-- attaches to the already-provisioned schema without any DDL or migration, and
-  verifies the required tables exist (fail-fast if the writer has not created
-  them yet);
-- forces `default_transaction_read_only=on` on every connection (both pools and
-  direct probes) as defense-in-depth, so a reader accidentally pointed at a
-  writable endpoint still cannot write;
-- disables the LightRAG response cache and rejects mutating REST/MCP/SDK calls
-  with HTTP 403; and
-- serves only stateless query/read APIs; the bundled Web conversation surface
-  runs on writer instances.
+- uses a **writable** DlightRAG domain session, while the LightRAG pool keeps
+  `default_transaction_read_only=on` and the no-DDL attach path;
+- **validates** the migrated domain and LightRAG schemas at startup and issues no
+  DDL; a missing or incompatible schema fails startup with a diagnostic and
+  serves no traffic, and a runtime schema mismatch answers HTTP 503;
+- keeps the LightRAG LLM response cache disabled and skips ingest-job recovery;
+  and
+- still rejects ingestion, workspace creation/reset, metadata mutation,
+  failed-document retry, and deletion through `require_writer()` (HTTP 403).
 
-Infrastructure requirements:
+DlightRAG makes no physical-standby or read-endpoint promise: both roles use the
+same primary endpoint. Read-replica routing would need a separate corpus endpoint
+and is outside this design.
 
-- Use **physical streaming replication** (it copies pgvector and DDL
-  byte-for-byte; logical replication does not propagate DDL and is unfit for the
-  extension stack).
-- Keep replication **asynchronous**; never make ingest wait on a replica.
-- Bring up a writer to create/migrate schema first, let replication ship it,
-  then start readers. On schema-changing releases, migrate on the writer first,
-  then roll readers.
-- Route traffic only to instances whose unauthenticated `GET /ready` probe
-  returns HTTP 200. Reader readiness also verifies the DlightRAG pool is in a
-  read-only transaction mode; `/health` remains a diagnostic HTTP 200 response.
-- Readers observe **eventual consistency**: a document ingested on the writer is
-  retrievable on readers only after replication catches up.
-- Physical replication does not copy the `working_dir`. If readers must serve
-  visual evidence or retained local source downloads, mount the writer's
-  `working_dir` read-only at the **same absolute path**; otherwise prefer remote
-  (S3/Azure/HTTPS) source locators.
-- Tune `hot_standby_feedback` and `max_standby_streaming_delay` to reduce
-  standby query cancellations, and monitor replication slot / WAL retention so a
-  dead replica cannot fill the primary's disk.
+Deployment requirements:
+
+- Apply writer migrations first, then roll readers onto the new revision. A
+  reader started against an older schema fails fast rather than degrading.
+- An operator-set `default_transaction_read_only=on` on the **domain** session
+  fails `/ready` for **both** roles, because both write operational state.
+- Route traffic only to instances whose unauthenticated `GET /ready` returns HTTP
+  200. `/ready` probes the database and short-caches its verdict; `GET /health`
+  is liveness only and never touches PostgreSQL.
+- Every process serving KB images or retained source downloads must see the same
+  POSIX artifact tree at the **same absolute `working_dir` path**. Single host:
+  the existing volume or a shared named volume. Multi-host: one shared POSIX
+  mount such as EFS, NFS, or Azure Files. DlightRAG emulates no object store:
+  LightRAG writes `file://` sidecar URIs under `INPUT_DIR/__parsed__` and its
+  installed resolver returns `None` for remote schemes.
+- All Answer workers sharing one database must run a compatible software revision
+  and the same effective model-role, Answer image-policy, and agent-limit
+  configuration. Drain or cancel active and queued runs before an incompatible
+  rolling change.
 
 ## Version Support Log
 

@@ -85,7 +85,10 @@ class _Conn:
         if "attisdropped" in query:
             return [{"name": name} for name in table.get("columns", ())]
         if "pg_index" in query:
-            return [{"name": name} for name in table.get("indexes", ())]
+            unique = list(table.get("unique_indexes", ()))
+            if "indisunique" in query:
+                return [{"name": name} for name in unique]
+            return [{"name": name} for name in (*table.get("indexes", ()), *unique)]
         if "contype = 'c'" in query:
             return [{"name": name} for name in table.get("checks", ())]
         if "contype IN ('p', 'u')" in query:
@@ -293,6 +296,7 @@ def _example_table() -> TableRequirement:
         foreign_keys=(ForeignKeyRequirement(columns=("id",), references="parent"),),
         checks=("example_name_check",),
         indexes=("example_name_idx",),
+        unique_indexes=("example_key_idx",),
     )
 
 
@@ -302,6 +306,7 @@ def _example_catalog() -> dict[str, dict[str, Any]]:
         "example": {
             "columns": ["id", "name", "legacy_column"],
             "indexes": ["example_name_idx", "example_legacy_idx"],
+            "unique_indexes": ["example_key_idx"],
             "checks": ["example_name_check", "example_legacy_check"],
             "keys": [("p", ["id"]), ("u", ["name"]), ("u", ["legacy_column"])],
             "fks": [(["id"], "parent")],
@@ -354,6 +359,7 @@ _DAMAGED_CATALOGS: list[tuple[str, str]] = [
     ("table", "table example"),
     ("column", "column example.name"),
     ("index", "index example_name_idx"),
+    ("unique_index", "unique index example_key_idx"),
     ("check", "constraint example_name_check"),
     ("primary_key", "primary key example (id)"),
     ("unique", "unique key example (name)"),
@@ -370,6 +376,11 @@ def _damaged_catalog(kind: str) -> dict[str, dict[str, Any]]:
         table["columns"] = ["id", "legacy_column"]
     elif kind == "index":
         table["indexes"] = ["example_legacy_idx"]
+    elif kind == "unique_index":
+        # The name survives a rebuild that dropped uniqueness; only the catalog
+        # flag proves the invariant the index is required to enforce.
+        table["indexes"] = [*table["indexes"], "example_key_idx"]
+        table["unique_indexes"] = []
     elif kind == "check":
         table["checks"] = ["example_legacy_check"]
     elif kind == "primary_key":

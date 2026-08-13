@@ -245,7 +245,6 @@ class HealthResponse(ClientContractModel):
     maintained_by: str
     storage: HealthStorageResponse
     warnings: list[str] | None = None
-    postgres: str
     answer_image_capability: AnswerImageCapabilityResponse | None = None
 
 

@@ -549,26 +549,32 @@ running many workers.
 
 ### Process role (writer / reader)
 
-`service_role` selects what a process does with its single PostgreSQL endpoint:
+`service_role` selects what a process may do with its single PostgreSQL endpoint:
 
 ```yaml
-service_role: writer   # default: ingest + all APIs against a write-capable endpoint
+service_role: writer   # default: ingest + all APIs, and owns schema migrations
 ```
 
-- `writer` (default) preserves today's behavior: it provisions schema, ingests,
-  and serves every API.
-- `reader` serves only stateless query/read APIs (`/retrieve`, `/answer`, and
-  ancillary reads) against an infra-provided **read endpoint** (a physical
-  streaming-replication standby). A reader performs no schema writes, disables
-  the LightRAG response cache, forces `default_transaction_read_only=on` on
-  every connection, and rejects mutating APIs with HTTP 403. It does not serve
-  the bundled Web conversation surface.
+- `writer` (default) provisions schema, ingests, and serves every API.
+- `reader` is **corpus-read-only, not process-read-only**. It creates and
+  executes durable answer runs, writes DlightRAG operational state (runs, events,
+  artifacts, Web conversations), and serves the bundled Web surface. Its LightRAG
+  pool keeps `default_transaction_read_only=on` and the no-DDL attach path, the
+  LightRAG response cache stays disabled, and ingestion, workspace
+  creation/reset, metadata mutation, retry, and deletion are still rejected with
+  HTTP 403.
 
-Readers run under **eventual consistency**: a document ingested on the writer is
-retrievable on readers only after replication catches up. Point a reader with
-`DLIGHTRAG_SERVICE_ROLE=reader` (or `service_role: reader`) and set its
-`DLIGHTRAG_POSTGRES_HOST` to the read endpoint. See [postgresql.md](postgresql.md#reader-role-and-read-replicas)
-for deployment, replication, and asset-sharing requirements.
+Both roles point at the **same primary endpoint**; DlightRAG makes no
+physical-standby or read-endpoint promise. A reader validates the migrated schema
+at startup and issues no DDL, so apply writer migrations first and then roll
+readers. An operator-set `default_transaction_read_only=on` on the domain session
+fails `/ready` for both roles. See
+[postgresql.md](postgresql.md#service-roles-and-shared-artifacts) for the full
+deployment and shared-artifact contract.
+
+Multi-host deployments must mount one shared POSIX `working_dir` at the **same
+absolute path** in every process that serves KB images or retained source
+downloads.
 
 Use [postgresql.md](postgresql.md) for production sizing, SSL, shared memory, and extension
 notes.
@@ -791,18 +797,25 @@ visual_assets:
 lifecycle. It keeps at most 100 complete turns and uses 30-day inactivity
 retention; expired conversations are hidden immediately and reclaimed in
 skip-locked batches by a lightweight hourly task. Listing conversations also
-removes expired rows for the active principal. Cleanup cascades through stored
-turns and their raw answer attachments without touching ingest documents,
-chunks, vectors, graph data, source files, visual assets, or jobs.
+removes expired rows for the active principal. Cleanup deletes the linked answer
+runs, which cascades their events and artifact references and releases blobs no
+surviving run references, without touching ingest documents, chunks, vectors,
+graph data, source files, visual assets, or jobs.
 
-The Web store persists uploaded answer attachments verbatim in one raw table and
-re-registers the newest historical attachments that fit the attachment-count
-limit as lazy request-local resources on every follow-up. Consequently, a Web
-conversation that contains an attachment remains on the research path.
-`visual_assets` controls browser thumbnails derived on demand from those
-attachments. There is no answer-time parse cache, no attachment chunk table, and
-no vector cache; the answer research path reads every resource fresh from its
-stored bytes.
+Uploaded answer attachments are stored once as owner-scoped content-addressed
+blobs owned by the durable run, not by a Web-owned table, and the newest
+historical attachments that fit the attachment-count limit are re-registered as
+lazy request-local resources on every follow-up. Consequently, a Web conversation
+that contains an attachment remains on the research path. `visual_assets`
+controls browser thumbnails derived on demand from those attachments. There is no
+answer-time parse cache, no attachment chunk table, and no vector cache; the
+research path reads every resource fresh from its stored bytes.
+
+Durable Answer run state has no operator knobs. Terminal run rows and every
+terminal run's event log expire 30 days after the run finished, except a
+succeeded run a committed Web turn still references. Lease duration, heartbeat
+and sweep cadence, retention cadence, batch sizes, token coalescing, and the
+crash-recovery bound are fixed internal constants.
 
 ## Web Search (optional)
 

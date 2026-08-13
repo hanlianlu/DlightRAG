@@ -193,8 +193,8 @@ WEB_CONVERSATION_SCHEMA_TABLES = (
                 columns=("principal_id", "answer_run_id"), references="dlightrag_answer_runs"
             ),
         ),
-        indexes=(
-            "idx_web_conversation_turns_principal_conversation",
+        indexes=("idx_web_conversation_turns_principal_conversation",),
+        unique_indexes=(
             "idx_web_conversation_turns_submission",
             "idx_web_conversation_turns_run",
         ),
@@ -614,8 +614,10 @@ class PGWebConversationStore:
         still waiting behind this transaction; neither leaves an orphan run.
         Deleting the runs in the same transaction stops any lease-fenced worker
         from appending to state the conversation no longer owns, cascades the
-        runs' events and artifact references, and releases blobs no surviving
-        run still references.
+        runs' events, turns, and artifact references, and releases blobs no
+        surviving run still references. Runs are deleted before the conversation
+        so this path takes the run lock before the turn lock, exactly as run
+        retention does; the reverse order deadlocks against a concurrent prune.
         """
         await self._ensure_initialized()
 
@@ -632,8 +634,8 @@ class PGWebConversationStore:
                         _SELECT_CONVERSATION_RUNS, principal_id, conversation_id
                     )
                 ]
-                await conn.execute(_DELETE_CONVERSATION, principal_id, conversation_id)
                 await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
+                await conn.execute(_DELETE_CONVERSATION, principal_id, conversation_id)
                 return True
 
         return await self._run_write(_operation)
@@ -649,8 +651,8 @@ class PGWebConversationStore:
                     str(row["answer_run_id"])
                     for row in await conn.fetch(_SELECT_PRINCIPAL_RUNS, principal_id)
                 ]
-                row = await conn.fetchrow(_DELETE_ALL_CONVERSATIONS, principal_id)
                 await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
+                row = await conn.fetchrow(_DELETE_ALL_CONVERSATIONS, principal_id)
                 return int(row["deleted_count"]) if row is not None else 0
 
         return await self._run_write(_operation)
@@ -840,8 +842,8 @@ class PGWebConversationStore:
                 run_rows = await conn.fetch(
                     _SELECT_RUNS_FOR_CONVERSATIONS, principals, conversation_ids
                 )
-                deleted = await conn.fetchrow(_DELETE_CONVERSATIONS, principals, conversation_ids)
                 await self._delete_runs_by_owner(conn, run_rows)
+                deleted = await conn.fetchrow(_DELETE_CONVERSATIONS, principals, conversation_ids)
                 return int(deleted["count"]) if deleted is not None else 0
 
         return await self._run_write(_operation)

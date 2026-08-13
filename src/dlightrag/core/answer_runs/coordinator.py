@@ -36,11 +36,27 @@ logger = logging.getLogger(__name__)
 
 #: How often an idle worker rechecks the queue for another host's work.
 SWEEP_SECONDS = 1.0
+#: How often each process runs the 30-day event trim and run/artifact prune.
+#: Every pass is bounded, ``SKIP LOCKED``, and idempotent, so running it on every
+#: run-owning process needs no leader election and exposes no operator knob.
+MAINTENANCE_SECONDS = 3600.0
+#: How long a graceful shutdown waits for writes that were already in flight.
+SHUTDOWN_WRITE_GRACE_SECONDS = 5.0
 #: Coalescing bounds for durable token batches.
 TOKEN_BATCH_CHARS = 512
 TOKEN_BATCH_SECONDS = 0.25
 
 _FAILED_MESSAGE = "Answer run failed."
+
+
+def _public_message(exc: BaseException) -> str:
+    """Keep the actionable message the answer taxonomy already vetted for clients.
+
+    Only ``public_message`` is client-safe; an unclassified exception's text may
+    carry provider or filesystem detail, so it degrades to the generic message.
+    """
+    message = getattr(exc, "public_message", None)
+    return message if isinstance(message, str) and message else _FAILED_MESSAGE
 
 
 class RunCancelledError(Exception):
@@ -49,6 +65,38 @@ class RunCancelledError(Exception):
 
 class LeaseLostError(Exception):
     """This worker no longer owns the run and must persist nothing further."""
+
+
+class DurableWrites:
+    """Keeps every shielded durable write joinable across a shutdown.
+
+    ``asyncio.shield`` stops a cancelled worker from tearing a small fenced write
+    in half, but on its own it leaves that write running as an unreferenced task:
+    a graceful shutdown could return before the requeue or terminal transition it
+    already started ever reached PostgreSQL. Registering each one lets ``aclose``
+    join them within the shutdown grace.
+    """
+
+    def __init__(self) -> None:
+        self._writes: set[asyncio.Task[Any]] = set()
+
+    def shield[T](self, operation: Awaitable[T]) -> Awaitable[T]:
+        task = asyncio.ensure_future(operation)
+        self._writes.add(task)
+        task.add_done_callback(self._writes.discard)
+        return asyncio.shield(task)
+
+    async def drain(self, timeout: float) -> None:
+        """Wait out the writes already in flight; never start new ones."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self._writes:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                logger.warning(
+                    "Shutdown left %d durable Answer writes in flight", len(self._writes)
+                )
+                return
+            await asyncio.wait(tuple(self._writes), timeout=remaining)
 
 
 class AnswerRunStore(Protocol):
@@ -134,6 +182,10 @@ class AnswerRunStore(Protocol):
 
     async def sweep_once(self) -> Any: ...
 
+    async def trim_expired_event_logs(self) -> int: ...
+
+    async def prune_expired_runs(self) -> Any: ...
+
     async def get_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None: ...
 
     async def read_event_page(
@@ -163,6 +215,7 @@ class RunSession:
         claimed: ClaimedRun,
         *,
         broker: RunEventBroker,
+        writes: DurableWrites,
         notify: Callable[[], None] | None = None,
     ) -> None:
         run = claimed.run
@@ -175,9 +228,11 @@ class RunSession:
         self.checkpoint: RunCheckpoint | None = claimed.checkpoint
         self._store = store
         self._broker = broker
+        self._writes = writes
         self._notify = notify
         self._cancel_requested = run.cancel_requested
         self._lease_lost = False
+        self._corrupt: CheckpointError | None = None
         self._pending_tokens: list[str] = []
         self._pending_chars = 0
         self._flush_deadline: float | None = None
@@ -202,10 +257,16 @@ class RunSession:
 
     async def check_cancelled(self) -> None:
         """Raise at a control boundary once the owner asked to cancel."""
-        if self._lease_lost:
-            raise LeaseLostError
+        self._guard()
         if self._cancel_requested:
             raise RunCancelledError
+
+    def _guard(self) -> None:
+        """Refuse every further durable write once this session lost coherence."""
+        if self._corrupt is not None:
+            raise self._corrupt
+        if self._lease_lost:
+            raise LeaseLostError
 
     # -- durable writes -------------------------------------------------
     async def enter_phase(self, phase: AnswerRunPhase) -> None:
@@ -263,10 +324,9 @@ class RunSession:
 
     async def commit_checkpoint(self, envelope: Mapping[str, Any]) -> None:
         """Advance one completed control turn and its checkpoint atomically."""
-        if self._lease_lost:
-            raise LeaseLostError
+        self._guard()
         expected = self.completed_turns
-        commit = await asyncio.shield(
+        commit = await self._writes.shield(
             self._store.commit_checkpoint(
                 owner_id=self.owner_id,
                 run_id=self.run_id,
@@ -294,9 +354,8 @@ class RunSession:
         references: Sequence[PendingArtifactReference] = (),
     ) -> None:
         """Persist validated fetched bytes before they may enter a checkpoint."""
-        if self._lease_lost:
-            raise LeaseLostError
-        outcome = await asyncio.shield(
+        self._guard()
+        outcome = await self._writes.shield(
             self._store.attach_artifacts(
                 owner_id=self.owner_id,
                 run_id=self.run_id,
@@ -309,20 +368,21 @@ class RunSession:
         )
         if outcome == "turn_mismatch":
             # The run advanced a turn without this worker; its replay slots no
-            # longer describe the durable state, so the run terminalizes here
-            # instead of being handed back to crash recovery.
-            raise CheckpointError(
+            # longer describe the durable state. Latching that here stops the
+            # rest of the turn from appending events for state it no longer owns,
+            # even though a tool boundary swallows this raise as a tool failure.
+            self._corrupt = CheckpointError(
                 "checkpoint_corrupt",
                 "Answer run artifacts no longer match its authoritative turn count.",
             )
+            raise self._corrupt
         if outcome != "attached":
             self._lease_lost = True
             raise LeaseLostError
 
     async def _fenced(self, operation: Awaitable[int | None]) -> None:
-        if self._lease_lost:
-            raise LeaseLostError
-        sequence = await asyncio.shield(operation)
+        self._guard()
+        sequence = await self._writes.shield(operation)
         if sequence is None:
             self._lease_lost = True
             raise LeaseLostError
@@ -343,6 +403,7 @@ class AnswerRunCoordinator:
         worker_id: str | None = None,
         heartbeat_seconds: float = ANSWER_RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
+        maintenance_seconds: float = MAINTENANCE_SECONDS,
     ) -> None:
         self._store = store
         self._executor = executor
@@ -350,12 +411,15 @@ class AnswerRunCoordinator:
         self._worker_id = worker_id or f"answer-worker-{uuid.uuid4().hex}"
         self._heartbeat_seconds = heartbeat_seconds
         self._sweep_seconds = sweep_seconds
+        self._maintenance_seconds = maintenance_seconds
         self._slots = asyncio.Semaphore(self._max_async)
         self._broker = RunEventBroker()
+        self._writes = DurableWrites()
         self._wake = asyncio.Event()
         self._closing = False
         self._scheduler: asyncio.Task[None] | None = None
         self._sweeper: asyncio.Task[None] | None = None
+        self._maintainer: asyncio.Task[None] | None = None
         self._runs: dict[str, asyncio.Task[None]] = {}
         self._sessions: dict[str, RunSession] = {}
 
@@ -378,6 +442,7 @@ class AnswerRunCoordinator:
         self._closing = False
         self._scheduler = asyncio.create_task(self._schedule_forever())
         self._sweeper = asyncio.create_task(self._sweep_forever())
+        self._maintainer = asyncio.create_task(self._maintain_forever())
 
     def wake(self) -> None:
         """Nudge this process after it accepted a run; polling remains the truth."""
@@ -387,19 +452,21 @@ class AnswerRunCoordinator:
         """Stop claiming, let fenced writes settle, then requeue owned work."""
         self._closing = True
         self._wake.set()
-        for task in (self._scheduler, self._sweeper):
+        for task in (self._scheduler, self._sweeper, self._maintainer):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         self._scheduler = None
         self._sweeper = None
+        self._maintainer = None
         running = list(self._runs.values())
         for task in running:
             task.cancel()
         for task in running:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await self._writes.drain(SHUTDOWN_WRITE_GRACE_SECONDS)
         self._runs.clear()
         self._sessions.clear()
 
@@ -464,9 +531,34 @@ class AnswerRunCoordinator:
                 logger.warning("Answer run sweep failed", exc_info=True)
             await asyncio.sleep(self._sweep_seconds)
 
+    async def _maintain_forever(self) -> None:
+        """Apply 30-day retention without reserving an execution slot.
+
+        Both passes are bounded batches that strictly shrink their own candidate
+        set, so draining them is finite and a transient store fault only defers
+        the remainder to the next cadence.
+        """
+        while True:
+            try:
+                while await self._store.trim_expired_event_logs() > 0:
+                    await asyncio.sleep(0)
+                while (await self._store.prune_expired_runs()).runs > 0:
+                    await asyncio.sleep(0)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Answer run retention failed", exc_info=True)
+            await asyncio.sleep(self._maintenance_seconds)
+
     # -- execution ------------------------------------------------------
     async def _execute(self, claimed: ClaimedRun) -> None:
-        session = RunSession(self._store, claimed, broker=self._broker, notify=self._wake.set)
+        session = RunSession(
+            self._store,
+            claimed,
+            broker=self._broker,
+            writes=self._writes,
+            notify=self._wake.set,
+        )
         self._sessions[session.run_id] = session
         heartbeat = asyncio.create_task(self._heartbeat_forever(session))
         try:
@@ -491,7 +583,7 @@ class AnswerRunCoordinator:
             await self._finish_failure(session, exc.kind, exc.public_message)
         except Exception as exc:
             logger.warning("Answer run %s failed", session.run_id, exc_info=True)
-            await self._finish_failure(session, classify_answer_error(exc), _FAILED_MESSAGE)
+            await self._finish_failure(session, classify_answer_error(exc), _public_message(exc))
         finally:
             heartbeat.cancel()
             try:
@@ -541,7 +633,7 @@ class AnswerRunCoordinator:
     async def _finish_success(self, session: RunSession, result: Mapping[str, Any]) -> None:
         if session.lease_lost:
             return
-        outcome = await asyncio.shield(
+        outcome = await self._writes.shield(
             self._store.finish_success(
                 owner_id=session.owner_id,
                 run_id=session.run_id,
@@ -560,7 +652,7 @@ class AnswerRunCoordinator:
         with contextlib.suppress(Exception):
             await session.flush_tokens()
         with contextlib.suppress(Exception):
-            await asyncio.shield(
+            await self._writes.shield(
                 self._store.finish_failure(
                     owner_id=session.owner_id,
                     run_id=session.run_id,
@@ -577,7 +669,7 @@ class AnswerRunCoordinator:
             return
         with contextlib.suppress(Exception):
             await session.flush_tokens()
-        await asyncio.shield(
+        await self._writes.shield(
             self._store.finish_cancelled(
                 owner_id=session.owner_id,
                 run_id=session.run_id,
@@ -592,7 +684,7 @@ class AnswerRunCoordinator:
         if session.lease_lost:
             return
         with contextlib.suppress(Exception):
-            await asyncio.shield(
+            await self._writes.shield(
                 self._store.release_for_shutdown(
                     owner_id=session.owner_id,
                     run_id=session.run_id,
@@ -604,12 +696,15 @@ class AnswerRunCoordinator:
 
 
 __all__ = [
+    "MAINTENANCE_SECONDS",
+    "SHUTDOWN_WRITE_GRACE_SECONDS",
     "SWEEP_SECONDS",
     "TOKEN_BATCH_CHARS",
     "TOKEN_BATCH_SECONDS",
     "AnswerRunCoordinator",
     "AnswerRunExecutor",
     "AnswerRunStore",
+    "DurableWrites",
     "LeaseLostError",
     "RunCancelledError",
     "RunSession",

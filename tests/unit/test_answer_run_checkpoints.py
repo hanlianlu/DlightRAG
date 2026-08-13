@@ -271,7 +271,33 @@ class TestCheckpointCodec:
             "sidecar": "file:///parsed/book",
         }
 
+    async def test_a_base64_shaped_string_without_image_identity_is_left_alone(self) -> None:
+        """Only a corpus row or a data URI is an image; nothing else is guessed at."""
+        state = _empty_state()
+        state.evidence.add_contexts(
+            {
+                "chunks": [
+                    {
+                        "chunk_id": "chunk-text",
+                        "content": "text only",
+                        "reference_id": "ref-b",
+                        # A 64-character digest decodes as base64 but is not an image,
+                        # and this row carries no workspace identity.
+                        "image_data": "a" * 64,
+                    }
+                ]
+            }
+        )
+        store = _FakeStore()
+
+        encoded = await encode_checkpoint_state(state, owner_id="owner", run_id="run", store=store)
+
+        assert encoded["state"]["evidence"]["contexts"]["chunks"][0]["image_data"] == "a" * 64
+        await state.tool_cache.aclose()
+        await _registry(state).aclose()
+
     async def test_missing_corpus_visual_drops_only_the_image_block(self) -> None:
+
         state = await _state_with_evidence()
         store = _FakeStore()
         encoded = await encode_checkpoint_state(state, owner_id="owner", run_id="run", store=store)

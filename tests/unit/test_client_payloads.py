@@ -7,7 +7,6 @@ import pytest
 
 from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.core.retrieval.protocols import RetrievalResult
-from dlightrag.models.schemas import Reference
 
 
 def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceReference:
@@ -106,51 +105,6 @@ def test_project_source_payloads_omits_link_without_download_permission() -> Non
     )[0]
 
     assert projected.download_url is None
-
-
-def test_answer_payload_projects_transport_neutral_source_without_download_url() -> None:
-    from dlightrag.core.client_payloads import answer_payload
-
-    result = RetrievalResult(
-        sources=[
-            SourceReference(
-                id="1",
-                source_uri="s3://bucket/report.pdf",
-                workspace="finance",
-                document_id="doc-report",
-                download_locator="s3://bucket/report.pdf",
-            )
-        ]
-    )
-
-    source = answer_payload(result)["sources"][0]
-
-    assert source["source_uri"] == "s3://bucket/report.pdf"
-    assert source["download_url"] is None
-    assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
-
-
-def test_public_https_provenance_survives_shared_answer_projection() -> None:
-    from dlightrag.core.client_payloads import answer_payload
-
-    source_uri = "https://www.bbc.com/weather/2711537"
-    result = RetrievalResult(
-        sources=[
-            SourceReference(
-                id="1",
-                title="Gothenburg - BBC Weather",
-                source_uri=source_uri,
-                workspace="__web_search__",
-                document_id="web-source",
-                download_locator=source_uri,
-            )
-        ]
-    )
-
-    source = answer_payload(result)["sources"][0]
-
-    assert source["source_uri"] == source_uri
-    assert source["download_url"] is None
 
 
 def test_public_context_projection_strips_internal_source_metadata() -> None:
@@ -318,43 +272,6 @@ def test_project_contexts_for_client_skips_chunks_without_public_id() -> None:
     assert public["chunks"] == []
 
 
-def test_answer_payload_uses_public_contexts_and_existing_sources() -> None:
-    from dlightrag.core.client_payloads import answer_payload
-
-    result = RetrievalResult(
-        answer="Answer [1-1].",
-        contexts={
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "file_path": "/private/report.pdf",
-                    "content": "Evidence",
-                    "image_data": "base64-payload",
-                    "_workspace": "default",
-                }
-            ],
-        },
-        references=[Reference(id="1", title="report.pdf")],
-        sources=[_internal_source()],
-        trace={"phase": "answer"},
-        image_descriptions=["chart"],
-    )
-
-    payload = answer_payload(result)
-
-    assert payload["answer"] == "Answer [1-1]."
-    assert payload["contexts"]["chunks"][0]["image_url"] == "/images/default/c1?size=full"
-    assert "image_data" not in payload["contexts"]["chunks"][0]
-    assert payload["references"] == [{"id": "1", "title": "report.pdf"}]
-    assert payload["sources"][0]["id"] == "1"
-    assert payload["answer_images"] == []
-    assert payload["answer_blocks"] == []
-    assert payload["trace"] == {"phase": "answer"}
-    assert payload["image_descriptions"] == ["chart"]
-    assert "current_image_ids" not in payload
-
-
 def test_answer_helpers_derive_visual_images_and_blocks() -> None:
     from dlightrag.core.answer.media import (
         answer_blocks_from_markdown,
@@ -392,103 +309,4 @@ def test_answer_helpers_derive_visual_images_and_blocks() -> None:
         {"type": "markdown", "text": "Diagram below [1-1]."},
         {"type": "image_ref", "image_id": "fig-1"},
         {"type": "markdown", "text": " Details after."},
-    ]
-
-
-def test_answer_payload_serializes_result_answer_images_and_blocks() -> None:
-    from dlightrag.core.client_payloads import answer_payload
-
-    result = RetrievalResult(
-        answer="Diagram below [1-1].",
-        answer_images=[
-            {
-                "id": "fig-1",
-                "chunk_id": "fig-1",
-                "source_ref": "1-1",
-                "url": "/images/default/fig-1?size=full",
-                "thumbnail_url": "/images/default/fig-1?size=thumb",
-                "label": "report.pdf",
-            }
-        ],
-        answer_blocks=[
-            {"type": "markdown", "text": "Diagram below [1-1]."},
-            {"type": "image_ref", "image_id": "fig-1"},
-        ],
-    )
-
-    payload = answer_payload(result)
-
-    assert payload["answer_images"] == result.answer_images
-    assert payload["answer_blocks"] == result.answer_blocks
-
-
-def test_answer_payload_projects_visuals_only_for_authorized_workspaces() -> None:
-    from dlightrag.core.answer.media import (
-        answer_blocks_from_markdown,
-        answer_images_from_sources,
-    )
-    from dlightrag.core.client_payloads import answer_payload
-
-    def source(source_id: str, workspace: str) -> SourceReference:
-        return SourceReference(
-            id=source_id,
-            title=f"{source_id}.pdf",
-            source_uri=f"local://{workspace}/{source_id}.pdf",
-            workspace=workspace,
-            document_id=f"doc-{source_id}",
-            download_locator=f"/{source_id}.pdf",
-            chunks=[
-                ChunkSnippet(
-                    chunk_id=f"figure-{source_id}",
-                    chunk_idx=1,
-                    content=f"{source_id} figure",
-                    image_url=f"/images/{workspace}/figure-{source_id}?size=full",
-                    thumbnail_url=f"/images/{workspace}/figure-{source_id}?size=thumb",
-                )
-            ],
-        )
-
-    sources = [source("legal", "legal"), source("finance", "finance")]
-    answer = "Allowed [legal-1]. Hidden [finance-1]."
-    images = answer_images_from_sources(sources)
-    result = RetrievalResult(
-        answer=answer,
-        contexts={
-            "chunks": [
-                {
-                    "chunk_id": "figure-legal",
-                    "reference_id": "legal",
-                    "file_path": "legal.pdf",
-                    "content": "legal figure",
-                    "image_data": "bytes",
-                    "_workspace": "legal",
-                },
-                {
-                    "chunk_id": "figure-finance",
-                    "reference_id": "finance",
-                    "file_path": "finance.pdf",
-                    "content": "finance figure",
-                    "image_data": "bytes",
-                    "_workspace": "finance",
-                },
-            ],
-            "entities": [],
-            "relationships": [],
-        },
-        sources=sources,
-        answer_images=images,
-        answer_blocks=answer_blocks_from_markdown(answer, images),
-    )
-
-    payload = answer_payload(result, visual_workspaces={"legal"})
-
-    assert "image_url" in payload["contexts"]["chunks"][0]
-    assert "image_url" not in payload["contexts"]["chunks"][1]
-    assert payload["sources"][0]["chunks"][0]["image_url"] is not None
-    assert payload["sources"][1]["chunks"][0]["image_url"] is None
-    assert [image["chunk_id"] for image in payload["answer_images"]] == ["figure-legal"]
-    assert payload["answer_blocks"] == [
-        {"type": "markdown", "text": "Allowed [legal-1]."},
-        {"type": "image_ref", "image_id": "figure-legal"},
-        {"type": "markdown", "text": " Hidden [finance-1]."},
     ]

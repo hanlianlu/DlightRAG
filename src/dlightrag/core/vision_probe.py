@@ -145,9 +145,12 @@ class ModelImageCapabilities:
             last = self._last_probe.get(identity)
             if cached is not None and last is not None and now - last < self._cooldown_seconds:
                 return cached
-            self._last_probe[identity] = now
             outcome = await self._probe(cfg)
             self._outcomes[identity] = outcome
+            # Stamped at completion: a probe that spends its provider timeout
+            # would otherwise consume the whole cooldown and let the next caller
+            # hammer a model that is simply unreachable.
+            self._last_probe[identity] = time.monotonic()
             return outcome
 
     async def _probe(self, cfg: ModelConfig) -> ImageProbeOutcome:

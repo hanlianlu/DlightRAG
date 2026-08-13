@@ -391,13 +391,13 @@ LightRAG's document status and DlightRAG's content-hash guard.
 
 ### Quick Reference
 
-| Interface | `retrieve` | `answer` | Streaming |
+| Interface | `retrieve` | `answer` | Following a run |
 |---|---|---|---|
-| Python SDK | `RetrievalResult` | `RetrievalResult` | `(contexts, token_iter)` |
-| REST API | JSON object | JSON object | SSE (`stream: true`) |
-| MCP Server | JSON text | JSON text | N/A |
-| Web UI | — | SSE (HTML) | Built-in |
-| CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | N/A |
+| Python SDK | `RetrievalResult` | durable run; `aanswer()` waits for the result | `aanswer_stream()` yields durable events |
+| REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
+| MCP Server | JSON text | descriptor-only, returns immediately | `get_answer_run` / `cancel_answer_run` tools |
+| Web UI | — | HTTP 202 run descriptor | same core SSE endpoint |
+| CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | follows the run, then falls back to status |
 
 ### Contract Terms
 
@@ -408,6 +408,55 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | `references` | Compact document-level citation summary for answers, derived from validated inline citations. |
 | `answer_images` | Registry of cited visual assets available for rendering. Entries reference image routes, not inline document image bytes. |
 | `answer_blocks` | Display plan for answers: markdown text blocks plus `image_ref` blocks that point into `answer_images`. |
+
+### Durable Answer Runs
+
+Every answer is one durable run with one identifier and one lifecycle, shared by
+REST, MCP, Web, the Python manager, the CLI, and evaluation. There is no
+ephemeral answer mode and no `stream` request field.
+
+`POST /answer` validates, persists, and returns **HTTP 202**:
+
+```json
+{
+  "run_id": "019…",
+  "status": "queued",
+  "status_url": "/answer/019…",
+  "events_url": "/answer/019…/events",
+  "cancel_url": "/answer/019…"
+}
+```
+
+| Operation | Contract |
+|---|---|
+| `POST /answer` | 202 with the descriptor. An idempotent replay returns 202 with the run's current status. Reusing a key with different normalized input returns 409. |
+| `GET /answer/{run_id}` | `queued` / `running` / `succeeded` / `failed` / `cancelled`, whether cancellation was requested, current phase, completed control turns, the canonical result once succeeded, and one public `error_kind` + `error_message` for a terminal failure. |
+| `GET /answer/{run_id}/events` | Reconnectable SSE. Each durable sequence is the SSE `id`; resume with `Last-Event-ID` or the integer `after` query parameter. Supplying both with different values returns 400. Without a cursor, replay starts at sequence 1. A quiet run sends a comment keepalive every 10s, which consumes no sequence. |
+| `DELETE /answer/{run_id}` | Requests cancellation. 200 when it completed or found a terminal transition, 202 while a running worker must still observe it. Cancelling a terminal run is an idempotent no-op. |
+
+Durable event types are exactly `progress`, `token`, `reset`, `done`, and
+`error`. `progress` carries the core phases `planning`, `searching`,
+`researching`, and `generating`. Successful `done` embeds the complete canonical
+result (answer, contexts, references, sources, answer-image metadata, trace,
+image descriptions); cancelled `done` carries `status="cancelled"` with no
+result; `error` is used only for `failed`. Exactly one terminal event is
+committed per run and the stream closes after replaying it. `reset` means a
+partial draft must be cleared before regenerated output.
+
+Idempotency uses one optional key per owner: the `Idempotency-Key` header for
+REST, an `idempotency_key` argument for MCP and Python, and the browser's
+`submission_id` for Web. Creation without a key always creates a new run.
+
+Owner scope is uniform: unknown runs, pruned runs, and another owner's runs are
+indistinguishable and all return 404 from status, events, and cancellation. An
+authorized terminal run whose 30-day event log was trimmed returns **410** from
+the events endpoint; its canonical result stays available from the status
+endpoint. Stored events and results carry transport-neutral source identities;
+each authenticated read projects fresh download URLs without modifying an event.
+
+Client disconnect never cancels a run. Closing an event subscriber or cancelling
+a waiting convenience call detaches that caller only; explicit run cancellation
+is the sole client action that requests a terminal `cancelled`.
 
 ### Web Conversation Boundary
 
@@ -420,24 +469,37 @@ and attachment reads always filter by both the authenticated principal and
 conversation ID, so another principal receives the same 404 as a missing
 conversation.
 
-Answer attachment admission completes before `/web/answer` returns its SSE
-response. Unsupported, empty, unsafe-name, per-attachment oversized, and
-over-count uploads return HTTP 4xx before any stream starts: a request exceeding
-`answer.max_attachments`, `answer.max_attachment_bytes`, or
-`answer.max_total_attachment_bytes` is rejected with a stable limit message. Once
-HTTP 200 SSE has started, a resource that cannot be read raises a classified
-`error` event; the answer does not silently drop evidence.
+`POST /web/answer` creates a core run and returns its 202 descriptor; the browser
+then subscribes to the same owner-scoped `GET /answer/{run_id}/events`. The run
+and its conversation turn are inserted in one transaction before the 202
+response, so no subscriber, finalizer, or reconnect commits history afterwards.
+Disconnecting the browser closes that subscriber only, and reconnecting resumes
+from the durable event sequence. Conversation reads return every linked turn in
+order: queued and running turns are pending entries carrying `answer_run_id`,
+status, and cancellation state, so a reloaded tab can resubscribe without
+remembering the original 202. Failed and cancelled turns stay visible with their
+public terminal error until their run is pruned; only succeeded turns become
+model history.
+
+Answer attachment admission completes before `/web/answer` returns. Unsupported,
+empty, unsafe-name, per-attachment oversized, and over-count uploads return HTTP
+4xx before the run is accepted: a request exceeding `answer.max_attachments`,
+`answer.max_attachment_bytes`, or `answer.max_total_attachment_bytes` is rejected
+with a stable limit message. Once a run is accepted, a resource that cannot be
+read produces a classified terminal `error` event; the answer does not silently
+drop evidence.
 
 Web conversations retain up to 100 complete turns with 30-day inactivity
-retention. Uploaded answer attachments are persisted verbatim in one raw table,
-`web_conversation_attachments`, keyed by principal, conversation, and turn.
-Historical attachments are re-registered lazily as request-local resources when a
-follow-up is answered, newest first up to the available attachment-count limit.
-An attachment-bearing conversation therefore remains on the research path, and
+retention. Uploaded answer attachments are stored once as owner-scoped
+content-addressed blobs owned by the run, not by a Web-owned table. Historical
+attachments are re-registered lazily as request-local resources when a follow-up
+is answered, newest first up to the available attachment-count limit. An
+attachment-bearing conversation therefore remains on the research path, and
 browser thumbnails are derived on demand. There is no parsed-chunk table and no
-vector cache: the answer research path reads each attachment fresh from its stored
-bytes. Manual delete and TTL pruning cascade attachment bytes through the owning
-turn and conversation.
+vector cache: the research path reads each attachment fresh from its stored
+bytes. Manual delete, TTL pruning, and window trimming delete the linked runs,
+which cascades their events and references and releases blobs no surviving run
+still references.
 
 `AnswerOrchestrator` owns every answer. A Web turn with attachments or an Exa
 web-search key takes the research path: the agent chooses among the available
@@ -452,7 +514,7 @@ session, or Playwright interaction; callers provide authenticated bytes or
 screenshots as attachments when those are required.
 After generation, citation/source/media finalization is deterministic. Provider
 and resource lifetimes are request-local; nothing is shared across turns except
-the durable raw attachment bytes.
+the durable attachment blobs the run owns.
 
 REST, MCP, and Python answer/retrieve calls remain stateless. Answer calls
 accept an optional caller-supplied `history` of prior `role`/`content` turns for
@@ -478,17 +540,38 @@ image resources is rejected fail-closed with a stable `error_kind`
 HTTP 400 (or a classified SSE `error` event carrying `error_kind` when streaming),
 MCP returns the error text, and the SDK raises `AnswerImageError`.
 
-`GET /health` is a diagnostic/liveness response and remains HTTP 200 when the
-process is degraded. Unauthenticated `GET /ready` is the traffic-readiness
-probe: it returns HTTP 200 only after the manager is initialized and the
-DlightRAG PostgreSQL pool responds. Reader processes additionally prove that
-their database session is read-only. Any failed readiness condition returns a
-minimal HTTP 503 response without exposing the underlying exception.
+`GET /health` is liveness only: it answers from in-process state (degraded flag,
+startup warnings, storage backends, `answer_image_capability`), stays HTTP 200
+when the process is degraded, and never touches PostgreSQL, so an unauthenticated
+poll loop cannot become database load. Unauthenticated `GET /ready` is the
+traffic-readiness probe: HTTP 200 only after the manager is initialized and the
+DlightRAG domain session is writable. A reader additionally proves its corpus
+session is still read-only and still resolves the corpus. Its database verdict is
+memoized for a few seconds, and a not-ready manager drops that memo so a startup
+or schema transition is never answered from a stale verdict. Any failed readiness
+condition returns a minimal HTTP 503 with a fixed detail string and no exception
+text.
+
+Error responses are `{detail, error_type, error_kind?}`. `error_type` is one of
+`validation` (400/413/422), `auth` (401/403), `unavailable` (503),
+`configuration` (a server tool-composition failure, carrying
+`error_kind: invalid_tool_configuration`), or `internal`. A durable schema that
+is incompatible with the running revision answers HTTP 503 `unavailable` with a
+fixed detail and no schema detail. Terminal run failures carry one stable
+`error_kind`: an answer-input kind (`CURRENT_IMAGES_UNSUPPORTED`,
+`CURRENT_IMAGE_LIMIT_EXCEEDED`, `CURRENT_DOCUMENT_PARSE_FAILED`,
+`ANSWER_INPUT_OVERFLOW`, `ANSWER_IMAGE_CAPABILITY_UNKNOWN`),
+`invalid_tool_configuration`, a checkpoint kind (`checkpoint_too_large`,
+`checkpoint_incompatible`, `checkpoint_corrupt`), `run_abandoned` when a run
+exceeds its crash-recovery bound, or `ANSWER_STREAM_FAILED`.
 
 A saturated service does not refuse an answer: accepted runs queue until an
-execution slot frees or the caller cancels the run. An answer request whose
-attachments exceed `answer.max_total_attachment_bytes` returns HTTP 413 before
-the route buffers the body.
+execution slot frees or the caller cancels the run, with no queue timeout, queue
+depth cap, or capacity error. An answer request whose attachments exceed
+`answer.max_total_attachment_bytes` returns HTTP 413 before the route buffers the
+body. Generic request-rate, connection, and volumetric limits are an ingress
+responsibility, not an application one — see
+[security.md](security.md#ingress-responsibilities).
 
 The Web shell defaults answer scope to `Search in: All authorized workspaces`.
 That authorization-relative multi-workspace selection is independent from
@@ -636,7 +719,8 @@ paths without deleting LightRAG rows, metadata, or local files.
 }
 ```
 
-**Non-streaming response:**
+**Canonical answer result** (the `result` field of a succeeded run's status
+response, and the payload embedded in its terminal `done` event):
 
 ```json
 {
@@ -663,33 +747,39 @@ paths without deleting LightRAG rows, metadata, or local files.
 }
 ```
 
-**SSE streaming** (`stream: true`): events are newline-delimited JSON.
+**Durable run events** (`GET /answer/{run_id}/events`): each frame carries the
+durable sequence as the SSE `id` and the event type as `event:`.
 
 | Event | Payload | Description |
 |---|---|---|
-| `context` | `{type, data}` | Full contexts, sent first |
-| `token` | `{type, content}` | LLM answer token (repeats) |
-| `sources` | `{type, data}` | Validated cited sources, after all tokens and before done. Includes `highlight_phrases` when `semantic_highlights` is true and enrichment succeeds. |
-| `trace` | `{type, data}` | Retrieval trace counts and planner/filter decisions |
-| `image_meta` | `{type, image_descriptions}` | VLM descriptions for current-request images |
-| `done` | `{type, answer, answer_images, answer_blocks}` | Stream complete; `answer` is the final normalized answer body after citation validation |
-| `error` | `{type, message, error_kind}` | Error mid-stream |
+| `progress` | `{"phase": "planning" \| "searching" \| "researching" \| "generating"}` | Last-writer-wins phase notification, not a monotonic history |
+| `token` | `{"text": "..."}` | Coalesced answer text batch (repeats) |
+| `reset` | `{}` | Clear the partial draft; regenerated output follows |
+| `done` | `{"status": "succeeded", "result": {...}}` or `{"status": "cancelled"}` | Terminal; succeeded embeds the complete canonical result |
+| `error` | `{"kind": "...", "message": "..."}` | Terminal failure with one public error kind |
 
 ```
-data: {"type":"context","data":{"chunks":[...],"entities":[...],"relationships":[...]}}
+id: 1
+event: progress
+data: {"phase":"searching"}
 
-data: {"type":"token","content":"The key findings"}
+id: 2
+event: token
+data: {"text":"The key findings"}
 
-data: {"type":"token","content":" are..."}
+id: 3
+event: token
+data: {"text":" are..."}
 
-data: {"type":"sources","data":[{"id":"1","title":"report.pdf","source_uri":"local://default/report.pdf","download_url":"/files/raw/doc-a1b2c3?workspace=default","chunks":[...]}]}
-
-data: {"type":"trace","data":{"bm25_enabled":true,"fused_chunk_count":8}}
-
-data: {"type":"image_meta","image_descriptions":["Image 1: a line chart"]}
-
-data: {"type":"done","answer":"The key findings are...","answer_images":[],"answer_blocks":[{"type":"markdown","text":"The key findings are..."}]}
+id: 4
+event: done
+data: {"status":"succeeded","result":{"answer":"The key findings are...","sources":[...],"contexts":{...}}}
 ```
+
+Intermediate contexts are never published: research may still change them, so
+clients receive the authoritative contexts and every other piece of metadata in
+the successful `done` event and from the status endpoint. A quiet run keeps its
+connection alive with SSE comments, which consume no sequence number.
 
 `bm25_enabled` reports whether the workspace PostgreSQL BM25 lane participated.
 If that lane fails while semantic retrieval succeeds, retrieval continues with
@@ -708,9 +798,10 @@ an authorization error. Ingest remains single-workspace and does not support
 broadcast ingestion. The strings `"*"` and `"all"` are ordinary workspace names,
 not selector aliases.
 
-Web streaming uses the same answer pipeline but always attempts semantic
-highlights when citation highlighting is enabled. If phrases are found, Web
-emits a `highlights` SSE event with the updated source panel HTML.
+Web follows the same durable run events as every other transport and always
+attempts semantic highlights when citation highlighting is enabled. Previews are
+derived from token text and highlights are requested after `done`; neither is
+stored.
 
 ### MCP Server
 
@@ -720,10 +811,15 @@ JSON for clients that consume text-only tool results. Expected validation or
 authorization failures set `isError: true`; protocol-level `MCPError` responses
 remain JSON-RPC errors. The server exposes these tools:
 
-`retrieve`, `answer`, `ingest`, `get_ingest_job`, `cancel_ingest_job`,
-`list_files`, `delete_files`, `list_workspaces`, `create_workspace`,
-`delete_workspace`, and `get_capabilities`.
+`retrieve`, `answer`, `get_answer_run`, `cancel_answer_run`, `ingest`,
+`get_ingest_job`, `cancel_ingest_job`, `list_files`, `delete_files`,
+`list_workspaces`, `create_workspace`, `delete_workspace`, and
+`get_capabilities`.
 
+MCP `answer` is deliberately descriptor-only: it creates the durable run and
+returns immediately rather than holding one tool call open for a run that may
+take tens of minutes. Poll `get_answer_run` for status and, once the run
+succeeded, its canonical result; `cancel_answer_run` requests cancellation.
 Answer payloads keep `sources` at top level:
 
 ```json

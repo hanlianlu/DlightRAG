@@ -10,16 +10,49 @@ The commands here are not part of normal ingestion or query traffic.
 
 ## Web Conversation History Reset On Upgrade
 
-The Web conversation store was unified onto one raw answer-attachment table. The
-schema migration that lands it is an intentional one-time reset: on first
-startup after the upgrade, DlightRAG deletes every existing Web conversation
-(cascading to turns and attachments), drops the superseded parsed-attachment and
-image tables, and recreates the single raw-attachment table. There is no
-in-place data migration and no compatibility bridge, so principals lose their
-prior Web chat history exactly once. This affects only the browser conversation
-lifecycle; ingested documents, chunks, vectors, graph data, source files, jobs,
-and stateless REST/MCP/SDK usage are untouched. Communicate the reset before
-upgrading a shared deployment.
+Web conversation turns were re-linked onto durable Answer runs. The schema
+migration that lands it is an intentional one-time reset: on first startup after
+the upgrade, DlightRAG deletes every existing Web conversation (cascading to its
+turns), drops the superseded duplicated-answer and raw-attachment tables, and
+recreates turns as pure run links. There is no in-place data migration and no
+compatibility bridge, so principals lose their prior Web chat history exactly
+once. This affects only the browser conversation lifecycle; ingested documents,
+chunks, vectors, graph data, source files, jobs, and stateless REST/MCP/SDK usage
+are untouched. Communicate the reset before upgrading a shared deployment.
+
+## Durable Answer Runs
+
+Every answer is a durable PostgreSQL-owned run, so operating them is a database
+concern rather than a request concern.
+
+- **Rolling upgrades.** All Answer workers sharing one database must run a
+  compatible revision and the same effective model-role, Answer image-policy, and
+  agent-limit configuration. Drain or cancel active and queued runs before an
+  incompatible rolling change; heterogeneous execution is unsupported.
+- **Migration order.** A writer applies migrations; readers validate the migrated
+  schema and issue no DDL. Roll the writer first, then readers. A reader on an
+  older schema fails startup with a diagnostic instead of degrading.
+- **Shared artifacts.** Every process that serves KB images or retained source
+  downloads must see the same POSIX artifact tree at the same absolute
+  `working_dir` path. Multi-host deployments need one shared mount (EFS, NFS,
+  Azure Files); DlightRAG emulates no object store.
+- **Shutdown.** A graceful stop finalizes cancel-pending runs and fenced-requeues
+  every other owned run so it is immediately reclaimable. A crash leaves the
+  lease to expire, after which any worker reclaims the run from its latest
+  checkpoint. Four consecutive reclaims without a committed checkpoint fail the
+  run with `run_abandoned`.
+- **Retention.** Every run-owning process trims 30-day-old event logs and prunes
+  30-day-old terminal runs hourly in bounded `SKIP LOCKED` batches. There is no
+  knob and no separate cron job. A succeeded run a Web conversation still
+  references survives until that conversation is deleted or expires; its event log
+  is trimmed on schedule regardless, after which its events endpoint returns 410
+  and clients read the canonical result from the status endpoint.
+- **Storage.** Queued runs are never rejected for capacity, so bound and monitor
+  PostgreSQL storage: `dlightrag_answer_artifacts` holds uploaded and fetched
+  bytes, and `dlightrag_answer_run_events` holds token batches until trimmed.
+- **Probes.** Route traffic on unauthenticated `GET /ready` (database and corpus
+  readiness, short-cached). `GET /health` is liveness only and never touches
+  PostgreSQL.
 
 ## Optional Docling Parser
 

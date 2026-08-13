@@ -385,7 +385,12 @@ class ResourceRegistry:
         self._fetched_ordinals = {
             str(key): int(value) for key, value in (state.get("fetched_ordinals") or {}).items()
         }
-        self._next_fetched_ordinal = int(state.get("next_fetched_ordinal") or 0)
+        # Never below a restored slot: a later turn that reused an ordinal would
+        # rebind bytes a checkpointed turn already named.
+        self._next_fetched_ordinal = max(
+            int(state.get("next_fetched_ordinal") or 0),
+            max(self._fetched_ordinals.values(), default=-1) + 1,
+        )
 
     def _admit_caller_key(self, dedup_key: tuple[str, bytes]) -> None:
         if dedup_key in self._caller_dedup:

@@ -523,12 +523,12 @@ unset, both Web capabilities are removed and answers stay corpus-only. A
 rejected or unpaid key parks the capability for a short window rather than
 retrying every turn.
 
-The Web channel persists uploaded answer attachments verbatim in one raw table,
-`web_conversation_attachments`, scoped by principal, conversation, and turn.
-There is no parsed-chunk table and no vector cache. Historical attachments are
-re-registered as lazy request-local resources on every follow-up, newest first up
-to the available attachment-count limit. An attachment-bearing conversation
-therefore remains on the research path. Browser thumbnails are derived on demand
-from the stored bytes. Manual delete and TTL pruning cascade attachment bytes
-through the owning turn and conversation; nothing crosses a conversation or
-principal boundary.
+The Web channel stores uploaded answer attachments once as owner-scoped
+content-addressed blobs owned by the durable Answer run, not by a Web-owned
+table. There is no parsed-chunk table and no vector cache. Historical attachments
+are re-registered as lazy request-local resources on every follow-up, newest
+first up to the available attachment-count limit. An attachment-bearing
+conversation therefore remains on the research path. Browser thumbnails are
+derived on demand from the stored bytes. Manual delete, TTL pruning, and 30-day
+run retention delete the linked runs and release blobs no surviving run
+references; nothing crosses a conversation or principal boundary.

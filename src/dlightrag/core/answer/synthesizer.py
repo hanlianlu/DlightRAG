@@ -33,7 +33,7 @@ from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.prompts import answer_core
 from dlightrag.utils.tokens import estimate_content_tokens, estimate_messages_tokens
 
@@ -70,9 +70,9 @@ class AnswerSynthesizer:
     Images found in chunks are inlined as ``image_url`` content blocks -- no
     separate VLM routing is needed.
 
-    Both ``generate()`` and ``generate_stream()`` use the same unified freetext
-    system prompt and identical evidence preparation.  Sources are projected
-    from validated inline ``[n]`` and ``[n-m]`` markers.
+    Both ``generate_stream()`` and ``synthesize_research_stream()`` use the same
+    unified freetext system prompt and identical evidence preparation. Sources
+    are projected from validated inline ``[n]`` and ``[n-m]`` markers.
     """
 
     def __init__(
@@ -95,69 +95,6 @@ class AnswerSynthesizer:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
-    async def generate(
-        self,
-        query: str,
-        contexts: RetrievalContexts,
-        conversation_history: PriorTurns | None = None,
-    ) -> RetrievalResult:
-        """Non-streaming final answer generation.
-
-        Returns a :class:`RetrievalResult` with ``answer``, ``contexts``, and
-        ``references``. Uses the same freetext prompt as streaming; references
-        are derived from validated inline markers.
-
-        """
-        if self.model_func is None:
-            logger.info("[AS] generate: no model_func available, returning None answer")
-            return RetrievalResult(answer=None, contexts=contexts)
-
-        prepared = await asyncio.to_thread(
-            self._prepare_model_call,
-            query,
-            contexts,
-            conversation_history=conversation_history,
-        )
-
-        logger.info(
-            "[AS] generate: input_chunks=%d packed_chunks=%d images_sent=%d "
-            "images_skipped=%d query=%s",
-            len(contexts.get("chunks", [])),
-            prepared.trace["answer_context_chunks"],
-            prepared.trace["answer_context_images_sent"],
-            prepared.trace["answer_context_images_skipped"],
-            query[:60],
-        )
-
-        raw = await self.model_func(messages=prepared.messages)
-        if prepared.no_context:
-            raw = _prepend_no_context_disclaimer(str(raw))
-
-        # Extract references programmatically from validated inline markers,
-        # not from model-generated reference-section text.
-        from dlightrag.citations import finalize_answer
-
-        finalized = finalize_answer(raw, prepared.contexts, indexer=prepared.indexer)
-
-        from dlightrag.core.answer.media import (
-            answer_blocks_from_markdown,
-            answer_images_from_sources,
-        )
-        from dlightrag.models.schemas import Reference
-
-        references = [Reference(id=s.id, title=s.title or "Source") for s in finalized.sources]
-        answer_images = answer_images_from_sources(finalized.sources, contexts=prepared.contexts)
-
-        return RetrievalResult(
-            answer=finalized.answer,
-            contexts=prepared.contexts,
-            references=references,
-            sources=finalized.sources,
-            answer_images=answer_images,
-            answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
-            trace=prepared.trace,
-        )
 
     async def generate_stream(
         self,
@@ -205,55 +142,6 @@ class AnswerSynthesizer:
     # ------------------------------------------------------------------
     # Research path: single final owner over a tool transcript
     # ------------------------------------------------------------------
-
-    async def synthesize_research(
-        self,
-        messages: list[dict[str, Any]],
-        contexts: RetrievalContexts,
-        *,
-        complete: Callable[..., Any],
-        indexer: CitationIndexer,
-        trace: dict[str, Any] | None = None,
-    ) -> RetrievalResult:
-        """Own the tools-disabled final answer for the non-streaming research path.
-
-        The orchestrator supplies the packed tool transcript ``messages`` (which
-        carries provider-native reasoning signatures), the ledger's citable
-        ``contexts``, and the matching ``indexer``.  This method makes the single
-        tools-disabled final call and owns no-context handling, citation
-        finalization, warnings, and answer media so both answer branches share
-        one final owner.
-        """
-        from dlightrag.citations import finalize_answer
-        from dlightrag.core.answer.media import (
-            answer_blocks_from_markdown,
-            answer_images_from_sources,
-        )
-        from dlightrag.models.schemas import Reference
-
-        result_trace = dict(trace or {})
-        no_context = not _has_research_evidence(contexts, messages)
-
-        raw = await complete(messages=messages)
-        text = str(raw)
-        if no_context:
-            text = _prepend_no_context_disclaimer(text)
-            result_trace["answer_no_context"] = True
-
-        finalized = finalize_answer(text, contexts, indexer=indexer)
-        answer_images = answer_images_from_sources(finalized.sources, contexts=contexts)
-        return RetrievalResult(
-            answer=finalized.answer,
-            contexts=contexts,
-            references=[
-                Reference(id=source.id, title=source.title or "Source")
-                for source in finalized.sources
-            ],
-            sources=finalized.sources,
-            answer_images=answer_images,
-            answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
-            trace=result_trace,
-        )
 
     async def synthesize_research_stream(
         self,
@@ -491,13 +379,6 @@ class AnswerSynthesizer:
                 )
             )
         return blocks
-
-
-def _prepend_no_context_disclaimer(answer: str) -> str:
-    answer = answer.strip()
-    if not answer:
-        return NO_CONTEXT_DISCLAIMER
-    return f"{NO_CONTEXT_DISCLAIMER}\n\n{answer}"
 
 
 async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:

@@ -1129,20 +1129,19 @@ class TestRetrieveEndpoint:
 
 
 class TestHealthEndpoint:
-    """Test /health endpoint."""
+    """``/health`` is liveness only: in-process facts, never a database probe."""
 
-    async def test_health_returns_status(
+    async def test_health_returns_status_without_probing_postgres(
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from unittest.mock import AsyncMock
-
         from dlightrag.storage.pool import pg_pool
 
-        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
+        probe = AsyncMock(return_value="off")
+        monkeypatch.setattr(pg_pool, "run_once", probe)
         app.state.manager = mock_manager
         resp = await client.get("/health")
         assert resp.status_code == 200
@@ -1150,6 +1149,8 @@ class TestHealthEndpoint:
         assert body["status"] == "healthy"
         assert "rag_initialized" in body
         assert "storage" in body
+        assert "postgres" not in body
+        probe.assert_not_awaited()
         cap = body["answer_image_capability"]
         assert cap["status"] == "supported"
         assert cap["effective_max_images"] == 8
@@ -1181,13 +1182,7 @@ class TestHealthEndpointEnhanced:
         client: AsyncClient,
         mock_config: DlightragConfig,
         mock_manager,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from unittest.mock import AsyncMock
-
-        from dlightrag.storage.pool import pg_pool
-
-        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         mock_manager.is_degraded = lambda: False
         mock_manager.get_warnings = lambda: []
         app.state.manager = mock_manager
@@ -1342,6 +1337,66 @@ class TestReadinessEndpoint:
         assert response.status_code == 200
         assert response.json() == {"status": "ready", "service_role": "reader"}
         corpus_probe.assert_awaited_once_with()
+
+    async def test_repeated_polls_reuse_one_cached_probe(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.storage.pool import pg_pool
+
+        probe = AsyncMock(return_value="off")
+        monkeypatch.setattr(pg_pool, "run_once", probe)
+        app.state.manager = mock_manager
+
+        for _ in range(5):
+            assert (await client.get("/ready")).status_code == 200
+
+        probe.assert_awaited_once()
+
+    async def test_the_cached_verdict_expires(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.api.routes.status import ReadinessProbeCache
+        from dlightrag.storage.pool import pg_pool
+
+        probe = AsyncMock(return_value="off")
+        monkeypatch.setattr(pg_pool, "run_once", probe)
+        app.state.readiness_cache = ReadinessProbeCache(0.0)
+        app.state.manager = mock_manager
+
+        await client.get("/ready")
+        await client.get("/ready")
+
+        assert probe.await_count == 2
+
+    async def test_a_not_ready_manager_invalidates_the_cached_verdict(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Startup and schema transitions must never be served from a stale verdict."""
+        from dlightrag.storage.pool import pg_pool
+
+        probe = AsyncMock(return_value="off")
+        monkeypatch.setattr(pg_pool, "run_once", probe)
+        app.state.manager = mock_manager
+
+        assert (await client.get("/ready")).status_code == 200
+        mock_manager.is_ready = lambda: False
+        assert (await client.get("/ready")).status_code == 503
+        mock_manager.is_ready = lambda: True
+        assert (await client.get("/ready")).status_code == 200
+
+        assert probe.await_count == 2
 
 
 # ---------------------------------------------------------------------------

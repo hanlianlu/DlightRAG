@@ -93,14 +93,12 @@ def web_answer_submission(
     *,
     conversation_id: str,
     run: AnswerRunRecord | None = None,
-    replayed: bool = False,
 ) -> WebAnswerSubmission:
     return WebAnswerSubmission(
         run=run if run is not None else answer_run(),
         turn_id=TURN_ID,
         turn_number=1,
         conversation=conversation_summary(conversation_id),
-        replayed=replayed,
     )
 
 

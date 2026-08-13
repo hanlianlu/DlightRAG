@@ -244,6 +244,48 @@ jwt_audience:
 Native MCP OAuth remains separate: its token audience must exactly equal
 `mcp_resource_server_url`, regardless of the broader REST/Web audience list.
 
+## Ingress Responsibilities
+
+DlightRAG owns the semantic invariants no generic edge device can evaluate, and
+deliberately owns nothing else at the network layer.
+
+**The application enforces:**
+
+- authentication, authorization, and owner scope on every run, event, artifact,
+  workspace, and conversation read or write;
+- idempotency keys and their 409 conflict on changed input;
+- HTTPS-only fetches with redirect, DNS, and SSRF validation, plus byte,
+  decompression, part-count, and pixel limits on uploads and fetched bytes;
+- a receive-layer streaming body cap so an oversized or chunked body never
+  reaches a parser, in addition to each route's semantic attachment limits;
+- durable lease fencing, so a worker that lost its lease cannot mutate state the
+  new owner holds;
+- sanitized model-visible and client-visible output, with exception class and
+  traceback kept for operators only; and
+- provider concurrency and per-call timeouts on every external model, embedding,
+  rerank, fetch, and parser request.
+
+**The ingress owns** generic request-rate and quota limits, DDoS and volumetric
+protection, WAF signature rules, IP/geo/bot reputation policy, TLS termination
+and certificate lifecycle, and connection/concurrency caps. Use Azure Front Door,
+Application Gateway WAF, API Management, NGINX, or the equivalent for your
+platform. **DlightRAG ships no in-process rate limiter and no WAF**, and adding
+one would duplicate ingress policy with worse context.
+
+Microsoft Sentinel is SIEM/SOAR: it monitors, correlates, and drives response
+playbooks over ingress and application logs. It is not the inline WAF and must
+not be relied on to block a request in flight.
+
+Because accepted answer runs queue rather than fail on capacity, a deployment
+must bound and monitor PostgreSQL storage and apply ingress rate limits
+appropriate to its `auth_mode`. `auth_mode: none` and `auth_mode: simple`
+collapse every caller into one deployment owner, so they are only safe behind an
+ingress that already restricts who can reach the port.
+
+Both probe endpoints are unauthenticated by design: `GET /health` is liveness
+only and never queries PostgreSQL, and `GET /ready` short-caches its database and
+corpus verdict, so neither turns an unauthenticated poll loop into database load.
+
 ## Access Control
 
 Authentication answers "who is calling?" Access control answers "what can this
@@ -359,6 +401,16 @@ capped tool observations, and budgeted image blocks do. The optional Exa
 web-search capability is gated solely by the presence of
 `DLIGHTRAG_WEB_SEARCH__API_KEY`; keep it in `.env`, and its absence removes the
 capability entirely.
+
+Admitted bytes become owner-scoped content-addressed artifacts owned by the
+durable run, so deduplication never crosses an owner. Run-scoped fetched web
+bytes are stored only after the HTTPS, redirect, DNS, SSRF, and byte validation
+above passes, and the blob plus its run reference commit in one transaction
+before the tool result may enter a checkpoint — a resumed run therefore reads the
+bytes it originally fetched rather than whatever the page serves now. Workspace
+authorization is evaluated once before the run-creation transaction and only the
+resulting workspace set is stored, never a token or mutable claims; a later policy
+change does not revoke an already accepted run, and its owner may cancel it.
 
 ## Deployment Posture
 

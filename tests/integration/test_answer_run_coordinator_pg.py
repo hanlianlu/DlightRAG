@@ -28,7 +28,11 @@ from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.agent.tools import _ToolCallCache
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer_runs.checkpoints import encode_checkpoint_state, restore_agent_state
-from dlightrag.core.answer_runs.coordinator import AnswerRunCoordinator, RunSession
+from dlightrag.core.answer_runs.coordinator import (
+    AnswerRunCoordinator,
+    DurableWrites,
+    RunSession,
+)
 from dlightrag.core.answer_runs.execution import AnswerRunInput
 from dlightrag.core.answer_runs.models import AgentRunState
 from dlightrag.core.answer_runs.subscription import RunEventBroker
@@ -45,6 +49,7 @@ from dlightrag.core.servicemanager import (
     _OrchestratorRun,
 )
 from dlightrag.storage.answer_runs import PGAnswerRunStore
+from dlightrag.storage.web_conversations import PGWebConversationStore
 
 pytestmark = [
     pytest.mark.integration,
@@ -93,6 +98,9 @@ async def store() -> AsyncIterator[PGAnswerRunStore]:
         assert pool is not None
         created = PGAnswerRunStore(pool=pool)
         await created.initialize()
+        # Retention exempts conversation-linked runs, so the whole operational
+        # schema is established here exactly as a real process establishes it.
+        await PGWebConversationStore(pool=pool, run_store=created).initialize()
         yield created
     finally:
         if pool is not None:
@@ -169,6 +177,57 @@ def _checkpoint_committed(store: PGAnswerRunStore, run_id: str) -> Any:
         return run is not None and run.completed_turns == 1
 
     return _check
+
+
+async def test_the_coordinator_applies_retention_without_an_execution_slot(
+    store: PGAnswerRunStore,
+) -> None:
+    """Every run-owning process trims expired event logs and prunes expired runs."""
+    expired = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    live = await store.create_run(owner_id=_OWNER, request={**_REQUEST, "query": "recent"})
+    for creation in (expired, live):
+        claim = await store.claim_next(worker_id="retention-setup")
+        assert claim is not None
+        await store.finish_success(
+            owner_id=_OWNER,
+            run_id=claim.run.run_id,
+            worker_id="retention-setup",
+            fencing_epoch=claim.run.fencing_epoch,
+            result={"answer": creation.run.run_id},
+        )
+    async with store._pool.acquire() as conn:  # noqa: SLF001 - backdating is test-only setup
+        await conn.execute(
+            "UPDATE dlightrag_answer_runs SET finished_at = NOW() - INTERVAL '31 days' "
+            "WHERE run_id = $1",
+            uuid.UUID(expired.run.run_id),
+        )
+
+    held = asyncio.Event()
+
+    async def body(session: RunSession) -> Mapping[str, Any]:
+        await held.wait()
+        return {"answer": "held"}
+
+    coordinator = AnswerRunCoordinator(
+        store=store,
+        executor=_Executor(body),
+        max_async=1,
+        maintenance_seconds=0.05,
+    )
+    await coordinator.start()
+    try:
+
+        async def _pruned() -> bool:
+            return await store.get_run(owner_id=_OWNER, run_id=expired.run.run_id) is None
+
+        await _settle(_pruned)
+    finally:
+        held.set()
+        await coordinator.aclose()
+
+    survivor = await store.get_run(owner_id=_OWNER, run_id=live.run.run_id)
+    assert survivor is not None
+    assert survivor.events_trimmed_at is None
 
 
 async def test_graceful_shutdown_requeues_without_crash_recovery(
@@ -348,7 +407,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     run_id = creation.run.run_id
     claimed = await store.claim_next(worker_id="worker-1")
     assert claimed is not None
-    session = RunSession(store, claimed, broker=RunEventBroker())
+    session = RunSession(store, claimed, broker=RunEventBroker(), writes=DurableWrites())
 
     reached: list[str] = []
 
@@ -398,7 +457,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     reclaimed = await store.claim_next(worker_id="worker-2")
     assert reclaimed is not None
     assert reclaimed.checkpoint is not None
-    resumed_session = RunSession(store, reclaimed, broker=RunEventBroker())
+    resumed_session = RunSession(store, reclaimed, broker=RunEventBroker(), writes=DurableWrites())
 
     async def _dead(url: str, **kwargs: Any) -> Any:
         reached.append(url)
