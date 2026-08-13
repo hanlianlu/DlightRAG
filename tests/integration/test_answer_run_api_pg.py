@@ -226,6 +226,18 @@ async def test_idempotency_replays_and_conflicts_within_one_owner(
     assert other.json()["run_id"] != first.json()["run_id"]
 
 
+@pytest.mark.parametrize("key", ["", "   "])
+async def test_a_blank_idempotency_key_never_replays_or_conflicts(
+    client: AsyncClient, key: str
+) -> None:
+    headers = {"Idempotency-Key": key}
+    first = await client.post("/answer", json={"query": "one"}, headers=headers)
+    second = await client.post("/answer", json={"query": "two"}, headers=headers)
+
+    assert first.status_code == second.status_code == 202
+    assert first.json()["run_id"] != second.json()["run_id"]
+
+
 async def test_another_owner_cannot_read_cancel_or_follow_a_run(
     client: AsyncClient, app: FastAPI
 ) -> None:

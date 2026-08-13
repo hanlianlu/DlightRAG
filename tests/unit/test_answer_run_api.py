@@ -245,6 +245,27 @@ class TestCreate:
 
         assert response.status_code == 409
 
+    @pytest.mark.parametrize("key", ["", "   "])
+    async def test_a_blank_idempotency_key_is_no_key(
+        self, client: AsyncClient, run_manager: _RunManager, key: str
+    ) -> None:
+        response = await client.post(
+            "/answer", json={"query": "hello"}, headers={"Idempotency-Key": key}
+        )
+
+        assert response.status_code == 202
+        assert run_manager.created[0]["idempotency_key"] is None
+
+    async def test_a_meaningful_idempotency_key_is_passed_through_verbatim(
+        self, client: AsyncClient, run_manager: _RunManager
+    ) -> None:
+        response = await client.post(
+            "/answer", json={"query": "hello"}, headers={"Idempotency-Key": "Key 1"}
+        )
+
+        assert response.status_code == 202
+        assert run_manager.created[0]["idempotency_key"] == "Key 1"
+
     async def test_authorized_workspaces_are_stored_on_the_run(
         self, client: AsyncClient, run_manager: _RunManager
     ) -> None:
@@ -509,6 +530,26 @@ class TestEvents:
 
         assert response.status_code == 400
 
+    async def test_empty_last_event_id_replays_from_the_beginning(
+        self, client: AsyncClient, run_manager: _RunManager
+    ) -> None:
+        run_manager.record = _record(status="succeeded", result=_stored_result())
+        run_manager.events = [_event(1, "token", {"text": "a"})]
+
+        response = await client.get(f"/answer/{_RUN_ID}/events", headers={"Last-Event-ID": ""})
+
+        assert response.status_code == 200
+        assert run_manager.subscriptions[0]["after_sequence"] == 0
+
+    @pytest.mark.parametrize("cursor", ["abc", "-1", "1.5"])
+    async def test_malformed_last_event_id_is_400(
+        self, client: AsyncClient, run_manager: _RunManager, cursor: str
+    ) -> None:
+        response = await client.get(f"/answer/{_RUN_ID}/events", headers={"Last-Event-ID": cursor})
+
+        assert response.status_code == 400
+        assert not run_manager.subscriptions
+
     async def test_unknown_run_events_are_404(
         self, client: AsyncClient, run_manager: _RunManager
     ) -> None:
@@ -623,6 +664,17 @@ class TestCancel:
         response = await client.delete(f"/answer/{_RUN_ID}")
 
         assert response.status_code == 404
+
+    async def test_both_cancellation_responses_are_documented(self, client: AsyncClient) -> None:
+        responses = (await client.get("/openapi.json")).json()["paths"]["/answer/{run_id}"][
+            "delete"
+        ]["responses"]
+
+        assert set(responses) >= {"200", "202"}
+        assert (
+            responses["202"]["content"]["application/json"]["schema"]
+            == responses["200"]["content"]["application/json"]["schema"]
+        )
 
 
 # ---------------------------------------------------------------------------

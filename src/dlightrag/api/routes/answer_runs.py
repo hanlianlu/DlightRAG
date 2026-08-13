@@ -186,6 +186,17 @@ async def _parse_answer_body(
         await form.close()
 
 
+def _idempotency_key(request: Request) -> str | None:
+    """Read the run's optional replay key; a blank header is no key at all.
+
+    An empty or whitespace-only header would otherwise become a real owner-unique
+    key that unrelated requests collide on. A meaningful key is passed through
+    verbatim, so a caller's byte-exact key stays its own.
+    """
+    value = request.headers.get("Idempotency-Key")
+    return value if value and value.strip() else None
+
+
 def _run_input(
     body: AnswerRequest,
     uploads: list[_UploadedAttachment],
@@ -292,7 +303,7 @@ async def create_answer_run(
         creation = await manager.astart_answer_run(
             owner_id=owner_id_from_user(user),
             request=_run_input(body, uploads, workspaces=workspaces),
-            idempotency_key=request.headers.get("Idempotency-Key"),
+            idempotency_key=_idempotency_key(request),
             attachment_bytes=[upload.content for upload in uploads],
         )
     except IdempotencyKeyConflict:
@@ -315,7 +326,16 @@ async def get_answer_run(
     return await _status_payload(request, user, record)
 
 
-@router.delete("/answer/{run_id}", response_model=AnswerRunStatusResponse)
+@router.delete(
+    "/answer/{run_id}",
+    response_model=AnswerRunStatusResponse,
+    responses={
+        202: {
+            "model": AnswerRunStatusResponse,
+            "description": "Cancellation requested; a running worker must still observe it.",
+        }
+    },
+)
 async def cancel_answer_run(
     run_id: str,
     request: Request,

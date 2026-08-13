@@ -1,11 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The canonical result of one durable Answer run, stored and projected.
 
-A stored result carries transport-neutral identities only: workspaces, document
-ids, chunk ids, and the answer text. Authorization-dependent download URLs and
-authorized image routes are projected on every authenticated read, so a policy
-change between execution and reading is honored and no URL becomes durable
-state.
+A stored result carries transport-neutral identities -- workspaces, document
+ids, chunk ids, and the answer text -- plus, inside the client-safe contexts,
+the stable ``/images`` route path, which is a route identity every transport
+shares and which authorizes each read on its own. Authorization-dependent
+download URLs are never stored, and both image visibility and download links are
+re-derived on every authenticated read, so a policy change between execution and
+reading is honored.
 """
 
 from __future__ import annotations

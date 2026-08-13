@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +29,14 @@ STATUS_POLL_SECONDS = 1.0
 #: How many consecutive transport failures a reconnecting stream tolerates.
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_BACKOFF_SECONDS = 0.5
+#: The server keeps a quiet run's stream alive with a comment every ten seconds,
+#: so longer silence is a half-open connection, not a slow run. The read timeout
+#: only bounds one silent read: the reconnect loop then resumes by sequence, so a
+#: caller's overall wait for a queued run stays unbounded.
+EVENT_READ_IDLE_SECONDS = 30.0
+_EVENT_STREAM_TIMEOUT = httpx.Timeout(
+    connect=10.0, read=EVENT_READ_IDLE_SECONDS, write=10.0, pool=10.0
+)
 
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
@@ -174,7 +183,7 @@ class AnswerRunClient:
         response.raise_for_status()
         return dict(response.json())
 
-    async def events(self, run_id: str, *, after: int = 0) -> AsyncIterator[AnswerRunEvent]:
+    async def events(self, run_id: str, *, after: int = 0) -> AsyncGenerator[AnswerRunEvent]:
         """Yield durable events after ``after``, reconnecting by sequence.
 
         Raises ``httpx.HTTPStatusError`` with status 410 when the run's event log
@@ -184,12 +193,13 @@ class AnswerRunClient:
         attempts = 0
         while True:
             try:
-                async for event in self._stream_once(run_id, cursor):
-                    cursor = event.sequence
-                    attempts = 0
-                    yield event
-                    if event.event_type in {"done", "error"}:
-                        return
+                async with aclosing(self._stream_once(run_id, cursor)) as stream:
+                    async for event in stream:
+                        cursor = event.sequence
+                        attempts = 0
+                        yield event
+                        if event.event_type in {"done", "error"}:
+                            return
             except httpx.HTTPStatusError:
                 raise
             except httpx.HTTPError:
@@ -218,32 +228,36 @@ class AnswerRunClient:
             payload, attachments=attachments, idempotency_key=idempotency_key
         )
         try:
-            async for event in self.events(descriptor.run_id):
-                if event.event_type == "token" and on_token is not None:
-                    on_token(str(event.payload.get("text") or ""))
-                elif event.event_type == "done":
-                    return self._terminal_result(
-                        descriptor.run_id,
-                        status=str(event.payload.get("status") or ""),
-                        result=event.payload.get("result"),
-                    )
-                elif event.event_type == "error":
-                    raise AnswerRunFailedError(
-                        str(event.payload.get("kind") or "answer_stream_failed"),
-                        str(event.payload.get("message") or "Answer run failed."),
-                    )
+            async with aclosing(self.events(descriptor.run_id)) as events:
+                async for event in events:
+                    if event.event_type == "token" and on_token is not None:
+                        on_token(str(event.payload.get("text") or ""))
+                    elif event.event_type == "done":
+                        return self._terminal_result(
+                            descriptor.run_id,
+                            status=str(event.payload.get("status") or ""),
+                            result=event.payload.get("result"),
+                        )
+                    elif event.event_type == "error":
+                        raise AnswerRunFailedError(
+                            str(event.payload.get("kind") or "answer_stream_failed"),
+                            str(event.payload.get("message") or "Answer run failed."),
+                        )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 410:
                 raise
         return await self._await_terminal_status(descriptor.run_id)
 
-    async def _stream_once(self, run_id: str, cursor: int) -> AsyncIterator[AnswerRunEvent]:
+    async def _stream_once(self, run_id: str, cursor: int) -> AsyncGenerator[AnswerRunEvent]:
         headers = dict(self._headers)
         headers.pop("Content-Type", None)
         if cursor:
             headers["Last-Event-ID"] = str(cursor)
         async with self._client.stream(
-            "GET", self._url(f"/answer/{run_id}/events"), headers=headers, timeout=None
+            "GET",
+            self._url(f"/answer/{run_id}/events"),
+            headers=headers,
+            timeout=_EVENT_STREAM_TIMEOUT,
         ) as response:
             response.raise_for_status()
             buffer = ""
@@ -286,6 +300,7 @@ class AnswerRunClient:
 
 
 __all__ = [
+    "EVENT_READ_IDLE_SECONDS",
     "MAX_RECONNECT_ATTEMPTS",
     "STATUS_POLL_SECONDS",
     "AnswerAttachmentUpload",
