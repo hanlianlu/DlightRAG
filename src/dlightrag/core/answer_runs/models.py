@@ -42,6 +42,23 @@ class CheckpointError(RuntimeError):
         self.public_message = message
 
 
+class AnswerRunCancelledError(RuntimeError):
+    """The run this caller waited on was cancelled by its owner."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(f"Answer run {run_id} was cancelled")
+        self.run_id = run_id
+
+
+class AnswerRunFailedError(RuntimeError):
+    """The run this caller waited on failed; only its public kind is exposed."""
+
+    def __init__(self, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.error_kind = kind
+        self.public_message = message
+
+
 @dataclass(slots=True)
 class AgentRunState:
     """The research memory one control turn advances and a checkpoint restores."""
@@ -59,6 +76,8 @@ __all__ = [
     "CHECKPOINT_SCHEMA_VERSION",
     "MAX_CHECKPOINT_BYTES",
     "AgentRunState",
+    "AnswerRunCancelledError",
+    "AnswerRunFailedError",
     "CheckpointError",
     "CheckpointErrorKind",
 ]

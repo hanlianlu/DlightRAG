@@ -3,6 +3,7 @@
 
 from fastapi import APIRouter
 
+from .answer_runs import router as answer_runs_router
 from .files import router as files_router
 from .files import serve_file
 from .images import router as images_router
@@ -15,6 +16,7 @@ router = APIRouter()
 router.include_router(status_router)
 router.include_router(workspaces_router)
 router.include_router(rag_router)
+router.include_router(answer_runs_router)
 router.include_router(images_router)
 router.include_router(files_router)
 router.include_router(metadata_router)

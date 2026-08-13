@@ -57,6 +57,22 @@ async def filter_workspace_records(
     )
 
 
+async def authorized_workspaces(
+    request: Request,
+    user: object,
+    workspaces: list[str],
+    action: str,
+) -> set[str]:
+    """Return the subset of workspaces this caller may use for one action."""
+    records = await filter_workspace_records(
+        request,
+        user,
+        action,
+        [{"workspace": workspace} for workspace in workspaces],
+    )
+    return core_access.workspace_names(records)
+
+
 async def resolve_authorized_query_workspaces(
     request: Request,
     user: object,

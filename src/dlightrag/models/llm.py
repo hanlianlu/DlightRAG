@@ -188,7 +188,7 @@ def get_query_model_func(config: DlightragConfig) -> Callable:
     """Messages-first query callable for AnswerSynthesizer (DlightRAG-owned; nests).
 
     Uses ``config.llm.roles.query`` if set, otherwise ``config.llm.default``.
-    Concurrency is bounded by ``RAGServiceManager._answer_stream_sem``.
+    Concurrency is bounded by ``max_async`` execution slots.
     """
     cfg = model_for_role(config, "query")
     return _make_completion_func(cfg)

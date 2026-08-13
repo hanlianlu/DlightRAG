@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Regression tests for answer-stream lifecycle (semaphore release + idle timeout).
+"""Regression tests for answer-stream lifecycle (cleanup on close + idle timeout).
 
 Guards the SSE-disconnect leak: when a client disconnects mid-stream the route's
-``finally`` must close the token iterator, which releases the bounded
-answer-stream slot and cancels the upstream LLM connection.
+``finally`` must close the token iterator, which awaits the request-local cleanup
+and cancels the upstream LLM connection.
 """
 
 import asyncio
@@ -40,14 +40,15 @@ class _FakeRawStream:
         self.closed = True
 
 
-async def test_aclose_releases_semaphore_on_early_stop() -> None:
-    """The core disconnect regression: partial consume + aclose frees the slot."""
-    sem = asyncio.Semaphore(1)
-    await sem.acquire()
-    assert sem.locked()
+async def test_aclose_runs_cleanup_on_early_stop() -> None:
+    """The core disconnect regression: partial consume + aclose frees resources."""
+    closed: list[str] = []
+
+    async def on_close() -> None:
+        closed.append("registry")
 
     raw = _FakeRawStream(["a", "b", "c"])
-    stream = _ScopedAnswerStream(raw, sem)
+    stream = _ScopedAnswerStream(raw, on_close=on_close)
 
     # Consume one token, then stop early (client disconnected mid-stream).
     first = await stream.__anext__()
@@ -56,28 +57,29 @@ async def test_aclose_releases_semaphore_on_early_stop() -> None:
     # This is what the route's `finally` runs.
     await aclose_answer_stream(stream)
 
-    assert not sem.locked(), "semaphore permit leaked on early stop"
+    assert closed == ["registry"], "request-local cleanup leaked on early stop"
     assert raw.closed, "upstream stream was not cancelled"
 
 
 async def test_aclose_is_idempotent_after_full_consume() -> None:
-    sem = asyncio.Semaphore(1)
-    await sem.acquire()
+    closed: list[str] = []
+
+    async def on_close() -> None:
+        closed.append("registry")
+
     raw = _FakeRawStream(["x"])
-    stream = _ScopedAnswerStream(raw, sem)
+    stream = _ScopedAnswerStream(raw, on_close=on_close)
 
     tokens = [chunk async for chunk in stream]
     assert tokens == ["x"]
-    assert not sem.locked()  # released on StopAsyncIteration
+    assert closed == ["registry"]  # cleaned up on StopAsyncIteration
 
-    await aclose_answer_stream(stream)  # must not release twice / raise
-    assert not sem.locked()
+    await aclose_answer_stream(stream)  # must not clean up twice / raise
+    assert closed == ["registry"]
 
 
 async def test_iter_answer_tokens_times_out_when_idle() -> None:
-    sem = asyncio.Semaphore(1)
-    await sem.acquire()
-    stream = _ScopedAnswerStream(_FakeRawStream([], hang=True), sem)
+    stream = _ScopedAnswerStream(_FakeRawStream([], hang=True))
 
     with pytest.raises(TimeoutError):
         async for _ in iter_answer_tokens(stream, idle_timeout=0.05):
@@ -90,9 +92,7 @@ async def test_iter_answer_tokens_passthrough_str_and_none() -> None:
 
 
 async def test_iter_answer_tokens_yields_all_chunks() -> None:
-    sem = asyncio.Semaphore(1)
-    await sem.acquire()
-    stream = _ScopedAnswerStream(_FakeRawStream(["a", "b", "c"]), sem)
+    stream = _ScopedAnswerStream(_FakeRawStream(["a", "b", "c"]))
     collected: list[str] = []
     token_iter: AsyncIterator[str] = iter_answer_tokens(stream, idle_timeout=1.0)
     async for chunk in token_iter:

@@ -20,13 +20,13 @@ from dlightrag.core.answer.errors import (
 from dlightrag.core.answer.highlights import enrich_semantic_highlights
 from dlightrag.core.answer.media import answer_images_from_sources
 from dlightrag.core.answer.turn import PreparedAnswerTurn
+from dlightrag.core.answer_runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.core.servicemanager import answer_trace_output
 from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils import log_safe
-from dlightrag.web.answer_snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import ConversationSummary
 from dlightrag.web.conversations import (

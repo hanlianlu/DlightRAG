@@ -407,13 +407,41 @@ class TestRunExecution:
             ),
         )
 
-        resources = manager._answer_run_resources(request, owner_id=_OWNER, store=cast(Any, store))
+        resources = await manager._answer_run_resources(
+            request, owner_id=_OWNER, store=cast(Any, store)
+        )
 
         assert resources is not None
         assert resources[0].filename == "a.txt"
         assert resources[0].content is None
         assert resources[0].loader is not None
         assert await resources[0].loader() == b"attachment-bytes"
+
+    async def test_image_attachments_are_materialized_for_current_image_admission(
+        self,
+    ) -> None:
+        store = _RecordingStore()
+        manager = _manager(store)
+        request = AnswerRunInput(
+            query="why",
+            attachments=(
+                AttachmentReference(
+                    digest=artifact_digest(b"attachment-bytes"),
+                    filename="chart.png",
+                    mime_type="image/png",
+                    ordinal=0,
+                ),
+            ),
+        )
+
+        resources = await manager._answer_run_resources(
+            request, owner_id=_OWNER, store=cast(Any, store)
+        )
+
+        assert resources is not None
+        # A lazy reader would arrive after current-image admission has run.
+        assert resources[0].content == b"attachment-bytes"
+        assert resources[0].loader is None
 
     async def test_the_canonical_result_holds_no_raw_context_payloads(self) -> None:
         store = _RecordingStore()

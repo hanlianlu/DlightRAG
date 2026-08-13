@@ -34,35 +34,47 @@ def test_ragas_eval_parser_requires_dataset() -> None:
 async def test_generate_rag_response_translates_answer_contract(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EVAL_QUERY_TOP_K", "7")
     captured: dict[str, Any] = {}
+    result_payload = {
+        "answer": "grounded answer",
+        "contexts": {
+            "chunks": [
+                {"content": "first chunk"},
+                {"content": ""},
+                {"content": 42},
+                {"content": "second chunk"},
+            ]
+        },
+        "answer_images": [
+            {
+                "id": "fig-1",
+                "source_ref": "1-1",
+                "url": "https://example.test/full.png",
+                "thumbnail_url": "https://example.test/thumb.png",
+            }
+        ],
+        "answer_blocks": [
+            {"type": "markdown", "text": "grounded answer [1-1]."},
+            {"type": "image_ref", "image_id": "fig-1"},
+        ],
+    }
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
+        captured.setdefault("requests", []).append(str(request.url))
         captured["headers"] = request.headers
+        if request.url.path.endswith("/events"):
+            frame = "id: 1\nevent: done\ndata: " + json.dumps(
+                {"status": "succeeded", "result": result_payload}
+            )
+            return httpx.Response(200, text=frame + "\n\n")
         captured["payload"] = json.loads(request.content.decode())
         return httpx.Response(
-            200,
+            202,
             json={
-                "answer": "grounded answer",
-                "contexts": {
-                    "chunks": [
-                        {"content": "first chunk"},
-                        {"content": ""},
-                        {"content": 42},
-                        {"content": "second chunk"},
-                    ]
-                },
-                "answer_images": [
-                    {
-                        "id": "fig-1",
-                        "source_ref": "1-1",
-                        "url": "https://example.test/full.png",
-                        "thumbnail_url": "https://example.test/thumb.png",
-                    }
-                ],
-                "answer_blocks": [
-                    {"type": "markdown", "text": "grounded answer [1-1]."},
-                    {"type": "image_ref", "image_id": "fig-1"},
-                ],
+                "run_id": "run-1",
+                "status": "queued",
+                "status_url": "/answer/run-1",
+                "events_url": "/answer/run-1/events",
+                "cancel_url": "/answer/run-1",
             },
         )
 
@@ -73,12 +85,11 @@ async def test_generate_rag_response_translates_answer_contract(monkeypatch: pyt
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         result = await evaluator.generate_rag_response("What changed?", client)
 
-    assert captured["url"] == "https://rag.example/answer"
-    assert captured["payload"] == {
-        "query": "What changed?",
-        "stream": False,
-        "top_k": 7,
-    }
+    assert captured["requests"] == [
+        "https://rag.example/answer",
+        "https://rag.example/answer/run-1/events",
+    ]
+    assert captured["payload"] == {"query": "What changed?", "top_k": 7}
     assert captured["headers"]["authorization"] == "Bearer secret"
     assert result == {"answer": "grounded answer", "contexts": ["first chunk", "second chunk"]}
 

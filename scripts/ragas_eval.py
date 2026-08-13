@@ -34,6 +34,8 @@ from dotenv import load_dotenv
 from lightrag.evaluation.eval_rag_quality import RAGEvaluator
 from lightrag.utils import logger
 
+from dlightrag.client import AnswerRunCancelledError, AnswerRunClient, AnswerRunFailedError
+
 
 class EvalError(RuntimeError):
     """A DlightRAG API call failed while generating an evaluation response."""
@@ -202,9 +204,9 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
         question: str,
         client: httpx.AsyncClient,
     ) -> dict[str, Any]:
-        """Call DlightRAG ``POST /answer`` and translate to LightRAG format.
+        """Run one durable DlightRAG answer and translate it to LightRAG format.
 
-        DlightRAG response::
+        DlightRAG canonical result::
 
             {"answer": "...",
              "contexts": {"chunks": [{"content": "...", "chunk_id": "..."}]},
@@ -215,43 +217,23 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
             {"answer": "...",
              "contexts": ["chunk text 1", "chunk text 2", ...]}
         """
+        headers: dict[str, str] = {}
+        if self._dlightrag_api_key:
+            headers["Authorization"] = f"Bearer {self._dlightrag_api_key}"
+        runs = AnswerRunClient(client, base_url=self.rag_api_url, headers=headers)
         try:
-            payload: dict[str, Any] = {
-                "query": question,
-                "stream": False,
-                "top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")),
-            }
-
-            headers: dict[str, str] = {}
-            if self._dlightrag_api_key:
-                headers["Authorization"] = f"Bearer {self._dlightrag_api_key}"
-
-            response = await client.post(
-                f"{self.rag_api_url}/answer",
-                json=payload,
-                headers=headers if headers else None,
+            result = await runs.answer(
+                {
+                    "query": question,
+                    "top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")),
+                }
             )
-            response.raise_for_status()
-            result = response.json()
-
-            answer = result.get("answer", "No response generated")
-            chunks = result.get("contexts", {}).get("chunks", [])
-
-            # RAGAS scores textual grounding; display-only media blocks stay out.
-            contexts: list[str] = []
-            for chunk in chunks:
-                content = chunk.get("content", "")
-                if isinstance(content, str) and content.strip():
-                    contexts.append(content)
-
-            if not contexts:
-                logger.warning("Eval query returned no chunk content for: %s", question[:80])
-
-            return {
-                "answer": answer,
-                "contexts": contexts,
-            }
-
+        except AnswerRunCancelledError as exc:
+            raise EvalError(f"DlightRAG answer run was cancelled for: {question[:80]}") from exc
+        except AnswerRunFailedError as exc:
+            raise EvalError(
+                f"DlightRAG answer run failed ({exc.error_kind}): {exc.public_message}"
+            ) from exc
         except httpx.ConnectError as exc:
             raise EvalError(
                 f"Cannot connect to DlightRAG API at {self.rag_api_url}/answer\n"
@@ -270,6 +252,21 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
             ) from exc
         except httpx.HTTPError as exc:
             raise EvalError(f"DlightRAG API request failed: {type(exc).__name__}: {exc}") from exc
+
+        answer = result.get("answer", "No response generated")
+        chunks = result.get("contexts", {}).get("chunks", [])
+
+        # RAGAS scores textual grounding; display-only media blocks stay out.
+        contexts: list[str] = []
+        for chunk in chunks:
+            content = chunk.get("content", "")
+            if isinstance(content, str) and content.strip():
+                contexts.append(content)
+
+        if not contexts:
+            logger.warning("Eval query returned no chunk content for: %s", question[:80])
+
+        return {"answer": answer, "contexts": contexts}
 
 
 # ═══════════════════════════════════════════════════════════════════

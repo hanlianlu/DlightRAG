@@ -690,9 +690,9 @@ async def test_service_derives_principal_for_each_lifecycle_operation(
     conversation_store: AsyncMock,
     jwt_user: UserContext,
 ) -> None:
-    from dlightrag.web.principal import principal_id_from_user
+    from dlightrag.api.principal import owner_id_from_user
 
-    expected_principal = principal_id_from_user(jwt_user)
+    expected_principal = owner_id_from_user(jwt_user)
 
     await service_under_test.create(jwt_user)
     await service_under_test.list(jwt_user)
@@ -764,10 +764,10 @@ async def test_history_thumbnail_is_principal_scoped_and_resource_bounded(
     with Image.open(io.BytesIO(payload)) as derived:
         assert max(derived.size) <= 320
         assert derived.format in {"JPEG", "PNG"}
-    from dlightrag.web.principal import principal_id_from_user
+    from dlightrag.api.principal import owner_id_from_user
 
     conversation_store.get_attachment.assert_awaited_once_with(
-        principal_id_from_user(jwt_user),
+        owner_id_from_user(jwt_user),
         _CID,
         _AID,
         ttl_days=30,

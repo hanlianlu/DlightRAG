@@ -48,7 +48,6 @@ class RetrieveRequest(QueryWorkspaceSelection, RetrieveRequestContract):
 
 
 class AnswerRequest(QueryWorkspaceSelection, AnswerRequestContract):
-    stream: bool = True
     filters: MetadataFilterRequest | None = None
     """Prior conversation turns supplied by the caller. Stateless: the client
     owns persistence and re-sends history each request; DlightRAG never stores
@@ -103,6 +102,30 @@ class AnswerResponse(RetrievalResponse):
     references: list[ReferenceSummary] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
     answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AnswerRunDescriptor(ClientContractModel):
+    """The 202 acceptance every answer request receives, replay included."""
+
+    run_id: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    status_url: str
+    events_url: str
+    cancel_url: str
+
+
+class AnswerRunStatusResponse(AnswerRunDescriptor):
+    """Authoritative lifecycle state, plus the canonical result once it exists."""
+
+    phase: Literal["planning", "searching", "researching", "generating"] | None = None
+    completed_turns: int = 0
+    cancel_requested: bool = False
+    result: AnswerResponse | None = None
+    error_kind: str | None = None
+    error_message: str | None = None
+    created_at: datetime.datetime | None = None
+    started_at: datetime.datetime | None = None
+    finished_at: datetime.datetime | None = None
 
 
 class IngestJobStatusResponse(ClientContractModel):

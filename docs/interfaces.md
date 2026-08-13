@@ -485,9 +485,8 @@ DlightRAG PostgreSQL pool responds. Reader processes additionally prove that
 their database session is read-only. Any failed readiness condition returns a
 minimal HTTP 503 response without exposing the underlying exception.
 
-A saturated service also answers HTTP 503: an answer request waits
-`answer_acquire_timeout` seconds for a free generation slot and then refuses,
-rather than queueing the caller indefinitely. Retry. An answer request whose
+A saturated service does not refuse an answer: accepted runs queue until an
+execution slot frees or the caller cancels the run. An answer request whose
 attachments exceed `answer.max_total_attachment_bytes` returns HTTP 413 before
 the route buffers the body.
 
@@ -540,10 +539,8 @@ result = await manager.aanswer(
 )
 
 # Streaming answer
-contexts, token_iter = await manager.aanswer_stream(query="What are the key findings?")
-# contexts (answer-packed RetrievalContexts) available immediately
-async for token in token_iter:
-    print(token, end="")
+async for event in manager.aanswer_stream(query="What are the key findings?"):
+    print(event.event_type, event.payload)
 ```
 
 **Parameters**:
@@ -557,7 +554,6 @@ async for token in token_iter:
 | `top_k` | `int \| None` | config default | LightRAG KG breadth: entities in local retrieval and relationships in global retrieval. |
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `bm25_query` | `str \| None` | `None` | `retrieve` only. Optional workspace BM25 query override; when omitted, RetrievalPlanner supplies lexical terms or retrieval uses the main query. REST and MCP inputs are capped at 1,024 characters. |
-| `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `query_images` | `list[QueryImage]` | `None` | `retrieve` only. Current-request OpenAI-style `image_url` blocks for knowledge-base visual search: described by the VLM for semantic/BM25 retrieval and embedded directly for visual retrieval. Capped at 3. Answer calls do not accept this field. |
 | `attachments` | `list[AnswerAttachmentLink]` (SDK: `list[AnswerAttachment]` via `resources`) | `None` | `/answer` only. Files or HTTPS references read as request-local resources for one answer. JSON/MCP bodies carry HTTPS link descriptors (`{url, filename?}`, HTTPS-only, no credentials); REST multipart adds uploaded files; the SDK uses `AnswerAttachment.from_path/from_bytes/from_url`. Bounded by `answer.max_attachments` (6), `answer.max_attachment_bytes` (100 MiB), and `answer.max_total_attachment_bytes` (128 MiB). |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
@@ -581,15 +577,19 @@ curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "key findings", "all_workspaces": true}'
 
-# Answer as one JSON response
+# Create an answer run; the 202 descriptor carries its status and events URLs
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
-  -d '{"query": "key findings", "stream": false, "semantic_highlights": true}'
+  -d '{"query": "key findings", "semantic_highlights": true}'
 
-# Streaming answer (default)
-curl -X POST http://localhost:8100/answer \
-  -H "Content-Type: application/json" \
-  -d '{"query": "key findings"}'
+# Read the run's status, and its canonical result once it succeeded
+curl http://localhost:8100/answer/$RUN_ID
+
+# Follow its durable events, resuming after the last sequence you saw
+curl -N -H "Last-Event-ID: 12" http://localhost:8100/answer/$RUN_ID/events
+
+# Request cancellation (idempotent)
+curl -X DELETE http://localhost:8100/answer/$RUN_ID
 
 # Answer with an HTTPS attachment reference (JSON body)
 curl -X POST http://localhost:8100/answer \
@@ -599,7 +599,7 @@ curl -X POST http://localhost:8100/answer \
 # Answer with uploaded files (multipart): exactly one JSON `request` part plus
 # repeated `attachments` file parts; uploaded files and JSON links may mix.
 curl -X POST http://localhost:8100/answer \
-  -F 'request={"query": "summarize this", "stream": false};type=application/json' \
+  -F 'request={"query": "summarize this"};type=application/json' \
   -F 'attachments=@report.pdf' \
   -F 'attachments=@figure.png'
 
@@ -997,7 +997,7 @@ result = await manager.aanswer(
 ```bash
 # REST API — attach the image as a multipart upload
 curl -X POST http://localhost:8100/answer \
-  -F 'request={"query": "What does this diagram show?", "stream": false};type=application/json' \
+  -F 'request={"query": "What does this diagram show?"};type=application/json' \
   -F 'attachments=@photo.png'
 ```
 

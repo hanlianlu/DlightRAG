@@ -15,7 +15,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from dlightrag.api import auth as auth_module
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
-from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import (
     AccessControlConfig,
     AccessControlRuleConfig,
@@ -25,6 +25,7 @@ from dlightrag.config import (
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
+from dlightrag.storage.answer_runs import AnswerRunRecord, RunCreation
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -59,6 +60,34 @@ def _finance_source_context() -> dict[str, object]:
             "source_file_name": "report.pdf",
         },
     }
+
+
+def _queued_run_record() -> AnswerRunRecord:
+    now = datetime.datetime(2026, 8, 13, tzinfo=datetime.UTC)
+    return AnswerRunRecord(
+        owner_id="owner",
+        run_id="0199a0a0-0000-7000-8000-0000000000aa",
+        idempotency_key=None,
+        request={"query": "hi", "workspaces": ["default"]},
+        status="queued",
+        phase=None,
+        stop_reason=None,
+        completed_turns=0,
+        cancel_requested_at=None,
+        lease_owner=None,
+        lease_expires_at=None,
+        fencing_epoch=0,
+        recovery_count=0,
+        next_event_sequence=1,
+        events_trimmed_at=None,
+        result=None,
+        error_kind=None,
+        error_message=None,
+        created_at=now,
+        updated_at=now,
+        started_at=None,
+        finished_at=None,
+    )
 
 
 @pytest.fixture
@@ -131,6 +160,10 @@ def mock_manager(mock_service, test_config):
     )
     manager.aretrieve = mock_service.aretrieve
     manager.aanswer = mock_service.aanswer
+    manager.astart_answer_run = AsyncMock(
+        return_value=RunCreation(run=_queued_run_record(), replayed=False)
+    )
+    manager.aget_answer_run = AsyncMock(return_value=_queued_run_record())
     manager.alist_ingested_files = mock_service.alist_ingested_files
     manager.adelete_files = mock_service.adelete_files
     manager.alist_workspaces = AsyncMock(return_value=["default"])
@@ -332,7 +365,7 @@ class TestWorkspaceLifecycleAPI:
         [
             ("POST", "/ingest", {"source_type": "local", "path": "/tmp/f.pdf"}),
             ("POST", "/retrieve", {"query": "hello"}),
-            ("POST", "/answer", {"query": "hello", "stream": False}),
+            ("POST", "/answer", {"query": "hello"}),
             ("DELETE", "/files", {"filenames": ["f.pdf"]}),
         ],
     )
@@ -481,7 +514,7 @@ class TestJWTAuth:
     @pytest.mark.parametrize(
         ("groups", "expected_status"),
         [
-            (["finance-rag-readers"], 200),
+            (["finance-rag-readers"], 202),
             (["legal-rag-readers"], 403),
         ],
     )
@@ -518,14 +551,15 @@ class TestJWTAuth:
 
         response = await client.post(
             "/answer",
-            json={"query": "hello", "stream": False, "all_workspaces": True},
+            json={"query": "hello", "all_workspaces": True},
         )
 
         assert response.status_code == expected_status
-        if expected_status == 200:
-            assert mock_manager.aanswer.await_args.kwargs["workspaces"] == allowed
+        if expected_status == 202:
+            run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+            assert list(run_input.workspaces) == allowed
         else:
-            mock_manager.aanswer.assert_not_awaited()
+            mock_manager.astart_answer_run.assert_not_awaited()
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_jwt_expired_token(
@@ -1373,106 +1407,7 @@ class TestDeleteEndpoint:
 
 
 class TestAnswerEndpoint:
-    """Test /answer endpoint."""
-
-    async def test_answer_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "What is RAG?", "stream": False})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "answer" in body
-        assert "contexts" in body
-        assert "sources" in body
-        assert body["answer"] == "The answer is 42"
-
-    async def test_non_stream_answer_projects_source_workspace_without_internal_fields(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        mock_manager.aanswer = AsyncMock(
-            return_value=RetrievalResult(
-                answer="Answer [1-1].",
-                sources=[_finance_source()],
-            )
-        )
-        app.state.manager = mock_manager
-
-        response = await client.post(
-            "/answer",
-            json={"query": "report", "stream": False, "workspaces": ["finance"]},
-        )
-
-        assert response.status_code == 200
-        source = response.json()["sources"][0]
-        assert source["source_uri"] == "s3://bucket/report.pdf"
-        assert source["download_url"] == "/files/raw/doc-report?workspace=finance"
-        assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
-
-    async def test_answer_includes_structured_images_and_blocks(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        mock_manager.aanswer = AsyncMock(
-            return_value=RetrievalResult(
-                answer="Diagram below [1-1].",
-                contexts={
-                    "chunks": [
-                        {
-                            "chunk_id": "fig-1",
-                            "reference_id": "1",
-                            "file_path": "/private/report.pdf",
-                            "content": "Figure evidence",
-                            "image_data": "base64-payload",
-                            "_workspace": "default",
-                        }
-                    ],
-                },
-                sources=[
-                    SourceReference(
-                        id="1",
-                        title="report.pdf",
-                        source_uri="s3://bucket/report.pdf",
-                        workspace="default",
-                        document_id="doc-report",
-                        download_locator="s3://bucket/report.pdf",
-                        chunks=[
-                            ChunkSnippet(
-                                chunk_id="fig-1",
-                                chunk_idx=1,
-                                content="Figure evidence",
-                                image_url="/images/default/fig-1?size=full",
-                                thumbnail_url="/images/default/fig-1?size=thumb",
-                            )
-                        ],
-                    )
-                ],
-                answer_images=[
-                    {
-                        "id": "fig-1",
-                        "chunk_id": "fig-1",
-                        "source_ref": "1-1",
-                        "url": "/images/default/fig-1?size=full",
-                        "thumbnail_url": "/images/default/fig-1?size=thumb",
-                        "label": "report.pdf",
-                    }
-                ],
-                answer_blocks=[
-                    {"type": "markdown", "text": "Diagram below [1-1]."},
-                    {"type": "image_ref", "image_id": "fig-1"},
-                ],
-            )
-        )
-        app.state.manager = mock_manager
-
-        resp = await client.post("/answer", json={"query": "show diagram", "stream": False})
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["answer_images"][0]["chunk_id"] == "fig-1"
-        assert body["answer_blocks"] == [
-            {"type": "markdown", "text": "Diagram below [1-1]."},
-            {"type": "image_ref", "image_id": "fig-1"},
-        ]
+    """POST /answer admission: what the run's immutable input may carry."""
 
     async def test_answer_forwards_explicit_filters(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1482,13 +1417,12 @@ class TestAnswerEndpoint:
             "/answer",
             json={
                 "query": "What did Ada write?",
-                "stream": False,
                 "filters": {"author": "Ada"},
             },
         )
-        assert resp.status_code == 200
-        filters = mock_manager.aanswer.call_args.kwargs["filters"]
-        assert filters.author == "Ada"
+        assert resp.status_code == 202
+        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+        assert run_input.filters == {"author": "Ada"}
 
     async def test_answer_forwards_answer_context_limits(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1498,14 +1432,13 @@ class TestAnswerEndpoint:
             "/answer",
             json={
                 "query": "What is RAG?",
-                "stream": False,
                 "chunk_top_k": 12,
             },
         )
-        assert resp.status_code == 200
-        call_kwargs = mock_manager.aanswer.call_args.kwargs
-        assert call_kwargs["chunk_top_k"] == 12
-        assert call_kwargs["semantic_highlights"] is False
+        assert resp.status_code == 202
+        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+        assert run_input.chunk_top_k == 12
+        assert run_input.semantic_highlights is False
 
     async def test_answer_forwards_semantic_highlights_opt_in(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1515,63 +1448,39 @@ class TestAnswerEndpoint:
             "/answer",
             json={
                 "query": "What is RAG?",
-                "stream": False,
                 "semantic_highlights": True,
             },
         )
-        assert resp.status_code == 200
-        assert mock_manager.aanswer.call_args.kwargs["semantic_highlights"] is True
+        assert resp.status_code == 202
+        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+        assert run_input.semantic_highlights is True
 
     async def test_answer_rejects_query_images_and_accepts_attachment_links(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
-        history = [
-            {"role": "user", "content": [{"type": "text", "text": "previous"}]},
-        ]
         query_images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
 
         rejected = await client.post(
             "/answer",
-            json={
-                "query": "What is shown?",
-                "stream": False,
-                "conversation_history": history,
-                "query_images": query_images,
-            },
+            json={"query": "What is shown?", "query_images": query_images},
         )
-
         assert rejected.status_code == 422
-        mock_manager.aanswer.assert_not_awaited()
-
-        rejected_images = await client.post(
-            "/answer",
-            json={
-                "query": "What is shown?",
-                "stream": False,
-                "query_images": query_images,
-            },
-        )
-        assert rejected_images.status_code == 422
-        mock_manager.aanswer.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
         resp = await client.post(
             "/answer",
             json={
                 "query": "What is shown?",
-                "stream": False,
                 "attachments": [{"url": "https://example.com/report.pdf", "filename": "r.pdf"}],
             },
         )
 
-        assert resp.status_code == 200
-        call_kwargs = mock_manager.aanswer.call_args.kwargs
-        assert "conversation_history" not in call_kwargs
-        assert "query_images" not in call_kwargs
-        resources = call_kwargs["resources"]
-        assert [resource.url for resource in resources] == ["https://example.com/report.pdf"]
-        assert resources[0].filename == "r.pdf"
-        assert resources[0].content is None
+        assert resp.status_code == 202
+        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+        assert [link.url for link in run_input.links] == ["https://example.com/report.pdf"]
+        assert run_input.links[0].filename == "r.pdf"
+        assert run_input.attachments == ()
 
     async def test_answer_accepts_caller_history(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1584,31 +1493,12 @@ class TestAnswerEndpoint:
 
         resp = await client.post(
             "/answer",
-            json={"query": "And its population?", "stream": False, "history": history},
+            json={"query": "And its population?", "history": history},
         )
 
-        assert resp.status_code == 200
-        assert mock_manager.aanswer.call_args.kwargs["history"] == history
-
-    async def test_non_stream_answer_uses_shared_executor(
-        self,
-        client: AsyncClient,
-        mock_config: DlightragConfig,
-        mock_manager,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from dlightrag.api.routes import rag as rag_routes
-
-        execute = AsyncMock(return_value=RetrievalResult(answer="shared", contexts={"chunks": []}))
-        monkeypatch.setattr(rag_routes, "execute_answer", execute)
-        app.state.manager = mock_manager
-
-        resp = await client.post("/answer", json={"query": "hello", "stream": False})
-
-        assert resp.status_code == 200
-        assert resp.json()["answer"] == "shared"
-        execute.assert_awaited_once()
-        mock_manager.aanswer.assert_not_awaited()
+        assert resp.status_code == 202
+        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+        assert list(run_input.history) == history
 
     async def test_json_enforces_link_count_limit(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1620,39 +1510,22 @@ class TestAnswerEndpoint:
             "/answer",
             json={
                 "query": "q",
-                "stream": False,
                 "attachments": [{"url": f"https://example.com/{index}.pdf"} for index in range(3)],
             },
         )
 
         assert resp.status_code == 413
         assert "2" in resp.json()["detail"]
-        mock_manager.aanswer.assert_not_awaited()
-
-    async def test_json_stream_enforces_link_count_limit(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        mock_config.answer.max_attachments = 2
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/answer",
-            json={
-                "query": "q",
-                "stream": True,
-                "attachments": [{"url": f"https://example.com/{index}.pdf"} for index in range(3)],
-            },
-        )
-
-        assert resp.status_code == 413
-        mock_manager.aanswer_stream.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.aanswer = AsyncMock(side_effect=RAGServiceUnavailableError("RAG not ready"))
+        mock_manager.astart_answer_run = AsyncMock(
+            side_effect=RAGServiceUnavailableError("RAG not ready")
+        )
         app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "hello", "stream": False})
+        resp = await client.post("/answer", json={"query": "hello"})
         assert resp.status_code == 503
 
 
@@ -1664,7 +1537,7 @@ class TestAnswerEndpoint:
 class TestAnswerMultipart:
     """POST /answer multipart: one JSON request part plus repeated attachment files."""
 
-    async def test_multipart_nonstream_mixes_links_and_files(
+    async def test_multipart_mixes_links_and_files(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         import json as json_mod
@@ -1673,7 +1546,6 @@ class TestAnswerMultipart:
         request_part = json_mod.dumps(
             {
                 "query": "compare",
-                "stream": False,
                 "attachments": [{"url": "https://example.com/a.pdf"}],
             }
         )
@@ -1683,36 +1555,13 @@ class TestAnswerMultipart:
             files=[("attachments", ("report.pdf", b"%PDF-body", "application/pdf"))],
         )
 
-        assert resp.status_code == 200
-        resources = mock_manager.aanswer.call_args.kwargs["resources"]
-        assert [resource.url for resource in resources if resource.url] == [
-            "https://example.com/a.pdf"
-        ]
-        file_resources = [resource for resource in resources if resource.content is not None]
-        assert file_resources[0].content == b"%PDF-body"
-        assert file_resources[0].filename == "report.pdf"
-
-    async def test_multipart_streaming_passes_resources(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        import json as json_mod
-
-        async def mock_tokens():
-            yield "answer"
-
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
-        app.state.manager = mock_manager
-        request_part = json_mod.dumps({"query": "compare", "stream": True})
-        resp = await client.post(
-            "/answer",
-            data={"request": request_part},
-            files=[("attachments", ("a.txt", b"hello", "text/plain"))],
-        )
-
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
-        resources = mock_manager.aanswer_stream.call_args.kwargs["resources"]
-        assert resources[0].content == b"hello"
+        assert resp.status_code == 202
+        call = mock_manager.astart_answer_run.await_args.kwargs
+        run_input = call["request"]
+        assert [link.url for link in run_input.links] == ["https://example.com/a.pdf"]
+        assert call["attachment_bytes"] == [b"%PDF-body"]
+        assert run_input.attachments[0].filename == "report.pdf"
+        assert run_input.attachments[0].mime_type == "application/pdf"
 
     async def test_multipart_accepts_maximum_unicode_history(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1737,15 +1586,16 @@ class TestAnswerMultipart:
             "/answer",
             data={
                 "request": json_mod.dumps(
-                    {"query": "continue", "stream": False, "history": history},
+                    {"query": "continue", "history": history},
                     ensure_ascii=False,
                 )
             },
             files=[("attachments", ("note.txt", b"evidence", "text/plain"))],
         )
 
-        assert response.status_code == 200
-        assert len(mock_manager.aanswer.call_args.kwargs["history"]) == MAX_HISTORY_MESSAGES
+        assert response.status_code == 202
+        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+        assert len(run_input.history) == MAX_HISTORY_MESSAGES
 
     async def test_multipart_requires_exactly_one_request_part(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1760,20 +1610,20 @@ class TestAnswerMultipart:
 
         duplicate = await client.post(
             "/answer",
-            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            data={"request": json_mod.dumps({"query": "q"})},
             files=[
                 (
                     "request",
                     (
                         "r.json",
-                        json_mod.dumps({"query": "q2", "stream": False}),
+                        json_mod.dumps({"query": "q2"}),
                         "application/json",
                     ),
                 )
             ],
         )
         assert duplicate.status_code == 400
-        mock_manager.aanswer.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
     async def test_multipart_rejects_wrong_part_name(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1783,12 +1633,12 @@ class TestAnswerMultipart:
         app.state.manager = mock_manager
         resp = await client.post(
             "/answer",
-            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            data={"request": json_mod.dumps({"query": "q"})},
             files=[("documents", ("a.txt", b"x", "text/plain"))],
         )
 
         assert resp.status_code == 400
-        mock_manager.aanswer.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
     async def test_multipart_malformed_request_part_is_422(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1801,7 +1651,7 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 422
-        mock_manager.aanswer.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
     async def test_multipart_enforces_count_limit(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1812,12 +1662,12 @@ class TestAnswerMultipart:
         app.state.manager = mock_manager
         resp = await client.post(
             "/answer",
-            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            data={"request": json_mod.dumps({"query": "q"})},
             files=[("attachments", (f"f{index}.txt", b"x", "text/plain")) for index in range(3)],
         )
 
         assert resp.status_code == 413
-        mock_manager.aanswer.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
     async def test_multipart_enforces_per_item_limit(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1828,12 +1678,12 @@ class TestAnswerMultipart:
         app.state.manager = mock_manager
         resp = await client.post(
             "/answer",
-            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            data={"request": json_mod.dumps({"query": "q"})},
             files=[("attachments", ("big.bin", b"x" * 64, "application/octet-stream"))],
         )
 
         assert resp.status_code == 413
-        mock_manager.aanswer.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
     async def test_multipart_enforces_total_limit(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1844,7 +1694,7 @@ class TestAnswerMultipart:
         app.state.manager = mock_manager
         resp = await client.post(
             "/answer",
-            data={"request": json_mod.dumps({"query": "q", "stream": False})},
+            data={"request": json_mod.dumps({"query": "q"})},
             files=[
                 ("attachments", ("a.bin", b"x" * 10, "application/octet-stream")),
                 ("attachments", ("b.bin", b"y" * 10, "application/octet-stream")),
@@ -1852,7 +1702,7 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 413
-        mock_manager.aanswer.assert_not_awaited()
+        mock_manager.astart_answer_run.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1900,435 +1750,7 @@ class TestFilesEndpoint:
 
 
 class TestAnswerStreamMode:
-    """Test POST /answer with stream=true SSE mode."""
-
-    async def test_stream_returns_sse_content_type(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        async def mock_tokens():
-            for t in ["Hello", " world"]:
-                yield t
-
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "test", "stream": True})
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
-
-    async def test_stream_sources_event_projects_source_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        async def mock_tokens():
-            yield "Answer [1-1]."
-
-        mock_manager.aanswer_stream = AsyncMock(
-            return_value=({"chunks": [_finance_source_context()]}, mock_tokens())
-        )
-        app.state.manager = mock_manager
-
-        response = await client.post(
-            "/answer",
-            json={"query": "report", "stream": True, "workspaces": ["finance"]},
-        )
-
-        import json as json_mod
-
-        events = [
-            json_mod.loads(line.removeprefix("data: "))
-            for line in response.text.splitlines()
-            if line.startswith("data: ")
-        ]
-        sources_event = next(event for event in events if event["type"] == "sources")
-        source = sources_event["data"][0]
-        assert source["source_uri"] == "s3://bucket/report.pdf"
-        assert source["download_url"] == "/files/raw/doc-report?workspace=finance"
-        assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
-
-    async def test_stream_all_workspaces_uses_visible_records(
-        self,
-        client: AsyncClient,
-        mock_config: DlightragConfig,
-        mock_manager,
-    ) -> None:
-        async def mock_tokens():
-            yield "answer"
-
-        mock_manager.alist_workspace_records.return_value = [
-            {"workspace": "default"},
-            {"workspace": "research_notes"},
-        ]
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
-        app.state.manager = mock_manager
-
-        response = await client.post(
-            "/answer",
-            json={"query": "hello", "stream": True, "all_workspaces": True},
-        )
-
-        assert response.status_code == 200
-        await_args = mock_manager.aanswer_stream.await_args
-        assert await_args is not None
-        assert await_args.kwargs["workspaces"] == [
-            "default",
-            "research_notes",
-        ]
-
-    async def test_stream_forwards_explicit_filters(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        async def mock_tokens():
-            yield "Hello"
-
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/answer",
-            json={
-                "query": "Stream filtered",
-                "stream": True,
-                "filters": {"title": "Manual"},
-            },
-        )
-        assert resp.status_code == 200
-        filters = mock_manager.aanswer_stream.call_args.kwargs["filters"]
-        assert filters.title == "Manual"
-
-    async def test_stream_forwards_answer_context_limits(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        async def mock_tokens():
-            yield "Hello"
-
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/answer",
-            json={
-                "query": "Stream with limits",
-                "stream": True,
-                "chunk_top_k": 16,
-            },
-        )
-        assert resp.status_code == 200
-        call_kwargs = mock_manager.aanswer_stream.call_args.kwargs
-        assert call_kwargs["chunk_top_k"] == 16
-
-    async def test_stream_event_sequence(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """Verify context -> token(s) -> done event order."""
-
-        async def mock_tokens():
-            for t in ["Hi", " there"]:
-                yield t
-
-        mock_manager.aanswer_stream = AsyncMock(
-            return_value=({"chunks": [{"id": "c1"}]}, mock_tokens())
-        )
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "test", "stream": True})
-        lines = [line for line in resp.text.split("\n") if line.startswith("data: ")]
-
-        import json as json_mod
-
-        events = [json_mod.loads(line.removeprefix("data: ")) for line in lines]
-        assert events[0]["type"] == "context"
-        assert events[0]["data"] == {
-            "chunks": [{"chunk_id": "c1", "reference_id": "", "file_path": "", "content": ""}],
-            "entities": [],
-            "relationships": [],
-        }
-        assert events[-1]["type"] == "done"
-        assert events[-1]["answer"] == "Hi there"
-        token_events = [e for e in events if e["type"] == "token"]
-        assert len(token_events) == 2
-        assert token_events[0]["content"] == "Hi"
-        assert token_events[1]["content"] == " there"
-
-    async def test_stream_done_includes_structured_images_and_blocks(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        async def mock_tokens():
-            yield "Diagram below [1-1]."
-
-        contexts = {
-            "chunks": [
-                {
-                    "chunk_id": "fig-1",
-                    "reference_id": "1",
-                    "full_doc_id": "doc-report",
-                    "file_path": "/private/report.pdf",
-                    "content": "Figure evidence",
-                    "image_data": "base64-payload",
-                    "_workspace": "default",
-                    "metadata": {
-                        "source_uri": "s3://bucket/report.pdf",
-                        "source_download_locator": "s3://bucket/report.pdf",
-                    },
-                }
-            ]
-        }
-        mock_manager.aanswer_stream = AsyncMock(return_value=(contexts, mock_tokens()))
-        app.state.manager = mock_manager
-
-        resp = await client.post("/answer", json={"query": "show diagram", "stream": True})
-
-        import json as json_mod
-
-        events = [
-            json_mod.loads(line.removeprefix("data: "))
-            for line in resp.text.split("\n")
-            if line.startswith("data: ")
-        ]
-        done = events[-1]
-        assert done["type"] == "done"
-        assert done["answer_images"][0]["chunk_id"] == "fig-1"
-        assert done["answer_blocks"] == [
-            {"type": "markdown", "text": "Diagram below [1-1]."},
-            {"type": "image_ref", "image_id": "fig-1"},
-        ]
-
-    async def test_stream_semantic_highlights_default_off(
-        self,
-        client: AsyncClient,
-        mock_config: DlightragConfig,
-        mock_manager,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Streaming REST answer does not enrich highlights unless requested."""
-        from dlightrag.api.routes import rag as rag_routes
-
-        async def mock_tokens():
-            yield "Market growth improved [1-1]."
-
-        async def fail_enrich(*args, **kwargs):
-            raise AssertionError("semantic highlights should be opt-in for REST streaming")
-
-        monkeypatch.setattr(
-            rag_routes,
-            "enrich_semantic_highlights",
-            fail_enrich,
-            raising=False,
-        )
-        mock_manager.aanswer_stream = AsyncMock(
-            return_value=(
-                {
-                    "chunks": [
-                        {
-                            "chunk_id": "c1",
-                            "reference_id": "1",
-                            "full_doc_id": "doc-report",
-                            "file_path": "/docs/report.pdf",
-                            "content": "The report says market growth improved.",
-                            "_workspace": "default",
-                            "metadata": {
-                                "source_uri": "s3://bucket/report.pdf",
-                                "source_download_locator": "s3://bucket/report.pdf",
-                            },
-                        }
-                    ]
-                },
-                mock_tokens(),
-            )
-        )
-        app.state.manager = mock_manager
-
-        resp = await client.post("/answer", json={"query": "test", "stream": True})
-
-        assert resp.status_code == 200
-        assert "semantic highlights should be opt-in" not in resp.text
-
-    async def test_stream_semantic_highlights_are_opt_in(
-        self,
-        client: AsyncClient,
-        mock_config: DlightragConfig,
-        mock_manager,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Streaming REST answer can opt into source highlight phrases."""
-        from dlightrag.api.routes import rag as rag_routes
-
-        async def mock_tokens():
-            yield "Market growth improved [1-1]."
-
-        async def fake_enrich(
-            sources: list[SourceReference],
-            answer_text: str | None,
-            config: DlightragConfig,
-        ) -> list[SourceReference]:
-            assert answer_text == "Market growth improved [1-1]."
-            chunks = sources[0].chunks
-            assert chunks is not None
-            chunks[0].highlight_phrases = ["market growth"]
-            return sources
-
-        monkeypatch.setattr(
-            rag_routes,
-            "enrich_semantic_highlights",
-            fake_enrich,
-            raising=False,
-        )
-        mock_manager.aanswer_stream = AsyncMock(
-            return_value=(
-                {
-                    "chunks": [
-                        {
-                            "chunk_id": "c1",
-                            "reference_id": "1",
-                            "full_doc_id": "doc-report",
-                            "file_path": "/docs/report.pdf",
-                            "content": "The report says market growth improved.",
-                            "_workspace": "default",
-                            "metadata": {
-                                "source_uri": "s3://bucket/report.pdf",
-                                "source_download_locator": "s3://bucket/report.pdf",
-                            },
-                        }
-                    ]
-                },
-                mock_tokens(),
-            )
-        )
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/answer",
-            json={"query": "test", "stream": True, "semantic_highlights": True},
-        )
-
-        import json as json_mod
-
-        events = [
-            json_mod.loads(line.removeprefix("data: "))
-            for line in resp.text.split("\n")
-            if line.startswith("data: ")
-        ]
-        sources_event = next(event for event in events if event["type"] == "sources")
-        assert sources_event["data"][0]["chunks"][0]["highlight_phrases"] == ["market growth"]
-
-    async def test_stream_error_during_iteration(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """Error mid-stream produces error event."""
-
-        async def mock_tokens():
-            yield "start"
-            raise RuntimeError("LLM exploded")
-
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "test", "stream": True})
-        lines = [line for line in resp.text.split("\n") if line.startswith("data: ")]
-
-        import json as json_mod
-
-        events = [json_mod.loads(line.removeprefix("data: ")) for line in lines]
-        error_events = [e for e in events if e["type"] == "error"]
-        assert len(error_events) == 1
-        assert "Internal server error" in error_events[0]["message"]
-
-    async def test_stream_setup_error_becomes_sse_error_event(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """Setup errors during streaming surface as an SSE error event (200), not HTTP 503.
-
-        The root trace span now wraps the whole streamed response, so
-        ``aanswer_stream`` runs inside the SSE generator; its errors are streamed
-        as an error event instead of a pre-stream HTTP status.
-        """
-        mock_manager.aanswer_stream = AsyncMock(
-            side_effect=RAGServiceUnavailableError("RAG not ready")
-        )
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "hello", "stream": True})
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
-        assert "Internal server error during streaming" in resp.text
-
-    async def test_stream_false_returns_json(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """stream=false returns normal JSON response."""
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "test", "stream": False})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "answer" in body
-        assert body["answer"] == "The answer is 42"
-
-    async def test_missing_stream_defaults_to_streaming(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """REST /answer streams by default; stream=false opts into JSON."""
-
-        async def mock_tokens():
-            yield "Hello"
-
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "test"})
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
-        mock_manager.aanswer_stream.assert_awaited_once()
-
-    async def test_answer_image_capability_error_maps_to_400(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """A non-streaming capability rejection surfaces as HTTP 400 + stable error_kind."""
-        from dlightrag.core.answer.errors import CURRENT_IMAGES_UNSUPPORTED, AnswerImageError
-
-        mock_manager.aanswer = AsyncMock(
-            side_effect=AnswerImageError(
-                "[IMAGES_NOT_SUPPORTED_BY_MODEL] no vision",
-                error_kind=CURRENT_IMAGES_UNSUPPORTED,
-            )
-        )
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "hi", "stream": False})
-        assert resp.status_code == 400
-        body = resp.json()
-        assert body["error_type"] == "validation"
-        assert body["error_kind"] == CURRENT_IMAGES_UNSUPPORTED
-
-    async def test_answer_input_overflow_maps_to_400(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        from dlightrag.core.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
-
-        mock_manager.aanswer = AsyncMock(
-            side_effect=AnswerInputOverflowError("The answer input exceeds the context window.")
-        )
-        app.state.manager = mock_manager
-
-        response = await client.post("/answer", json={"query": "hi", "stream": False})
-
-        assert response.status_code == 400
-        body = response.json()
-        assert body["error_type"] == "validation"
-        assert body["error_kind"] == ANSWER_INPUT_OVERFLOW
-
-    async def test_invalid_tool_configuration_maps_to_500_configuration(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """Duplicate run-tool names are server composition failure, not caller input."""
-        from dlightrag.core.answer.errors import (
-            INVALID_TOOL_CONFIGURATION,
-            InvalidToolConfigurationError,
-        )
-
-        mock_manager.aanswer = AsyncMock(
-            side_effect=InvalidToolConfigurationError(("read_resource",))
-        )
-        app.state.manager = mock_manager
-
-        response = await client.post("/answer", json={"query": "hi", "stream": False})
-
-        assert response.status_code == 500
-        body = response.json()
-        assert body["error_type"] == "configuration"
-        assert body["error_kind"] == INVALID_TOOL_CONFIGURATION == "invalid_tool_configuration"
-        assert body["detail"] == "Answer tooling is misconfigured."
-        assert "read_resource" not in response.text
+    """Runtime failure mappings the app still owns for its non-durable routes."""
 
     async def test_rejected_metadata_is_a_client_error_not_a_500(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -2344,99 +1766,9 @@ class TestAnswerStreamMode:
         assert resp.status_code == 400
         assert resp.json()["error_type"] == "validation"
 
-    async def test_stream_capability_error_becomes_structured_sse_error(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """A capability rejection during streaming surfaces as a classified SSE error."""
-        import json as json_mod
-
-        from dlightrag.core.answer.errors import ANSWER_IMAGE_CAPABILITY_UNKNOWN, AnswerImageError
-
-        mock_manager.aanswer_stream = AsyncMock(
-            side_effect=AnswerImageError(
-                "[ANSWER_IMAGE_CAPABILITY_UNKNOWN] unknown",
-                error_kind=ANSWER_IMAGE_CAPABILITY_UNKNOWN,
-            )
-        )
-        app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "hi", "stream": True})
-        assert resp.status_code == 200
-        events = [
-            json_mod.loads(line.removeprefix("data: "))
-            for line in resp.text.split("\n")
-            if line.startswith("data: ")
-        ]
-        error_events = [e for e in events if e["type"] == "error"]
-        assert len(error_events) == 1
-        assert error_events[0]["error_kind"] == ANSWER_IMAGE_CAPABILITY_UNKNOWN
-        assert "Internal server error" not in error_events[0]["message"]
-
-    async def test_stream_invalid_tool_configuration_is_a_configuration_error(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        """A misconfigured run keeps its stable kind without leaking tool names."""
-        import json as json_mod
-
-        from dlightrag.core.answer.errors import (
-            INVALID_TOOL_CONFIGURATION,
-            InvalidToolConfigurationError,
-        )
-
-        mock_manager.aanswer_stream = AsyncMock(
-            side_effect=InvalidToolConfigurationError(("read_resource",))
-        )
-        app.state.manager = mock_manager
-
-        resp = await client.post("/answer", json={"query": "hi", "stream": True})
-
-        assert resp.status_code == 200
-        events = [
-            json_mod.loads(line.removeprefix("data: "))
-            for line in resp.text.split("\n")
-            if line.startswith("data: ")
-        ]
-        error_events = [e for e in events if e["type"] == "error"]
-        assert len(error_events) == 1
-        assert error_events[0]["error_kind"] == INVALID_TOOL_CONFIGURATION
-        assert error_events[0]["message"] == "Answer tooling is misconfigured."
-        assert "read_resource" not in resp.text
-
 
 class TestAPIContracts:
     """Request and response contracts are explicit in OpenAPI."""
-
-    def test_answer_stream_sources_event_uses_contract_model(self) -> None:
-        import json
-
-        from dlightrag.api.events import AnswerSourcesStreamEvent, sse_data_event
-        from dlightrag.citations.schemas import SourceReferencePayload
-
-        frame = sse_data_event(
-            AnswerSourcesStreamEvent(
-                data=[
-                    SourceReferencePayload(
-                        id="1",
-                        title="report.pdf",
-                        source_uri="local://default/report.pdf",
-                        download_url="/files/raw/report.pdf?workspace=default",
-                    )
-                ]
-            )
-        )
-
-        assert frame.startswith("data: ")
-        payload = json.loads(frame.removeprefix("data: ").strip())
-        assert payload == {
-            "type": "sources",
-            "data": [
-                {
-                    "id": "1",
-                    "title": "report.pdf",
-                    "source_uri": "local://default/report.pdf",
-                    "download_url": "/files/raw/report.pdf?workspace=default",
-                }
-            ],
-        }
 
     async def test_openapi_exposes_pydantic_response_models(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -2450,6 +1782,8 @@ class TestAPIContracts:
         schemas = spec["components"]["schemas"]
         assert "RetrievalResponse" in schemas
         assert "AnswerResponse" in schemas
+        assert "AnswerRunDescriptor" in schemas
+        assert "AnswerRunStatusResponse" in schemas
         ingest_properties = schemas["IngestRequest"]["properties"]
         assert "download_uri" in ingest_properties
         assert "download_uris" in ingest_properties

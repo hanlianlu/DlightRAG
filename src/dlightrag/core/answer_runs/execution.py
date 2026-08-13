@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The immutable input, durable boundaries, and canonical result of one run.
+"""The immutable input and durable turn boundaries of one Answer run.
 
 This is the seam between the coordinator, which owns durability, and the answer
 orchestrator, which owns retrieval and synthesis. It holds no lifecycle state of
@@ -8,7 +8,7 @@ its own: the run row remains authoritative for status, turns, and cancellation.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +41,24 @@ class AttachmentReference:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkReference:
+    """One ordered HTTPS attachment link, kept inert until an explicit read."""
+
+    url: str
+    filename: str | None
+    ordinal: int
+    mime_type: str | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "url": self.url,
+            "filename": self.filename,
+            "ordinal": self.ordinal,
+            "mime_type": self.mime_type,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AnswerRunInput:
     """The normalized, immutable request one accepted run executes.
 
@@ -56,6 +74,7 @@ class AnswerRunInput:
     chunk_top_k: int | None = None
     filters: Mapping[str, Any] | None = None
     semantic_highlights: bool = False
+    links: tuple[LinkReference, ...] = ()
     attachments: tuple[AttachmentReference, ...] = ()
 
     def as_request(self) -> dict[str, Any]:
@@ -67,6 +86,7 @@ class AnswerRunInput:
             "chunk_top_k": self.chunk_top_k,
             "filters": dict(self.filters) if self.filters else None,
             "semantic_highlights": self.semantic_highlights,
+            "links": [item.as_json() for item in self.links],
             "attachments": [item.as_json() for item in self.attachments],
         }
 
@@ -81,6 +101,15 @@ class AnswerRunInput:
             )
             for item in request.get("attachments") or ()
         )
+        links = tuple(
+            LinkReference(
+                url=str(item["url"]),
+                filename=(str(item["filename"]) if item.get("filename") else None),
+                ordinal=int(item["ordinal"]),
+                mime_type=(str(item["mime_type"]) if item.get("mime_type") else None),
+            )
+            for item in request.get("links") or ()
+        )
         filters = request.get("filters")
         return cls(
             query=str(request.get("query") or ""),
@@ -90,6 +119,7 @@ class AnswerRunInput:
             chunk_top_k=_optional_int(request.get("chunk_top_k")),
             filters=dict(filters) if isinstance(filters, Mapping) else None,
             semantic_highlights=bool(request.get("semantic_highlights")),
+            links=links,
             attachments=attachments,
         )
 
@@ -112,41 +142,6 @@ class SessionBoundaries:
         await self._session.check_cancelled()
 
 
-def canonical_result(
-    *,
-    answer: str,
-    contexts: Mapping[str, Any],
-    sources: Sequence[Any],
-    answer_images: Sequence[Mapping[str, Any]],
-    answer_blocks: Sequence[Mapping[str, Any]],
-    trace: Mapping[str, Any],
-    image_descriptions: Sequence[str],
-) -> dict[str, Any]:
-    """Project one finished run into the transport-neutral canonical result.
-
-    ``contexts`` must already be the client-safe projection: a durable result
-    never stores inline image bytes or internal source locators. Source
-    identities are stored, never authorization-dependent download URLs; each
-    authenticated read projects fresh URLs from these identities.
-    """
-    return {
-        "answer": answer,
-        "contexts": dict(contexts),
-        "sources": [_json_safe(source) for source in sources],
-        "answer_images": [dict(image) for image in answer_images],
-        "answer_blocks": [dict(block) for block in answer_blocks],
-        "trace": dict(trace),
-        "image_descriptions": list(image_descriptions),
-    }
-
-
-def _json_safe(value: Any) -> Any:
-    dump = getattr(value, "model_dump", None)
-    if callable(dump):
-        return dump(mode="json")
-    return value
-
-
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
 
@@ -155,6 +150,6 @@ __all__ = [
     "AnswerRunInput",
     "AttachmentReference",
     "CheckpointEncoder",
+    "LinkReference",
     "SessionBoundaries",
-    "canonical_result",
 ]

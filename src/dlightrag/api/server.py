@@ -26,6 +26,7 @@ from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurat
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES
 from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
+from dlightrag.storage.migrations import SchemaValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,19 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         """Metadata is validated below the request model, so it needs its own mapping."""
         body = ErrorDetail(detail=str(exc), error_type="validation")
         return JSONResponse(status_code=400, content=body.model_dump())
+
+    @application.exception_handler(SchemaValidationError)
+    async def schema_validation_error_handler(
+        request: Request,  # noqa: ARG001
+        exc: SchemaValidationError,
+    ) -> JSONResponse:
+        """An incompatible schema is an operator fault; callers see no schema detail."""
+        logger.error("Durable schema is incompatible with this revision", exc_info=exc)
+        body = ErrorDetail(
+            detail="Durable storage is unavailable on this deployment",
+            error_type="unavailable",
+        )
+        return JSONResponse(status_code=503, content=body.model_dump())
 
     # -- API routes --
     application.include_router(router)

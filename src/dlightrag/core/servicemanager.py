@@ -21,6 +21,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -50,14 +51,25 @@ from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.answer_runs.coordinator import RunSession
-from dlightrag.core.answer_runs.execution import AnswerRunInput
-from dlightrag.core.answer_runs.models import AgentRunState, CheckpointError
+from dlightrag.core.answer_runs.execution import (
+    AnswerRunInput,
+    AttachmentReference,
+    LinkReference,
+)
+from dlightrag.core.answer_runs.models import (
+    AgentRunState,
+    AnswerRunCancelledError,
+    AnswerRunFailedError,
+    CheckpointError,
+)
+from dlightrag.core.answer_runs.results import restore_answer_result, store_answer_result
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.core.memory.conversation import PriorTurns
+from dlightrag.core.principal import DEPLOYMENT_OWNER_ID
 from dlightrag.core.request.images import prepare_query_images
 from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.core.request.workspaces import (
@@ -70,12 +82,14 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResul
 from dlightrag.core.service import RAGService
 from dlightrag.core.vision_probe import ImageCapabilityStatus, ModelImageCapabilities
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.storage.answer_runs import (
     AnswerRunEvent,
     AnswerRunRecord,
     CancellationOutcome,
     PGAnswerRunStore,
     RunCreation,
+    artifact_digest,
 )
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
 from dlightrag.storage.migrations import SchemaValidationError
@@ -99,20 +113,22 @@ def _defer_cancellation(
     return first if first is not None else current
 
 
+def _attachment_bytes(resources: list[ResourceInput] | None) -> list[bytes]:
+    """Return the inline bytes an accepted run must persist with its input."""
+    return [resource.content for resource in resources or () if resource.content is not None]
+
+
 class _ScopedAnswerStream:
-    """Async iterator wrapper that releases a semaphore when streaming ends."""
+    """Async iterator wrapper that awaits its cleanup once when streaming ends."""
 
     def __init__(
         self,
         inner: AsyncIterator[str],
-        semaphore: asyncio.Semaphore,
         *,
         on_close: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._inner = inner
         self._aiter = inner.__aiter__()
-        self._semaphore = semaphore
-        self._released = False
         self._on_close = on_close
         self._completed = False
 
@@ -162,22 +178,13 @@ class _ScopedAnswerStream:
     async def _acomplete(self) -> None:
         """Await cleanup exactly once on exhaustion, aclose, error, or cancel.
 
-        The registry close is awaited (never fire-and-forget) and the semaphore
-        slot is always released, even if the close callback raises.
+        The registry close is awaited, never fire-and-forget.
         """
         if self._completed:
             return
         self._completed = True
-        try:
-            if self._on_close is not None:
-                await self._on_close()
-        finally:
-            self._release()
-
-    def _release(self) -> None:
-        if not self._released:
-            self._released = True
-            self._semaphore.release()
+        if self._on_close is not None:
+            await self._on_close()
 
 
 @dataclass(frozen=True)
@@ -371,7 +378,6 @@ class RAGServiceManager:
         self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
-        self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._answer_run_store: PGAnswerRunStore | None = None
         self._answer_coordinator: Any | None = None
@@ -428,6 +434,7 @@ class RAGServiceManager:
             raise
 
         await manager._start_ingest_job_recovery()
+        await manager._start_answer_runtime()
         if default_ws in manager._services:
             manager._ready = True
         else:
@@ -470,6 +477,20 @@ class RAGServiceManager:
         except Exception as exc:
             self._startup_warnings.append("Answer run store unavailable")
             logger.warning("Answer run store initialization failed: %s", exc)
+
+    async def _start_answer_runtime(self) -> None:
+        """Begin executing accepted runs once startup validated their schema.
+
+        A store that never initialized already reported its startup warning, so
+        this neither retries it nor turns a transient fault into a hard failure.
+        """
+        if self._answer_run_store is None:
+            return
+        try:
+            await self.astart_answer_runtime()
+        except Exception as exc:
+            self._startup_warnings.append("Answer runtime unavailable")
+            logger.warning("Answer runtime failed to start: %s", exc)
 
     async def _get_workspace_registry(self) -> PGWorkspaceRegistry:
         if self._workspace_registry is None:
@@ -1695,94 +1716,19 @@ class RAGServiceManager:
         )
         return registry, tools
 
-    async def _aanswer_orchestrated(
+    async def _aanswer_stream_prepared(
         self,
         turn: PreparedAnswerTurn,
         *,
-        workspace: str | None,
-        workspaces: list[str] | None,
-        all_workspaces: bool,
-        top_k: int | None,
-        chunk_top_k: int | None,
-        filters: MetadataFilter | None,
-        semantic_highlights: bool,
-        resources: list[ResourceInput] | None = None,
-    ) -> RetrievalResult:
-        from dlightrag.observability import trace_observation
-
-        run: _OrchestratorRun | None = None
-        try:
-            async with asyncio.timeout(self._config.request_timeout):
-                run = await self._prepare_orchestrated_run(
-                    turn,
-                    workspace=workspace,
-                    workspaces=workspaces,
-                    all_workspaces=all_workspaces,
-                    top_k=top_k,
-                    chunk_top_k=chunk_top_k,
-                    filters=filters,
-                    resources=resources,
-                )
-                async with trace_observation(
-                    "answer_orchestration",
-                    as_type="chain",
-                    input={"query": turn.current_query},
-                    metadata={
-                        "stream": False,
-                        "research": run.orchestrator.uses_research_path,
-                        "workspaces": run.ws_list,
-                        "history_turns": len(run.history or []),
-                        "query_image_count": run.current_image_count,
-                        "semantic_highlights": semantic_highlights,
-                    },
-                ) as pipeline_trace:
-                    await self._acquire_answer_slot()
-                    try:
-                        result = await run.orchestrator.answer(
-                            turn.current_query,
-                            conversation_history=run.history,
-                            query_images=run.query_images,
-                        )
-                    finally:
-                        self._answer_stream_sem.release()
-                    result.trace["query_image_description_count"] = len(run.image_descriptions)
-                    result.image_descriptions = run.image_descriptions
-                    if semantic_highlights:
-                        from dlightrag.core.answer.highlights import enrich_semantic_highlights
-
-                        result.sources = await enrich_semantic_highlights(
-                            result.sources,
-                            answer_text=result.answer,
-                            config=self._config,
-                        )
-                    pipeline_trace.update(
-                        output=answer_trace_output(
-                            result.answer,
-                            result.sources,
-                            result.contexts,
-                        )
-                    )
-                    return result
-        except TimeoutError as exc:
-            raise RAGServiceUnavailableError(
-                detail=f"Request timed out after {self._config.request_timeout}s"
-            ) from exc
-        finally:
-            if run is not None and run.registry is not None:
-                await run.registry.aclose()
-
-    async def _aanswer_stream_orchestrated(
-        self,
-        turn: PreparedAnswerTurn,
-        *,
-        workspace: str | None,
-        workspaces: list[str] | None,
-        all_workspaces: bool,
-        top_k: int | None,
-        chunk_top_k: int | None,
-        filters: MetadataFilter | None,
+        workspace: str | None = None,
+        workspaces: list[str] | None = None,
+        all_workspaces: bool = False,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        filters: MetadataFilter | None = None,
         resources: list[ResourceInput] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
+        """Stream one server-prepared turn through the one answer orchestrator."""
         from dlightrag.observability import trace_observation
 
         run: _OrchestratorRun | None = None
@@ -1811,41 +1757,31 @@ class RAGServiceManager:
                         "query_image_count": run.current_image_count,
                     },
                 ) as pipeline_trace:
-                    await self._acquire_answer_slot()
-                    answer_slot_owned = True
-                    try:
-                        contexts, stream = await run.orchestrator.answer_stream(
-                            turn.current_query,
-                            conversation_history=run.history,
-                            query_images=run.query_images,
-                        )
-                        if stream is None:
-                            return contexts, None
-                        stream_meta = cast(Any, stream)
-                        existing_trace = getattr(stream_meta, "trace", None)
-                        merged_trace = (
-                            dict(existing_trace) if isinstance(existing_trace, dict) else {}
-                        )
-                        merged_trace["query_image_description_count"] = len(run.image_descriptions)
-                        stream_meta.trace = merged_trace
-                        stream_meta.image_descriptions = run.image_descriptions
-                        wrapped = _ScopedAnswerStream(
-                            stream,
-                            self._answer_stream_sem,
-                            on_close=run.registry.aclose if run.registry is not None else None,
-                        )
-                        answer_slot_owned = False
-                        registry_transferred = True
-                        pipeline_trace.update(
-                            output={
-                                **_context_output(contexts),
-                                "agent_turns": merged_trace.get("agent_turns", 0),
-                            }
-                        )
-                        return contexts, wrapped
-                    finally:
-                        if answer_slot_owned:
-                            self._answer_stream_sem.release()
+                    contexts, stream = await run.orchestrator.answer_stream(
+                        turn.current_query,
+                        conversation_history=run.history,
+                        query_images=run.query_images,
+                    )
+                    if stream is None:
+                        return contexts, None
+                    stream_meta = cast(Any, stream)
+                    existing_trace = getattr(stream_meta, "trace", None)
+                    merged_trace = dict(existing_trace) if isinstance(existing_trace, dict) else {}
+                    merged_trace["query_image_description_count"] = len(run.image_descriptions)
+                    stream_meta.trace = merged_trace
+                    stream_meta.image_descriptions = run.image_descriptions
+                    wrapped = _ScopedAnswerStream(
+                        stream,
+                        on_close=run.registry.aclose if run.registry is not None else None,
+                    )
+                    registry_transferred = True
+                    pipeline_trace.update(
+                        output={
+                            **_context_output(contexts),
+                            "agent_turns": merged_trace.get("agent_turns", 0),
+                        }
+                    )
+                    return contexts, wrapped
         except TimeoutError as exc:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -1853,15 +1789,6 @@ class RAGServiceManager:
         finally:
             if run is not None and run.registry is not None and not registry_transferred:
                 await run.registry.aclose()
-
-    async def _acquire_answer_slot(self) -> None:
-        try:
-            await asyncio.wait_for(
-                self._answer_stream_sem.acquire(),
-                timeout=self._config.answer_acquire_timeout,
-            )
-        except TimeoutError as exc:
-            raise RAGServiceUnavailableError("Every answer slot is busy; retry shortly.") from exc
 
     # --- Durable answer runs ---
 
@@ -1976,7 +1903,6 @@ class RAGServiceManager:
         from dlightrag.citations.finalization import finalize_answer
         from dlightrag.citations.streaming import aclose_answer_stream
         from dlightrag.core.answer.media import (
-            answer_blocks_from_markdown,
             answer_images_from_sources,
         )
         from dlightrag.core.answer_runs.checkpoints import (
@@ -1988,9 +1914,9 @@ class RAGServiceManager:
         )
         from dlightrag.core.answer_runs.execution import (
             SessionBoundaries,
-            canonical_result,
         )
         from dlightrag.core.client_payloads import project_contexts_for_client
+        from dlightrag.observability import trace_observation
 
         store = await self._get_answer_run_store()
         request = _Input.from_request(session.request)
@@ -2004,113 +1930,153 @@ class RAGServiceManager:
             all_workspaces=False,
             top_k=request.top_k,
             chunk_top_k=request.chunk_top_k,
-            filters=cast(MetadataFilter | None, request.filters),
-            resources=self._answer_run_resources(request, owner_id=session.owner_id, store=store),
+            filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
+            resources=await self._answer_run_resources(
+                request, owner_id=session.owner_id, store=store
+            ),
             fetched_bytes_sink=_fetched_bytes_sink(session, store),
         )
         stream: AsyncIterator[str] | None = None
         try:
-            prepared = run.orchestrator.prepare_run(
-                request.query,
-                conversation_history=run.history,
-                query_images=run.query_images,
-                registry=run.registry,
-            )
-            if session.checkpoint is not None:
-                await restore_agent_state(
-                    prepared.state,
-                    {
-                        "version": session.checkpoint.version,
-                        "completed_turns": session.checkpoint.completed_turns,
-                        "state": session.checkpoint.state,
-                    },
-                    owner_id=session.owner_id,
-                    run_id=session.run_id,
-                    store=store,
-                    expected_completed_turns=session.completed_turns,
-                    load_corpus_image=self._load_corpus_image,
+            async with trace_observation(
+                "answer_orchestration",
+                as_type="chain",
+                input={"query": request.query},
+                metadata={
+                    "run_id": session.run_id,
+                    "research": run.orchestrator.uses_research_path,
+                    "workspaces": run.ws_list,
+                    "history_turns": len(run.history or []),
+                    "query_image_count": run.current_image_count,
+                    "semantic_highlights": request.semantic_highlights,
+                },
+            ) as pipeline_trace:
+                prepared = run.orchestrator.prepare_run(
+                    request.query,
+                    conversation_history=run.history,
+                    query_images=run.query_images,
+                    registry=run.registry,
                 )
+                if session.checkpoint is not None:
+                    await restore_agent_state(
+                        prepared.state,
+                        {
+                            "version": session.checkpoint.version,
+                            "completed_turns": session.checkpoint.completed_turns,
+                            "state": session.checkpoint.state,
+                        },
+                        owner_id=session.owner_id,
+                        run_id=session.run_id,
+                        store=store,
+                        expected_completed_turns=session.completed_turns,
+                        load_corpus_image=self._load_corpus_image,
+                    )
 
-            async def _encode(state: AgentRunState) -> Mapping[str, Any]:
-                return await encode_checkpoint_state(
-                    state, owner_id=session.owner_id, run_id=session.run_id, store=store
+                async def _encode(state: AgentRunState) -> Mapping[str, Any]:
+                    return await encode_checkpoint_state(
+                        state, owner_id=session.owner_id, run_id=session.run_id, store=store
+                    )
+
+                boundaries = SessionBoundaries(session, encode=_encode)
+                contexts, stream = await run.orchestrator.answer_stream(
+                    request.query,
+                    conversation_history=run.history,
+                    run=prepared,
+                    boundaries=boundaries,
                 )
+                answer_parts: list[str] = []
+                if stream is not None:
+                    async for chunk in stream:
+                        answer_parts.append(chunk)
+                        await session.emit_token(chunk)
+                await session.flush_tokens()
+                answer_text = getattr(stream, "answer", "") or "".join(answer_parts)
+                finalized = finalize_answer(answer_text, contexts)
+                if request.semantic_highlights:
+                    from dlightrag.core.answer.highlights import enrich_semantic_highlights
 
-            boundaries = SessionBoundaries(session, encode=_encode)
-            contexts, stream = await run.orchestrator.answer_stream(
-                request.query,
-                run=prepared,
-                boundaries=boundaries,
-            )
-            answer_parts: list[str] = []
-            if stream is not None:
-                async for chunk in stream:
-                    answer_parts.append(chunk)
-                    await session.emit_token(chunk)
-            await session.flush_tokens()
-            answer_text = getattr(stream, "answer", "") or "".join(answer_parts)
-            finalized = finalize_answer(answer_text, contexts)
-            if request.semantic_highlights:
-                from dlightrag.core.answer.highlights import enrich_semantic_highlights
-
-                finalized.sources = await enrich_semantic_highlights(
-                    finalized.sources,
-                    answer_text=finalized.answer,
-                    config=self._config,
+                    finalized.sources = await enrich_semantic_highlights(
+                        finalized.sources,
+                        answer_text=finalized.answer,
+                        config=self._config,
+                    )
+                trace = dict(getattr(stream, "trace", None) or {})
+                trace["query_image_description_count"] = len(run.image_descriptions)
+                images = answer_images_from_sources(finalized.sources, contexts=contexts)
+                pipeline_trace.update(
+                    output=answer_trace_output(finalized.answer, finalized.sources, contexts)
                 )
-            trace = dict(getattr(stream, "trace", None) or {})
-            trace["query_image_description_count"] = len(run.image_descriptions)
-            images = answer_images_from_sources(finalized.sources, contexts=contexts)
-            return canonical_result(
-                answer=finalized.answer,
-                # Answer images are derived from the raw contexts first; only the
-                # client-safe projection is durable, so no inline image payload or
-                # internal source locator is stored twice.
-                contexts=project_contexts_for_client(contexts, image_url_prefix=None),
-                sources=finalized.sources,
-                answer_images=images,
-                answer_blocks=answer_blocks_from_markdown(finalized.answer, images),
-                trace=trace,
-                image_descriptions=run.image_descriptions,
-            )
+                return store_answer_result(
+                    answer=finalized.answer,
+                    # Answer images are derived from the raw contexts first; only the
+                    # client-safe projection is durable, so no inline image payload or
+                    # internal source locator is stored twice.
+                    contexts=project_contexts_for_client(contexts),
+                    sources=finalized.sources,
+                    answer_images=images,
+                    trace=trace,
+                    image_descriptions=run.image_descriptions,
+                )
         finally:
             await aclose_answer_stream(stream)
             if run.registry is not None:
                 await run.registry.aclose()
 
-    def _answer_run_resources(
+    async def _answer_run_resources(
         self,
         request: AnswerRunInput,
         *,
         owner_id: str,
         store: PGAnswerRunStore,
     ) -> list[ResourceInput] | None:
-        """Rebuild the run's attachments as lazy readers over durable bytes."""
+        """Rebuild the run's ordered links and attachments over durable bytes.
+
+        Image attachments are materialized now because current-turn images are
+        verified and promoted into image blocks before the run starts; every
+        other attachment stays lazy and is read only through resource tools.
+        """
         from dlightrag.core.resources import ResourceInput as _ResourceInput
 
-        if not request.attachments:
+        if not request.links and not request.attachments:
             return None
 
+        async def _load(digest: str) -> bytes:
+            content = await store.load_artifact(owner_id=owner_id, digest=digest)
+            if content is None:
+                raise CheckpointError(
+                    "checkpoint_corrupt",
+                    "Answer run attachment bytes no longer exist.",
+                )
+            return content
+
         def _loader(digest: str) -> Callable[[], Awaitable[bytes]]:
-            async def _load() -> bytes:
-                content = await store.load_artifact(owner_id=owner_id, digest=digest)
-                if content is None:
-                    raise CheckpointError(
-                        "checkpoint_corrupt",
-                        "Answer run attachment bytes no longer exist.",
-                    )
-                return content
+            async def _read() -> bytes:
+                return await _load(digest)
 
-            return _load
+            return _read
 
-        return [
-            _ResourceInput(
-                filename=attachment.filename,
-                declared_mime=attachment.mime_type,
-                loader=_loader(attachment.digest),
-            )
-            for attachment in request.attachments
+        resources: list[ResourceInput] = [
+            _ResourceInput(filename=link.filename, url=link.url, declared_mime=link.mime_type)
+            for link in request.links
         ]
+        for attachment in request.attachments:
+            if attachment.mime_type.lower().startswith("image/"):
+                resources.append(
+                    _ResourceInput(
+                        filename=attachment.filename,
+                        declared_mime=attachment.mime_type,
+                        content=await _load(attachment.digest),
+                    )
+                )
+                continue
+            resources.append(
+                _ResourceInput(
+                    filename=attachment.filename,
+                    declared_mime=attachment.mime_type,
+                    loader=_loader(attachment.digest),
+                )
+            )
+        return resources
 
     async def _load_corpus_image(self, workspace: str, chunk_id: str) -> str | None:
         """Resolve one knowledge-base visual, or ``None`` when it no longer exists."""
@@ -2140,31 +2106,53 @@ class RAGServiceManager:
         history: list[dict[str, Any]] | None = None,
         semantic_highlights: bool = False,
         resources: list[ResourceInput] | None = None,
+        idempotency_key: str | None = None,
+        owner_id: str | None = None,
     ) -> RetrievalResult:
-        """Answer from one or more workspaces through the one answer orchestrator.
+        """Create one durable answer run and wait for its canonical result.
 
-        Current-turn images and documents are supplied through ``resources``. The
-        manager prepares verified current images as internal image blocks and
-        registers every attachment request-locally. Fast answers describe images
-        before fixed KB retrieval; research answers show them directly to the
-        agent and describe them only if it selects KB search. Attachment text is
-        read only through resource tools and never enters query planning.
+        Current-turn images and documents are supplied through ``resources``:
+        inline bytes become owner artifacts and HTTPS links become inert link
+        descriptors, so a resumed run reads exactly what was accepted. A caller
+        that cancels this wait only detaches; use ``acancel_answer_run`` to stop
+        the run itself.
 
         ``history`` is caller-supplied prior turns (``role``/``content`` dicts).
         It is stateless -- the caller owns persistence and passes it per request.
-        The orchestrator takes the standard-RAG fast path unless the request has
-        resources or an open-web capability, in which case it researches.
         """
-        return await self._aanswer_orchestrated(
-            PreparedAnswerTurn.stateless(query, history=history),
-            workspace=workspace,
-            workspaces=workspaces,
-            all_workspaces=all_workspaces,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            filters=filters,
-            semantic_highlights=semantic_highlights,
-            resources=resources,
+        creation = await self.astart_answer_run(
+            owner_id=owner_id or DEPLOYMENT_OWNER_ID,
+            request=await self._durable_run_input(
+                query,
+                workspace=workspace,
+                workspaces=workspaces,
+                all_workspaces=all_workspaces,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                filters=filters,
+                history=history,
+                semantic_highlights=semantic_highlights,
+                resources=resources,
+            ),
+            idempotency_key=idempotency_key,
+            attachment_bytes=_attachment_bytes(resources),
+        )
+        run = creation.run
+        async with aclosing(
+            await self.asubscribe_answer_run(owner_id=run.owner_id, run_id=run.run_id)
+        ) as events:
+            async for _event in events:
+                pass
+        final = await self.aget_answer_run(owner_id=run.owner_id, run_id=run.run_id)
+        if final is None:
+            raise RAGServiceUnavailableError("Answer run disappeared before it finished")
+        if final.status == "succeeded":
+            return restore_answer_result(final.result or {})
+        if final.status == "cancelled":
+            raise AnswerRunCancelledError(final.run_id)
+        raise AnswerRunFailedError(
+            final.error_kind or "answer_stream_failed",
+            final.error_message or "Answer run failed.",
         )
 
     async def aanswer_stream(
@@ -2178,45 +2166,94 @@ class RAGServiceManager:
         chunk_top_k: int | None = None,
         filters: MetadataFilter | None = None,
         history: list[dict[str, Any]] | None = None,
+        semantic_highlights: bool = False,
         resources: list[ResourceInput] | None = None,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Streaming answer from one or more workspaces through the orchestrator.
+        idempotency_key: str | None = None,
+        owner_id: str | None = None,
+    ) -> AsyncGenerator[AnswerRunEvent]:
+        """Create one durable answer run and follow its events until it ends.
 
-        See ``aanswer`` for ``resources`` and ``history`` semantics.
+        Yields the run's durable ``progress``, ``token``, ``reset``, and terminal
+        events. Closing this generator detaches this subscriber only; the run
+        keeps executing until it finishes or is explicitly cancelled.
         """
-        return await self._aanswer_stream_prepared(
-            PreparedAnswerTurn.stateless(query, history=history),
-            workspace=workspace,
-            workspaces=workspaces,
-            all_workspaces=all_workspaces,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            filters=filters,
-            resources=resources,
+        creation = await self.astart_answer_run(
+            owner_id=owner_id or DEPLOYMENT_OWNER_ID,
+            request=await self._durable_run_input(
+                query,
+                workspace=workspace,
+                workspaces=workspaces,
+                all_workspaces=all_workspaces,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                filters=filters,
+                history=history,
+                semantic_highlights=semantic_highlights,
+                resources=resources,
+            ),
+            idempotency_key=idempotency_key,
+            attachment_bytes=_attachment_bytes(resources),
         )
+        run = creation.run
+        async with aclosing(
+            await self.asubscribe_answer_run(owner_id=run.owner_id, run_id=run.run_id)
+        ) as events:
+            async for event in events:
+                yield event
 
-    async def _aanswer_stream_prepared(
+    async def _durable_run_input(
         self,
-        turn: PreparedAnswerTurn,
+        query: str,
         *,
-        workspace: str | None = None,
-        workspaces: list[str] | None = None,
-        all_workspaces: bool = False,
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        filters: MetadataFilter | None = None,
-        resources: list[ResourceInput] | None = None,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Stream one server-prepared turn through the one answer orchestrator."""
-        return await self._aanswer_stream_orchestrated(
-            turn,
+        workspace: str | None,
+        workspaces: list[str] | None,
+        all_workspaces: bool,
+        top_k: int | None,
+        chunk_top_k: int | None,
+        filters: MetadataFilter | None,
+        history: list[dict[str, Any]] | None,
+        semantic_highlights: bool,
+        resources: list[ResourceInput] | None,
+    ) -> AnswerRunInput:
+        """Normalize one in-process request into an accepted run's immutable input."""
+        ws_list = await self._open_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
+        )
+        links: list[LinkReference] = []
+        attachments: list[AttachmentReference] = []
+        for resource in resources or ():
+            if resource.url is not None:
+                links.append(
+                    LinkReference(
+                        url=resource.url,
+                        filename=resource.filename,
+                        ordinal=len(links),
+                        mime_type=resource.declared_mime,
+                    )
+                )
+                continue
+            if resource.content is None:
+                raise ValueError("durable answer resources need inline bytes or an HTTPS link")
+            attachments.append(
+                AttachmentReference(
+                    digest=artifact_digest(resource.content),
+                    filename=safe_source_filename(resource.filename),
+                    mime_type=resource.declared_mime or "application/octet-stream",
+                    ordinal=len(attachments),
+                )
+            )
+        return AnswerRunInput(
+            query=query,
+            workspaces=tuple(ws_list),
+            history=tuple(dict(message) for message in history or ()),
             top_k=top_k,
             chunk_top_k=chunk_top_k,
-            filters=filters,
-            resources=resources,
+            filters=filters.model_dump(exclude_none=True, mode="json") if filters else None,
+            semantic_highlights=semantic_highlights,
+            links=tuple(links),
+            attachments=tuple(attachments),
         )
 
     # --- Management ---

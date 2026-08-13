@@ -11,7 +11,9 @@ from typing import Any, TypeVar
 import asyncpg
 
 from dlightrag.api.auth import UserContext
+from dlightrag.api.principal import owner_id_from_user
 from dlightrag.core.answer.media import answer_images_from_sources
+from dlightrag.core.answer_runs.snapshots import load_answer_snapshot
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
@@ -24,7 +26,6 @@ from dlightrag.storage.web_conversations import (
     StoredConversationAttachment,
 )
 from dlightrag.utils.images import thumbnail_bytes
-from dlightrag.web.answer_snapshots import load_answer_snapshot
 from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import (
     ConversationAttachmentReference,
@@ -32,7 +33,6 @@ from dlightrag.web.conversation_models import (
     ConversationSummary,
     ConversationTurn,
 )
-from dlightrag.web.principal import principal_id_from_user
 from dlightrag.web.safe_html import safe_answer_done
 
 logger = logging.getLogger(__name__)
@@ -134,12 +134,12 @@ class WebConversationService:
             await task
 
     async def create(self, user: UserContext | None) -> ConversationSummary:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         row = await self._store_call(self._store.create_conversation(principal_id))
         return _conversation_summary(row)
 
     async def list(self, user: UserContext | None) -> list[ConversationSummary]:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         rows = await self._store_call(
             self._store.list_conversations(
                 principal_id,
@@ -156,7 +156,7 @@ class WebConversationService:
         downloadable_workspaces: set[str] | None = None,
         visual_workspaces: set[str] | None = None,
     ) -> ConversationHistory | None:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         snapshot = await self._snapshot(principal_id, conversation_id)
         if snapshot is None:
             return None
@@ -180,7 +180,7 @@ class WebConversationService:
         conversation_id: str,
         title: str,
     ) -> ConversationSummary | None:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         row = await self._store_call(
             self._store.rename_conversation(
                 principal_id,
@@ -196,7 +196,7 @@ class WebConversationService:
         user: UserContext | None,
         conversation_id: str,
     ) -> bool:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         return await self._store_call(
             self._store.delete_conversation(
                 principal_id,
@@ -206,7 +206,7 @@ class WebConversationService:
         )
 
     async def delete_all(self, user: UserContext | None) -> int:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         return await self._store_call(self._store.delete_all_conversations(principal_id))
 
     async def prepare_answer(
@@ -215,7 +215,7 @@ class WebConversationService:
         conversation_id: str,
         submission_id: str | None = None,
     ) -> PreparedWebConversation | None:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         snapshot = await self._snapshot(principal_id, conversation_id)
         if snapshot is None:
             return None
@@ -322,7 +322,7 @@ class WebConversationService:
         conversation_id: str,
         attachment_id: str,
     ) -> StoredConversationAttachment | None:
-        principal_id = principal_id_from_user(user)
+        principal_id = owner_id_from_user(user)
         return await self._store_call(
             self._store.get_attachment(
                 principal_id,

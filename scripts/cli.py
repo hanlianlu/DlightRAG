@@ -37,12 +37,20 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
 from pydantic import ValidationError
 
+from dlightrag.client import (
+    AnswerAttachmentUpload,
+    AnswerRunCancelledError,
+    AnswerRunClient,
+    AnswerRunFailedError,
+)
 from dlightrag.core.client_requests import (
     ingest_kwargs_from_payload,
     ingest_spec_from_payload,
@@ -84,6 +92,11 @@ def _headers() -> dict[str, str]:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
+
+
+def _auth_headers() -> dict[str, str]:
+    token = _get_auth_token()
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def _print_json(data: Any) -> None:
@@ -164,7 +177,7 @@ def _build_answer_payload(
     *,
     query: str,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {"query": query, "stream": False}
+    payload: dict[str, Any] = {"query": query}
     _apply_common_options(payload, args)
     attachment_urls = getattr(args, "attachment_urls", None)
     if attachment_urls:
@@ -287,40 +300,45 @@ def cmd_query(args: argparse.Namespace) -> None:
     _print_json(resp.json())
 
 
-def _post_answer(
-    url: str, payload: dict[str, Any], attachment_paths: list[str] | None
-) -> httpx.Response:
-    """Send an answer request as JSON, or multipart when local files are attached."""
-    if attachment_paths:
-        files = [
-            (
-                "attachments",
-                (Path(path).name, Path(path).read_bytes(), "application/octet-stream"),
-            )
-            for path in attachment_paths
-        ]
-        return httpx.post(
-            url,
-            data={"request": json.dumps(payload)},
-            files=files,
-            headers=_headers(),
-            timeout=_get_timeout(),
+def _attachment_uploads(paths: list[str] | None) -> list[AnswerAttachmentUpload]:
+    return [
+        AnswerAttachmentUpload(filename=Path(path).name, content=Path(path).read_bytes())
+        for path in paths or []
+    ]
+
+
+@asynccontextmanager
+async def _answer_client() -> AsyncIterator[AnswerRunClient]:
+    """Open the one REST client every answer command shares."""
+    async with httpx.AsyncClient(timeout=_get_timeout()) as http:
+        yield AnswerRunClient(http, base_url=_get_api_url(), headers=_auth_headers())
+
+
+async def _run_answer(args: argparse.Namespace) -> dict[str, Any]:
+    async with _answer_client() as client:
+        return await client.answer(
+            _build_answer_payload(args, query=args.query),
+            attachments=_attachment_uploads(getattr(args, "attachment_paths", None)),
         )
-    return httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
 
 
 def cmd_answer(args: argparse.Namespace) -> None:
-    url = f"{_get_api_url()}/answer"
-    payload = _build_answer_payload(args, query=args.query)
-
     print(f"Question: {args.query}")
     if args.workspaces:
         print(f"Workspaces: {', '.join(args.workspaces)}")
-    print(f"API: {url}\n")
+    print(f"API: {_get_api_url()}/answer\n")
 
-    resp = _post_answer(url, payload, getattr(args, "attachment_paths", None))
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        data = asyncio.run(_run_answer(args))
+    except AnswerRunCancelledError:
+        _die("answer run was cancelled")
+        return
+    except AnswerRunFailedError as exc:
+        _die(f"answer run failed ({exc.error_kind}): {exc.public_message}")
+        return
+    except httpx.HTTPStatusError as exc:
+        _die(f"HTTP {exc.response.status_code}: {exc.response.text}")
+        return
 
     # Print answer first, then validated references.
     answer = _render_answer_for_terminal(data)
@@ -333,51 +351,52 @@ def cmd_answer(args: argparse.Namespace) -> None:
             print(f"  [{ref.get('id', '?')}] {ref.get('title', '')}")
 
 
-def cmd_chat(args: argparse.Namespace) -> None:
-    url = f"{_get_api_url()}/answer"
-
+async def _run_chat(args: argparse.Namespace) -> None:
     ws_info = f", workspaces={','.join(args.workspaces)}" if args.workspaces else ""
     print(f"dlightrag chat (API={_get_api_url()}{ws_info})")
     print("Type your question, or /quit to exit. Each request is stateless.\n")
 
-    while True:
-        try:
-            question = input("You: ").strip()
-        except EOFError, KeyboardInterrupt:
-            print("\nBye!")
-            break
+    async with _answer_client() as client:
+        while True:
+            try:
+                question = (await asyncio.to_thread(input, "You: ")).strip()
+            except EOFError, KeyboardInterrupt:
+                print("\nBye!")
+                return
 
-        if not question:
-            continue
-        if question in ("/quit", "/exit", "/q"):
-            print("Bye!")
-            break
-        payload = _build_answer_payload(
-            args,
-            query=question,
-        )
+            if not question:
+                continue
+            if question in ("/quit", "/exit", "/q"):
+                print("Bye!")
+                return
 
-        try:
-            resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            print(f"[error] HTTP {e.response.status_code}: {e.response.text}\n")
-            continue
-        except httpx.ConnectError:
-            print(f"[error] Connection failed: {_get_api_url()}\n")
-            continue
+            try:
+                data = await client.answer(_build_answer_payload(args, query=question))
+            except httpx.HTTPStatusError as exc:
+                print(f"[error] HTTP {exc.response.status_code}: {exc.response.text}\n")
+                continue
+            except httpx.ConnectError:
+                print(f"[error] Connection failed: {_get_api_url()}\n")
+                continue
+            except AnswerRunFailedError as exc:
+                print(f"[error] answer run failed ({exc.error_kind}): {exc.public_message}\n")
+                continue
+            except AnswerRunCancelledError:
+                print("[error] answer run was cancelled\n")
+                continue
 
-        data = resp.json()
-        rendered_answer = _render_answer_for_terminal(data)
+            print(f"\nAssistant: {_render_answer_for_terminal(data)}")
 
-        print(f"\nAssistant: {rendered_answer}")
+            sources = data.get("sources") or []
+            if sources:
+                titles = {s.get("title") for s in sources if s.get("title")}
+                if titles:
+                    print(f"  Sources: {', '.join(sorted(titles))}")
+            print()
 
-        sources = data.get("sources") or []
-        if sources:
-            titles = {s.get("title") for s in sources if s.get("title")}
-            if titles:
-                print(f"  Sources: {', '.join(sorted(titles))}")
-        print()
+
+def cmd_chat(args: argparse.Namespace) -> None:
+    asyncio.run(_run_chat(args))
 
 
 def _add_filter_options(parser: argparse.ArgumentParser) -> None:

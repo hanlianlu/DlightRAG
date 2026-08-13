@@ -30,11 +30,11 @@ from playwright.sync_api import Browser, Page, sync_playwright
 from dlightrag.api.server import create_app
 from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.core.answer.media import answer_images_from_sources
+from dlightrag.core.answer_runs.snapshots import load_answer_snapshot
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.storage.web_conversations import CommitTurnResult, StoredConversationAttachment
 from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
-from dlightrag.web.answer_snapshots import load_answer_snapshot
 from dlightrag.web.conversation_models import (
     ConversationAttachmentReference,
     ConversationHistory,

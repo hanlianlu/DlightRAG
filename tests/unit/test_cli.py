@@ -2,7 +2,6 @@
 """Tests for CLI argument validation."""
 
 import importlib.util
-import json
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +99,6 @@ def test_answer_payload_supports_current_answer_options() -> None:
 
     assert _build_answer_payload(args, query=args.query) == {
         "query": "summarize",
-        "stream": False,
         "chunk_top_k": 9,
         "filters": {"author": "Ada"},
         "attachments": [{"url": "https://example.test/chart.pdf"}],
@@ -113,23 +111,16 @@ def test_answer_cli_local_attachment_uses_multipart(
     source = tmp_path / "report.pdf"
     source.write_bytes(b"%PDF-body")
 
-    class Response:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {"answer": "done", "references": []}
-
     captured: dict[str, Any] = {}
 
-    def fake_post(url: str, **kwargs: Any):
-        captured["url"] = url
-        captured.update(kwargs)
-        return Response()
+    async def fake_answer(self, payload, *, attachments=(), idempotency_key=None, on_token=None):
+        captured["payload"] = payload
+        captured["attachments"] = list(attachments)
+        return {"answer": "done", "references": []}
 
-    monkeypatch.setattr(_cli.httpx, "post", fake_post)
+    monkeypatch.setattr(_cli.AnswerRunClient, "answer", fake_answer)
     monkeypatch.setattr(_cli, "_get_api_url", lambda: "https://rag.example")
-    monkeypatch.setattr(_cli, "_headers", lambda: {})
+    monkeypatch.setattr(_cli, "_auth_headers", lambda: {})
     monkeypatch.setattr(_cli, "_get_timeout", lambda: 15)
 
     args = _parse_answer(
@@ -143,13 +134,10 @@ def test_answer_cli_local_attachment_uses_multipart(
     )
     cmd_answer(args)
 
-    assert captured["url"] == "https://rag.example/answer"
-    request_payload = json.loads(captured["data"]["request"])
-    assert request_payload["attachments"] == [{"url": "https://example.test/a.pdf"}]
-    field, (name, content, _mime) = captured["files"][0]
-    assert field == "attachments"
-    assert name == "report.pdf"
-    assert content == b"%PDF-body"
+    assert captured["payload"]["attachments"] == [{"url": "https://example.test/a.pdf"}]
+    upload = captured["attachments"][0]
+    assert upload.filename == "report.pdf"
+    assert upload.content == b"%PDF-body"
 
 
 def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> None:
@@ -162,7 +150,6 @@ def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> Non
 
     assert _build_answer_payload(args, query="Follow up") == {
         "query": "Follow up",
-        "stream": False,
         "chunk_top_k": 3,
     }
 
@@ -170,49 +157,38 @@ def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> Non
 def test_answer_cli_renders_structured_image_blocks(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    class Response:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {
-                "answer": "The figure shows the flow [1-1].",
-                "references": [{"id": "1", "title": "paper.pdf"}],
-                "answer_images": [
-                    {
-                        "id": "fig-1",
-                        "source_ref": "1-1",
-                        "label": "paper.pdf",
-                        "url": "https://example.test/full.png",
-                        "thumbnail_url": "https://example.test/thumb.png",
-                    }
-                ],
-                "answer_blocks": [
-                    {"type": "markdown", "text": "The figure shows the flow [1-1]."},
-                    {"type": "image_ref", "image_id": "fig-1"},
-                ],
-            }
-
     captured: dict[str, Any] = {}
 
-    def fake_post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int):
-        captured["url"] = url
-        captured["json"] = json
-        captured["headers"] = headers
-        captured["timeout"] = timeout
-        return Response()
+    async def fake_answer(self, payload, *, attachments=(), idempotency_key=None, on_token=None):
+        captured["payload"] = payload
+        return {
+            "answer": "The figure shows the flow [1-1].",
+            "references": [{"id": "1", "title": "paper.pdf"}],
+            "answer_images": [
+                {
+                    "id": "fig-1",
+                    "source_ref": "1-1",
+                    "label": "paper.pdf",
+                    "url": "https://example.test/full.png",
+                    "thumbnail_url": "https://example.test/thumb.png",
+                }
+            ],
+            "answer_blocks": [
+                {"type": "markdown", "text": "The figure shows the flow [1-1]."},
+                {"type": "image_ref", "image_id": "fig-1"},
+            ],
+        }
 
-    monkeypatch.setattr(_cli.httpx, "post", fake_post)
+    monkeypatch.setattr(_cli.AnswerRunClient, "answer", fake_answer)
     monkeypatch.setattr(_cli, "_get_api_url", lambda: "https://rag.example")
-    monkeypatch.setattr(_cli, "_headers", lambda: {})
+    monkeypatch.setattr(_cli, "_auth_headers", lambda: {})
     monkeypatch.setattr(_cli, "_get_timeout", lambda: 15)
 
     args = _parse_answer(["describe diagram"])
     cmd_answer(args)
 
     output = capsys.readouterr().out
-    assert captured["url"] == "https://rag.example/answer"
-    assert captured["json"]["query"] == "describe diagram"
+    assert captured["payload"]["query"] == "describe diagram"
     assert "The figure shows the flow [1-1]." in output
     assert "[image 1-1] paper.pdf https://example.test/thumb.png" in output
     assert "References (1):" in output
