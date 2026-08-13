@@ -322,6 +322,17 @@ export function setAnswerError(turn: ChatTurn, message: unknown): void {
   turn.contentDiv.classList.add(chatStyles.textError);
 }
 
+/** A recoverable connection failure: the run continues, so offer a reattach. */
+export function setAnswerRetryable(turn: ChatTurn, message: string, onRetry: () => void): void {
+  setAnswerError(turn, message);
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = 'Reconnect';
+  retry.setAttribute('aria-label', 'Reconnect to this answer');
+  retry.addEventListener('click', onRetry);
+  turn.contentDiv.append(document.createTextNode(' '), retry);
+}
+
 export function markAnswerStopped(turn: ChatTurn): void {
   // Keep the partial answer that already streamed; drop the live streaming
   // indicator and append a subtle "Stopped" marker instead of wiping content.

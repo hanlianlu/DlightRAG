@@ -107,7 +107,6 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
 @router.post("/answer", status_code=202, response_model=AnswerRunDescriptor)
 async def start_answer_run(
     request: Request,
-    response: Response,
     workspace: str = Depends(get_workspace),
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ) -> AnswerRunDescriptor:
@@ -154,8 +153,6 @@ async def start_answer_run(
         ) from None
     if submission is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    # A replay is already accepted work, so report its authoritative state.
-    response.status_code = 200 if submission.replayed else 202
     return answer_run_descriptor(submission)
 
 

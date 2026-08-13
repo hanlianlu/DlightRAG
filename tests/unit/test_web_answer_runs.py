@@ -7,6 +7,7 @@ projection every conversation read shares. Storage-level atomicity, foreign
 keys, retention, and concurrency live in the PostgreSQL integration suite.
 """
 
+import asyncio
 import datetime
 import json
 from typing import Any
@@ -19,7 +20,7 @@ from dlightrag.api.server import create_app
 from dlightrag.storage.answer_runs import AnswerRunEvent, IdempotencyKeyConflict
 from dlightrag.storage.web_conversations import ConversationSubmissionConflict
 from dlightrag.web.answer_events import render_done_event, stream_answer_events
-from dlightrag.web.conversations import project_conversation_turn
+from dlightrag.web.conversations import WebConversationService, project_conversation_turn
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
     SUBMISSION_ID,
@@ -116,7 +117,9 @@ async def test_replaying_a_submission_returns_the_authoritative_run(
 
     response = await client.post("/web/answer", json=_BODY)
 
-    assert response.status_code == 200
+    # A replay is accepted work too, so it reports the same 202 as the original
+    # submission and simply carries the run's current status.
+    assert response.status_code == 202
     assert response.json()["run_id"] == RUN_ID
     assert response.json()["status"] == "running"
 
@@ -231,6 +234,52 @@ async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: AsyncMoc
     assert response.status_code == 410
 
 
+@pytest.fixture
+async def scoped_client(manager: AsyncMock, test_config):
+    """A client whose conversation service is real, over a store that must not run."""
+    store = AsyncMock()
+    application = create_app(include_web_app=True)
+    manager.config = test_config
+    application.state.manager = manager
+    application.state.web_conversation_service = WebConversationService(
+        store=store, max_turns=100, ttl_days=30, max_attachments=6
+    )
+    transport = ASGITransport(app=application)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        cookies={"dlightrag_workspace": "default"},
+    ) as created:
+        created.store = store  # type: ignore[attr-defined]
+        yield created
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/web/answer/{run_id}"),
+        ("DELETE", "/web/answer/{run_id}"),
+        ("GET", "/web/answer/{run_id}/events"),
+        ("GET", "/web/runs/{run_id}/attachments/1"),
+        ("GET", "/web/runs/{run_id}/attachments/1/thumbnail"),
+    ],
+    ids=["status", "cancel", "events", "attachment", "thumbnail"],
+)
+@pytest.mark.parametrize(
+    "run_id", ["not-a-uuid", "019", RUN_ID[:-1]], ids=["text", "short", "trunc"]
+)
+async def test_a_malformed_run_id_is_the_same_opaque_404(
+    scoped_client: AsyncClient, manager: AsyncMock, method: str, path: str, run_id: str
+) -> None:
+    """An unparseable id is unknown, not a server fault, and never reaches storage."""
+    response = await scoped_client.request(method, path.format(run_id=run_id))
+
+    assert response.status_code == 404
+    scoped_client.store.find_turn_by_run.assert_not_awaited()  # type: ignore[attr-defined]
+    manager.acancel_answer_run.assert_not_awaited()
+    manager.asubscribe_answer_run.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("header", "query", "expected"),
     [
@@ -343,6 +392,55 @@ async def test_a_token_frame_carries_only_the_text() -> None:
     (frame,) = await _frames([_event(1, "token", {"text": "Rev"})])
 
     assert json.loads(frame.split("data: ", 1)[1].strip()) == "Rev"
+
+
+async def test_a_quiet_run_keeps_its_connection_alive_until_the_next_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A queued or silent run yields comments, and the next real event still follows."""
+    monkeypatch.setattr("dlightrag.web.answer_events.SSE_KEEPALIVE_SECONDS", 0.01)
+    released = asyncio.Event()
+
+    async def _iterate():
+        await released.wait()
+        yield _event(1, "token", {"text": "Rev"})
+
+    stream = stream_answer_events(_iterate())
+    keepalive = await anext(stream)
+    released.set()
+    event = await anext(stream)
+    await stream.aclose()
+
+    assert keepalive == ": keepalive\n\n"
+    assert keepalive.startswith(":")  # a comment consumes no durable sequence
+    assert event.startswith("id: 1\nevent: token\n")
+
+
+async def test_closing_the_event_stream_detaches_without_cancelling(
+    client: AsyncClient, manager: AsyncMock
+) -> None:
+    """Disconnecting is a transport decision, never a decision about the run."""
+    detached = asyncio.Event()
+
+    async def _iterate():
+        try:
+            yield _event(1, "progress", {"phase": "planning"})
+            yield _event(2, "token", {"text": "Rev"})
+        finally:
+            detached.set()
+
+    async def _events(**_kwargs: Any):
+        return _iterate()
+
+    manager.asubscribe_answer_run.side_effect = _events
+
+    async with client.stream("GET", f"/web/answer/{RUN_ID}/events") as response:
+        assert response.status_code == 200
+        async for _line in response.aiter_lines():
+            break
+
+    assert detached.is_set()
+    manager.acancel_answer_run.assert_not_awaited()
 
 
 async def test_a_failed_run_becomes_a_public_browser_error() -> None:

@@ -17,17 +17,21 @@ import {
     markAnswerPending,
     renderStoredTurn,
     setAnswerError,
+    setAnswerRetryable,
 } from '../lib/chat_renderer.ts';
 import type {ChatTurn} from '../lib/chat_renderer.ts';
 import {bus} from '../events/bus.ts';
 import {answerRunStore, payloadFingerprint} from '../stores/answerRunStore.ts';
 
 // A dropped connection is a transport fault, never a decision about the run, so
-// the browser reattaches from its last durable sequence a bounded number of
-// times before falling back to the run's stored state.
+// the browser reattaches from its last durable sequence. The budget bounds
+// consecutive attempts that consume nothing, not reconnects that make progress.
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 500;
 
+// The POST that turns one submission into a durable run. Only this window may
+// block conversation navigation; following the accepted run never does.
+let submissionPending = false;
 let queryInFlight = false;
 let queryStopping = false;
 // Detaches this tab's event reader. It never cancels the run: only the explicit
@@ -49,9 +53,21 @@ export function isQueryInFlight(): boolean {
     return queryInFlight;
 }
 
-/** User pressed Stop — cancellation was requested, waiting for the run to end. */
-export function isQueryStopping(): boolean {
-    return queryStopping;
+/** True only until the server has accepted the submission as a durable run. */
+export function isSubmissionPending(): boolean {
+    return submissionPending;
+}
+
+/** Stop reading this tab's run events. The run itself keeps producing. */
+export function detachAnswerRun(): void {
+    const controller = currentFollowController;
+    if (!controller) return;
+    // Release the composer now rather than when the reader finally unwinds, so
+    // the conversation being opened can immediately reattach to its own run.
+    currentFollowController = null;
+    currentRunId = null;
+    endSubmission();
+    controller.abort();
 }
 
 function submitComposerForm(form: HTMLFormElement): void {
@@ -80,8 +96,15 @@ async function followAnswerRun(
     controller: AbortController,
 ): Promise<boolean> {
     const renderer = createAnswerRenderer(turn);
-    for (let attempt = 0; attempt <= MAX_RECONNECT_ATTEMPTS; attempt += 1) {
-        if (controller.signal.aborted) return false;
+    let barren = 0;
+    // Only a connection that consumed a new durable sequence counts as progress:
+    // a long answer may legitimately outlive any number of dropped connections.
+    function mayRetry(before: number): boolean {
+        barren = answerRunStore.lastSequence(conversationId, runId) > before ? 0 : barren + 1;
+        return barren <= MAX_RECONNECT_ATTEMPTS;
+    }
+
+    while (!controller.signal.aborted) {
         const after = answerRunStore.lastSequence(conversationId, runId);
         let response: Response;
         try {
@@ -89,9 +112,9 @@ async function followAnswerRun(
                 signal: controller.signal,
                 headers: after > 0 ? {'Last-Event-ID': String(after)} : undefined,
             });
-        } catch (error) {
+        } catch (_) {
             if (controller.signal.aborted) return false;
-            if (attempt === MAX_RECONNECT_ATTEMPTS) throw error;
+            if (!mayRetry(after)) break;
             await sleep(RECONNECT_DELAY_MS);
             continue;
         }
@@ -102,27 +125,46 @@ async function followAnswerRun(
         }
         try {
             await readAnswerEvents(response, conversationId, runId, renderer);
-        } catch (error) {
+        } catch (_) {
             if (controller.signal.aborted) return false;
-            if (attempt === MAX_RECONNECT_ATTEMPTS) throw error;
+            if (!mayRetry(after)) break;
             await sleep(RECONNECT_DELAY_MS);
             continue;
         }
         if (renderer.terminal) return true;
-        if (attempt === MAX_RECONNECT_ATTEMPTS) break;
+        if (!mayRetry(after)) break;
         await sleep(RECONNECT_DELAY_MS);
     }
-    // The event log was trimmed or the stream ended without a terminal event;
-    // the run row stays authoritative.
     if (controller.signal.aborted) return false;
+    return await settleFromStoredRun(turn, conversationId, runId);
+}
+
+/**
+ * The event log is gone or unreachable, so the run row stays authoritative.
+ *
+ * A run that is still producing is a connection failure this tab can recover
+ * from, so it offers an explicit reattach rather than a spinner nothing feeds.
+ */
+async function settleFromStoredRun(
+    turn: ChatTurn,
+    conversationId: string,
+    runId: string,
+): Promise<boolean> {
+    let stored: ConversationTurn;
     try {
-        const stored = await getAnswerRun(runId);
-        renderStoredTurn(turn, stored);
-        return stored.status !== 'queued' && stored.status !== 'running';
+        stored = await getAnswerRun(runId);
     } catch (_) {
         setAnswerError(turn, 'Service error. Please try again.');
         return true;
     }
+    if (stored.status === 'queued' || stored.status === 'running') {
+        setAnswerRetryable(turn, 'Connection lost. This answer is still running.', function() {
+            void resumePendingTurn(turn, conversationId, stored);
+        });
+        return false;
+    }
+    renderStoredTurn(turn, stored);
+    return true;
 }
 
 async function readAnswerEvents(
@@ -190,6 +232,14 @@ function beginFollowing(
     bus.emit('conversationStreamChanged', {active: true});
 }
 
+/** Release the composer and its Stop affordance; this tab follows nothing now. */
+function endSubmission(): void {
+    submissionPending = false;
+    queryInFlight = false;
+    queryStopping = false;
+    bus.emit('conversationStreamChanged', {active: false});
+}
+
 function endFollowing(
     controller: AbortController,
     conversationId: string,
@@ -198,9 +248,7 @@ function endFollowing(
     if (currentFollowController !== controller) return;
     currentFollowController = null;
     currentRunId = null;
-    queryInFlight = false;
-    queryStopping = false;
-    bus.emit('conversationStreamChanged', {active: false});
+    endSubmission();
     if (!finished) return;
     // A finished run retires its submission key, so asking the same question
     // again is a new run rather than a replay of this one.
@@ -211,6 +259,7 @@ function endFollowing(
 export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
+    submissionPending = true;
     bus.emit('conversationStreamChanged', {active: true});
 
     const conversationId = conversationStore.answerConversationId;
@@ -229,6 +278,7 @@ export async function submitQuery(query: string): Promise<void> {
     };
 
     const controller = new AbortController();
+    let following = false;
     let finished = false;
 
     const pendingAttachments = getPendingAttachments();
@@ -290,6 +340,7 @@ export async function submitQuery(query: string): Promise<void> {
             ...(requestHeaders ? {headers: requestHeaders} : {}),
             body: requestBody,
         });
+        submissionPending = false;
 
         if (!response.ok) {
             if (response.status < 500) answerRunStore.clear(conversationId);
@@ -304,6 +355,7 @@ export async function submitQuery(query: string): Promise<void> {
         // rest of this call only follows an object the server already owns.
         releaseLiveViewport(true);
         beginFollowing(controller, descriptor.run_id, descriptor.cancel_requested);
+        following = true;
         finished = await followAnswerRun(turn, conversationId, descriptor.run_id, controller);
     } catch (_) {
         if (!controller.signal.aborted) {
@@ -312,12 +364,8 @@ export async function submitQuery(query: string): Promise<void> {
         }
     } finally {
         releaseLiveViewport();
-        if (conversationId) endFollowing(controller, conversationId, finished);
-        if (currentFollowController === null) {
-            queryInFlight = false;
-            queryStopping = false;
-            bus.emit('conversationStreamChanged', {active: false});
-        }
+        if (following && conversationId) endFollowing(controller, conversationId, finished);
+        else endSubmission();
     }
 }
 

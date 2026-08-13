@@ -11,7 +11,7 @@ import {
     renameConversation,
 } from '../api/conversations.ts';
 import {bus} from '../events/bus.ts';
-import {resumePendingTurn} from './chat.ts';
+import {detachAnswerRun, isSubmissionPending, resumePendingTurn} from './chat.ts';
 import {
     renderConversationHistory,
     renderConversationHistoryError,
@@ -26,7 +26,6 @@ import type {
     ConversationRenameDetail,
     ConversationRetryDetail,
 } from './conversation_list.ts';
-import {isQueryInFlight, isQueryStopping} from './chat.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';
 import {closePanel} from './panel.ts';
@@ -157,11 +156,15 @@ async function confirmDiscardDraft(resolveReturnTarget: FocusResolver): Promise<
     return await dialogResult(dialog, resolveReturnTarget) === 'discard';
 }
 
+/**
+ * Only an unaccepted submission blocks a conversation change.
+ *
+ * Once the run is durable, leaving merely detaches this tab's event reader: the
+ * run keeps producing and the turn is waiting in history on the way back.
+ */
 function lifecycleBlocked(): boolean {
-    if (!isQueryInFlight()) return false;
-    if (!isQueryStopping()) {
-        showToast('Stop the current response before changing conversations.', 4000);
-    }
+    if (!isSubmissionPending()) return false;
+    showToast('Wait for the current question to be accepted.', 4000);
     return true;
 }
 
@@ -172,7 +175,7 @@ function setLifecyclePending(pending: boolean): void {
 
 /** Pushes the shell state the list cannot derive on its own. */
 function syncList(): void {
-    const busy = isQueryInFlight() || pendingLifecycleAction;
+    const busy = pendingLifecycleAction;
     resolveNewConversationButton()?.toggleAttribute('disabled', busy);
     resolveDeleteAllButton()?.toggleAttribute('disabled', busy);
     const list = conversationList();
@@ -287,6 +290,8 @@ async function loadConversation(
     requestGeneration = conversationStore.beginRequest(),
 ): Promise<boolean> {
     historyController?.abort();
+    // Leaving a conversation stops reading its run; it never stops the run.
+    if (conversationStore.activeConversationId !== conversationId) detachAnswerRun();
     if (!conversationStore.select(conversationId)) return false;
     const controller = new AbortController();
     historyController = controller;
@@ -437,6 +442,7 @@ async function requestDelete(conversationId: string): Promise<void> {
     if (lifecycleBlocked()) return;
 
     setLifecyclePending(true);
+    if (wasActive) detachAnswerRun();
     let resolveFinalFocus: FocusResolver = function() {
         return resolveConversationActions(conversationId) || resolveSurvivingConversation();
     };
@@ -484,6 +490,7 @@ async function requestDeleteAll(): Promise<void> {
     if (lifecycleBlocked()) return;
 
     setLifecyclePending(true);
+    detachAnswerRun();
     let resolveFinalFocus: FocusResolver = trigger;
     try {
         await deleteAllConversations();
@@ -578,7 +585,6 @@ export function setupConversations(): void {
     window.addEventListener('resize', applySidebarState);
 
     // The list re-renders itself from the store; only the in-flight flag is ours.
-    bus.on('conversationStreamChanged', syncList);
     bus.on('conversationAnswerSaved', function({conversationId}) {
         if (conversationStore.activeConversationId !== conversationId) return;
         void selectConversation(conversationId, false, false);

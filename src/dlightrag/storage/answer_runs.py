@@ -1044,7 +1044,7 @@ class PGAnswerRunStore:
     async def get_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Load one owned run; unknown and foreign identifiers both return ``None``."""
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return None
 
@@ -1069,7 +1069,7 @@ class PGAnswerRunStore:
         terminal one. The page size is a fixed internal bound.
         """
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return ()
         cursor = max(0, int(after_sequence))
@@ -1083,7 +1083,7 @@ class PGAnswerRunStore:
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
         """Cancel a queued run outright or record the request for a running one."""
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return CancellationOutcome(outcome="unknown", run=None)
 
@@ -1156,7 +1156,7 @@ class PGAnswerRunStore:
     ) -> LeaseRenewal:
         """Renew an unexpired fenced lease and report pending cancellation."""
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return LeaseRenewal(renewed=False, cancel_requested=False)
 
@@ -1247,7 +1247,7 @@ class PGAnswerRunStore:
         run that actually committed.
         """
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         expected = int(expected_completed_turns)
         committed_turn = expected + 1
         envelope = json.dumps(
@@ -1376,7 +1376,7 @@ class PGAnswerRunStore:
         field, and recovery count, so an orderly restart is not crash recovery.
         """
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return "lease_lost"
 
@@ -1457,7 +1457,7 @@ class PGAnswerRunStore:
         Accepted input artifacts belong to :meth:`create_run` and need no fence.
         """
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return "lease_lost"
         expected = int(expected_completed_turns)
@@ -1499,7 +1499,7 @@ class PGAnswerRunStore:
     ) -> tuple[RunArtifactReference, ...]:
         """List one owned run's ordered artifact references."""
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return ()
 
@@ -1528,7 +1528,7 @@ class PGAnswerRunStore:
         longer append to a run whose row disappeared.
         """
         owner = _require_owner(owner_id)
-        run_uuids = [parsed for parsed in (_run_uuid(value) for value in run_ids) if parsed]
+        run_uuids = [parsed for parsed in (parse_run_id(value) for value in run_ids) if parsed]
         if not run_uuids:
             return RunDeletion(runs=0, artifacts=0)
         owners = [owner] * len(run_uuids)
@@ -1594,7 +1594,7 @@ class PGAnswerRunStore:
         payload: Mapping[str, Any],
     ) -> int | None:
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return None
         encoded = json.dumps(dict(payload), ensure_ascii=False, allow_nan=False)
@@ -1632,7 +1632,7 @@ class PGAnswerRunStore:
         require_uncancelled: bool,
     ) -> TerminalOutcome:
         owner = _require_owner(owner_id)
-        run_uuid = _run_uuid(run_id)
+        run_uuid = parse_run_id(run_id)
         if run_uuid is None:
             return TerminalOutcome(committed=False, status=None, event_sequence=None)
         result_json = (
@@ -1823,8 +1823,12 @@ def _require_owner(owner_id: str) -> str:
     return owner
 
 
-def _run_uuid(run_id: str) -> uuid.UUID | None:
-    """Parse a caller-supplied run id; malformed ids read as unknown, not as errors."""
+def parse_run_id(run_id: str) -> uuid.UUID | None:
+    """Parse a caller-supplied run id; malformed ids read as unknown, not as errors.
+
+    Parsing only: it grants no access, so an adapter can reject an unusable id
+    before any owner-scoped query without reaching around the store.
+    """
     try:
         return uuid.UUID(str(run_id))
     except ValueError:
@@ -1936,4 +1940,5 @@ __all__ = [
     "answer_run_record",
     "answer_run_request_fingerprint",
     "artifact_digest",
+    "parse_run_id",
 ]

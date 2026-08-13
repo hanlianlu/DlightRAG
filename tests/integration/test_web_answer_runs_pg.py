@@ -311,6 +311,53 @@ async def test_reusing_a_submission_in_another_conversation_is_a_conflict(
     assert await _count(pool, "web_conversation_turns") == 1
 
 
+async def test_the_same_submission_in_two_conversations_at_once_is_a_conflict(
+    store: PGWebConversationStore, pool: Any
+) -> None:
+    """A race loses to the unique key, and losing is a conflict, not a server fault.
+
+    Both callers see no existing turn and both replay the one run the submission
+    id owns, so the second turn insert is what discovers the reuse.
+    """
+    first_conversation = await _conversation(store)
+    second_conversation = await _conversation(store)
+    submission_id = str(uuid.uuid4())
+    content = b"chart-bytes"
+    references = [
+        PendingArtifactReference(
+            resource_id="attachment-1",
+            reference_kind="current_attachment",
+            ordinal=1,
+            digest=artifact_digest(content),
+            filename="chart.png",
+            mime_type="image/png",
+        )
+    ]
+
+    outcomes = await asyncio.gather(
+        *(
+            _submit(
+                store,
+                conversation_id,
+                submission_id=submission_id,
+                artifacts=[PendingArtifact(content=content)],
+                references=list(references),
+            )
+            for conversation_id in (first_conversation, second_conversation)
+        ),
+        return_exceptions=True,
+    )
+
+    accepted = [item for item in outcomes if not isinstance(item, BaseException)]
+    rejected = [item for item in outcomes if isinstance(item, BaseException)]
+    assert len(accepted) == 1
+    assert [type(error) for error in rejected] == [ConversationSubmissionConflict]
+    assert await _count(pool, "dlightrag_answer_runs") == 1
+    assert await _count(pool, "web_conversation_turns") == 1
+    assert await _count(pool, "dlightrag_answer_artifacts") == 1
+    assert await _count(pool, "dlightrag_answer_run_artifacts") == 1
+
+
 async def test_the_submission_key_is_owner_wide_not_conversation_scoped(
     store: PGWebConversationStore, runs: PGAnswerRunStore
 ) -> None:
@@ -392,6 +439,72 @@ async def test_a_run_is_only_findable_by_its_owner(store: PGWebConversationStore
 # ---------------------------------------------------------------------------
 # Deletion and retention
 # ---------------------------------------------------------------------------
+
+
+async def _hold_conversation_lock(conn: Any, conversation_id: str) -> Any:
+    """Take the lock a submission holds, so a deleter has to wait behind it."""
+    transaction = conn.transaction()
+    await transaction.start()
+    await conn.fetchrow(
+        "SELECT 1 FROM web_conversations "
+        "WHERE principal_id = $1 AND conversation_id = $2::text::uuid FOR UPDATE",
+        _OWNER,
+        conversation_id,
+    )
+    return transaction
+
+
+async def _link_turn(conn: Any, runs: PGAnswerRunStore, conversation_id: str) -> str:
+    """Create the run and its turn the way an accepted submission would."""
+    creation = await runs.create_run_in(conn, owner_id=_OWNER, request=_request("late"))
+    await conn.execute(
+        "INSERT INTO web_conversation_turns "
+        "(turn_id, principal_id, conversation_id, turn_number, submission_id, answer_run_id) "
+        "VALUES ($1, $2, $3::text::uuid, 1, $4, $5::text::uuid)",
+        uuid.uuid4(),
+        _OWNER,
+        conversation_id,
+        uuid.uuid4(),
+        creation.run.run_id,
+    )
+    return creation.run.run_id
+
+
+async def test_deleting_a_conversation_never_orphans_a_turn_committed_behind_it(
+    store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
+) -> None:
+    """The deleter must snapshot run ids under the conversation lock, not before it."""
+    conversation_id = await _conversation(store)
+
+    async with pool.acquire() as holder:
+        transaction = await _hold_conversation_lock(holder, conversation_id)
+        deletion = asyncio.create_task(
+            store.delete_conversation(_OWNER, conversation_id, ttl_days=_TTL_DAYS)
+        )
+        await asyncio.sleep(0.2)
+        await _link_turn(holder, runs, conversation_id)
+        await transaction.commit()
+
+    assert await deletion is True
+    assert await _count(pool, "web_conversation_turns") == 0
+    assert await _count(pool, "dlightrag_answer_runs") == 0
+
+
+async def test_deleting_every_conversation_never_orphans_a_turn_committed_behind_it(
+    store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
+) -> None:
+    conversation_id = await _conversation(store)
+
+    async with pool.acquire() as holder:
+        transaction = await _hold_conversation_lock(holder, conversation_id)
+        deletion = asyncio.create_task(store.delete_all_conversations(_OWNER))
+        await asyncio.sleep(0.2)
+        await _link_turn(holder, runs, conversation_id)
+        await transaction.commit()
+
+    assert await deletion == 1
+    assert await _count(pool, "web_conversation_turns") == 0
+    assert await _count(pool, "dlightrag_answer_runs") == 0
 
 
 async def test_deleting_a_conversation_deletes_its_runs_and_frees_its_bytes(

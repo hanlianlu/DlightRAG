@@ -28,6 +28,7 @@ from dlightrag.storage.answer_runs import (
     PendingArtifactReference,
     PGAnswerRunStore,
     artifact_digest,
+    parse_run_id,
 )
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
@@ -224,8 +225,15 @@ class WebConversationService:
         )
 
     async def turn_for_run(self, user: UserContext | None, run_id: str) -> LinkedTurn | None:
-        """Return the conversation entry an owned run belongs to, if any."""
+        """Return the conversation entry an owned run belongs to, if any.
+
+        An unparseable identifier is simply unknown here: every run route reads
+        through this projection, so a malformed id is the same opaque miss as a
+        pruned or foreign one and never reaches storage.
+        """
         principal_id = owner_id_from_user(user)
+        if parse_run_id(run_id) is None:
+            return None
         return await self._store_call(self._store.find_turn_by_run(principal_id, run_id))
 
     async def attachment(

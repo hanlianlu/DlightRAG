@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+import asyncpg
+
 from dlightrag.storage.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
@@ -252,12 +254,22 @@ FROM web_conversation_turns
 WHERE principal_id = $1
 """
 
+# Deletion snapshots run ids under this lock, so a submission that commits its
+# own turn concurrently is either already visible or still waiting behind it.
+# The order matches creation and retention: the conversation first, its runs
+# second. Ordering by conversation_id keeps two owner-wide deletes deadlock-free.
+_LOCK_PRINCIPAL_CONVERSATIONS = """
+SELECT conversation_id
+FROM web_conversations
+WHERE principal_id = $1
+ORDER BY conversation_id
+FOR UPDATE
+"""
+
 _DELETE_CONVERSATION = """
 DELETE FROM web_conversations
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
-  AND updated_at >= NOW() - ($3 * INTERVAL '1 day')
-RETURNING 1
 """
 
 _DELETE_ALL_CONVERSATIONS = """
@@ -445,6 +457,13 @@ class ConversationSubmissionConflict(RuntimeError):
     """One principal reused a submission id with a different conversation or input."""
 
 
+#: The two indexes that make one submission id one turn in the owner's namespace.
+#: Only these mean "this key is already accepted"; any other violation is a bug.
+_SUBMISSION_KEY_INDEXES = frozenset(
+    {"idx_web_conversation_turns_submission", "idx_web_conversation_turns_run"}
+)
+
+
 def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
@@ -590,6 +609,9 @@ class PGWebConversationStore:
     ) -> bool:
         """Delete one owned conversation, its turns, and the runs they linked.
 
+        The conversation is locked before its run ids are read, so a submission
+        committing its own turn concurrently is either already visible here or
+        still waiting behind this transaction; neither leaves an orphan run.
         Deleting the runs in the same transaction stops any lease-fenced worker
         from appending to state the conversation no longer owns, cascades the
         runs' events and artifact references, and releases blobs no surviving
@@ -599,20 +621,18 @@ class PGWebConversationStore:
 
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
+                if (
+                    await conn.fetchrow(_LOCK_CONVERSATION, principal_id, conversation_id, ttl_days)
+                    is None
+                ):
+                    return False
                 run_ids = [
                     str(row["answer_run_id"])
                     for row in await conn.fetch(
                         _SELECT_CONVERSATION_RUNS, principal_id, conversation_id
                     )
                 ]
-                row = await conn.fetchrow(
-                    _DELETE_CONVERSATION,
-                    principal_id,
-                    conversation_id,
-                    ttl_days,
-                )
-                if row is None:
-                    return False
+                await conn.execute(_DELETE_CONVERSATION, principal_id, conversation_id)
                 await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
                 return True
 
@@ -624,6 +644,7 @@ class PGWebConversationStore:
 
         async def _operation(conn: Any) -> int:
             async with conn.transaction():
+                await conn.fetch(_LOCK_PRINCIPAL_CONVERSATIONS, principal_id)
                 run_ids = [
                     str(row["answer_run_id"])
                     for row in await conn.fetch(_SELECT_PRINCIPAL_RUNS, principal_id)
@@ -740,14 +761,25 @@ class PGWebConversationStore:
                     artifacts=artifacts,
                     references=references,
                 )
-                turn_row = await conn.fetchrow(
-                    _INSERT_TURN,
-                    turn_id,
-                    principal_id,
-                    conversation_id,
-                    submission_id,
-                    creation.run.run_id,
-                )
+                try:
+                    turn_row = await conn.fetchrow(
+                        _INSERT_TURN,
+                        turn_id,
+                        principal_id,
+                        conversation_id,
+                        submission_id,
+                        creation.run.run_id,
+                    )
+                except asyncpg.UniqueViolationError as exc:
+                    # A concurrent submission committed this key first: both saw
+                    # no turn and both replayed the one run the key owns, so the
+                    # loser is a reuse conflict rather than a server fault. The
+                    # transaction unwinds, leaving that run and its bytes alone.
+                    if getattr(exc, "constraint_name", None) not in _SUBMISSION_KEY_INDEXES:
+                        raise
+                    raise ConversationSubmissionConflict(
+                        "submission id was accepted concurrently for another conversation"
+                    ) from None
                 if turn_row is None:
                     raise RuntimeError("conversation turn insert returned no row")
                 touched = await conn.fetchrow(
