@@ -396,7 +396,7 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | Python SDK | `RetrievalResult` | durable run; `aanswer()` waits for the result | `aanswer_stream()` yields durable events |
 | REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
 | MCP Server | JSON text | descriptor-only, returns immediately | `get_answer_run` / `cancel_answer_run` tools |
-| Web UI | — | HTTP 202 run descriptor | same core SSE endpoint |
+| Web UI | — | HTTP 202 run descriptor | rendered events at `/web/answer/{run_id}/events` |
 | CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | follows the run, then falls back to status |
 
 ### Contract Terms

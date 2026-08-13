@@ -46,26 +46,37 @@ class ReadinessProbeCache:
         self._deadline = 0.0
         self._detail: str | None = None
         self._probe: asyncio.Task[str | None] | None = None
+        self._generation = 0
 
     async def detail(self, probe: Callable[[], Awaitable[str | None]]) -> str | None:
         if time.monotonic() < self._deadline:
             return self._detail
         probing = self._probe
         if probing is None:
+            generation = self._generation
             probing = self._probe = asyncio.ensure_future(probe())
-            probing.add_done_callback(self._memoize)
+            probing.add_done_callback(
+                lambda task, generation=generation: self._memoize(task, generation)
+            )
         return await asyncio.shield(probing)
 
-    def _memoize(self, probing: asyncio.Task[str | None]) -> None:
-        self._probe = None
+    def _memoize(self, probing: asyncio.Task[str | None], generation: int) -> None:
+        if self._probe is probing:
+            self._probe = None
         if probing.cancelled() or probing.exception() is not None:
+            return
+        if generation != self._generation:
             return
         self._detail = probing.result()
         self._deadline = time.monotonic() + self._ttl
 
     def invalidate(self) -> None:
         """Drop the memo so the next probe reflects a completed transition."""
+        self._generation += 1
         self._deadline = 0.0
+        # Do not cancel a probe another waiter may still need. Disown it so the
+        # next readiness request starts a fresh post-transition probe instead.
+        self._probe = None
 
 
 def _readiness_cache(request: Request) -> ReadinessProbeCache:

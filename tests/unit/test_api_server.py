@@ -1464,6 +1464,34 @@ class TestReadinessEndpoint:
 
         assert probe.await_count == 2
 
+    async def test_invalidation_discards_an_inflight_pre_transition_verdict(self) -> None:
+        from dlightrag.api.routes.status import ReadinessProbeCache
+
+        cache = ReadinessProbeCache(60.0)
+        old_started = asyncio.Event()
+        release_old = asyncio.Event()
+        calls = 0
+
+        async def probe() -> str | None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                old_started.set()
+                await release_old.wait()
+                return None
+            return "new failure"
+
+        old_waiter = asyncio.create_task(cache.detail(probe))
+        await old_started.wait()
+        cache.invalidate()
+        assert await cache.detail(probe) == "new failure"
+        release_old.set()
+        assert await old_waiter is None
+
+        # Completion of the disowned old probe must not overwrite the new memo.
+        assert await cache.detail(probe) == "new failure"
+        assert calls == 2
+
 
 # ---------------------------------------------------------------------------
 # TestDeleteEndpoint

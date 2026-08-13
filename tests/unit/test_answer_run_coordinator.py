@@ -574,7 +574,9 @@ class TestRetentionMaintenance:
 
     @pytest.mark.parametrize("cadence", [0.0, 0.01, 3600.0])
     def test_startup_jitter_never_outlasts_a_share_of_the_cadence(self, cadence: float) -> None:
-        assert all(0.0 <= coordinator_module._startup_jitter(cadence) <= cadence for _ in range(50))
+        assert all(
+            0.0 <= coordinator_module._startup_jitter(cadence) <= cadence * 0.1 for _ in range(50)
+        )
 
     async def test_a_transient_retention_fault_is_retried_not_fatal(self) -> None:
         store = _MemoryStore()

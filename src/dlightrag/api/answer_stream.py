@@ -87,8 +87,9 @@ async def follow_run_frames(
     finally:
         if pending is not None:
             pending.cancel()
-            with contextlib.suppress(BaseException):
-                await pending
+            # A cancelled child is returned as a value; cancellation of this
+            # enclosing subscriber still propagates instead of being swallowed.
+            await asyncio.gather(pending, return_exceptions=True)
         with contextlib.suppress(Exception):
             await events.aclose()  # pyright: ignore[reportAttributeAccessIssue]
 

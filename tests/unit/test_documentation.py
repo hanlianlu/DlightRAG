@@ -50,6 +50,7 @@ _STALE_PHRASES = (
     "hot standby",
     # The browser follows its own rendered projection, not the REST event stream.
     "subscribes to the same owner-scoped",
+    "same core SSE endpoint",
 )
 
 

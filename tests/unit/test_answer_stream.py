@@ -163,6 +163,23 @@ async def test_closing_early_detaches_the_subscriber(
 
 
 @pytest.mark.parametrize("render", list(_RENDERERS.values()), ids=list(_RENDERERS))
+async def test_cancelling_a_waiting_subscriber_propagates_and_still_detaches(
+    render: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(answer_stream, "SSE_KEEPALIVE_SECONDS", 60.0)
+    subscription = _QuietSubscription()
+    frames = follow_run_frames(subscription.events(), render)
+    waiting = asyncio.create_task(anext(frames))
+
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+    assert subscription.closed is True
+
+
+@pytest.mark.parametrize("render", list(_RENDERERS.values()), ids=list(_RENDERERS))
 async def test_the_stream_ends_when_the_run_committed_its_terminal_event(render: Any) -> None:
     async def _events() -> AsyncIterator[AnswerRunEvent]:
         yield _event(1, "progress", {"phase": "planning"})
