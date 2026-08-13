@@ -29,22 +29,26 @@ from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
+from dlightrag.core.answer_runs.results import project_answer_result
+from dlightrag.core.client_attachments import answer_link_resources
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     QueryImage,
     SourceType,
+    conversation_history_as_dicts,
 )
-from dlightrag.core.client_execution import execute_answer, execute_retrieve
+from dlightrag.core.client_execution import execute_retrieve
 from dlightrag.core.client_payloads import (
-    answer_payload,
     retrieval_payload,
 )
 from dlightrag.core.client_requests import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
+    query_kwargs_from_payload,
 )
+from dlightrag.core.principal import owner_id_from_principal
 from dlightrag.core.request.workspaces import (
     NoQueryableWorkspacesError,
 )
@@ -53,6 +57,7 @@ from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.mcp.auth import DlightRAGTokenVerifier
 from dlightrag.mcp.contracts import (
     AnswerInput,
+    AnswerRunInput,
     ConversationMessage,
     CreateWorkspaceInput,
     DeleteFilesInput,
@@ -62,6 +67,7 @@ from dlightrag.mcp.contracts import (
     ListFilesInput,
     RetrieveInput,
 )
+from dlightrag.storage.answer_runs import AnswerRunRecord, IdempotencyKeyConflict
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +97,38 @@ HistoryParam = Annotated[
         ),
     ),
 ]
+IdempotencyKeyParam = Annotated[
+    str | None,
+    Field(
+        default=None,
+        max_length=255,
+        description=(
+            "Optional replay key scoped to the calling identity. Repeating it with the "
+            "same request returns the same run instead of starting a second one; "
+            "repeating it with a different request is rejected."
+        ),
+    ),
+]
+
+
+def _owner_id() -> str:
+    """Project the current MCP principal into the shared run owner namespace."""
+    scope = current_request_scope()
+    return owner_id_from_principal(
+        auth_mode=scope.auth_mode,
+        user_id=scope.user_id,
+        issuer=str(scope.claims.get("iss") or "") or None,
+    )
+
+
+def _run_descriptor(record: AnswerRunRecord) -> dict[str, Any]:
+    """Project one run's identity and lifecycle state for an MCP caller."""
+    return {
+        "run_id": record.run_id,
+        "status": record.status,
+        "cancel_requested": record.cancel_requested,
+        "created_at": record.created_at.isoformat(),
+    }
 
 
 class DlightRAGMCPServer(MCPServer):
@@ -351,10 +389,14 @@ async def retrieve_tool(
 @mcp_app.tool(
     name="answer",
     description=(
-        "Ask a question and get an LLM-generated answer backed by retrieved context "
-        "from the default or selected workspaces in the knowledge base."
+        "Start an LLM-generated answer backed by retrieved context from the default or "
+        "selected workspaces. Returns immediately with a run_id and its initial status; "
+        "the answer itself is NOT returned here. Poll get_answer_run with that run_id "
+        "until status is succeeded, failed, or cancelled, and call cancel_answer_run to "
+        "stop a run you no longer need. A run survives this call, this connection, and a "
+        "server restart."
     ),
-    annotations=ToolAnnotations(read_only_hint=True),
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=False),
 )
 async def answer_tool(
     query: Annotated[str, Field(description="The question to answer")],
@@ -387,6 +429,7 @@ async def answer_tool(
         Field(default=False, description="Include semantic highlight phrases in cited sources."),
     ] = False,
     history: HistoryParam = None,
+    idempotency_key: IdempotencyKeyParam = None,
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
     manager = await _ensure_manager()
@@ -398,16 +441,86 @@ async def answer_tool(
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
-    result = await execute_answer(
-        manager=manager,
-        payload=args,
-        resolved_workspaces=resolved_workspaces,
-    )
-    visual_workspaces = await _authorized_workspace_names(
-        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
-        resolved_workspaces,
-    )
-    return answer_payload(result, visual_workspaces=visual_workspaces)
+    try:
+        creation = await manager.acreate_answer_run(
+            args.query,
+            workspaces=resolved_workspaces,
+            top_k=args.top_k,
+            chunk_top_k=args.chunk_top_k,
+            semantic_highlights=args.semantic_highlights,
+            history=conversation_history_as_dicts(args.history),
+            resources=answer_link_resources(args.attachments) or None,
+            idempotency_key=args.idempotency_key,
+            owner_id=_owner_id(),
+            **query_kwargs_from_payload(args),
+        )
+    except IdempotencyKeyConflict:
+        raise ValueError(
+            "idempotency_key was already used for a different answer request"
+        ) from None
+    return _run_descriptor(creation.run)
+
+
+@mcp_app.tool(
+    name="get_answer_run",
+    description=(
+        "Return the current state of an answer run started by the answer tool. status is "
+        "queued, running, succeeded, failed, or cancelled; cancel_requested reports whether "
+        "cancellation was asked for. A succeeded run carries result with answer, sources, "
+        "contexts, references, answer_images, and image_descriptions. A failed run carries "
+        "error_kind and error_message. An unknown run id, or one owned by another caller, "
+        "is reported as not found."
+    ),
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+async def get_answer_run_tool(
+    run_id: Annotated[str, Field(description="Run id returned by the answer tool.")],
+) -> dict[str, Any]:
+    args = AnswerRunInput.model_validate(locals())
+    manager = await _ensure_manager()
+    record = await manager.aget_answer_run(owner_id=_owner_id(), run_id=args.run_id)
+    if record is None:
+        raise ValueError(f"Answer run not found: {args.run_id}")
+    result: dict[str, Any] | None = None
+    if record.result is not None:
+        result = project_answer_result(
+            record.result,
+            visual_workspaces=await _authorized_workspace_names(
+                AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+                [str(value) for value in record.request.get("workspaces") or ()],
+            ),
+        )
+    return {
+        **_run_descriptor(record),
+        "phase": record.phase,
+        "completed_turns": record.completed_turns,
+        "result": result,
+        "error_kind": record.error_kind,
+        "error_message": record.error_message,
+        "finished_at": record.finished_at.isoformat() if record.finished_at else None,
+    }
+
+
+@mcp_app.tool(
+    name="cancel_answer_run",
+    description=(
+        "Request cancellation of an answer run started by the answer tool and return its "
+        "state. A queued run is cancelled immediately; a running one is cancelled once its "
+        "worker observes the request, so status may still be running with cancel_requested "
+        "true. Cancelling an already finished run changes nothing. An unknown run id, or "
+        "one owned by another caller, is reported as not found."
+    ),
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def cancel_answer_run_tool(
+    run_id: Annotated[str, Field(description="Run id returned by the answer tool.")],
+) -> dict[str, Any]:
+    args = AnswerRunInput.model_validate(locals())
+    manager = await _ensure_manager()
+    outcome = await manager.acancel_answer_run(owner_id=_owner_id(), run_id=args.run_id)
+    if outcome.run is None:
+        raise ValueError(f"Answer run not found: {args.run_id}")
+    return _run_descriptor(outcome.run)
 
 
 @mcp_app.tool(

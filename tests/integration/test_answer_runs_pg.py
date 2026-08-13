@@ -89,6 +89,11 @@ async def pool() -> AsyncIterator[Any]:
 async def store(pool: Any) -> PGAnswerRunStore:
     created = PGAnswerRunStore(pool=pool)
     await created.initialize()
+    # Retention exempts conversation-linked runs, so the whole operational schema
+    # is established here exactly as a real process establishes it at startup.
+    from dlightrag.storage.web_conversations import PGWebConversationStore
+
+    await PGWebConversationStore(pool=pool, run_store=created).initialize()
     return created
 
 

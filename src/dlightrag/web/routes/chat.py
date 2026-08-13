@@ -1,20 +1,31 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Web routes for chat interface and answer generation."""
+"""Web routes for the chat interface and durable answer runs."""
 
 import logging
+from collections.abc import Mapping
+from dataclasses import replace
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.access_control import AccessAction
+from dlightrag.api.principal import owner_id_from_user
 from dlightrag.core.access import workspace_names
+from dlightrag.storage.answer_runs import IdempotencyKeyConflict
 from dlightrag.utils import normalize_workspace
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.attachment_models import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
 )
 from dlightrag.web.attachment_requests import parse_web_answer_request
-from dlightrag.web.conversations import WebConversationService
+from dlightrag.web.conversation_models import AnswerRunDescriptor, ConversationTurn
+from dlightrag.web.conversations import (
+    ConversationSubmissionConflict,
+    WebAnswerSubmission,
+    WebConversationService,
+    project_conversation_turn,
+)
 from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,
@@ -93,80 +104,190 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     )
 
 
-@router.post("/answer")
-async def answer_stream(
+@router.post("/answer", status_code=202, response_model=AnswerRunDescriptor)
+async def start_answer_run(
     request: Request,
+    response: Response,
     workspace: str = Depends(get_workspace),
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
-):
-    """Stream answer via SSE, then swap in enriched citations."""
+) -> AnswerRunDescriptor:
+    """Accept one submission as a durable run linked to its conversation entry.
+
+    The run, its uploaded bytes, and the conversation turn are committed in one
+    transaction before this descriptor is returned, so the browser follows the
+    run's own event stream and a page reload rediscovers it from history.
+    """
     manager = get_manager(request)
     cfg = manager.config
-    # Enforce the probed answer capability at admission (pre-stream 4xx).
+    # Enforce the probed answer capability at admission (pre-acceptance 4xx).
     if "multipart/form-data" in request.headers.get("content-type", "").lower():
         await manager._maybe_reprobe_answer_image_capability()
-    capability = manager.answer_image_capability
     body = await parse_web_answer_request(
         request,
         max_attachments=cfg.answer.max_attachments,
         max_attachment_bytes=cfg.answer.max_attachment_bytes,
         max_total_attachment_bytes=cfg.answer.max_total_attachment_bytes,
         image_max_pixels=cfg.answer.image_max_pixels,
-        answer_image_capability=capability,
+        answer_image_capability=manager.answer_image_capability,
     )
-
-    query = body.query
+    query = body.query.strip()
     if not query:
-        return HTMLResponse("<span>Please enter a question.</span>")
+        raise HTTPException(status_code=422, detail="A question is required")
 
-    prepared_conversation = await conversation_service.prepare_answer(
-        getattr(request.state, "user_context", None),
-        str(body.conversation_id),
-        str(body.submission_id),
-    )
-    if prepared_conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    # Extract workspaces (multi-select from frontend).
-    workspaces = body.workspaces
-    target_workspaces = workspaces or [workspace]
+    target_workspaces = body.workspaces or [workspace]
     for ws in target_workspaces:
         await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
-    projection_workspaces = target_workspaces
-    committed = prepared_conversation.committed_submission
-    if committed is not None and committed.queried_workspaces:
-        projection_workspaces = list(committed.queried_workspaces)
-    downloadable_records = await filter_web_workspace_records(
-        request,
-        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
-        [{"workspace": ws} for ws in projection_workspaces],
-    )
-    downloadable_workspaces = workspace_names(downloadable_records)
-    visual_records = await filter_web_workspace_records(
-        request,
-        AccessAction.WORKSPACE_READ_VISUAL_ASSET,
-        [{"workspace": ws} for ws in projection_workspaces],
-    )
-    visual_workspaces = workspace_names(visual_records)
 
-    # Planning runs lazily inside the stream (under the request-root span), not
-    # here: this keeps retrieval_planning nested in the answer_pipeline trace
-    # and lets an already-committed (duplicate) submission replay without
-    # re-planning. The handler stays synchronous request gating only.
+    try:
+        submission = await conversation_service.start_answer(
+            getattr(request.state, "user_context", None),
+            conversation_id=str(body.conversation_id),
+            submission_id=str(body.submission_id),
+            query=query,
+            workspaces=target_workspaces,
+            attachments=body.attachments,
+        )
+    except ConversationSubmissionConflict, IdempotencyKeyConflict:
+        raise HTTPException(
+            status_code=409,
+            detail="This submission id was already used for a different request",
+        ) from None
+    if submission is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    # A replay is already accepted work, so report its authoritative state.
+    response.status_code = 200 if submission.replayed else 202
+    return answer_run_descriptor(submission)
+
+
+@router.get("/answer/{run_id}", response_model=ConversationTurn)
+async def answer_run_status(
+    run_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> ConversationTurn:
+    """Return one owned run's conversation entry and authoritative state."""
+    turn = await conversation_service.turn_for_run(
+        getattr(request.state, "user_context", None), run_id
+    )
+    if turn is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    downloadable, visual = await _projection_workspaces(request, turn.run.request)
+    return project_conversation_turn(
+        turn, downloadable_workspaces=downloadable, visual_workspaces=visual
+    )
+
+
+@router.delete("/answer/{run_id}", response_model=ConversationTurn)
+async def cancel_answer_run(
+    run_id: str,
+    request: Request,
+    response: Response,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> ConversationTurn:
+    """Request cancellation of one owned run; repeating it is a no-op."""
+    user = getattr(request.state, "user_context", None)
+    turn = await conversation_service.turn_for_run(user, run_id)
+    if turn is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    outcome = await get_manager(request).acancel_answer_run(
+        owner_id=owner_id_from_user(user), run_id=run_id
+    )
+    if outcome.run is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    # 202 only while a running worker still has to observe the request.
+    response.status_code = 202 if outcome.outcome == "pending" else 200
+    downloadable, visual = await _projection_workspaces(request, outcome.run.request)
+    return project_conversation_turn(
+        replace(turn, run=outcome.run),
+        downloadable_workspaces=downloadable,
+        visual_workspaces=visual,
+    )
+
+
+@router.get("/answer/{run_id}/events")
+async def answer_run_events(
+    run_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> StreamingResponse:
+    """Replay this run's durable events from a cursor, then follow it live."""
+    user = getattr(request.state, "user_context", None)
+    turn = await conversation_service.turn_for_run(user, run_id)
+    if turn is None:
+        raise HTTPException(status_code=404, detail="Answer run not found")
+    if turn.run.events_trimmed_at is not None:
+        raise HTTPException(
+            status_code=410,
+            detail="Answer run events expired; read its result from the conversation",
+        )
+    downloadable, visual = await _projection_workspaces(request, turn.run.request)
+    events = await get_manager(request).asubscribe_answer_run(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        after_sequence=_resume_cursor(request),
+    )
     return StreamingResponse(
         stream_answer_events(
-            manager=manager,
-            cfg=cfg,
-            query=query,
-            workspaces=workspaces,
-            workspace=workspace,
-            downloadable_workspaces=downloadable_workspaces,
-            visual_workspaces=visual_workspaces,
-            conversation_service=conversation_service,
-            prepared_conversation=prepared_conversation,
-            validated_attachments=body.attachments,
-            submission_id=str(body.submission_id),
+            events,
+            downloadable_workspaces=downloadable,
+            visual_workspaces=visual,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def answer_run_descriptor(submission: WebAnswerSubmission) -> AnswerRunDescriptor:
+    """Project the owner-scoped links one accepted submission is followed by."""
+    run_id = submission.run.run_id
+    return AnswerRunDescriptor(
+        run_id=run_id,
+        status=submission.run.status,
+        cancel_requested=submission.run.cancel_requested,
+        turn_id=submission.turn_id,
+        turn_number=submission.turn_number,
+        submission_id=str(submission.run.idempotency_key or ""),
+        events_url=f"/web/answer/{run_id}/events",
+        status_url=f"/web/answer/{run_id}",
+        cancel_url=f"/web/answer/{run_id}",
+        conversation=submission.conversation,
+    )
+
+
+def _resume_cursor(request: Request) -> int:
+    """Resolve the durable sequence this subscriber resumes after.
+
+    An empty ``Last-Event-ID`` is how a browser reports "no cursor yet"; an
+    explicitly supplied ``after`` is always parsed strictly.
+    """
+    header = request.headers.get("Last-Event-ID")
+    query = request.query_params.get("after")
+    from_header = _parse_cursor(header) if header else None
+    from_query = _parse_cursor(query) if query is not None else None
+    if from_header is not None and from_query is not None and from_header != from_query:
+        raise HTTPException(
+            status_code=400, detail="Last-Event-ID and 'after' request different cursors"
+        )
+    if from_query is not None:
+        return from_query
+    return from_header or 0
+
+
+def _parse_cursor(value: str | None) -> int:
+    if value is None or not value.isdigit():
+        raise HTTPException(status_code=400, detail="Event cursor must be a non-negative integer")
+    return int(value)
+
+
+async def _projection_workspaces(
+    request: Request, run_request: Mapping[str, Any]
+) -> tuple[set[str], set[str]]:
+    """Authorize this reader's source downloads and visuals for one run."""
+    workspaces = [{"workspace": str(value)} for value in run_request.get("workspaces") or ()]
+    downloadable = await filter_web_workspace_records(
+        request, AccessAction.WORKSPACE_DOWNLOAD_SOURCE, list(workspaces)
+    )
+    visual = await filter_web_workspace_records(
+        request, AccessAction.WORKSPACE_READ_VISUAL_ASSET, list(workspaces)
+    )
+    return workspace_names(downloadable), workspace_names(visual)

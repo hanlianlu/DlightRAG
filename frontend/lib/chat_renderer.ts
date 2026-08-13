@@ -5,46 +5,43 @@ import {renderMath} from './math.ts';
 import {renderDiagrams} from '../ui/mermaid.ts';
 import {createDocumentChip} from './document_chip.ts';
 import {answerErrorMessage} from './errors.ts';
-import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
+import {llmFragmentFromSanitizedHtml} from './safe_html.ts';
 import {parseData} from './sse.ts';
 import chatStyles from '../styles/chat.module.css';
 import type {
   ConversationAttachmentReference,
   ConversationHistory,
-  ConversationSummary,
+  ConversationTurn,
 } from '../api/conversations.ts';
-import type {ConversationSavePresentation} from '../stores/pendingSubmissionStore.ts';
 
 // SSE HTML payloads are sanitized server-side by nh3 and again here before
 // browser insertion. Keep new HTML sinks behind frontend/lib/safe_html.ts.
 
 // ── types ────────────────────────────────────────────────────────────
 
-interface ChatTurn {
+export interface ChatTurn {
   chatArea: HTMLElement;
   aiDiv: HTMLDivElement;
   contentDiv: HTMLDivElement;
 }
 
 export interface DonePayload {
+  status: 'succeeded' | 'cancelled';
   html: string;
   answer: string;
-  conversation_saved: boolean;
-  conversation_save_reason?: string | null;
-  conversation?: ConversationSummary | null;
 }
 
 interface ProgressPayload {
   phase: string;
 }
 
-type PhaseLabel = 'planning' | 'searching' | 'generating' | 'saving';
+type PhaseLabel = 'planning' | 'searching' | 'researching' | 'generating';
 
 const PHASE_LABELS: Record<PhaseLabel, string> = {
   planning: 'Analyzing query...',
   searching: 'Searching knowledge base...',
+  researching: 'Researching sources...',
   generating: 'Generating answer...',
-  saving: 'Saving conversation...',
 };
 
 // ── helpers ───────────────────────────────────────────────────────────
@@ -82,32 +79,14 @@ const STICK_TO_BOTTOM_PX = 160;
 // answer on every 0.3s snapshot.
 const MATH_DELIMITER = /\$|\\\(|\\\[/;
 
-// Marks the raw-token tail appended between previews (see createAnswerRenderer).
+// Marks the raw-token tail appended while the answer streams. The rendered
+// answer is derived once, from the run's canonical result, when it finishes.
 const STREAM_TAIL_CLASS = 'stream-tail';
-
-// Split a sanitized answer-HTML snapshot into its top-level markdown blocks so
-// completed blocks can be frozen while only the trailing block is re-rendered.
-function answerBlocksFromHtml(html: string): HTMLElement[] {
-  const fragment = llmFragmentFromSanitizedHtml(html);
-  return Array.from(fragment.children).filter(
-    (node): node is HTMLElement => node instanceof HTMLElement,
-  );
-}
-
-// Typeset a block only when it contains math delimiters, so a frozen block is
-// typeset once and math-free blocks skip MathJax entirely.
-function typesetBlockMath(block: HTMLElement): void {
-  if (MATH_DELIMITER.test(block.textContent || '')) renderMath(block);
-}
 
 function isDonePayload(value: unknown): value is DonePayload {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
-  return (
-    typeof payload.html === 'string' &&
-    typeof payload.answer === 'string' &&
-    typeof payload.conversation_saved === 'boolean'
-  );
+  return payload.status === 'succeeded' || payload.status === 'cancelled';
 }
 
 
@@ -255,12 +234,58 @@ export function clearChatViewport(): void {
   document.querySelector('.app')?.classList.remove('has-messages');
 }
 
-export function renderConversationHistory(history: ConversationHistory): void {
+export interface PendingHistoryTurn {
+  turn: ChatTurn;
+  stored: ConversationTurn;
+}
+
+/**
+ * Render stored history and report the turn whose run has not finished.
+ *
+ * A reloaded page therefore rediscovers a queued or running answer from the
+ * conversation itself, without remembering the response that started it.
+ */
+export function renderConversationHistory(
+  history: ConversationHistory,
+): PendingHistoryTurn | null {
   clearChatViewport();
+  let pending: PendingHistoryTurn | null = null;
   for (const stored of history.turns) {
     const turn = createChatTurn(stored.user_text, stored.user_attachments);
-    applyFinalAnswerHtml(turn, stored.answer_html);
+    renderStoredTurn(turn, stored);
+    if (stored.status === 'queued' || stored.status === 'running') {
+      pending = {turn, stored};
+    }
   }
+  return pending;
+}
+
+/** Render one stored turn from its run's state: pending, terminal, or answered. */
+export function renderStoredTurn(turn: ChatTurn, stored: ConversationTurn): void {
+  if (stored.status === 'succeeded') {
+    applyFinalAnswerHtml(turn, stored.answer_html);
+    return;
+  }
+  if (stored.status === 'failed') {
+    setAnswerError(turn, answerErrorMessage({message: stored.error_message}));
+    return;
+  }
+  if (stored.status === 'cancelled') {
+    markAnswerStopped(turn);
+    return;
+  }
+  markAnswerPending(turn, stored.cancel_requested);
+}
+
+/** Show that a queued or running answer is still being produced elsewhere. */
+export function markAnswerPending(turn: ChatTurn, cancelRequested = false): void {
+  const indicator = document.createElement('span');
+  indicator.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
+  indicator.setAttribute(
+    'data-phase',
+    cancelRequested ? 'Stopping...' : 'Generating answer...',
+  );
+  turn.contentDiv.replaceChildren(indicator);
 }
 
 function renderConversationState(message: string, isError: boolean): HTMLElement | null {
@@ -292,28 +317,6 @@ export function renderConversationHistoryError(onRetry: () => void): void {
   state.append(document.createTextNode(' '), retry);
 }
 
-export function renderAnswerSaveOutcome(
-  turn: ChatTurn,
-  presentation: ConversationSavePresentation,
-  onRecovery: () => void,
-): void {
-  if (presentation.state === 'saved' || !presentation.message) return;
-  const status = document.createElement('div');
-  if (presentation.state === 'not_saved') status.className = chatStyles.textError;
-  status.setAttribute('role', 'status');
-  status.setAttribute('aria-live', 'polite');
-  status.textContent = presentation.message;
-  if (presentation.actionLabel) {
-    const action = document.createElement('button');
-    action.type = 'button';
-    action.textContent = presentation.actionLabel;
-    action.setAttribute('aria-label', presentation.actionLabel);
-    action.addEventListener('click', onRecovery);
-    status.append(document.createTextNode(' '), action);
-  }
-  turn.aiDiv.appendChild(status);
-}
-
 export function setAnswerError(turn: ChatTurn, message: unknown): void {
   turn.contentDiv.textContent = typeof message === 'string' ? message : 'Service error. Please try again.';
   turn.contentDiv.classList.add(chatStyles.textError);
@@ -334,13 +337,9 @@ export function markAnswerStopped(turn: ChatTurn): void {
 export function createAnswerRenderer(turn: ChatTurn) {
   let fullAnswer = '';
   let failed = false;
-  let saveOutcome: DonePayload | null = null;
+  let outcome: DonePayload | null = null;
   let scrollScheduled = false;
   let streamStarted = false;
-  // Count of leading answer blocks that are complete and frozen: rendered and
-  // typeset once, then never touched again so their MathJax output, text
-  // selection and scroll position survive the rest of the stream.
-  let frozenBlocks = 0;
 
   // Coalesce autoscroll into one write per animation frame, and only follow the
   // stream while the reader is already near the bottom.
@@ -358,15 +357,13 @@ export function createAnswerRenderer(turn: ChatTurn) {
   }
 
   // Clear the placeholder streaming dot / progress phase the first time real
-  // answer content arrives, so the block viewport starts from a clean slate.
+  // answer content arrives, so the draft starts from a clean slate.
   function startStreamViewport(): void {
     if (streamStarted) return;
     turn.contentDiv.replaceChildren();
     streamStarted = true;
   }
 
-  // Append raw tokens to a trailing span for sub-preview smoothness; the next
-  // preview rebuilds the trailing region and absorbs this tail.
   function appendStreamTail(token: string): void {
     const last = turn.contentDiv.lastElementChild;
     let tail: HTMLElement;
@@ -389,32 +386,12 @@ export function createAnswerRenderer(turn: ChatTurn) {
     scheduleAutoScroll();
   }
 
-  // Server sends the whole accumulated answer HTML each preview. Rather than
-  // wiping and re-rendering it all (which re-typesets every equation and drops
-  // selection), freeze completed blocks and rebuild only the trailing one.
-  function handlePreview(data: string): void {
-    const previewHtml = parseData(data);
-    const html = typeof previewHtml === 'string' ? previewHtml : '';
-    startStreamViewport();
-    const blocks = answerBlocksFromHtml(html);
-    // Drop the volatile trailing region (previous in-progress block + raw token
-    // tail); frozen leading blocks are left untouched.
-    while (turn.contentDiv.children.length > frozenBlocks) {
-      turn.contentDiv.lastElementChild?.remove();
-    }
-    for (let i = frozenBlocks; i < blocks.length; i += 1) {
-      const block = blocks[i].cloneNode(true) as HTMLElement;
-      turn.contentDiv.appendChild(block);
-      typesetBlockMath(block);
-      // Only a completed (non-trailing) block has a stable fence; the trailing
-      // block may still be mid-stream, so its diagram waits for a later preview
-      // or the done backstop in applyFinalAnswerHtml.
-      if (i < blocks.length - 1) renderDiagrams(block);
-      fixExternalLinks(block);
-    }
-    // Every block except the last is now complete, so freeze them.
-    frozenBlocks = Math.max(frozenBlocks, blocks.length - 1);
-    scheduleAutoScroll();
+  // A resumed run regenerates its answer, so drop the interrupted draft before
+  // the replacement tokens arrive.
+  function handleReset(): void {
+    fullAnswer = '';
+    streamStarted = false;
+    turn.contentDiv.replaceChildren();
   }
 
   function handleDone(data: string): void {
@@ -424,31 +401,23 @@ export function createAnswerRenderer(turn: ChatTurn) {
       setAnswerError(turn, 'Service error. Please try again.');
       return;
     }
+    outcome = payload;
+    if (payload.status === 'cancelled') {
+      markAnswerStopped(turn);
+      return;
+    }
     fullAnswer = payload.answer;
-    saveOutcome = payload;
-
     applyFinalAnswerHtml(turn, payload.html);
     const live = turn.aiDiv.querySelector('.sr-only');
     if (live) live.textContent = 'Answer ready';
-  }
-
-  function handleHighlights(data: string): void {
-    const highlightsHtml = parseData(data);
-    const sourceData = turn.aiDiv.querySelector('.source-data');
-    if (sourceData) {
-      // Update this turn's stored sources so opening the panel shows highlights.
-      // The server also persists them, so history and reloads stay in sync.
-      setSanitizedLlmHtml(sourceData, typeof highlightsHtml === 'string' ? highlightsHtml : '');
-      fixExternalLinks(sourceData);
-    }
   }
 
   function handleProgress(data: string): void {
     const info = parseData(data) as ProgressPayload;
     const label: string = PHASE_LABELS[info.phase as PhaseLabel] || info.phase;
     // Resolve the phase indicator, creating one when tokens have already
-    // replaced the initial streaming dot so late phases (e.g. "Saving…") stay
-    // visible. The done event replaces contentDiv, clearing any created node.
+    // replaced the initial streaming dot. The done event replaces contentDiv,
+    // clearing any created node.
     const existing = turn.contentDiv.querySelector<HTMLElement>(
       '.' + chatStyles.progressPhase + ', .' + chatStyles.streamingDot,
     );
@@ -463,9 +432,8 @@ export function createAnswerRenderer(turn: ChatTurn) {
   return {
     handle(eventType: string, data: string): void {
       if (eventType === 'token') handleToken(data);
-      else if (eventType === 'preview') handlePreview(data);
+      else if (eventType === 'reset') handleReset();
       else if (eventType === 'done') handleDone(data);
-      else if (eventType === 'highlights') handleHighlights(data);
       else if (eventType === 'progress') handleProgress(data);
       else if (eventType === 'error') {
         failed = true;
@@ -478,8 +446,12 @@ export function createAnswerRenderer(turn: ChatTurn) {
     get failed(): boolean {
       return failed;
     },
-    get saveOutcome(): DonePayload | null {
-      return saveOutcome;
+    /** Set once a terminal event arrived; the run needs no further following. */
+    get terminal(): boolean {
+      return failed || outcome !== null;
+    },
+    get outcome(): DonePayload | null {
+      return outcome;
     },
   };
 }

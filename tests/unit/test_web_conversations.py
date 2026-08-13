@@ -1,10 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for the durable Web conversation service and its lifecycle routes."""
+"""Tests for the Web conversation lifecycle routes and their failure contract."""
 
 import datetime
-import io
 import json
-from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -12,16 +10,10 @@ from uuid import UUID
 import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
-from PIL import Image
 
-from dlightrag.api.auth import UserContext
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
-from dlightrag.storage.web_conversations import (
-    ConversationSnapshot,
-    StoredConversationAttachment,
-)
-from dlightrag.utils.images import thumbnail_bytes
+from tests.unit.web.answer_run_fixtures import web_answer_submission
 
 _CID = "00000000-0000-0000-0000-000000000001"
 _AID = "00000000-0000-0000-0000-000000000020"
@@ -48,6 +40,7 @@ def conversation_service() -> AsyncMock:
     service.rename.return_value = {**summary, "title": "Renamed chat"}
     service.delete.return_value = True
     service.delete_all.return_value = 2
+    service.start_answer.return_value = web_answer_submission(conversation_id=_CID)
     service.attachment.return_value = SimpleNamespace(
         attachment_id=_AID,
         filename="chart.png",
@@ -186,103 +179,6 @@ async def test_delete_has_no_messages_subroute(conversation_client: AsyncClient)
 
 
 # ---------------------------------------------------------------------------
-# Unified attachment download + thumbnail routes
-# ---------------------------------------------------------------------------
-
-
-async def test_scoped_attachment_response_is_private(
-    conversation_client: AsyncClient,
-) -> None:
-    response = await conversation_client.get(f"/web/conversations/{_CID}/attachments/{_AID}")
-
-    assert response.status_code == 200
-    assert response.content == b"png-bytes"
-    assert response.headers["content-type"] == "image/png"
-    assert response.headers["cache-control"] == "private, max-age=3600"
-    assert response.headers["x-content-type-options"] == "nosniff"
-
-
-async def test_scoped_document_attachment_sets_content_disposition(
-    conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
-) -> None:
-    conversation_service.attachment.return_value = SimpleNamespace(
-        attachment_id=_AID,
-        filename="report.pdf",
-        mime_type="application/pdf",
-        attachment_bytes=b"%PDF-1.4",
-    )
-
-    response = await conversation_client.get(f"/web/conversations/{_CID}/attachments/{_AID}")
-
-    assert response.status_code == 200
-    assert response.headers["content-disposition"] == 'attachment; filename="report.pdf"'
-
-
-async def test_scoped_attachment_of_other_principal_is_404(
-    conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
-) -> None:
-    conversation_service.attachment.return_value = None
-
-    response = await conversation_client.get(f"/web/conversations/{_CID}/attachments/{_AID}")
-
-    assert response.status_code == 404
-
-
-async def test_scoped_thumbnail_response_is_private_and_immutable(
-    conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
-) -> None:
-    response = await conversation_client.get(
-        f"/web/conversations/{_CID}/attachments/{_AID}/thumbnail"
-    )
-
-    assert response.status_code == 200
-    assert response.content == b"derived-thumbnail"
-    assert response.headers["content-type"] == "image/jpeg"
-    assert response.headers["cache-control"] == "private, max-age=86400, immutable"
-    assert response.headers["x-content-type-options"] == "nosniff"
-    conversation_service.thumbnail.assert_awaited_once()
-
-
-async def test_scoped_thumbnail_failure_does_not_fall_back_to_original(
-    conversation_client: AsyncClient,
-    conversation_service: AsyncMock,
-) -> None:
-    conversation_service.thumbnail.return_value = None
-
-    response = await conversation_client.get(
-        f"/web/conversations/{_CID}/attachments/{_AID}/thumbnail"
-    )
-
-    assert response.status_code == 404
-    assert response.content != b"png-bytes"
-    conversation_service.thumbnail.assert_awaited_once()
-
-
-async def test_scoped_thumbnail_requires_web_auth(
-    test_config: DlightragConfig,
-    conversation_service: AsyncMock,
-) -> None:
-    test_config.auth_mode = "simple"
-    test_config.api_auth_token = "secret-token"
-    application = create_app(include_web_app=True)
-    application.state.web_conversation_service = conversation_service
-    transport = ASGITransport(app=application)
-    async with AsyncClient(
-        transport=transport,
-        base_url="https://app.example.com",
-        follow_redirects=False,
-    ) as client:
-        response = await client.get(f"/web/conversations/{_CID}/attachments/{_AID}/thumbnail")
-
-    assert response.status_code == 303
-    assert response.headers["location"].startswith("/web/login")
-    conversation_service.thumbnail.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
 # Cross-origin protection
 # ---------------------------------------------------------------------------
 
@@ -390,7 +286,7 @@ async def test_cookie_web_answer_accepts_exact_origin_independent_of_content_typ
     conversation_service: AsyncMock,
     content_type: str,
 ) -> None:
-    conversation_service.prepare_answer.return_value = None
+    conversation_service.start_answer.return_value = None
 
     response = await cookie_conversation_client.post(
         "/web/answer",
@@ -399,7 +295,7 @@ async def test_cookie_web_answer_accepts_exact_origin_independent_of_content_typ
     )
 
     assert response.status_code == 404
-    conversation_service.prepare_answer.assert_awaited_once()
+    conversation_service.start_answer.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -415,7 +311,7 @@ async def test_cookie_web_answer_rejects_non_exact_origin_before_service(
     conversation_service: AsyncMock,
     origin: str | None,
 ) -> None:
-    conversation_service.prepare_answer.return_value = None
+    conversation_service.start_answer.return_value = None
     headers = {"Content-Type": "text/plain"}
     if origin is not None:
         headers["Origin"] = origin
@@ -427,14 +323,14 @@ async def test_cookie_web_answer_rejects_non_exact_origin_before_service(
     )
 
     assert response.status_code == 403
-    conversation_service.prepare_answer.assert_not_awaited()
+    conversation_service.start_answer.assert_not_awaited()
 
 
 async def test_bearer_web_answer_does_not_require_browser_origin(
     cookie_conversation_client: AsyncClient,
     conversation_service: AsyncMock,
 ) -> None:
-    conversation_service.prepare_answer.return_value = None
+    conversation_service.start_answer.return_value = None
 
     response = await cookie_conversation_client.post(
         "/web/answer",
@@ -443,7 +339,7 @@ async def test_bearer_web_answer_does_not_require_browser_origin(
     )
 
     assert response.status_code == 404
-    conversation_service.prepare_answer.assert_awaited_once()
+    conversation_service.start_answer.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -587,603 +483,3 @@ def test_browser_contracts_forbid_extra_fields_and_normalize_titles() -> None:
     assert request.title == "Quarterly review"
     with pytest.raises(ValidationError):
         RenameConversationRequest.model_validate({"title": "Valid", "principal_id": "p1"})
-
-
-# ---------------------------------------------------------------------------
-# Service-level fixtures
-# ---------------------------------------------------------------------------
-
-
-def _conversation_row() -> dict[str, object]:
-    now = datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC)
-    return {
-        "conversation_id": _CID,
-        "title": "Quarterly review",
-        "content_revision": 7,
-        "created_at": now,
-        "updated_at": now,
-    }
-
-
-def _conversation_snapshot() -> ConversationSnapshot:
-    now = datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC)
-    return ConversationSnapshot(
-        principal_id="stored-principal",
-        conversation_id=_CID,
-        content_revision=7,
-        title="Quarterly review",
-        created_at=now,
-        updated_at=now,
-        history=(
-            {
-                "turn_id": "00000000-0000-0000-0000-000000000010",
-                "turn_number": 1,
-                "user_text": "What changed?",
-                "assistant_text": "Revenue increased [1].",
-                "answer_sources": {
-                    "sources": [
-                        {
-                            "id": "1",
-                            "title": "Report",
-                            "type": "document",
-                            "source_uri": "local://report.pdf",
-                            "workspace": "default",
-                            "document_id": "report",
-                            "chunks": [],
-                        }
-                    ]
-                },
-                "queried_workspaces": ["default"],
-                "created_at": now,
-                "attachments": [
-                    {
-                        "attachment_id": _AID,
-                        "ordinal": 1,
-                        "filename": "chart.png",
-                        "mime_type": "image/png",
-                        "byte_size": 9,
-                    }
-                ],
-            },
-        ),
-    )
-
-
-@pytest.fixture
-def conversation_store() -> AsyncMock:
-    store = AsyncMock()
-    store.create_conversation.return_value = _conversation_row()
-    store.list_conversations.return_value = [_conversation_row()]
-    store.snapshot.return_value = _conversation_snapshot()
-    store.rename_conversation.return_value = _conversation_row()
-    store.delete_conversation.return_value = True
-    store.delete_all_conversations.return_value = 2
-    store.prune_expired.return_value = 0
-    return store
-
-
-@pytest.fixture
-def service_under_test(conversation_store: AsyncMock):
-    from dlightrag.web.conversations import WebConversationService
-
-    return WebConversationService(
-        store=conversation_store, max_turns=100, ttl_days=30, max_attachments=6
-    )
-
-
-@pytest.fixture
-def jwt_user() -> UserContext:
-    return UserContext(
-        user_id="alice",
-        auth_mode="jwt",
-        claims={"iss": "https://issuer.example"},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Service behaviour
-# ---------------------------------------------------------------------------
-
-
-async def test_service_derives_principal_for_each_lifecycle_operation(
-    service_under_test,
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    from dlightrag.api.principal import owner_id_from_user
-
-    expected_principal = owner_id_from_user(jwt_user)
-
-    await service_under_test.create(jwt_user)
-    await service_under_test.list(jwt_user)
-    await service_under_test.rename(jwt_user, _CID, "Quarterly review")
-    await service_under_test.delete(jwt_user, _CID)
-    await service_under_test.delete_all(jwt_user)
-
-    assert conversation_store.create_conversation.await_args.args == (expected_principal,)
-    assert conversation_store.list_conversations.await_args.args == (expected_principal,)
-    assert conversation_store.rename_conversation.await_args.args[:2] == (
-        expected_principal,
-        _CID,
-    )
-    assert conversation_store.delete_conversation.await_args.args[:2] == (
-        expected_principal,
-        _CID,
-    )
-    assert conversation_store.delete_all_conversations.await_args.args == (expected_principal,)
-
-
-async def test_history_projects_safe_attachments_sources_and_rendered_answer(
-    service_under_test,
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    history = await service_under_test.history(jwt_user, _CID)
-
-    assert history is not None
-    turn = history.turns[0]
-    attachment = turn.user_attachments[0]
-    expected_url = f"/web/conversations/{_CID}/attachments/{_AID}"
-    assert attachment.url == expected_url
-    assert attachment.kind == "image"
-    assert attachment.thumbnail_url == expected_url + "/thumbnail"
-    assert attachment.label == "Turn 1, attachment 1"
-    assert "/web/files/raw/report?workspace=default" in turn.answer_html
-    assert "citation-badge" in turn.answer_html
-    assert "answer_sources" not in turn.model_dump()
-    assert "queried_workspaces" not in turn.model_dump()
-    assert "attachment_bytes" not in turn.model_dump_json()
-    assert "principal_id" not in turn.model_dump_json()
-    conversation_store.list_conversations.assert_not_awaited()
-
-
-async def test_history_thumbnail_is_principal_scoped_and_resource_bounded(
-    service_under_test,
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    source = Image.effect_noise((1600, 1200), 100).convert("RGB")
-    original_buffer = io.BytesIO()
-    source.save(original_buffer, format="PNG")
-    original = original_buffer.getvalue()
-    conversation_store.get_attachment.return_value = StoredConversationAttachment(
-        attachment_id=_AID,
-        filename="chart.png",
-        mime_type="image/png",
-        suffix=".png",
-        attachment_bytes=original,
-    )
-
-    thumbnail = await service_under_test.thumbnail(jwt_user, _CID, _AID)
-
-    assert thumbnail is not None
-    payload, mime_type = thumbnail
-    assert mime_type in {"image/jpeg", "image/png"}
-    assert len(payload) <= 128 * 1024
-    assert len(payload) < len(original)
-    with Image.open(io.BytesIO(payload)) as derived:
-        assert max(derived.size) <= 320
-        assert derived.format in {"JPEG", "PNG"}
-    from dlightrag.api.principal import owner_id_from_user
-
-    conversation_store.get_attachment.assert_awaited_once_with(
-        owner_id_from_user(jwt_user),
-        _CID,
-        _AID,
-        ttl_days=30,
-    )
-
-
-async def test_history_thumbnail_generation_failure_returns_none(
-    service_under_test,
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    conversation_store.get_attachment.return_value = StoredConversationAttachment(
-        attachment_id=_AID,
-        filename="chart.png",
-        mime_type="image/png",
-        suffix=".png",
-        attachment_bytes=b"durable-original-but-not-a-decodable-image",
-    )
-
-    thumbnail = await service_under_test.thumbnail(jwt_user, _CID, _AID)
-
-    assert thumbnail is None
-
-
-async def test_history_thumbnail_of_document_attachment_returns_none(
-    service_under_test,
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    conversation_store.get_attachment.return_value = StoredConversationAttachment(
-        attachment_id=_AID,
-        filename="report.pdf",
-        mime_type="application/pdf",
-        suffix=".pdf",
-        attachment_bytes=b"%PDF-1.4",
-    )
-
-    thumbnail = await service_under_test.thumbnail(jwt_user, _CID, _AID)
-
-    assert thumbnail is None
-
-
-def test_bounded_thumbnail_handles_valid_cmyk_jpeg() -> None:
-    source = Image.new("CMYK", (640, 480), (0, 127, 127, 0))
-    original_buffer = io.BytesIO()
-    source.save(original_buffer, format="JPEG")
-
-    payload, mime_type = thumbnail_bytes(
-        original_buffer.getvalue(),
-        max_px=320,
-        max_bytes=128 * 1024,
-    )
-
-    assert mime_type in {"image/jpeg", "image/png"}
-    assert len(payload) <= 128 * 1024
-    with Image.open(io.BytesIO(payload)) as derived:
-        assert max(derived.size) <= 320
-
-
-async def test_prepare_answer_uses_one_snapshot_text_history_and_manifest(
-    service_under_test,
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    prepared = await service_under_test.prepare_answer(jwt_user, _CID)
-
-    assert prepared is not None
-    assert prepared.content_revision == 7
-    assert prepared.text_history == (
-        {"role": "user", "content": "What changed?"},
-        {"role": "assistant", "content": "Revenue increased [1]."},
-    )
-    assert prepared.attachment_manifest[0]["attachment_id"] == _AID
-    assert prepared.attachment_manifest[0]["filename"] == "chart.png"
-    conversation_store.snapshot.assert_awaited_with(
-        prepared.principal_id,
-        prepared.conversation_id,
-        ttl_days=30,
-        max_turns=100,
-    )
-
-
-async def test_prepare_answer_submission_replay_lookup_is_bounded_one_shot(
-    service_under_test,
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    conversation_store.find_committed_turn.return_value = None
-
-    prepared = await service_under_test.prepare_answer(
-        jwt_user,
-        _CID,
-        "00000000-0000-4000-8000-000000000099",
-    )
-
-    assert prepared is not None
-    conversation_store.find_committed_turn.assert_awaited_once()
-
-
-async def test_build_answer_resources_orders_current_then_history_attachments(
-    service_under_test,
-    jwt_user: UserContext,
-) -> None:
-    from dlightrag.web.attachment_models import validate_web_attachments
-
-    prepared = await service_under_test.prepare_answer(jwt_user, _CID)
-    assert prepared is not None
-    image_buffer = io.BytesIO()
-    Image.new("RGB", (4, 4), "white").save(image_buffer, format="PNG")
-    (current,) = validate_web_attachments(
-        [("now.png", "image/png", image_buffer.getvalue())],
-        max_attachments=6,
-        max_attachment_bytes=15 * 1024 * 1024,
-        max_total_attachment_bytes=128 * 1024 * 1024,
-    )
-
-    resources = service_under_test.build_answer_resources(prepared, (current,))
-
-    assert len(resources) == 2
-    # Current-turn attachment carries inline bytes; prior attachment is a lazy loader.
-    assert resources[0].content is not None
-    assert resources[0].filename == "now.png"
-    assert resources[1].content is None
-    assert resources[1].loader is not None
-
-
-async def test_build_answer_resources_caps_history_by_configured_limit(
-    conversation_store: AsyncMock,
-    jwt_user: UserContext,
-) -> None:
-    from dlightrag.web.attachment_models import validate_web_attachments
-    from dlightrag.web.conversations import WebConversationService
-
-    service = WebConversationService(
-        store=conversation_store, max_turns=100, ttl_days=30, max_attachments=2
-    )
-    prepared = await service.prepare_answer(jwt_user, _CID)
-    assert prepared is not None
-    prepared = replace(
-        prepared,
-        attachment_manifest=tuple(
-            {"attachment_id": f"prior-{i}", "filename": f"p{i}.pdf", "mime_type": "application/pdf"}
-            for i in range(4)
-        ),
-    )
-    image_buffer = io.BytesIO()
-    Image.new("RGB", (4, 4), "white").save(image_buffer, format="PNG")
-    (current,) = validate_web_attachments(
-        [("now.png", "image/png", image_buffer.getvalue())],
-        max_attachments=2,
-        max_attachment_bytes=15 * 1024 * 1024,
-        max_total_attachment_bytes=128 * 1024 * 1024,
-    )
-
-    resources = service.build_answer_resources(prepared, (current,))
-
-    # Lowered limit of 2: one current attachment leaves room for exactly one
-    # prior lazy resource, keeping the most recent manifest entry.
-    assert len(resources) == 2
-    assert resources[0].filename == "now.png"
-    assert resources[1].content is None
-    assert resources[1].loader is not None
-
-
-async def test_commit_answer_maps_validated_attachments_and_revision(
-    service_under_test,
-    conversation_store: AsyncMock,
-) -> None:
-    from dlightrag.storage.web_conversations import CommitTurnResult
-    from dlightrag.web.attachment_models import validate_web_attachments
-    from dlightrag.web.conversations import PreparedWebConversation
-
-    conversation_store.commit_turn.return_value = CommitTurnResult(
-        saved=False, reason="conversation_changed", summary=None, turn_id=None
-    )
-    prepared = PreparedWebConversation(
-        principal_id="principal-hash",
-        conversation_id=_CID,
-        content_revision=7,
-        text_history=(),
-    )
-    image_buffer = io.BytesIO()
-    Image.new("RGB", (4, 4), "white").save(image_buffer, format="PNG")
-    raw = image_buffer.getvalue()
-    (attachment,) = validate_web_attachments(
-        [("chart.png", "image/png", raw)],
-        max_attachments=6,
-        max_attachment_bytes=15 * 1024 * 1024,
-        max_total_attachment_bytes=128 * 1024 * 1024,
-    )
-
-    result = await service_under_test.commit_answer(
-        prepared,
-        submission_id="00000000-0000-4000-8000-000000000098",
-        user_text="Question",
-        assistant_text="Answer",
-        answer_sources={"sources": [], "answer_images": []},
-        queried_workspaces=["default"],
-        attachments=(attachment,),
-    )
-
-    assert result.reason == "conversation_changed"
-    call = conversation_store.commit_turn.await_args.kwargs
-    assert call["expected_revision"] == 7
-    assert call["principal_id"] == "principal-hash"
-    pending = call["attachments"]
-    assert pending[0].attachment_bytes == raw
-    assert pending[0].filename == "chart.png"
-    assert pending[0].suffix == ".png"
-
-
-async def test_commit_answer_reconciles_lost_commit_acknowledgement(
-    service_under_test,
-    conversation_store: AsyncMock,
-) -> None:
-    from dlightrag.storage.web_conversations import CommitTurnResult
-    from dlightrag.web.conversations import PreparedWebConversation
-
-    committed = CommitTurnResult(
-        saved=True,
-        reason=None,
-        summary=None,
-        turn_id="turn",
-        current_attachment_ids=("stored-attachment",),
-        assistant_text="Stored answer",
-        answer_sources={"sources": []},
-        replayed=True,
-    )
-    conversation_store.commit_turn.side_effect = ConnectionError("ack lost")
-    conversation_store.find_committed_turn.return_value = committed
-    prepared = PreparedWebConversation(
-        principal_id="principal",
-        conversation_id=_CID,
-        content_revision=1,
-        text_history=(),
-    )
-
-    result = await service_under_test.commit_answer(
-        prepared,
-        submission_id="00000000-0000-4000-8000-000000000099",
-        user_text="Question",
-        assistant_text="Answer",
-        answer_sources={},
-        queried_workspaces=["default"],
-        attachments=(),
-    )
-
-    assert result == committed
-    conversation_store.find_committed_turn.assert_awaited_once_with(
-        "principal",
-        _CID,
-        "00000000-0000-4000-8000-000000000099",
-        ttl_days=30,
-        retry=False,
-    )
-
-
-async def test_commit_answer_returns_unknown_after_bounded_reconciliation_timeout(
-    service_under_test,
-    conversation_store: AsyncMock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    from dlightrag.web.conversations import PreparedWebConversation
-
-    monkeypatch.setattr("dlightrag.web.conversations._COMMIT_ATTEMPT_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr("dlightrag.web.conversations._RECONCILE_ATTEMPT_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr("dlightrag.web.conversations._RECONCILE_ATTEMPTS", 1)
-    conversation_store.commit_turn.side_effect = ConnectionError("ack lost")
-    conversation_store.find_committed_turn.side_effect = asyncio.TimeoutError
-    prepared = PreparedWebConversation(
-        principal_id="principal",
-        conversation_id=_CID,
-        content_revision=1,
-        text_history=(),
-    )
-
-    result = await asyncio.wait_for(
-        service_under_test.commit_answer(
-            prepared,
-            submission_id="00000000-0000-4000-8000-000000000099",
-            user_text="Question",
-            assistant_text="Answer",
-            answer_sources={},
-            queried_workspaces=["default"],
-            attachments=(),
-        ),
-        timeout=0.1,
-    )
-
-    assert result.saved is False
-    assert result.reason == "commit_outcome_unknown"
-    assert result.current_attachment_ids == ()
-
-
-async def test_initialize_applies_schema_then_global_prune(
-    service_under_test,
-    conversation_store: AsyncMock,
-) -> None:
-    await service_under_test.initialize()
-
-    conversation_store.initialize.assert_awaited_once_with(validate_only=False)
-    conversation_store.prune_expired.assert_awaited_once_with(ttl_days=30, batch_size=500)
-    await service_under_test.aclose()
-
-
-async def test_reader_initialize_validates_schema_without_migrating(
-    conversation_store: AsyncMock,
-) -> None:
-    from dlightrag.web.conversations import WebConversationService
-
-    service = WebConversationService(
-        store=conversation_store,
-        max_turns=30,
-        ttl_days=30,
-        max_attachments=4,
-        validate_schema_only=True,
-    )
-
-    await service.initialize()
-
-    conversation_store.initialize.assert_awaited_once_with(validate_only=True)
-    await service.aclose()
-
-
-async def test_initialize_runs_periodic_prune_until_closed(
-    service_under_test,
-    conversation_store: AsyncMock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    periodic_prune = asyncio.Event()
-    calls = 0
-
-    async def prune_expired(*, ttl_days: int, batch_size: int) -> int:
-        nonlocal calls
-        calls += 1
-        if calls >= 2:
-            periodic_prune.set()
-        return 0
-
-    conversation_store.prune_expired.side_effect = prune_expired
-    monkeypatch.setattr("dlightrag.web.conversations._PRUNE_INTERVAL_SECONDS", 0.001)
-
-    await service_under_test.initialize()
-    await asyncio.wait_for(periodic_prune.wait(), timeout=0.1)
-    await service_under_test.aclose()
-
-    assert calls >= 2
-    assert all(
-        call.kwargs == {"ttl_days": 30, "batch_size": 500}
-        for call in conversation_store.prune_expired.await_args_list
-    )
-
-
-# ---------------------------------------------------------------------------
-# Projection helpers
-# ---------------------------------------------------------------------------
-
-
-def test_conversation_turn_projects_document_and_image_attachments() -> None:
-    from dlightrag.web.conversations import _conversation_turn
-
-    row = {
-        "turn_id": "00000000-0000-0000-0000-000000000010",
-        "turn_number": 2,
-        "user_text": "see attached",
-        "assistant_text": "answer",
-        "answer_sources": {},
-        "queried_workspaces": ["default"],
-        "attachments": [
-            {
-                "attachment_id": "00000000-0000-0000-0000-000000000011",
-                "ordinal": 1,
-                "filename": "report.pdf",
-                "mime_type": "application/pdf",
-                "byte_size": 8,
-            },
-            {
-                "attachment_id": "00000000-0000-0000-0000-000000000012",
-                "ordinal": 2,
-                "filename": "chart.png",
-                "mime_type": "image/png",
-                "byte_size": 9,
-            },
-        ],
-        "created_at": "2026-07-20T00:00:00Z",
-    }
-
-    turn = _conversation_turn(_CID, row)
-
-    document, image = turn.user_attachments
-    assert document.kind == "document"
-    assert document.filename == "report.pdf"
-    assert document.url.endswith("/attachments/00000000-0000-0000-0000-000000000011")
-    assert document.thumbnail_url is None
-    assert image.kind == "image"
-    assert image.thumbnail_url is not None
-    assert image.thumbnail_url.endswith(
-        "/attachments/00000000-0000-0000-0000-000000000012/thumbnail"
-    )
-
-
-def test_pending_conversation_attachment_shape() -> None:
-    from dlightrag.storage.web_conversations import PendingConversationAttachment
-
-    item = PendingConversationAttachment(
-        attachment_id="00000000-0000-0000-0000-000000000011",
-        ordinal=1,
-        filename="report.pdf",
-        mime_type="application/pdf",
-        suffix=".pdf",
-        attachment_bytes=b"%PDF",
-        content_sha256="abc",
-    )
-
-    assert item.byte_size == 4

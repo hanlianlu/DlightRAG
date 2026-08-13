@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,20 +29,11 @@ from playwright.sync_api import Browser, Page, sync_playwright
 
 from dlightrag.api.server import create_app
 from dlightrag.core.answer.capability import AnswerImageCapability
-from dlightrag.core.answer.media import answer_images_from_sources
-from dlightrag.core.answer_runs.snapshots import load_answer_snapshot
-from dlightrag.core.client_payloads import project_source_payloads
-from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
-from dlightrag.storage.web_conversations import CommitTurnResult, StoredConversationAttachment
+from dlightrag.storage.answer_runs import AnswerRunEvent, AnswerRunRecord
+from dlightrag.storage.web_conversations import LinkedTurn
 from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
-from dlightrag.web.conversation_models import (
-    ConversationAttachmentReference,
-    ConversationHistory,
-    ConversationSummary,
-    ConversationTurn,
-)
-from dlightrag.web.conversations import PreparedWebConversation
-from dlightrag.web.safe_html import safe_answer_done
+from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary
+from dlightrag.web.conversations import WebAnswerSubmission, project_conversation_turn
 
 MOCK_WORKSPACES = [
     {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"},
@@ -55,9 +46,55 @@ MOCK_WORKSPACES = [
 
 MOCK_WORKSPACE_LIST = ["default", "research"]
 
+ANSWER_TEXT = "DlightRAG is a multimodal RAG system."
+_ANSWER_TOKENS = ("DlightRAG is a ", "multimodal RAG system.")
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
+
+def _run_record(
+    run_id: str,
+    request: dict[str, Any],
+    *,
+    status: str,
+    result: dict[str, Any] | None = None,
+    cancel_requested: bool = False,
+) -> AnswerRunRecord:
+    now = datetime.now(UTC)
+    terminal = status in ("succeeded", "failed", "cancelled")
+    return AnswerRunRecord(
+        owner_id="e2e",
+        run_id=run_id,
+        idempotency_key=None,
+        request=request,
+        status=status,  # type: ignore[arg-type]
+        phase=None,
+        stop_reason=None,
+        completed_turns=0,
+        cancel_requested_at=now if cancel_requested else None,
+        lease_owner=None,
+        lease_expires_at=None,
+        fencing_epoch=0,
+        recovery_count=0,
+        next_event_sequence=1,
+        events_trimmed_at=None,
+        result=result,
+        error_kind=None,
+        error_message=None,
+        created_at=now,
+        updated_at=now,
+        started_at=None,
+        finished_at=now if terminal else None,
+    )
+
 
 class E2EConversationService:
-    """Resettable in-memory Web conversation service for browser-only tests."""
+    """Resettable in-memory Web conversation service for browser-only tests.
+
+    Mirrors the durable contract: one submission becomes one run plus its linked
+    turn, and every read projects that turn from the run's recorded state.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -66,6 +103,7 @@ class E2EConversationService:
     def reset(self) -> None:
         with self._lock:
             self._conversations: dict[str, dict[str, Any]] = {}
+            self._runs: dict[str, dict[str, Any]] = {}
 
     async def initialize(self) -> None:
         return None
@@ -84,11 +122,9 @@ class E2EConversationService:
         value = {
             "conversation_id": str(uuid4()),
             "title": None,
-            "content_revision": 0,
             "created_at": now,
             "updated_at": now,
             "turns": [],
-            "attachments": {},
         }
         with self._lock:
             self._conversations[value["conversation_id"]] = value
@@ -103,14 +139,16 @@ class E2EConversationService:
             )
             return [self._summary(value) for value in values]
 
-    async def history(self, _user: Any, conversation_id: str) -> ConversationHistory | None:
+    async def history(
+        self, _user: Any, conversation_id: str, **_: Any
+    ) -> ConversationHistory | None:
         with self._lock:
             value = self._conversations.get(conversation_id)
             if value is None:
                 return None
             return ConversationHistory(
                 conversation=self._summary(value),
-                turns=list(value["turns"]),
+                turns=[project_conversation_turn(turn) for turn in value["turns"]],
             )
 
     async def rename(
@@ -126,205 +164,213 @@ class E2EConversationService:
 
     async def delete(self, _user: Any, conversation_id: str) -> bool:
         with self._lock:
-            return self._conversations.pop(conversation_id, None) is not None
+            value = self._conversations.pop(conversation_id, None)
+            for turn in (value or {}).get("turns", []):
+                self._runs.pop(turn.run.run_id, None)
+            return value is not None
 
-    async def prepare_answer(
+    async def delete_all(self, _user: Any) -> int:
+        with self._lock:
+            count = len(self._conversations)
+            self._conversations.clear()
+            self._runs.clear()
+            return count
+
+    async def start_answer(
         self,
         _user: Any,
+        *,
         conversation_id: str,
-        submission_id: str | None = None,
-    ) -> PreparedWebConversation | None:
-        del submission_id
+        submission_id: str,
+        query: str,
+        workspaces: Any,
+        attachments: Any = (),
+    ) -> WebAnswerSubmission | None:
         with self._lock:
             value = self._conversations.get(conversation_id)
             if value is None:
                 return None
-            text_history: list[dict[str, Any]] = []
             for turn in value["turns"]:
-                text_history.extend(
-                    (
-                        {"role": "user", "content": turn.user_text},
-                        {"role": "assistant", "content": turn.assistant_text},
+                if turn.submission_id == submission_id:
+                    return WebAnswerSubmission(
+                        run=turn.run,
+                        turn_id=turn.turn_id,
+                        turn_number=turn.turn_number,
+                        conversation=self._summary(value),
+                        replayed=True,
                     )
-                )
-            return PreparedWebConversation(
-                principal_id="e2e",
-                conversation_id=conversation_id,
-                content_revision=value["content_revision"],
-                text_history=tuple(text_history),
+            run_id = str(uuid4())
+            request = {
+                "query": query,
+                "workspaces": list(workspaces),
+                "attachments": [
+                    {
+                        "digest": attachment.content_sha256,
+                        "filename": attachment.filename,
+                        "mime_type": attachment.mime_type,
+                        "ordinal": attachment.ordinal,
+                        "byte_size": attachment.byte_size,
+                    }
+                    for attachment in attachments
+                ],
+            }
+            turn = LinkedTurn(
+                turn_id=str(uuid4()),
+                turn_number=len(value["turns"]) + 1,
+                submission_id=submission_id,
+                created_at=datetime.now(UTC),
+                run=_run_record(run_id, request, status="queued"),
+            )
+            value["turns"].append(turn)
+            value["title"] = value["title"] or " ".join(query.split())[:120]
+            value["updated_at"] = datetime.now(UTC)
+            self._runs[run_id] = {
+                "conversation_id": conversation_id,
+                "bytes": {
+                    attachment.ordinal: (attachment.attachment_bytes, attachment.mime_type)
+                    for attachment in attachments
+                },
+            }
+            return WebAnswerSubmission(
+                run=turn.run,
+                turn_id=turn.turn_id,
+                turn_number=turn.turn_number,
+                conversation=self._summary(value),
+                replayed=False,
             )
 
-    def build_answer_resources(
-        self,
-        prepared: PreparedWebConversation,
-        current_attachments: tuple[Any, ...],
-    ) -> list[Any]:
-        del prepared, current_attachments
-        return []
-
-    async def attachment(
-        self, _user: Any, conversation_id: str, attachment_id: str
-    ) -> StoredConversationAttachment | None:
+    async def turn_for_run(self, _user: Any, run_id: str) -> LinkedTurn | None:
         with self._lock:
-            value = self._conversations.get(conversation_id)
-            if value is None:
-                return None
-            return value["attachments"].get(attachment_id)
+            return self._find_turn(run_id)
 
-    async def thumbnail(
-        self, _user: Any, conversation_id: str, attachment_id: str
-    ) -> tuple[bytes, str] | None:
-        stored = await self.attachment(_user, conversation_id, attachment_id)
-        if stored is None or not stored.mime_type.lower().startswith("image/"):
+    def _find_turn(self, run_id: str) -> LinkedTurn | None:
+        entry = self._runs.get(run_id)
+        if entry is None:
             return None
-        return stored.attachment_bytes, stored.mime_type
+        value = self._conversations.get(entry["conversation_id"])
+        if value is None:
+            return None
+        return next((turn for turn in value["turns"] if turn.run.run_id == run_id), None)
+
+    def finish_run(self, run_id: str, *, status: str = "succeeded") -> None:
+        """Record the terminal state a worker would have committed."""
+        with self._lock:
+            entry = self._runs.get(run_id)
+            if entry is None:
+                return
+            value = self._conversations[entry["conversation_id"]]
+            for index, turn in enumerate(value["turns"]):
+                if turn.run.run_id != run_id:
+                    continue
+                result = (
+                    {
+                        "answer": ANSWER_TEXT,
+                        "contexts": {"chunks": []},
+                        "sources": [],
+                        "answer_images": [],
+                        "trace": {},
+                        "image_descriptions": [],
+                    }
+                    if status == "succeeded"
+                    else None
+                )
+                value["turns"][index] = LinkedTurn(
+                    turn_id=turn.turn_id,
+                    turn_number=turn.turn_number,
+                    submission_id=turn.submission_id,
+                    created_at=turn.created_at,
+                    run=_run_record(run_id, turn.run.request, status=status, result=result),
+                )
+
+    async def attachment(self, _user: Any, run_id: str, ordinal: int) -> Any:
+        with self._lock:
+            entry = self._runs.get(run_id)
+            if entry is None or ordinal not in entry["bytes"]:
+                return None
+            turn = self._find_turn(run_id)
+            if turn is None:
+                return None
+            content, _mime = entry["bytes"][ordinal]
+        reference = next(
+            item for item in _request_attachments(turn.run.request) if item["ordinal"] == ordinal
+        )
+        return SimpleNamespace(
+            filename=reference["filename"], mime_type=reference["mime_type"]
+        ), content
+
+    async def thumbnail(self, user: Any, run_id: str, ordinal: int) -> tuple[bytes, str] | None:
+        stored = await self.attachment(user, run_id, ordinal)
+        if stored is None or not stored[0].mime_type.lower().startswith("image/"):
+            return None
+        return stored[1], stored[0].mime_type
 
     def seed_image_history(self, *, turn_count: int) -> str:
         """Create one long image conversation for browser loading probes."""
         conversation_id = str(uuid4())
         now = datetime.now(UTC)
-        png = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
-            "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
-        )
         value: dict[str, Any] = {
             "conversation_id": conversation_id,
             "title": "Image history",
-            "content_revision": turn_count,
             "created_at": now,
             "updated_at": now,
             "turns": [],
-            "attachments": {},
         }
         for index in range(1, turn_count + 1):
-            attachment_id = str(uuid4())
-            base_url = f"/web/conversations/{conversation_id}/attachments/{attachment_id}"
-            value["attachments"][attachment_id] = StoredConversationAttachment(
-                attachment_id=attachment_id,
-                filename="chart.png",
-                mime_type="image/png",
-                suffix=".png",
-                attachment_bytes=png,
-            )
+            run_id = str(uuid4())
+            request = {
+                "query": f"Image question {index}",
+                "workspaces": ["default"],
+                "attachments": [
+                    {
+                        "digest": f"{index:064d}",
+                        "filename": "chart.png",
+                        "mime_type": "image/png",
+                        "ordinal": 1,
+                        "byte_size": len(_PNG),
+                    }
+                ],
+            }
             value["turns"].append(
-                ConversationTurn(
+                LinkedTurn(
                     turn_id=str(uuid4()),
                     turn_number=index,
-                    user_text=f"Image question {index}",
-                    assistant_text=f"Image answer {index}",
-                    user_attachments=[
-                        ConversationAttachmentReference(
-                            attachment_id=attachment_id,
-                            ordinal=1,
-                            kind="image",
-                            filename="chart.png",
-                            mime_type="image/png",
-                            byte_size=len(png),
-                            url=base_url,
-                            thumbnail_url=base_url + "/thumbnail",
-                            label=f"Turn {index}, attachment 1",
-                        )
-                    ],
-                    answer_html=safe_answer_done(
-                        answer=f"Image answer {index}",
-                        sources=[],
-                        answer_images=[],
-                    ),
+                    submission_id=str(uuid4()),
                     created_at=now,
+                    run=_run_record(
+                        run_id,
+                        request,
+                        status="succeeded",
+                        result={
+                            "answer": f"Image answer {index}",
+                            "contexts": {"chunks": []},
+                            "sources": [],
+                            "answer_images": [],
+                            "trace": {},
+                            "image_descriptions": [],
+                        },
+                    ),
                 )
             )
+            self._runs[run_id] = {
+                "conversation_id": conversation_id,
+                "bytes": {1: (_PNG, "image/png")},
+            }
         with self._lock:
             self._conversations[conversation_id] = value
         return conversation_id
 
-    async def commit_answer(
-        self,
-        prepared: PreparedWebConversation,
-        *,
-        submission_id: str,
-        user_text: str,
-        assistant_text: str,
-        answer_sources: dict[str, Any],
-        queried_workspaces: list[str],
-        attachments: tuple[Any, ...] = (),
-    ) -> CommitTurnResult:
-        del submission_id
-        with self._lock:
-            value = self._conversations.get(prepared.conversation_id)
-            if value is None or value["content_revision"] != prepared.content_revision:
-                return CommitTurnResult(False, "conversation_changed", None, None)
-            now = datetime.now(UTC)
-            turn_number = len(value["turns"]) + 1
-            turn_id = str(uuid4())
-            attachment_references: list[ConversationAttachmentReference] = []
-            for attachment in attachments:
-                value["attachments"][attachment.attachment_id] = StoredConversationAttachment(
-                    attachment_id=attachment.attachment_id,
-                    filename=attachment.filename,
-                    mime_type=attachment.mime_type,
-                    suffix=attachment.suffix,
-                    attachment_bytes=attachment.attachment_bytes,
-                    content_sha256=attachment.content_sha256,
-                )
-                is_image = attachment.mime_type.lower().startswith("image/")
-                base_url = (
-                    f"/web/conversations/{prepared.conversation_id}/attachments/"
-                    f"{attachment.attachment_id}"
-                )
-                attachment_references.append(
-                    ConversationAttachmentReference(
-                        attachment_id=attachment.attachment_id,
-                        ordinal=attachment.ordinal,
-                        kind="image" if is_image else "document",
-                        filename=attachment.filename,
-                        mime_type=attachment.mime_type,
-                        byte_size=attachment.byte_size,
-                        url=base_url,
-                        thumbnail_url=(base_url + "/thumbnail") if is_image else None,
-                        label=f"Turn {turn_number}, attachment {attachment.ordinal}",
-                    )
-                )
-            internal_sources = load_answer_snapshot(answer_sources)
-            sources = project_source_payloads(
-                internal_sources,
-                resolver=SourceDownloadLinkBuilder(base_url="/web/files/raw"),
-            )
-            answer_images = answer_images_from_sources(internal_sources)
-            value["turns"].append(
-                ConversationTurn(
-                    turn_id=turn_id,
-                    turn_number=turn_number,
-                    user_text=user_text,
-                    assistant_text=assistant_text,
-                    user_attachments=attachment_references,
-                    answer_html=safe_answer_done(
-                        answer=assistant_text,
-                        sources=sources,
-                        answer_images=answer_images,
-                    ),
-                    created_at=now,
-                )
-            )
-            value["content_revision"] += 1
-            value["title"] = value["title"] or " ".join(user_text.split())[:120]
-            value["updated_at"] = now
-            summary = {
-                "conversation_id": prepared.conversation_id,
-                "title": value["title"],
-                "content_revision": value["content_revision"],
-                "created_at": value["created_at"],
-                "updated_at": value["updated_at"],
-            }
-            return CommitTurnResult(
-                saved=True,
-                reason=None,
-                summary=summary,
-                turn_id=turn_id,
-                current_attachment_ids=tuple(item.attachment_id for item in attachments),
-                assistant_text=assistant_text,
-                answer_sources=answer_sources,
-                queried_workspaces=tuple(queried_workspaces),
-            )
+
+def _request_attachments(request: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return list(request.get("attachments") or [])
+
+
+def _event(sequence: int, event_type: str, payload: dict[str, Any]) -> AnswerRunEvent:
+    return AnswerRunEvent(
+        sequence=sequence,
+        event_type=event_type,  # type: ignore[arg-type]
+        payload=payload,
+        created_at=datetime.now(UTC),
+    )
 
 
 def _free_port() -> int:
@@ -355,17 +401,41 @@ def e2e_base_url(
             image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
             max_attachments=6,
             max_attachment_bytes=100 * 1024 * 1024,
+            max_total_attachment_bytes=128 * 1024 * 1024,
         ),
     )
 
-    async def _token_stream() -> Any:
-        yield "DlightRAG is a "
-        yield "multimodal RAG system."
+    async def _events(*, owner_id: str, run_id: str, after_sequence: int = 0) -> Any:
+        """Replay this run's durable events from the caller's cursor.
 
-    async def _mock_answer_stream(*__: Any, **___: Any) -> Any:
-        return ({}, _token_stream())
+        The browser is the only consumer, so the whole log is short and
+        deterministic: two phases, the answer tokens, then the terminal event.
+        Resuming after a sequence never repeats an earlier frame.
+        """
+        del owner_id
+        log: list[AnswerRunEvent] = [
+            _event(1, "progress", {"phase": "planning"}),
+            _event(2, "progress", {"phase": "generating"}),
+            *(
+                _event(3 + index, "token", {"text": token})
+                for index, token in enumerate(_ANSWER_TOKENS)
+            ),
+        ]
+        e2e_conversation_service.finish_run(run_id)
+        turn = await e2e_conversation_service.turn_for_run(None, run_id)
+        result = dict(turn.run.result or {}) if turn is not None else {}
+        log.append(
+            _event(3 + len(_ANSWER_TOKENS), "done", {"status": "succeeded", "result": result})
+        )
 
-    manager._aanswer_stream_prepared.side_effect = _mock_answer_stream
+        async def _iterate() -> Any:
+            for event in log:
+                if event.sequence > after_sequence:
+                    yield event
+
+        return _iterate()
+
+    manager.asubscribe_answer_run.side_effect = _events
     manager.answer_image_capability = AnswerImageCapability(
         status="supported",
         configured_ceiling=3,

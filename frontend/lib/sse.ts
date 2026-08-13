@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-export type SSEEventHandler = (eventType: string, data: string) => void;
+export type SSEEventHandler = (eventType: string, data: string, id: string) => void;
 
 interface SSEParser {
   push(chunk: string): void;
@@ -18,12 +18,14 @@ export function parseData(data: string): unknown {
 export function createSSEParser(onEvent: SSEEventHandler): SSEParser {
   let buffer = '';
   let eventType = '';
+  let eventId = '';
   const dataParts: string[] = [];
 
   function dispatch(): void {
     if (dataParts.length === 0) return;
-    onEvent(eventType || 'message', dataParts.join('\n'));
+    onEvent(eventType || 'message', dataParts.join('\n'), eventId);
     eventType = '';
+    eventId = '';
     dataParts.length = 0;
   }
 
@@ -31,10 +33,10 @@ export function createSSEParser(onEvent: SSEEventHandler): SSEParser {
     const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
     if (line === '') {
       dispatch();
-    } else if (line.startsWith('event: ')) {
-      eventType = line.slice(7).trim();
     } else if (line.startsWith('event:')) {
       eventType = line.slice(6).trim();
+    } else if (line.startsWith('id:')) {
+      eventId = line.slice(3).trim();
     } else if (line.startsWith('data: ')) {
       dataParts.push(line.slice(6));
     } else if (line.startsWith('data:')) {

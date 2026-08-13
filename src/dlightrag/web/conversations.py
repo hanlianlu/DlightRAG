@@ -1,9 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Principal-scoped service adapter for durable Web conversations."""
+"""Principal-scoped service adapter for durable Web conversations.
+
+A conversation owns navigation and history only. One browser submission becomes
+one durable Answer run plus the conversation entry that links to it, committed
+together before the 202 response. Every read projects a turn from the run's
+authoritative state, so no answer text, source snapshot, or uploaded byte is
+stored a second time under the conversation.
+"""
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -12,18 +19,23 @@ import asyncpg
 
 from dlightrag.api.auth import UserContext
 from dlightrag.api.principal import owner_id_from_user
-from dlightrag.core.answer.media import answer_images_from_sources
-from dlightrag.core.answer_runs.snapshots import load_answer_snapshot
-from dlightrag.core.client_payloads import project_source_payloads
-from dlightrag.core.resources.models import ResourceInput
+from dlightrag.core.answer_runs.execution import AnswerRunInput, AttachmentReference
+from dlightrag.core.answer_runs.results import project_answer_result
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
+from dlightrag.storage.answer_runs import (
+    AnswerRunRecord,
+    PendingArtifact,
+    PendingArtifactReference,
+    PGAnswerRunStore,
+    artifact_digest,
+)
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
-    CommitTurnResult,
+    AnswerTurnCreation,
     ConversationSnapshot,
-    PendingConversationAttachment,
+    ConversationSubmissionConflict,
+    LinkedTurn,
     PGWebConversationStore,
-    StoredConversationAttachment,
 )
 from dlightrag.utils.images import thumbnail_bytes
 from dlightrag.web.attachment_models import ValidatedWebAttachment
@@ -37,10 +49,6 @@ from dlightrag.web.safe_html import safe_answer_done
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
-_COMMIT_ATTEMPT_TIMEOUT_SECONDS = 45.0
-_RECONCILE_ATTEMPT_TIMEOUT_SECONDS = 10.0
-_RECONCILE_ATTEMPTS = 2
-_RECONCILE_BACKOFF_SECONDS = 0.25
 _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS = (
     *POSTGRES_UNAVAILABLE_EXCEPTIONS,
     asyncpg.InterfaceError,
@@ -52,6 +60,9 @@ _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
 _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
+
+#: Browser answer sources are served through the Web-scoped download route.
+WEB_SOURCE_DOWNLOAD_BASE = "/web/files/raw"
 
 
 def _is_image_mime(mime_type: str | None) -> bool:
@@ -65,16 +76,14 @@ class WebConversationUnavailableError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedWebConversation:
-    principal_id: str
-    conversation_id: str
-    content_revision: int
-    text_history: tuple[dict[str, Any], ...]
-    committed_submission: CommitTurnResult | None = None
-    # Compact manifest of prior attachments (id, ordinal, filename, mime,
-    # byte_size). Registered as lazy authorized resources each answer; bytes load
-    # only when the model reads/inspects one by id.
-    attachment_manifest: tuple[dict[str, Any], ...] = ()
+class WebAnswerSubmission:
+    """The run and conversation entry one accepted browser submission created."""
+
+    run: AnswerRunRecord
+    turn_id: str
+    turn_number: int
+    conversation: ConversationSummary
+    replayed: bool
 
 
 class WebConversationService:
@@ -84,12 +93,14 @@ class WebConversationService:
         self,
         *,
         store: PGWebConversationStore,
+        run_store: PGAnswerRunStore | None = None,
         max_turns: int,
         ttl_days: int,
         max_attachments: int,
         validate_schema_only: bool = False,
     ) -> None:
         self._store = store
+        self._run_store = run_store or PGAnswerRunStore()
         self._max_turns = max_turns
         self._ttl_days = ttl_days
         self._max_attachments = max_attachments
@@ -133,6 +144,10 @@ class WebConversationService:
         with suppress(asyncio.CancelledError):
             await task
 
+    # ------------------------------------------------------------------
+    # Conversation lifecycle
+    # ------------------------------------------------------------------
+
     async def create(self, user: UserContext | None) -> ConversationSummary:
         principal_id = owner_id_from_user(user)
         row = await self._store_call(self._store.create_conversation(principal_id))
@@ -147,32 +162,6 @@ class WebConversationService:
             )
         )
         return [_conversation_summary(row) for row in rows]
-
-    async def history(
-        self,
-        user: UserContext | None,
-        conversation_id: str,
-        *,
-        downloadable_workspaces: set[str] | None = None,
-        visual_workspaces: set[str] | None = None,
-    ) -> ConversationHistory | None:
-        principal_id = owner_id_from_user(user)
-        snapshot = await self._snapshot(principal_id, conversation_id)
-        if snapshot is None:
-            return None
-
-        return ConversationHistory(
-            conversation=_snapshot_summary(snapshot),
-            turns=[
-                _conversation_turn(
-                    conversation_id,
-                    row,
-                    downloadable_workspaces=downloadable_workspaces,
-                    visual_workspaces=visual_workspaces,
-                )
-                for row in snapshot.history
-            ],
-        )
 
     async def rename(
         self,
@@ -191,11 +180,7 @@ class WebConversationService:
         )
         return _conversation_summary(row) if row is not None else None
 
-    async def delete(
-        self,
-        user: UserContext | None,
-        conversation_id: str,
-    ) -> bool:
+    async def delete(self, user: UserContext | None, conversation_id: str) -> bool:
         principal_id = owner_id_from_user(user)
         return await self._store_call(
             self._store.delete_conversation(
@@ -209,143 +194,80 @@ class WebConversationService:
         principal_id = owner_id_from_user(user)
         return await self._store_call(self._store.delete_all_conversations(principal_id))
 
-    async def prepare_answer(
+    # ------------------------------------------------------------------
+    # Reads
+    # ------------------------------------------------------------------
+
+    async def history(
         self,
         user: UserContext | None,
         conversation_id: str,
-        submission_id: str | None = None,
-    ) -> PreparedWebConversation | None:
+        *,
+        downloadable_workspaces: set[str] | None = None,
+        visual_workspaces: set[str] | None = None,
+    ) -> ConversationHistory | None:
+        """Project every linked turn from its run's authoritative state."""
         principal_id = owner_id_from_user(user)
         snapshot = await self._snapshot(principal_id, conversation_id)
         if snapshot is None:
             return None
-        text_history: list[dict[str, Any]] = []
-        attachment_manifest: list[dict[str, Any]] = []
-        for turn in snapshot.history:
-            text_history.extend(
-                (
-                    {"role": "user", "content": str(turn["user_text"])},
-                    {"role": "assistant", "content": str(turn["assistant_text"])},
+        return ConversationHistory(
+            conversation=_snapshot_summary(snapshot),
+            turns=[
+                project_conversation_turn(
+                    turn,
+                    downloadable_workspaces=downloadable_workspaces,
+                    visual_workspaces=visual_workspaces,
                 )
-            )
-            for attachment in turn.get("attachments") or []:
-                attachment_manifest.append(
-                    {
-                        "attachment_id": str(attachment["attachment_id"]),
-                        "turn_number": turn.get("turn_number"),
-                        "ordinal": attachment.get("ordinal"),
-                        "filename": attachment.get("filename"),
-                        "mime_type": attachment.get("mime_type"),
-                        "byte_size": attachment.get("byte_size"),
-                    }
-                )
-        committed_submission = None
-        if submission_id is not None:
-            try:
-                async with asyncio.timeout(_RECONCILE_ATTEMPT_TIMEOUT_SECONDS):
-                    committed_submission = await self._store.find_committed_turn(
-                        principal_id,
-                        conversation_id,
-                        submission_id,
-                        ttl_days=self._ttl_days,
-                        retry=False,
-                    )
-            except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS as exc:
-                raise WebConversationUnavailableError from exc
-        return PreparedWebConversation(
-            principal_id=principal_id,
-            conversation_id=snapshot.conversation_id,
-            content_revision=snapshot.content_revision,
-            text_history=tuple(text_history),
-            committed_submission=committed_submission,
-            attachment_manifest=tuple(attachment_manifest),
+                for turn in snapshot.turns
+            ],
         )
 
-    def build_answer_resources(
-        self,
-        prepared: PreparedWebConversation,
-        current_attachments: tuple[ValidatedWebAttachment, ...],
-    ) -> list[ResourceInput]:
-        """Build the ordered request resources for one answer.
-
-        Current-turn attachments carry inline bytes (the manager extracts verified
-        images into current-image blocks and registers documents). Prior
-        attachments are compact manifest entries registered as lazy authorized
-        resources whose bytes load only when the model reads/inspects them.
-        """
-        resources: list[ResourceInput] = [
-            ResourceInput(
-                filename=attachment.filename,
-                content=attachment.attachment_bytes,
-                declared_mime=attachment.mime_type,
-            )
-            for attachment in current_attachments
-        ]
-        remaining = max(0, self._max_attachments - len(resources))
-        history = list(prepared.attachment_manifest)[-remaining:] if remaining else []
-        for entry in history:
-            resources.append(
-                ResourceInput(
-                    filename=entry.get("filename"),
-                    declared_mime=entry.get("mime_type"),
-                    loader=self._history_loader(
-                        prepared.principal_id,
-                        prepared.conversation_id,
-                        str(entry["attachment_id"]),
-                    ),
-                )
-            )
-        return resources
-
-    def _history_loader(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        attachment_id: str,
-    ) -> Callable[[], Awaitable[bytes]]:
-        async def _load() -> bytes:
-            stored = await self._store.get_attachment(
-                principal_id,
-                conversation_id,
-                attachment_id,
-                ttl_days=self._ttl_days,
-            )
-            if stored is None:
-                raise FileNotFoundError(f"attachment {attachment_id} is unavailable")
-            return stored.attachment_bytes
-
-        return _load
+    async def turn_for_run(self, user: UserContext | None, run_id: str) -> LinkedTurn | None:
+        """Return the conversation entry an owned run belongs to, if any."""
+        principal_id = owner_id_from_user(user)
+        return await self._store_call(self._store.find_turn_by_run(principal_id, run_id))
 
     async def attachment(
         self,
         user: UserContext | None,
-        conversation_id: str,
-        attachment_id: str,
-    ) -> StoredConversationAttachment | None:
+        run_id: str,
+        ordinal: int,
+    ) -> tuple[AttachmentReference, bytes] | None:
+        """Load one owned run's uploaded attachment bytes by its ordinal."""
         principal_id = owner_id_from_user(user)
-        return await self._store_call(
-            self._store.get_attachment(
-                principal_id,
-                conversation_id,
-                attachment_id,
-                ttl_days=self._ttl_days,
-            )
+        turn = await self.turn_for_run(user, run_id)
+        if turn is None:
+            return None
+        reference = next(
+            (
+                item
+                for item in AnswerRunInput.from_request(turn.run.request).attachments
+                if item.ordinal == ordinal
+            ),
+            None,
         )
+        if reference is None:
+            return None
+        content = await self._store_call(
+            self._run_store.load_artifact(owner_id=principal_id, digest=reference.digest)
+        )
+        return None if content is None else (reference, content)
 
     async def thumbnail(
         self,
         user: UserContext | None,
-        conversation_id: str,
-        attachment_id: str,
+        run_id: str,
+        ordinal: int,
     ) -> tuple[bytes, str] | None:
         """Derive one bounded UI thumbnail for an image attachment."""
-        stored = await self.attachment(user, conversation_id, attachment_id)
-        if stored is None or not _is_image_mime(stored.mime_type):
+        stored = await self.attachment(user, run_id, ordinal)
+        if stored is None or not _is_image_mime(stored[0].mime_type):
             return None
         try:
             payload, mime_type = await asyncio.to_thread(
                 thumbnail_bytes,
-                stored.attachment_bytes,
+                stored[1],
                 max_px=_HISTORY_THUMBNAIL_MAX_PX,
                 max_bytes=_HISTORY_THUMBNAIL_MAX_BYTES,
                 quality=_HISTORY_THUMBNAIL_QUALITY,
@@ -357,95 +279,54 @@ class WebConversationService:
             return None
         return payload, mime_type
 
-    async def commit_answer(
-        self,
-        prepared: PreparedWebConversation,
-        *,
-        submission_id: str,
-        user_text: str,
-        assistant_text: str,
-        answer_sources: dict[str, Any],
-        queried_workspaces: list[str],
-        attachments: tuple[ValidatedWebAttachment, ...] = (),
-    ) -> CommitTurnResult:
-        """Atomically append a completed answer against its captured revision."""
-        pending_attachments = [
-            PendingConversationAttachment(
-                attachment_id=attachment.attachment_id,
-                ordinal=attachment.ordinal,
-                filename=attachment.filename,
-                mime_type=attachment.mime_type,
-                suffix=attachment.suffix,
-                attachment_bytes=attachment.attachment_bytes,
-                content_sha256=attachment.content_sha256,
-            )
-            for attachment in attachments
-        ]
-        try:
-            async with asyncio.timeout(_COMMIT_ATTEMPT_TIMEOUT_SECONDS):
-                return await self._store.commit_turn(
-                    principal_id=prepared.principal_id,
-                    conversation_id=prepared.conversation_id,
-                    submission_id=submission_id,
-                    expected_revision=prepared.content_revision,
-                    user_text=user_text,
-                    assistant_text=assistant_text,
-                    answer_sources=answer_sources,
-                    queried_workspaces=queried_workspaces,
-                    attachments=pending_attachments,
-                    max_turns=self._max_turns,
-                    ttl_days=self._ttl_days,
-                )
-        except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS:
-            return await self._reconcile_commit(prepared, submission_id)
+    # ------------------------------------------------------------------
+    # Submission
+    # ------------------------------------------------------------------
 
-    async def update_answer_highlights(
+    async def start_answer(
         self,
-        prepared: PreparedWebConversation,
+        user: UserContext | None,
         *,
+        conversation_id: str,
         submission_id: str,
-        answer_sources: dict[str, Any],
-    ) -> None:
-        """Persist semantic highlights into a committed turn's stored sources.
+        query: str,
+        workspaces: Sequence[str],
+        attachments: Sequence[ValidatedWebAttachment] = (),
+    ) -> WebAnswerSubmission | None:
+        """Create or replay one submission's run and its conversation entry.
 
-        Best-effort: highlights are a display enhancement computed after the
-        turn is committed, so a failure here must never affect the answer.
+        The conversation is validated and locked, and the run, its uploaded
+        bytes, and the linked turn are written in one transaction, so the
+        descriptor returned here is already durable history.
         """
-        try:
-            async with asyncio.timeout(_COMMIT_ATTEMPT_TIMEOUT_SECONDS):
-                await self._store.update_turn_sources(
-                    principal_id=prepared.principal_id,
-                    conversation_id=prepared.conversation_id,
-                    submission_id=submission_id,
-                    answer_sources=answer_sources,
-                )
-        except Exception:
-            logger.warning("Failed to persist semantic highlights", exc_info=True)
-
-    async def _reconcile_commit(
-        self,
-        prepared: PreparedWebConversation,
-        submission_id: str,
-    ) -> CommitTurnResult:
-        """Resolve an ambiguous mutation through a short, one-shot lookup budget."""
-        for attempt in range(_RECONCILE_ATTEMPTS):
-            try:
-                async with asyncio.timeout(_RECONCILE_ATTEMPT_TIMEOUT_SECONDS):
-                    committed = await self._store.find_committed_turn(
-                        prepared.principal_id,
-                        prepared.conversation_id,
-                        submission_id,
-                        ttl_days=self._ttl_days,
-                        retry=False,
-                    )
-            except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS:
-                if attempt + 1 < _RECONCILE_ATTEMPTS:
-                    await asyncio.sleep(_RECONCILE_BACKOFF_SECONDS)
-                continue
-            if committed is not None:
-                return committed
-            return CommitTurnResult(False, "commit_not_found", None, None)
-        return CommitTurnResult(False, "commit_outcome_unknown", None, None)
+        principal_id = owner_id_from_user(user)
+        snapshot = await self._snapshot(principal_id, conversation_id)
+        if snapshot is None:
+            return None
+        run_input = _answer_run_input(
+            query=query,
+            workspaces=workspaces,
+            snapshot=snapshot,
+            attachments=attachments,
+            max_attachments=self._max_attachments,
+        )
+        creation = await self._store_call(
+            self._store.create_answer_turn(
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                submission_id=submission_id,
+                request=run_input.as_request(),
+                artifacts=[
+                    PendingArtifact(content=attachment.attachment_bytes)
+                    for attachment in attachments
+                ],
+                references=_artifact_references(run_input),
+                title_hint=_auto_title(query),
+                max_turns=self._max_turns,
+                ttl_days=self._ttl_days,
+            )
+        )
+        return None if creation is None else _submission(creation)
 
     async def _snapshot(
         self,
@@ -468,6 +349,160 @@ class WebConversationService:
             raise WebConversationUnavailableError from exc
 
 
+# ---------------------------------------------------------------------------
+# Projection
+# ---------------------------------------------------------------------------
+
+
+def _auto_title(query: str) -> str | None:
+    return " ".join(query.split())[:120] or None
+
+
+def _submission(creation: AnswerTurnCreation) -> WebAnswerSubmission:
+    return WebAnswerSubmission(
+        run=creation.turn.run,
+        turn_id=creation.turn.turn_id,
+        turn_number=creation.turn.turn_number,
+        conversation=_conversation_summary(creation.summary),
+        replayed=creation.replayed,
+    )
+
+
+def _artifact_references(run_input: AnswerRunInput) -> list[PendingArtifactReference]:
+    """Order this run's current and carried-forward attachment references."""
+    references = [
+        PendingArtifactReference(
+            resource_id=attachment.resource_id,
+            reference_kind="current_attachment",
+            ordinal=attachment.ordinal,
+            digest=attachment.digest,
+            filename=attachment.filename,
+            mime_type=attachment.mime_type,
+        )
+        for attachment in run_input.attachments
+    ]
+    references.extend(
+        PendingArtifactReference(
+            resource_id=attachment.history_resource_id,
+            reference_kind="history_attachment",
+            ordinal=attachment.ordinal,
+            digest=attachment.digest,
+            filename=attachment.filename,
+            mime_type=attachment.mime_type,
+        )
+        for attachment in run_input.history_attachments
+    )
+    return references
+
+
+def _answer_run_input(
+    *,
+    query: str,
+    workspaces: Sequence[str],
+    snapshot: ConversationSnapshot,
+    attachments: Sequence[ValidatedWebAttachment],
+    max_attachments: int,
+) -> AnswerRunInput:
+    """Normalize one browser submission into the run's immutable input.
+
+    Only succeeded turns become model history, and only their uploads stay
+    readable as prior resources: a pending, failed, or cancelled turn remains
+    visible in the browser but is never replayed to the model.
+    """
+    history: list[dict[str, Any]] = []
+    prior: list[AttachmentReference] = []
+    for turn in snapshot.turns:
+        if turn.run.status != "succeeded":
+            continue
+        request = AnswerRunInput.from_request(turn.run.request)
+        history.extend(
+            (
+                {"role": "user", "content": request.query},
+                {"role": "assistant", "content": str((turn.run.result or {}).get("answer") or "")},
+            )
+        )
+        prior.extend(request.attachments)
+    remaining = max(0, max_attachments - len(attachments))
+    carried = prior[-remaining:] if remaining else []
+    return AnswerRunInput(
+        query=query,
+        workspaces=tuple(workspaces),
+        history=tuple(history),
+        semantic_highlights=True,
+        attachments=tuple(
+            AttachmentReference(
+                digest=artifact_digest(attachment.attachment_bytes),
+                filename=attachment.filename,
+                mime_type=attachment.mime_type,
+                ordinal=attachment.ordinal,
+                byte_size=attachment.byte_size,
+            )
+            for attachment in attachments
+        ),
+        history_attachments=tuple(
+            AttachmentReference(
+                digest=item.digest,
+                filename=item.filename,
+                mime_type=item.mime_type,
+                ordinal=ordinal,
+                byte_size=item.byte_size,
+            )
+            for ordinal, item in enumerate(carried)
+        ),
+    )
+
+
+def project_conversation_turn(
+    turn: LinkedTurn,
+    *,
+    downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
+) -> ConversationTurn:
+    """Render one linked turn from the authoritative state of its run.
+
+    A queued or running turn is a pending entry carrying its run id and
+    cancellation state, so a reloaded browser resubscribes without remembering
+    the original 202 response. A failed or cancelled turn stays visible with its
+    public terminal state until its run prunes. Only a succeeded turn carries an
+    answer, and that answer is projected from the run's canonical result.
+    """
+    run = turn.run
+    request = AnswerRunInput.from_request(run.request)
+    answer = ""
+    answer_html = ""
+    if run.status == "succeeded" and run.result is not None:
+        projected = project_answer_result(
+            run.result,
+            source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
+            downloadable_workspaces=downloadable_workspaces,
+            visual_workspaces=visual_workspaces,
+        )
+        answer = str(projected["answer"])
+        answer_html = safe_answer_done(
+            answer=answer,
+            sources=projected["sources"],
+            answer_images=projected["answer_images"],
+        )
+    return ConversationTurn(
+        turn_id=turn.turn_id,
+        turn_number=turn.turn_number,
+        answer_run_id=run.run_id,
+        submission_id=turn.submission_id,
+        status=run.status,
+        cancel_requested=run.cancel_requested,
+        user_text=request.query,
+        assistant_text=answer,
+        user_attachments=[
+            _attachment_reference(run.run_id, turn.turn_number, attachment)
+            for attachment in request.attachments
+        ],
+        answer_html=answer_html,
+        error_kind=run.error_kind,
+        error_message=run.error_message,
+        created_at=turn.created_at,
+    )
+
+
 def _conversation_summary(row: dict[str, Any]) -> ConversationSummary:
     return ConversationSummary(
         conversation_id=str(row["conversation_id"]),
@@ -486,70 +521,31 @@ def _snapshot_summary(snapshot: ConversationSnapshot) -> ConversationSummary:
     )
 
 
-def _conversation_turn(
-    conversation_id: str,
-    row: dict[str, Any],
-    *,
-    downloadable_workspaces: set[str] | None = None,
-    visual_workspaces: set[str] | None = None,
-) -> ConversationTurn:
-    turn_number = int(row["turn_number"])
-    attachments = [
-        _attachment_reference(conversation_id, turn_number, attachment)
-        for attachment in row.get("attachments", [])
-    ]
-    internal_sources = load_answer_snapshot(row.get("answer_sources") or {"sources": []})
-    sources = project_source_payloads(
-        internal_sources,
-        resolver=SourceDownloadLinkBuilder(base_url="/web/files/raw"),
-        downloadable_workspaces=downloadable_workspaces,
-        visual_workspaces=visual_workspaces,
-    )
-    answer_images = answer_images_from_sources(
-        internal_sources,
-        visual_workspaces=visual_workspaces,
-    )
-    assistant_text = str(row["assistant_text"])
-    return ConversationTurn(
-        turn_id=str(row["turn_id"]),
-        turn_number=turn_number,
-        user_text=str(row["user_text"]),
-        assistant_text=assistant_text,
-        user_attachments=attachments,
-        answer_html=safe_answer_done(
-            answer=assistant_text,
-            sources=sources,
-            answer_images=answer_images,
-        ),
-        created_at=row["created_at"],
-    )
-
-
 def _attachment_reference(
-    conversation_id: str,
+    run_id: str,
     turn_number: int,
-    attachment: dict[str, Any],
+    attachment: AttachmentReference,
 ) -> ConversationAttachmentReference:
-    attachment_id = str(attachment["attachment_id"])
-    ordinal = int(attachment["ordinal"])
-    mime_type = str(attachment["mime_type"])
-    is_image = _is_image_mime(mime_type)
-    url = f"/web/conversations/{conversation_id}/attachments/{attachment_id}"
+    is_image = _is_image_mime(attachment.mime_type)
+    url = f"/web/runs/{run_id}/attachments/{attachment.ordinal}"
     return ConversationAttachmentReference(
-        attachment_id=attachment_id,
-        ordinal=ordinal,
+        attachment_id=f"{run_id}:{attachment.ordinal}",
+        ordinal=attachment.ordinal,
         kind="image" if is_image else "document",
-        filename=str(attachment["filename"]),
-        mime_type=mime_type,
-        byte_size=int(attachment["byte_size"]),
+        filename=attachment.filename,
+        mime_type=attachment.mime_type,
+        byte_size=attachment.byte_size,
         url=url,
         thumbnail_url=(url + "/thumbnail") if is_image else None,
-        label=f"Turn {turn_number}, attachment {ordinal}",
+        label=f"Turn {turn_number}, attachment {attachment.ordinal}",
     )
 
 
 __all__ = [
-    "PreparedWebConversation",
+    "WEB_SOURCE_DOWNLOAD_BASE",
+    "ConversationSubmissionConflict",
+    "WebAnswerSubmission",
     "WebConversationService",
     "WebConversationUnavailableError",
+    "project_conversation_turn",
 ]

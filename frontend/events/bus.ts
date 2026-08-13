@@ -16,7 +16,6 @@ export interface DlightragEvents {
   conversationListChanged: (payload: { conversations: readonly ConversationSummary[] }) => void;
   conversationSelected: (payload: { conversationId: string | null }) => void;
   conversationAnswerSaved: (payload: { conversationId: string }) => void;
-  conversationSaveCheckRequested: (payload: { conversationId: string }) => void;
   conversationDeferredSelectionReady: (payload: { conversationId: string }) => void;
   conversationStreamChanged: (payload: { active: boolean }) => void;
   ingestWorkspaceChanged: (payload: { workspace: string }) => void;

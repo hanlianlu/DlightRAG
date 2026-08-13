@@ -3,42 +3,53 @@
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';
-import {streamSSE} from '../lib/sse.ts';
+import {createSSEParser} from '../lib/sse.ts';
 import {buildAnswerRequest} from '../lib/answer_request.ts';
-import type {ConversationAttachmentReference} from '../api/conversations.ts';
+import {cancelAnswerRun, getAnswerRun} from '../api/conversations.ts';
+import type {
+    AnswerRunDescriptor,
+    ConversationAttachmentReference,
+    ConversationTurn,
+} from '../api/conversations.ts';
 import {
     createAnswerRenderer,
     createChatTurn,
-    markAnswerStopped,
-    renderAnswerSaveOutcome,
+    markAnswerPending,
+    renderStoredTurn,
     setAnswerError,
 } from '../lib/chat_renderer.ts';
+import type {ChatTurn} from '../lib/chat_renderer.ts';
 import {bus} from '../events/bus.ts';
-import {
-    isDefinitiveSaveOutcome,
-    describeConversationSaveOutcome,
-    payloadFingerprint,
-    pendingSubmissionStore,
-    shouldKeepLiveConversation,
-} from '../stores/pendingSubmissionStore.ts';
+import {answerRunStore, payloadFingerprint} from '../stores/answerRunStore.ts';
+
+// A dropped connection is a transport fault, never a decision about the run, so
+// the browser reattaches from its last durable sequence a bounded number of
+// times before falling back to the run's stored state.
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAY_MS = 500;
 
 let queryInFlight = false;
 let queryStopping = false;
-let currentQueryController: AbortController | null = null;
+// Detaches this tab's event reader. It never cancels the run: only the explicit
+// Stop action does that, through the durable cancel endpoint.
+let currentFollowController: AbortController | null = null;
+let currentRunId: string | null = null;
 
-/** Abort the in-flight answer request (user stop / navigation), if any. */
+/** Ask the server to stop the run this tab is following. */
 export function cancelQuery(): void {
-    if (currentQueryController && !currentQueryController.signal.aborted) {
-        queryStopping = true;
-        currentQueryController.abort(new DOMException('Query cancelled', 'AbortError'));
-    }
+    const runId = currentRunId;
+    if (!runId || queryStopping) return;
+    queryStopping = true;
+    void cancelAnswerRun(runId).catch(function() {
+        queryStopping = false;
+    });
 }
 
 export function isQueryInFlight(): boolean {
     return queryInFlight;
 }
 
-/** User pressed Stop — abort was sent, waiting for stream cleanup. */
+/** User pressed Stop — cancellation was requested, waiting for the run to end. */
 export function isQueryStopping(): boolean {
     return queryStopping;
 }
@@ -49,6 +60,152 @@ function submitComposerForm(form: HTMLFormElement): void {
 
 function isLineBreakInput(e: InputEvent): boolean {
     return e.inputType === 'insertLineBreak';
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+/**
+ * Follow one durable run until it reaches a terminal event.
+ *
+ * Reconnects resume after the last durable sequence this tab consumed, so no
+ * event is replayed twice and none is skipped. Aborting only detaches, and the
+ * returned flag reports whether the run actually finished.
+ */
+async function followAnswerRun(
+    turn: ChatTurn,
+    conversationId: string,
+    runId: string,
+    controller: AbortController,
+): Promise<boolean> {
+    const renderer = createAnswerRenderer(turn);
+    for (let attempt = 0; attempt <= MAX_RECONNECT_ATTEMPTS; attempt += 1) {
+        if (controller.signal.aborted) return false;
+        const after = answerRunStore.lastSequence(conversationId, runId);
+        let response: Response;
+        try {
+            response = await fetch(`/web/answer/${encodeURIComponent(runId)}/events`, {
+                signal: controller.signal,
+                headers: after > 0 ? {'Last-Event-ID': String(after)} : undefined,
+            });
+        } catch (error) {
+            if (controller.signal.aborted) return false;
+            if (attempt === MAX_RECONNECT_ATTEMPTS) throw error;
+            await sleep(RECONNECT_DELAY_MS);
+            continue;
+        }
+        if (response.status === 410 || response.status === 404) break;
+        if (!response.ok) {
+            setAnswerError(turn, 'Service error. Please try again.');
+            return true;
+        }
+        try {
+            await readAnswerEvents(response, conversationId, runId, renderer);
+        } catch (error) {
+            if (controller.signal.aborted) return false;
+            if (attempt === MAX_RECONNECT_ATTEMPTS) throw error;
+            await sleep(RECONNECT_DELAY_MS);
+            continue;
+        }
+        if (renderer.terminal) return true;
+        if (attempt === MAX_RECONNECT_ATTEMPTS) break;
+        await sleep(RECONNECT_DELAY_MS);
+    }
+    // The event log was trimmed or the stream ended without a terminal event;
+    // the run row stays authoritative.
+    if (controller.signal.aborted) return false;
+    try {
+        const stored = await getAnswerRun(runId);
+        renderStoredTurn(turn, stored);
+        return stored.status !== 'queued' && stored.status !== 'running';
+    } catch (_) {
+        setAnswerError(turn, 'Service error. Please try again.');
+        return true;
+    }
+}
+
+async function readAnswerEvents(
+    response: Response,
+    conversationId: string,
+    runId: string,
+    renderer: ReturnType<typeof createAnswerRenderer>,
+): Promise<void> {
+    if (!response.body) throw new Error('Response body is not streamable');
+    const parser = createSSEParser(function(eventType, data, id) {
+        const sequence = Number(id);
+        if (Number.isFinite(sequence) && sequence > 0) {
+            if (sequence <= answerRunStore.lastSequence(conversationId, runId)) return;
+            answerRunStore.recordSequence(conversationId, runId, sequence);
+        }
+        if (conversationStore.activeConversationId !== conversationId) return;
+        renderer.handle(eventType, data);
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+        while (true) {
+            const result = await reader.read();
+            if (result.done) break;
+            parser.push(decoder.decode(result.value, {stream: true}));
+        }
+        parser.push(decoder.decode());
+        parser.flush();
+    } finally {
+        // Release the underlying connection on any exit (completion, error, abort).
+        reader.cancel().catch(() => {});
+    }
+}
+
+/** Reattach to a pending turn discovered from conversation history. */
+export async function resumePendingTurn(
+    turn: ChatTurn,
+    conversationId: string,
+    stored: ConversationTurn,
+): Promise<void> {
+    if (queryInFlight) return;
+    answerRunStore.trackRun(conversationId, stored.answer_run_id);
+    const controller = new AbortController();
+    beginFollowing(controller, stored.answer_run_id, stored.cancel_requested);
+    let finished = false;
+    try {
+        finished = await followAnswerRun(turn, conversationId, stored.answer_run_id, controller);
+    } catch (_) {
+        setAnswerError(turn, 'Connection error. Please try again.');
+        finished = true;
+    } finally {
+        endFollowing(controller, conversationId, finished);
+    }
+}
+
+function beginFollowing(
+    controller: AbortController,
+    runId: string,
+    cancelRequested: boolean,
+): void {
+    queryInFlight = true;
+    queryStopping = cancelRequested;
+    currentFollowController = controller;
+    currentRunId = runId;
+    bus.emit('conversationStreamChanged', {active: true});
+}
+
+function endFollowing(
+    controller: AbortController,
+    conversationId: string,
+    finished: boolean,
+): void {
+    if (currentFollowController !== controller) return;
+    currentFollowController = null;
+    currentRunId = null;
+    queryInFlight = false;
+    queryStopping = false;
+    bus.emit('conversationStreamChanged', {active: false});
+    if (!finished) return;
+    // A finished run retires its submission key, so asking the same question
+    // again is a new run rather than a replay of this one.
+    answerRunStore.clear(conversationId);
+    bus.emit('conversationAnswerSaved', {conversationId});
 }
 
 export async function submitQuery(query: string): Promise<void> {
@@ -72,7 +229,7 @@ export async function submitQuery(query: string): Promise<void> {
     };
 
     const controller = new AbortController();
-    currentQueryController = controller;
+    let finished = false;
 
     const pendingAttachments = getPendingAttachments();
     // Render the just-submitted attachments in the user bubble from fresh object
@@ -117,7 +274,7 @@ export async function submitQuery(query: string): Promise<void> {
             setAnswerError(turn, 'The active conversation changed before this answer started.');
             return;
         }
-        const submissionId = pendingSubmissionStore.getOrCreate(conversationId, fingerprint);
+        const submissionId = answerRunStore.getOrCreateSubmissionId(conversationId, fingerprint);
         const {body: requestBody, headers: requestHeaders} = buildAnswerRequest(
             {
                 query,
@@ -131,54 +288,36 @@ export async function submitQuery(query: string): Promise<void> {
         const response = await fetch('/web/answer', {
             method: 'POST',
             ...(requestHeaders ? {headers: requestHeaders} : {}),
-            signal: controller.signal,
             body: requestBody,
         });
 
         if (!response.ok) {
-            if (response.status < 500) pendingSubmissionStore.clear(conversationId);
+            if (response.status < 500) answerRunStore.clear(conversationId);
             setAnswerError(turn, 'Service error. Please try again.');
             return;
         }
-
-        const activeRenderer = createAnswerRenderer(turn);
-        await streamSSE(response, function(eventType, data) {
-            if (conversationStore.activeConversationId !== conversationId) return;
-            activeRenderer.handle(eventType, data);
-        });
-        if (activeRenderer.failed || isDefinitiveSaveOutcome(activeRenderer.saveOutcome)) {
-            pendingSubmissionStore.clear(conversationId);
-        }
-        const saveOutcome = activeRenderer.saveOutcome;
-        if (shouldKeepLiveConversation(saveOutcome)) {
-            releaseLiveViewport(true);
-            if (saveOutcome.conversation) {
-                conversationStore.upsertSummary(saveOutcome.conversation);
-            }
-            bus.emit('conversationAnswerSaved', {conversationId});
-        } else if (saveOutcome?.conversation_saved === false) {
-            renderAnswerSaveOutcome(
-                turn,
-                describeConversationSaveOutcome(saveOutcome),
-                function() {
-                    bus.emit('conversationSaveCheckRequested', {conversationId});
-                },
-            );
-        }
-        releaseLiveViewport();
+        const descriptor = await response.json() as AnswerRunDescriptor;
+        answerRunStore.attachRun(conversationId, descriptor.run_id);
+        conversationStore.upsertSummary(descriptor.conversation);
+        markAnswerPending(turn, descriptor.cancel_requested);
+        // The run is durable history now, so the composer is released and the
+        // rest of this call only follows an object the server already owns.
+        releaseLiveViewport(true);
+        beginFollowing(controller, descriptor.run_id, descriptor.cancel_requested);
+        finished = await followAnswerRun(turn, conversationId, descriptor.run_id, controller);
     } catch (_) {
-        if (controller.signal.aborted) {
-            // Keep the idempotency key: cancellation may race a successful server commit.
-            markAnswerStopped(turn);
-        } else {
+        if (!controller.signal.aborted) {
             setAnswerError(turn, 'Connection error. Please try again.');
+            finished = true;
         }
     } finally {
         releaseLiveViewport();
-        if (currentQueryController === controller) currentQueryController = null;
-        queryInFlight = false;
-        queryStopping = false;
-        bus.emit('conversationStreamChanged', {active: false});
+        if (conversationId) endFollowing(controller, conversationId, finished);
+        if (currentFollowController === null) {
+            queryInFlight = false;
+            queryStopping = false;
+            bus.emit('conversationStreamChanged', {active: false});
+        }
     }
 }
 

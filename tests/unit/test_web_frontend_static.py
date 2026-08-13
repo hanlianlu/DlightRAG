@@ -249,7 +249,7 @@ def test_source_panel_links_public_web_provenance_without_download_permission(
     source_uri: str,
 ) -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
-    from dlightrag.web.safe_html import safe_source_panel
+    from dlightrag.web.safe_html import safe_answer_done
 
     source = SourceReferencePayload(
         id="1",
@@ -259,7 +259,7 @@ def test_source_panel_links_public_web_provenance_without_download_permission(
         chunks=[],
     )
 
-    html = safe_source_panel(sources=[source])
+    html = safe_answer_done(answer="Cited.", sources=[source], answer_images=[])
 
     assert 'aria-label="Open source"' in html
     assert source_uri.split("?", 1)[0] in html
@@ -270,7 +270,7 @@ def test_source_panel_links_public_web_provenance_without_download_permission(
 
 def test_source_panel_does_not_link_non_public_provenance() -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
-    from dlightrag.web.safe_html import safe_source_panel
+    from dlightrag.web.safe_html import safe_answer_done
 
     sources = [
         SourceReferencePayload(id="1", source_uri="local://default/report.pdf", chunks=[]),
@@ -278,7 +278,7 @@ def test_source_panel_does_not_link_non_public_provenance() -> None:
         SourceReferencePayload(id="3", source_uri="res-opaque", chunks=[]),
     ]
 
-    html = safe_source_panel(sources=sources)
+    html = safe_answer_done(answer="Cited.", sources=sources, answer_images=[])
 
     assert 'aria-label="Open source"' not in html
     assert "https://127.0.0.1/private" not in html
@@ -286,8 +286,7 @@ def test_source_panel_does_not_link_non_public_provenance() -> None:
 
 def test_source_templates_use_the_public_source_contract() -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
-    from dlightrag.web.answer_events import _AnswerPayload
-    from dlightrag.web.safe_html import safe_answer_done, safe_source_panel
+    from dlightrag.web.safe_html import safe_answer_done
 
     partials = ROOT / "src/dlightrag/web/templates/partials"
     template_text = "\n".join(
@@ -299,14 +298,12 @@ def test_source_templates_use_the_public_source_contract() -> None:
     assert "src.path" not in template_text
     assert "src.download_url" in template_text
     assert "src.source_uri" in template_text
-    assert get_type_hints(_AnswerPayload)["sources"] == list[SourceReferencePayload]
     assert get_type_hints(safe_answer_done)["sources"] == list[SourceReferencePayload]
-    assert get_type_hints(safe_source_panel)["sources"] == list[SourceReferencePayload]
 
 
 def test_sanitized_source_download_preserves_accessible_name() -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
-    from dlightrag.web.safe_html import safe_source_panel
+    from dlightrag.web.safe_html import safe_answer_done
 
     source = SourceReferencePayload(
         id="1",
@@ -316,7 +313,7 @@ def test_sanitized_source_download_preserves_accessible_name() -> None:
         chunks=[],
     )
 
-    html = safe_source_panel(sources=[source])
+    html = safe_answer_done(answer="Cited.", sources=[source], answer_images=[])
 
     assert 'aria-label="Download source"' in html
     assert 'download=""' in html or " download" in html

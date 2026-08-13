@@ -2,6 +2,7 @@
 """Browser-safe contracts for durable Web conversations."""
 
 import datetime
+from typing import Literal
 
 from pydantic import Field, field_validator
 
@@ -30,11 +31,32 @@ class ConversationAttachmentReference(ClientContractModel):
 class ConversationTurn(ClientContractModel):
     turn_id: str
     turn_number: int
+    answer_run_id: str
+    submission_id: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    cancel_requested: bool = False
     user_text: str
     assistant_text: str
     user_attachments: list[ConversationAttachmentReference] = Field(default_factory=list)
     answer_html: str
+    error_kind: str | None = None
+    error_message: str | None = None
     created_at: datetime.datetime
+
+
+class AnswerRunDescriptor(ClientContractModel):
+    """What the browser needs to follow one accepted submission."""
+
+    run_id: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    cancel_requested: bool = False
+    turn_id: str
+    turn_number: int
+    submission_id: str
+    events_url: str
+    status_url: str
+    cancel_url: str
+    conversation: ConversationSummary
 
 
 class ConversationHistory(ClientContractModel):
@@ -55,6 +77,7 @@ class RenameConversationRequest(ClientContractModel):
 
 
 __all__ = [
+    "AnswerRunDescriptor",
     "ConversationAttachmentReference",
     "ConversationHistory",
     "ConversationSummary",

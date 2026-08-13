@@ -19,14 +19,35 @@ export interface ConversationAttachmentReference {
   label: string;
 }
 
+export type AnswerRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
 export interface ConversationTurn {
   turn_id: string;
   turn_number: number;
+  answer_run_id: string;
+  submission_id: string;
+  status: AnswerRunStatus;
+  cancel_requested: boolean;
   user_text: string;
   assistant_text: string;
   user_attachments: ConversationAttachmentReference[];
   answer_html: string;
+  error_kind: string | null;
+  error_message: string | null;
   created_at: string;
+}
+
+export interface AnswerRunDescriptor {
+  run_id: string;
+  status: AnswerRunStatus;
+  cancel_requested: boolean;
+  turn_id: string;
+  turn_number: number;
+  submission_id: string;
+  events_url: string;
+  status_url: string;
+  cancel_url: string;
+  conversation: ConversationSummary;
 }
 
 export interface ConversationHistory {
@@ -96,4 +117,23 @@ export async function deleteAllConversations(signal?: AbortSignal): Promise<void
   if (!response.ok) {
     throw new ConversationApiError(response.status, 'Failed to delete conversations');
   }
+}
+
+export async function getAnswerRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ConversationTurn> {
+  const id = encodeURIComponent(runId);
+  const response = await fetch(`/web/answer/${id}`, {signal});
+  return responseJson<ConversationTurn>(response, 'Failed to load answer run');
+}
+
+/** Ask the server to stop a run; disconnecting never does this on its own. */
+export async function cancelAnswerRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ConversationTurn> {
+  const id = encodeURIComponent(runId);
+  const response = await fetch(`/web/answer/${id}`, {method: 'DELETE', signal});
+  return responseJson<ConversationTurn>(response, 'Failed to stop the answer');
 }

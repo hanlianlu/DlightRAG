@@ -1,20 +1,35 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL persistence for principal-scoped Web conversations.
 
-Web answer attachments are stored as raw resources: original bytes, verified
-MIME/suffix, and a content digest. There is no image table, no parse/chunk/
-vector cache, and no stored VLM description; every request reads resources
-locally instead of persisting derived artifacts.
+A conversation is navigation and history; it owns no execution state. Each turn
+is one row pointing at the durable Answer run that owns the request input, the
+uploaded bytes, the streamed events, and the canonical result. The turn is
+created inside the run's own creation transaction and keyed by the browser's
+submission id, so history exists before the 202 response and no subscriber,
+finalizer, or reconnect has to commit it afterwards.
 """
 
 from __future__ import annotations
 
 import datetime
-import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from dlightrag.storage.answer_runs import (
+    ANSWER_RUN_MIGRATION_SCOPE,
+    ANSWER_RUN_MIGRATIONS,
+    ANSWER_RUN_SCHEMA_TABLES,
+    AnswerRunRecord,
+    PendingArtifact,
+    PendingArtifactReference,
+    PGAnswerRunStore,
+    RunDeletion,
+    answer_run_columns,
+    answer_run_record,
+    answer_run_request_fingerprint,
+)
 from dlightrag.storage.migrations import (
     ForeignKeyRequirement,
     Migration,
@@ -36,7 +51,7 @@ CREATE TABLE IF NOT EXISTS web_conversations (
 )
 """
 
-_CREATE_TURNS = """
+_CREATE_LEGACY_TURNS = """
 CREATE TABLE IF NOT EXISTS web_conversation_turns (
     turn_id UUID NOT NULL,
     principal_id TEXT NOT NULL,
@@ -56,24 +71,27 @@ CREATE TABLE IF NOT EXISTS web_conversation_turns (
 )
 """
 
-_CREATE_ATTACHMENTS = """
-CREATE TABLE IF NOT EXISTS web_conversation_attachments (
-    attachment_id UUID NOT NULL,
+# The turn carries conversation order and the run link only. Request content,
+# answer text, sources, and uploaded bytes all live in the run it references, so
+# nothing about one answer is stored twice. Deleting the run deletes the turn:
+# pruning a failed or cancelled run removes its visible terminal entry, and
+# deleting a conversation deletes its runs in the same transaction.
+_CREATE_TURNS = """
+CREATE TABLE IF NOT EXISTS web_conversation_turns (
+    turn_id UUID NOT NULL,
     principal_id TEXT NOT NULL,
     conversation_id UUID NOT NULL,
-    turn_id UUID NOT NULL,
-    ordinal INTEGER NOT NULL,
-    filename TEXT NOT NULL,
-    mime_type TEXT NOT NULL,
-    suffix TEXT NOT NULL,
-    attachment_bytes BYTEA NOT NULL,
-    byte_size INTEGER NOT NULL,
-    content_sha256 TEXT NOT NULL,
+    turn_number INTEGER NOT NULL,
+    submission_id UUID NOT NULL,
+    answer_run_id UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (principal_id, conversation_id, attachment_id),
-    UNIQUE (principal_id, conversation_id, turn_id, ordinal),
-    FOREIGN KEY (principal_id, conversation_id, turn_id)
-      REFERENCES web_conversation_turns (principal_id, conversation_id, turn_id)
+    PRIMARY KEY (principal_id, conversation_id, turn_id),
+    UNIQUE (principal_id, conversation_id, turn_number),
+    FOREIGN KEY (principal_id, conversation_id)
+      REFERENCES web_conversations (principal_id, conversation_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (principal_id, answer_run_id)
+      REFERENCES dlightrag_answer_runs (owner_id, run_id)
       ON DELETE CASCADE
 )
 """
@@ -83,27 +101,32 @@ _CREATE_CONVERSATION_INDEXES = (
     "ON web_conversations (principal_id, updated_at DESC, conversation_id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_web_conversations_updated "
     "ON web_conversations (updated_at, principal_id, conversation_id)",
+)
+
+_CREATE_TURN_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_web_conversation_turns_principal_conversation "
     "ON web_conversation_turns (principal_id, conversation_id, turn_number DESC)",
+    # The submission id is the owner-wide idempotency key of the run itself, so
+    # its turn must be unique in the same namespace rather than per conversation.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_web_conversation_turns_submission "
-    "ON web_conversation_turns (principal_id, conversation_id, submission_id)",
+    "ON web_conversation_turns (principal_id, submission_id)",
+    # One turn per run, and the reverse lookup run retention uses to recognize a
+    # conversation-linked run.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_web_conversation_turns_run "
+    "ON web_conversation_turns (principal_id, answer_run_id)",
 )
 
-_CREATE_ATTACHMENT_INDEX = (
-    "CREATE INDEX IF NOT EXISTS idx_web_conversation_attachments_catalog "
-    "ON web_conversation_attachments (principal_id, conversation_id, created_at DESC)"
-)
-
-# Intentional one-time reset. Existing deployments applied an earlier schema
-# with a separate image table and a derived parse/vector cache; this migration
-# deletes every Web conversation row (cascading to turns and their children),
-# drops the superseded tables, and recreates one raw-attachment table. The reset
-# is deliberate: no committed turn may keep a source pointing at a dropped
-# entity, and there is no compatibility view or renamed-column bridge.
+# Intentional one-time reset. Earlier schemas stored a second copy of each
+# answer (assistant text plus a source snapshot) and the raw uploaded bytes in a
+# Web-owned attachment table. Both are superseded by the durable run, so this
+# migration deletes every Web conversation, drops those tables, and recreates
+# turns as pure run links. There is no compatibility view, dual write, or
+# backfill: no committed turn may keep a payload the run no longer owns.
 _RESET_WEB_CONVERSATIONS = "DELETE FROM web_conversations"
 _DROP_ATTACHMENT_CHUNKS = "DROP TABLE IF EXISTS web_conversation_attachment_chunks"
 _DROP_IMAGES = "DROP TABLE IF EXISTS web_conversation_images"
-_DROP_LEGACY_ATTACHMENTS = "DROP TABLE IF EXISTS web_conversation_attachments"
+_DROP_ATTACHMENTS = "DROP TABLE IF EXISTS web_conversation_attachments"
+_DROP_TURNS = "DROP TABLE IF EXISTS web_conversation_turns"
 
 WEB_CONVERSATION_MIGRATIONS = (
     Migration(
@@ -111,26 +134,22 @@ WEB_CONVERSATION_MIGRATIONS = (
         "Create scoped Web conversations and turns",
         (
             _CREATE_CONVERSATIONS,
-            _CREATE_TURNS,
+            _CREATE_LEGACY_TURNS,
             *_CREATE_CONVERSATION_INDEXES,
         ),
     ),
     Migration(
-        "0002_unified_web_conversation_attachments",
-        "Reset Web conversations and store answer attachments as raw resources",
+        "0004_answer_run_turns",
+        "Reset Web conversations and link every turn to its durable Answer run",
         (
             _RESET_WEB_CONVERSATIONS,
             _DROP_ATTACHMENT_CHUNKS,
             _DROP_IMAGES,
-            _DROP_LEGACY_ATTACHMENTS,
-            _CREATE_ATTACHMENTS,
-            _CREATE_ATTACHMENT_INDEX,
+            _DROP_ATTACHMENTS,
+            _DROP_TURNS,
+            _CREATE_TURNS,
+            *_CREATE_TURN_INDEXES,
         ),
-    ),
-    Migration(
-        "0003_canonical_answer_sources",
-        "Reset Web conversations before storing canonical answer source snapshots",
-        (_RESET_WEB_CONVERSATIONS,),
     ),
 )
 
@@ -159,10 +178,7 @@ WEB_CONVERSATION_SCHEMA_TABLES = (
             "conversation_id",
             "turn_number",
             "submission_id",
-            "user_text",
-            "assistant_text",
-            "answer_sources",
-            "queried_workspaces",
+            "answer_run_id",
             "created_at",
         ),
         primary_key=("principal_id", "conversation_id", "turn_id"),
@@ -171,37 +187,15 @@ WEB_CONVERSATION_SCHEMA_TABLES = (
             ForeignKeyRequirement(
                 columns=("principal_id", "conversation_id"), references="web_conversations"
             ),
+            ForeignKeyRequirement(
+                columns=("principal_id", "answer_run_id"), references="dlightrag_answer_runs"
+            ),
         ),
         indexes=(
             "idx_web_conversation_turns_principal_conversation",
             "idx_web_conversation_turns_submission",
+            "idx_web_conversation_turns_run",
         ),
-    ),
-    TableRequirement(
-        name="web_conversation_attachments",
-        columns=(
-            "attachment_id",
-            "principal_id",
-            "conversation_id",
-            "turn_id",
-            "ordinal",
-            "filename",
-            "mime_type",
-            "suffix",
-            "attachment_bytes",
-            "byte_size",
-            "content_sha256",
-            "created_at",
-        ),
-        primary_key=("principal_id", "conversation_id", "attachment_id"),
-        unique=(("principal_id", "conversation_id", "turn_id", "ordinal"),),
-        foreign_keys=(
-            ForeignKeyRequirement(
-                columns=("principal_id", "conversation_id", "turn_id"),
-                references="web_conversation_turns",
-            ),
-        ),
-        indexes=("idx_web_conversation_attachments_catalog",),
     ),
 )
 
@@ -237,6 +231,27 @@ WHERE principal_id = $1
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
+_LOCK_CONVERSATION = f"""
+SELECT {_SUMMARY_COLUMNS}
+FROM web_conversations
+WHERE principal_id = $1
+  AND conversation_id = $2::text::uuid
+  AND updated_at >= NOW() - ($3 * INTERVAL '1 day')
+FOR UPDATE
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
+
+_SELECT_CONVERSATION_RUNS = """
+SELECT answer_run_id::text AS answer_run_id
+FROM web_conversation_turns
+WHERE principal_id = $1 AND conversation_id = $2::text::uuid
+"""
+
+_SELECT_PRINCIPAL_RUNS = """
+SELECT answer_run_id::text AS answer_run_id
+FROM web_conversation_turns
+WHERE principal_id = $1
+"""
+
 _DELETE_CONVERSATION = """
 DELETE FROM web_conversations
 WHERE principal_id = $1
@@ -269,72 +284,65 @@ WHERE principal_id = $1
   AND updated_at >= NOW() - ($3 * INTERVAL '1 day')
 """
 
-_ATTACHMENT_MANIFEST_SUBQUERY = """
-COALESCE(
-    (
-        SELECT jsonb_agg(
-            jsonb_build_object(
-                'attachment_id', a.attachment_id::text,
-                'ordinal', a.ordinal,
-                'filename', a.filename,
-                'mime_type', a.mime_type,
-                'byte_size', a.byte_size,
-                'content_sha256', a.content_sha256
-            ) ORDER BY a.ordinal
-        )
-        FROM web_conversation_attachments AS a
-        WHERE a.principal_id = $1
-          AND a.conversation_id = $2::text::uuid
-          AND a.turn_id = {turn_id_expr}
-    ),
-    '[]'::jsonb
-) AS attachments
+_TURN_COLUMNS = """
+t.turn_id::text AS turn_id,
+t.turn_number,
+t.submission_id::text AS submission_id,
+t.answer_run_id::text AS answer_run_id,
+t.conversation_id::text AS turn_conversation_id,
+t.created_at AS turn_created_at
 """
 
-_GET_HISTORY = f"""
-WITH recent_turns AS (
-    SELECT
-        t.turn_id,
-        t.turn_number,
-        t.submission_id,
-        t.user_text,
-        t.assistant_text,
-        t.answer_sources,
-        t.queried_workspaces,
-        t.created_at
-    FROM web_conversation_turns AS t
-    JOIN web_conversations AS c
-      ON c.principal_id = t.principal_id
-     AND c.conversation_id = t.conversation_id
-    WHERE t.principal_id = $1
-      AND t.conversation_id = $2::text::uuid
-      AND c.principal_id = $1
-      AND c.updated_at >= NOW() - ($3 * INTERVAL '1 day')
-    ORDER BY t.turn_number DESC
-    LIMIT $4
-)
+_GET_TURNS = f"""
 SELECT
-    recent_turns.turn_id::text AS turn_id,
-    recent_turns.turn_number,
-    recent_turns.submission_id,
-    recent_turns.user_text,
-    recent_turns.assistant_text,
-    recent_turns.answer_sources,
-    recent_turns.queried_workspaces,
-    recent_turns.created_at,
-    {_ATTACHMENT_MANIFEST_SUBQUERY.format(turn_id_expr="recent_turns.turn_id")}
-FROM recent_turns
-ORDER BY recent_turns.turn_number ASC
-"""  # noqa: S608 - interpolates only trusted attachment-manifest SQL constants
+{_TURN_COLUMNS},
+{answer_run_columns("r")}
+FROM web_conversation_turns AS t
+JOIN dlightrag_answer_runs AS r
+  ON r.owner_id = t.principal_id
+ AND r.run_id = t.answer_run_id
+JOIN web_conversations AS c
+  ON c.principal_id = t.principal_id
+ AND c.conversation_id = t.conversation_id
+WHERE t.principal_id = $1
+  AND t.conversation_id = $2::text::uuid
+  AND c.updated_at >= NOW() - ($3 * INTERVAL '1 day')
+ORDER BY t.turn_number DESC
+LIMIT $4
+"""  # noqa: S608 - interpolates only trusted column-projection constants
 
-_GUARDED_UPDATE = f"""
+_GET_TURN_BY_SUBMISSION = f"""
+SELECT
+{_TURN_COLUMNS},
+r.request_fingerprint,
+{answer_run_columns("r")}
+FROM web_conversation_turns AS t
+JOIN dlightrag_answer_runs AS r
+  ON r.owner_id = t.principal_id
+ AND r.run_id = t.answer_run_id
+WHERE t.principal_id = $1
+  AND t.submission_id = $2::text::uuid
+"""  # noqa: S608 - interpolates only trusted column-projection constants
+
+_GET_TURN_BY_RUN = f"""
+SELECT
+{_TURN_COLUMNS},
+{answer_run_columns("r")}
+FROM web_conversation_turns AS t
+JOIN dlightrag_answer_runs AS r
+  ON r.owner_id = t.principal_id
+ AND r.run_id = t.answer_run_id
+WHERE t.principal_id = $1
+  AND t.answer_run_id = $2::text::uuid
+"""  # noqa: S608 - interpolates only trusted column-projection constants
+
+_TOUCH_CONVERSATION = f"""
 UPDATE web_conversations
 SET content_revision = content_revision + 1,
-    title = COALESCE(title, $4),
+    title = COALESCE(title, $3),
     updated_at = NOW()
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
-  AND content_revision = $3
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
@@ -345,10 +353,7 @@ INSERT INTO web_conversation_turns (
     conversation_id,
     turn_number,
     submission_id,
-    user_text,
-    assistant_text,
-    answer_sources,
-    queried_workspaces
+    answer_run_id
 )
 VALUES (
     $1::text::uuid,
@@ -361,133 +366,59 @@ VALUES (
           AND conversation_id = $3::text::uuid
     ),
     $4::text::uuid,
-    $5,
-    $6,
-    $7::jsonb,
-    $8::jsonb
+    $5::text::uuid
 )
 RETURNING turn_id::text AS turn_id, turn_number
 """
 
-_UPDATE_TURN_SOURCES = """
-UPDATE web_conversation_turns
-SET answer_sources = $4::jsonb
-WHERE principal_id = $1
-  AND conversation_id = $2::text::uuid
-  AND submission_id = $3::text::uuid
-"""
-
-_GET_COMMITTED_TURN = f"""
-SELECT
-    c.conversation_id::text AS conversation_id,
-    c.title,
-    c.content_revision,
-    c.created_at,
-    c.updated_at,
-    t.turn_id::text AS turn_id,
-    t.assistant_text,
-    t.answer_sources,
-    t.queried_workspaces,
-    {_ATTACHMENT_MANIFEST_SUBQUERY.format(turn_id_expr="t.turn_id")}
-FROM web_conversation_turns AS t
-JOIN web_conversations AS c
-  ON c.principal_id = t.principal_id
- AND c.conversation_id = t.conversation_id
-WHERE t.principal_id = $1
-  AND t.conversation_id = $2::text::uuid
-  AND t.submission_id = $3::text::uuid
-  AND c.updated_at >= NOW() - ($4 * INTERVAL '1 day')
-"""  # noqa: S608 - interpolates only trusted attachment-manifest SQL constants
-
-_INSERT_ATTACHMENT = """
-INSERT INTO web_conversation_attachments (
-    attachment_id,
-    principal_id,
-    conversation_id,
-    turn_id,
-    ordinal,
-    filename,
-    mime_type,
-    suffix,
-    attachment_bytes,
-    byte_size,
-    content_sha256
-)
-VALUES (
-    $1::text::uuid,
-    $2,
-    $3::text::uuid,
-    $4::text::uuid,
-    $5,
-    $6,
-    $7,
-    $8,
-    $9,
-    $10,
-    $11
-)
-"""
-
-_ATTACHMENT_COLUMNS = """
-a.attachment_id::text AS attachment_id,
-a.filename,
-a.mime_type,
-a.suffix,
-a.attachment_bytes,
-a.content_sha256
-"""
-
-_GET_ATTACHMENT = f"""
-SELECT
-{_ATTACHMENT_COLUMNS}
-FROM web_conversation_attachments AS a
-JOIN web_conversations AS c
-  ON c.principal_id = a.principal_id
- AND c.conversation_id = a.conversation_id
-WHERE a.principal_id = $1
-  AND a.conversation_id = $2::text::uuid
-  AND a.attachment_id = $3::text::uuid
-  AND c.principal_id = $1
-  AND c.updated_at >= NOW() - ($4 * INTERVAL '1 day')
-"""  # noqa: S608 - interpolates only the trusted _ATTACHMENT_COLUMNS constant
-
-_FETCH_ATTACHMENTS_BY_IDS = f"""
-SELECT
-{_ATTACHMENT_COLUMNS}
-FROM web_conversation_attachments AS a
-JOIN web_conversations AS c
-  ON c.principal_id = a.principal_id
- AND c.conversation_id = a.conversation_id
-WHERE a.principal_id = $1
-  AND a.conversation_id = $2::text::uuid
-  AND a.attachment_id = ANY($3::uuid[])
-  AND c.updated_at >= NOW() - ($4 * INTERVAL '1 day')
-"""  # noqa: S608 - interpolates only the trusted _ATTACHMENT_COLUMNS constant
-
-_TRIM_TURNS = """
-DELETE FROM web_conversation_turns
+_SELECT_TRIMMABLE_RUNS = """
+SELECT answer_run_id::text AS answer_run_id
+FROM web_conversation_turns
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
   AND turn_number <= $3
 """
 
-_PRUNE_EXPIRED = """
-WITH candidates AS (
-    SELECT principal_id, conversation_id
-    FROM web_conversations
-    WHERE updated_at < NOW() - ($1 * INTERVAL '1 day')
-    ORDER BY updated_at, principal_id, conversation_id
-    LIMIT $2
-    FOR UPDATE SKIP LOCKED
-), deleted AS (
-    DELETE FROM web_conversations AS conversations
-    USING candidates
-    WHERE conversations.principal_id = candidates.principal_id
-      AND conversations.conversation_id = candidates.conversation_id
-    RETURNING conversations.conversation_id
-)
-SELECT COUNT(*)::int AS count FROM deleted
+_SELECT_EXPIRED_CONVERSATIONS = """
+SELECT principal_id, conversation_id
+FROM web_conversations
+WHERE updated_at < NOW() - ($1 * INTERVAL '1 day')
+ORDER BY updated_at, principal_id, conversation_id
+LIMIT $2
+FOR UPDATE SKIP LOCKED
 """
+
+_SELECT_RUNS_FOR_CONVERSATIONS = """
+SELECT t.principal_id, t.answer_run_id::text AS answer_run_id
+FROM web_conversation_turns AS t
+WHERE (t.principal_id, t.conversation_id)
+      IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
+"""
+
+_DELETE_CONVERSATIONS = """
+WITH deleted AS (
+    DELETE FROM web_conversations AS conversations
+    WHERE (conversations.principal_id, conversations.conversation_id)
+          IN (SELECT * FROM unnest($1::text[], $2::uuid[]))
+    RETURNING 1
+)
+SELECT count(*)::int AS count FROM deleted
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedTurn:
+    """One conversation entry and the authoritative run state behind it."""
+
+    turn_id: str
+    turn_number: int
+    submission_id: str
+    created_at: datetime.datetime
+    run: AnswerRunRecord
+
+    @property
+    def answer_run_id(self) -> str:
+        return self.run.run_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,106 +429,42 @@ class ConversationSnapshot:
     title: str | None
     created_at: datetime.datetime
     updated_at: datetime.datetime
-    history: tuple[dict[str, Any], ...]
+    turns: tuple[LinkedTurn, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class PendingConversationAttachment:
-    """One raw current-turn attachment to persist with a committed turn."""
+class AnswerTurnCreation:
+    """The run and the conversation entry one submission durably created."""
 
-    attachment_id: str
-    ordinal: int
-    filename: str
-    mime_type: str
-    suffix: str
-    attachment_bytes: bytes
-    content_sha256: str
-
-    @property
-    def byte_size(self) -> int:
-        return len(self.attachment_bytes)
+    turn: LinkedTurn
+    summary: dict[str, Any]
+    replayed: bool
 
 
-@dataclass(frozen=True, slots=True)
-class CommitTurnResult:
-    saved: bool
-    reason: str | None
-    summary: dict[str, Any] | None
-    turn_id: str | None
-    current_attachment_ids: tuple[str, ...] = ()
-    assistant_text: str | None = None
-    answer_sources: dict[str, Any] | None = None
-    replayed: bool = False
-    queried_workspaces: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class StoredConversationAttachment:
-    attachment_id: str
-    filename: str
-    mime_type: str
-    suffix: str
-    attachment_bytes: bytes
-    content_sha256: str = ""
+class ConversationSubmissionConflict(RuntimeError):
+    """One principal reused a submission id with a different conversation or input."""
 
 
 def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
 
-def _json_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return json.loads(value)
-    return value
-
-
-def _history_row(row: Any) -> dict[str, Any]:
-    result = _row_dict(row)
-    for key in ("answer_sources", "queried_workspaces", "attachments"):
-        result[key] = _json_value(result[key])
-    return result
-
-
-def _committed_result(row: Any, *, replayed: bool) -> CommitTurnResult:
-    value = _row_dict(row)
-    attachments = _json_value(value.get("attachments", []))
-    answer_sources = _json_value(value.get("answer_sources", {}))
-    summary = {
-        key: value[key]
-        for key in ("conversation_id", "title", "content_revision", "created_at", "updated_at")
-        if key in value
-    }
-    return CommitTurnResult(
-        saved=True,
-        reason=None,
-        summary=summary,
-        turn_id=str(value["turn_id"]),
-        current_attachment_ids=tuple(str(item["attachment_id"]) for item in attachments),
-        assistant_text=str(value["assistant_text"]),
-        answer_sources=answer_sources,
-        replayed=replayed,
-        queried_workspaces=tuple(
-            str(workspace) for workspace in _json_value(value.get("queried_workspaces", []))
-        ),
-    )
-
-
-def _stored_attachment(row: Any) -> StoredConversationAttachment:
-    return StoredConversationAttachment(
-        attachment_id=str(row["attachment_id"]),
-        filename=str(row["filename"]),
-        mime_type=str(row["mime_type"]),
-        suffix=str(row["suffix"]),
-        attachment_bytes=bytes(row["attachment_bytes"]),
-        content_sha256=str(row["content_sha256"]),
+def _linked_turn(row: Any) -> LinkedTurn:
+    return LinkedTurn(
+        turn_id=str(row["turn_id"]),
+        turn_number=int(row["turn_number"]),
+        submission_id=str(row["submission_id"]),
+        created_at=row["turn_created_at"],
+        run=answer_run_record(row),
     )
 
 
 class PGWebConversationStore:
     """Durable PostgreSQL store for server-owned Web conversations."""
 
-    def __init__(self, *, pool: Any = None) -> None:
+    def __init__(self, *, pool: Any = None, run_store: PGAnswerRunStore | None = None) -> None:
         self._pool = pool
+        self._run_store = run_store or PGAnswerRunStore(pool=pool)
         self._initialized = False
 
     async def _run_read(self, operation, *, retry: bool = True):
@@ -619,7 +486,11 @@ class PGWebConversationStore:
         return await pg_pool.run_once(operation)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
-        """Create the Web conversation schema, or validate it (reader)."""
+        """Create the Web conversation schema, or validate it (reader).
+
+        A turn's foreign key targets the durable Answer run table, so the run
+        schema is established first in the same connection.
+        """
         if self._initialized:
             return
 
@@ -627,11 +498,22 @@ class PGWebConversationStore:
             if validate_only:
                 await verify_migrations(
                     conn,
+                    scope=ANSWER_RUN_MIGRATION_SCOPE,
+                    migrations=ANSWER_RUN_MIGRATIONS,
+                    tables=ANSWER_RUN_SCHEMA_TABLES,
+                )
+                await verify_migrations(
+                    conn,
                     scope="web_conversations",
                     migrations=WEB_CONVERSATION_MIGRATIONS,
                     tables=WEB_CONVERSATION_SCHEMA_TABLES,
                 )
                 return
+            await apply_migrations(
+                conn,
+                scope=ANSWER_RUN_MIGRATION_SCOPE,
+                migrations=ANSWER_RUN_MIGRATIONS,
+            )
             await apply_migrations(
                 conn,
                 scope="web_conversations",
@@ -706,27 +588,49 @@ class PGWebConversationStore:
         *,
         ttl_days: int,
     ) -> bool:
-        """Delete an unexpired owned conversation and its cascaded children."""
+        """Delete one owned conversation, its turns, and the runs they linked.
+
+        Deleting the runs in the same transaction stops any lease-fenced worker
+        from appending to state the conversation no longer owns, cascades the
+        runs' events and artifact references, and releases blobs no surviving
+        run still references.
+        """
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> bool:
-            row = await conn.fetchrow(
-                _DELETE_CONVERSATION,
-                principal_id,
-                conversation_id,
-                ttl_days,
-            )
-            return row is not None
+            async with conn.transaction():
+                run_ids = [
+                    str(row["answer_run_id"])
+                    for row in await conn.fetch(
+                        _SELECT_CONVERSATION_RUNS, principal_id, conversation_id
+                    )
+                ]
+                row = await conn.fetchrow(
+                    _DELETE_CONVERSATION,
+                    principal_id,
+                    conversation_id,
+                    ttl_days,
+                )
+                if row is None:
+                    return False
+                await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
+                return True
 
         return await self._run_write(_operation)
 
     async def delete_all_conversations(self, principal_id: str) -> int:
-        """Delete every conversation owned by one principal."""
+        """Delete every conversation owned by one principal and its linked runs."""
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> int:
-            row = await conn.fetchrow(_DELETE_ALL_CONVERSATIONS, principal_id)
-            return int(row["deleted_count"]) if row is not None else 0
+            async with conn.transaction():
+                run_ids = [
+                    str(row["answer_run_id"])
+                    for row in await conn.fetch(_SELECT_PRINCIPAL_RUNS, principal_id)
+                ]
+                row = await conn.fetchrow(_DELETE_ALL_CONVERSATIONS, principal_id)
+                await self._run_store.delete_runs_in(conn, owner_id=principal_id, run_ids=run_ids)
+                return int(row["deleted_count"]) if row is not None else 0
 
         return await self._run_write(_operation)
 
@@ -738,7 +642,7 @@ class PGWebConversationStore:
         ttl_days: int,
         max_turns: int = 100,
     ) -> ConversationSnapshot | None:
-        """Load one unexpired conversation and its client-safe recent history."""
+        """Load one unexpired conversation and its run-linked recent turns."""
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> ConversationSnapshot | None:
@@ -751,8 +655,8 @@ class PGWebConversationStore:
                 )
                 if row is None:
                     return None
-                history_rows = await conn.fetch(
-                    _GET_HISTORY,
+                turn_rows = await conn.fetch(
+                    _GET_TURNS,
                     principal_id,
                     conversation_id,
                     ttl_days,
@@ -765,237 +669,170 @@ class PGWebConversationStore:
                     title=row["title"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
-                    history=tuple(_history_row(history_row) for history_row in history_rows),
+                    turns=tuple(_linked_turn(turn) for turn in reversed(turn_rows)),
                 )
 
         return await self._run_read(_operation)
 
-    async def get_attachment(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        attachment_id: str,
-        *,
-        ttl_days: int,
-    ) -> StoredConversationAttachment | None:
-        """Load original attachment bytes only when ownership and TTL match."""
+    async def find_turn_by_run(self, principal_id: str, run_id: str) -> LinkedTurn | None:
+        """Return the conversation entry one owned run belongs to, if any."""
         await self._ensure_initialized()
 
-        async def _operation(conn: Any) -> StoredConversationAttachment | None:
-            row = await conn.fetchrow(
-                _GET_ATTACHMENT,
-                principal_id,
-                conversation_id,
-                attachment_id,
-                ttl_days,
-            )
-            return _stored_attachment(row) if row is not None else None
+        async def _operation(conn: Any) -> LinkedTurn | None:
+            row = await conn.fetchrow(_GET_TURN_BY_RUN, principal_id, run_id)
+            return _linked_turn(row) if row is not None else None
 
         return await self._run_read(_operation)
 
-    async def fetch_attachments_by_ids(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        attachment_ids: list[str],
-        *,
-        ttl_days: int,
-    ) -> list[StoredConversationAttachment]:
-        """Return owned, unexpired original attachment bytes for the given ids."""
-        if not attachment_ids:
-            return []
-        await self._ensure_initialized()
-
-        async def _operation(conn: Any) -> list[StoredConversationAttachment]:
-            rows = await conn.fetch(
-                _FETCH_ATTACHMENTS_BY_IDS,
-                principal_id,
-                conversation_id,
-                attachment_ids,
-                ttl_days,
-            )
-            return [_stored_attachment(row) for row in rows]
-
-        return await self._run_read(_operation)
-
-    async def find_committed_turn(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        submission_id: str,
-        *,
-        ttl_days: int,
-        retry: bool = True,
-    ) -> CommitTurnResult | None:
-        """Return the authoritative completed turn for one scoped submission key.
-
-        ``retry=False`` performs a single bounded-protocol lookup without the
-        storage-layer retry budget, used by outcome reconciliation.
-        """
-        await self._ensure_initialized()
-
-        async def _operation(conn: Any) -> CommitTurnResult | None:
-            row = await conn.fetchrow(
-                _GET_COMMITTED_TURN,
-                principal_id,
-                conversation_id,
-                submission_id,
-                ttl_days,
-            )
-            return _committed_result(row, replayed=True) if row is not None else None
-
-        return await self._run_read(_operation, retry=retry)
-
-    async def commit_turn(
+    async def create_answer_turn(
         self,
         *,
         principal_id: str,
         conversation_id: str,
         submission_id: str,
-        expected_revision: int,
-        user_text: str,
-        assistant_text: str,
-        answer_sources: dict[str, Any],
-        queried_workspaces: list[str],
-        attachments: list[PendingConversationAttachment],
+        request: Mapping[str, Any],
+        artifacts: Sequence[PendingArtifact] = (),
+        references: Sequence[PendingArtifactReference] = (),
+        title_hint: str | None,
         max_turns: int,
         ttl_days: int,
-    ) -> CommitTurnResult:
-        """Atomically append one turn when the captured revision still matches."""
-        await self._ensure_initialized()
-        auto_title = " ".join(user_text.split())[:120] or None
+    ) -> AnswerTurnCreation | None:
+        """Accept one submission as a run plus its conversation entry, atomically.
 
-        async def _operation(conn: Any) -> CommitTurnResult:
+        The owned conversation is locked, the run and its uploaded bytes are
+        created or replayed under the submission id, and the linked turn is
+        inserted before this transaction commits. Replaying the same submission
+        returns the authoritative run and turn; reusing it for a different
+        conversation or different normalized input is a conflict. ``None`` means
+        the conversation does not exist for this principal or has expired.
+        """
+        await self._ensure_initialized()
+        turn_id = str(uuid4())
+        fingerprint = answer_run_request_fingerprint(request)
+
+        async def _operation(conn: Any) -> AnswerTurnCreation | None:
             async with conn.transaction():
-                committed_row = await conn.fetchrow(
-                    _GET_COMMITTED_TURN,
-                    principal_id,
-                    conversation_id,
-                    submission_id,
-                    ttl_days,
-                )
-                if committed_row is not None:
-                    return _committed_result(committed_row, replayed=True)
                 summary_row = await conn.fetchrow(
-                    _GUARDED_UPDATE,
-                    principal_id,
-                    conversation_id,
-                    expected_revision,
-                    auto_title,
+                    _LOCK_CONVERSATION, principal_id, conversation_id, ttl_days
                 )
                 if summary_row is None:
-                    committed_row = await conn.fetchrow(
-                        _GET_COMMITTED_TURN,
-                        principal_id,
-                        conversation_id,
-                        submission_id,
-                        ttl_days,
+                    return None
+                existing = await conn.fetchrow(_GET_TURN_BY_SUBMISSION, principal_id, submission_id)
+                if existing is not None:
+                    if str(existing["turn_conversation_id"]) != str(conversation_id):
+                        raise ConversationSubmissionConflict(
+                            "submission id was reused in a different conversation"
+                        )
+                    if str(existing["request_fingerprint"]) != fingerprint:
+                        raise ConversationSubmissionConflict(
+                            "submission id was reused with different request input"
+                        )
+                    return AnswerTurnCreation(
+                        turn=_linked_turn(existing),
+                        summary=_row_dict(summary_row),
+                        replayed=True,
                     )
-                    if committed_row is not None:
-                        return _committed_result(committed_row, replayed=True)
-                    return CommitTurnResult(False, "conversation_changed", None, None)
-
-                turn_id = str(uuid4())
+                creation = await self._run_store.create_run_in(
+                    conn,
+                    owner_id=principal_id,
+                    request=request,
+                    idempotency_key=submission_id,
+                    artifacts=artifacts,
+                    references=references,
+                )
                 turn_row = await conn.fetchrow(
                     _INSERT_TURN,
                     turn_id,
                     principal_id,
                     conversation_id,
                     submission_id,
-                    user_text,
-                    assistant_text,
-                    json.dumps(answer_sources),
-                    json.dumps(queried_workspaces),
+                    creation.run.run_id,
                 )
                 if turn_row is None:
                     raise RuntimeError("conversation turn insert returned no row")
-
-                authoritative_turn_id = str(turn_row["turn_id"])
-                for attachment in attachments:
-                    await conn.execute(
-                        _INSERT_ATTACHMENT,
-                        attachment.attachment_id,
-                        principal_id,
-                        conversation_id,
-                        authoritative_turn_id,
-                        attachment.ordinal,
-                        attachment.filename,
-                        attachment.mime_type,
-                        attachment.suffix,
-                        attachment.attachment_bytes,
-                        attachment.byte_size,
-                        attachment.content_sha256,
-                    )
-
-                trim_before_or_at = int(turn_row["turn_number"]) - max_turns
-                await conn.execute(
-                    _TRIM_TURNS,
-                    principal_id,
-                    conversation_id,
-                    trim_before_or_at,
+                touched = await conn.fetchrow(
+                    _TOUCH_CONVERSATION, principal_id, conversation_id, title_hint
                 )
-                return CommitTurnResult(
-                    saved=True,
-                    reason=None,
-                    summary=_row_dict(summary_row),
-                    turn_id=authoritative_turn_id,
-                    current_attachment_ids=tuple(
-                        attachment.attachment_id for attachment in attachments
+                turn_number = int(turn_row["turn_number"])
+                await self._trim_turns(
+                    conn,
+                    principal_id=principal_id,
+                    conversation_id=conversation_id,
+                    before_or_at=turn_number - max_turns,
+                )
+                return AnswerTurnCreation(
+                    turn=LinkedTurn(
+                        turn_id=str(turn_row["turn_id"]),
+                        turn_number=turn_number,
+                        submission_id=submission_id,
+                        created_at=creation.run.created_at,
+                        run=creation.run,
                     ),
-                    assistant_text=assistant_text,
-                    answer_sources=answer_sources,
-                    queried_workspaces=tuple(queried_workspaces),
+                    summary=_row_dict(touched if touched is not None else summary_row),
+                    replayed=creation.replayed,
                 )
 
         return await self._run_write(_operation)
 
-    async def update_turn_sources(
+    async def _trim_turns(
         self,
+        conn: Any,
         *,
         principal_id: str,
         conversation_id: str,
-        submission_id: str,
-        answer_sources: dict[str, Any],
-    ) -> bool:
-        """Overwrite one committed turn's answer_sources snapshot.
-
-        Used to fold post-answer semantic highlights into the stored turn so
-        history and page reloads render the same highlighted sources the live
-        answer showed. Returns whether a row matched the submission key.
-        """
-        await self._ensure_initialized()
-
-        async def _operation(conn: Any) -> bool:
-            status = await conn.execute(
-                _UPDATE_TURN_SOURCES,
-                principal_id,
-                conversation_id,
-                submission_id,
-                json.dumps(answer_sources),
-            )
-            return status.rsplit(" ", 1)[-1] == "1"
-
-        return await self._run_write(_operation)
+        before_or_at: int,
+    ) -> None:
+        """Drop turns beyond the conversation window along with their runs."""
+        if before_or_at <= 0:
+            return
+        rows = await conn.fetch(_SELECT_TRIMMABLE_RUNS, principal_id, conversation_id, before_or_at)
+        await self._run_store.delete_runs_in(
+            conn,
+            owner_id=principal_id,
+            run_ids=[str(row["answer_run_id"]) for row in rows],
+        )
 
     async def prune_expired(self, *, ttl_days: int, batch_size: int = 500) -> int:
-        """Delete one skip-locked batch of expired conversations."""
+        """Delete one skip-locked batch of expired conversations and their runs."""
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> int:
-            row = await conn.fetchrow(_PRUNE_EXPIRED, ttl_days, batch_size)
-            return int(row["count"]) if row is not None else 0
+            async with conn.transaction():
+                rows = await conn.fetch(_SELECT_EXPIRED_CONVERSATIONS, ttl_days, batch_size)
+                if not rows:
+                    return 0
+                principals = [str(row["principal_id"]) for row in rows]
+                conversation_ids = [row["conversation_id"] for row in rows]
+                run_rows = await conn.fetch(
+                    _SELECT_RUNS_FOR_CONVERSATIONS, principals, conversation_ids
+                )
+                deleted = await conn.fetchrow(_DELETE_CONVERSATIONS, principals, conversation_ids)
+                await self._delete_runs_by_owner(conn, run_rows)
+                return int(deleted["count"]) if deleted is not None else 0
 
         return await self._run_write(_operation)
+
+    async def _delete_runs_by_owner(self, conn: Any, rows: Sequence[Any]) -> RunDeletion:
+        """Delete linked runs one owner at a time, keeping every scope check."""
+        by_owner: dict[str, list[str]] = {}
+        for row in rows:
+            by_owner.setdefault(str(row["principal_id"]), []).append(str(row["answer_run_id"]))
+        runs = artifacts = 0
+        for owner_id, run_ids in by_owner.items():
+            outcome = await self._run_store.delete_runs_in(conn, owner_id=owner_id, run_ids=run_ids)
+            runs += outcome.runs
+            artifacts += outcome.artifacts
+        return RunDeletion(runs=runs, artifacts=artifacts)
 
 
 __all__ = [
     "WEB_CONVERSATION_MIGRATIONS",
     "WEB_CONVERSATION_SCHEMA_TABLES",
-    "CommitTurnResult",
+    "AnswerTurnCreation",
     "ConversationSnapshot",
+    "ConversationSubmissionConflict",
+    "LinkedTurn",
     "PGWebConversationStore",
-    "PendingConversationAttachment",
-    "StoredConversationAttachment",
 ]

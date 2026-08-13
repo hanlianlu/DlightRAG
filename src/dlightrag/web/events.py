@@ -1,25 +1,27 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Typed browser-facing SSE event payloads."""
+"""Typed browser-facing SSE event payloads.
+
+One durable run event becomes one browser frame. Nothing here is stored: the
+rendered answer, its images, and its sources are derived from the run's
+canonical result when the terminal event is projected for this reader.
+"""
 
 from typing import Any, Literal
 
 from pydantic import Field
 
 from dlightrag.core.client_contracts import ClientContractModel
-from dlightrag.web.conversation_models import ConversationSummary
 
 
 class AnswerProgressEvent(ClientContractModel):
-    phase: Literal["planning", "searching", "generating", "saving"]
+    phase: Literal["planning", "searching", "researching", "generating"]
 
 
 class AnswerDoneEvent(ClientContractModel):
-    html: str
-    answer: str
+    status: Literal["succeeded", "cancelled"]
+    html: str = ""
+    answer: str = ""
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
-    conversation_saved: bool
-    conversation_save_reason: str | None = None
-    conversation: ConversationSummary | None = None
 
 
 class AnswerErrorEvent(ClientContractModel):

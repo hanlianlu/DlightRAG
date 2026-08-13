@@ -25,7 +25,6 @@ from dlightrag.config import (
     WebSearchConfig,
     set_config,
 )
-from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
@@ -187,24 +186,6 @@ class _CapturingOrchestrator:
     async def answer_stream(self, query: str, **kwargs: Any) -> Any:
         _CapturingOrchestrator.last["answer_stream"] = {"query": query, **kwargs}
         return {"chunks": []}, None
-
-
-async def test_prepared_stream_keeps_server_history_internal(
-    test_cfg, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-    turn = answer_turn.PreparedAnswerTurn(
-        current_query="Follow up",
-        text_history=({"role": "user", "content": "Earlier"},),
-    )
-    manager = RAGServiceManager(config=test_cfg)
-    monkeypatch.setattr("dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator)
-
-    await manager._aanswer_stream_prepared(turn, workspaces=["default"])
-
-    assert _CapturingOrchestrator.last["answer_stream"]["conversation_history"].messages == [
-        {"role": "user", "content": "Earlier"}
-    ]
 
 
 async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:
@@ -1968,20 +1949,13 @@ class TestRequestTimeout:
         with pytest.raises(RAGServiceUnavailableError, match="timed out"):
             await manager.aretrieve("test query", workspace="default")
 
-    async def test_answer_timeout_includes_request_preparation(self, test_cfg) -> None:
-        """Web's prepared stream still bounds preparation with ``request_timeout``."""
-        manager = RAGServiceManager(config=test_cfg.model_copy(update={"request_timeout": 0.01}))
+    async def test_answer_timeout_does_not_bound_a_durable_run(self, test_cfg) -> None:
+        """``request_timeout`` bounds Retrieve and Query, never a durable answer."""
+        import inspect
 
-        async def slow_prepare(*_args, **_kwargs):
-            await asyncio.sleep(0.05)
-            raise AssertionError("preparation escaped the request timeout")
+        source = inspect.getsource(RAGServiceManager._execute_answer_run)
 
-        manager._prepare_orchestrated_run = slow_prepare  # type: ignore[method-assign]
-
-        with pytest.raises(RAGServiceUnavailableError, match="timed out"):
-            await manager._aanswer_stream_prepared(
-                PreparedAnswerTurn.stateless("question"), workspace="default"
-            )
+        assert "request_timeout" not in source
 
 
 async def test_unsupported_image_link_is_rejected_before_materialization(test_cfg) -> None:
@@ -2568,7 +2542,7 @@ class TestAgenticAnswerCapability:
         manager._query_tool_model.assert_not_awaited()
         manager._web_search.search.assert_not_awaited()
 
-    async def test_with_exa_prepared_stream_uses_agentic_path(
+    async def test_with_exa_a_prepared_run_uses_the_agentic_path(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
@@ -2580,10 +2554,18 @@ class TestAgenticAnswerCapability:
         answer_turn = importlib.import_module("dlightrag.core.answer.turn")
         turn = answer_turn.PreparedAnswerTurn.stateless("question")
 
-        await manager._aanswer_stream_prepared(turn, workspace="alpha")
+        await manager._prepare_orchestrated_run(
+            turn,
+            workspace="alpha",
+            workspaces=None,
+            all_workspaces=False,
+            top_k=None,
+            chunk_top_k=None,
+            filters=None,
+            resources=None,
+        )
 
         assert _CapturingOrchestrator.last["init"]["search_web"] is not None
-        assert "answer_stream" in _CapturingOrchestrator.last
 
     async def test_agentic_kb_tool_plans_the_agent_query_lazily(self, test_cfg) -> None:
         from dlightrag.core.answer.synthesizer import AnswerSynthesizer
@@ -2819,191 +2801,3 @@ class TestAgenticAnswerCapability:
         assert retrieve_call.kwargs["history"] is None
         assert "plan" not in retrieve_call.kwargs
         web.search.assert_awaited_once_with("inflation 2026")
-
-    async def test_agentic_stream_keeps_slots_until_disconnect(self, test_cfg) -> None:
-        from dlightrag.citations.streaming import aclose_answer_stream
-        from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
-
-        class StreamingToolModel:
-            def __init__(self) -> None:
-                self.turns = [
-                    AssistantTurn(
-                        text="",
-                        tool_calls=(
-                            ToolCall(
-                                id="kb",
-                                name="search_knowledge_base",
-                                arguments={"query": "planned question"},
-                            ),
-                            ToolCall(
-                                id="web",
-                                name="search_web",
-                                arguments={"query": "planned question"},
-                            ),
-                        ),
-                        stop_reason="tool_use",
-                    ),
-                    AssistantTurn(
-                        text="control draft",
-                        tool_calls=(),
-                        stop_reason="stop",
-                    ),
-                ]
-                self.closed = asyncio.Event()
-
-            async def __call__(self, **_kwargs: Any) -> AssistantTurn:
-                return self.turns.pop(0)
-
-            def stream_text(self, **_kwargs: Any) -> AsyncIterator[str]:
-                async def tokens() -> AsyncIterator[str]:
-                    try:
-                        yield "first token"
-                        await asyncio.Event().wait()
-                    finally:
-                        self.closed.set()
-
-                return tokens()
-
-        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
-        manager = RAGServiceManager(config=cfg)
-        plan = RetrievalPlan(standalone_query="planned question")
-        manager._plan_retrieval = AsyncMock(return_value=plan)  # type: ignore[method-assign]
-        manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
-        manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
-            return_value=["alpha"]
-        )
-        manager._retrieve = AsyncMock(  # type: ignore[method-assign]
-            return_value=RetrievalResult(
-                contexts={
-                    "chunks": [
-                        {
-                            "chunk_id": "c1",
-                            "reference_id": "upstream",
-                            "full_doc_id": "doc-1",
-                            "file_path": "report.pdf",
-                            "content": "corpus fact",
-                            "_workspace": "alpha",
-                            "metadata": {
-                                "source_type": "file",
-                                "source_uri": "file:///alpha/report.pdf",
-                                "source_download_locator": "file:///alpha/report.pdf",
-                            },
-                        }
-                    ],
-                    "entities": [],
-                    "relationships": [],
-                }
-            )
-        )
-        web = AsyncMock()
-        web.search.return_value = WebSearchResult(
-            hits=(
-                WebSearchHit(
-                    url="https://example.com/current",
-                    title="Current",
-                    text="web fact",
-                ),
-            ),
-            cost_dollars=0.007,
-        )
-        manager._web_search = web
-        model = StreamingToolModel()
-        manager._query_tool_model = model  # type: ignore[assignment]
-        manager._direct_llm_sem = asyncio.Semaphore(1)
-
-        contexts, stream = await manager._aanswer_stream_prepared(
-            PreparedAnswerTurn.stateless("Question"), workspace="alpha"
-        )
-
-        assert len(contexts["chunks"]) == 2
-        assert stream is not None
-        assert not manager._direct_llm_sem.locked()
-        assert await stream.__anext__() == "first token"
-        assert manager._direct_llm_sem.locked()
-
-        await aclose_answer_stream(stream)
-
-        assert model.closed.is_set()
-        assert not manager._direct_llm_sem.locked()
-
-
-# ---------------------------------------------------------------------------
-# _ScopedAnswerStream must await its cleanup exactly once, never fire-and-forget.
-# ---------------------------------------------------------------------------
-
-
-async def test_scoped_answer_stream_awaits_on_close_on_natural_exhaustion() -> None:
-    from dlightrag.core.servicemanager import _ScopedAnswerStream
-
-    calls = 0
-    closed = asyncio.Event()
-
-    async def on_close() -> None:
-        nonlocal calls
-        calls += 1
-        await asyncio.sleep(0)
-        closed.set()
-
-    async def inner() -> AsyncIterator[str]:
-        yield "a"
-        yield "b"
-
-    stream = _ScopedAnswerStream(inner(), on_close=on_close)
-
-    tokens = [token async for token in stream]
-
-    assert tokens == ["a", "b"]
-    # on_close was awaited before StopAsyncIteration propagated -- not scheduled.
-    assert closed.is_set()
-    assert calls == 1
-    # No background task was left running.
-    others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    assert others == []
-    # Cleanup is idempotent: a later aclose does not run on_close again.
-    await stream.aclose()
-    assert calls == 1
-
-
-async def test_scoped_answer_stream_surfaces_a_failing_cleanup() -> None:
-    from dlightrag.core.servicemanager import _ScopedAnswerStream
-
-    async def on_close() -> None:
-        raise RuntimeError("cleanup boom")
-
-    async def inner() -> AsyncIterator[str]:
-        yield "only"
-
-    stream = _ScopedAnswerStream(inner(), on_close=on_close)
-
-    with pytest.raises(RuntimeError, match="cleanup boom"):
-        async for _ in stream:
-            pass
-
-    # Even when cleanup raises, no background task lingers.
-    others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    assert others == []
-
-
-async def test_scoped_answer_stream_awaits_on_close_on_explicit_aclose() -> None:
-    from dlightrag.core.servicemanager import _ScopedAnswerStream
-
-    calls = 0
-
-    async def on_close() -> None:
-        nonlocal calls
-        calls += 1
-
-    async def inner() -> AsyncIterator[str]:
-        yield "a"
-        yield "b"
-
-    stream = _ScopedAnswerStream(inner(), on_close=on_close)
-
-    assert await stream.__anext__() == "a"
-    await stream.aclose()
-
-    assert calls == 1
-    # Idempotent across a second aclose.
-    await stream.aclose()
-    assert calls == 1

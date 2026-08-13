@@ -308,30 +308,42 @@ ANSWER_RUN_SCHEMA_TABLES = (
     ),
 )
 
-_RUN_COLUMNS = """
-owner_id,
-run_id::text AS run_id,
-idempotency_key,
-request_json,
-status,
-phase,
-stop_reason,
-completed_turns,
-cancel_requested_at,
-lease_owner,
-lease_expires_at,
-fencing_epoch,
-recovery_count,
-next_event_sequence,
-events_trimmed_at,
-result_json,
-error_kind,
-error_message,
-created_at,
-updated_at,
-started_at,
-finished_at
-"""
+#: ``(expression, output name)`` for every column :func:`answer_run_record` reads.
+#: Joined queries project them through :func:`answer_run_columns` so a table alias
+#: disambiguates the names other durable tables also use.
+_RUN_COLUMN_SPECS: tuple[tuple[str, str], ...] = (
+    ("owner_id", "owner_id"),
+    ("run_id::text", "run_id"),
+    ("idempotency_key", "idempotency_key"),
+    ("request_json", "request_json"),
+    ("status", "status"),
+    ("phase", "phase"),
+    ("stop_reason", "stop_reason"),
+    ("completed_turns", "completed_turns"),
+    ("cancel_requested_at", "cancel_requested_at"),
+    ("lease_owner", "lease_owner"),
+    ("lease_expires_at", "lease_expires_at"),
+    ("fencing_epoch", "fencing_epoch"),
+    ("recovery_count", "recovery_count"),
+    ("next_event_sequence", "next_event_sequence"),
+    ("events_trimmed_at", "events_trimmed_at"),
+    ("result_json", "result_json"),
+    ("error_kind", "error_kind"),
+    ("error_message", "error_message"),
+    ("created_at", "created_at"),
+    ("updated_at", "updated_at"),
+    ("started_at", "started_at"),
+    ("finished_at", "finished_at"),
+)
+
+
+def answer_run_columns(alias: str = "") -> str:
+    """Project one run row's columns, optionally through a join alias."""
+    prefix = f"{alias}." if alias else ""
+    return ",\n".join(f"{prefix}{expression} AS {name}" for expression, name in _RUN_COLUMN_SPECS)
+
+
+_RUN_COLUMNS = answer_run_columns()
 
 _INSERT_RUN = f"""
 INSERT INTO dlightrag_answer_runs (
@@ -669,17 +681,27 @@ WITH candidates AS (
 SELECT count(*)::int FROM deleted
 """
 
-# Task 7/8 must add the conversation-linked exemption here — a succeeded run
-# referenced by a committed web_conversation_turns row is owned by that
-# conversation — once `web_conversation_turns.answer_run_id` exists.
+# A succeeded run a Web conversation still links to is owned by that
+# conversation's lifetime, so retention skips it until the conversation (or the
+# turn itself) is gone. Failed and cancelled runs always prune, and their
+# visible terminal turns cascade away with them.
 _SELECT_EXPIRED_RUNS = """
-SELECT owner_id, run_id
-FROM dlightrag_answer_runs
-WHERE status IN ('succeeded', 'failed', 'cancelled')
-  AND finished_at < NOW() - ($1 * INTERVAL '1 second')
-ORDER BY finished_at
+SELECT runs.owner_id, runs.run_id
+FROM dlightrag_answer_runs AS runs
+WHERE runs.status IN ('succeeded', 'failed', 'cancelled')
+  AND runs.finished_at < NOW() - ($1 * INTERVAL '1 second')
+  AND (
+      runs.status <> 'succeeded'
+      OR NOT EXISTS (
+          SELECT 1
+          FROM web_conversation_turns AS turns
+          WHERE turns.principal_id = runs.owner_id
+            AND turns.answer_run_id = runs.run_id
+      )
+  )
+ORDER BY runs.finished_at
 LIMIT $2
-FOR UPDATE SKIP LOCKED
+FOR UPDATE OF runs SKIP LOCKED
 """
 
 _SELECT_TRIMMABLE_RUNS = """
@@ -722,7 +744,7 @@ def _canonical_request_json(request: Mapping[str, Any]) -> str:
     )
 
 
-def _request_fingerprint(request: Mapping[str, Any]) -> str:
+def answer_run_request_fingerprint(request: Mapping[str, Any]) -> str:
     """Digest the canonical request so key replays can detect changed input."""
     return hashlib.sha256(_canonical_request_json(request).encode("utf-8")).hexdigest()
 
@@ -957,35 +979,67 @@ class PGAnswerRunStore:
         existing run; reusing it with different input raises
         :class:`IdempotencyKeyConflict`.
         """
-        owner = _require_owner(owner_id)
-        payload = _canonical_request_json(request)
-        fingerprint = _request_fingerprint(request)
-        run_uuid = _new_run_id()
+
+        # An unusable owner or request is a caller fault, so both are rejected
+        # before a connection is acquired rather than inside a transaction that
+        # would then have to unwind.
+        _require_owner(owner_id)
+        _canonical_request_json(request)
 
         async def _operation(conn: Any) -> RunCreation:
             async with conn.transaction():
-                row = await conn.fetchrow(
-                    _INSERT_RUN, owner, run_uuid, idempotency_key, payload, fingerprint
-                )
-                if row is None:
-                    existing = await conn.fetchrow(_SELECT_RUN_BY_KEY, owner, idempotency_key)
-                    if existing is None:
-                        raise RuntimeError("answer run insert reported a vanished conflict")
-                    if str(existing["request_fingerprint"]) != fingerprint:
-                        raise IdempotencyKeyConflict(
-                            "idempotency key was reused with different request input"
-                        )
-                    return RunCreation(run=_run_record(existing), replayed=True)
-                await self._write_artifacts(
+                return await self.create_run_in(
                     conn,
-                    owner_id=owner,
-                    run_uuid=run_uuid,
+                    owner_id=owner_id,
+                    request=request,
+                    idempotency_key=idempotency_key,
                     artifacts=artifacts,
                     references=references,
                 )
-                return RunCreation(run=_run_record(row), replayed=False)
 
         return await self._run_write(_operation)
+
+    async def create_run_in(
+        self,
+        conn: Any,
+        *,
+        owner_id: str,
+        request: Mapping[str, Any],
+        idempotency_key: str | None = None,
+        artifacts: Sequence[PendingArtifact] = (),
+        references: Sequence[PendingArtifactReference] = (),
+    ) -> RunCreation:
+        """Create or replay one run inside a transaction the caller already owns.
+
+        This is the composition seam another durable table uses to link its own
+        row to the accepted run atomically. It performs no transaction control of
+        its own, so the caller's commit is what makes the run and its link
+        durable together.
+        """
+        owner = _require_owner(owner_id)
+        payload = _canonical_request_json(request)
+        fingerprint = answer_run_request_fingerprint(request)
+        run_uuid = _new_run_id()
+        row = await conn.fetchrow(
+            _INSERT_RUN, owner, run_uuid, idempotency_key, payload, fingerprint
+        )
+        if row is None:
+            existing = await conn.fetchrow(_SELECT_RUN_BY_KEY, owner, idempotency_key)
+            if existing is None:
+                raise RuntimeError("answer run insert reported a vanished conflict")
+            if str(existing["request_fingerprint"]) != fingerprint:
+                raise IdempotencyKeyConflict(
+                    "idempotency key was reused with different request input"
+                )
+            return RunCreation(run=answer_run_record(existing), replayed=True)
+        await self._write_artifacts(
+            conn,
+            owner_id=owner,
+            run_uuid=run_uuid,
+            artifacts=artifacts,
+            references=references,
+        )
+        return RunCreation(run=answer_run_record(row), replayed=False)
 
     async def get_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Load one owned run; unknown and foreign identifiers both return ``None``."""
@@ -996,7 +1050,7 @@ class PGAnswerRunStore:
 
         async def _operation(conn: Any) -> AnswerRunRecord | None:
             row = await conn.fetchrow(_SELECT_RUN, owner, run_uuid)
-            return _run_record(row) if row is not None else None
+            return answer_run_record(row) if row is not None else None
 
         return await self._run_read(_operation)
 
@@ -1038,7 +1092,7 @@ class PGAnswerRunStore:
                 row = await conn.fetchrow(_SELECT_RUN_FOR_UPDATE, owner, run_uuid)
                 if row is None:
                     return CancellationOutcome(outcome="unknown", run=None)
-                record = _run_record(row)
+                record = answer_run_record(row)
                 if record.terminal:
                     return CancellationOutcome(outcome="already_terminal", run=record)
                 if record.status == "queued":
@@ -1055,13 +1109,13 @@ class PGAnswerRunStore:
                     updated = await conn.fetchrow(_SELECT_RUN, owner, run_uuid)
                     return CancellationOutcome(
                         outcome="cancelled",
-                        run=_run_record(updated) if updated is not None else record,
+                        run=answer_run_record(updated) if updated is not None else record,
                     )
                 await conn.execute(_REQUEST_CANCELLATION, owner, run_uuid)
                 updated = await conn.fetchrow(_SELECT_RUN, owner, run_uuid)
                 return CancellationOutcome(
                     outcome="pending",
-                    run=_run_record(updated) if updated is not None else record,
+                    run=answer_run_record(updated) if updated is not None else record,
                 )
 
         return await self._run_write(_operation)
@@ -1091,7 +1145,7 @@ class PGAnswerRunStore:
                 if row is None:
                     return None
                 return ClaimedRun(
-                    run=_run_record(row),
+                    run=answer_run_record(row),
                     checkpoint=_checkpoint_record(row["checkpoint_json"]),
                 )
 
@@ -1457,20 +1511,31 @@ class PGAnswerRunStore:
 
     async def delete_runs(self, *, owner_id: str, run_ids: Sequence[str]) -> RunDeletion:
         """Delete owned runs and any blobs no reference keeps alive."""
+
+        async def _operation(conn: Any) -> RunDeletion:
+            async with conn.transaction():
+                return await self.delete_runs_in(conn, owner_id=owner_id, run_ids=run_ids)
+
+        return await self._run_write(_operation)
+
+    async def delete_runs_in(
+        self, conn: Any, *, owner_id: str, run_ids: Sequence[str]
+    ) -> RunDeletion:
+        """Delete owned runs and orphaned blobs inside a caller-owned transaction.
+
+        The composition seam a linked table uses so deleting its own rows and the
+        runs they referenced is one atomic act; a lease-fenced worker can no
+        longer append to a run whose row disappeared.
+        """
         owner = _require_owner(owner_id)
         run_uuids = [parsed for parsed in (_run_uuid(value) for value in run_ids) if parsed]
         if not run_uuids:
             return RunDeletion(runs=0, artifacts=0)
         owners = [owner] * len(run_uuids)
-
-        async def _operation(conn: Any) -> RunDeletion:
-            async with conn.transaction():
-                pairs = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_uuids)
-                deleted = await conn.fetchval(_DELETE_RUNS, owners, run_uuids)
-                artifacts = await _delete_unreferenced(conn, *_digest_pairs(pairs))
-                return RunDeletion(runs=int(deleted or 0), artifacts=artifacts)
-
-        return await self._run_write(_operation)
+        pairs = await conn.fetch(_SELECT_RUN_DIGESTS, owners, run_uuids)
+        deleted = await conn.fetchval(_DELETE_RUNS, owners, run_uuids)
+        artifacts = await _delete_unreferenced(conn, *_digest_pairs(pairs))
+        return RunDeletion(runs=int(deleted or 0), artifacts=artifacts)
 
     # ------------------------------------------------------------------
     # Retention
@@ -1775,7 +1840,7 @@ def _json_object(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def _run_record(row: Any) -> AnswerRunRecord:
+def answer_run_record(row: Any) -> AnswerRunRecord:
     return AnswerRunRecord(
         owner_id=str(row["owner_id"]),
         run_id=str(row["run_id"]),
@@ -1867,5 +1932,8 @@ __all__ = [
     "ShutdownOutcome",
     "SweepOutcome",
     "TerminalOutcome",
+    "answer_run_columns",
+    "answer_run_record",
+    "answer_run_request_fingerprint",
     "artifact_digest",
 ]

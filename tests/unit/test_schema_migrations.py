@@ -407,10 +407,10 @@ async def test_verify_migrations_rejects_a_fully_recorded_ledger_missing_an_obje
 async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
     """The Web conversation reset migration only touches web_conversation* tables.
 
-    It deletes every Web conversation row, drops the three superseded tables,
-    and recreates one unified raw-attachment table under the existing ledger,
-    without referencing workspace documents, LightRAG tables, ingest jobs, or
-    global migration tables.
+    It deletes every Web conversation row, drops the superseded duplicated-answer
+    and raw-attachment tables, and recreates turns as pure durable-run links
+    under the existing ledger, without referencing workspace documents, LightRAG
+    tables, ingest jobs, or global migration tables.
     """
     from dlightrag.storage.web_conversations import WEB_CONVERSATION_MIGRATIONS
 
@@ -427,15 +427,20 @@ async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
     assert "DROP TABLE IF EXISTS web_conversation_attachment_chunks" in joined
     assert "DROP TABLE IF EXISTS web_conversation_images" in joined
     assert "DROP TABLE IF EXISTS web_conversation_attachments" in joined
+    # The raw attachment table is superseded by owner artifacts, so it is never
+    # recreated; turns are dropped and rebuilt as run links instead.
+    assert "CREATE TABLE IF NOT EXISTS web_conversation_attachments" not in joined
     drop_index = next(
-        i for i, q in enumerate(ddl) if "DROP TABLE IF EXISTS web_conversation_attachments" in q
+        i for i, q in enumerate(ddl) if "DROP TABLE IF EXISTS web_conversation_turns" in q
     )
     create_index = next(
         i
         for i, q in enumerate(ddl)
-        if "CREATE TABLE IF NOT EXISTS web_conversation_attachments" in q
+        if "CREATE TABLE IF NOT EXISTS web_conversation_turns" in q and "answer_run_id" in q
     )
     assert drop_index < create_index
+    assert "REFERENCES dlightrag_answer_runs (owner_id, run_id)" in ddl[create_index]
+    assert "ON DELETE CASCADE" in ddl[create_index]
 
     # Nothing outside the Web conversation scope is touched.
     executed_sql = "\n".join(query for query, _ in conn.executed)
@@ -450,4 +455,4 @@ async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
         assert foreign not in executed_sql
     # Every applied version was recorded against the web_conversations scope only.
     assert {scope for scope, _ in conn.applied} == {"web_conversations"}
-    assert ("web_conversations", "0002_unified_web_conversation_attachments") in conn.applied
+    assert ("web_conversations", "0004_answer_run_turns") in conn.applied

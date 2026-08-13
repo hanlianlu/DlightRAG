@@ -227,6 +227,12 @@ class _SchemaConn:
 
 
 def _required_domain_scopes() -> list[tuple[str, tuple[Any, ...], tuple[Any, ...], Any]]:
+    """Each domain store with the scope, versions, and tables it validates.
+
+    The Web conversation store validates the durable Answer run schema too: its
+    turns carry a foreign key into ``dlightrag_answer_runs``, so a reader whose
+    run schema is absent must fail there as well.
+    """
     from dlightrag.storage import answer_runs, pg_metadata_index, web_conversations, workspaces
 
     return [
@@ -257,6 +263,24 @@ def _required_domain_scopes() -> list[tuple[str, tuple[Any, ...], tuple[Any, ...
     ]
 
 
+def _prerequisite_versions(scope: str) -> set[tuple[str, str]]:
+    """Versions another scope must already carry before this one validates."""
+    from dlightrag.storage import answer_runs
+
+    if scope != "web_conversations":
+        return set()
+    return {
+        (answer_runs.ANSWER_RUN_MIGRATION_SCOPE, migration.version)
+        for migration in answer_runs.ANSWER_RUN_MIGRATIONS
+    }
+
+
+def _prerequisite_tables(scope: str) -> tuple[Any, ...]:
+    from dlightrag.storage import answer_runs
+
+    return answer_runs.ANSWER_RUN_SCHEMA_TABLES if scope == "web_conversations" else ()
+
+
 @contextmanager
 def _domain_pool_routed_to(conn: _SchemaConn) -> Iterator[None]:
     """Route every domain-store operation at ``conn`` without a real pool."""
@@ -275,7 +299,10 @@ def _domain_pool_routed_to(conn: _SchemaConn) -> Iterator[None]:
 @pytest.mark.parametrize("scope_index", range(4))
 async def test_reader_startup_validates_domain_schema_without_ddl(scope_index: int) -> None:
     scope, migrations, tables, store_cls = _required_domain_scopes()[scope_index]
-    conn = _SchemaConn({(scope, migration.version) for migration in migrations}, tables)
+    conn = _SchemaConn(
+        {(scope, migration.version) for migration in migrations} | _prerequisite_versions(scope),
+        tables + _prerequisite_tables(scope),
+    )
 
     with _domain_pool_routed_to(conn):
         await store_cls().initialize(validate_only=True)
@@ -288,9 +315,10 @@ async def test_reader_startup_fails_on_incompatible_domain_schema(scope_index: i
     from dlightrag.storage.migrations import SchemaValidationError
 
     scope, _migrations, tables, store_cls = _required_domain_scopes()[scope_index]
-    conn = _SchemaConn(set(), tables)
+    conn = _SchemaConn(set(), tables + _prerequisite_tables(scope))
+    expected = "answer_runs" if scope == "web_conversations" else scope
 
-    with _domain_pool_routed_to(conn), pytest.raises(SchemaValidationError, match=scope):
+    with _domain_pool_routed_to(conn), pytest.raises(SchemaValidationError, match=expected):
         await store_cls().initialize(validate_only=True)
 
     assert conn.executed == []
@@ -302,7 +330,10 @@ async def test_reader_startup_fails_when_a_required_table_is_absent(scope_index:
     from dlightrag.storage.migrations import SchemaValidationError
 
     scope, migrations, tables, store_cls = _required_domain_scopes()[scope_index]
-    conn = _SchemaConn({(scope, migration.version) for migration in migrations}, tables[1:])
+    conn = _SchemaConn(
+        {(scope, migration.version) for migration in migrations} | _prerequisite_versions(scope),
+        tables[1:] + _prerequisite_tables(scope),
+    )
 
     with (
         _domain_pool_routed_to(conn),
@@ -318,7 +349,7 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
     from dlightrag.storage.migrations import SchemaValidationError
 
     _scope, _migrations, tables, store_cls = _required_domain_scopes()[scope_index]
-    conn = _SchemaConn(set(), tables, ledger_exists=False)
+    conn = _SchemaConn(set(), tables + _prerequisite_tables(_scope), ledger_exists=False)
 
     with (
         _domain_pool_routed_to(conn),
@@ -400,8 +431,9 @@ def _patch_manager_startup(
 def _patch_answer_run_store(
     monkeypatch: pytest.MonkeyPatch, *, failure: Exception | None = None
 ) -> tuple[list[Any], list[bool]]:
-    """Replace the durable Answer run store with one that records its startup."""
+    """Replace the durable operational stores with ones that record their startup."""
     import dlightrag.storage.answer_runs as answer_runs_module
+    import dlightrag.storage.web_conversations as web_conversations_module
 
     built: list[Any] = []
     validate_calls: list[bool] = []
@@ -418,7 +450,21 @@ def _patch_answer_run_store(
         return store
 
     monkeypatch.setattr(answer_runs_module, "PGAnswerRunStore", _factory)
+    # The Web conversation link table is part of the same operational schema; it
+    # is recorded separately so run-store assertions stay exact.
+    monkeypatch.setattr(
+        web_conversations_module, "PGWebConversationStore", lambda: _WebSchemaRecorder()
+    )
     return built, validate_calls
+
+
+class _WebSchemaRecorder:
+    """Records how the Web conversation schema was established at startup."""
+
+    calls: list[bool] = []
+
+    async def initialize(self, *, validate_only: bool = False) -> None:
+        type(self).calls.append(validate_only)
 
 
 @pytest.mark.parametrize(
@@ -535,6 +581,31 @@ async def test_manager_startup_initializes_the_answer_run_store_before_readiness
     # The one store built at startup is the one every later caller reuses.
     assert await manager._get_answer_run_store() is built[0]
     assert len(built) == 1
+
+
+@pytest.mark.parametrize(
+    ("service_role", "expected_validate_only"),
+    [("writer", False), ("reader", True)],
+)
+async def test_manager_startup_establishes_the_conversation_link_schema(
+    service_role: str,
+    expected_validate_only: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run retention exempts conversation-linked runs, so that table must exist.
+
+    Every process that owns runs therefore establishes the Web conversation
+    schema at startup: a writer migrates it, a reader validates it.
+    """
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+    _patch_manager_startup(monkeypatch, stub_answer_store=False)
+    _patch_answer_run_store(monkeypatch)
+    _WebSchemaRecorder.calls = []
+
+    await RAGServiceManager.acreate(config=_config(service_role=service_role))
+
+    assert _WebSchemaRecorder.calls == [expected_validate_only]
 
 
 async def test_reader_startup_aborts_when_the_answer_run_schema_is_absent(

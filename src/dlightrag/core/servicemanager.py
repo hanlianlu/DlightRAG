@@ -118,75 +118,6 @@ def _attachment_bytes(resources: list[ResourceInput] | None) -> list[bytes]:
     return [resource.content for resource in resources or () if resource.content is not None]
 
 
-class _ScopedAnswerStream:
-    """Async iterator wrapper that awaits its cleanup once when streaming ends."""
-
-    def __init__(
-        self,
-        inner: AsyncIterator[str],
-        *,
-        on_close: Callable[[], Awaitable[None]] | None = None,
-    ) -> None:
-        self._inner = inner
-        self._aiter = inner.__aiter__()
-        self._on_close = on_close
-        self._completed = False
-
-    def __aiter__(self) -> _ScopedAnswerStream:
-        return self
-
-    async def __anext__(self) -> str:
-        try:
-            return await self._aiter.__anext__()
-        except StopAsyncIteration:
-            await self._acomplete()
-            raise
-        except BaseException:
-            await self._acomplete()
-            raise
-
-    async def aclose(self) -> None:
-        close = getattr(self._inner, "aclose", None)
-        try:
-            if callable(close):
-                result = close()
-                if inspect.isawaitable(result):
-                    await cast(Awaitable[Any], result)
-        finally:
-            await self._acomplete()
-
-    @property
-    def answer(self) -> str:
-        return getattr(self._inner, "answer", "")
-
-    @property
-    def trace(self) -> Any:
-        return getattr(self._inner, "trace", None)
-
-    @trace.setter
-    def trace(self, value: Any) -> None:
-        self._inner.trace = value  # type: ignore[attr-defined]
-
-    @property
-    def image_descriptions(self) -> Any:
-        return getattr(self._inner, "image_descriptions", None)
-
-    @image_descriptions.setter
-    def image_descriptions(self, value: Any) -> None:
-        self._inner.image_descriptions = value  # type: ignore[attr-defined]
-
-    async def _acomplete(self) -> None:
-        """Await cleanup exactly once on exhaustion, aclose, error, or cancel.
-
-        The registry close is awaited, never fire-and-forget.
-        """
-        if self._completed:
-            return
-        self._completed = True
-        if self._on_close is not None:
-            await self._on_close()
-
-
 @dataclass(frozen=True)
 class _OrchestratorRun:
     """One request resolved into a capability-driven orchestrator and its inputs."""
@@ -464,14 +395,19 @@ class RAGServiceManager:
             logger.warning("Workspace registry initialization failed: %s", exc)
 
     async def _initialize_answer_run_store(self) -> None:
-        """Migrate the durable Answer run schema, or validate it on a reader.
+        """Migrate the durable operational schema, or validate it on a reader.
 
         Answer runs are startup state, not first-request state: a process whose
         run schema is absent must fail before readiness rather than accept runs
-        it cannot durably record.
+        it cannot durably record. The Web conversation link table is part of the
+        same schema because run retention exempts conversation-linked runs, so
+        every process that owns runs also establishes that table.
         """
+        from dlightrag.storage.web_conversations import PGWebConversationStore
+
         try:
             await self._get_answer_run_store()
+            await PGWebConversationStore().initialize(validate_only=self._config.is_reader)
         except SchemaValidationError:
             raise
         except Exception as exc:
@@ -1716,80 +1652,6 @@ class RAGServiceManager:
         )
         return registry, tools
 
-    async def _aanswer_stream_prepared(
-        self,
-        turn: PreparedAnswerTurn,
-        *,
-        workspace: str | None = None,
-        workspaces: list[str] | None = None,
-        all_workspaces: bool = False,
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        filters: MetadataFilter | None = None,
-        resources: list[ResourceInput] | None = None,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Stream one server-prepared turn through the one answer orchestrator."""
-        from dlightrag.observability import trace_observation
-
-        run: _OrchestratorRun | None = None
-        registry_transferred = False
-        try:
-            async with asyncio.timeout(self._config.request_timeout):
-                run = await self._prepare_orchestrated_run(
-                    turn,
-                    workspace=workspace,
-                    workspaces=workspaces,
-                    all_workspaces=all_workspaces,
-                    top_k=top_k,
-                    chunk_top_k=chunk_top_k,
-                    filters=filters,
-                    resources=resources,
-                )
-                async with trace_observation(
-                    "answer_orchestration",
-                    as_type="chain",
-                    input={"query": turn.current_query},
-                    metadata={
-                        "stream": True,
-                        "research": run.orchestrator.uses_research_path,
-                        "workspaces": run.ws_list,
-                        "history_turns": len(run.history or []),
-                        "query_image_count": run.current_image_count,
-                    },
-                ) as pipeline_trace:
-                    contexts, stream = await run.orchestrator.answer_stream(
-                        turn.current_query,
-                        conversation_history=run.history,
-                        query_images=run.query_images,
-                    )
-                    if stream is None:
-                        return contexts, None
-                    stream_meta = cast(Any, stream)
-                    existing_trace = getattr(stream_meta, "trace", None)
-                    merged_trace = dict(existing_trace) if isinstance(existing_trace, dict) else {}
-                    merged_trace["query_image_description_count"] = len(run.image_descriptions)
-                    stream_meta.trace = merged_trace
-                    stream_meta.image_descriptions = run.image_descriptions
-                    wrapped = _ScopedAnswerStream(
-                        stream,
-                        on_close=run.registry.aclose if run.registry is not None else None,
-                    )
-                    registry_transferred = True
-                    pipeline_trace.update(
-                        output={
-                            **_context_output(contexts),
-                            "agent_turns": merged_trace.get("agent_turns", 0),
-                        }
-                    )
-                    return contexts, wrapped
-        except TimeoutError as exc:
-            raise RAGServiceUnavailableError(
-                detail=f"Request timed out after {self._config.request_timeout}s"
-            ) from exc
-        finally:
-            if run is not None and run.registry is not None and not registry_transferred:
-                await run.registry.aclose()
-
     # --- Durable answer runs ---
 
     async def _get_answer_run_store(self) -> PGAnswerRunStore:
@@ -1865,6 +1727,17 @@ class RAGServiceManager:
             )
             for attachment in request.attachments
         ]
+        references.extend(
+            PendingArtifactReference(
+                resource_id=attachment.history_resource_id,
+                reference_kind="history_attachment",
+                ordinal=attachment.ordinal,
+                digest=attachment.digest,
+                filename=attachment.filename,
+                mime_type=attachment.mime_type,
+            )
+            for attachment in request.history_attachments
+        )
         creation = await store.create_run(
             owner_id=owner_id,
             request=request.as_request(),
@@ -2033,11 +1906,12 @@ class RAGServiceManager:
 
         Image attachments are materialized now because current-turn images are
         verified and promoted into image blocks before the run starts; every
-        other attachment stays lazy and is read only through resource tools.
+        other attachment, including every prior-turn one, stays lazy and is read
+        only through resource tools.
         """
         from dlightrag.core.resources import ResourceInput as _ResourceInput
 
-        if not request.links and not request.attachments:
+        if not request.links and not request.attachments and not request.history_attachments:
             return None
 
         async def _load(digest: str) -> bytes:
@@ -2076,6 +1950,14 @@ class RAGServiceManager:
                     loader=_loader(attachment.digest),
                 )
             )
+        resources.extend(
+            _ResourceInput(
+                filename=attachment.filename,
+                declared_mime=attachment.mime_type,
+                loader=_loader(attachment.digest),
+            )
+            for attachment in request.history_attachments
+        )
         return resources
 
     async def _load_corpus_image(self, workspace: str, chunk_id: str) -> str | None:
@@ -2120,22 +2002,19 @@ class RAGServiceManager:
         ``history`` is caller-supplied prior turns (``role``/``content`` dicts).
         It is stateless -- the caller owns persistence and passes it per request.
         """
-        creation = await self.astart_answer_run(
-            owner_id=owner_id or DEPLOYMENT_OWNER_ID,
-            request=await self._durable_run_input(
-                query,
-                workspace=workspace,
-                workspaces=workspaces,
-                all_workspaces=all_workspaces,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                filters=filters,
-                history=history,
-                semantic_highlights=semantic_highlights,
-                resources=resources,
-            ),
+        creation = await self.acreate_answer_run(
+            query,
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            filters=filters,
+            history=history,
+            semantic_highlights=semantic_highlights,
+            resources=resources,
             idempotency_key=idempotency_key,
-            attachment_bytes=_attachment_bytes(resources),
+            owner_id=owner_id,
         )
         run = creation.run
         async with aclosing(
@@ -2153,6 +2032,47 @@ class RAGServiceManager:
         raise AnswerRunFailedError(
             final.error_kind or "answer_stream_failed",
             final.error_message or "Answer run failed.",
+        )
+
+    async def acreate_answer_run(
+        self,
+        query: str,
+        *,
+        workspace: str | None = None,
+        workspaces: list[str] | None = None,
+        all_workspaces: bool = False,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        filters: MetadataFilter | None = None,
+        history: list[dict[str, Any]] | None = None,
+        semantic_highlights: bool = False,
+        resources: list[ResourceInput] | None = None,
+        idempotency_key: str | None = None,
+        owner_id: str | None = None,
+    ) -> RunCreation:
+        """Accept one durable answer run and return it without waiting.
+
+        The descriptor-only entry point every transport shares: the run outlives
+        the call that created it, and its state is read back through
+        ``aget_answer_run``, ``asubscribe_answer_run``, and
+        ``acancel_answer_run``.
+        """
+        return await self.astart_answer_run(
+            owner_id=owner_id or DEPLOYMENT_OWNER_ID,
+            request=await self._durable_run_input(
+                query,
+                workspace=workspace,
+                workspaces=workspaces,
+                all_workspaces=all_workspaces,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                filters=filters,
+                history=history,
+                semantic_highlights=semantic_highlights,
+                resources=resources,
+            ),
+            idempotency_key=idempotency_key,
+            attachment_bytes=_attachment_bytes(resources),
         )
 
     async def aanswer_stream(
@@ -2177,22 +2097,19 @@ class RAGServiceManager:
         events. Closing this generator detaches this subscriber only; the run
         keeps executing until it finishes or is explicitly cancelled.
         """
-        creation = await self.astart_answer_run(
-            owner_id=owner_id or DEPLOYMENT_OWNER_ID,
-            request=await self._durable_run_input(
-                query,
-                workspace=workspace,
-                workspaces=workspaces,
-                all_workspaces=all_workspaces,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                filters=filters,
-                history=history,
-                semantic_highlights=semantic_highlights,
-                resources=resources,
-            ),
+        creation = await self.acreate_answer_run(
+            query,
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            filters=filters,
+            history=history,
+            semantic_highlights=semantic_highlights,
+            resources=resources,
             idempotency_key=idempotency_key,
-            attachment_bytes=_attachment_bytes(resources),
+            owner_id=owner_id,
         )
         run = creation.run
         async with aclosing(
@@ -2242,6 +2159,7 @@ class RAGServiceManager:
                     filename=safe_source_filename(resource.filename),
                     mime_type=resource.declared_mime or "application/octet-stream",
                     ordinal=len(attachments),
+                    byte_size=len(resource.content),
                 )
             )
         return AnswerRunInput(

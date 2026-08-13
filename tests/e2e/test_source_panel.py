@@ -278,12 +278,16 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
                         {
                             "turn_id": "source-turn",
                             "turn_number": 1,
+                            "answer_run_id": "source-run",
+                            "submission_id": "source-submission",
+                            "status": "succeeded",
+                            "cancel_requested": False,
                             "user_text": "Show the source",
                             "assistant_text": "Cited answer.",
                             "user_attachments": [],
-                            "answer_sources": {},
                             "answer_html": answer_html,
-                            "queried_workspaces": [],
+                            "error_kind": None,
+                            "error_message": None,
                             "created_at": timestamp,
                         }
                     ],

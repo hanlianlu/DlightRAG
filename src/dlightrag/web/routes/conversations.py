@@ -137,37 +137,34 @@ async def delete_conversation(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/conversations/{conversation_id}/attachments/{attachment_id}")
-async def conversation_attachment(
-    conversation_id: UUID,
-    attachment_id: UUID,
+@router.get("/runs/{run_id}/attachments/{ordinal}")
+async def run_attachment(
+    run_id: str,
+    ordinal: int,
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> Response:
-    attachment = await service.attachment(_user(request), str(conversation_id), str(attachment_id))
-    if attachment is None:
+    stored = await service.attachment(_user(request), run_id, ordinal)
+    if stored is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
+    reference, content = stored
     headers = {
         "Cache-Control": "private, max-age=3600",
         "X-Content-Type-Options": "nosniff",
     }
-    if not attachment.mime_type.lower().startswith("image/"):
-        headers["Content-Disposition"] = _attachment_content_disposition(attachment.filename)
-    return Response(
-        content=attachment.attachment_bytes,
-        media_type=attachment.mime_type,
-        headers=headers,
-    )
+    if not reference.mime_type.lower().startswith("image/"):
+        headers["Content-Disposition"] = _attachment_content_disposition(reference.filename)
+    return Response(content=content, media_type=reference.mime_type, headers=headers)
 
 
-@router.get("/conversations/{conversation_id}/attachments/{attachment_id}/thumbnail")
-async def conversation_attachment_thumbnail(
-    conversation_id: UUID,
-    attachment_id: UUID,
+@router.get("/runs/{run_id}/attachments/{ordinal}/thumbnail")
+async def run_attachment_thumbnail(
+    run_id: str,
+    ordinal: int,
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> Response:
-    thumbnail = await service.thumbnail(_user(request), str(conversation_id), str(attachment_id))
+    thumbnail = await service.thumbnail(_user(request), run_id, ordinal)
     if thumbnail is None:
         raise HTTPException(status_code=404, detail="Thumbnail not available")
     payload, mime_type = thumbnail

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""E2E tests for chat flow: SSE streaming, citations, image rendering."""
+"""E2E tests for chat flow: durable run submission, streaming, and reload."""
 
 import pytest
 
@@ -8,8 +8,8 @@ import pytest
 def test_chat_submit_streams_answer(page):
     """Submit a query via the composer and verify the AI response appears in the DOM.
 
-    The mocked backend yields token → preview → done SSE events.
-    The frontend progressively renders them into .ai-message-content.
+    The mocked backend accepts a durable run, then replays its progress, token,
+    and terminal events; the frontend renders them into .ai-message-content.
     """
     page.goto("/web/")
     page.wait_for_selector(".composer-input", timeout=10000)
@@ -93,3 +93,79 @@ def test_chat_submit_keeps_open_panel_visible(page):
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
     assert page.locator("#panel").evaluate("el => el.classList.contains('open')")
     assert page.locator("body").evaluate("el => el.classList.contains('panel-open')")
+
+
+@pytest.mark.e2e
+def test_reloading_recovers_the_answer_from_the_run_not_the_response(page):
+    """The 202 response is not the answer; the reloaded page reads the run."""
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+    page.locator(".composer-input").fill("What is DlightRAG?")
+    page.click(".composer-send")
+    page.wait_for_function(
+        """
+        () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
+            .some(node => node.textContent.includes('DlightRAG is a multimodal'))
+        """,
+        timeout=15000,
+    )
+
+    page.reload()
+
+    # Nothing from the original response survives a reload, so this text can only
+    # have come from the run the conversation still links to.
+    page.wait_for_function(
+        """
+        () => Array.from(document.querySelectorAll('[class*="aiMessageContent"]'))
+            .some(node => node.textContent.includes('DlightRAG is a multimodal'))
+        """,
+        timeout=15000,
+    )
+    assert page.locator('[class*="userMessageWrapper"]').count() == 1
+
+
+@pytest.mark.e2e
+def test_a_replayed_submission_never_creates_a_second_turn(page, e2e_base_url):
+    """Resending one submission id returns the run it already created."""
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+    page.locator(".composer-input").fill("What is DlightRAG?")
+    page.click(".composer-send")
+    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=15000)
+
+    replay = page.evaluate(
+        """
+        async () => {
+          const history = await (await fetch('/web/conversations')).json();
+          const conversation = history[0].conversation_id;
+          const turns = await (
+            await fetch(`/web/conversations/${conversation}/history`)
+          ).json();
+          const turn = turns.turns[0];
+          const response = await fetch('/web/answer', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              query: 'What is DlightRAG?',
+              workspaces: ['default'],
+              conversation_id: conversation,
+              submission_id: turn.submission_id,
+            }),
+          });
+          const descriptor = await response.json();
+          const after = await (
+            await fetch(`/web/conversations/${conversation}/history`)
+          ).json();
+          return {
+            status: response.status,
+            runId: descriptor.run_id,
+            originalRunId: turn.answer_run_id,
+            turnCount: after.turns.length,
+          };
+        }
+        """
+    )
+
+    assert replay["status"] == 200
+    assert replay["runId"] == replay["originalRunId"]
+    assert replay["turnCount"] == 1

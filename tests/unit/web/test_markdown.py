@@ -77,9 +77,11 @@ def test_render_markdown_mermaid_source_escaped():
 
 def test_mermaid_marker_survives_nh3():
     """The mermaid marker must survive server-side nh3 sanitization."""
-    from dlightrag.web.safe_html import safe_answer_preview
+    from dlightrag.web.safe_html import safe_answer_done
 
-    result = safe_answer_preview("```mermaid\ngraph TD\n  A-->B\n```")
+    result = safe_answer_done(
+        answer="```mermaid\ngraph TD\n  A-->B\n```", sources=[], answer_images=[]
+    )
     assert 'class="mermaid-source"' in result
     assert 'data-lang="mermaid"' in result
     assert "graph TD" in result

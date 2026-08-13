@@ -11,6 +11,7 @@ import {
     renameConversation,
 } from '../api/conversations.ts';
 import {bus} from '../events/bus.ts';
+import {resumePendingTurn} from './chat.ts';
 import {
     renderConversationHistory,
     renderConversationHistoryError,
@@ -298,7 +299,14 @@ async function loadConversation(
     try {
         const history = await getConversationHistory(conversationId, controller.signal);
         if (!conversationStore.isCurrentRequest(requestGeneration)) return false;
-        if (conversationStore.setHistory(history, requestGeneration)) renderConversationHistory(history);
+        if (conversationStore.setHistory(history, requestGeneration)) {
+            const pending = renderConversationHistory(history);
+            // A queued or running answer keeps producing on the server; reattach
+            // to its durable events instead of showing a dead placeholder.
+            if (pending) {
+                void resumePendingTurn(pending.turn, conversationId, pending.stored);
+            }
+        }
         return true;
     } catch (error) {
         if (isAbortError(error) || !conversationStore.isCurrentRequest(requestGeneration)) return false;
@@ -574,10 +582,6 @@ export function setupConversations(): void {
     bus.on('conversationAnswerSaved', function({conversationId}) {
         if (conversationStore.activeConversationId !== conversationId) return;
         void selectConversation(conversationId, false, false);
-    });
-    bus.on('conversationSaveCheckRequested', function({conversationId}) {
-        if (conversationStore.activeConversationId !== conversationId) return;
-        void selectConversation(conversationId, true, false);
     });
     bus.on('conversationDeferredSelectionReady', function({conversationId}) {
         void selectConversation(conversationId, true, true);

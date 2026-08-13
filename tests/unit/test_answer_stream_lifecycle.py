@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Regression tests for answer-stream lifecycle (cleanup on close + idle timeout).
+"""Regression tests for answer-token iteration (idle timeout + close).
 
-Guards the SSE-disconnect leak: when a client disconnects mid-stream the route's
-``finally`` must close the token iterator, which awaits the request-local cleanup
-and cancels the upstream LLM connection.
+Guards the stream-consumption contract every answer path shares: an idle upstream
+stream raises rather than hanging, and closing a partially consumed stream
+cancels the upstream LLM connection.
 """
 
 import asyncio
@@ -12,7 +12,6 @@ from collections.abc import AsyncIterator
 import pytest
 
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
-from dlightrag.core.servicemanager import _ScopedAnswerStream
 
 
 class _FakeRawStream:
@@ -40,46 +39,8 @@ class _FakeRawStream:
         self.closed = True
 
 
-async def test_aclose_runs_cleanup_on_early_stop() -> None:
-    """The core disconnect regression: partial consume + aclose frees resources."""
-    closed: list[str] = []
-
-    async def on_close() -> None:
-        closed.append("registry")
-
-    raw = _FakeRawStream(["a", "b", "c"])
-    stream = _ScopedAnswerStream(raw, on_close=on_close)
-
-    # Consume one token, then stop early (client disconnected mid-stream).
-    first = await stream.__anext__()
-    assert first == "a"
-
-    # This is what the route's `finally` runs.
-    await aclose_answer_stream(stream)
-
-    assert closed == ["registry"], "request-local cleanup leaked on early stop"
-    assert raw.closed, "upstream stream was not cancelled"
-
-
-async def test_aclose_is_idempotent_after_full_consume() -> None:
-    closed: list[str] = []
-
-    async def on_close() -> None:
-        closed.append("registry")
-
-    raw = _FakeRawStream(["x"])
-    stream = _ScopedAnswerStream(raw, on_close=on_close)
-
-    tokens = [chunk async for chunk in stream]
-    assert tokens == ["x"]
-    assert closed == ["registry"]  # cleaned up on StopAsyncIteration
-
-    await aclose_answer_stream(stream)  # must not clean up twice / raise
-    assert closed == ["registry"]
-
-
 async def test_iter_answer_tokens_times_out_when_idle() -> None:
-    stream = _ScopedAnswerStream(_FakeRawStream([], hang=True))
+    stream = _FakeRawStream([], hang=True)
 
     with pytest.raises(TimeoutError):
         async for _ in iter_answer_tokens(stream, idle_timeout=0.05):
@@ -92,7 +53,7 @@ async def test_iter_answer_tokens_passthrough_str_and_none() -> None:
 
 
 async def test_iter_answer_tokens_yields_all_chunks() -> None:
-    stream = _ScopedAnswerStream(_FakeRawStream(["a", "b", "c"]))
+    stream = _FakeRawStream(["a", "b", "c"])
     collected: list[str] = []
     token_iter: AsyncIterator[str] = iter_answer_tokens(stream, idle_timeout=1.0)
     async for chunk in token_iter:

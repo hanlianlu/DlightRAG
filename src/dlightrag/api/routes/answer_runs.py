@@ -223,6 +223,7 @@ def _run_input(
                 filename=upload.filename,
                 mime_type=upload.mime_type,
                 ordinal=ordinal,
+                byte_size=len(upload.content),
             )
             for ordinal, upload in enumerate(uploads)
         ),

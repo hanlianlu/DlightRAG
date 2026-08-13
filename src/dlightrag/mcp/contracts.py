@@ -35,6 +35,13 @@ class AnswerInput(QueryWorkspaceSelection, AnswerRequestContract):
     attachments: list[AnswerAttachmentLink] = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
         default_factory=list,
     )
+    idempotency_key: str | None = Field(default=None, max_length=255)
+
+
+class AnswerRunInput(MCPInput):
+    """One owned answer run addressed by the id the answer tool returned."""
+
+    run_id: str = Field(min_length=1, max_length=64)
 
 
 class IngestInput(IngestPayload):
@@ -69,6 +76,7 @@ class DeleteFilesInput(MCPInput):
 
 __all__ = [
     "AnswerInput",
+    "AnswerRunInput",
     "ConversationMessage",
     "CreateWorkspaceInput",
     "DeleteFilesInput",

@@ -26,6 +26,7 @@ class AttachmentReference:
     filename: str
     mime_type: str
     ordinal: int
+    byte_size: int = 0
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -33,11 +34,16 @@ class AttachmentReference:
             "filename": self.filename,
             "mime_type": self.mime_type,
             "ordinal": self.ordinal,
+            "byte_size": self.byte_size,
         }
 
     @property
     def resource_id(self) -> str:
         return f"attachment-{self.ordinal}"
+
+    @property
+    def history_resource_id(self) -> str:
+        return f"history-attachment-{self.ordinal}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +82,9 @@ class AnswerRunInput:
     semantic_highlights: bool = False
     links: tuple[LinkReference, ...] = ()
     attachments: tuple[AttachmentReference, ...] = ()
+    #: Earlier conversation uploads this run may read but never sends as a
+    #: current-turn image; they point at artifacts an earlier run already stored.
+    history_attachments: tuple[AttachmentReference, ...] = ()
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -88,19 +97,13 @@ class AnswerRunInput:
             "semantic_highlights": self.semantic_highlights,
             "links": [item.as_json() for item in self.links],
             "attachments": [item.as_json() for item in self.attachments],
+            "history_attachments": [item.as_json() for item in self.history_attachments],
         }
 
     @classmethod
     def from_request(cls, request: Mapping[str, Any]) -> AnswerRunInput:
-        attachments = tuple(
-            AttachmentReference(
-                digest=str(item["digest"]),
-                filename=str(item["filename"]),
-                mime_type=str(item["mime_type"]),
-                ordinal=int(item["ordinal"]),
-            )
-            for item in request.get("attachments") or ()
-        )
+        attachments = _attachment_references(request.get("attachments"))
+        history_attachments = _attachment_references(request.get("history_attachments"))
         links = tuple(
             LinkReference(
                 url=str(item["url"]),
@@ -121,7 +124,21 @@ class AnswerRunInput:
             semantic_highlights=bool(request.get("semantic_highlights")),
             links=links,
             attachments=attachments,
+            history_attachments=history_attachments,
         )
+
+
+def _attachment_references(value: Any) -> tuple[AttachmentReference, ...]:
+    return tuple(
+        AttachmentReference(
+            digest=str(item["digest"]),
+            filename=str(item["filename"]),
+            mime_type=str(item["mime_type"]),
+            ordinal=int(item["ordinal"]),
+            byte_size=int(item.get("byte_size") or 0),
+        )
+        for item in value or ()
+    )
 
 
 class SessionBoundaries:

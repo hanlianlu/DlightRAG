@@ -783,14 +783,14 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
     e2e_conversation_service: Any,
 ) -> None:
     turn_count = 40
-    conversation_id = e2e_conversation_service.seed_image_history(turn_count=turn_count)
+    e2e_conversation_service.seed_image_history(turn_count=turn_count)
     thumbnail_requests: list[str] = []
     original_requests: list[str] = []
 
     def record_image_request(request) -> None:
         path = urlparse(request.url).path
-        prefix = f"/web/conversations/{conversation_id}/attachments/"
-        if not path.startswith(prefix):
+        # Uploads live with the run that accepted them, not with the conversation.
+        if not path.startswith("/web/runs/") or "/attachments/" not in path:
             return
         if path.endswith("/thumbnail"):
             thumbnail_requests.append(path)

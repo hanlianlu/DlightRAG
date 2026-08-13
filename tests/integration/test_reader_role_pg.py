@@ -326,9 +326,16 @@ _DAMAGE_CASES = [
     ),
     pytest.param(
         "web_conversations",
-        "DROP TABLE web_conversation_attachments",
-        ["table web_conversation_attachments"],
+        "DROP TABLE web_conversation_turns",
+        ["table web_conversation_turns"],
         id="web-table",
+    ),
+    pytest.param(
+        "web_conversations",
+        "ALTER TABLE web_conversation_turns "
+        "DROP CONSTRAINT web_conversation_turns_principal_id_answer_run_id_fkey",
+        ["foreign key web_conversation_turns (principal_id, answer_run_id) "],
+        id="web-run-link",
     ),
     pytest.param(
         "web_conversations",

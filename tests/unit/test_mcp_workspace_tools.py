@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for MCP workspace lifecycle tools."""
 
+import datetime
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -10,13 +12,13 @@ import pytest
 from mcp import Client, MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
-from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec
+from dlightrag.core.principal import owner_id_from_principal
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.scope import RequestScope, request_scope_context
 from dlightrag.mcp import server as mcp_server
-from dlightrag.models.schemas import Reference
+from dlightrag.storage.answer_runs import AnswerRunRecord
 
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
@@ -47,11 +49,91 @@ def mock_mcp_manager(monkeypatch):
     manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
     manager.aretrieve = AsyncMock()
     manager.aanswer = AsyncMock()
+    manager.acreate_answer_run = AsyncMock(
+        return_value=SimpleNamespace(run=_run_record(), replayed=False)
+    )
+    manager.aget_answer_run = AsyncMock(return_value=_run_record())
+    manager.acancel_answer_run = AsyncMock(
+        return_value=SimpleNamespace(outcome="cancelled", run=_run_record(status="cancelled"))
+    )
     manager.aingest = AsyncMock()
     manager.astart_ingest_job = AsyncMock()
     manager.config.answer.max_attachments = 6
     monkeypatch.setattr(mcp_server, "_ensure_manager", AsyncMock(return_value=manager))
     return manager
+
+
+_RUN_ID = "019893f4-0000-7000-8000-000000000001"
+_CREATED_AT = datetime.datetime(2026, 8, 12, tzinfo=datetime.UTC)
+#: MCP with ``auth_mode="none"`` collapses callers into the deployment owner.
+_EXPECTED_OWNER = owner_id_from_principal(auth_mode="none", user_id="anonymous")
+
+
+def _run_record(
+    *,
+    status: str = "queued",
+    result: dict[str, Any] | None = None,
+    cancel_requested: bool = False,
+    error_kind: str | None = None,
+    error_message: str | None = None,
+) -> AnswerRunRecord:
+    terminal = status in ("succeeded", "failed", "cancelled")
+    return AnswerRunRecord(
+        owner_id=_EXPECTED_OWNER,
+        run_id=_RUN_ID,
+        idempotency_key=None,
+        request={"query": "Follow up", "workspaces": ["default"]},
+        status=status,  # type: ignore[arg-type]
+        phase=None,
+        stop_reason=None,
+        completed_turns=0,
+        cancel_requested_at=_CREATED_AT if cancel_requested else None,
+        lease_owner=None,
+        lease_expires_at=None,
+        fencing_epoch=0,
+        recovery_count=0,
+        next_event_sequence=1,
+        events_trimmed_at=None,
+        result=result,
+        error_kind=error_kind,
+        error_message=error_message,
+        created_at=_CREATED_AT,
+        updated_at=_CREATED_AT,
+        started_at=None,
+        finished_at=_CREATED_AT if terminal else None,
+    )
+
+
+def _stored_result() -> dict[str, Any]:
+    return {
+        "answer": "Answer [1-1].",
+        "contexts": {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "file_path": "/private/report.pdf",
+                    "content": "Evidence",
+                    "image_data": "base64-payload",
+                    "_workspace": "default",
+                }
+            ]
+        },
+        "sources": [
+            {
+                "id": "1",
+                "title": "report.pdf",
+                "type": "document",
+                "source_uri": "local://default/report.pdf",
+                "workspace": "default",
+                "document_id": "doc-report",
+                "chunks": [],
+            }
+        ],
+        "answer_images": [],
+        "trace": {},
+        "image_descriptions": [],
+    }
 
 
 async def test_get_capabilities_reports_answer_image_capability(
@@ -121,10 +203,12 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
 
     assert names == {
         "answer",
+        "cancel_answer_run",
         "cancel_ingest_job",
         "create_workspace",
         "delete_files",
         "delete_workspace",
+        "get_answer_run",
         "get_capabilities",
         "get_ingest_job",
         "ingest",
@@ -134,8 +218,23 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     }
     answer_tool = next(tool for tool in tools if tool.name == "answer")
     answer_props = answer_tool.input_schema["properties"]
-    assert {"query", "history", "attachments", "filters", "chunk_top_k"} <= answer_props.keys()
+    assert {
+        "query",
+        "history",
+        "attachments",
+        "filters",
+        "chunk_top_k",
+        "idempotency_key",
+    } <= answer_props.keys()
     assert "query_images" not in answer_props
+    # The answer tool starts work and returns; the follow-up tools read and stop it.
+    assert answer_tool.annotations is not None
+    assert answer_tool.annotations.read_only_hint is False
+    for name in ("get_answer_run", "cancel_answer_run"):
+        tool = next(item for item in tools if item.name == name)
+        assert set(tool.input_schema["properties"]) == {"run_id"}
+        assert tool.input_schema["properties"]["run_id"]["description"]
+        assert tool.description and "answer run" in tool.description
     ingest_tool = next(tool for tool in tools if tool.name == "ingest")
     ingest_props = ingest_tool.input_schema["properties"]
     assert {"source_type", "path", "url", "documents", "metadata"} <= ingest_props.keys()
@@ -522,38 +621,9 @@ async def test_mcp_get_ingest_job_reads_manager_job(mock_mcp_manager) -> None:
     mock_mcp_manager.aget_ingest_job.assert_awaited_once_with("job-1")
 
 
-async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_contexts(
-    mock_mcp_manager,
+async def test_mcp_answer_returns_a_descriptor_without_waiting(
+    mock_mcp_manager: AsyncMock,
 ) -> None:
-    mock_mcp_manager.aanswer = AsyncMock(
-        return_value=RetrievalResult(
-            answer="Answer [1-1].",
-            contexts={
-                "chunks": [
-                    {
-                        "chunk_id": "c1",
-                        "reference_id": "1",
-                        "file_path": "/private/report.pdf",
-                        "content": "Evidence",
-                        "image_data": "base64-payload",
-                        "_workspace": "default",
-                    }
-                ]
-            },
-            references=[Reference(id="1", title="report.pdf")],
-            sources=[
-                SourceReference(
-                    id="1",
-                    title="report.pdf",
-                    source_uri="local://default/report.pdf",
-                    workspace="default",
-                    document_id="doc-report",
-                    download_locator="/private/report.pdf",
-                )
-            ],
-        )
-    )
-
     result = await mcp_server.mcp_app.call_tool(
         "answer",
         {
@@ -564,32 +634,175 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "attachments": [{"url": "https://example.com/report.pdf", "filename": "report.pdf"}],
             "filters": {"title": "Manual"},
             "semantic_highlights": True,
+            "idempotency_key": "key-1",
         },
     )
 
     body = _tool_json(result)
-    assert body["answer"] == "Answer [1-1]."
-    assert body["contexts"]["chunks"][0]["image_url"] == "/images/default/c1?size=full"
-    assert "image_data" not in body["contexts"]["chunks"][0]
-    assert body["sources"][0]["id"] == "1"
-    assert body["sources"][0]["source_uri"] == "local://default/report.pdf"
-    assert body["sources"][0]["download_url"] is None
-    assert {"workspace", "download_locator", "path", "url"}.isdisjoint(body["sources"][0])
+    assert body == {
+        "run_id": _RUN_ID,
+        "status": "queued",
+        "cancel_requested": False,
+        "created_at": _CREATED_AT.isoformat(),
+    }
+    # The tool call never holds the run open, so no answer text is returned here.
+    assert "answer" not in body
+    mock_mcp_manager.aanswer.assert_not_awaited()
 
-    call_kwargs = mock_mcp_manager.aanswer.call_args.kwargs
+    call_kwargs = mock_mcp_manager.acreate_answer_run.await_args.kwargs
     assert call_kwargs["workspaces"] == ["default"]
     assert call_kwargs["top_k"] == 8
     assert call_kwargs["chunk_top_k"] == 12
+    assert call_kwargs["semantic_highlights"] is True
+    assert call_kwargs["idempotency_key"] == "key-1"
+    assert call_kwargs["owner_id"] == _EXPECTED_OWNER
+    assert call_kwargs["filters"].title == "Manual"
     assert "query_images" not in call_kwargs
     resources = call_kwargs["resources"]
     assert [resource.url for resource in resources] == ["https://example.com/report.pdf"]
     assert resources[0].filename == "report.pdf"
     assert resources[0].content is None
-    assert "conversation_history" not in call_kwargs
-    assert "session_id" not in call_kwargs
-    assert "referenced_image_ids" not in call_kwargs
-    assert call_kwargs["filters"].title == "Manual"
-    assert call_kwargs["semantic_highlights"] is True
+
+
+async def test_mcp_answer_reports_a_reused_key_with_different_input(
+    mock_mcp_manager: AsyncMock,
+) -> None:
+    from dlightrag.storage.answer_runs import IdempotencyKeyConflict
+
+    mock_mcp_manager.acreate_answer_run.side_effect = IdempotencyKeyConflict("reused")
+
+    result = await mcp_server.mcp_app.call_tool(
+        "answer", {"query": "x", "idempotency_key": "key-1"}
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert "idempotency_key" in _tool_text(result)
+
+
+async def test_mcp_status_returns_the_canonical_result_and_sanitizes_contexts(
+    mock_mcp_manager: AsyncMock,
+) -> None:
+    mock_mcp_manager.aget_answer_run.return_value = _run_record(
+        status="succeeded",
+        result=_stored_result(),
+    )
+
+    body = _tool_json(await mcp_server.mcp_app.call_tool("get_answer_run", {"run_id": _RUN_ID}))
+
+    assert body["status"] == "succeeded"
+    assert body["result"]["answer"] == "Answer [1-1]."
+    assert body["result"]["contexts"]["chunks"][0]["image_url"] == "/images/default/c1?size=full"
+    assert "image_data" not in body["result"]["contexts"]["chunks"][0]
+    assert body["result"]["sources"][0]["source_uri"] == "local://default/report.pdf"
+    assert body["result"]["sources"][0]["download_url"] is None
+    assert {"workspace", "download_locator", "path", "url"}.isdisjoint(body["result"]["sources"][0])
+    assert mock_mcp_manager.aget_answer_run.await_args.kwargs["owner_id"] == _EXPECTED_OWNER
+
+
+async def test_mcp_status_keeps_the_recorded_answer_image_transport_state(
+    mock_mcp_manager: AsyncMock,
+) -> None:
+    """An image the answer model never received must not read as if it had."""
+    stored = _stored_result()
+    stored["answer_images"] = [
+        {
+            "id": "c1",
+            "chunk_id": "c1",
+            "workspace": "default",
+            "source_ref": "1-1",
+            "label": "Figure 1",
+            "answer_image_sent": False,
+        }
+    ]
+    mock_mcp_manager.aget_answer_run.return_value = _run_record(status="succeeded", result=stored)
+
+    body = _tool_json(await mcp_server.mcp_app.call_tool("get_answer_run", {"run_id": _RUN_ID}))
+
+    assert body["result"]["answer_images"][0]["answer_image_sent"] is False
+
+
+async def test_mcp_status_reports_a_failed_run_with_its_public_error(
+    mock_mcp_manager: AsyncMock,
+) -> None:
+    mock_mcp_manager.aget_answer_run.return_value = _run_record(
+        status="failed",
+        error_kind="answer_stream_failed",
+        error_message="Service error.",
+    )
+
+    body = _tool_json(await mcp_server.mcp_app.call_tool("get_answer_run", {"run_id": _RUN_ID}))
+
+    assert body["status"] == "failed"
+    assert body["error_kind"] == "answer_stream_failed"
+    assert body["error_message"] == "Service error."
+    assert body["result"] is None
+
+
+@pytest.mark.parametrize("tool", ["get_answer_run", "cancel_answer_run"])
+async def test_mcp_never_reveals_another_owners_run(mock_mcp_manager: AsyncMock, tool: str) -> None:
+    mock_mcp_manager.aget_answer_run.return_value = None
+    mock_mcp_manager.acancel_answer_run.return_value = SimpleNamespace(outcome="unknown", run=None)
+
+    result = await mcp_server.mcp_app.call_tool(tool, {"run_id": _RUN_ID})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == f"Error: Answer run not found: {_RUN_ID}"
+
+
+async def test_mcp_cancel_reports_the_pending_request(mock_mcp_manager: AsyncMock) -> None:
+    running = _run_record(status="running", cancel_requested=True)
+    mock_mcp_manager.acancel_answer_run.return_value = SimpleNamespace(
+        outcome="pending", run=running
+    )
+
+    body = _tool_json(await mcp_server.mcp_app.call_tool("cancel_answer_run", {"run_id": _RUN_ID}))
+
+    assert body["status"] == "running"
+    assert body["cancel_requested"] is True
+    assert mock_mcp_manager.acancel_answer_run.await_args.kwargs["owner_id"] == _EXPECTED_OWNER
+
+
+async def test_mcp_answer_preserves_answer_input_error_kind(
+    mock_mcp_manager: AsyncMock,
+) -> None:
+    from dlightrag.core.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
+
+    mock_mcp_manager.acreate_answer_run.side_effect = AnswerInputOverflowError(
+        "The answer input is too large."
+    )
+
+    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == f"Error [{ANSWER_INPUT_OVERFLOW}]: The answer input is too large."
+
+
+async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
+    mock_mcp_manager: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.core.answer.errors import (
+        INVALID_TOOL_CONFIGURATION,
+        InvalidToolConfigurationError,
+    )
+
+    mock_mcp_manager.acreate_answer_run.side_effect = InvalidToolConfigurationError(
+        ("read_resource",)
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert _tool_text(result) == (
+        f"Error [{INVALID_TOOL_CONFIGURATION}]: Answer tooling is misconfigured."
+    )
+    assert "read_resource" not in _tool_text(result)
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 @pytest.mark.parametrize(
@@ -611,7 +824,7 @@ async def test_mcp_answer_rejects_local_and_base64_attachments(
 
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
-    mock_mcp_manager.aanswer.assert_not_awaited()
+    mock_mcp_manager.acreate_answer_run.assert_not_awaited()
 
 
 async def test_mcp_answer_enforces_link_count_limit(mock_mcp_manager) -> None:
@@ -627,7 +840,7 @@ async def test_mcp_answer_enforces_link_count_limit(mock_mcp_manager) -> None:
 
     assert isinstance(result, CallToolResult)
     assert result.is_error is True
-    mock_mcp_manager.aanswer.assert_not_awaited()
+    mock_mcp_manager.acreate_answer_run.assert_not_awaited()
 
 
 async def test_mcp_answer_rejects_top_level_local_fields(mock_mcp_manager) -> None:
@@ -638,67 +851,7 @@ async def test_mcp_answer_rejects_top_level_local_fields(mock_mcp_manager) -> No
         )
         assert isinstance(result, CallToolResult)
         assert result.is_error is True
-    mock_mcp_manager.aanswer.assert_not_awaited()
-
-
-async def test_mcp_answer_uses_shared_executor(
-    mock_mcp_manager: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    execute = AsyncMock(return_value=RetrievalResult(answer="shared", contexts={"chunks": []}))
-    monkeypatch.setattr(mcp_server, "execute_answer", execute)
-
-    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
-
-    assert _tool_json(result)["answer"] == "shared"
-    execute.assert_awaited_once()
-    mock_mcp_manager.aanswer.assert_not_awaited()
-
-
-async def test_mcp_answer_preserves_answer_input_error_kind(
-    mock_mcp_manager: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from dlightrag.core.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
-
-    monkeypatch.setattr(
-        mcp_server,
-        "execute_answer",
-        AsyncMock(side_effect=AnswerInputOverflowError("The answer input is too large.")),
-    )
-
-    result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
-
-    assert isinstance(result, CallToolResult)
-    assert result.is_error is True
-    assert _tool_text(result) == f"Error [{ANSWER_INPUT_OVERFLOW}]: The answer input is too large."
-
-
-async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
-    mock_mcp_manager: AsyncMock,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    from dlightrag.core.answer.errors import (
-        INVALID_TOOL_CONFIGURATION,
-        InvalidToolConfigurationError,
-    )
-
-    monkeypatch.setattr(
-        mcp_server,
-        "execute_answer",
-        AsyncMock(side_effect=InvalidToolConfigurationError(("read_resource",))),
-    )
-
-    with caplog.at_level(logging.WARNING):
-        result = await mcp_server.mcp_app.call_tool("answer", {"query": "x"})
-
-    assert isinstance(result, CallToolResult)
-    assert result.is_error is True
-    assert _tool_text(result) == (
-        f"Error [{INVALID_TOOL_CONFIGURATION}]: Answer tooling is misconfigured."
-    )
-    assert "read_resource" not in _tool_text(result)
-    assert [record for record in caplog.records if record.levelno >= logging.ERROR]
-    assert not [record for record in caplog.records if record.levelno == logging.WARNING]
+    mock_mcp_manager.acreate_answer_run.assert_not_awaited()
 
 
 async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
