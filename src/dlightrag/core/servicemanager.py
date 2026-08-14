@@ -32,13 +32,15 @@ if TYPE_CHECKING:
     from dlightrag.core.resources import ResourceInput, ResourceRegistry
     from dlightrag.core.retrieval.web_search import ExaSearch
     from dlightrag.core.source_download import SourceDownloadTarget
-    from dlightrag.models.tool_model import QueryToolModel
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag_agent.tools import AgentTool
+from dlightrag_ai.completion import CompletionModel
 from dlightrag_ai.media import MAX_DECODE_IMAGE_PIXELS
 from dlightrag_ai.telemetry import safe_log_text
+from dlightrag_ai.tool_model import ToolModel
+from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
 from dlightrag_rag.retrieval import MetadataFilter
 from PIL import Image
 
@@ -73,6 +75,7 @@ from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag.core.lightrag_lifecycle import defer_cancellation
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.principal import DEPLOYMENT_OWNER_ID
 from dlightrag.core.request.images import prepare_query_images
@@ -84,7 +87,7 @@ from dlightrag.core.request.workspaces import (
 )
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
-from dlightrag.core.vision_probe import ImageCapabilityStatus, ModelImageCapabilities
+from dlightrag.model_settings import model_settings_for_role, rerank_scoring_model_settings
 from dlightrag.observability import LangfuseTelemetry
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import safe_source_filename
@@ -105,17 +108,6 @@ logger = logging.getLogger(__name__)
 _MAX_RETRY_INTERVAL: float = 300.0
 _QUERY_WORKSPACE_MAX_CONCURRENCY = 8
 _SCHEMA_CACHE_MAX_ENTRIES = 128
-
-
-def _defer_cancellation(
-    first: asyncio.CancelledError | None,
-    current: asyncio.CancelledError,
-) -> asyncio.CancelledError:
-    task = asyncio.current_task()
-    if task is not None:
-        while task.cancelling():
-            task.uncancel()
-    return first if first is not None else current
 
 
 def _attachment_bytes(resources: list[ResourceInput] | None) -> list[bytes]:
@@ -297,22 +289,24 @@ class RAGServiceManager:
         self._warmups: set[asyncio.Task[None]] = set()
 
         self._answer_synthesizer: AnswerSynthesizer | None = None
+        self._answer_model: CompletionModel | None = None
         self._ingest_jobs = IngestJobCoordinator(
             self._get_ingest_service,
             input_root=self._config.input_dir_path,
         )
         self._retrieval_planner: RetrievalPlanner | None = None
+        self._planner_model: CompletionModel | None = None
         self._vlm_func: Callable[..., Any] | None = None
-        self._vlm_closers: list[Callable[[], Awaitable[Any]]] = []
+        self._vlm_model: CompletionModel | None = None
         self._web_search: ExaSearch | None = None
-        self._query_tool_model: QueryToolModel | None = None
+        self._query_tool_model: ToolModel | None = None
         self._vlm_func_lock = asyncio.Lock()
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         # Image capability is role-specific but cached per resolved model config,
         # so roles that share one model share one probe.
-        self._image_capabilities = ModelImageCapabilities()
+        self._image_capabilities = ModelImageCapabilities(telemetry=LangfuseTelemetry())
         self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
@@ -637,18 +631,15 @@ class RAGServiceManager:
         self._cache_answer_image_capability(await self._discover_answer_image_capability())
 
     async def _discover_answer_image_capability(self) -> AnswerImageCapability:
-        """Probe ``model_for_role(config, "query")`` and build a tri-state capability.
+        """Probe ``model_settings_for_role(config, "query")`` and build a capability.
 
         Probes the model the AnswerSynthesizer actually uses -- not ``llm.default``.
         A non-positive deployment ceiling disables answer images without any model
         call, and without recording that config choice against a model another
         role may share. Best-effort otherwise: failures degrade to ``unknown``.
         """
-        from dlightrag.core.vision_probe import ImageProbeOutcome
-        from dlightrag.models.llm_roles import model_for_role
-
         ceiling = int(self._config.answer.max_images)
-        cfg = model_for_role(self._config, "query")
+        cfg = model_settings_for_role(self._config, "query")
         outcome = (
             await self._image_capabilities.resolve(cfg)
             if ceiling > 0
@@ -673,12 +664,12 @@ class RAGServiceManager:
         non-positive deployment ceiling leaves no image slot for any role, so it
         settles the role without spending a model call.
         """
-        from dlightrag.models.llm_roles import model_for_role
-
         if int(self._config.answer.max_images) <= 0:
             self._vlm_image_status = "unsupported"
             return
-        outcome = await self._image_capabilities.resolve(model_for_role(self._config, "vlm"))
+        outcome = await self._image_capabilities.resolve(
+            model_settings_for_role(self._config, "vlm")
+        )
         self._vlm_image_status = outcome.status
 
     async def _maybe_reprobe_vlm_image_capability(self) -> None:
@@ -702,10 +693,8 @@ class RAGServiceManager:
         ):
             return  # no rerank model consumes image input; nothing to probe
 
-        from dlightrag.models.llm import get_chat_rerank_scoring_config
-
         outcome = await self._image_capabilities.resolve(
-            get_chat_rerank_scoring_config(self._config)
+            rerank_scoring_model_settings(self._config)
         )
         self._rerank_supports_vision = {"supported": True, "unsupported": False}.get(outcome.status)
 
@@ -958,13 +947,20 @@ class RAGServiceManager:
 
     def _get_answer_synthesizer(self) -> AnswerSynthesizer:
         """Lazy-create the AnswerSynthesizer from global config."""
+        if self._closed:
+            raise RAGServiceUnavailableError("RAG service manager is closed")
         if self._answer_synthesizer is None:
-            from dlightrag.models.llm import get_query_model_func
-
-            self._answer_synthesizer = AnswerSynthesizer(
-                model_func=get_query_model_func(self._config),
+            synthesizer = AnswerSynthesizer(
+                model_func=None,
                 image_policy=self._answer_image_policy(),
             )
+            answer_model = CompletionModel(
+                model_settings_for_role(self._config, "query"),
+                telemetry=LangfuseTelemetry(),
+            )
+            synthesizer.model_func = answer_model
+            self._answer_model = answer_model
+            self._answer_synthesizer = synthesizer
         return self._answer_synthesizer
 
     def _answer_image_policy(self) -> AnswerImagePolicy:
@@ -1037,19 +1033,26 @@ class RAGServiceManager:
 
     def _get_retrieval_planner(self) -> RetrievalPlanner:
         """Return the manager-owned RetrievalPlanner, creating it when needed."""
+        if self._closed:
+            raise RAGServiceUnavailableError("RAG service manager is closed")
         if self._retrieval_planner is None:
             from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE
-            from dlightrag.models.llm import get_retrieval_planner_model_func
 
             envelope = self._config.answer.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
+            self._planner_model = CompletionModel(
+                model_settings_for_role(self._config, "extract"),
+                telemetry=LangfuseTelemetry(),
+            )
             self._retrieval_planner = RetrievalPlanner(
-                llm_func=self._sem_bound(get_retrieval_planner_model_func(self._config)),
+                llm_func=self._sem_bound(self._planner_model),
                 input_token_envelope=max(1, envelope),
             )
         return self._retrieval_planner
 
     def _get_web_search(self) -> ExaSearch | None:
         """Return the manager-owned web search client, or None when unconfigured."""
+        if self._closed:
+            raise RAGServiceUnavailableError("RAG service manager is closed")
         key = self._config.web_search.api_key
         if not key:
             return None
@@ -1059,12 +1062,15 @@ class RAGServiceManager:
             self._web_search = ExaSearch(key)
         return self._web_search
 
-    def _get_query_tool_model(self) -> QueryToolModel:
+    def _get_query_tool_model(self) -> ToolModel:
         """Return the agent control model used by the research answer path."""
+        if self._closed:
+            raise RAGServiceUnavailableError("RAG service manager is closed")
         if self._query_tool_model is None:
-            from dlightrag.models.tool_model import create_query_tool_model
-
-            self._query_tool_model = create_query_tool_model(self._config)
+            self._query_tool_model = ToolModel(
+                model_settings_for_role(self._config, "query"),
+                telemetry=LangfuseTelemetry(),
+            )
         return self._query_tool_model
 
     def _query_image_describer(self) -> QueryImageDescriber:
@@ -1086,11 +1092,11 @@ class RAGServiceManager:
         if self._closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
         if self._vlm_func is None:
-            from dlightrag.models.llm import get_vlm_model_func
-
-            self._vlm_func = self._sem_bound(
-                get_vlm_model_func(self._config, owner_closers=self._vlm_closers)
+            self._vlm_model = CompletionModel(
+                model_settings_for_role(self._config, "vlm"),
+                telemetry=LangfuseTelemetry(),
             )
+            self._vlm_func = self._sem_bound(self._vlm_model)
         return self._vlm_func
 
     async def _get_schema(
@@ -2246,7 +2252,7 @@ class RAGServiceManager:
             try:
                 await coordinator.aclose()
             except asyncio.CancelledError as exc:
-                cancellation = _defer_cancellation(cancellation, exc)
+                cancellation = defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Failed to close the durable answer coordinator", exc_info=True)
 
@@ -2257,21 +2263,21 @@ class RAGServiceManager:
 
         async with self._vlm_func_lock:
             self._vlm_func = None
-            vlm_closers, self._vlm_closers = self._vlm_closers, []
+            vlm_model, self._vlm_model = self._vlm_model, None
 
-        for close_vlm in vlm_closers:
-            try:
-                await close_vlm()
-            except asyncio.CancelledError as exc:
-                cancellation = _defer_cancellation(cancellation, exc)
-            except Exception:
-                logger.warning("Failed to close manager VLM provider", exc_info=True)
+        answer_model, self._answer_model = self._answer_model, None
+        planner_model, self._planner_model = self._planner_model, None
+        query_tool_model, self._query_tool_model = self._query_tool_model, None
+        web_search, self._web_search = self._web_search, None
+        self._answer_synthesizer = None
+        self._retrieval_planner = None
 
         for component in (
-            self._answer_synthesizer,
-            self._retrieval_planner,
-            self._query_tool_model,
-            self._web_search,
+            query_tool_model,
+            answer_model,
+            planner_model,
+            vlm_model,
+            web_search,
         ):
             close = getattr(component, "aclose", None)
             if not callable(close):
@@ -2281,7 +2287,7 @@ class RAGServiceManager:
                 if inspect.isawaitable(result):
                     await cast(Awaitable[Any], result)
             except asyncio.CancelledError as exc:
-                cancellation = _defer_cancellation(cancellation, exc)
+                cancellation = defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Failed to close manager component", exc_info=True)
 
@@ -2289,7 +2295,7 @@ class RAGServiceManager:
             try:
                 await svc.aclose()
             except asyncio.CancelledError as exc:
-                cancellation = _defer_cancellation(cancellation, exc)
+                cancellation = defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
         self._services.clear()
@@ -2300,7 +2306,7 @@ class RAGServiceManager:
         try:
             await pg_pool.close()
         except asyncio.CancelledError as exc:
-            cancellation = _defer_cancellation(cancellation, exc)
+            cancellation = defer_cancellation(cancellation, exc)
         shutdown_tracing()
         if cancellation is not None:
             raise cancellation

@@ -28,6 +28,16 @@ class _FakePostgresConn:
         raise AssertionError(f"unexpected SQL: {sql!r}")
 
 
+class _FakeChatModels:
+    @classmethod
+    async def acreate(cls, *_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            default_func=object(),
+            role_configs=None,
+            aclose=AsyncMock(),
+        )
+
+
 # ---------------------------------------------------------------------------
 # TestRAGServiceAingest
 # ---------------------------------------------------------------------------
@@ -72,6 +82,21 @@ class TestRAGServiceAingest:
         service = RAGService(config=test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.aingest(source_type="local", path="/tmp/f.pdf")
+
+    async def test_acreate_closes_partial_service_when_initialization_fails(
+        self,
+        test_config: DlightragConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        initialize = AsyncMock(side_effect=RuntimeError("initialization failed"))
+        close = AsyncMock()
+        monkeypatch.setattr(RAGService, "initialize", initialize)
+        monkeypatch.setattr(RAGService, "aclose", close)
+
+        with pytest.raises(RuntimeError, match="initialization failed"):
+            await RAGService.acreate(config=test_config)
+
+        close.assert_awaited_once()
 
     async def test_aingest_replace_default_from_config(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -152,6 +177,34 @@ class TestRAGServiceAingest:
 
 class TestRAGServiceClose:
     """Test cleanup logic."""
+
+    async def test_close_defers_cancellation_until_all_resources_are_closed(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._rerank_func = AsyncMock()
+        multimodal_embedder = AsyncMock()
+        chat_models = AsyncMock()
+        service._multimodal_embedder = multimodal_embedder
+        service._chat_models = chat_models
+        service._lightrag = MagicMock()
+        service._lightrag.finalize_storages = AsyncMock()
+
+        async def cancel_current_task() -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()
+            await asyncio.sleep(0)
+
+        service._rerank_func.aclose.side_effect = cancel_current_task
+
+        with pytest.raises(asyncio.CancelledError):
+            await service.aclose()
+
+        multimodal_embedder.aclose.assert_awaited_once()
+        chat_models.aclose.assert_awaited_once()
+        service._lightrag.finalize_storages.assert_awaited_once()
 
     async def test_close_handles_errors(self, test_config: DlightragConfig) -> None:
         service = RAGService(config=test_config)
@@ -867,16 +920,16 @@ class TestRAGServiceLightRAGMainPath:
                 self.doc_status = object()
 
         monkeypatch.setattr(
-            "dlightrag.core.service.get_default_model_func_for_lightrag",
-            lambda config: object(),
+            "dlightrag.core.service.LightRagChatModels",
+            _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag.core.service.get_rerank_func", lambda config, **_: None)
-        monkeypatch.setattr("dlightrag.core.service.build_role_llm_configs", lambda config: None)
+        monkeypatch.setattr("dlightrag.core.service.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag.core.service.get_multimodal_embedder", lambda config: object()
+            "dlightrag.core.service.create_embedding_model",
+            lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag.core.service.get_embedding_func", lambda config, **_: object()
+            "dlightrag.core.service.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
             RAGService,
@@ -902,7 +955,7 @@ class TestRAGServiceLightRAGMainPath:
 
         with (
             patch("lightrag.LightRAG", FakeLightRAG),
-            patch("dlightrag.models.rerank.rerank_consumes_images", return_value=False),
+            patch("dlightrag.core.service.rerank_consumes_images", return_value=False),
             patch(
                 "dlightrag.core.retrieval.filtered_vdb.FilteredVectorStorage",
                 side_effect=lambda **kwargs: kwargs["original"],
@@ -957,16 +1010,16 @@ class TestRAGServiceLightRAGMainPath:
                 self.doc_status = object()
 
         monkeypatch.setattr(
-            "dlightrag.core.service.get_default_model_func_for_lightrag",
-            lambda config: object(),
+            "dlightrag.core.service.LightRagChatModels",
+            _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag.core.service.get_rerank_func", lambda config, **_: None)
-        monkeypatch.setattr("dlightrag.core.service.build_role_llm_configs", lambda config: None)
+        monkeypatch.setattr("dlightrag.core.service.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag.core.service.get_multimodal_embedder", lambda config: object()
+            "dlightrag.core.service.create_embedding_model",
+            lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag.core.service.get_embedding_func", lambda config, **_: object()
+            "dlightrag.core.service.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
             RAGService,
@@ -988,7 +1041,7 @@ class TestRAGServiceLightRAGMainPath:
 
         with (
             patch("lightrag.LightRAG", FakeLightRAG),
-            patch("dlightrag.models.rerank.rerank_consumes_images", return_value=False),
+            patch("dlightrag.core.service.rerank_consumes_images", return_value=False),
             patch("dlightrag.core.lightrag_stores.LightRAGStores", return_value=object()),
             patch("dlightrag.core.visual_assets.ThumbnailCache", return_value=object()),
             patch("dlightrag.core.visual_assets.VisualAssetResolver", return_value=object()),
@@ -1038,16 +1091,16 @@ class TestRAGServiceLightRAGMainPath:
             call_order.append("attach")
 
         monkeypatch.setattr(
-            "dlightrag.core.service.get_default_model_func_for_lightrag",
-            lambda config: object(),
+            "dlightrag.core.service.LightRagChatModels",
+            _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag.core.service.get_rerank_func", lambda config, **_: None)
-        monkeypatch.setattr("dlightrag.core.service.build_role_llm_configs", lambda config: None)
+        monkeypatch.setattr("dlightrag.core.service.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag.core.service.get_multimodal_embedder", lambda config: object()
+            "dlightrag.core.service.create_embedding_model",
+            lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag.core.service.get_embedding_func", lambda config, **_: object()
+            "dlightrag.core.service.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
             RAGService,
@@ -1069,7 +1122,7 @@ class TestRAGServiceLightRAGMainPath:
 
         with (
             patch("lightrag.LightRAG", FakeLightRAG),
-            patch("dlightrag.models.rerank.rerank_consumes_images", return_value=False),
+            patch("dlightrag.core.service.rerank_consumes_images", return_value=False),
             patch(
                 "dlightrag.core.retrieval.filtered_vdb.FilteredVectorStorage",
                 side_effect=lambda **kwargs: kwargs["original"],

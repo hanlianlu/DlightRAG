@@ -221,25 +221,37 @@ def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMulti
     from dlightrag.core import service as service_module
 
     multimodal_embedder = FakeMultimodalEmbedder(dim=dim)
+
+    class FakeLightRagChatModels:
+        @classmethod
+        async def acreate(cls, *_args: Any, **_kwargs: Any) -> FakeLightRagChatModels:
+            return cls()
+
+        def __init__(self) -> None:
+            self.default_func = fake_lightrag_llm
+            self.role_configs = None
+
+        async def aclose(self) -> None:
+            return None
+
     monkeypatch.setattr(
         service_module,
-        "get_default_model_func_for_lightrag",
-        lambda _config: fake_lightrag_llm,
+        "LightRagChatModels",
+        FakeLightRagChatModels,
     )
     monkeypatch.setattr(
         service_module,
-        "get_rerank_func",
-        lambda _config, *, supports_vision=None: None,
-    )
-    monkeypatch.setattr(service_module, "build_role_llm_configs", lambda _config: None)
-    monkeypatch.setattr(
-        service_module,
-        "get_embedding_func",
-        lambda _config, *, embedder=None: fake_embedding_func(dim=dim),
+        "build_rerank_func",
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         service_module,
-        "get_multimodal_embedder",
-        lambda _config: multimodal_embedder,
+        "build_lightrag_embedding",
+        lambda _settings, _embedder: fake_embedding_func(dim=dim),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "create_embedding_model",
+        lambda *_args, **_kwargs: multimodal_embedder,
     )
     return multimodal_embedder

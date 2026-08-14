@@ -165,7 +165,6 @@ class EmbeddingConfig(BaseModel):
     input_modality: InputModality = "auto"
     asymmetric: AsymmetricMode = "auto"
     startup_probe: bool = True
-    model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
 class LLMRolesConfig(BaseModel):

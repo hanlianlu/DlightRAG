@@ -36,6 +36,8 @@ class RecordingObservation:
 
 
 class RecordingTelemetry:
+    capture_sensitive_data = False
+
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.observation = RecordingObservation()

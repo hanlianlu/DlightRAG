@@ -22,7 +22,7 @@ from dlightrag.config import (
     VisualAssetsConfig,
     load_config,
 )
-from dlightrag.models.llm_roles import model_for_role
+from dlightrag.model_settings import model_settings_for_role
 
 
 @pytest.fixture(autouse=True)
@@ -180,6 +180,10 @@ class TestEmbeddingConfig:
         with pytest.raises(ValidationError):
             EmbeddingConfig(provider="voyage", model="voyage-multimodal-3.5", **kwargs)
 
+    def test_rejects_retired_model_kwargs(self) -> None:
+        with pytest.raises(ValidationError):
+            cast(Any, EmbeddingConfig)(model_kwargs={"truncation": False})
+
 
 class TestRerankConfig:
     def test_defaults(self):
@@ -301,13 +305,13 @@ class TestDlightragConfigNested:
             timeout=240.0,
         )
         assert cfg.llm.roles.extract is None
-        assert model_for_role(cfg, "extract") == cfg.llm.default
+        assert model_settings_for_role(cfg, "extract").model == cfg.llm.default.model
         assert cfg.llm.roles.keyword is None
-        assert model_for_role(cfg, "keyword") == cfg.llm.default
+        assert model_settings_for_role(cfg, "keyword").model == cfg.llm.default.model
         assert cfg.llm.roles.query is None
-        assert model_for_role(cfg, "query") == cfg.llm.default
+        assert model_settings_for_role(cfg, "query").model == cfg.llm.default.model
         assert cfg.llm.roles.vlm is None
-        assert model_for_role(cfg, "vlm") == cfg.llm.default
+        assert model_settings_for_role(cfg, "vlm").model == cfg.llm.default.model
         assert cfg.embedding == EmbeddingConfig()
         assert cfg.rerank.strategy == "chat_llm_reranker"
         assert cfg.rerank.model is None

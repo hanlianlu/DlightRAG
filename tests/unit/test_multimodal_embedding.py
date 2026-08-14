@@ -3,10 +3,19 @@
 
 import io
 import threading
+from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dlightrag_ai.contracts import InputModality, ResolvedInputModality
+from dlightrag_ai.embedding import (
+    MultimodalEmbedder as _MultimodalEmbedder,
+)
+from dlightrag_ai.embedding import (
+    resolve_embedding_input_modality,
+)
+from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.media import decode_image_base64
 from dlightrag_ai.providers.embed_base import EmbedProvider
 from dlightrag_ai.providers.embed_providers import (
@@ -17,10 +26,52 @@ from dlightrag_ai.providers.embed_providers import (
 )
 from PIL import Image
 
-from dlightrag.models.multimodal_embedding import (
-    MultimodalEmbedder,
-    resolve_embedding_input_modality,
+_TEST_FINGERPRINT = ModelFingerprint(
+    provider="test",
+    model="test-model",
+    endpoint_fingerprint=None,
 )
+
+
+def MultimodalEmbedder(**kwargs):
+    return _MultimodalEmbedder(fingerprint=_TEST_FINGERPRINT, **kwargs)
+
+
+async def test_embedding_error_text_is_redacted_when_sensitive_capture_is_disabled() -> None:
+    class Observation:
+        updates: list[dict[str, Any]] = []
+
+        def update(self, **kwargs: Any) -> None:
+            self.updates.append(kwargs)
+
+    class Telemetry:
+        capture_sensitive_data = False
+        observation = Observation()
+
+        @asynccontextmanager
+        async def observe(self, name: str, **_kwargs: Any):
+            del name
+            yield self.observation
+
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+        telemetry=Telemetry(),
+    )
+    embedder._client.post = AsyncMock(  # pyright: ignore[reportPrivateUsage]
+        side_effect=RuntimeError("upstream echoed secret embedding input")
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="secret embedding input"):
+            await embedder.embed_texts(["secret"])
+    finally:
+        await embedder.aclose()
+
+    assert Telemetry.observation.updates == [{"level": "ERROR", "status_message": "RuntimeError"}]
 
 
 @pytest.mark.parametrize(
@@ -274,7 +325,7 @@ async def test_embed_query_images_batches_with_query_context() -> None:
 
 
 async def test_embed_query_images_builds_payload_off_event_loop(monkeypatch) -> None:
-    from dlightrag.models import multimodal_embedding
+    from dlightrag_ai import embedding
 
     provider = VoyageEmbedProvider()
     loop_thread = threading.get_ident()
@@ -289,7 +340,7 @@ async def test_embed_query_images_builds_payload_off_event_loop(monkeypatch) -> 
         preparation_threads.append(threading.get_ident())
         return original_build_payload(*args, **kwargs)
 
-    monkeypatch.setattr(multimodal_embedding, "bounded_embedding_image_data_uri", encode_image)
+    monkeypatch.setattr(embedding, "bounded_embedding_image_data_uri", encode_image)
     monkeypatch.setattr(provider, "build_payload", build_payload)
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
@@ -313,7 +364,7 @@ async def test_embed_query_images_builds_payload_off_event_loop(monkeypatch) -> 
 
 
 async def test_embed_index_fused_builds_payload_off_event_loop(monkeypatch) -> None:
-    from dlightrag.models import multimodal_embedding
+    from dlightrag_ai import embedding
 
     provider = VoyageEmbedProvider()
     loop_thread = threading.get_ident()
@@ -328,7 +379,7 @@ async def test_embed_index_fused_builds_payload_off_event_loop(monkeypatch) -> N
         preparation_threads.append(threading.get_ident())
         return original_build_payload(*args, **kwargs)
 
-    monkeypatch.setattr(multimodal_embedding, "bounded_embedding_image_data_uri", encode_image)
+    monkeypatch.setattr(embedding, "bounded_embedding_image_data_uri", encode_image)
     monkeypatch.setattr(provider, "build_payload", build_payload)
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",

@@ -49,7 +49,12 @@ def test_core_distribution_dependencies_follow_import_direction() -> None:
     version = _project()["version"]
 
     assert agent == [f"dlightrag-ai=={version}", "pydantic>=2.11.0"]
-    assert rag == ["pydantic>=2.11.0"]
+    assert rag == [
+        f"dlightrag-ai=={version}",
+        "lightrag-hku>=1.5.6",
+        "numpy>=2.3.0",
+        "pydantic>=2.11.0",
+    ]
 
 
 def test_eval_dependency_group_uses_lightrag_evaluation_extra() -> None:

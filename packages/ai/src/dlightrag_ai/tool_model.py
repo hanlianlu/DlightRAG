@@ -1,38 +1,42 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Manager-owned query model for optional tool-capable turns."""
+"""Closeable tool-capable model execution over provider-neutral settings."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from typing import Any
 
+from dlightrag_ai.fingerprints import model_fingerprint
 from dlightrag_ai.messages import AssistantTurn, ToolChoice, ToolDefinition
 from dlightrag_ai.providers import get_provider
 from dlightrag_ai.providers.base import CompletionProvider
-
-from dlightrag.config import DlightragConfig, ModelConfig
-from dlightrag.models.llm_roles import model_for_role
+from dlightrag_ai.settings import ModelSettings
+from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
 
 logger = logging.getLogger(__name__)
 
 
-class QueryToolModel:
-    """Own one query-role provider without changing the text completion path."""
+class ToolModel:
+    """Own one provider for tool turns and final transcript generation."""
 
-    def __init__(self, config: ModelConfig) -> None:
-        self._config = config
-        self._ordinary_model_kwargs = dict(config.model_kwargs)
-        # Research calls inherit ordinary options; same-named top-level keys
-        # from the endpoint-specific agentic overlay replace them.
-        self._agentic_model_kwargs = {
-            **config.model_kwargs,
-            **config.agentic_model_kwargs,
-        }
+    def __init__(
+        self,
+        settings: ModelSettings,
+        *,
+        telemetry: Telemetry = NOOP_TELEMETRY,
+    ) -> None:
+        self.settings = settings
+        self.fingerprint = model_fingerprint(settings)
+        self._telemetry = telemetry
+        self._ordinary_model_kwargs = settings.model_kwargs_copy()
+        self._agentic_model_kwargs = settings.agentic_model_kwargs_copy()
         self._provider: CompletionProvider = get_provider(
-            config.provider,
-            api_key=config.api_key,
-            base_url=config.base_url,
-            timeout=config.timeout,
-            max_retries=config.max_retries,
+            settings.provider,
+            api_key=settings.api_key,
+            base_url=settings.base_url,
+            timeout=settings.timeout,
+            max_retries=settings.max_retries,
         )
 
     async def __call__(
@@ -42,27 +46,37 @@ class QueryToolModel:
         tools: list[ToolDefinition],
         tool_choice: ToolChoice = "auto",
     ) -> AssistantTurn:
-        from dlightrag.observability import trace_observation
-
-        async with trace_observation(
+        async with self._telemetry.observe(
             "agent_model_turn",
             as_type="generation",
             input={"message_count": len(messages)},
             metadata={
-                "model": self._config.model,
+                "model": self.fingerprint.model,
+                "provider": self.fingerprint.provider,
+                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
                 "tool_names": [tool.name for tool in tools],
                 "tool_choice": tool_choice,
             },
-        ) as trace:
-            turn = await self._provider.complete_tool_turn(
-                messages,
-                self._config.model,
-                tools=tools,
-                tool_choice=tool_choice,
-                temperature=self._config.temperature,
-                model_kwargs=self._agentic_model_kwargs,
-            )
-            trace.update(
+            model=self.settings.model,
+        ) as observation:
+            try:
+                turn = await self._provider.complete_tool_turn(
+                    messages,
+                    self.settings.model,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    temperature=self.settings.temperature,
+                    model_kwargs=self._agentic_model_kwargs,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                observation.update(
+                    level="ERROR",
+                    status_message=telemetry_error_message(self._telemetry, exc),
+                )
+                raise
+            observation.update(
                 output={
                     "stop_reason": turn.stop_reason,
                     "tool_calls": len(turn.tool_calls),
@@ -78,38 +92,43 @@ class QueryToolModel:
         *,
         messages: list[dict[str, Any]],
     ) -> AsyncIterator[str]:
-        """Stream a tools-none final answer from a rich tool transcript."""
-        from dlightrag.observability import trace_observation, trace_sensitive_enabled
-
-        record_text = trace_sensitive_enabled()
+        """Stream a tools-disabled final answer from a rich tool transcript."""
+        record_text = self._telemetry.capture_sensitive_data
         streamed: list[str] = []
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
         text_length = 0
         attempts = 0
-        async with trace_observation(
+        async with self._telemetry.observe(
             "agent_final_answer",
             as_type="generation",
             input={"message_count": len(messages)},
-            metadata={"model": self._config.model},
-        ) as trace:
+            metadata={
+                "model": self.fingerprint.model,
+                "provider": self.fingerprint.provider,
+                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+            },
+            model=self.settings.model,
+        ) as observation:
             try:
                 for model_kwargs in self._final_attempt_kwargs():
                     attempts += 1
                     attempt_usage: dict[str, Any] = {}
                     substantive_text = False
-                    async for token in self._provider.stream_tool_text(
+                    stream = self._provider.stream_tool_text(
                         messages,
-                        self._config.model,
-                        temperature=self._config.temperature,
+                        self.settings.model,
+                        temperature=self.settings.temperature,
                         model_kwargs=model_kwargs,
                         usage_holder=attempt_usage,
-                    ):
-                        text_length += len(token)
-                        substantive_text = substantive_text or bool(token.strip())
-                        if record_text:
-                            streamed.append(token)
-                        yield token
+                    )
+                    async with aclosing(stream):
+                        async for token in stream:
+                            text_length += len(token)
+                            substantive_text = substantive_text or bool(token.strip())
+                            if record_text:
+                                streamed.append(token)
+                            yield token
                     _accumulate_metrics(usage_details, attempt_usage.get("usage_details"))
                     _accumulate_metrics(cost_details, attempt_usage.get("cost_details"))
                     if substantive_text:
@@ -119,11 +138,19 @@ class QueryToolModel:
                             "Agent final answer returned no text; retrying with ordinary model options"
                         )
                 raise RuntimeError("Query model returned an empty final answer after retry")
+            except asyncio.CancelledError, GeneratorExit:
+                raise
+            except BaseException as exc:
+                observation.update(
+                    level="ERROR",
+                    status_message=telemetry_error_message(self._telemetry, exc),
+                )
+                raise
             finally:
                 output: dict[str, Any] = {"text_length": text_length, "attempts": attempts}
                 if record_text:
                     output["text"] = "".join(streamed)
-                trace.update(
+                observation.update(
                     output=output,
                     usage_details=usage_details or None,
                     cost_details=cost_details or None,
@@ -134,33 +161,30 @@ class QueryToolModel:
         *,
         messages: list[dict[str, Any]],
     ) -> str:
-        """Return a tools-disabled final answer from a rich tool transcript.
-
-        Non-streaming analogue of :meth:`stream_text`. Reuses the provider's
-        tool-transcript path with no tools offered, so provider-native reasoning
-        signatures in the transcript are preserved while the model can only emit
-        text.
-        """
-        from dlightrag.observability import trace_observation, trace_sensitive_enabled
-
+        """Return a tools-disabled final answer from a rich tool transcript."""
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
         text = ""
         attempts = 0
-        async with trace_observation(
+        async with self._telemetry.observe(
             "agent_final_answer",
             as_type="generation",
             input={"message_count": len(messages)},
-            metadata={"model": self._config.model},
-        ) as trace:
+            metadata={
+                "model": self.fingerprint.model,
+                "provider": self.fingerprint.provider,
+                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+            },
+            model=self.settings.model,
+        ) as observation:
             try:
                 for model_kwargs in self._final_attempt_kwargs():
                     attempts += 1
                     turn = await self._provider.complete_tool_turn(
                         messages,
-                        self._config.model,
+                        self.settings.model,
                         tools=[],
-                        temperature=self._config.temperature,
+                        temperature=self.settings.temperature,
                         model_kwargs=model_kwargs,
                     )
                     _accumulate_metrics(usage_details, turn.usage_details)
@@ -174,11 +198,19 @@ class QueryToolModel:
                             "retrying with ordinary model options"
                         )
                 raise RuntimeError("Query model returned an empty final answer after retry")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                observation.update(
+                    level="ERROR",
+                    status_message=telemetry_error_message(self._telemetry, exc),
+                )
+                raise
             finally:
                 output: dict[str, Any] = {"text_length": len(text), "attempts": attempts}
-                if trace_sensitive_enabled():
+                if self._telemetry.capture_sensitive_data:
                     output["text"] = text
-                trace.update(
+                observation.update(
                     output=output,
                     usage_details=usage_details or None,
                     cost_details=cost_details or None,
@@ -188,11 +220,8 @@ class QueryToolModel:
         return self._agentic_model_kwargs, self._ordinary_model_kwargs
 
     async def aclose(self) -> None:
+        """Release the provider SDK client and its connection pools."""
         await self._provider.aclose()
-
-
-def create_query_tool_model(config: DlightragConfig) -> QueryToolModel:
-    return QueryToolModel(model_for_role(config, "query"))
 
 
 def _accumulate_metrics(
@@ -205,4 +234,4 @@ def _accumulate_metrics(
         total[key] = total.get(key, 0) + value
 
 
-__all__ = ["QueryToolModel", "create_query_tool_model"]
+__all__ = ["ToolModel"]

@@ -282,12 +282,6 @@ class AnswerSynthesizer:
         trace["answer_images_total"] = rag_context
         trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
-    async def aclose(self) -> None:
-        """Release model-function worker resources owned by this synthesizer."""
-        from dlightrag_ai.concurrency import shutdown_async_callable
-
-        await shutdown_async_callable(self.model_func)
-
     def _prepare_prompt_context(
         self,
         query: str,

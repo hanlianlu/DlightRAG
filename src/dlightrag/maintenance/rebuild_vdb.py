@@ -8,6 +8,8 @@ import os
 from types import SimpleNamespace
 from typing import Any, Literal
 
+from dlightrag_ai.embedding import create_embedding_model
+from dlightrag_rag.lightrag_models import build_lightrag_embedding
 from lightrag.base import DocStatus
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 from lightrag.kg import STORAGE_ENV_REQUIREMENTS
@@ -20,7 +22,8 @@ from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
 from dlightrag.core.lightrag_stores import LightRAGStores
 from dlightrag.core.retrieval.bm25 import rebuild_postgres_bm25
 from dlightrag.core.service import RAGService
-from dlightrag.models.llm import get_embedding_func, get_multimodal_embedder
+from dlightrag.model_settings import embedding_settings
+from dlightrag.observability import LangfuseTelemetry
 from dlightrag.storage.pool import pg_pool
 
 logger = logging.getLogger(__name__)
@@ -283,12 +286,12 @@ async def run_rebuild(
         raise SystemExit("--yes is required for rebuild targets; stop DlightRAG first")
 
     resolved_config = config or get_config()
-    multimodal_embedder = None
-    if target in {"chunks", "all"} and restore_sidecar_alignment:
-        multimodal_embedder = get_multimodal_embedder(resolved_config)
-        embedding_func = get_embedding_func(resolved_config, embedder=multimodal_embedder)
-    else:
-        embedding_func = get_embedding_func(resolved_config)
+    resolved_embedding = embedding_settings(resolved_config)
+    multimodal_embedder = create_embedding_model(
+        resolved_embedding,
+        telemetry=LangfuseTelemetry(),
+    )
+    embedding_func = build_lightrag_embedding(resolved_embedding, multimodal_embedder)
 
     tool = DlightRAGRebuildTool(resolved_config, embedding_func=embedding_func)
     tool.batch_size = batch_size
@@ -331,15 +334,13 @@ async def run_rebuild(
                     f"{bm25_stats['updated_chunks']} updated"
                 )
 
-            if restore_sidecar_alignment and multimodal_embedder is not None:
+            if restore_sidecar_alignment:
                 lightrag_surface = _lightrag_surface(tool)
                 stores = LightRAGStores(lightrag_surface)
                 direct_enabled = await RAGService._resolve_direct_image_embedding_enabled(
                     multimodal_embedder,
-                    startup_probe=resolved_config.embedding.startup_probe,
-                    require_image_support=(
-                        resolved_config.embedding.input_modality == "multimodal"
-                    ),
+                    startup_probe=resolved_embedding.startup_probe,
+                    require_image_support=resolved_embedding.input_modality == "multimodal",
                 )
                 if direct_enabled:
                     stats = await restore_sidecar_image_vectors(
@@ -364,8 +365,7 @@ async def run_rebuild(
         except Exception:  # noqa: BLE001
             logger.warning("Failed to finalize LightRAG shared storage", exc_info=True)
         try:
-            if multimodal_embedder is not None and hasattr(multimodal_embedder, "aclose"):
-                await multimodal_embedder.aclose()
+            await multimodal_embedder.aclose()
         finally:
             if domain_pool_bound:
                 await pg_pool.close()

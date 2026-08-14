@@ -1,10 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Langfuse observability wrappers."""
 
-import inspect
+import asyncio
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -100,6 +99,27 @@ async def test_langfuse_telemetry_adapts_neutral_observation() -> None:
     assert client.observations[0].updates == [{"output": {"outcome": "ok"}}]
 
 
+async def test_langfuse_telemetry_normalizes_provider_usage_and_cost() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    async with observability.LangfuseTelemetry().observe(
+        "llm_model",
+        as_type="generation",
+    ) as observation:
+        observation.update(
+            usage_details={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            cost_details={"total": 0.001},
+        )
+
+    assert client.observations[0].updates == [
+        {
+            "usage_details": {"input": 3, "output": 2, "total": 5},
+            "cost_details": {"total": 0.001},
+        }
+    ]
+
+
 async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
     client = _RecordingLangfuse()
     observability._client = client
@@ -133,6 +153,20 @@ async def test_trace_observation_records_error_text_when_enabled() -> None:
             raise RuntimeError("secret provider detail")
 
     assert client.observations[-1].updates[-1]["status_message"] == "secret provider detail"
+
+
+async def test_langfuse_telemetry_cancellation_is_not_an_error() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    with pytest.raises(asyncio.CancelledError):
+        async with observability.LangfuseTelemetry().observe(
+            "llm_model",
+            as_type="generation",
+        ):
+            raise asyncio.CancelledError
+
+    assert client.observations[-1].updates == []
 
 
 async def test_trace_observation_redacts_error_text_in_privacy_mode() -> None:
@@ -211,54 +245,6 @@ def test_trace_sensitive_enabled_reflects_flag() -> None:
     assert observability.trace_sensitive_enabled() is True
 
 
-async def test_chat_wrapper_uses_generation_observation() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> str:
-        return "answer"
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_gpt-5.4-mini", model="gpt-5.4-mini")
-
-    result = await wrapped(messages=[{"role": "user", "content": "hi"}], temperature=0.2)
-
-    assert result == "answer"
-    assert len(client.observations) == 1
-    obs = client.observations[0]
-    assert obs.kwargs["as_type"] == "generation"
-    assert obs.kwargs["name"] == "llm_gpt-5.4-mini"
-    assert obs.kwargs["model"] == "gpt-5.4-mini"
-    assert obs.kwargs["metadata"] == {"temperature": 0.2}
-    assert obs.updates == [{"output": "answer"}]
-
-
-async def test_chat_wrapper_updates_generation_usage_and_cost_details() -> None:
-    from dlightrag_ai.providers.base import CompletionOutput
-
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> CompletionOutput:
-        return CompletionOutput(
-            "answer",
-            usage_details={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
-            cost_details={"total": 0.001},
-        )
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_gpt-5.4-mini", model="gpt-5.4-mini")
-
-    result = await wrapped(messages=[{"role": "user", "content": "hi"}])
-
-    assert result == "answer"
-    assert client.observations[0].updates == [
-        {
-            "output": "answer",
-            "usage_details": {"input": 3, "output": 2, "total": 5},
-            "cost_details": {"total": 0.001},
-        }
-    ]
-
-
 def test_langfuse_usage_details_normalizes_overlapping_provider_keys() -> None:
     # DeepSeek-style usage mixes components, an aggregate, and cache counters;
     # Langfuse sums every value into total, so forwarding raw triple-counts.
@@ -282,181 +268,6 @@ def test_langfuse_usage_details_derives_total_when_absent() -> None:
         "output": 4,
         "total": 14,
     }
-
-
-async def test_chat_wrapper_does_not_retry_model_call_on_error() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-    calls = 0
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> str:
-        nonlocal calls
-        calls += 1
-        raise RuntimeError("provider down")
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_test", model="test-model")
-
-    with pytest.raises(RuntimeError, match="provider down"):
-        await wrapped(messages=[{"role": "user", "content": "hi"}])
-
-    assert calls == 1
-    assert len(client.observations) == 1
-    assert client.observations[0].updates[-1]["level"] == "ERROR"
-
-
-async def test_chat_wrapper_traces_streaming_generation() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-    calls = 0
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-        nonlocal calls
-        calls += 1
-
-        async def stream() -> Any:
-            yield "hel"
-            yield "lo"
-
-        return stream()
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
-
-    token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
-    result = [chunk async for chunk in token_iterator]
-
-    assert result == ["hel", "lo"]
-    assert calls == 1
-    assert len(client.observations) == 1
-    obs = client.observations[0]
-    assert obs.kwargs["as_type"] == "generation"
-    assert obs.kwargs["name"] == "llm_stream"
-    assert set(obs.updates[0]) == {"completion_start_time"}
-    assert isinstance(obs.updates[0]["completion_start_time"], datetime)
-    assert obs.updates[1:] == [{"output": "hello"}]
-    assert client.active == []
-
-
-async def test_streaming_generation_attaches_usage_and_cost() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-        holder = kwargs.get("usage_holder")
-
-        async def stream() -> Any:
-            yield "hel"
-            yield "lo"
-            if holder is not None:  # provider records usage at stream end
-                holder["usage_details"] = {
-                    "prompt_tokens": 5,
-                    "completion_tokens": 2,
-                    "total_tokens": 7,
-                }
-                holder["cost_details"] = {"total": 0.001}
-
-        return stream()
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
-
-    token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
-    result = [chunk async for chunk in token_iterator]
-
-    assert result == ["hel", "lo"]
-    updates = client.observations[0].updates
-    assert set(updates[0]) == {"completion_start_time"}
-    assert isinstance(updates[0]["completion_start_time"], datetime)
-    assert updates[1:] == [
-        {"output": "hello"},
-        {"usage_details": {"input": 5, "output": 2, "total": 7}, "cost_details": {"total": 0.001}},
-    ]
-
-
-async def test_streaming_generation_no_usage_is_graceful() -> None:
-    # A provider that records no streaming usage must not add a usage update.
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-        async def stream() -> Any:
-            yield "x"
-
-        return stream()
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
-
-    token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
-    assert [chunk async for chunk in token_iterator] == ["x"]
-    updates = client.observations[0].updates
-    assert set(updates[0]) == {"completion_start_time"}
-    assert isinstance(updates[0]["completion_start_time"], datetime)
-    assert updates[1:] == [{"output": "x"}]
-
-
-async def test_streaming_generation_records_time_to_first_token() -> None:
-    # completion_start_time (TTFT) is recorded once, on the first streamed chunk,
-    # before the terminal output/usage updates, as a timezone-aware datetime.
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-        async def stream() -> Any:
-            yield "a"
-            yield "b"
-            yield "c"
-
-        return stream()
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
-    token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
-    assert [chunk async for chunk in token_iterator] == ["a", "b", "c"]
-
-    updates = client.observations[0].updates
-    ttft = [u for u in updates if "completion_start_time" in u]
-    assert len(ttft) == 1
-    assert updates[0] is ttft[0]
-    assert isinstance(ttft[0]["completion_start_time"], datetime)
-    assert ttft[0]["completion_start_time"].tzinfo is not None
-
-
-def test_chat_wrapper_has_no_detached_root_mode() -> None:
-    assert "root" not in inspect.signature(observability.wrap_chat_func).parameters
-
-
-async def test_chat_func_default_has_no_trace_context() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def complete(messages: Any, **kwargs: Any) -> str:
-        return "ok"
-
-    wrapped = observability.wrap_chat_func(complete, name="llm_x", model="x")
-    await wrapped([{"role": "user", "content": "q"}])
-
-    assert "trace_context" not in client.observations[0].kwargs
-
-
-def test_embedding_wrapper_has_no_detached_root_mode() -> None:
-    assert "root" not in inspect.signature(observability.wrap_embedding_func).parameters
-
-
-async def test_embedding_wrapper_uses_embedding_observation() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-
-    async def embed(inputs: list[str], **kwargs: Any) -> list[list[float]]:
-        return [[0.1, 0.2]]
-
-    wrapped = observability.wrap_embedding_func(embed, name="embed_text-embedding-3-large")
-
-    result = await wrapped(["hello"], context="document")
-
-    assert result == [[0.1, 0.2]]
-    assert len(client.observations) == 1
-    obs = client.observations[0]
-    assert obs.kwargs["as_type"] == "embedding"
-    assert obs.kwargs["name"] == "embed_text-embedding-3-large"
-    assert obs.kwargs["metadata"] == {"context": "document", "input_count": 1}
-    assert obs.updates == [{"output": {"embedding_count": 1}}]
 
 
 async def test_trace_observation_nests_child_observations() -> None:

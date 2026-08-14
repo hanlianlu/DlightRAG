@@ -6,8 +6,12 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from dlightrag_ai.completion import CompletionModel
+
 from dlightrag.citations.highlight import extract_highlights_for_sources
 from dlightrag.citations.schemas import HighlightSource
+from dlightrag.model_settings import model_settings_for_role
+from dlightrag.observability import LangfuseTelemetry
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
@@ -27,12 +31,14 @@ async def enrich_semantic_highlights[SourceT: HighlightSource](
     if not highlight_cfg.enabled or not answer_text or text_chunk_count == 0:
         return sources
 
+    llm_model: CompletionModel | None = None
     try:
-        from dlightrag.models.llm import get_keyword_model_func
-        from dlightrag.observability import trace_observation
-
-        llm_func = get_keyword_model_func(config)
-        async with trace_observation(
+        telemetry = LangfuseTelemetry()
+        llm_model = CompletionModel(
+            model_settings_for_role(config, "keyword"),
+            telemetry=telemetry,
+        )
+        async with telemetry.observe(
             "semantic_highlights",
             as_type="chain",
             metadata={"source_count": len(sources), "text_chunk_count": text_chunk_count},
@@ -41,7 +47,7 @@ async def enrich_semantic_highlights[SourceT: HighlightSource](
                 extract_highlights_for_sources(
                     sources=sources,
                     answer_text=answer_text,
-                    llm_func=llm_func,
+                    llm_func=llm_model,
                     max_concurrency=highlight_cfg.max_concurrency,
                     batch_size=highlight_cfg.batch_size,
                     max_input_chars=highlight_cfg.max_input_chars,
@@ -58,6 +64,14 @@ async def enrich_semantic_highlights[SourceT: HighlightSource](
         )
     except Exception:
         logger.warning("Semantic highlight extraction failed", exc_info=True)
+    finally:
+        if llm_model is not None:
+            try:
+                await llm_model.aclose()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Failed to close semantic highlight model", exc_info=True)
     return sources
 
 

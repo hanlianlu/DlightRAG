@@ -1112,7 +1112,12 @@ class TestAnswerViaEngine:
         async def llm_func(*, messages, **kwargs) -> str:
             return '{"items": [{"id": "0", "phrases": ["market growth"], "confidence": 1.0}]}'
 
-        monkeypatch.setattr("dlightrag.models.llm.get_keyword_model_func", lambda _cfg: llm_func)
+        highlight_model = AsyncMock(side_effect=llm_func)
+        highlight_model.aclose = AsyncMock()
+        monkeypatch.setattr(
+            "dlightrag.core.answer.highlights.CompletionModel",
+            MagicMock(return_value=highlight_model),
+        )
         trace_calls: list[dict[str, Any]] = []
         monkeypatch.setattr(
             "dlightrag.observability.trace_observation",
@@ -1148,6 +1153,7 @@ class TestAnswerViaEngine:
         assert semantic_highlights["updates"] == [
             {"output": {"highlighted_source_count": 1, "highlighted_chunk_count": 1}}
         ]
+        highlight_model.aclose.assert_awaited_once()
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
@@ -1200,13 +1206,30 @@ class TestAnswerViaEngine:
         """_get_answer_synthesizer() lazily creates an AnswerSynthesizer instance."""
         manager = RAGServiceManager(config=test_cfg)
         assert manager._answer_synthesizer is None
-        with patch("dlightrag.models.llm.get_query_model_func") as mock_llm:
-            mock_llm.return_value = MagicMock()
+        with patch(
+            "dlightrag.core.servicemanager.CompletionModel",
+            return_value=MagicMock(),
+        ):
             engine = manager._get_answer_synthesizer()
             assert engine is not None
             # Second call returns same instance
             engine2 = manager._get_answer_synthesizer()
             assert engine2 is engine
+
+    def test_answer_synthesizer_failure_never_constructs_provider(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+
+        with (
+            patch(
+                "dlightrag.core.servicemanager.AnswerSynthesizer",
+                side_effect=RuntimeError("synthesizer failed"),
+            ),
+            patch("dlightrag.core.servicemanager.CompletionModel") as completion,
+            pytest.raises(RuntimeError, match="synthesizer failed"),
+        ):
+            manager._get_answer_synthesizer()
+
+        completion.assert_not_called()
 
     def test_get_answer_synthesizer_threads_config_policy_to_fresh_budgets(
         self,
@@ -1215,7 +1238,10 @@ class TestAnswerViaEngine:
         test_cfg.answer.image_max_pixels = 123
         manager = RAGServiceManager(config=test_cfg)
 
-        with patch("dlightrag.models.llm.get_query_model_func", return_value=MagicMock()):
+        with patch(
+            "dlightrag.core.servicemanager.CompletionModel",
+            return_value=MagicMock(),
+        ):
             engine = manager._get_answer_synthesizer()
 
         policy = engine._image_policy
@@ -1228,28 +1254,27 @@ class TestAnswerViaEngine:
         assert policy.new_budget().count == 0
         assert policy.new_budget().max_pixels == 123
 
-    def test_get_retrieval_planner_uses_retrieval_planner_model_func(self, test_cfg) -> None:
-        """RetrievalPlanner uses the text planning factory, not the answer/query role."""
-        manager = RAGServiceManager(config=test_cfg)
-        planner_func = MagicMock()
+    def test_get_retrieval_planner_uses_extract_role_model(self, test_cfg) -> None:
+        from dlightrag.model_settings import model_settings_for_role
 
-        with (
-            patch(
-                "dlightrag.models.llm.get_retrieval_planner_model_func",
-                return_value=planner_func,
-                create=True,
-            ) as mock_planner,
-            patch("dlightrag.models.llm.get_query_model_func") as mock_query,
-        ):
+        manager = RAGServiceManager(config=test_cfg)
+        planner_model = MagicMock()
+
+        with patch(
+            "dlightrag.core.servicemanager.CompletionModel",
+            return_value=planner_model,
+        ) as create:
             planner = manager._get_retrieval_planner()
             planner2 = manager._get_retrieval_planner()
 
-        mock_planner.assert_called_once_with(test_cfg)
-        mock_query.assert_not_called()
+        create.assert_called_once_with(
+            model_settings_for_role(test_cfg, "extract"),
+            telemetry=ANY,
+        )
         assert planner2 is planner
-        # llm_func is the planner factory wrapped by the direct-LLM semaphore
+        # The manager's direct-LLM semaphore wraps but does not own the AI model.
         assert callable(planner._llm_func)
-        assert planner._llm_func is not planner_func
+        assert planner._llm_func is not planner_model
 
 
 class TestDelegation:
@@ -1792,7 +1817,7 @@ async def test_vision_probe_result_is_manager_scoped(
             "rerank": RerankConfig(strategy="chat_llm_reranker"),
         }
     )
-    from dlightrag.core.vision_probe import ImageProbeOutcome
+    from dlightrag_ai.vision import ImageProbeOutcome
 
     first = RAGServiceManager(config=test_cfg)
     first._rerank_supports_vision = False
@@ -1800,8 +1825,8 @@ async def test_vision_probe_result_is_manager_scoped(
     provider = SimpleNamespace(aclose=AsyncMock())
     probe = AsyncMock(return_value=ImageProbeOutcome(status="supported"))
 
-    monkeypatch.setattr("dlightrag_ai.providers.get_provider", MagicMock(return_value=provider))
-    monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", probe)
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", MagicMock(return_value=provider))
+    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", probe)
 
     await second._probe_rerank_image_capability()
 
@@ -1814,7 +1839,7 @@ async def test_rerank_vision_probe_does_not_borrow_default_key(
     monkeypatch: pytest.MonkeyPatch,
     test_cfg: DlightragConfig,
 ) -> None:
-    from dlightrag.core.vision_probe import ImageProbeOutcome
+    from dlightrag_ai.vision import ImageProbeOutcome
 
     config = test_cfg.model_copy(
         update={
@@ -1832,9 +1857,9 @@ async def test_rerank_vision_probe_does_not_borrow_default_key(
     provider = SimpleNamespace(aclose=AsyncMock())
     provider_factory = MagicMock(return_value=provider)
 
-    monkeypatch.setattr("dlightrag_ai.providers.get_provider", provider_factory)
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", provider_factory)
     monkeypatch.setattr(
-        "dlightrag.core.vision_probe.probe_image_capability",
+        "dlightrag_ai.vision.probe_image_capability",
         AsyncMock(return_value=ImageProbeOutcome(status="supported")),
     )
 
@@ -2023,13 +2048,45 @@ class TestClose:
     ) -> None:
         manager = RAGServiceManager(config=test_cfg)
         factory = MagicMock()
-        monkeypatch.setattr("dlightrag.models.llm.get_vlm_model_func", factory)
+        monkeypatch.setattr("dlightrag.core.servicemanager.CompletionModel", factory)
 
         await manager.aclose()
 
         with pytest.raises(RAGServiceUnavailableError):
             manager._get_or_create_vlm_func()
         factory.assert_not_called()
+
+    async def test_close_is_idempotent_and_prevents_recreating_owned_models(
+        self,
+        test_cfg,
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        answer_model = AsyncMock()
+        planner_model = AsyncMock()
+        vlm_model = AsyncMock()
+        tool_model = AsyncMock()
+        web_search = AsyncMock()
+        manager._answer_model = answer_model
+        manager._planner_model = planner_model
+        manager._vlm_model = vlm_model
+        manager._query_tool_model = tool_model
+        manager._web_search = web_search
+
+        await manager.aclose()
+        await manager.aclose()
+
+        for component in (answer_model, planner_model, vlm_model, tool_model, web_search):
+            component.aclose.assert_awaited_once()
+        with pytest.raises(RAGServiceUnavailableError):
+            manager._get_answer_synthesizer()
+        with pytest.raises(RAGServiceUnavailableError):
+            manager._get_retrieval_planner()
+        with pytest.raises(RAGServiceUnavailableError):
+            manager._get_query_tool_model()
+        with pytest.raises(RAGServiceUnavailableError):
+            manager._get_web_search()
+        with pytest.raises(RAGServiceUnavailableError):
+            manager._get_or_create_vlm_func()
 
 
 class TestWorkspaceDiscovery:
@@ -2299,7 +2356,7 @@ class TestAgenticAnswerCapability:
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         create = MagicMock(side_effect=AssertionError("tool model must stay absent"))
-        monkeypatch.setattr("dlightrag.models.tool_model.create_query_tool_model", create)
+        monkeypatch.setattr("dlightrag.core.servicemanager.ToolModel", create)
         manager = RAGServiceManager(config=test_cfg)
         manager._retrieve = AsyncMock(  # type: ignore[method-assign]
             return_value=RetrievalResult(contexts={"chunks": []})
@@ -2314,15 +2371,20 @@ class TestAgenticAnswerCapability:
         create.assert_not_called()
 
     def test_with_exa_one_tool_model_is_shared(self, test_cfg, monkeypatch) -> None:
+        from dlightrag.model_settings import model_settings_for_role
+
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         model = MagicMock()
         create = MagicMock(return_value=model)
-        monkeypatch.setattr("dlightrag.models.tool_model.create_query_tool_model", create)
+        monkeypatch.setattr("dlightrag.core.servicemanager.ToolModel", create)
         manager = RAGServiceManager(config=cfg)
 
         assert manager._get_query_tool_model() is model
         assert manager._get_query_tool_model() is model
-        create.assert_called_once_with(cfg)
+        create.assert_called_once_with(
+            model_settings_for_role(cfg, "query"),
+            telemetry=ANY,
+        )
 
     async def test_closing_manager_closes_tool_model(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
@@ -2350,10 +2412,11 @@ class TestAgenticAnswerCapability:
             failure_kind=None,
         )
         manager._vlm_image_status = "supported"
-        provider = SimpleNamespace(aclose=AsyncMock())
-        provider_factory = MagicMock(return_value=provider)
+        model = AsyncMock()
+        model.aclose = AsyncMock()
+        model_factory = MagicMock(return_value=model)
         inspector = MagicMock()
-        monkeypatch.setattr("dlightrag.models.llm.get_provider", provider_factory)
+        monkeypatch.setattr("dlightrag.core.servicemanager.CompletionModel", model_factory)
         monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
 
         describer = manager._query_image_describer()
@@ -2364,9 +2427,9 @@ class TestAgenticAnswerCapability:
         await manager.aclose()
 
         assert registry is not None
-        provider_factory.assert_called_once()
+        model_factory.assert_called_once()
         assert inspector.call_args.kwargs["vlm_func"] is describer._vlm_func
-        provider.aclose.assert_awaited_once()
+        model.aclose.assert_awaited_once()
 
     async def test_current_image_verification_and_encoding_run_off_event_loop(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
@@ -2470,7 +2533,7 @@ class TestAgenticAnswerCapability:
         manager._vlm_image_status = "supported"
         manager._answer_synthesizer = MagicMock()
         monkeypatch.setattr(
-            "dlightrag.models.llm.get_vlm_model_func",
+            "dlightrag.core.servicemanager.CompletionModel",
             MagicMock(return_value=AsyncMock(return_value="visual evidence")),
         )
         inspector = MagicMock()
@@ -2517,7 +2580,7 @@ class TestAgenticAnswerCapability:
         manager = RAGServiceManager(config=test_cfg)
         manager._vlm_image_status = "supported"
         monkeypatch.setattr(
-            "dlightrag.models.llm.get_vlm_model_func",
+            "dlightrag.core.servicemanager.CompletionModel",
             MagicMock(return_value=AsyncMock(return_value="visual evidence")),
         )
         inspector = MagicMock()

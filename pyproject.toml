@@ -172,7 +172,6 @@ source_modules = ["dlightrag_rag"]
 forbidden_modules = [
     "dlightrag",
     "dlightrag_agent",
-    "dlightrag_ai",
     "asyncpg",
     "fastapi",
     "mcp",
@@ -184,6 +183,7 @@ name = "Internal packages must not import from transport layers"
 type = "forbidden"
 source_modules = [
     "dlightrag.config",
+    "dlightrag.model_settings",
     "dlightrag.utils",
     "dlightrag.prompts",
     "dlightrag.citations",
@@ -210,11 +210,12 @@ source_modules = [
     "dlightrag.prompts",
 ]
 forbidden_modules = [
+    "dlightrag.model_settings",
+    "dlightrag.models",
     "dlightrag.core",
     "dlightrag.storage",
     "dlightrag.sourcing",
     "dlightrag.observability",
-    "dlightrag.models",
     "dlightrag.citations",
 ]
 
@@ -223,7 +224,7 @@ id = "foundation-layers"
 name = "Foundation packages follow the documented layering"
 type = "layers"
 layers = [
-    "dlightrag.models",
+    "dlightrag.model_settings | dlightrag.models",
     "dlightrag.config",
     "dlightrag.observability",
     "dlightrag.prompts | dlightrag.utils",

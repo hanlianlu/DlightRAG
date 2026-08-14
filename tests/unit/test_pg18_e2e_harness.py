@@ -50,14 +50,15 @@ def test_pg18_harness_validates_preloaded_libraries() -> None:
     ]
 
 
-def test_pg18_fake_model_factories_match_service_initialization(monkeypatch) -> None:
+async def test_pg18_fake_model_factories_match_service_initialization(monkeypatch) -> None:
     from dlightrag.core import service as service_module
 
     embedder = install_fake_model_functions(monkeypatch, dim=8)
     config: Any = object()
 
-    assert service_module.get_default_model_func_for_lightrag(config) is not None
-    assert service_module.get_rerank_func(config, supports_vision=True) is None
-    assert service_module.build_role_llm_configs(config) is None
-    assert service_module.get_multimodal_embedder(config) is embedder
-    assert service_module.get_embedding_func(config, embedder=embedder).embedding_dim == 8
+    chat_models = await service_module.LightRagChatModels.acreate(config)
+    assert chat_models.default_func is not None
+    assert service_module.build_rerank_func(config, supports_vision=True) is None
+    assert chat_models.role_configs is None
+    assert service_module.create_embedding_model(config) is embedder
+    assert service_module.build_lightrag_embedding(config, embedder).embedding_dim == 8

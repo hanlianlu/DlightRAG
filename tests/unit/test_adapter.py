@@ -3,8 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from dlightrag.models.llm import _adapt_for_lightrag
+from dlightrag_rag.lightrag_models import adapt_completion_for_lightrag
 
 
 class TestAdaptForLightrag:
@@ -12,7 +11,7 @@ class TestAdaptForLightrag:
     async def test_prompt_to_messages(self):
         """Converts (prompt, system_prompt) to messages array."""
         inner = AsyncMock(return_value="response")
-        adapted = _adapt_for_lightrag(inner)
+        adapted = adapt_completion_for_lightrag(inner)
 
         result = await adapted("What is AI?", system_prompt="You are helpful")
         assert result == "response"
@@ -26,7 +25,7 @@ class TestAdaptForLightrag:
     @pytest.mark.asyncio
     async def test_no_system_prompt(self):
         inner = AsyncMock(return_value="response")
-        adapted = _adapt_for_lightrag(inner)
+        adapted = adapt_completion_for_lightrag(inner)
 
         await adapted("Hello")
         messages = inner.call_args.kwargs["messages"]
@@ -37,7 +36,7 @@ class TestAdaptForLightrag:
     async def test_lightrag_kwargs_not_forwarded(self):
         """LightRAG-internal kwargs are accepted explicitly and not forwarded."""
         inner = AsyncMock(return_value="ok")
-        adapted = _adapt_for_lightrag(inner)
+        adapted = adapt_completion_for_lightrag(inner)
 
         await adapted(
             "test",
@@ -56,7 +55,7 @@ class TestAdaptForLightrag:
     async def test_history_messages_incorporated(self):
         """history_messages are inserted between system prompt and user message."""
         inner = AsyncMock(return_value="ok")
-        adapted = _adapt_for_lightrag(inner)
+        adapted = adapt_completion_for_lightrag(inner)
 
         history = [
             {"role": "user", "content": "prior question"},
@@ -76,7 +75,7 @@ class TestAdaptForLightrag:
     async def test_forwards_stream_and_response_format(self):
         """Non-LightRAG kwargs like stream and response_format pass through."""
         inner = AsyncMock(return_value="ok")
-        adapted = _adapt_for_lightrag(inner)
+        adapted = adapt_completion_for_lightrag(inner)
 
         await adapted("test", stream=True, response_format={"type": "json_object"})
         call_kwargs = inner.call_args.kwargs

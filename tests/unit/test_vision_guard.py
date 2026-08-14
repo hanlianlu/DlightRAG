@@ -2,6 +2,7 @@
 """Tests for the answer-image capability guard."""
 
 import pytest
+from dlightrag_ai.vision import ImageCapabilityStatus
 
 from dlightrag.core.answer.capability import (
     AnswerImageCapability,
@@ -12,7 +13,6 @@ from dlightrag.core.answer.errors import (
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,
 )
-from dlightrag.core.vision_probe import ImageCapabilityStatus
 
 
 def _capability(status: ImageCapabilityStatus) -> AnswerImageCapability:

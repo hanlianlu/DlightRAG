@@ -244,20 +244,25 @@ top-level Python packages make their import directions observable in source and
 in built wheels:
 
 ```text
-dlightrag-ai          provider/tool-call contracts, media/tokens, telemetry seam
-     ↑
+dlightrag-ai          immutable settings/fingerprints; chat, tool, embedding,
+     ↑       ↑        HTTP rerank and image-probe model lifecycles
+     │       │
 dlightrag-agent-core  generic tool contracts and deterministic turn execution
 
-dlightrag-rag-core    storage-neutral metadata records and score fusion
+dlightrag-rag-core    LightRAG chat/embedding adapters, rerank orchestration,
+                      storage-neutral metadata records and score fusion
 
 dlightrag             product composition, PostgreSQL, REST/Web/MCP/SDK
 ```
 
-Agent core depends on AI. The root product depends on all three cores. The
-initial RAG leaves are independently installable and import neither the root
-product nor Agent; later RAG modules may depend on AI but never on root product
-or concrete PostgreSQL adapters. Concrete provider SDKs are lazy AI extras, so
-importing `dlightrag_ai` does not load OpenAI, Anthropic, or Gemini clients.
+Agent and RAG core depend on AI; RAG core also owns its direct LightRAG API
+dependency. The root product depends on all three cores and maps Pydantic input
+configuration into immutable AI settings before composition. RAG imports
+neither the root product nor Agent and never imports concrete PostgreSQL
+adapters. Concrete provider SDKs are lazy AI extras, so importing
+`dlightrag_ai` does not load OpenAI, Anthropic, or Gemini clients. Root
+`LangfuseTelemetry` is injected into core model operations; standalone cores use
+the explicit no-op adapter.
 
 Inside the root product, modules still sit on a decreasing dependency stack: a
 module at a higher layer may import from lower layers, but lower layers must not
@@ -269,10 +274,11 @@ L8  core.servicemanager                            multi-workspace coordinator
 L7  core.{service, reset}                          per-workspace facade
 L6  core orchestration                             ingest, retrieve, answer, visual assets
 L5  LightRAG/store adapters                        patches, parser sidecar, BM25, filtered VDB
-L4  workspace cores and root model orchestration   AI, Agent, RAG leaves; LLM/rerank composition
+L4  workspace cores and model adapters             AI execution; Agent tools; RAG/LightRAG adapters
 L3  PostgreSQL, sourcing, citations                product/domain implementations
-L2  config, schemas, scope, protocols              shared contracts
-L1  observability                                  Langfuse wrappers and no-op fallback
+L2b model settings, schemas                        resolved foundation values
+L2a config, scope, protocols                       shared configuration and contracts
+L1  observability                                  Langfuse telemetry adapter
 L0  prompts, utils                                 pure helpers
 ```
 
@@ -284,9 +290,12 @@ uv run lint-imports
 
 `lint-imports` enforces contracts over all four roots: AI cannot import the
 product, Agent, RAG, LightRAG, PostgreSQL, or transport packages; Agent may use
-AI but not product/RAG/storage/transport code; and RAG cannot import the product,
-Agent, PostgreSQL, or transport packages. Existing root contracts continue to
+AI but not product/RAG/storage/transport code; and RAG may use AI and LightRAG
+APIs but cannot import the product, Agent, PostgreSQL, or transport packages.
+Existing root contracts continue to
 keep `api`/`mcp`/`web` out of internal modules, order the foundation and core
 coordination stacks, and separate resources from model-visible tool adapters.
 The same checks run against installed wheel contents so an editable workspace
-cannot hide an undeclared dependency.
+cannot hide an undeclared dependency; that artifact gate also rejects imports
+of LightRAG's concrete PostgreSQL backend, whose external submodule path cannot
+be represented by import-linter.

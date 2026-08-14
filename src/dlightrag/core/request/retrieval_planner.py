@@ -221,12 +221,6 @@ class RetrievalPlanner:
             structured_output=structured_output,
         )
 
-    async def aclose(self) -> None:
-        """Release model-function worker resources owned by this planner."""
-        from dlightrag_ai.concurrency import shutdown_async_callable
-
-        await shutdown_async_callable(self._llm_func)
-
     async def plan(
         self,
         query: str,

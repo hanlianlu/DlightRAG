@@ -28,11 +28,13 @@ DlightRAG has one unified production RAG path: LightRAG provides fusional one-ho
 [docs/architecture.md](docs/architecture.md).
 
 The repository is one UV workspace with a lockstep release train. Reusable
-provider/media primitives ship as `dlightrag-ai`, generic tool execution as
-`dlightrag-agent-core`, and storage-neutral retrieval records/fusion as
-`dlightrag-rag-core`; the `dlightrag` distribution composes those cores into the
-REST, Web, MCP, SDK, and PostgreSQL-backed product. CI builds and inspects all
-four wheels outside the editable workspace.
+model settings, provider lifecycles, embedding/rerank execution, media, and
+capability probing ship as `dlightrag-ai`; generic tool execution ships as
+`dlightrag-agent-core`; LightRAG adapters, rerank orchestration, and
+storage-neutral retrieval records/fusion ship as `dlightrag-rag-core`. The
+`dlightrag` distribution maps product configuration and composes those cores
+into the REST, Web, MCP, SDK, and PostgreSQL-backed product. CI builds and
+inspects all four wheels outside the editable workspace.
 
 ## Choose Your Deployment Path
 

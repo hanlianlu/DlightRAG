@@ -1,11 +1,18 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unit tests for answer-model image capability derivation."""
 
+import asyncio
 import base64
 import dataclasses
 import io
 
 import pytest
+from dlightrag_ai.settings import ModelSettings
+from dlightrag_ai.vision import (
+    ImageCapabilityStatus,
+    ImageProbeOutcome,
+    ModelImageCapabilities,
+)
 from PIL import Image
 
 from dlightrag.config import (
@@ -20,8 +27,7 @@ from dlightrag.core.answer.capability import (
     derive_effective_max_images,
 )
 from dlightrag.core.servicemanager import RAGServiceManager
-from dlightrag.core.vision_probe import ImageCapabilityStatus, ImageProbeOutcome
-from dlightrag.models.llm_roles import model_for_role
+from dlightrag.model_settings import model_settings_for_role
 
 
 @pytest.mark.parametrize(
@@ -91,14 +97,14 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
         probed["api_key"] = kwargs["api_key"]
         return _StubProvider()
 
-    monkeypatch.setattr("dlightrag_ai.providers.get_provider", fake_get_provider)
-    monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", fake_probe)
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", fake_get_provider)
+    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", fake_probe)
 
     await manager._probe_answer_image_capability()
 
     cap = manager.answer_image_capability
     ceiling = int(manager._config.answer.max_images)
-    query_cfg = model_for_role(manager._config, "query")
+    query_cfg = model_settings_for_role(manager._config, "query")
     assert isinstance(cap, AnswerImageCapability)
     assert cap.status == "supported"
     assert cap.effective_max_images == ceiling
@@ -249,20 +255,22 @@ def _probed_models(monkeypatch: pytest.MonkeyPatch, *statuses: ImageCapabilitySt
         async def aclose(self) -> None:
             pass
 
-    monkeypatch.setattr("dlightrag_ai.providers.get_provider", lambda *_a, **_k: _StubProvider())
-    monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", fake_probe)
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", lambda *_a, **_k: _StubProvider())
+    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", fake_probe)
     return probed
 
 
 async def test_identical_resolved_configurations_share_one_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.vision_probe import ModelImageCapabilities
-
     probed = _probed_models(monkeypatch, "supported")
     capabilities = ModelImageCapabilities()
-    first = ModelConfig(model="shared", api_key="k", base_url="https://api.example/v1")
-    second = ModelConfig(model="shared", api_key="k", base_url="https://api.example/v1")
+    first = ModelSettings(
+        provider="openai", model="shared", api_key="k", base_url="https://api.example/v1"
+    )
+    second = ModelSettings(
+        provider="openai", model="shared", api_key="k", base_url="https://api.example/v1"
+    )
 
     assert (await capabilities.resolve(first)).status == "supported"
     assert (await capabilities.resolve(second)).status == "supported"
@@ -272,13 +280,15 @@ async def test_identical_resolved_configurations_share_one_probe(
 async def test_distinct_resolved_configurations_are_probed_separately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.vision_probe import ModelImageCapabilities
-
     probed = _probed_models(monkeypatch, "supported", "unsupported")
     capabilities = ModelImageCapabilities()
 
-    answer = await capabilities.resolve(ModelConfig(model="answer-model", api_key="k"))
-    vlm = await capabilities.resolve(ModelConfig(model="vlm-model", api_key="k"))
+    answer = await capabilities.resolve(
+        ModelSettings(provider="openai", model="answer-model", api_key="k")
+    )
+    vlm = await capabilities.resolve(
+        ModelSettings(provider="openai", model="vlm-model", api_key="k")
+    )
 
     assert probed == ["answer-model", "vlm-model"]
     assert (answer.status, vlm.status) == ("supported", "unsupported")
@@ -287,13 +297,11 @@ async def test_distinct_resolved_configurations_are_probed_separately(
 async def test_same_endpoint_with_a_different_key_is_not_deduplicated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.vision_probe import ModelImageCapabilities
-
     probed = _probed_models(monkeypatch, "supported")
     capabilities = ModelImageCapabilities()
 
-    await capabilities.resolve(ModelConfig(model="m", api_key="key-one"))
-    await capabilities.resolve(ModelConfig(model="m", api_key="key-two"))
+    await capabilities.resolve(ModelSettings(provider="openai", model="m", api_key="key-one"))
+    await capabilities.resolve(ModelSettings(provider="openai", model="m", api_key="key-two"))
 
     assert probed == ["m", "m"]
 
@@ -301,12 +309,10 @@ async def test_same_endpoint_with_a_different_key_is_not_deduplicated(
 async def test_only_unknown_reprobes_and_only_once_per_cooldown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.vision_probe import ModelImageCapabilities
-
     probed = _probed_models(monkeypatch, "unknown")
     capabilities = ModelImageCapabilities(reprobe_cooldown_seconds=3600.0)
-    unknown = ModelConfig(model="flaky", api_key="k")
-    terminal = ModelConfig(model="steady", api_key="k")
+    unknown = ModelSettings(provider="openai", model="flaky", api_key="k")
+    terminal = ModelSettings(provider="openai", model="steady", api_key="k")
 
     await capabilities.resolve(unknown)
     await capabilities.resolve(unknown)  # inside the cooldown -> no second probe
@@ -318,7 +324,7 @@ async def test_only_unknown_reprobes_and_only_once_per_cooldown(
 
     probed.clear()
     monkeypatch.setattr(
-        "dlightrag.core.vision_probe.probe_image_capability",
+        "dlightrag_ai.vision.probe_image_capability",
         _recording_probe(probed, "supported"),
     )
     await capabilities.resolve(terminal)
@@ -340,8 +346,6 @@ async def test_a_slow_probe_does_not_spend_its_own_cooldown(
     """An unreachable model must not be re-probed the moment its timeout returns."""
     import asyncio
 
-    from dlightrag.core.vision_probe import ModelImageCapabilities
-
     probed: list[str] = []
 
     async def slow_probe(_provider, *, model, model_kwargs=None):
@@ -353,10 +357,10 @@ async def test_a_slow_probe_does_not_spend_its_own_cooldown(
         async def aclose(self) -> None:
             pass
 
-    monkeypatch.setattr("dlightrag_ai.providers.get_provider", lambda *_a, **_k: _StubProvider())
-    monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", slow_probe)
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", lambda *_a, **_k: _StubProvider())
+    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", slow_probe)
     capabilities = ModelImageCapabilities(reprobe_cooldown_seconds=0.04)
-    cfg = ModelConfig(model="unreachable", api_key="k")
+    cfg = ModelSettings(provider="openai", model="unreachable", api_key="k")
 
     await capabilities.resolve(cfg)
     await capabilities.resolve(cfg)
@@ -369,15 +373,40 @@ async def test_concurrent_resolution_of_one_configuration_probes_once(
 ) -> None:
     import asyncio
 
-    from dlightrag.core.vision_probe import ModelImageCapabilities
-
     probed = _probed_models(monkeypatch, "supported")
     capabilities = ModelImageCapabilities()
-    cfg = ModelConfig(model="single-flight", api_key="k")
+    cfg = ModelSettings(provider="openai", model="single-flight", api_key="k")
 
     await asyncio.gather(*(capabilities.resolve(cfg) for _ in range(4)))
 
     assert probed == ["single-flight"]
+
+
+async def test_cancelled_probe_finishes_provider_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+
+    class Provider:
+        async def aclose(self) -> None:
+            close_started.set()
+            await release_close.wait()
+
+    async def cancelled_probe(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", lambda *_a, **_k: Provider())
+    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", cancelled_probe)
+    capabilities = ModelImageCapabilities()
+    task = asyncio.create_task(
+        capabilities.resolve(ModelSettings(provider="openai", model="cancelled", api_key="k"))
+    )
+    await close_started.wait()
+    release_close.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 def _role_config(**roles: ModelConfig) -> DlightragConfig:

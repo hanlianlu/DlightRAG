@@ -8,15 +8,13 @@ import math
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, get_args
+from typing import Literal, get_args
 
 from dlightrag_ai.concurrency import bounded_map
+from dlightrag_ai.embedding import MultimodalEmbedder
 from dlightrag_ai.media import flatten_image_to_rgb
 from dlightrag_ai.telemetry import safe_log_text
 from PIL import Image
-
-if TYPE_CHECKING:
-    from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 
 logger = logging.getLogger(__name__)
 

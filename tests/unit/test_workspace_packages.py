@@ -95,7 +95,7 @@ def _write_workspace_artifacts(
     rag_source: str = "",
     rag_version: str = "1.9.0",
     rag_package: str = "dlightrag_rag",
-    rag_requires: tuple[str, ...] = ("pydantic>=2.11.0",),
+    rag_requires: tuple[str, ...] = ("dlightrag-ai==1.9.0", "pydantic>=2.11.0"),
     rag_sdist_source: str | None = None,
     root_requires: tuple[str, ...] = (
         "dlightrag-ai[all]==1.9.0",
@@ -175,15 +175,6 @@ def test_workspace_wheel_verifier_rejects_forbidden_source_import(tmp_path: Path
 
     assert completed.returncode == 1
     assert "forbidden import asyncpg" in completed.stderr
-
-
-def test_workspace_wheel_verifier_rejects_undeclared_rag_ai_import(tmp_path: Path) -> None:
-    _write_workspace_artifacts(tmp_path, rag_source="import dlightrag_ai\n")
-
-    completed = _verify_wheels(tmp_path)
-
-    assert completed.returncode == 1
-    assert "forbidden import dlightrag_ai" in completed.stderr
 
 
 def test_workspace_wheel_verifier_scans_sdist_sources(tmp_path: Path) -> None:

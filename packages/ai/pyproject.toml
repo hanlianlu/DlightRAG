@@ -9,6 +9,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
+    "httpx>=0.28.1",
     "json-repair>=0.62.0",
     "pillow>=12.3.0",
     "pydantic>=2.11.0",

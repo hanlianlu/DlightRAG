@@ -1,11 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Context-aware text and image embedding over DlightRAG's provider registry."""
+"""Context-aware text and image embedding execution."""
 
 import asyncio
 import logging
 import math
+from typing import Any
 
 import httpx
+from PIL import Image
+
 from dlightrag_ai.contracts import AsymmetricMode, InputModality, ResolvedInputModality
 from dlightrag_ai.embedding_inputs import (
     EmbeddingInput,
@@ -13,9 +16,12 @@ from dlightrag_ai.embedding_inputs import (
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
+from dlightrag_ai.fingerprints import ModelFingerprint, model_fingerprint
 from dlightrag_ai.media import bounded_embedding_image_data_uri
 from dlightrag_ai.providers.embed_base import EmbeddingContext, EmbedProvider
-from PIL import Image
+from dlightrag_ai.providers.embed_providers import get_embed_provider
+from dlightrag_ai.settings import EmbeddingSettings
+from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +54,7 @@ def resolve_embedding_input_modality(
 
 
 class MultimodalEmbedder:
-    """Embed text, and images when the provider supports a shared vector space."""
+    """Embed text and images in one provider-owned vector space."""
 
     def __init__(
         self,
@@ -61,6 +67,8 @@ class MultimodalEmbedder:
         input_modality: InputModality = "auto",
         asymmetric: AsymmetricMode = "auto",
         timeout: float = 120.0,
+        fingerprint: ModelFingerprint,
+        telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/") if base_url else "https://api.openai.com/v1"
@@ -71,6 +79,8 @@ class MultimodalEmbedder:
         self.asymmetric = resolve_asymmetric(provider, asymmetric)
         self.supports_asymmetric = self.asymmetric
         self.api_key = api_key
+        self.fingerprint = fingerprint
+        self._telemetry = telemetry
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers=provider.request_headers(api_key),
@@ -95,13 +105,14 @@ class MultimodalEmbedder:
             asymmetric=self.asymmetric,
             output_dimension=self.dim,
         )
-        data = await self._post(payload)
-        vectors = self.provider.parse_response(data)
-        self._validate_vectors(vectors, expected_count=len(texts))
-        return vectors
+        return await self._request_vectors(
+            payload,
+            expected_count=len(texts),
+            context=context,
+            modality="text",
+        )
 
     def _fused_input(self, description: str, image: Image.Image) -> MultimodalEmbeddingInput:
-        """Build one interleaved text+image input for fused embedding."""
         data_uri = bounded_embedding_image_data_uri(image)
         parts: list[TextEmbeddingInput | ImageEmbeddingInput] = []
         text = description.strip()
@@ -112,8 +123,7 @@ class MultimodalEmbedder:
 
     def _build_fused_payload(
         self, items: list[tuple[str, Image.Image]], *, context: EmbeddingContext
-    ) -> dict:
-        """Build the provider request body for fused (text+image) index vectors."""
+    ) -> dict[str, Any]:
         inputs: list[EmbeddingInput] = [
             self._fused_input(description, image) for description, image in items
         ]
@@ -126,45 +136,32 @@ class MultimodalEmbedder:
         )
 
     async def embed_index_fused(self, items: list[tuple[str, Image.Image]]) -> list[list[float]]:
-        """Embed (description, image) pairs as fused document vectors in one request.
-
-        Any image-capable provider is a unified multimodal model, so each VLM
-        description and its image are interleaved into one vector and the visual
-        chunk stays reachable by text queries (closes the modality gap). An empty
-        description degrades gracefully to an image-only vector.
-
-        All pairs are sent as a single provider request; callers chunk the input
-        to respect provider batch limits.
-        """
+        """Embed description-image pairs as fused document vectors."""
         self._ensure_image_support()
         if not items:
             return []
         payload = await asyncio.to_thread(self._build_fused_payload, items, context="document")
-        data = await self._post(payload)
-        vectors = self.provider.parse_response(data)
-        self._validate_vectors(vectors, expected_count=len(items))
-        return vectors
+        return await self._request_vectors(
+            payload,
+            expected_count=len(items),
+            context="document",
+            modality="multimodal",
+        )
 
     async def embed_query_images(self, images: list[Image.Image]) -> list[list[float]]:
-        """Embed query-side images (image-only) for direct visual retrieval.
-
-        All images are sent as one query-context request. This preserves the raw
-        visual signal that the VLM-description path loses; the caller fuses these
-        results with the text/BM25/KG legs via RRF, so partial overlap is fine.
-        Works for any image-capable provider: the query-image vector matches the
-        index in the provider's shared text-image space (cross-modal), whether the
-        index vectors are fused or LightRAG's native VLM->text descriptions.
-        """
+        """Embed query-side images in one batched provider request."""
         self._ensure_image_support()
         if not images:
             return []
         payload = await asyncio.to_thread(self._build_query_image_payload, images)
-        data = await self._post(payload)
-        vectors = self.provider.parse_response(data)
-        self._validate_vectors(vectors, expected_count=len(images))
-        return vectors
+        return await self._request_vectors(
+            payload,
+            expected_count=len(images),
+            context="query",
+            modality="image",
+        )
 
-    def _build_query_image_payload(self, images: list[Image.Image]) -> dict:
+    def _build_query_image_payload(self, images: list[Image.Image]) -> dict[str, Any]:
         inputs: list[EmbeddingInput] = [
             ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image))
             for image in images
@@ -178,10 +175,43 @@ class MultimodalEmbedder:
         )
 
     async def probe_image_embedding(self) -> None:
-        """Probe that the provider can embed an image (gates the direct-visual leg)."""
+        """Probe that the provider can embed an image."""
         await self.embed_query_images([Image.new("RGB", (1, 1), "white")])
 
-    async def _post(self, payload: dict) -> dict:
+    async def _request_vectors(
+        self,
+        payload: dict[str, Any],
+        *,
+        expected_count: int,
+        context: EmbeddingContext,
+        modality: str,
+    ) -> list[list[float]]:
+        async with self._telemetry.observe(
+            f"embed_{self.model}",
+            as_type="embedding",
+            input={"input_count": expected_count},
+            metadata={
+                "context": context,
+                "modality": modality,
+                "provider": self.fingerprint.provider,
+                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+            },
+            model=self.fingerprint.model,
+        ) as observation:
+            try:
+                data = await self._post(payload)
+                vectors = self.provider.parse_response(data)
+                self._validate_vectors(vectors, expected_count=expected_count)
+            except Exception as exc:
+                observation.update(
+                    level="ERROR",
+                    status_message=telemetry_error_message(self._telemetry, exc),
+                )
+                raise
+            observation.update(output={"embedding_count": len(vectors)})
+            return vectors
+
+    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}{self.provider.endpoint_for_model(self.model)}"
         headers = self.provider.request_headers(self.api_key)
         response = await self._client.post(url, json=payload, headers=headers)
@@ -209,3 +239,31 @@ class MultimodalEmbedder:
             raise ValueError(
                 f"{self.provider.__class__.__name__} does not support image embeddings"
             )
+
+
+def create_embedding_model(
+    settings: EmbeddingSettings,
+    *,
+    telemetry: Telemetry = NOOP_TELEMETRY,
+) -> MultimodalEmbedder:
+    """Build a closeable embedding model from immutable settings."""
+    return MultimodalEmbedder(
+        model=settings.model,
+        api_key=settings.api_key or "",
+        base_url=settings.base_url or "",
+        dim=settings.dim,
+        provider=get_embed_provider(settings.provider),
+        input_modality=settings.input_modality,
+        asymmetric=settings.asymmetric,
+        timeout=settings.timeout,
+        fingerprint=model_fingerprint(settings),
+        telemetry=telemetry,
+    )
+
+
+__all__ = [
+    "MultimodalEmbedder",
+    "create_embedding_model",
+    "resolve_asymmetric",
+    "resolve_embedding_input_modality",
+]

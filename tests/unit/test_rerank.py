@@ -4,10 +4,12 @@
 import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 from functools import partial
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import dlightrag_rag.rerank as rerank_module
 import pytest
 from dlightrag_ai.media import ImagePayloadBudget
 from dlightrag_ai.providers.rerank_base import resolve_rerank_input_modality
@@ -20,17 +22,17 @@ from dlightrag_ai.providers.rerank_providers import (
     VoyageRerankProvider,
     _azure_cohere_rerank_url,
 )
-
-import dlightrag.models.rerank as rerank_module
-from dlightrag.config import RerankConfig
-from dlightrag.core.retrieval.rerank import rerank_with_fallback
-from dlightrag.models.rerank import (
+from dlightrag_ai.rerank import RerankModel
+from dlightrag_ai.settings import ModelSettings, RerankSettings
+from dlightrag_rag.rerank import (
     _build_scored_chunks,
     _chat_llm_rerank,
     _parse_listwise_scores,
     _run_http_rerank,
     build_rerank_func,
 )
+
+from dlightrag.core.retrieval.rerank import rerank_with_fallback
 
 
 def _chunks() -> list[dict[str, Any]]:
@@ -39,6 +41,78 @@ def _chunks() -> list[dict[str, Any]]:
         {"chunk_id": "b", "content": "second"},
         {"chunk_id": "c", "content": "third"},
     ]
+
+
+async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None:
+    from dlightrag_ai import rerank
+
+    provider = MagicMock()
+    provider.requires_api_key = True
+    provider.requires_base_url = False
+    provider.default_model = "rerank-default"
+    provider.request_url.return_value = "https://rerank.example/v1/rerank"
+    provider.request_headers.return_value = {"Authorization": "Bearer key"}
+    provider.build_payload.return_value = {"query": "query", "documents": ["text"]}
+    provider.parse_results.return_value = [{"index": 0, "relevance_score": 0.8}]
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"results": []}
+    client = AsyncMock()
+    client.post.return_value = response
+    monkeypatch.setattr(rerank, "RERANK_PROVIDERS", {"voyage_reranker": provider})
+    monkeypatch.setattr("dlightrag_ai.rerank.httpx.AsyncClient", lambda **_kwargs: client)
+
+    model = rerank.create_rerank_model(
+        RerankSettings(
+            strategy="voyage_reranker",
+            model="rerank-2.5",
+            api_key="key",
+        )
+    )
+    scores = await model.score("query", [("text", None)], top_n=1)
+    await model.aclose()
+
+    assert scores == [{"index": 0, "relevance_score": 0.8}]
+    client.post.assert_awaited_once()
+    client.aclose.assert_awaited_once()
+
+
+async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled() -> None:
+    class Observation:
+        updates: list[dict[str, Any]] = []
+
+        def update(self, **kwargs: Any) -> None:
+            self.updates.append(kwargs)
+
+    class Telemetry:
+        capture_sensitive_data = False
+        observation = Observation()
+
+        @asynccontextmanager
+        async def observe(self, name: str, **_kwargs: Any):
+            del name
+            yield self.observation
+
+    model = RerankModel(
+        RerankSettings(
+            strategy="voyage_reranker",
+            model="rerank-2.5",
+            api_key="key",
+        ),
+        VoyageRerankProvider(),
+        telemetry=Telemetry(),
+    )
+    model._client.post = AsyncMock(  # pyright: ignore[reportPrivateUsage]
+        side_effect=RuntimeError("upstream echoed secret rerank query")
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="secret rerank query"):
+            await model.score("secret", [("document", None)], top_n=1)
+    finally:
+        await model.aclose()
+
+    assert Telemetry.observation.updates == [{"level": "ERROR", "status_message": "RuntimeError"}]
 
 
 async def test_rerank_with_fallback_caps_successful_provider_result() -> None:
@@ -192,71 +266,117 @@ class TestBuildRerankFunc:
             captured["score_threshold"] = kwargs["score_threshold"]
             return chunks[:top_k]
 
-        monkeypatch.setattr(
-            "dlightrag.observability.wrap_rerank_func",
-            lambda fn, *, name: fn,
-        )
         monkeypatch.setattr(rerank_module, func_name, fake_rerank)
         return captured
 
     @staticmethod
-    def _stub_http_client(monkeypatch) -> None:
-        monkeypatch.setattr(
-            rerank_module.httpx,
-            "AsyncClient",
-            lambda *args, **kwargs: object(),
-        )
+    def _stub_http_model(monkeypatch) -> AsyncMock:
+        model = AsyncMock()
+        model.aclose = AsyncMock()
+        monkeypatch.setattr(rerank_module, "create_rerank_model", MagicMock(return_value=model))
+        return model
 
     async def test_chat_llm_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
         captured = self._capture_threshold(monkeypatch, "_chat_llm_rerank")
+        scoring_model = AsyncMock()
+        scoring_model.aclose = AsyncMock()
+        monkeypatch.setattr(
+            rerank_module,
+            "CompletionModel",
+            MagicMock(return_value=scoring_model),
+        )
 
         fn = build_rerank_func(
-            RerankConfig(strategy="chat_llm_reranker"),
-            ingest_func=AsyncMock(),
+            RerankSettings(strategy="chat_llm_reranker"),
+            scoring_settings=ModelSettings(provider="openai", model="scoring-model"),
         )
+        assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
 
         assert captured["score_threshold"] is None
 
     async def test_provider_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
         captured = self._capture_threshold(monkeypatch, "_run_http_rerank")
-        self._stub_http_client(monkeypatch)
+        self._stub_http_model(monkeypatch)
 
         fn = build_rerank_func(
-            RerankConfig(strategy="voyage_reranker", api_key="voyage-key"),
+            RerankSettings(strategy="voyage_reranker", api_key="voyage-key"),
         )
+        assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
 
         assert captured["score_threshold"] is None
 
     async def test_explicit_provider_threshold_is_preserved(self, monkeypatch):
         captured = self._capture_threshold(monkeypatch, "_run_http_rerank")
-        self._stub_http_client(monkeypatch)
+        self._stub_http_model(monkeypatch)
 
         fn = build_rerank_func(
-            RerankConfig(
+            RerankSettings(
                 strategy="voyage_reranker",
                 api_key="voyage-key",
                 score_threshold=0.42,
             ),
         )
+        assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
 
         assert captured["score_threshold"] == 0.42
 
     def test_provider_requires_api_key(self):
         with pytest.raises(ValueError, match="requires api_key"):
-            build_rerank_func(RerankConfig(strategy="voyage_reranker"))
+            build_rerank_func(RerankSettings(strategy="voyage_reranker"))
 
     def test_provider_requires_base_url(self):
         with pytest.raises(ValueError, match="requires base_url"):
-            build_rerank_func(RerankConfig(strategy="aliyun_reranker", api_key="k"))
+            build_rerank_func(RerankSettings(strategy="aliyun_reranker", api_key="k"))
 
     def test_multimodal_on_text_only_provider_raises(self):
         with pytest.raises(ValueError, match="text-only"):
             build_rerank_func(
-                RerankConfig(strategy="voyage_reranker", api_key="k", input_modality="multimodal")
+                RerankSettings(
+                    strategy="voyage_reranker",
+                    api_key="k",
+                    input_modality="multimodal",
+                )
             )
+
+    async def test_http_rerank_keeps_bounded_orchestration_observation(
+        self,
+        monkeypatch,
+    ) -> None:
+        calls: list[dict[str, Any]] = []
+
+        class Telemetry:
+            capture_sensitive_data = True
+
+            @asynccontextmanager
+            async def observe(self, name: str, **kwargs: Any):
+                calls.append({"name": name, **kwargs})
+                observation = MagicMock()
+                yield observation
+
+        model = AsyncMock()
+        model.score.return_value = [{"index": 0, "relevance_score": 0.8}]
+        model.aclose = AsyncMock()
+        monkeypatch.setattr(
+            rerank_module,
+            "create_rerank_model",
+            MagicMock(return_value=model),
+        )
+        fn = build_rerank_func(
+            RerankSettings(strategy="voyage_reranker", api_key="key"),
+            telemetry=Telemetry(),
+        )
+        assert fn is not None
+
+        await fn("q" * 1200, [{"content": "candidate"}], 1)
+
+        assert calls[0]["name"] == "rerank/voyage_reranker"
+        assert calls[0]["metadata"] == {"chunk_count": 1, "top_k": 1}
+        traced_query = calls[0]["input"]["query"]
+        assert len(traced_query) < 1100
+        assert "truncated 200 chars" in traced_query
 
 
 class TestChatLlmRerank:
@@ -271,7 +391,7 @@ class TestChatLlmRerank:
         assert result[1]["rerank_score"] == pytest.approx(0.5)
 
     async def test_listwise_prompt_separates_rules_from_json_data(self, monkeypatch):
-        import dlightrag.models.rerank as rerank_module
+        import dlightrag_rag.rerank as rerank_module
 
         prompt_template = "Central listwise prompt for {n} items"
         monkeypatch.setattr(rerank_module, "LISTWISE_RERANK_SYSTEM_PROMPT", prompt_template)
@@ -471,7 +591,7 @@ class TestChatLlmRerank:
         assert len(result) == 5
 
     async def test_logs_listwise_schedule_summary(self, caplog):
-        caplog.set_level(logging.INFO, logger="dlightrag.models.rerank")
+        caplog.set_level(logging.INFO, logger="dlightrag_rag.rerank")
 
         async def mock_scoring(messages, **kwargs):
             n = sum("candidate" in payload for payload in _rerank_user_payloads(messages))
@@ -646,13 +766,33 @@ def _budget_factory():
     )
 
 
+class _ScoreModel:
+    def __init__(self, scores: list[dict[str, Any]]) -> None:
+        self.scores = scores
+        self.query: str | None = None
+        self.documents: list[tuple[str, str | None]] | None = None
+        self.top_n: int | None = None
+
+    async def score(
+        self,
+        query: str,
+        documents: list[tuple[str, str | None]],
+        *,
+        top_n: int,
+    ) -> list[dict[str, Any]]:
+        self.query = query
+        self.documents = documents
+        self.top_n = top_n
+        return self.scores
+
+
 class TestRunHttpRerank:
     async def test_bounds_image_payloads(self, monkeypatch):
         import dlightrag_ai.media as image_budget_module
 
         raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
         bounded_uri = "data:image/jpeg;base64,BOUNDED"
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.9}]})
+        model = _ScoreModel([{"index": 0, "relevance_score": 0.9}])
 
         def fake_bounded_image_data_uri(value, **kwargs):
             assert value == raw_image
@@ -669,13 +809,9 @@ class TestRunHttpRerank:
             "query",
             [{"content": "with image", "image_data": raw_image}],
             top_k=1,
-            provider=HttpRerankProvider(),
-            model="reranker",
-            base_url="https://rerank.example",
-            api_key=None,
+            model=cast(Any, model),
             modality="multimodal",
             score_threshold=0.3,
-            client=cast(Any, client),
             budget_factory=partial(
                 ImagePayloadBudget,
                 max_total_bytes=789,
@@ -689,77 +825,60 @@ class TestRunHttpRerank:
         )
 
         assert result[0]["rerank_score"] == pytest.approx(0.9)
-        assert client.payload is not None
-        assert client.payload["documents"] == [{"image": bounded_uri}]
-        assert client.url == "https://rerank.example/rerank"
-        assert raw_image not in str(client.payload)
+        assert model.documents == [("with image", bounded_uri)]
+        assert raw_image not in str(model.documents)
 
     async def test_text_modality_skips_images_sends_text_only(self):
         raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.85}]})
+        model = _ScoreModel([{"index": 0, "relevance_score": 0.85}])
 
         result = await _run_http_rerank(
             "query",
             [{"content": "VLM text description", "image_data": raw_image}],
             top_k=1,
-            provider=HttpRerankProvider(),
-            model="text-only-reranker",
-            base_url="https://rerank.example",
-            api_key=None,
+            model=cast(Any, model),
             modality="text",
             score_threshold=0.3,
-            client=cast(Any, client),
             budget_factory=_budget_factory(),
         )
 
         assert result[0]["rerank_score"] == pytest.approx(0.85)
-        assert client.payload is not None
-        assert client.payload["documents"] == [{"text": "VLM text description"}]
-        assert raw_image not in str(client.payload)
+        assert model.documents == [("VLM text description", None)]
+        assert raw_image not in str(model.documents)
 
     async def test_score_threshold_drops_all_results_below_threshold(self):
-        client = _CaptureClient(
-            {
-                "results": [
-                    {"index": 0, "relevance_score": 0.1},
-                    {"index": 1, "relevance_score": 0.2},
-                ]
-            }
+        model = _ScoreModel(
+            [
+                {"index": 0, "relevance_score": 0.1},
+                {"index": 1, "relevance_score": 0.2},
+            ]
         )
 
         result = await _run_http_rerank(
             "query",
             [{"content": "low"}, {"content": "also low"}],
             top_k=10,
-            provider=HttpRerankProvider(),
-            model="reranker",
-            base_url="https://rerank.example",
-            api_key=None,
+            model=cast(Any, model),
             modality="text",
             score_threshold=0.5,
-            client=cast(Any, client),
             budget_factory=_budget_factory(),
         )
 
         assert result == []
 
     async def test_empty_chunks_short_circuits(self):
-        client = _CaptureClient({"results": []})
+        model = _ScoreModel([])
         result = await _run_http_rerank(
             "query",
             [],
             top_k=5,
-            provider=HttpRerankProvider(),
-            model="reranker",
-            base_url="https://rerank.example",
-            api_key=None,
+            model=cast(Any, model),
             modality="text",
             score_threshold=None,
-            client=cast(Any, client),
             budget_factory=_budget_factory(),
         )
         assert result == []
-        assert client.payload is None
+        assert model.documents is None
 
 
 class TestRerankProviders:
@@ -923,19 +1042,26 @@ class TestRunHttpRerankIntegration:
             }
         )
 
+        model = RerankModel(
+            RerankSettings(
+                strategy="voyage_reranker",
+                model="rerank-2.5",
+                api_key="voyage-key",
+            ),
+            VoyageRerankProvider(),
+        )
+        model._client = cast(Any, client)
+
         result = await _run_http_rerank(
             "query",
             [{"content": "first", "image_data": "RAW_IMAGE"}, {"content": "second"}],
             top_k=1,
-            provider=VoyageRerankProvider(),
-            model="rerank-2.5",
-            base_url=None,
-            api_key="voyage-key",
+            model=model,
             modality="text",
             score_threshold=0.5,
-            client=cast(Any, client),
             budget_factory=_budget_factory(),
         )
+        await model.aclose()
 
         assert result == [{"content": "second", "rerank_score": 0.91}]
         assert client.url == "https://api.voyageai.com/v1/rerank"
@@ -957,12 +1083,16 @@ class _CaptureClient:
         self.payload = None
         self.url = None
         self.headers = None
+        self.closed = False
 
     async def post(self, url, *, json, headers):
         self.url = url
         self.payload = json
         self.headers = headers
         return _CaptureResponse(self.data)
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class _CaptureResponse:

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Shared lifecycle helpers for LightRAG-owned resources."""
+"""Shared lifecycle helpers for core-owned resources."""
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Any
@@ -8,6 +9,18 @@ from typing import Any
 from dlightrag_ai.concurrency import shutdown_async_callable
 
 logger = logging.getLogger(__name__)
+
+
+def defer_cancellation(
+    first: asyncio.CancelledError | None,
+    current: asyncio.CancelledError,
+) -> asyncio.CancelledError:
+    """Record cancellation while allowing the remaining cleanup to run."""
+    task = asyncio.current_task()
+    if task is not None:
+        while task.cancelling():
+            task.uncancel()
+    return first if first is not None else current
 
 
 def _unwrap_worker_pool(value: Any) -> Any:

@@ -30,23 +30,26 @@ _EXPECTED_DLIGHTRAG_DEPENDENCIES = {
     "dlightrag": {"dlightrag-agent-core", "dlightrag-ai", "dlightrag-rag-core"},
     "dlightrag-agent-core": {"dlightrag-ai"},
     "dlightrag-ai": set(),
-    "dlightrag-rag-core": set(),
+    "dlightrag-rag-core": {"dlightrag-ai"},
+}
+_CONCRETE_LIGHTRAG_BACKEND = "lightrag.kg.postgres_impl"
+# import-linter rejects external submodules as contract targets, so the built
+# artifact gate owns this one exact LightRAG implementation prohibition.
+_SPECIFIC_FORBIDDEN_IMPORTS = {
+    "dlightrag-rag-core": (_CONCRETE_LIGHTRAG_BACKEND,),
 }
 _REQUIRED_EXTERNAL_PROHIBITIONS = {
     "dlightrag": set(),
     "dlightrag-agent-core": {"lightrag", "asyncpg", "fastapi", "mcp"},
     "dlightrag-ai": {"lightrag", "asyncpg", "fastapi", "mcp"},
     "dlightrag-rag-core": {
-        "lightrag.kg.postgres_impl",
+        _CONCRETE_LIGHTRAG_BACKEND,
         "asyncpg",
         "fastapi",
         "mcp",
     },
 }
 _DLIGHTRAG_DISTRIBUTIONS = frozenset(_EXPECTED_PACKAGES)
-_SPECIFIC_FORBIDDEN_IMPORTS = {
-    "dlightrag-rag-core": ("lightrag.kg.postgres_impl",),
-}
 _NORMALIZE_RE = re.compile(r"[-_.]+")
 
 _ABSENT_HELPER = """
@@ -150,7 +153,7 @@ assert MetadataFilter(filename=' example.pdf ').filename == 'example.pdf'
     + _ABSENT_HELPER
     + """
 assert all(absent(name) for name in (
-    'dlightrag', 'dlightrag_agent', 'dlightrag_ai', 'lightrag', 'asyncpg'
+    'dlightrag', 'dlightrag_agent', 'asyncpg'
 ))
 """
 )
@@ -647,7 +650,7 @@ def smoke_installed(dist_dir: Path) -> None:
         ("ai", ("dlightrag-ai",), _AI_SMOKE),
         ("ai-all", ("dlightrag-ai[all]",), _AI_ALL_SMOKE),
         ("agent", ("dlightrag-ai", "dlightrag-agent-core"), _AGENT_SMOKE),
-        ("rag", ("dlightrag-rag-core",), _RAG_SMOKE),
+        ("rag", ("dlightrag-ai", "dlightrag-rag-core"), _RAG_SMOKE),
     )
     required_distributions = {
         requirement.partition("[")[0]

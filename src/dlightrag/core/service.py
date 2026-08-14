@@ -20,7 +20,10 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from dlightrag_ai.embedding import MultimodalEmbedder, create_embedding_model
+from dlightrag_rag.lightrag_models import LightRagChatModels, build_lightrag_embedding
 from dlightrag_rag.ports import MetadataIndexProtocol
+from dlightrag_rag.rerank import build_rerank_func, rerank_consumes_images
 from lightrag.constants import (
     DEFAULT_COSINE_THRESHOLD,
     PARSED_DIR_NAME,
@@ -39,7 +42,14 @@ from dlightrag.core.ingestion.paths import (
     staged_input_path,
     workspace_input_root,
 )
-from dlightrag.core.lightrag_lifecycle import shutdown_lightrag_worker_pools
+from dlightrag.core.lightrag_lifecycle import defer_cancellation, shutdown_lightrag_worker_pools
+from dlightrag.model_settings import (
+    embedding_settings,
+    model_role_settings,
+    rerank_scoring_model_settings,
+    rerank_settings,
+)
+from dlightrag.observability import LangfuseTelemetry
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import (
     SourceDownloadContractError,
@@ -59,7 +69,6 @@ if TYPE_CHECKING:
     from dlightrag.core.retrieval.provenance import ProvenanceCache
     from dlightrag.core.retrieval.retriever import UnifiedRetriever
     from dlightrag.core.visual_assets import VisualAssetResolver
-    from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -213,13 +222,6 @@ from dlightrag_rag.retrieval import MetadataFilter  # noqa: E402
 
 from dlightrag.core.contract_guard import LightRAGContractGuard  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
-from dlightrag.models.llm import (  # noqa: E402
-    build_role_llm_configs,
-    get_default_model_func_for_lightrag,
-    get_embedding_func,
-    get_multimodal_embedder,
-    get_rerank_func,
-)
 from dlightrag.storage.lightrag_readonly import attach_lightrag_storages_read_only  # noqa: E402
 from dlightrag.storage.postgres_version import (  # noqa: E402
     ensure_pgvector_halfvec,
@@ -265,7 +267,14 @@ class RAGService:
             cancel_checker=cancel_checker,
             rerank_supports_vision=rerank_supports_vision,
         )
-        await instance.initialize()
+        try:
+            await instance.initialize()
+        except BaseException:
+            try:
+                await instance.aclose()
+            except BaseException:  # noqa: BLE001 - preserve the initialization failure
+                logger.warning("Failed to close partially initialized RAG service", exc_info=True)
+            raise
         return instance
 
     def __init__(
@@ -294,6 +303,7 @@ class RAGService:
         self._ingestion_engine: UnifiedIngestionEngine | None = None
         self._bm25: BM25Retriever | None = None
         self._retrieval_orchestrator: UnifiedRetriever | None = None
+        self._chat_models: LightRagChatModels | None = None
         self._multimodal_embedder: MultimodalEmbedder | None = None
         self._document_embedder: RobustDocumentEmbedder | None = None
         self._rerank_func: Any = None
@@ -598,26 +608,44 @@ class RAGService:
         config = self.config
         logger.info("Initializing unified representational RAG mode...")
 
-        # Get model functions
-        default_func_lr = get_default_model_func_for_lightrag(config)
-        rerank_func = get_rerank_func(config, supports_vision=self._rerank_supports_vision)
-        self._rerank_func = rerank_func
-        from dlightrag.models.rerank import rerank_consumes_images
-
-        self._rerank_consumes_images = rerank_consumes_images(
-            config.rerank, supports_vision=self._rerank_supports_vision
+        # Build one service-owned model bundle for LightRAG's default and role calls.
+        chat_models = await LightRagChatModels.acreate(
+            model_role_settings(config),
+            telemetry=LangfuseTelemetry(),
         )
-        role_overrides = build_role_llm_configs(config)
+        self._chat_models = chat_models
+        default_func_lr = chat_models.default_func
+        resolved_rerank = rerank_settings(config)
+        rerank_func = build_rerank_func(
+            resolved_rerank,
+            scoring_settings=(
+                rerank_scoring_model_settings(config)
+                if resolved_rerank.enabled and resolved_rerank.strategy == "chat_llm_reranker"
+                else None
+            ),
+            supports_vision=self._rerank_supports_vision,
+            telemetry=LangfuseTelemetry(),
+        )
+        self._rerank_func = rerank_func
+        self._rerank_consumes_images = rerank_consumes_images(
+            resolved_rerank,
+            supports_vision=self._rerank_supports_vision,
+        )
+        role_overrides = chat_models.role_configs
         if role_overrides is not None:
             logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
 
-        multimodal_embedder = get_multimodal_embedder(config)
+        resolved_embedding = embedding_settings(config)
+        multimodal_embedder = create_embedding_model(
+            resolved_embedding,
+            telemetry=LangfuseTelemetry(),
+        )
         self._multimodal_embedder = multimodal_embedder
-        embedding_func = get_embedding_func(config, embedder=multimodal_embedder)
+        embedding_func = build_lightrag_embedding(resolved_embedding, multimodal_embedder)
         self._direct_image_embedding_enabled = await self._resolve_direct_image_embedding_enabled(
             multimodal_embedder,
-            startup_probe=config.embedding.startup_probe,
-            require_image_support=config.embedding.input_modality == "multimodal",
+            startup_probe=resolved_embedding.startup_probe,
+            require_image_support=resolved_embedding.input_modality == "multimodal",
         )
         document_embedder = self._build_document_embedder(
             config,
@@ -655,13 +683,13 @@ class RAGService:
             enable_llm_cache=not config.is_reader,
             enable_llm_cache_for_entity_extract=not config.is_reader,
         )
+        self._lightrag = lightrag
         contract_guard = LightRAGContractGuard(lightrag)
         if config.is_reader:
             contract_guard.verify_read_only_attach_contract()
             await attach_lightrag_storages_read_only(lightrag, config=config)
         else:
             await lightrag.initialize_storages()
-        self._lightrag = lightrag
         logger.info(
             "LightRAG storages %s",
             "attached (read-only)" if config.is_reader else "initialized",
@@ -828,35 +856,59 @@ class RAGService:
 
     async def aclose(self) -> None:
         """Clean up storages and worker pools (best-effort)."""
+        cancellation: asyncio.CancelledError | None = None
         if self._pipeline_recovery_task is not None:
             self._pipeline_recovery_task.cancel()
             try:
                 await self._pipeline_recovery_task
-            except asyncio.CancelledError:
-                pass
+            except asyncio.CancelledError as exc:
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    cancellation = defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Pipeline recovery task raised during shutdown", exc_info=True)
             self._pipeline_recovery_task = None
         # Shutdown LightRAG worker pools first — they hold background asyncio
         # tasks that block asyncio.run() from exiting.
-        await self._shutdown_worker_pools()
+        try:
+            await self._shutdown_worker_pools()
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+        except Exception:
+            logger.warning("Failed to shutdown LightRAG worker pools", exc_info=True)
 
         if self._rerank_func is not None and hasattr(self._rerank_func, "aclose"):
             try:
                 await self._rerank_func.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = defer_cancellation(cancellation, exc)
             except Exception:
                 logger.warning("Failed to close rerank function", exc_info=True)
 
         if self._multimodal_embedder is not None:
             try:
                 await self._multimodal_embedder.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = defer_cancellation(cancellation, exc)
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to close multimodal embedder", exc_info=True)
+        if self._chat_models is not None:
+            try:
+                await self._chat_models.aclose()
+            except asyncio.CancelledError as exc:
+                cancellation = defer_cancellation(cancellation, exc)
+            except Exception:
+                logger.warning("Failed to close LightRAG chat models", exc_info=True)
+            self._chat_models = None
         if self._lightrag is not None:
             try:
                 await self._lightrag.finalize_storages()
+            except asyncio.CancelledError as exc:
+                cancellation = defer_cancellation(cancellation, exc)
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to finalize LightRAG storages", exc_info=True)
+        if cancellation is not None:
+            raise cancellation
 
     async def areset(
         self,

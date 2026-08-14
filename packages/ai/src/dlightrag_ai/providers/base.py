@@ -175,6 +175,7 @@ class CompletionProvider(ABC):
         usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[return]
         raise NotImplementedError
+        yield ""  # pragma: no cover
 
     async def complete_tool_turn(
         self,

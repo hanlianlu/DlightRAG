@@ -48,6 +48,7 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
     from dlightrag.maintenance import rebuild_vdb as module
 
     fake_embedding = object()
+    fake_embedder = AsyncMock()
     config = _fake_config()
     calls: dict[str, Any] = {}
 
@@ -65,7 +66,16 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
         self.doc_status = AsyncMock()
         return True
 
-    monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: fake_embedding)
+    monkeypatch.setattr(
+        module,
+        "create_embedding_model",
+        lambda *_args, **_kwargs: fake_embedder,
+    )
+    monkeypatch.setattr(
+        module,
+        "build_lightrag_embedding",
+        lambda _settings, _embedder: fake_embedding,
+    )
     monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
     monkeypatch.setattr(module.DlightRAGRebuildTool, "run_check", AsyncMock())
 
@@ -146,7 +156,13 @@ async def test_chunks_rebuild_relabels_bm25_languages_after_success(
 
     config = _fake_config()
     config.bm25_enabled = True
-    monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
+    embedder = AsyncMock()
+    monkeypatch.setattr(
+        module,
+        "create_embedding_model",
+        lambda *_args, **_kwargs: embedder,
+    )
+    monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
     rebuild_mock = AsyncMock(return_value={"processed_chunks": 2, "updated_chunks": 2})
     monkeypatch.setattr(
         module,
@@ -200,8 +216,13 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
     from dlightrag.maintenance import rebuild_vdb as module
 
     config = _fake_config()
-    monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
-    monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: object())
+    embedder = AsyncMock()
+    monkeypatch.setattr(
+        module,
+        "create_embedding_model",
+        lambda *_args, **_kwargs: embedder,
+    )
+    monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
     restore_mock = AsyncMock()
     rebuild_mock = AsyncMock()
     monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore_mock)
@@ -234,8 +255,8 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
 
     config = _fake_config()
     embedder = AsyncMock()
-    monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: embedder)
-    monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
+    monkeypatch.setattr(module, "create_embedding_model", lambda *_args, **_kwargs: embedder)
+    monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
     resolve_mock = AsyncMock()
     restore_mock = AsyncMock()
     rebuild_mock = AsyncMock()
@@ -280,8 +301,8 @@ async def test_chunks_rebuild_closes_domain_pool_when_embedder_close_fails(
     embedder = AsyncMock()
     embedder.aclose.side_effect = RuntimeError("embedder close failed")
     fake_pool = SimpleNamespace(bind=MagicMock(), close=AsyncMock())
-    monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: embedder)
-    monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
+    monkeypatch.setattr(module, "create_embedding_model", lambda *_args, **_kwargs: embedder)
+    monkeypatch.setattr(module, "build_lightrag_embedding", lambda *_args: object())
     monkeypatch.setattr(module, "pg_pool", fake_pool)
     monkeypatch.setattr(
         module,
@@ -338,9 +359,18 @@ def _fake_config() -> SimpleNamespace:
             vlm=SimpleNamespace(min_image_pixel=64),
         ),
         embedding=SimpleNamespace(
+            provider="openai_compatible",
             model="text-embedding-3-small",
+            api_key="key",
+            base_url="https://api.example/v1",
+            dim=1536,
+            max_token_size=8192,
             input_modality="auto",
+            asymmetric="auto",
+            startup_probe=False,
+            model_kwargs={},
         ),
+        embedding_request_timeout=120.0,
         bm25_enabled=False,
         bm25_profiles=[],
         apply_lightrag_backend_env=lambda force=False: None,
