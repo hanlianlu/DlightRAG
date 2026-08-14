@@ -4,6 +4,8 @@
 import asyncio
 from typing import Any
 
+from dlightrag_ai.tokens import estimate_messages_tokens
+
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.answer.errors import AnswerInputOverflowError
@@ -18,7 +20,6 @@ from dlightrag.prompts import (
     answer_core,
 )
 from dlightrag.sourcing.source_contract import safe_source_filename
-from dlightrag.utils.tokens import estimate_messages_tokens
 
 
 class ContextAssembler:

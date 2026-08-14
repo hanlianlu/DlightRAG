@@ -18,15 +18,38 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: '3.14'
-      - name: Verify tag matches package version
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Verify tag matches workspace versions
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PKG_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} (${TAG_VERSION}) does not match pyproject.toml version (${PKG_VERSION})"
-            exit 1
-          fi
-      - run: uv build
+          uv run python - "$TAG_VERSION" <<'PY'
+          import pathlib
+          import sys
+          import tomllib
+
+          expected = sys.argv[1]
+          manifests = [
+              pathlib.Path("pyproject.toml"),
+              pathlib.Path("packages/ai/pyproject.toml"),
+              pathlib.Path("packages/agent-core/pyproject.toml"),
+              pathlib.Path("packages/rag-core/pyproject.toml"),
+          ]
+          versions = {
+              str(path): tomllib.loads(path.read_text(encoding="utf-8"))["project"]["version"]
+              for path in manifests
+          }
+          mismatches = {path: version for path, version in versions.items() if version != expected}
+          if mismatches:
+              raise SystemExit(f"tag {expected} does not match workspace versions: {mismatches}")
+          PY
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run build
+      - run: uv build --all-packages --out-dir dist
+      - run: uv run python scripts/verify_workspace_wheels.py --dist dist --smoke-installed
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           skip-existing: true

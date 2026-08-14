@@ -8,12 +8,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
+from dlightrag_rag.retrieval import ContextRow
+
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.utils import context_chunk_key
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget
-from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
+from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 _NO_KG = "No knowledge graph context available."
 
@@ -300,7 +302,7 @@ class EvidenceLedger:
 
 
 def _chunk_evidence_cost(row: ContextRow) -> int:
-    from dlightrag.utils.tokens import estimate_tokens
+    from dlightrag_ai.tokens import estimate_tokens
 
     cost = estimate_tokens(str(row.get("content") or ""))
     if row.get("image_data"):

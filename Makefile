@@ -9,10 +9,10 @@ PYTHON ?= python3
 LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(LANGFUSE_PROJECT) -f "$(LANGFUSE_LOCAL_DIR)/docker-compose.yml"
 LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
 LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env"
-PYTHON_LINT_PATHS = src/ tests/ scripts/ prerequisite_setup.py
-PYTHON_SECURITY_PATHS = src/ scripts/ prerequisite_setup.py
+PYTHON_LINT_PATHS = packages/ src/ tests/ scripts/ prerequisite_setup.py
+PYTHON_SECURITY_PATHS = packages/ src/ scripts/ prerequisite_setup.py
 
-.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-build frontend-audit frontend-ci test-unit ci ci-full test-e2e ci-e2e
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-build frontend-audit frontend-ci workspace-wheels test-unit ci ci-full test-e2e ci-e2e
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -133,11 +133,16 @@ frontend-audit:
 frontend-ci: frontend-install frontend-typecheck frontend-lint frontend-build frontend-audit
 	@echo "Frontend CI passed."
 
+workspace-wheels: frontend-build
+	rm -rf dist
+	uv build --all-packages --out-dir dist
+	uv run python scripts/verify_workspace_wheels.py --dist dist --smoke-installed
+
 test-unit:
 	uv run pytest tests/unit -q --tb=short
 
-# Fast path: what GitHub Actions runs on every PR/push (~2 min)
-ci: sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-ci test-unit
+# Pull-request gate: static analysis, frontend checks, isolated wheels, and unit tests.
+ci: sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-ci workspace-wheels test-unit
 	@echo "CI (fast) passed."
 
 # Full local: includes integration tests (needs PostgreSQL + pgvector)

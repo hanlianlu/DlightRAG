@@ -3,7 +3,9 @@
 
 from dataclasses import dataclass, field
 
-from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
+from dlightrag_rag.retrieval import ContextRow
+
+from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 from .indexer import CitationIndexer, build_citation_index
 from .processor import CitationProcessor

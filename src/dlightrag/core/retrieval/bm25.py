@@ -9,15 +9,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from dlightrag_rag.retrieval import ContextRow, MetadataScope, format_bm25_top, rrf_fuse
+
 from dlightrag.core.retrieval.bm25_language import (
     BM25_FALLBACK_LANGUAGE,
     BM25_LANGUAGE_COLUMN,
     BM25LanguageClassifier,
     normalize_language_code,
 )
-from dlightrag.core.retrieval.fusion import format_bm25_top, rrf_fuse
-from dlightrag.core.retrieval.models import MetadataScope
-from dlightrag.core.retrieval.protocols import ContextRow
 from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")

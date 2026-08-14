@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from dlightrag_ai.telemetry import NoopTelemetry
 
 from dlightrag import observability
 
@@ -73,6 +74,30 @@ async def test_trace_observation_captures_input_when_enabled() -> None:
         pass
 
     assert client.observations[-1].kwargs.get("input") == {"query": "q"}
+
+
+async def test_noop_telemetry_accepts_updates_without_product_dependencies() -> None:
+    async with NoopTelemetry().observe("standalone", metadata={"source": "test"}) as observation:
+        observation.update(output={"ok": True})
+
+
+async def test_langfuse_telemetry_adapts_neutral_observation() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    async with observability.LangfuseTelemetry().observe(
+        "agent_tool",
+        as_type="tool",
+        metadata={"tool": "search"},
+    ) as observation:
+        observation.update(output={"outcome": "ok"})
+
+    assert client.observations[0].kwargs == {
+        "as_type": "tool",
+        "name": "agent_tool",
+        "metadata": {"tool": "search"},
+    }
+    assert client.observations[0].updates == [{"output": {"outcome": "ok"}}]
 
 
 async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
@@ -208,7 +233,7 @@ async def test_chat_wrapper_uses_generation_observation() -> None:
 
 
 async def test_chat_wrapper_updates_generation_usage_and_cost_details() -> None:
-    from dlightrag.models.providers.base import CompletionOutput
+    from dlightrag_ai.providers.base import CompletionOutput
 
     client = _RecordingLangfuse()
     observability._client = client

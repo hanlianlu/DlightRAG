@@ -7,13 +7,13 @@ import io
 from typing import Any
 
 import pytest
+from dlightrag_agent.tools import AgentTool
 from PIL import Image
 from pydantic import ValidationError
 
 from dlightrag.core.resources.models import ResourceInput, ResourceRegistryError
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.resources.visual import ResourceInspectionError, ResourceInspector
-from dlightrag.core.tools import AgentTool
 from dlightrag.core.tools.resources import build_resource_tools
 from tests.unit.conftest import answer_image_policy
 

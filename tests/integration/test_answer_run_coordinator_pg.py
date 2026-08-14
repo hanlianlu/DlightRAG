@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 
 import asyncpg
 import pytest
+from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
@@ -581,6 +582,7 @@ def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
     orchestrator = AnswerOrchestrator(
         synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
         retrieve_knowledge_base=_retrieve_visual,
+        telemetry=NOOP_TELEMETRY,
     )
 
     async def _prepare(turn: Any, **kwargs: Any) -> _OrchestratorRun:

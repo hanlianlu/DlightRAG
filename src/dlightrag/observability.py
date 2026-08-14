@@ -8,10 +8,12 @@ every wrapper returns the original function unchanged (zero overhead).
 
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import ExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
+
+from dlightrag_ai.telemetry import Observation
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +206,27 @@ class _ObservationHandle:
     def update(self, **kwargs: Any) -> None:
         if self._observation is not None:
             _safe_update(self._observation, **kwargs)
+
+
+class LangfuseTelemetry:
+    """Root adapter from neutral telemetry to DlightRAG's Langfuse state."""
+
+    def observe(
+        self,
+        name: str,
+        *,
+        as_type: str = "span",
+        input: Any | None = None,
+        metadata: Any | None = None,
+        session_id: str | None = None,
+    ) -> AbstractAsyncContextManager[Observation]:
+        return trace_observation(
+            name,
+            as_type=as_type,
+            input=input,
+            metadata=metadata,
+            session_id=session_id,
+        )
 
 
 # Provider usage key synonyms → Langfuse canonical usage types. Langfuse sums

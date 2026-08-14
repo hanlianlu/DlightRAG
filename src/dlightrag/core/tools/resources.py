@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import cast
 
+from dlightrag_agent.tools import AgentTool, ToolResult
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.core.resources.models import (
@@ -26,7 +27,6 @@ from dlightrag.core.resources.visual import (
     ResourceInspectionResult,
     ResourceInspector,
 )
-from dlightrag.core.tools.models import AgentTool, ToolResult
 
 _READ_DESCRIPTION = (
     "Read bounded text (at most 16K tokens) from a registered resource. An "

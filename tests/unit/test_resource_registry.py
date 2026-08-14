@@ -292,8 +292,9 @@ async def test_read_continues_above_observation_budget() -> None:
 
 
 async def test_read_continues_within_single_oversized_line() -> None:
+    from dlightrag_ai.tokens import estimate_tokens
+
     from dlightrag.core.answer.capacity import MAX_TOOL_OBSERVATION_TOKENS
-    from dlightrag.utils.tokens import estimate_tokens
 
     registry = ResourceRegistry()
     # A minified single-line JSON payload with no newline, far over one budget.

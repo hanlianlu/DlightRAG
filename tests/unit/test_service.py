@@ -2350,7 +2350,7 @@ class TestRAGServiceLightRAGMainPath:
         self, test_config: DlightragConfig
     ) -> None:
         """Case folding belongs to the SQL comparison, not to the value in flight."""
-        from dlightrag.core.retrieval.models import MetadataFilter
+        from dlightrag_rag.retrieval import MetadataFilter
 
         service = RAGService(config=test_config)
         service._metadata_index = AsyncMock()

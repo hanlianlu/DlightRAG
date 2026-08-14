@@ -14,6 +14,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+from dlightrag_agent.tools import AgentTool, ExecutedTurn, ToolTurnExecutor
+from dlightrag_ai.messages import AssistantTurn
+from dlightrag_ai.telemetry import Telemetry
+
 from dlightrag.core.agent.context import ContextAssembler
 from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.images import AnswerImageBudget
@@ -25,15 +29,7 @@ from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.retrieval.protocols import RetrievalContexts
-from dlightrag.core.tools import (
-    AgentTool,
-    ExecutedTurn,
-    KnowledgeRetrieval,
-    ToolTurnExecutor,
-    WebSearch,
-    compose_research_tools,
-)
-from dlightrag.models.tool_turn import AssistantTurn
+from dlightrag.core.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +86,7 @@ class AnswerOrchestrator:
         image_budget: AnswerImageBudget | None = None,
         context_window_tokens: int = 260_000,
         max_agent_turns: int = 50,
+        telemetry: Telemetry,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -102,6 +99,7 @@ class AnswerOrchestrator:
         self._image_budget = image_budget
         self._capacity = AnswerCapacity(max(1, context_window_tokens))
         self._max_agent_turns = max(1, max_agent_turns)
+        self._telemetry = telemetry
 
     @property
     def uses_research_path(self) -> bool:
@@ -277,7 +275,10 @@ class AnswerOrchestrator:
         run: PreparedRun,
     ) -> tuple[ExecutedTurn, bool]:
         state = run.state
-        executor = ToolTurnExecutor(cast(ToolModel, self._model_func))
+        executor = ToolTurnExecutor(
+            cast(ToolModel, self._model_func),
+            telemetry=self._telemetry,
+        )
         call_messages = await run.context.control_turn(
             evidence=state.evidence, episode=state.episode
         )

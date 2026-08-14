@@ -4,6 +4,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from dlightrag_rag.retrieval import MetadataFilter
 
 from dlightrag.core.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
@@ -12,7 +13,6 @@ from dlightrag.core.retrieval.metadata_fields import (
     extract_system_metadata,
     normalize_user_metadata,
 )
-from dlightrag.core.retrieval.models import MetadataFilter
 
 
 def _writer_config():

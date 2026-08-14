@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dlightrag_rag.retrieval import MetadataScope
 
 from dlightrag.core.retrieval import bm25 as bm25_module
 from dlightrag.core.retrieval.bm25 import (
@@ -20,7 +21,6 @@ from dlightrag.core.retrieval.bm25 import (
     rebuild_postgres_bm25,
     required_postgres_extensions,
 )
-from dlightrag.core.retrieval.models import MetadataScope
 
 
 def _scope(*doc_ids: str, chunk_count: int = 12) -> MetadataScope:

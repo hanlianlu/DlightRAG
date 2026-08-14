@@ -4,7 +4,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from dlightrag.utils.tokens import estimate_content_tokens
+from dlightrag_ai.tokens import estimate_content_tokens
 
 
 class PriorTurns:

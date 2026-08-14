@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import uuid4
 
+from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS, verify_web_image_bytes
+
 from dlightrag.core.ingestion.uploads import safe_upload_basename
-from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS, verify_web_image_bytes
 
 # One ordered attachment collection per message. Images and documents mix; the
 # manager extracts verified images into current-image blocks and registers the

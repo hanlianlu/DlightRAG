@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+from dlightrag_ai.media import verify_web_image_bytes
 
 from dlightrag.core.resources.converters import (
     ExtractedVisual,
@@ -50,7 +51,6 @@ from dlightrag.sourcing.url import (
     normalize_https_url_identity,
     validate_public_https_url,
 )
-from dlightrag.utils.images import verify_web_image_bytes
 
 _DEFAULT_MAX_ATTACHMENTS = 6
 _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024

@@ -10,11 +10,11 @@ import os
 from pathlib import Path
 
 import pytest
+from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
 
 from dlightrag import config as config_module
 from dlightrag.config import DlightragConfig
 from dlightrag.core.answer.images import AnswerImagePolicy
-from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 
 _REPO_CONFIG_YAML = Path(__file__).resolve().parents[2] / "config.yaml"
 # Bound before the fixture patches the name, otherwise the wrapper recurses.

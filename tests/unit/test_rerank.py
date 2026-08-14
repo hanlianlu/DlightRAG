@@ -9,12 +9,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
-
-import dlightrag.models.rerank as rerank_module
-from dlightrag.config import RerankConfig
-from dlightrag.core.retrieval.rerank import rerank_with_fallback
-from dlightrag.models.providers.rerank_base import resolve_rerank_input_modality
-from dlightrag.models.providers.rerank_providers import (
+from dlightrag_ai.media import ImagePayloadBudget
+from dlightrag_ai.providers.rerank_base import resolve_rerank_input_modality
+from dlightrag_ai.providers.rerank_providers import (
     AliyunRerankProvider,
     AzureCohereRerankProvider,
     CohereRerankProvider,
@@ -23,6 +20,10 @@ from dlightrag.models.providers.rerank_providers import (
     VoyageRerankProvider,
     _azure_cohere_rerank_url,
 )
+
+import dlightrag.models.rerank as rerank_module
+from dlightrag.config import RerankConfig
+from dlightrag.core.retrieval.rerank import rerank_with_fallback
 from dlightrag.models.rerank import (
     _build_scored_chunks,
     _chat_llm_rerank,
@@ -30,7 +31,6 @@ from dlightrag.models.rerank import (
     _run_http_rerank,
     build_rerank_func,
 )
-from dlightrag.utils.image_budget import ImagePayloadBudget
 
 
 def _chunks() -> list[dict[str, Any]]:
@@ -323,7 +323,7 @@ class TestChatLlmRerank:
 
     async def test_multimodal_chunks_are_bounded_before_scoring(self, monkeypatch):
         """Rerank image payloads should not bypass the rerank-stage budget."""
-        import dlightrag.utils.image_budget as image_budget_module
+        import dlightrag_ai.media as image_budget_module
 
         raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
         bounded_uri = "data:image/jpeg;base64,BOUNDED"
@@ -377,7 +377,7 @@ class TestChatLlmRerank:
 
     async def test_multimodal_chunks_skip_images_when_batch_budget_is_exhausted(self, monkeypatch):
         """Reranker should omit images that do not fit the batch request budget."""
-        import dlightrag.utils.image_budget as image_budget_module
+        import dlightrag_ai.media as image_budget_module
 
         received_messages = []
 
@@ -648,7 +648,7 @@ def _budget_factory():
 
 class TestRunHttpRerank:
     async def test_bounds_image_payloads(self, monkeypatch):
-        import dlightrag.utils.image_budget as image_budget_module
+        import dlightrag_ai.media as image_budget_module
 
         raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
         bounded_uri = "data:image/jpeg;base64,BOUNDED"

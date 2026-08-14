@@ -3,13 +3,14 @@
 
 from unittest.mock import AsyncMock
 
+from dlightrag_rag.retrieval import MetadataScope
+
 from dlightrag.core.retrieval.filtered_vdb import (
     FilteredChunkStore,
     FilteredVectorStorage,
     _active_filter,
     metadata_filter_scope,
 )
-from dlightrag.core.retrieval.models import MetadataScope
 
 
 class _FakeDB:

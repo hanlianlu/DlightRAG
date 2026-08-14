@@ -8,8 +8,9 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
+from dlightrag_ai.media import detect_image_mime, thumbnail_bytes
+
 from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
-from dlightrag.utils.images import detect_image_mime, thumbnail_bytes
 
 logger = logging.getLogger(__name__)
 

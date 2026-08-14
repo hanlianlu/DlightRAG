@@ -6,15 +6,14 @@ import io
 import logging
 from typing import Any
 
-from PIL import Image
-
-from dlightrag.core.retrieval.protocols import ContextRow
-from dlightrag.utils.concurrency import bounded_map
-from dlightrag.utils.images import (
+from dlightrag_ai.concurrency import bounded_map
+from dlightrag_ai.media import (
     decode_image_base64,
     image_url_block,
     verify_web_image_bytes,
 )
+from dlightrag_rag.retrieval import ContextRow
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 

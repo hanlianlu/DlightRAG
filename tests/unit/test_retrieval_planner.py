@@ -6,6 +6,8 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from dlightrag_ai.structured import StructuredOutput
+from dlightrag_rag.retrieval import MetadataFilter
 
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.retrieval_planner import (
@@ -14,8 +16,6 @@ from dlightrag.core.request.retrieval_planner import (
     _build_custom_keys_hint,
     _build_schema_section,
 )
-from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.models.structured import StructuredOutput
 
 # ---------------------------------------------------------------------------
 # _build_schema_section / _build_custom_keys_hint

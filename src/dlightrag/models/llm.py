@@ -14,14 +14,15 @@ from functools import partial
 from typing import Any, cast
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
+from dlightrag_ai.providers import get_provider
+from dlightrag_ai.structured import StructuredOutput
+
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.llm_roles import (
     LIGHTRAG_ROLE_NAMES,
     has_complete_api_key_setting,
     model_for_role,
 )
-from dlightrag.models.providers import get_provider
-from dlightrag.models.structured import StructuredOutput
 
 logger = logging.getLogger(__name__)
 
@@ -314,8 +315,9 @@ def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) 
 
 def get_multimodal_embedder(config: DlightragConfig) -> Any:
     """Build a provider-aware multimodal embedder for text and images."""
+    from dlightrag_ai.providers.embed_providers import get_embed_provider
+
     from dlightrag.models.multimodal_embedding import MultimodalEmbedder
-    from dlightrag.models.providers.embed_providers import get_embed_provider
 
     cfg = config.embedding
     return MultimodalEmbedder(

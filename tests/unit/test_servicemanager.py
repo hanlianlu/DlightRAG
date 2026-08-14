@@ -14,6 +14,7 @@ from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from dlightrag_rag.retrieval import MetadataFilter
 from PIL import Image
 
 from dlightrag.config import (
@@ -30,10 +31,19 @@ from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
 from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.core.resources.models import ResourceInput
-from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.base import SourceDocument
+
+
+def test_manager_applies_product_image_decode_ceiling(test_cfg, monkeypatch) -> None:
+    from dlightrag_ai.media import MAX_DECODE_IMAGE_PIXELS
+
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1)
+
+    RAGServiceManager(config=test_cfg)
+
+    assert Image.MAX_IMAGE_PIXELS == MAX_DECODE_IMAGE_PIXELS
 
 
 def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
@@ -1790,7 +1800,7 @@ async def test_vision_probe_result_is_manager_scoped(
     provider = SimpleNamespace(aclose=AsyncMock())
     probe = AsyncMock(return_value=ImageProbeOutcome(status="supported"))
 
-    monkeypatch.setattr("dlightrag.models.providers.get_provider", MagicMock(return_value=provider))
+    monkeypatch.setattr("dlightrag_ai.providers.get_provider", MagicMock(return_value=provider))
     monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", probe)
 
     await second._probe_rerank_image_capability()
@@ -1822,7 +1832,7 @@ async def test_rerank_vision_probe_does_not_borrow_default_key(
     provider = SimpleNamespace(aclose=AsyncMock())
     provider_factory = MagicMock(return_value=provider)
 
-    monkeypatch.setattr("dlightrag.models.providers.get_provider", provider_factory)
+    monkeypatch.setattr("dlightrag_ai.providers.get_provider", provider_factory)
     monkeypatch.setattr(
         "dlightrag.core.vision_probe.probe_image_capability",
         AsyncMock(return_value=ImageProbeOutcome(status="supported")),
@@ -2374,8 +2384,8 @@ class TestAgenticAnswerCapability:
             preparation_threads.append(threading.get_ident())
             return "data:image/png;base64,AA=="
 
-        monkeypatch.setattr("dlightrag.utils.images.verify_web_image_bytes", verify)
-        monkeypatch.setattr("dlightrag.utils.images.image_bytes_to_data_uri", encode)
+        monkeypatch.setattr("dlightrag_ai.media.verify_web_image_bytes", verify)
+        monkeypatch.setattr("dlightrag_ai.media.image_bytes_to_data_uri", encode)
         manager = RAGServiceManager(config=test_cfg)
 
         images, _resources, _image_resources = await manager._prepare_current_images(
@@ -2387,8 +2397,9 @@ class TestAgenticAnswerCapability:
         assert all(thread_id != loop_thread for thread_id in preparation_threads)
 
     async def test_agent_image_budgeting_runs_off_event_loop(self, test_cfg) -> None:
+        from dlightrag_ai.media import image_bytes_to_data_uri
+
         from dlightrag.core.answer.capability import AnswerImageCapability
-        from dlightrag.utils.images import image_bytes_to_data_uri
 
         loop_thread = threading.get_ident()
         budget_threads: list[int] = []
@@ -2568,8 +2579,9 @@ class TestAgenticAnswerCapability:
         assert _CapturingOrchestrator.last["init"]["search_web"] is not None
 
     async def test_agentic_kb_tool_plans_the_agent_query_lazily(self, test_cfg) -> None:
+        from dlightrag_ai.messages import AssistantTurn, ToolCall
+
         from dlightrag.core.answer.synthesizer import AnswerSynthesizer
-        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
@@ -2620,9 +2632,10 @@ class TestAgenticAnswerCapability:
         assert "plan" not in retrieve_call.kwargs
 
     async def test_agentic_kb_searches_describe_current_images_once(self, test_cfg) -> None:
+        from dlightrag_ai.messages import AssistantTurn, ToolCall
+
         from dlightrag.core.answer.capability import AnswerImageCapability
         from dlightrag.core.answer.synthesizer import AnswerSynthesizer
-        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_image_capability = AnswerImageCapability(
@@ -2713,9 +2726,10 @@ class TestAgenticAnswerCapability:
             assert call.kwargs["image_descriptions"] == ["Image 1: chart"]
 
     async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
+        from dlightrag_ai.messages import AssistantTurn, ToolCall
+
         from dlightrag.core.answer.synthesizer import AnswerSynthesizer
         from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-        from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)

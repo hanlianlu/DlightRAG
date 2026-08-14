@@ -3,7 +3,6 @@
 
 from typing import Any
 
-from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import (
     RetrievalBackend,
     RetrievalContexts,
@@ -129,7 +128,6 @@ def _next_reference_id(used_refs: set[str]) -> int:
 
 
 __all__ = [
-    "MetadataFilter",
     "RetrievalBackend",
     "RetrievalContexts",
     "RetrievalResult",

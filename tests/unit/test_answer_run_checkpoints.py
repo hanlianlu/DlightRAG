@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 import pytest
+from dlightrag_agent.tools import ToolResult
 
 from dlightrag.core.answer_runs.checkpoints import (
     CheckpointError,
@@ -27,7 +28,7 @@ from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.resources.registry import ResourceRegistry, ResourceStateMismatchError
-from dlightrag.core.tools import ExactCallCache, ToolResult
+from dlightrag.core.tools import ExactCallCache
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 _ATTACHMENT_BYTES = b"\x89PNG\r\n\x1a\nfake-attachment"

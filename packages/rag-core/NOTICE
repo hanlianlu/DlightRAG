@@ -1,0 +1,14 @@
+dlightrag
+Copyright 2025-2026 Hanlian Lyu
+
+This product includes software developed by Hanlian Lyu.
+
+This project builds on the following open-source projects:
+- LightRAG (https://github.com/HKUDS/LightRAG) - MIT License
+- Lucide Icons (https://lucide.dev) - ISC License (embedded Sun, Moon, and Monitor SVG path geometry in web templates)
+- MinerU (https://github.com/opendatalab/MinerU) -
+  MinerU Open Source License (Apache License 2.0 with additional terms);
+  used as a separately installed sidecar service.
+- Docling / Docling Serve (https://github.com/docling-project/docling,
+  https://github.com/docling-project/docling-serve) - MIT License;
+  used through LightRAG as a separately deployed sidecar service.

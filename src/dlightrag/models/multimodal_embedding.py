@@ -6,17 +6,16 @@ import logging
 import math
 
 import httpx
-from PIL import Image
-
-from dlightrag.contracts import AsymmetricMode, InputModality, ResolvedInputModality
-from dlightrag.models.embedding_inputs import (
+from dlightrag_ai.contracts import AsymmetricMode, InputModality, ResolvedInputModality
+from dlightrag_ai.embedding_inputs import (
     EmbeddingInput,
     ImageEmbeddingInput,
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
-from dlightrag.models.providers.embed_base import EmbeddingContext, EmbedProvider
-from dlightrag.utils.images import bounded_embedding_image_data_uri
+from dlightrag_ai.media import bounded_embedding_image_data_uri
+from dlightrag_ai.providers.embed_base import EmbeddingContext, EmbedProvider
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 

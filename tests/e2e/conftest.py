@@ -25,13 +25,13 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
 from playwright.sync_api import Browser, Page, sync_playwright
 
 from dlightrag.api.server import create_app
 from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.storage.answer_runs import AnswerRunEvent, AnswerRunRecord
 from dlightrag.storage.web_conversations import LinkedTurn
-from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary
 from dlightrag.web.conversations import WebAnswerSubmission, project_conversation_turn
 

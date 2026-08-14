@@ -8,10 +8,48 @@ from pathlib import Path
 import pytest
 import yaml
 
+_MANIFESTS = (
+    Path("pyproject.toml"),
+    Path("packages/ai/pyproject.toml"),
+    Path("packages/agent-core/pyproject.toml"),
+    Path("packages/rag-core/pyproject.toml"),
+)
 
-def _dependencies() -> list[str]:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    return pyproject["project"]["dependencies"]
+
+def _project(path: Path = Path("pyproject.toml")) -> dict[str, object]:
+    return tomllib.loads(path.read_text(encoding="utf-8"))["project"]
+
+
+def _dependencies(path: Path = Path("pyproject.toml")) -> list[str]:
+    return _project(path)["dependencies"]  # type: ignore[return-value]
+
+
+def test_workspace_versions_are_lockstep() -> None:
+    versions = {_project(path)["version"] for path in _MANIFESTS}
+
+    assert len(versions) == 1
+
+
+def test_root_depends_on_workspace_cores_without_redeclaring_provider_sdks() -> None:
+    dependencies = _dependencies()
+    version = _project()["version"]
+
+    assert f"dlightrag-ai[all]=={version}" in dependencies
+    assert f"dlightrag-agent-core=={version}" in dependencies
+    assert f"dlightrag-rag-core=={version}" in dependencies
+    assert not any(
+        dependency.startswith(("openai", "anthropic", "google-genai", "json-repair"))
+        for dependency in dependencies
+    )
+
+
+def test_core_distribution_dependencies_follow_import_direction() -> None:
+    agent = _dependencies(Path("packages/agent-core/pyproject.toml"))
+    rag = _dependencies(Path("packages/rag-core/pyproject.toml"))
+    version = _project()["version"]
+
+    assert agent == [f"dlightrag-ai=={version}", "pydantic>=2.11.0"]
+    assert rag == ["pydantic>=2.11.0"]
 
 
 def test_eval_dependency_group_uses_lightrag_evaluation_extra() -> None:

@@ -6,12 +6,12 @@ import json
 from collections import Counter
 from typing import Any
 
+from dlightrag_agent.tools import AgentTool, ToolResult
 from pydantic import BaseModel
 
 from dlightrag.core.answer.errors import InvalidToolConfigurationError
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.tools.cache import ExactCallCache
-from dlightrag.core.tools.models import AgentTool, ToolResult
 from dlightrag.core.tools.search import (
     KnowledgeRetrieval,
     RegisterWebSource,

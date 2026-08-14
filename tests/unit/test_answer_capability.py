@@ -91,7 +91,7 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
         probed["api_key"] = kwargs["api_key"]
         return _StubProvider()
 
-    monkeypatch.setattr("dlightrag.models.providers.get_provider", fake_get_provider)
+    monkeypatch.setattr("dlightrag_ai.providers.get_provider", fake_get_provider)
     monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", fake_probe)
 
     await manager._probe_answer_image_capability()
@@ -249,9 +249,7 @@ def _probed_models(monkeypatch: pytest.MonkeyPatch, *statuses: ImageCapabilitySt
         async def aclose(self) -> None:
             pass
 
-    monkeypatch.setattr(
-        "dlightrag.models.providers.get_provider", lambda *_a, **_k: _StubProvider()
-    )
+    monkeypatch.setattr("dlightrag_ai.providers.get_provider", lambda *_a, **_k: _StubProvider())
     monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", fake_probe)
     return probed
 
@@ -355,9 +353,7 @@ async def test_a_slow_probe_does_not_spend_its_own_cooldown(
         async def aclose(self) -> None:
             pass
 
-    monkeypatch.setattr(
-        "dlightrag.models.providers.get_provider", lambda *_a, **_k: _StubProvider()
-    )
+    monkeypatch.setattr("dlightrag_ai.providers.get_provider", lambda *_a, **_k: _StubProvider())
     monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", slow_probe)
     capabilities = ModelImageCapabilities(reprobe_cooldown_seconds=0.04)
     cfg = ModelConfig(model="unreachable", api_key="k")

@@ -27,9 +27,8 @@ async def search_metadata(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return the document IDs matching all key-value pairs in 'filters'."""
+    from dlightrag_rag.retrieval import MetadataFilter
     from pydantic import ValidationError
-
-    from dlightrag.core.retrieval.models import MetadataFilter
 
     # Validate the user-supplied dict against the MetadataFilter schema.
     # The storage backend's query() takes a Pydantic model, not a raw dict,

@@ -36,6 +36,12 @@ if TYPE_CHECKING:
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
+from dlightrag_agent.tools import AgentTool
+from dlightrag_ai.media import MAX_DECODE_IMAGE_PIXELS
+from dlightrag_ai.telemetry import safe_log_text
+from dlightrag_rag.retrieval import MetadataFilter
+from PIL import Image
+
 from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.answer.capability import (
@@ -76,11 +82,10 @@ from dlightrag.core.request.workspaces import (
     resolve_query_workspaces,
     validate_query_workspace_selection,
 )
-from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
-from dlightrag.core.tools import AgentTool
 from dlightrag.core.vision_probe import ImageCapabilityStatus, ModelImageCapabilities
+from dlightrag.observability import LangfuseTelemetry
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.storage.answer_runs import (
@@ -93,7 +98,7 @@ from dlightrag.storage.answer_runs import (
 )
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
 from dlightrag.storage.migrations import SchemaValidationError
-from dlightrag.utils import log_safe, normalize_workspace
+from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +262,7 @@ class RAGServiceUnavailableError(Exception):
 
 
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:
-    from dlightrag.utils.images import image_bytes_to_data_uri, verify_web_image_bytes
+    from dlightrag_ai.media import image_bytes_to_data_uri, verify_web_image_bytes
 
     mime = verify_web_image_bytes(data, max_pixels=max_pixels)
     return mime, image_bytes_to_data_uri(data, fallback_mime=mime)
@@ -273,6 +278,8 @@ class RAGServiceManager:
     def __init__(self, config: DlightragConfig | None = None) -> None:
         from dlightrag.config import get_config
 
+        # Large document scans are DlightRAG product policy, not an AI package import side effect.
+        Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
         self._config = config or get_config()
         self._services: dict[str, RAGService] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -497,7 +504,7 @@ class RAGServiceManager:
                 # Clear backoff on success
                 self._backoff.pop(workspace, None)
 
-                logger.info("Created RAGService for workspace '%s'", log_safe(workspace))
+                logger.info("Created RAGService for workspace '%s'", safe_log_text(workspace))
                 return svc
             except SchemaValidationError:
                 # Terminal: no backoff or retry can repair an absent schema, and
@@ -511,8 +518,8 @@ class RAGServiceManager:
                 self._backoff[workspace] = (time.time(), new_interval)
                 logger.error(
                     "RAGService creation failed for '%s': %s. Retry in %ss",
-                    log_safe(workspace),
-                    log_safe(error_msg),
+                    safe_log_text(workspace),
+                    safe_log_text(error_msg),
                     new_interval,
                 )
                 raise RAGServiceUnavailableError(detail=error_msg) from e
@@ -930,8 +937,8 @@ class RAGServiceManager:
                 total_errors += 1
                 logger.warning(
                     "Failed to reset workspace '%s': %s",
-                    log_safe(ws),
-                    log_safe(exc),
+                    safe_log_text(ws),
+                    safe_log_text(exc),
                 )
 
             # Close and evict from cache even after reset errors, but never for a
@@ -942,7 +949,7 @@ class RAGServiceManager:
                 except Exception:
                     logger.warning(
                         "Failed to close service for '%s'",
-                        log_safe(ws),
+                        safe_log_text(ws),
                         exc_info=True,
                     )
                 del self._services[ws]
@@ -1522,6 +1529,7 @@ class RAGServiceManager:
             image_budget=image_budget,
             context_window_tokens=self._config.answer.context_window_tokens,
             max_agent_turns=self._config.max_agent_turns,
+            telemetry=LangfuseTelemetry(),
         )
         return _OrchestratorRun(
             orchestrator=orchestrator,
@@ -1980,7 +1988,7 @@ class RAGServiceManager:
         except Exception:
             logger.info(
                 "Knowledge-base visual for '%s' no longer resolves; dropping the image block",
-                log_safe(chunk_id),
+                safe_log_text(chunk_id),
             )
             return None
         content = getattr(asset, "data", None)

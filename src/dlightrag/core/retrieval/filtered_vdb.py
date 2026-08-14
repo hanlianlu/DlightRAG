@@ -18,7 +18,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.core.retrieval.models import MetadataScope
+from dlightrag_rag.retrieval import MetadataScope
+
 from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
 logger = logging.getLogger(__name__)

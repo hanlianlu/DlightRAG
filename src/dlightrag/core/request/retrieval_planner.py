@@ -11,19 +11,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from dlightrag_ai.structured import StructuredOutput
+from dlightrag_ai.telemetry import safe_log_text
+from dlightrag_ai.tokens import (
+    estimate_tokens,
+)
+from dlightrag_rag.retrieval import MetadataFilter
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
     RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE,
     RETRIEVAL_PLANNER_SYSTEM_PROMPT,
-)
-from dlightrag.utils import log_safe
-from dlightrag.utils.tokens import (
-    estimate_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,7 +223,7 @@ class RetrievalPlanner:
 
     async def aclose(self) -> None:
         """Release model-function worker resources owned by this planner."""
-        from dlightrag.utils.concurrency import shutdown_async_callable
+        from dlightrag_ai.concurrency import shutdown_async_callable
 
         await shutdown_async_callable(self._llm_func)
 
@@ -307,12 +307,12 @@ class RetrievalPlanner:
         logger.info(
             "[Planner] result: standalone=%r, bm25_query=%r, filter_source=%s, "
             "filter_confidence=%s, filter_evidence=%s, filter=%s",
-            log_safe(plan.standalone_query, max_length=60),
-            log_safe(plan.bm25_query),
-            log_safe(plan.metadata_filter_source),
-            log_safe(plan.metadata_filter_confidence),
-            log_safe(_format_filter_evidence(plan.metadata_filter_evidence)),
-            log_safe(plan.metadata_filter),
+            safe_log_text(plan.standalone_query, max_length=60),
+            safe_log_text(plan.bm25_query),
+            safe_log_text(plan.metadata_filter_source),
+            safe_log_text(plan.metadata_filter_confidence),
+            safe_log_text(_format_filter_evidence(plan.metadata_filter_evidence)),
+            safe_log_text(plan.metadata_filter),
         )
         return plan
 
@@ -376,7 +376,7 @@ class RetrievalPlanner:
         except ValidationError, ValueError, TypeError:
             logger.warning(
                 "RetrievalPlanner: invalid structured output for query: %s",
-                log_safe(query, max_length=80),
+                safe_log_text(query, max_length=80),
             )
             return None
 
@@ -418,7 +418,7 @@ class RetrievalPlanner:
             except Exception:
                 logger.warning(
                     "RetrievalPlanner: invalid filter values for query: %s",
-                    log_safe(query, max_length=80),
+                    safe_log_text(query, max_length=80),
                 )
                 metadata_filter = None
 

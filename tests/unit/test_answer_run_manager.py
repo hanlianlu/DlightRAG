@@ -9,6 +9,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
@@ -363,6 +364,7 @@ class TestRunExecution:
         orchestrator = AnswerOrchestrator(
             synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
             retrieve_knowledge_base=_retrieve,
+            telemetry=NOOP_TELEMETRY,
         )
         prepared: list[Any] = []
 
@@ -450,6 +452,7 @@ class TestRunExecution:
         orchestrator = AnswerOrchestrator(
             synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
             retrieve_knowledge_base=_retrieve_visual,
+            telemetry=NOOP_TELEMETRY,
         )
 
         async def _prepare(turn: Any, **kwargs: Any) -> _OrchestratorRun:

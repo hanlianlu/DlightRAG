@@ -10,13 +10,15 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from dlightrag_ai.telemetry import safe_log_text
+
 from dlightrag.core.client_contracts import SourceType
 from dlightrag.storage.ingest_jobs import (
     JOB_HEARTBEAT_SECONDS,
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,
 )
-from dlightrag.utils import log_safe, normalize_workspace
+from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
     from dlightrag.core.service import RAGService
@@ -208,7 +210,9 @@ class IngestJobCoordinator:
             if isinstance(errors, list):
                 errors.append(f"ingest_jobs: {exc}")
             logger.warning(
-                "Failed to delete ingest jobs for workspace '%s': %s", log_safe(workspace), exc
+                "Failed to delete ingest jobs for workspace '%s': %s",
+                safe_log_text(workspace),
+                exc,
             )
 
     async def cancel_job(self, job_id: str, *, workspace: str) -> bool:
@@ -246,7 +250,7 @@ class IngestJobCoordinator:
         except Exception:
             logger.warning(
                 "Could not park unfinished documents for '%s'; a restart may resume them",
-                log_safe(workspace),
+                safe_log_text(workspace),
                 exc_info=True,
             )
             return

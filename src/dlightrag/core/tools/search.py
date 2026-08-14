@@ -10,6 +10,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from dlightrag_agent.tools import AgentTool, ToolResult
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.core.memory.evidence import EvidenceLedger
@@ -20,7 +21,6 @@ from dlightrag.core.retrieval.web_search import (
     web_context_rows,
 )
 from dlightrag.core.tools.cache import ExactCallCache
-from dlightrag.core.tools.models import AgentTool, ToolResult
 
 KnowledgeRetrieval = Callable[[str], Awaitable[RetrievalResult]]
 WebSearch = Callable[[str], Awaitable[WebSearchResult]]

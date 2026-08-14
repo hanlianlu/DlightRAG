@@ -239,8 +239,29 @@ complete role, migration-order, and shared-artifact contract.
 
 ## Code Layering
 
-Modules sit on a decreasing dependency stack: a module at a higher layer may
-import from lower layers, but lower layers must not import higher ones.
+The repository is one UV workspace with four lockstep distributions. Distinct
+top-level Python packages make their import directions observable in source and
+in built wheels:
+
+```text
+dlightrag-ai          provider/tool-call contracts, media/tokens, telemetry seam
+     ↑
+dlightrag-agent-core  generic tool contracts and deterministic turn execution
+
+dlightrag-rag-core    storage-neutral metadata records and score fusion
+
+dlightrag             product composition, PostgreSQL, REST/Web/MCP/SDK
+```
+
+Agent core depends on AI. The root product depends on all three cores. The
+initial RAG leaves are independently installable and import neither the root
+product nor Agent; later RAG modules may depend on AI but never on root product
+or concrete PostgreSQL adapters. Concrete provider SDKs are lazy AI extras, so
+importing `dlightrag_ai` does not load OpenAI, Anthropic, or Gemini clients.
+
+Inside the root product, modules still sit on a decreasing dependency stack: a
+module at a higher layer may import from lower layers, but lower layers must not
+import higher ones.
 
 ```text
 L9  api, mcp, web                                  interface adapters
@@ -248,8 +269,8 @@ L8  core.servicemanager                            multi-workspace coordinator
 L7  core.{service, reset}                          per-workspace facade
 L6  core orchestration                             ingest, retrieve, answer, visual assets
 L5  LightRAG/store adapters                        patches, parser sidecar, BM25, filtered VDB
-L4  models and shared retrieval helpers            embedding, LLM, rerank, metadata path
-L3  providers, storage, sourcing, citations        external/domain implementations
+L4  workspace cores and root model orchestration   AI, Agent, RAG leaves; LLM/rerank composition
+L3  PostgreSQL, sourcing, citations                product/domain implementations
 L2  config, schemas, scope, protocols              shared contracts
 L1  observability                                  Langfuse wrappers and no-op fallback
 L0  prompts, utils                                 pure helpers
@@ -261,13 +282,11 @@ The layering checks are part of local and CI verification:
 uv run lint-imports
 ```
 
-`lint-imports` enforces six contracts: `api`/`mcp`/`web` stay out of the
-internal packages and operator-only maintenance commands; foundation packages
-never import domain code; the lower stack is ordered
-`models → config → observability → prompts`/`utils`; the core coordination stack
-is ordered `servicemanager → service → reset`; the resource domain never imports
-the model-visible tool package; and model-visible tools never import the agent
-orchestrator, durable run host, or maintenance commands. Shared contract modules
-(`core.retrieval.protocols`/`models`, `models.schemas`) are imported across
-several layers, so the full table above is a design guide rather than a single
-machine-checked chain.
+`lint-imports` enforces contracts over all four roots: AI cannot import the
+product, Agent, RAG, LightRAG, PostgreSQL, or transport packages; Agent may use
+AI but not product/RAG/storage/transport code; and RAG cannot import the product,
+Agent, PostgreSQL, or transport packages. Existing root contracts continue to
+keep `api`/`mcp`/`web` out of internal modules, order the foundation and core
+coordination stacks, and separate resources from model-visible tool adapters.
+The same checks run against installed wheel contents so an editable workspace
+cannot hide an undeclared dependency.

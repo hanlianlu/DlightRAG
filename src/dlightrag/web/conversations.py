@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import asyncpg
+from dlightrag_ai.media import thumbnail_bytes
 
 from dlightrag.api.auth import UserContext
 from dlightrag.api.principal import owner_id_from_user
@@ -38,7 +39,6 @@ from dlightrag.storage.web_conversations import (
     LinkedTurn,
     PGWebConversationStore,
 )
-from dlightrag.utils.images import thumbnail_bytes
 from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import (
     ConversationAttachmentReference,

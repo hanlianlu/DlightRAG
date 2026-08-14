@@ -6,21 +6,21 @@ import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from PIL import Image
-
-from dlightrag.contracts import InputModality, ResolvedInputModality
-from dlightrag.models.multimodal_embedding import (
-    MultimodalEmbedder,
-    resolve_embedding_input_modality,
-)
-from dlightrag.models.providers.embed_base import EmbedProvider
-from dlightrag.models.providers.embed_providers import (
+from dlightrag_ai.contracts import InputModality, ResolvedInputModality
+from dlightrag_ai.media import decode_image_base64
+from dlightrag_ai.providers.embed_base import EmbedProvider
+from dlightrag_ai.providers.embed_providers import (
     GeminiEmbedProvider,
     OllamaEmbedProvider,
     OpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
-from dlightrag.utils.images import decode_image_base64
+from PIL import Image
+
+from dlightrag.models.multimodal_embedding import (
+    MultimodalEmbedder,
+    resolve_embedding_input_modality,
+)
 
 
 @pytest.mark.parametrize(

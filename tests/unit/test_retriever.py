@@ -5,8 +5,8 @@ import logging
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_rag.retrieval import MetadataFilter
 
-from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.retriever import UnifiedRetriever
 
 

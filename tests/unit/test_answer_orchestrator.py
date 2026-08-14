@@ -7,6 +7,9 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
+from dlightrag_agent.tools import AgentTool, ToolResult
+from dlightrag_ai.messages import AssistantTurn, ToolCall
+from dlightrag_ai.telemetry import NOOP_TELEMETRY
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.citations import finalize_answer
@@ -22,8 +25,7 @@ from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynth
 from dlightrag.core.resources.models import ResourceManifestEntry
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-from dlightrag.core.tools import AgentTool, SearchInput, ToolResult, compose_research_tools
-from dlightrag.models.tool_turn import AssistantTurn, ToolCall
+from dlightrag.core.tools import SearchInput, compose_research_tools
 from tests.unit.conftest import answer_image_policy
 
 
@@ -60,6 +62,9 @@ class _DrainedOrchestrator(AnswerOrchestrator):
     citations over the ledger's contexts. Keeping it here lets the agent tests
     assert on one settled answer without a second production execution path.
     """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(telemetry=NOOP_TELEMETRY, **kwargs)
 
     async def answer(self, query: str, **kwargs: Any) -> RetrievalResult:
         contexts, stream = await self.answer_stream(query, **kwargs)
@@ -932,7 +937,7 @@ async def test_tool_failure_reaches_the_operator_log(
         _answer("cannot recover"),
         final_text="Best effort answer.",
     )
-    with caplog.at_level(logging.WARNING, logger="dlightrag.core.tools.executor"):
+    with caplog.at_level(logging.WARNING, logger="dlightrag_agent.tools"):
         await _research(agent, retrieve, search).answer("Question")
 
     failures = [

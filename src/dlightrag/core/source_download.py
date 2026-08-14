@@ -5,6 +5,8 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
+from dlightrag_rag.ports import MetadataIndexProtocol
+
 from dlightrag.config import DlightragConfig
 from dlightrag.core.ingestion.paths import lightrag_archived_source_path
 from dlightrag.sourcing.aws_s3 import (
@@ -14,7 +16,6 @@ from dlightrag.sourcing.aws_s3 import (
 )
 from dlightrag.sourcing.azure_blob import generate_azure_sas_url
 from dlightrag.sourcing.source_contract import validate_download_uri
-from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.utils import normalize_workspace
 
 

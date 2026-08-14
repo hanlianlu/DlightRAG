@@ -5,11 +5,12 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
+from dlightrag_ai.messages import AssistantTurn, ToolChoice, ToolDefinition
+from dlightrag_ai.providers import get_provider
+from dlightrag_ai.providers.base import CompletionProvider
+
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.llm_roles import model_for_role
-from dlightrag.models.providers import get_provider
-from dlightrag.models.providers.base import CompletionProvider
-from dlightrag.models.tool_turn import AssistantTurn, ToolChoice, ToolDefinition
 
 logger = logging.getLogger(__name__)
 

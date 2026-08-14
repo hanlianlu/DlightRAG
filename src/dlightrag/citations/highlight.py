@@ -11,13 +11,13 @@ import time
 from collections import OrderedDict, defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 
+from dlightrag_ai.concurrency import bounded_map
 from pydantic import BaseModel, Field
 
 from dlightrag.prompts import (
     HIGHLIGHT_BATCH_USER_PROMPT,
     HIGHLIGHT_SYSTEM_PROMPT,
 )
-from dlightrag.utils.concurrency import bounded_map
 
 from .parser import CITATION_PATTERN, DOC_CITATION_PATTERN, strip_generated_references_section
 from .schemas import HighlightSource

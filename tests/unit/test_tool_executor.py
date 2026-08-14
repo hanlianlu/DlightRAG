@@ -2,13 +2,13 @@
 """Tests for provider-neutral tool turn execution."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
+from dlightrag_agent.tools import AgentTool, ToolResult, ToolTurnExecutor
+from dlightrag_ai.messages import AssistantTurn, ToolCall
 from pydantic import BaseModel, ConfigDict
-
-from dlightrag.core.tools import AgentTool, ToolResult, ToolTurnExecutor
-from dlightrag.models.tool_turn import AssistantTurn, ToolCall
 
 
 class SearchArgs(BaseModel):
@@ -25,6 +25,25 @@ class ScriptedModel:
     async def complete_turn(self, **kwargs: Any) -> AssistantTurn:
         self.calls.append(kwargs)
         return self.turn
+
+
+class RecordingObservation:
+    def __init__(self) -> None:
+        self.updates: list[dict[str, Any]] = []
+
+    def update(self, **kwargs: Any) -> None:
+        self.updates.append(kwargs)
+
+
+class RecordingTelemetry:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.observation = RecordingObservation()
+
+    @asynccontextmanager
+    async def observe(self, name: str, **kwargs: Any):
+        self.calls.append({"name": name, **kwargs})
+        yield self.observation
 
 
 def _turn(*calls: ToolCall, stop_reason: str = "tool_use") -> AssistantTurn:
@@ -69,6 +88,44 @@ async def test_valid_calls_execute_in_parallel_and_results_replay_in_source_orde
     assert [message["content"] for message in executed.messages[-2:]] == [
         "result:first",
         "result:second",
+    ]
+
+
+async def test_tool_execution_uses_injected_telemetry() -> None:
+    async def execute(_args: BaseModel) -> ToolResult:
+        return ToolResult(content="found")
+
+    telemetry = RecordingTelemetry()
+    model = ScriptedModel(_turn(ToolCall(id="call-1", name="search", arguments={"query": "q"})))
+
+    executed = await ToolTurnExecutor(
+        model.complete_turn,
+        telemetry=telemetry,
+    ).run_turn(
+        [{"role": "user", "content": "q"}],
+        [AgentTool("search", "Search.", SearchArgs, execute)],
+    )
+
+    assert executed.results[0].is_error is False
+    assert telemetry.calls == [
+        {
+            "name": "agent_tool",
+            "as_type": "tool",
+            "metadata": {"tool": "search", "call_id": "call-1"},
+        }
+    ]
+    assert telemetry.observation.updates == [
+        {
+            "output": {
+                "tool": "search",
+                "call_id": "call-1",
+                "outcome": "ok",
+                "duration_ms": executed.results[0].observation.duration_ms,
+                "cached": False,
+                "is_error": False,
+                "content_chars": 5,
+            }
+        }
     ]
 
 

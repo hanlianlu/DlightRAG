@@ -25,6 +25,8 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+from dlightrag_ai.tokens import estimate_content_tokens, estimate_messages_tokens
+
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
@@ -35,7 +37,6 @@ from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.prompts import answer_core
-from dlightrag.utils.tokens import estimate_content_tokens, estimate_messages_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +284,7 @@ class AnswerSynthesizer:
 
     async def aclose(self) -> None:
         """Release model-function worker resources owned by this synthesizer."""
-        from dlightrag.utils.concurrency import shutdown_async_callable
+        from dlightrag_ai.concurrency import shutdown_async_callable
 
         await shutdown_async_callable(self.model_func)
 

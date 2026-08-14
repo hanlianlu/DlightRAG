@@ -7,7 +7,8 @@ FROM python:3.14-slim-bookworm AS uv-bin
 ARG UV_VERSION
 RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
 
-FROM node:24-slim AS frontend
+# Match GitHub Actions so one npm version produces the same cross-platform lock behavior.
+FROM node:26-slim AS frontend
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json frontend/
 RUN --mount=type=cache,target=/root/.npm npm --prefix frontend ci
@@ -22,12 +23,16 @@ ENV UV_LINK_MODE=copy
 COPY --from=uv-bin /usr/local/bin/uv /bin/
 
 COPY pyproject.toml uv.lock ./
+COPY packages/ai/pyproject.toml packages/ai/pyproject.toml
+COPY packages/agent-core/pyproject.toml packages/agent-core/pyproject.toml
+COPY packages/rag-core/pyproject.toml packages/rag-core/pyproject.toml
 # Deps only — binary-only (UV_NO_BUILD): never compile an sdist; the slim base has
 # no toolchain, so a missing wheel fails fast. Keep it off the project build below.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_HTTP_TIMEOUT=300 UV_NO_BUILD=1 uv sync --frozen --no-dev --no-install-project
+    UV_HTTP_TIMEOUT=300 UV_NO_BUILD=1 uv sync --frozen --no-dev --no-install-workspace
 
-COPY README.md ./
+COPY LICENSE NOTICE README.md ./
+COPY packages/ packages/
 COPY src/ src/
 COPY --from=frontend /app/src/dlightrag/web/static/generated/ src/dlightrag/web/static/generated/
 RUN --mount=type=cache,target=/root/.cache/uv \

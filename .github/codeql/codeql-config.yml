@@ -12,6 +12,7 @@ query-filters:
 
 paths:
   - .github/workflows
+  - packages
   - src
   - frontend
   - scripts

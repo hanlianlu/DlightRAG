@@ -7,14 +7,15 @@ description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
+    # Workspace cores
+    "dlightrag-ai[all]==1.9.0",
+    "dlightrag-agent-core==1.9.0",
+    "dlightrag-rag-core==1.9.0",
     # Core RAG
     "lightrag-hku>=1.5.6",
-    # LLM
-    "openai>=2.53.0",
-    "anthropic>=0.121.0",
-    "google-genai>=2.17.0",
     # PostgreSQL
     "asyncpg>=0.31.0",
     "pgvector>=0.5.0",
@@ -29,8 +30,6 @@ dependencies = [
     "lingua-language-detector>=2.2.0",
     # Request-local lexical retrieval for Web Composer documents.
     "bm25s>=0.3.10",
-    # JSON repair for LLM output
-    "json-repair>=0.62.0",
     # LightRAG paragraph_semantic chunker fallback
     "langchain-text-splitters",
     # lightrag-server runtime dep when lightrag-hku is installed without the api extra.
@@ -98,9 +97,21 @@ dlightrag-rebuild-vdb = "dlightrag.maintenance.rebuild_vdb:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.uv.workspace]
+members = ["packages/ai", "packages/agent-core", "packages/rag-core"]
+
+[tool.uv.sources]
+dlightrag-ai = { workspace = true }
+dlightrag-agent-core = { workspace = true }
+dlightrag-rag-core = { workspace = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/dlightrag"]
 # Built by Vite and gitignored, so hatchling would otherwise leave the UI out.
+artifacts = ["src/dlightrag/web/static/generated/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/dlightrag", "README.md", "LICENSE", "NOTICE"]
 artifacts = ["src/dlightrag/web/static/generated/**"]
 
 [tool.ruff]
@@ -121,7 +132,51 @@ markers = [
 ]
 
 [tool.importlinter]
-root_package = "dlightrag"
+root_packages = ["dlightrag", "dlightrag_ai", "dlightrag_agent", "dlightrag_rag"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+id = "ai-package-independence"
+name = "AI must remain provider-neutral and root-independent"
+type = "forbidden"
+source_modules = ["dlightrag_ai"]
+forbidden_modules = [
+    "dlightrag",
+    "dlightrag_agent",
+    "dlightrag_rag",
+    "lightrag",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "agent-package-independence"
+name = "Agent core may depend on AI but not product or RAG"
+type = "forbidden"
+source_modules = ["dlightrag_agent"]
+forbidden_modules = [
+    "dlightrag",
+    "dlightrag_rag",
+    "lightrag",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "rag-package-independence"
+name = "RAG core must remain storage-neutral and product-independent"
+type = "forbidden"
+source_modules = ["dlightrag_rag"]
+forbidden_modules = [
+    "dlightrag",
+    "dlightrag_agent",
+    "dlightrag_ai",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
 
 [[tool.importlinter.contracts]]
 id = "no-transport-internals"

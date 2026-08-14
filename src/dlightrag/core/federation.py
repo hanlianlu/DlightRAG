@@ -7,9 +7,10 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from dlightrag_ai.concurrency import bounded_gather
+from dlightrag_ai.telemetry import safe_log_text
+
 from dlightrag.core.retrieval.protocols import RetrievalResult
-from dlightrag.utils import log_safe
-from dlightrag.utils.concurrency import bounded_gather
 
 if TYPE_CHECKING:
     from dlightrag.core.service import RAGService
@@ -185,7 +186,7 @@ async def federated_retrieve(
             elapsed = time.monotonic() - start
             logger.info(
                 "Federation workspace '%s' retrieved %d chunks in %.2fs",
-                log_safe(ws),
+                safe_log_text(ws),
                 len(result.contexts.get("chunks", [])),
                 elapsed,
             )
@@ -194,7 +195,7 @@ async def federated_retrieve(
             elapsed = time.monotonic() - start
             logger.warning(
                 "Federation workspace '%s' timed out after %.2fs (cap=%.2fs)",
-                log_safe(ws),
+                safe_log_text(ws),
                 elapsed,
                 per_workspace_timeout or 0.0,
             )
@@ -215,8 +216,8 @@ async def federated_retrieve(
         if isinstance(result, Exception):
             logger.warning(
                 "Federated retrieval failed for workspace '%s': %s",
-                log_safe(ws),
-                log_safe(result),
+                safe_log_text(ws),
+                safe_log_text(result),
             )
             failed_workspaces.append(ws)
             failures.append(result)
@@ -229,7 +230,7 @@ async def federated_retrieve(
             "Federated query partial: %d/%d workspaces failed (%s)",
             len(failed_workspaces),
             len(workspaces),
-            log_safe(", ".join(failed_workspaces)),
+            safe_log_text(", ".join(failed_workspaces)),
         )
 
     if not successful_results:

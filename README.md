@@ -27,6 +27,13 @@ Clients
 DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime and code-layer view is in
 [docs/architecture.md](docs/architecture.md).
 
+The repository is one UV workspace with a lockstep release train. Reusable
+provider/media primitives ship as `dlightrag-ai`, generic tool execution as
+`dlightrag-agent-core`, and storage-neutral retrieval records/fusion as
+`dlightrag-rag-core`; the `dlightrag` distribution composes those cores into the
+REST, Web, MCP, SDK, and PostgreSQL-backed product. CI builds and inspects all
+four wheels outside the editable workspace.
+
 ## Choose Your Deployment Path
 
 | Path | Use this when | PostgreSQL | Parser endpoint | Security | Start here |
@@ -440,8 +447,8 @@ npm run lint:css
 ```
 
 `npm run build` writes the browser bundle to `src/dlightrag/web/static/generated/`.
-That directory is gitignored and rebuilt by `make ci`; the wheel picks it up
-through `tool.hatch.build.targets.wheel.artifacts`.
+That directory is gitignored and rebuilt by `make ci`; the wheel and source
+distribution include it through their Hatch artifact settings.
 
 Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 

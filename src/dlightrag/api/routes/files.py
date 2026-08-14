@@ -4,6 +4,7 @@
 import logging
 from typing import Any
 
+from dlightrag_ai.telemetry import safe_log_text
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import FileResponse, RedirectResponse
 
@@ -23,7 +24,6 @@ from dlightrag.core.source_download import (
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
 )
-from dlightrag.utils import log_safe
 
 from .deps import enforce_access, get_manager, resolve_workspace
 
@@ -134,7 +134,7 @@ async def _enforce_source_download_access(
         if exc.status_code == 403:
             logger.info(
                 "source_download_projection_outcome",
-                extra={"outcome": "unauthorized", "workspace": log_safe(workspace)},
+                extra={"outcome": "unauthorized", "workspace": safe_log_text(workspace)},
             )
         raise
 

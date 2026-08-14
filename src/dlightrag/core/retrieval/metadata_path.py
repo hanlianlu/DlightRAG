@@ -3,9 +3,10 @@
 
 import logging
 
-from dlightrag.core.retrieval.models import MetadataFilter, MetadataScope
+from dlightrag_rag.ports import MetadataIndexProtocol
+from dlightrag_rag.retrieval import MetadataFilter, MetadataScope
+
 from dlightrag.core.retrieval.protocols import MetadataChunkStore
-from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 

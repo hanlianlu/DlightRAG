@@ -6,19 +6,24 @@ import logging
 from collections import Counter
 from typing import Any
 
+from dlightrag_rag.ports import MetadataIndexProtocol
+from dlightrag_rag.retrieval import (
+    ContextRow,
+    MetadataFilter,
+    MetadataScope,
+    format_bm25_top,
+    rrf_fuse,
+)
+
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-from dlightrag.core.retrieval.fusion import format_bm25_top, rrf_fuse
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
-from dlightrag.core.retrieval.models import MetadataFilter, MetadataScope
 from dlightrag.core.retrieval.protocols import (
     BM25Retriever,
-    ContextRow,
     MetadataChunkStore,
     RetrievalBackend,
     RetrievalResult,
 )
 from dlightrag.core.retrieval.visual import DirectVisualRetriever
-from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 

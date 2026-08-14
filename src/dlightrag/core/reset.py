@@ -18,8 +18,10 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from dlightrag_ai.telemetry import safe_log_text
+
 from dlightrag.core.lightrag_lifecycle import shutdown_lightrag_worker_pools
-from dlightrag.utils import log_safe, normalize_workspace
+from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -137,12 +139,16 @@ async def areset(
                 stats["local_files_removed"] = file_count
         except Exception as exc:
             errors.append(f"Phase 4 (filesystem): {exc}")
-            logger.warning("areset Phase 4 failed: %s", log_safe(exc))
+            logger.warning("areset Phase 4 failed: %s", safe_log_text(exc))
 
     # A dry run is a preview: never invalidate the live runtime.
     if not dry_run:
         service._initialized = False
-    logger.info("areset complete for workspace=%s: %s", log_safe(workspace), log_safe(stats))
+    logger.info(
+        "areset complete for workspace=%s: %s",
+        safe_log_text(workspace),
+        safe_log_text(stats),
+    )
     return stats
 
 
@@ -353,7 +359,7 @@ async def areset_orphaned_workspace(
 
     logger.info(
         "areset_orphaned complete for workspace=%s: %s",
-        log_safe(workspace),
-        log_safe(stats),
+        safe_log_text(workspace),
+        safe_log_text(stats),
     )
     return stats

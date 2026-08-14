@@ -4,11 +4,11 @@
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from dlightrag_rag.retrieval import MetadataFilter
 from pydantic import ValidationError
 
 from dlightrag.api.models import MetadataFilterRequest
 from dlightrag.core.client_payloads import metadata_filter_from_payload
-from dlightrag.core.retrieval.models import MetadataFilter
 
 
 class TestMetadataFilter:

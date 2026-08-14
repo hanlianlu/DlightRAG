@@ -20,6 +20,7 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from dlightrag_rag.ports import MetadataIndexProtocol
 from lightrag.constants import (
     DEFAULT_COSINE_THRESHOLD,
     PARSED_DIR_NAME,
@@ -47,7 +48,6 @@ from dlightrag.sourcing.source_contract import (
     validate_download_uri,
     validate_source_uri,
 )
-from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
@@ -209,8 +209,9 @@ def _configured_process_count() -> int:
     return 1
 
 
+from dlightrag_rag.retrieval import MetadataFilter  # noqa: E402
+
 from dlightrag.core.contract_guard import LightRAGContractGuard  # noqa: E402
-from dlightrag.core.retrieval.models import MetadataFilter  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
     build_role_llm_configs,
@@ -1183,7 +1184,7 @@ class RAGService:
         """Download remote objects into ephemeral parser batches and ingest them."""
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
-        from dlightrag.utils.concurrency import bounded_map
+        from dlightrag_ai.concurrency import bounded_map
 
         resume_from_window = max(0, int(resume_from_window))
         processed = 0

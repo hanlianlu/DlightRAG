@@ -23,17 +23,16 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import httpx
-
-from dlightrag.contracts import ResolvedInputModality
-from dlightrag.models.providers.rerank_base import (
+from dlightrag_ai.contracts import ResolvedInputModality
+from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS, ImagePayloadBudget
+from dlightrag_ai.providers.rerank_base import (
     PreparedDocument,
     RerankProvider,
     resolve_rerank_input_modality,
 )
-from dlightrag.models.providers.rerank_providers import RERANK_PROVIDERS
+from dlightrag_ai.providers.rerank_providers import RERANK_PROVIDERS
+
 from dlightrag.prompts import LISTWISE_RERANK_SYSTEM_PROMPT
-from dlightrag.utils.image_budget import ImagePayloadBudget
-from dlightrag.utils.images import MODEL_IMAGE_MAX_PIXELS
 
 if TYPE_CHECKING:
     from dlightrag.config import RerankConfig
@@ -251,7 +250,7 @@ async def _chat_llm_rerank(
 
         return list(zip(batch, scores, strict=True))
 
-    from dlightrag.utils.concurrency import bounded_gather
+    from dlightrag_ai.concurrency import bounded_gather
 
     batches = [
         (batch_start, chunks[batch_start : batch_start + batch_size])

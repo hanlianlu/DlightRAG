@@ -5,7 +5,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from dlightrag.core.tools.models import ToolResult
+from dlightrag_agent.tools import ToolResult
 
 
 class ExactCallCache:

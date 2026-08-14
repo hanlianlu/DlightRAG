@@ -4,6 +4,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_ai.messages import AssistantTurn, ToolDefinition
 
 from dlightrag.config import (
     DlightragConfig,
@@ -13,7 +14,6 @@ from dlightrag.config import (
     ModelConfig,
 )
 from dlightrag.models.tool_model import create_query_tool_model
-from dlightrag.models.tool_turn import AssistantTurn, ToolDefinition
 
 
 def _query_config(

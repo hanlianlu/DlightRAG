@@ -4,10 +4,11 @@
 import logging
 from typing import Any
 
+from dlightrag_rag.retrieval import ContextRow
 from lightrag import QueryParam
 
 from dlightrag.core.retrieval import canonicalize_reference_ids
-from dlightrag.core.retrieval.protocols import ContextRow, RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalResult
 
 logger = logging.getLogger(__name__)
 

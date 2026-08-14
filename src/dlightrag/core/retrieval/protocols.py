@@ -4,14 +4,14 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from dlightrag_rag.retrieval import ContextRow
+
 from dlightrag.models.schemas import Reference
 
 if TYPE_CHECKING:
+    from dlightrag_rag.retrieval import MetadataScope
+
     from dlightrag.citations.schemas import SourceReference
-    from dlightrag.core.retrieval.models import MetadataScope
-
-ContextRow = dict[str, Any]
-
 
 # RetrievalContexts is intentionally a plain type alias rather than a TypedDict.
 # Contexts flow through JSON/DB boundaries as ``dict[str, Any]`` and are built
@@ -78,7 +78,6 @@ class MetadataChunkStore(Protocol):
 
 
 __all__ = [
-    "ContextRow",
     "BM25Retriever",
     "MetadataChunkStore",
     "RetrievalBackend",

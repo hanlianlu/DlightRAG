@@ -40,7 +40,7 @@ jobs:
       - run: make frontend-install
       - run: make frontend-typecheck
       - run: make frontend-lint
-      - run: make frontend-build
+      - run: make workspace-wheels
       - run: make frontend-audit
       - run: make test-unit
 

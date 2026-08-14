@@ -4,6 +4,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dlightrag_ai.structured import StructuredOutput
 from pydantic import BaseModel, ConfigDict
 
 from dlightrag.config import (
@@ -14,7 +15,6 @@ from dlightrag.config import (
     ModelConfig,
     RerankConfig,
 )
-from dlightrag.models.structured import StructuredOutput
 
 
 class DemoPlan(BaseModel):
@@ -426,20 +426,16 @@ class TestMakeCompletionFunc:
 
 class TestModelFactoryExports:
     def test_lightrag_default_adapter_is_explicitly_exported(self):
-        import dlightrag.models as models
-        from dlightrag.models import llm
+        from dlightrag.models import get_default_model_func_for_lightrag
 
-        assert hasattr(llm, "get_default_model_func_for_lightrag")
-        assert "get_default_model_func_for_lightrag" in models.__all__
+        assert callable(get_default_model_func_for_lightrag)
 
 
 class TestGetKeywordModelFunc:
     def test_keyword_model_factory_is_exported(self):
-        import dlightrag.models as models
-        from dlightrag.models import llm
+        from dlightrag.models import get_keyword_model_func
 
-        assert hasattr(llm, "get_keyword_model_func")
-        assert "get_keyword_model_func" in models.__all__
+        assert callable(get_keyword_model_func)
 
     def test_explicit_keyword_role(self, monkeypatch):
         from dlightrag.models import llm

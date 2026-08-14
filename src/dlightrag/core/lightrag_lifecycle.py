@@ -5,7 +5,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from dlightrag.utils.concurrency import shutdown_async_callable
+from dlightrag_ai.concurrency import shutdown_async_callable
 
 logger = logging.getLogger(__name__)
 

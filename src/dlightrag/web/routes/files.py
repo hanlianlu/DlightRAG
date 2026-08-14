@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from dlightrag_ai.telemetry import safe_log_text
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
@@ -27,7 +28,6 @@ from dlightrag.core.source_download import (
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
 )
-from dlightrag.utils import log_safe
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,
@@ -62,7 +62,7 @@ async def download_source(
         if exc.status_code == 403:
             logger.info(
                 "source_download_projection_outcome",
-                extra={"outcome": "unauthorized", "workspace": log_safe(safe_workspace)},
+                extra={"outcome": "unauthorized", "workspace": safe_log_text(safe_workspace)},
             )
         raise
 
@@ -193,7 +193,7 @@ async def _file_list_response(request: Request, workspace: str):
     except Exception:
         logger.debug(
             "Could not read files panel snapshot for workspace %s",
-            log_safe(workspace),
+            safe_log_text(workspace),
             exc_info=True,
         )
         files = []
@@ -252,7 +252,7 @@ async def upload_files(
     except Exception:
         logger.debug(
             "Could not read pipeline status before upload for workspace %s",
-            log_safe(selected_workspace),
+            safe_log_text(selected_workspace),
             exc_info=True,
         )
 
@@ -308,7 +308,7 @@ async def upload_files(
     except Exception:
         logger.exception(
             "Failed to start ingest job for workspace %s",
-            log_safe(selected_workspace),
+            safe_log_text(selected_workspace),
         )
         if upload_dir is not None:
             shutil.rmtree(upload_dir, ignore_errors=True)

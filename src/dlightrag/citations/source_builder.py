@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from dlightrag_ai.telemetry import safe_log_text
+
 from dlightrag.core.retrieval.protocols import RetrievalContexts
-from dlightrag.utils import log_safe
 
 from .indexer import CitationIndexer
 from .schemas import ChunkSnippet, SourceReference
@@ -104,7 +105,7 @@ def build_sources_from_chunks(
         )
         workspace = catalog.workspace if catalog else first.get("_workspace") or default_workspace
         if not isinstance(workspace, str) or not workspace.strip():
-            raise SourceBuildInvariantError(f"Source {log_safe(ref_id)} is missing workspace")
+            raise SourceBuildInvariantError(f"Source {safe_log_text(ref_id)} is missing workspace")
         document_id = catalog.document_id if catalog else first.get("full_doc_id")
         if not isinstance(document_id, str) or not document_id.strip():
             document_id = None
@@ -172,7 +173,7 @@ def build_sources_from_chunks(
 def _required_source_metadata(metadata: Any, key: str, *, ref_id: str) -> str:
     value = metadata.get(key) if isinstance(metadata, dict) else None
     if not isinstance(value, str) or not value.strip():
-        raise SourceBuildInvariantError(f"Source {log_safe(ref_id)} is missing {key}")
+        raise SourceBuildInvariantError(f"Source {safe_log_text(ref_id)} is missing {key}")
     return value
 
 

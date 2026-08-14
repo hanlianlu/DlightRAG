@@ -5,12 +5,13 @@ import json
 import logging
 from typing import Any
 
+from dlightrag_rag.retrieval import MetadataFilter
+
 from dlightrag.core.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
     METADATA_FIELDS,
     canonical_metadata_key,
 )
-from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.storage.migrations import (
     Migration,
     TableRequirement,

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode, urlsplit
 
+from dlightrag_ai.contracts import AsymmetricMode, ChatProvider, InputModality
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -31,12 +32,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from dlightrag.contracts import (
-    AsymmetricMode,
-    ChatProvider,
-    InputModality,
-    ServiceRole,
-)
+from dlightrag.contracts import ServiceRole
 
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"

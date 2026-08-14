@@ -7,13 +7,14 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
+from dlightrag_ai.telemetry import safe_log_text
+from dlightrag_rag.retrieval import MetadataFilter
+
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.core.access import can_project_workspace_visual
-from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
-from dlightrag.utils import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,7 @@ def project_source_payloads(
     """Convert internal sources into the strict public source contract."""
     projected: list[SourceReferencePayload] = []
     for source in sources:
-        safe_source_id = log_safe(source.id)
+        safe_source_id = safe_log_text(source.id)
         download_url = None
         can_download = (
             downloadable_workspaces is None or source.workspace in downloadable_workspaces

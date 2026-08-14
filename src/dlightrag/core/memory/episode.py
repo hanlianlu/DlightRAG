@@ -4,7 +4,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from dlightrag.utils.tokens import estimate_messages_tokens
+from dlightrag_ai.tokens import estimate_messages_tokens
 
 # The budget pi replays verbatim before it reduces older turns.
 _KEEP_RECENT_TOKENS = 20_000

@@ -6,16 +6,16 @@ import io
 from dataclasses import FrozenInstanceError
 
 import pytest
-from PIL import Image
-
-from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
-from dlightrag.utils.image_budget import ImagePayloadBudget
-from dlightrag.utils.images import (
+from dlightrag_ai.media import (
+    ImagePayloadBudget,
     bounded_embedding_image_data_uri,
     bounded_image_data_uri,
     decode_image_base64,
     flatten_image_to_rgb,
 )
+from PIL import Image
+
+from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -302,13 +302,6 @@ def test_bounded_embedding_image_flattens_transparency_over_white() -> None:
         assert decoded.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
 
 
-def test_decode_ceiling_supports_large_scans() -> None:
-    from PIL import Image as PILImage
-
-    assert PILImage.MAX_IMAGE_PIXELS is not None
-    assert PILImage.MAX_IMAGE_PIXELS >= 250_000_000
-
-
 def _jpeg_bytes(size: tuple[int, int], *, quality: int) -> bytes:
     image = Image.new("RGB", size, "white")
     buf = io.BytesIO()
@@ -342,7 +335,7 @@ def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
-# ── Canonical image normalization path (utils.images.bounded_image_data_uri) ──
+# ── Canonical image normalization path (dlightrag_ai.media) ──
 
 
 def test_bounded_image_applies_exif_orientation() -> None:

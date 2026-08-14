@@ -154,7 +154,7 @@ class ModelImageCapabilities:
             return outcome
 
     async def _probe(self, cfg: ModelConfig) -> ImageProbeOutcome:
-        from dlightrag.models.providers import get_provider
+        from dlightrag_ai.providers import get_provider
 
         provider: Any = None
         try:

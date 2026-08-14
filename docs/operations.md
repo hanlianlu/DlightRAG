@@ -54,6 +54,23 @@ concern rather than a request concern.
   readiness, short-cached). `GET /health` is liveness only and never touches
   PostgreSQL.
 
+## Trusted Publisher Prerequisite
+
+The release workflow publishes four lockstep PyPI projects from one tag:
+`dlightrag`, `dlightrag-ai`, `dlightrag-agent-core`, and
+`dlightrag-rag-core`. Before the first tag that contains the workspace split,
+create each project on PyPI and configure the same trusted publisher:
+
+- GitHub repository: `hanlianlu/DlightRAG`;
+- workflow: `.github/workflows/publish.yml`;
+- environment: `pypi`.
+
+Configure all four projects before pushing the tag. The workflow uses GitHub
+OIDC (`id-token: write`) and intentionally has no API-token fallback. Publishing
+across four PyPI projects is not transactional, so a missing project or
+publisher binding can leave a partial release that must be completed by
+rerunning the workflow.
+
 ## Optional Docling Parser
 
 Parser selection comes from `config.yaml`: keep one

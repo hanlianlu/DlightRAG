@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from dlightrag_ai.media import detect_image_mime_type
 from lightrag.utils_pipeline import resolve_sidecar_uri
 
 from dlightrag.core.sidecar_provenance import (
@@ -22,7 +23,6 @@ from dlightrag.core.sidecar_provenance import (
     load_block_provenance_index,
     resolve_sidecar_asset_path,
 )
-from dlightrag.utils.images import detect_image_mime_type
 
 logger = logging.getLogger(__name__)
 

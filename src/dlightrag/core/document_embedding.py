@@ -10,11 +10,10 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, get_args
 
+from dlightrag_ai.concurrency import bounded_map
+from dlightrag_ai.media import flatten_image_to_rgb
+from dlightrag_ai.telemetry import safe_log_text
 from PIL import Image
-
-from dlightrag.utils import log_safe
-from dlightrag.utils.concurrency import bounded_map
-from dlightrag.utils.images import flatten_image_to_rgb
 
 if TYPE_CHECKING:
     from dlightrag.models.multimodal_embedding import MultimodalEmbedder
@@ -313,10 +312,12 @@ class RobustDocumentEmbedder:
                 task.add_done_callback(_close_image_task_result)
             raise
         except Exception:  # noqa: BLE001
-            source = f"path:{log_safe(item.image_path)}" if item.image_path is not None else "bytes"
+            source = (
+                f"path:{safe_log_text(item.image_path)}" if item.image_path is not None else "bytes"
+            )
             logger.warning(
                 "Document image could not be opened; using text embedding key=%s source=%s",
-                log_safe(item.key),
+                safe_log_text(item.key),
                 source,
                 exc_info=True,
             )
