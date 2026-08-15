@@ -30,7 +30,6 @@ from dlightrag.storage.answer_runs import (
     RunDeletion,
     answer_run_columns,
     answer_run_record,
-    answer_run_request_fingerprint,
 )
 from dlightrag.storage.migrations import (
     ForeignKeyRequirement,
@@ -714,6 +713,7 @@ class PGWebConversationStore:
         conversation_id: str,
         submission_id: str,
         request: Mapping[str, Any],
+        idempotency_fingerprint: str,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
         title_hint: str | None,
@@ -731,7 +731,7 @@ class PGWebConversationStore:
         """
         await self._ensure_initialized()
         turn_id = str(uuid4())
-        fingerprint = answer_run_request_fingerprint(request)
+        fingerprint = idempotency_fingerprint
 
         async def _operation(conn: Any) -> AnswerTurnCreation | None:
             async with conn.transaction():
@@ -759,6 +759,7 @@ class PGWebConversationStore:
                     conn,
                     owner_id=principal_id,
                     request=request,
+                    idempotency_fingerprint=fingerprint,
                     idempotency_key=submission_id,
                     artifacts=artifacts,
                     references=references,
@@ -807,6 +808,33 @@ class PGWebConversationStore:
                 )
 
         return await self._run_write(_operation)
+
+    async def replay_answer_turn(
+        self,
+        *,
+        principal_id: str,
+        conversation_id: str,
+        submission_id: str,
+        idempotency_fingerprint: str,
+    ) -> LinkedTurn | None:
+        """Return an accepted browser submission before resolved input is rebuilt."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> LinkedTurn | None:
+            existing = await conn.fetchrow(_GET_TURN_BY_SUBMISSION, principal_id, submission_id)
+            if existing is None:
+                return None
+            if str(existing["turn_conversation_id"]) != str(conversation_id):
+                raise ConversationSubmissionConflict(
+                    "submission id was reused in a different conversation"
+                )
+            if str(existing["request_fingerprint"]) != idempotency_fingerprint:
+                raise ConversationSubmissionConflict(
+                    "submission id was reused with different request input"
+                )
+            return _linked_turn(existing)
+
+        return await self._run_read(_operation)
 
     async def _trim_turns(
         self,

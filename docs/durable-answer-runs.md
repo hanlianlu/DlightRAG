@@ -71,7 +71,7 @@ executor.
 ### Answer image policy
 
 One frozen Answer image policy owns the answer transport geometry, byte limits,
-quality limits, and context window. It creates fresh mutable budgets for a run.
+and quality limits. It creates fresh mutable budgets for a run.
 `AnswerSynthesizer`, `QueryImageDescriber`, and `ResourceInspector` consume the
 policy instead of repeating scalar constructor parameters and default literals.
 
@@ -324,16 +324,23 @@ returns the existing run, while reusing a key with different input returns 409.
 Creation without a key always creates a new run. The key expires with the run
 row.
 
-The normalized request is canonical JSON over the query, exact authorized
-workspace set, retrieval and answer options, history, ordered resource
-descriptors, and uploaded artifact digests after validation. It excludes
-transport headers, temporary paths, authorization-dependent URLs, and secrets.
+Idempotency hashes canonical JSON over the normalized public request before
+model resolution: query, exact authorized workspace set, retrieval and answer
+options, caller history, ordered resource descriptors, and uploaded artifact
+digests after validation. It excludes transport headers, temporary paths,
+authorization-dependent URLs, secrets, and every resolved model fact. A keyed
+replay checks that fingerprint and returns the accepted run before repeating
+profile resolution, URL fetches, image description, or history projection.
 
-All Answer workers sharing a database must run a compatible software revision
-and the same effective model-role, Answer image-policy, and agent-limit
-configuration. These values are deployment state, not copied into every run.
-Operators drain or cancel active and queued runs before an incompatible rolling
-change; heterogeneous execution is unsupported.
+The run's stored request is the immutable resolved execution input. In addition
+to the public fields it carries the selected history projection, each role's
+endpoint fingerprint and effective `ModelProfile`, context-policy and catalog
+revisions, and accepted image descriptions. Workers use those pinned profile
+values for request arithmetic and never substitute current catalog facts.
+All workers must still run a compatible software revision and the same model
+endpoint configuration because provider credentials remain deployment state.
+Startup aborts while an active run pins another endpoint or context-policy
+revision; operators drain or owner-cancel those runs before deployment.
 
 The run row is the sole authority for lifecycle status, phase, completed turn
 count, stop reason, cancellation, lease, final result, and terminal error. The
@@ -412,8 +419,10 @@ after the existing HTTPS, redirect, DNS, SSRF, and byte validation passes.
 Storing the blob and its run-artifact reference is one transaction performed
 before the tool result may enter a checkpoint. Once that turn is checkpointed,
 its resource id is permanently bound to those validated bytes and recovery
-never silently re-fetches a changed page. Work from an uncheckpointed tool batch
-may execute again after a crash and carries no same-bytes guarantee, consistent
+never silently re-fetches a changed page. Recovery reads the stored bytes without
+live DNS revalidation because no network request occurs; ordinary live URL reads
+retain their per-read validation. Work from an uncheckpointed tool batch may
+execute again after a crash and carries no same-bytes guarantee, consistent
 with the read-only-tool replay non-goal.
 
 ### `dlightrag_answer_run_artifacts`
@@ -448,8 +457,9 @@ contains only JSON-safe state:
 - `EvidenceLedger` contexts and citation identities;
 - `RunEpisode` exchanges including provider-native state;
 - completed exact-call cache results;
-- resource catalog and cursor state restored verbatim, including the exact
-  resource ids and cursor tokens already named in episode messages;
+- resource catalog plus compact active-cursor state: the original focus-plan
+  budget, rank position, absolute character offset, and the exact continuation
+  token available to a later turn; consumed cursor tokens are not retained;
 - the copied completed-turn number used only to validate it against the run
   row.
 

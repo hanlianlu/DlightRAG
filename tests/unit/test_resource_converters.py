@@ -300,7 +300,7 @@ async def test_registry_read_routes_docx_to_visual_handle() -> None:
         resource_id = registry.register(
             ResourceInput(filename="contract.docx", content=content, declared_mime=DOCX_MIME)
         )
-        result = await registry.read(resource_id)
+        result = await registry.read(resource_id, max_window_tokens=1_000)
 
     assert "Total liability" in result.content
     assert "data:image" not in result.content
@@ -319,7 +319,7 @@ async def test_registry_read_surfaces_xlsx_cell_anchor_label() -> None:
         resource_id = registry.register(
             ResourceInput(filename="model.xlsx", content=content, declared_mime=XLSX_MIME)
         )
-        result = await registry.read(resource_id)
+        result = await registry.read(resource_id, max_window_tokens=1_000)
 
     assert len(result.visual_handles) == 1
     assert result.visual_handles[0].label == "Financials!B2"
@@ -330,7 +330,7 @@ async def test_registry_text_resource_has_no_visual_handles() -> None:
         resource_id = registry.register(
             ResourceInput(filename="notes.txt", content=b"plain notes", declared_mime="text/plain")
         )
-        result = await registry.read(resource_id)
+        result = await registry.read(resource_id, max_window_tokens=1_000)
 
     assert result.content == "plain notes"
     assert result.visual_handles == ()

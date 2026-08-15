@@ -9,24 +9,36 @@ the model selects from the available peer tools, evidence-growth convergence,
 and one additional tools-disabled final answer generation.
 """
 
+import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 
-from dlightrag_agent.tools import AgentTool, ExecutedTurn, ToolTurnExecutor
+from dlightrag_agent.tools import (
+    AgentTool,
+    ExecutedTurn,
+    ToolResultCapacityError,
+    ToolTurnExecutor,
+)
+from dlightrag_ai.capacity import (
+    CONTEXT_POLICY,
+    ContextPolicy,
+    ModelProfile,
+)
 from dlightrag_ai.messages import AssistantTurn
 from dlightrag_ai.telemetry import Telemetry
+from dlightrag_ai.tokens import estimate_tokens
 
 from dlightrag.core.agent.context import ContextAssembler
-from dlightrag.core.answer.capacity import AnswerCapacity
+from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer_runs.models import AgentRunState
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
-from dlightrag.core.resources.models import ResourceManifestEntry
+from dlightrag.core.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.core.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
@@ -84,7 +96,9 @@ class AnswerOrchestrator:
         resource_manifest: tuple[ResourceManifestEntry, ...] = (),
         register_web_source: Callable[[str], str | None] | None = None,
         image_budget: AnswerImageBudget | None = None,
-        context_window_tokens: int = 260_000,
+        text_window_budget: TextWindowBudget,
+        model_profile: ModelProfile,
+        context_policy: ContextPolicy = CONTEXT_POLICY,
         max_agent_turns: int = 50,
         telemetry: Telemetry,
     ) -> None:
@@ -97,7 +111,9 @@ class AnswerOrchestrator:
         self._resource_manifest = tuple(resource_manifest)
         self._register_web_source = register_web_source
         self._image_budget = image_budget
-        self._capacity = AnswerCapacity(max(1, context_window_tokens))
+        self._text_window_budget = text_window_budget
+        self._model_profile = model_profile
+        self._context_policy = context_policy
         self._max_agent_turns = max(1, max_agent_turns)
         self._telemetry = telemetry
 
@@ -239,35 +255,44 @@ class AnswerOrchestrator:
     ) -> PreparedRun:
         """Build one run's memory and the tools bound to it, before any restore."""
         evidence = EvidenceLedger(image_budget=self._image_budget)
+        retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
         trace: dict[str, Any] = {
             "agent_turns": 0,
             "web_search_cost_dollars": 0.0,
             "tool_observations": [],
         }
-        tools, tool_cache = compose_research_tools(
-            evidence=evidence,
-            trace=trace,
-            retrieve_knowledge_base=self._retrieve_knowledge_base,
-            search_web=self._search_web,
-            resource_tools=self._resource_tools,
-            register_web_source=self._register_web_source,
-        )
+        tools, tool_cache = self._compose_tools(evidence, trace)
         return PreparedRun(
             state=AgentRunState(
                 evidence=evidence,
-                episode=RunEpisode(),
+                episode=RunEpisode(retained_tail_tokens=retained_tail_tokens),
                 tool_cache=tool_cache,
                 registry=registry,
                 trace=trace,
             ),
             context=ContextAssembler(
-                self._capacity,
+                model_profile=self._model_profile,
+                context_policy=self._context_policy,
                 query=query,
                 history=conversation_history or PriorTurns(),
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
             ),
             tools=tools,
+        )
+
+    def _compose_tools(
+        self,
+        evidence: EvidenceLedger,
+        trace: dict[str, Any],
+    ) -> tuple[list[AgentTool], Any]:
+        return compose_research_tools(
+            evidence=evidence,
+            trace=trace,
+            retrieve_knowledge_base=self._retrieve_knowledge_base,
+            search_web=self._search_web,
+            resource_tools=self._resource_tools,
+            register_web_source=self._register_web_source,
         )
 
     async def _execute_control_turn(
@@ -279,15 +304,41 @@ class AnswerOrchestrator:
             cast(ToolModel, self._model_func),
             telemetry=self._telemetry,
         )
+        tool_schema_tokens = _tool_schema_tokens(run.tools)
         call_messages = await run.context.control_turn(
-            evidence=state.evidence, episode=state.episode
+            evidence=state.evidence,
+            episode=state.episode,
+            tool_schema_tokens=tool_schema_tokens,
         )
-        previous_rows = state.evidence.row_count
-        executed = await executor.run_turn(
+        max_output_tokens = run.context.control_output_allowance(
             call_messages,
-            run.tools,
-            tool_choice="auto",
+            tool_schema_tokens=tool_schema_tokens,
         )
+
+        def observation_budget(transcript: list[dict[str, Any]]) -> int:
+            residual = run.context.observation_residual(
+                transcript,
+                tool_schema_tokens=tool_schema_tokens,
+            )
+            if residual < 1:
+                raise AnswerInputOverflowError(
+                    "Research tool calls exhausted the resolved model input residual"
+                )
+            call_count = max(1, len(transcript[-1].get("tool_calls") or ()))
+            self._text_window_budget.update(max(1, residual // call_count))
+            return residual
+
+        previous_rows = state.evidence.row_count
+        try:
+            executed = await executor.run_turn(
+                call_messages,
+                run.tools,
+                tool_choice="auto",
+                observation_budget=observation_budget,
+                max_tokens=max_output_tokens,
+            )
+        except ToolResultCapacityError as exc:
+            raise AnswerInputOverflowError(str(exc)) from exc
         state.trace["tool_observations"].extend(
             execution.observation.as_dict() for execution in executed.results
         )
@@ -295,4 +346,54 @@ class AnswerOrchestrator:
         return executed, state.evidence.row_count != previous_rows
 
 
-__all__ = ["AnswerOrchestrator", "PreparedRun", "RunBoundaries"]
+def _tool_schema_tokens(tools: list[AgentTool]) -> int:
+    return estimate_tokens(
+        json.dumps(
+            [asdict(tool.definition) for tool in tools],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def research_history_input_measure(
+    *,
+    model_profile: ModelProfile,
+    context_policy: ContextPolicy,
+    query: str,
+    query_images: list[dict[str, Any]] | None,
+    resource_manifest: tuple[ResourceManifestEntry, ...],
+    image_budget: AnswerImageBudget | None,
+    tools: list[AgentTool],
+    retained_tail_tokens: int,
+) -> Callable[[list[dict[str, Any]]], int]:
+    """Return the exact zero-evidence Research seed serializer used at acceptance."""
+    tool_schema_tokens = _tool_schema_tokens(tools)
+
+    def measure(history: list[dict[str, Any]]) -> int:
+        context = ContextAssembler(
+            model_profile=model_profile,
+            context_policy=context_policy,
+            query=query,
+            history=PriorTurns(history),
+            query_images=query_images,
+            resource_manifest=resource_manifest,
+        )
+        return (
+            context.measure_control_input(
+                evidence=EvidenceLedger(image_budget=image_budget),
+                episode=RunEpisode(retained_tail_tokens=retained_tail_tokens),
+            )
+            + tool_schema_tokens
+        )
+
+    return measure
+
+
+__all__ = [
+    "AnswerOrchestrator",
+    "PreparedRun",
+    "RunBoundaries",
+    "research_history_input_measure",
+]

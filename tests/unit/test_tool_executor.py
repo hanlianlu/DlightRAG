@@ -6,8 +6,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
-from dlightrag_agent.tools import AgentTool, ToolResult, ToolTurnExecutor
+from dlightrag_agent.tools import (
+    AgentTool,
+    ToolResult,
+    ToolResultCapacityError,
+    ToolTurnExecutor,
+)
 from dlightrag_ai.messages import AssistantTurn, ToolCall
+from dlightrag_ai.tokens import estimate_tokens
 from pydantic import BaseModel, ConfigDict
 
 
@@ -91,6 +97,81 @@ async def test_valid_calls_execute_in_parallel_and_results_replay_in_source_orde
         "result:first",
         "result:second",
     ]
+
+
+async def test_parallel_results_share_the_current_request_residual_budget() -> None:
+    async def execute(args: BaseModel) -> ToolResult:
+        assert isinstance(args, SearchArgs)
+        return ToolResult(content=args.query * 400)
+
+    model = ScriptedModel(
+        _turn(
+            ToolCall(id="1", name="search", arguments={"query": "a"}),
+            ToolCall(id="2", name="search", arguments={"query": "b"}),
+        )
+    )
+    measured_transcript: list[dict[str, Any]] = []
+
+    def observation_budget(transcript: list[dict[str, Any]]) -> int:
+        measured_transcript.extend(transcript)
+        return 150
+
+    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+        [{"role": "user", "content": "q"}],
+        [AgentTool("search", "Search.", SearchArgs, execute)],
+        observation_budget=observation_budget,
+    )
+
+    assert measured_transcript[-1]["role"] == "assistant"
+    assert sum(estimate_tokens(result.result.content) for result in executed.results) <= 150
+    assert 0 < len(executed.results[0].result.content) < 400
+    assert 0 < len(executed.results[1].result.content) < 400
+
+
+async def test_parallel_result_fitting_preserves_every_continuation_suffix() -> None:
+    suffix = "[more text available; cursor=opaque-cursor]"
+
+    async def execute(args: BaseModel) -> ToolResult:
+        assert isinstance(args, SearchArgs)
+        return ToolResult(
+            content=f"{args.query * 400}\n{suffix}",
+            protected_suffix=suffix,
+        )
+
+    model = ScriptedModel(
+        _turn(
+            ToolCall(id="1", name="search", arguments={"query": "a"}),
+            ToolCall(id="2", name="search", arguments={"query": "b"}),
+        )
+    )
+
+    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+        [{"role": "user", "content": "q"}],
+        [AgentTool("search", "Search.", SearchArgs, execute)],
+        observation_budget=lambda _transcript: 80,
+    )
+
+    for result in executed.results:
+        assert result.result.content.endswith(suffix)
+        assert "tool result truncated" in result.result.content
+        assert result.result.content
+    assert sum(estimate_tokens(result.result.content) for result in executed.results) <= 80
+
+
+async def test_unfit_protected_suffix_raises_a_capacity_error() -> None:
+    suffix = "[continuation " + "x" * 200 + "]"
+
+    async def execute(_args: BaseModel) -> ToolResult:
+        return ToolResult(content=f"body\n{suffix}", protected_suffix=suffix)
+
+    model = ScriptedModel(_turn(ToolCall(id="1", name="search", arguments={"query": "q"})))
+
+    with pytest.raises(ToolResultCapacityError, match="continuation"):
+        await ToolTurnExecutor(model.complete_turn).run_turn(
+            [{"role": "user", "content": "q"}],
+            [AgentTool("search", "Search.", SearchArgs, execute)],
+            observation_budget=lambda _transcript: 5,
+        )
 
 
 async def test_tool_execution_uses_injected_telemetry() -> None:

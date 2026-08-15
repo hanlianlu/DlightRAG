@@ -103,6 +103,7 @@ def _write_workspace_artifacts(
         "dlightrag-rag-core==1.9.0",
     ),
     ai_include_legal: bool = True,
+    ai_include_model_catalog: bool = True,
     root_include_frontend: bool = True,
     root_source: str = "",
     root_additional_sources: dict[str, str] | None = None,
@@ -113,6 +114,11 @@ def _write_workspace_artifacts(
         package="dlightrag_ai",
         requires=("pydantic>=2.11.0",),
         include_legal=ai_include_legal,
+        additional_sources=(
+            {"model_catalog.json": '{"revision":"test","models":[]}'}
+            if ai_include_model_catalog
+            else None
+        ),
     )
     _write_wheel(
         tmp_path,
@@ -361,6 +367,15 @@ def test_workspace_wheel_verifier_requires_legal_files(tmp_path: Path) -> None:
 
     assert completed.returncode == 1
     assert "LICENSE and NOTICE" in completed.stderr
+
+
+def test_workspace_wheel_verifier_requires_ai_model_catalog(tmp_path: Path) -> None:
+    _write_workspace_artifacts(tmp_path, ai_include_model_catalog=False)
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "model_catalog.json" in completed.stderr
 
 
 def test_workspace_wheel_verifier_requires_root_frontend(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from tests.unit.conftest import prepare_test_answer_run_input
 from tests.unit.web.answer_run_fixtures import web_answer_submission
 
 _CID = "00000000-0000-0000-0000-000000000001"
@@ -389,6 +390,7 @@ async def test_store_unavailability_returns_retryable_503(
     application = create_app(include_web_app=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
+        prepare_run_input=prepare_test_answer_run_input,
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
@@ -425,6 +427,7 @@ async def test_postgres_shutdown_returns_retryable_503(shutdown_error: Exception
     application = create_app(include_web_app=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
+        prepare_run_input=prepare_test_answer_run_input,
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
@@ -463,6 +466,7 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
     application = create_app(include_web_app=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
+        prepare_run_input=prepare_test_answer_run_input,
         max_turns=100,
         ttl_days=30,
         max_attachments=6,

@@ -24,7 +24,7 @@ from dlightrag.core.answer_runs.models import (
     MAX_CHECKPOINT_BYTES,
     AgentRunState,
 )
-from dlightrag.core.memory.episode import RunEpisode
+from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.resources.registry import ResourceRegistry, ResourceStateMismatchError
@@ -34,6 +34,10 @@ _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 _ATTACHMENT_BYTES = b"\x89PNG\r\n\x1a\nfake-attachment"
 _ATTACHMENT_B64 = base64.b64encode(_ATTACHMENT_BYTES).decode("ascii")
 _FETCHED_BYTES = b"<html>the page as it was when the run fetched it</html>"
+
+
+def _episode() -> _RunEpisode:
+    return _RunEpisode(retained_tail_tokens=20_000)
 
 
 class _FakeStore:
@@ -74,7 +78,7 @@ async def _state_with_evidence() -> AgentRunState:
             "relationships": [{"src_id": "Alpha", "tgt_id": "Beta"}],
         }
     )
-    episode = RunEpisode()
+    episode = _episode()
     episode.record(
         [
             {
@@ -141,7 +145,7 @@ class TestOwnerExports:
 
     async def test_episode_export_round_trips_provider_native_state(self) -> None:
         state = await _state_with_evidence()
-        restored = RunEpisode()
+        restored = _episode()
         restored.restore_state(state.episode.export_state())
 
         assert restored.messages() == state.episode.messages()
@@ -164,18 +168,38 @@ class TestOwnerExports:
 
     async def test_registry_export_restores_ids_cursors_and_next_ordinal(self) -> None:
         registry = ResourceRegistry()
-        first = registry.register(ResourceInput(content=b"doc-bytes", filename="a.txt"))
+        text = "".join(f"line {index} " + "x" * 30 + "\n" for index in range(200))
+        content = text.encode("utf-8")
+        first = registry.register(ResourceInput(content=content, filename="a.txt"))
+        first_page = await registry.read(first, max_window_tokens=100)
+        assert first_page.next_cursor is not None
         discovered = registry.register_discovered_link("https://example.com/a")
         assert discovered is not None
         ordinal = registry.allocate_fetched_ordinal(discovered)
         exported = registry.export_state()
 
         resumed = ResourceRegistry()
-        replayed = resumed.register(ResourceInput(content=b"doc-bytes", filename="a.txt"))
+        replayed = resumed.register(ResourceInput(content=content, filename="a.txt"))
         assert replayed != first
         resumed.restore_state(exported)
 
+        chunks = [first_page.content]
+        current = await resumed.read(
+            first,
+            cursor=first_page.next_cursor,
+            max_window_tokens=40,
+        )
+        chunks.append(current.content)
+        while current.has_more:
+            current = await resumed.read(
+                first,
+                cursor=current.next_cursor,
+                max_window_tokens=40,
+            )
+            chunks.append(current.content)
+
         assert [entry.resource_id for entry in resumed.manifest()] == [first, discovered]
+        assert "".join(chunks) == text
         assert resumed.allocate_fetched_ordinal(discovered) == ordinal
         assert resumed.register_discovered_link("https://example.com/a") == discovered
         next_link = resumed.register_discovered_link("https://example.com/b")
@@ -231,7 +255,7 @@ class TestCheckpointCodec:
 
         resumed = AgentRunState(
             evidence=EvidenceLedger(),
-            episode=RunEpisode(),
+            episode=_episode(),
             tool_cache=ExactCallCache(),
             registry=ResourceRegistry(),
             trace={"agent_turns": 0, "tool_observations": []},
@@ -554,7 +578,7 @@ async def _no_network(url: str, **kwargs: Any) -> bytes:
 def _empty_state() -> AgentRunState:
     return AgentRunState(
         evidence=EvidenceLedger(),
-        episode=RunEpisode(),
+        episode=_episode(),
         tool_cache=ExactCallCache(),
         registry=ResourceRegistry(),
         trace={"agent_turns": 0, "tool_observations": []},

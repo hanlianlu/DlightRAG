@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 
 import pytest
@@ -14,7 +15,26 @@ from dlightrag.core.resources.models import (
     ResourceInput,
     ResourceNotFoundError,
 )
-from dlightrag.core.resources.registry import ResourceRegistry
+from dlightrag.core.resources.registry import ResourceRegistry as _ResourceRegistry
+
+
+class ResourceRegistry(_ResourceRegistry):
+    """Exercise registry behavior under a small explicit model window."""
+
+    async def read(
+        self,
+        resource_id: str,
+        *,
+        max_window_tokens: int = 100,
+        focus: str | None = None,
+        cursor: str | None = None,
+    ):
+        return await super().read(
+            resource_id,
+            max_window_tokens=max_window_tokens,
+            focus=focus,
+            cursor=cursor,
+        )
 
 
 class _StreamResponse:
@@ -255,6 +275,25 @@ async def test_read_revalidates_host_resolution_each_read(
         await registry.read(resource_id)
 
 
+async def test_read_uses_checkpointed_bytes_without_live_dns_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def reject_validation(_url: str) -> None:
+        raise AssertionError("checkpointed bytes must not re-enter the network gate")
+
+    monkeypatch.setattr(
+        "dlightrag.core.resources.registry.avalidate_public_https_url",
+        reject_validation,
+    )
+    registry = ResourceRegistry()
+    resource_id = registry.register(ResourceInput(url="https://data.example.com/report.txt"))
+    registry.restore_fetched_bytes(resource_id, b"durable body")
+
+    result = await registry.read(resource_id)
+
+    assert result.content == "durable body"
+
+
 async def test_read_returns_structural_text_window() -> None:
     registry = ResourceRegistry()
     resource_id = registry.register(
@@ -291,20 +330,100 @@ async def test_read_continues_above_observation_budget() -> None:
     assert combined == text
 
 
+@pytest.mark.parametrize("first_budget,next_budget", [(100, 40), (40, 100)])
+async def test_cursor_is_stable_across_changing_window_budgets(
+    first_budget: int,
+    next_budget: int,
+) -> None:
+    registry = ResourceRegistry()
+    text = "".join(f"line {index} " + "x" * 30 + "\n" for index in range(400))
+    resource_id = registry.register(ResourceInput(content=text.encode("utf-8")))
+
+    current = await registry.read(resource_id, max_window_tokens=first_budget)
+    chunks = [current.content]
+    while current.has_more:
+        current = await registry.read(
+            resource_id,
+            cursor=current.next_cursor,
+            max_window_tokens=next_budget,
+        )
+        chunks.append(current.content)
+
+    assert "".join(chunks) == text
+
+
+async def test_cursor_pages_do_not_rebuild_whole_resource_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from dlightrag.core.resources import registry as registry_module
+
+    input_lengths: list[int] = []
+    span_threads: list[int] = []
+    loop_thread = threading.get_ident()
+    build = registry_module.build_text_windows
+    read_cursor_span = registry_module._read_cursor_span
+
+    def count_builds(text: str, *, max_window_tokens: int):
+        input_lengths.append(len(text))
+        return build(text, max_window_tokens=max_window_tokens)
+
+    def record_span(*args, **kwargs):
+        span_threads.append(threading.get_ident())
+        return read_cursor_span(*args, **kwargs)
+
+    monkeypatch.setattr(registry_module, "build_text_windows", count_builds)
+    monkeypatch.setattr(registry_module, "_read_cursor_span", record_span)
+    registry = ResourceRegistry()
+    text = "".join(f"line {index} " + "x" * 30 + "\n" for index in range(400))
+    resource_id = registry.register(ResourceInput(content=text.encode("utf-8")))
+
+    current = await registry.read(resource_id, max_window_tokens=100)
+    for _ in range(3):
+        assert current.next_cursor is not None
+        current = await registry.read(
+            resource_id,
+            cursor=current.next_cursor,
+            max_window_tokens=40,
+        )
+
+    assert input_lengths.count(len(text)) == 1
+    assert all(length < len(text) for length in input_lengths[1:])
+    assert span_threads and all(thread_id != loop_thread for thread_id in span_threads)
+
+
+async def test_checkpoint_keeps_only_one_compact_active_cursor() -> None:
+    registry = ResourceRegistry()
+    text = "".join(f"line {index} " + "x" * 30 + "\n" for index in range(4000))
+    resource_id = registry.register(ResourceInput(content=text.encode("utf-8")))
+
+    current = await registry.read(resource_id, max_window_tokens=100)
+    for _ in range(10):
+        assert current.next_cursor is not None
+        current = await registry.read(
+            resource_id,
+            cursor=current.next_cursor,
+            max_window_tokens=40,
+        )
+
+    cursors = registry.export_state()["cursors"]
+    assert len(cursors) == 1
+    assert len(json.dumps(cursors)) < 1_024
+
+
 async def test_read_continues_within_single_oversized_line() -> None:
     from dlightrag_ai.tokens import estimate_tokens
-
-    from dlightrag.core.answer.capacity import MAX_TOOL_OBSERVATION_TOKENS
 
     registry = ResourceRegistry()
     # A minified single-line JSON payload with no newline, far over one budget.
     payload = '{"data":[' + ",".join(f'"{"v" * 40}"' for _ in range(4000)) + "]}"
     assert "\n" not in payload
-    assert estimate_tokens(payload) > MAX_TOOL_OBSERVATION_TOKENS
+    assert estimate_tokens(payload) > 100
     resource_id = registry.register(ResourceInput(content=payload.encode("utf-8")))
 
     first = await registry.read(resource_id)
-    assert estimate_tokens(first.content) <= MAX_TOOL_OBSERVATION_TOKENS
+    assert estimate_tokens(first.content) <= 100
     assert first.has_more is True
     assert first.next_cursor is not None
 
@@ -312,7 +431,7 @@ async def test_read_continues_within_single_oversized_line() -> None:
     current = first
     while current.has_more:
         current = await registry.read(resource_id, cursor=current.next_cursor)
-        assert estimate_tokens(current.content) <= MAX_TOOL_OBSERVATION_TOKENS
+        assert estimate_tokens(current.content) <= 100
         combined = combined + current.content
     assert combined == payload
 
@@ -342,6 +461,31 @@ async def test_cursor_inherits_focus_and_rejects_a_conflict() -> None:
 
     with pytest.raises(ResourceCursorError):
         await registry.read(resource_id, focus="different", cursor=first.next_cursor)
+
+
+async def test_focused_cursor_order_survives_a_smaller_window_budget() -> None:
+    registry = ResourceRegistry()
+    lines = [f"record {index:03d} value\n" for index in range(200)]
+    lines[150] = "record 150 unique-needle\n"
+    text = "".join(lines)
+    resource_id = registry.register(ResourceInput(content=text.encode("utf-8")))
+
+    current = await registry.read(
+        resource_id,
+        focus="unique-needle",
+        max_window_tokens=100,
+    )
+    assert "unique-needle" in current.content
+    chunks = [current.content]
+    while current.has_more:
+        current = await registry.read(
+            resource_id,
+            cursor=current.next_cursor,
+            max_window_tokens=40,
+        )
+        chunks.append(current.content)
+
+    assert sorted("".join(chunks).splitlines(keepends=True)) == sorted(lines)
 
 
 async def test_cursor_is_isolated_across_registries() -> None:

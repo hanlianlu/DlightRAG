@@ -21,6 +21,7 @@ from dlightrag.storage.answer_runs import (
     IdempotencyKeyConflict,
     RunCreation,
 )
+from tests.unit.conftest import prepare_test_answer_run_input
 
 _ANON = UserContext(user_id="anonymous", auth_mode="none")
 _RUN_ID = "0199a0a0-0000-7000-8000-000000000001"
@@ -77,8 +78,41 @@ class _RunManager:
         self.events: list[AnswerRunEvent] = []
         self.conflict = False
         self.replayed = False
+        self.replay_record: AnswerRunRecord | None = None
+        self.prepare_calls = 0
+        self.prepared_resources: Any = None
+        self.fail_prepare = False
         self.cancellation = CancellationOutcome(outcome="pending", run=_record(status="running"))
         self.closed_subscribers = 0
+
+    async def aprepare_answer_run_input(
+        self,
+        request: Any,
+        *,
+        resources: Any,
+        idempotency_fingerprint: str,
+    ) -> Any:
+        self.prepare_calls += 1
+        self.prepared_resources = resources
+        if self.fail_prepare:
+            raise AssertionError("accepted replay must not prepare model input")
+        return await prepare_test_answer_run_input(
+            request,
+            resources=resources,
+            idempotency_fingerprint=idempotency_fingerprint,
+        )
+
+    async def areplay_answer_run(
+        self,
+        *,
+        owner_id: str,
+        idempotency_key: str,
+        idempotency_fingerprint: str,
+    ) -> AnswerRunRecord | None:
+        del owner_id, idempotency_key, idempotency_fingerprint
+        if self.conflict:
+            raise IdempotencyKeyConflict("reused")
+        return self.replay_record
 
     async def astart_answer_run(
         self,
@@ -219,11 +253,31 @@ class TestCreate:
         assert attachment.filename == "notes.txt"
         assert attachment.ordinal == 0
 
+    async def test_octet_stream_image_bytes_remain_lazy_at_acceptance(
+        self,
+        client: AsyncClient,
+        run_manager: _RunManager,
+    ) -> None:
+        payload = b"\x89PNG\r\n\x1a\nnot-promoted-by-content-sniffing"
+
+        response = await client.post(
+            "/answer",
+            data={"request": json.dumps({"query": "summarize"})},
+            files=[("attachments", ("chart.png", payload, "application/octet-stream"))],
+        )
+
+        assert response.status_code == 202
+        (resource,) = run_manager.prepared_resources
+        assert resource.declared_mime == "application/octet-stream"
+        assert resource.content is None
+        assert resource.loader is not None
+        assert await resource.loader() == payload
+
     async def test_idempotent_replay_returns_the_current_status(
         self, client: AsyncClient, run_manager: _RunManager
     ) -> None:
-        run_manager.replayed = True
-        run_manager.record = _record(status="running", idempotency_key="key-1")
+        run_manager.replay_record = _record(status="running", idempotency_key="key-1")
+        run_manager.fail_prepare = True
 
         response = await client.post(
             "/answer", json={"query": "hello"}, headers={"Idempotency-Key": "key-1"}
@@ -231,7 +285,8 @@ class TestCreate:
 
         assert response.status_code == 202
         assert response.json()["status"] == "running"
-        assert run_manager.created[0]["idempotency_key"] == "key-1"
+        assert run_manager.prepare_calls == 0
+        assert run_manager.created == []
 
     async def test_idempotency_conflict_is_409(
         self, client: AsyncClient, run_manager: _RunManager

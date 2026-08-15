@@ -9,14 +9,21 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from dlightrag_ai.capacity import ModelProfile
+from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer_runs.coordinator import RunSession
-from dlightrag.core.answer_runs.execution import AnswerRunInput, AttachmentReference
+from dlightrag.core.answer_runs.execution import (
+    AnswerRunInput,
+    AttachmentReference,
+    PinnedModelProfile,
+)
 from dlightrag.core.memory.conversation import PriorTurns
+from dlightrag.core.resources.models import TextWindowBudget
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import (
     RAGServiceManager,
@@ -33,6 +40,22 @@ from dlightrag.storage.answer_runs import (
 _OWNER = "owner-alpha"
 _VISUAL_BYTES = b"\x89PNG\r\n\x1a\nfake-corpus-visual"
 _VISUAL_B64 = base64.b64encode(_VISUAL_BYTES).decode("ascii")
+_TEST_PIN = PinnedModelProfile(
+    role="query",
+    fingerprint=ModelFingerprint("openai", "test-model", None),
+    profile=ModelProfile(context_window_tokens=1_000_000),
+)
+
+
+def _run_input(query: str = "why", **kwargs: Any) -> AnswerRunInput:
+    return AnswerRunInput(
+        query=query,
+        pinned_models=(_TEST_PIN,),
+        context_policy_revision="m1-v1",
+        model_catalog_revision="2026-08-14",
+        idempotency_fingerprint="public-request-hash",
+        **kwargs,
+    )
 
 
 class _RecordingStore:
@@ -45,6 +68,7 @@ class _RecordingStore:
         *,
         owner_id: str,
         request: Mapping[str, Any],
+        idempotency_fingerprint: str | None = None,
         idempotency_key: str | None = None,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[Any] = (),
@@ -53,6 +77,7 @@ class _RecordingStore:
             {
                 "owner_id": owner_id,
                 "request": dict(request),
+                "idempotency_fingerprint": idempotency_fingerprint,
                 "idempotency_key": idempotency_key,
                 "artifacts": list(artifacts),
                 "references": list(references),
@@ -122,6 +147,9 @@ def _manager(store: _RecordingStore) -> RAGServiceManager:
     manager._answer_coordinator = None
     manager._answer_store_lock = asyncio.Lock()
     manager._answer_runtime_lock = asyncio.Lock()
+    manager._validate_pinned_model_profiles = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda request: {item.role: item.profile for item in request.pinned_models}
+    )
     return manager
 
 
@@ -225,8 +253,7 @@ class TestRunCreation:
         store = _RecordingStore()
         manager = _manager(store)
         content = b"attachment-bytes"
-        request = AnswerRunInput(
-            query="why",
+        request = _run_input(
             workspaces=("default",),
             attachments=(
                 AttachmentReference(
@@ -272,7 +299,8 @@ class TestRunCreation:
 
         try:
             await manager.astart_answer_run(
-                owner_id=_OWNER, request=AnswerRunInput(query="why", workspaces=("default",))
+                owner_id=_OWNER,
+                request=_run_input(workspaces=("default",)),
             )
             assert manager._answer_coordinator is not None
             assert _runtime_tasks() == _ONE_RUNTIME
@@ -358,18 +386,52 @@ class TestRuntimeStartup:
 
 
 class TestRunExecution:
+    def test_immutable_input_round_trips_pinned_capacity_facts(self) -> None:
+        pinned = PinnedModelProfile(
+            role="query",
+            fingerprint=ModelFingerprint(
+                provider="openai",
+                model="private-query",
+                endpoint_fingerprint="endpoint-hash",
+            ),
+            profile=ModelProfile(
+                context_window_tokens=262_144,
+                max_input_tokens=200_000,
+                max_output_tokens=32_768,
+                supports_tools=True,
+            ),
+        )
+        original = AnswerRunInput(
+            query="why",
+            history=(
+                {"role": "user", "content": "earlier"},
+                {"role": "assistant", "content": "answer"},
+            ),
+            pinned_models=(pinned,),
+            context_policy_revision="m1-v1",
+            model_catalog_revision="2026-08-14",
+            idempotency_fingerprint="public-request-hash",
+            image_descriptions=("Image 1: chart",),
+        )
+
+        restored = AnswerRunInput.from_request(original.as_request())
+
+        assert restored == original
+
     async def test_executes_immutable_input_and_returns_the_canonical_result(self) -> None:
         store = _RecordingStore()
         manager = _manager(store)
         orchestrator = AnswerOrchestrator(
             synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
             retrieve_knowledge_base=_retrieve,
+            model_profile=ModelProfile(context_window_tokens=1_000_000),
             telemetry=NOOP_TELEMETRY,
+            text_window_budget=TextWindowBudget(tokens=850_000),
         )
         prepared: list[Any] = []
 
-        async def _prepare(turn: Any, **kwargs: Any) -> _OrchestratorRun:
-            prepared.append((turn, kwargs))
+        async def _prepare(**kwargs: Any) -> _OrchestratorRun:
+            prepared.append(kwargs)
             return _OrchestratorRun(
                 orchestrator=orchestrator,
                 image_descriptions=[],
@@ -381,7 +443,14 @@ class TestRunExecution:
             )
 
         manager._prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
-        request = AnswerRunInput(query="why", workspaces=("default",)).as_request()
+        persisted_history = (
+            {"role": "user", "content": "persisted question"},
+            {"role": "assistant", "content": "persisted answer"},
+        )
+        request = _run_input(
+            workspaces=("default",),
+            history=persisted_history,
+        ).as_request()
         session = _Session(request=request, checkpoint=None)
 
         result = await manager._execute_answer_run(cast(RunSession, session))
@@ -391,15 +460,15 @@ class TestRunExecution:
         assert result["answer"] == "hello world"
         assert result["trace"]["query_image_description_count"] == 0
         assert "sources" in result and "contexts" in result
-        turn, kwargs = prepared[0]
-        assert turn.current_query == "why"
+        kwargs = prepared[0]
+        assert kwargs["projected_history"].messages == list(persisted_history)
+        assert kwargs["model_profiles"] == {"query": _TEST_PIN.profile}
         assert kwargs["workspaces"] == ["default"]
 
     async def test_attachments_are_replayed_as_lazy_readers_over_stored_bytes(self) -> None:
         store = _RecordingStore()
         manager = _manager(store)
-        request = AnswerRunInput(
-            query="why",
+        request = _run_input(
             attachments=(
                 AttachmentReference(
                     digest=artifact_digest(b"attachment-bytes"),
@@ -425,8 +494,7 @@ class TestRunExecution:
     ) -> None:
         store = _RecordingStore()
         manager = _manager(store)
-        request = AnswerRunInput(
-            query="why",
+        request = _run_input(
             attachments=(
                 AttachmentReference(
                     digest=artifact_digest(b"attachment-bytes"),
@@ -446,16 +514,41 @@ class TestRunExecution:
         assert resources[0].content == b"attachment-bytes"
         assert resources[0].loader is None
 
+    async def test_octet_stream_image_bytes_stay_lazy_during_execution(self) -> None:
+        store = _RecordingStore()
+        manager = _manager(store)
+        request = _run_input(
+            attachments=(
+                AttachmentReference(
+                    digest=artifact_digest(b"attachment-bytes"),
+                    filename="chart.png",
+                    mime_type="application/octet-stream",
+                    ordinal=0,
+                ),
+            ),
+        )
+
+        resources = await manager._answer_run_resources(
+            request, owner_id=_OWNER, store=cast(Any, store)
+        )
+
+        assert resources is not None
+        assert resources[0].content is None
+        assert resources[0].loader is not None
+        assert await resources[0].loader() == b"attachment-bytes"
+
     async def test_the_canonical_result_holds_no_raw_context_payloads(self) -> None:
         store = _RecordingStore()
         manager = _manager(store)
         orchestrator = AnswerOrchestrator(
             synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
             retrieve_knowledge_base=_retrieve_visual,
+            model_profile=ModelProfile(context_window_tokens=1_000_000),
             telemetry=NOOP_TELEMETRY,
+            text_window_budget=TextWindowBudget(tokens=850_000),
         )
 
-        async def _prepare(turn: Any, **kwargs: Any) -> _OrchestratorRun:
+        async def _prepare(**kwargs: Any) -> _OrchestratorRun:
             return _OrchestratorRun(
                 orchestrator=orchestrator,
                 image_descriptions=[],
@@ -467,7 +560,7 @@ class TestRunExecution:
             )
 
         manager._prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
-        request = AnswerRunInput(query="why", workspaces=("default",)).as_request()
+        request = _run_input(workspaces=("default",)).as_request()
 
         result = await manager._execute_answer_run(
             cast(RunSession, _Session(request=request, checkpoint=None))

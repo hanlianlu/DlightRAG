@@ -13,21 +13,29 @@ import logging
 from collections.abc import Awaitable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 import asyncpg
 from dlightrag_ai.media import thumbnail_bytes
 
 from dlightrag.api.auth import UserContext
 from dlightrag.api.principal import owner_id_from_user
-from dlightrag.core.answer_runs.execution import AnswerRunInput, AttachmentReference
+from dlightrag.core.answer_runs.execution import (
+    AnswerRunInput,
+    AnswerRunRequest,
+    AttachmentReference,
+    build_current_answer_resources,
+    in_memory_attachment_loader,
+)
 from dlightrag.core.answer_runs.results import project_answer_result
+from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.storage.answer_runs import (
     AnswerRunRecord,
     PendingArtifact,
     PendingArtifactReference,
     PGAnswerRunStore,
+    answer_run_request_fingerprint,
     artifact_digest,
     parse_run_id,
 )
@@ -54,6 +62,18 @@ _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS = (
     *POSTGRES_UNAVAILABLE_EXCEPTIONS,
     asyncpg.InterfaceError,
 )
+
+
+class AnswerRunInputPreparer(Protocol):
+    async def __call__(
+        self,
+        request: AnswerRunRequest,
+        *,
+        resources: list[ResourceInput] | None,
+        idempotency_fingerprint: str,
+    ) -> AnswerRunInput: ...
+
+
 _HISTORY_THUMBNAIL_MAX_PX = 320
 _HISTORY_THUMBNAIL_MAX_BYTES = 128 * 1024
 _HISTORY_THUMBNAIL_QUALITY = 82
@@ -93,6 +113,7 @@ class WebConversationService:
         self,
         *,
         store: PGWebConversationStore,
+        prepare_run_input: AnswerRunInputPreparer,
         run_store: PGAnswerRunStore | None = None,
         max_turns: int,
         ttl_days: int,
@@ -100,6 +121,7 @@ class WebConversationService:
         validate_schema_only: bool = False,
     ) -> None:
         self._store = store
+        self._prepare_run_input = prepare_run_input
         self._run_store = run_store or PGAnswerRunStore()
         self._max_turns = max_turns
         self._ttl_days = ttl_days
@@ -249,7 +271,7 @@ class WebConversationService:
         reference = next(
             (
                 item
-                for item in AnswerRunInput.from_request(turn.run.request).attachments
+                for item in AnswerRunRequest.from_request(turn.run.request).attachments
                 if item.ordinal == ordinal
             ),
             None,
@@ -310,12 +332,42 @@ class WebConversationService:
         snapshot = await self._snapshot(principal_id, conversation_id)
         if snapshot is None:
             return None
-        run_input = _answer_run_input(
+        idempotency_fingerprint = _web_answer_request_fingerprint(
+            conversation_id=conversation_id,
+            query=query,
+            workspaces=workspaces,
+            attachments=attachments,
+        )
+        replay = await self._store_call(
+            self._store.replay_answer_turn(
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                submission_id=submission_id,
+                idempotency_fingerprint=idempotency_fingerprint,
+            )
+        )
+        if replay is not None:
+            return WebAnswerSubmission(
+                run=replay.run,
+                turn_id=replay.turn_id,
+                turn_number=replay.turn_number,
+                conversation=_snapshot_summary(snapshot),
+            )
+        run_request = _answer_run_request(
             query=query,
             workspaces=workspaces,
             snapshot=snapshot,
             attachments=attachments,
             max_attachments=self._max_attachments,
+        )
+        run_input = await self._prepare_run_input(
+            run_request,
+            resources=await self._resource_inputs(
+                principal_id,
+                run_request,
+                attachments,
+            ),
+            idempotency_fingerprint=idempotency_fingerprint,
         )
         creation = await self._store_call(
             self._store.create_answer_turn(
@@ -323,6 +375,7 @@ class WebConversationService:
                 conversation_id=conversation_id,
                 submission_id=submission_id,
                 request=run_input.as_request(),
+                idempotency_fingerprint=run_input.idempotency_fingerprint,
                 artifacts=[
                     PendingArtifact(content=attachment.attachment_bytes)
                     for attachment in attachments
@@ -334,6 +387,40 @@ class WebConversationService:
             )
         )
         return None if creation is None else _submission(creation)
+
+    async def _resource_inputs(
+        self,
+        principal_id: str,
+        request: AnswerRunRequest,
+        attachments: Sequence[ValidatedWebAttachment],
+    ) -> list[ResourceInput] | None:
+        resources = await build_current_answer_resources(
+            links=request.links,
+            attachments=request.attachments,
+            attachment_loaders=[
+                in_memory_attachment_loader(attachment.attachment_bytes)
+                for attachment in attachments
+            ],
+        )
+        for attachment in request.history_attachments:
+
+            async def load_history(digest: str = attachment.digest) -> bytes:
+                content = await self._run_store.load_artifact(
+                    owner_id=principal_id,
+                    digest=digest,
+                )
+                if content is None:
+                    raise WebConversationUnavailableError
+                return content
+
+            resources.append(
+                ResourceInput(
+                    filename=attachment.filename,
+                    declared_mime=attachment.mime_type,
+                    loader=load_history,
+                )
+            )
+        return resources or None
 
     async def _snapshot(
         self,
@@ -401,14 +488,14 @@ def _artifact_references(run_input: AnswerRunInput) -> list[PendingArtifactRefer
     return references
 
 
-def _answer_run_input(
+def _answer_run_request(
     *,
     query: str,
     workspaces: Sequence[str],
     snapshot: ConversationSnapshot,
     attachments: Sequence[ValidatedWebAttachment],
     max_attachments: int,
-) -> AnswerRunInput:
+) -> AnswerRunRequest:
     """Normalize one browser submission into the run's immutable input.
 
     Only succeeded turns become model history, and only their uploads stay
@@ -420,7 +507,7 @@ def _answer_run_input(
     for turn in snapshot.turns:
         if turn.run.status != "succeeded":
             continue
-        request = AnswerRunInput.from_request(turn.run.request)
+        request = AnswerRunRequest.from_request(turn.run.request)
         history.extend(
             (
                 {"role": "user", "content": request.query},
@@ -430,7 +517,7 @@ def _answer_run_input(
         prior.extend(request.attachments)
     remaining = max(0, max_attachments - len(attachments))
     carried = prior[-remaining:] if remaining else []
-    return AnswerRunInput(
+    return AnswerRunRequest(
         query=query,
         workspaces=tuple(workspaces),
         history=tuple(history),
@@ -458,6 +545,33 @@ def _answer_run_input(
     )
 
 
+def _web_answer_request_fingerprint(
+    *,
+    conversation_id: str,
+    query: str,
+    workspaces: Sequence[str],
+    attachments: Sequence[ValidatedWebAttachment],
+) -> str:
+    """Hash only the stable browser submission, before conversation enrichment."""
+    return answer_run_request_fingerprint(
+        {
+            "conversation_id": conversation_id,
+            "query": query,
+            "workspaces": list(workspaces),
+            "attachments": [
+                {
+                    "digest": attachment.content_sha256,
+                    "filename": attachment.filename,
+                    "mime_type": attachment.mime_type,
+                    "ordinal": attachment.ordinal,
+                    "byte_size": attachment.byte_size,
+                }
+                for attachment in attachments
+            ],
+        }
+    )
+
+
 def project_conversation_turn(
     turn: LinkedTurn,
     *,
@@ -473,7 +587,7 @@ def project_conversation_turn(
     answer, and that answer is projected from the run's canonical result.
     """
     run = turn.run
-    request = AnswerRunInput.from_request(run.request)
+    request = AnswerRunRequest.from_request(run.request)
     answer = ""
     answer_html = ""
     if run.status == "succeeded" and run.result is not None:

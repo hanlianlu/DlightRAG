@@ -7,12 +7,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_ai.capacity import ModelProfile
 
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.retrieval.protocols import RetrievalContexts
-from tests.unit.conftest import answer_image_policy
+from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -152,7 +153,11 @@ class TestAnswerSynthesizerPolicy:
             SimpleNamespace(to_thread=fake_to_thread),
             raising=False,
         )
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=_stream_func("a"))
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=_stream_func("a"),
+        )
 
         await synth.generate_stream("query", _image_contexts())
 
@@ -163,6 +168,7 @@ class TestAnswerSynthesizerPolicy:
         model_func = _stream_func("ok")
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(max_images=6),
+            model_profile=answer_model_profile(),
             model_func=model_func,
         )
 
@@ -175,7 +181,11 @@ class TestAnswerSynthesizerPolicy:
     @pytest.mark.asyncio
     async def test_each_call_gets_a_fresh_budget_from_one_policy(self) -> None:
         policy = answer_image_policy(max_images=1)
-        synth = AnswerSynthesizer(image_policy=policy, model_func=_stream_func("ok [1-1]."))
+        synth = AnswerSynthesizer(
+            image_policy=policy,
+            model_profile=answer_model_profile(),
+            model_func=_stream_func("ok [1-1]."),
+        )
 
         _, first = await synth.generate_stream("describe", _image_contexts())
         _, second = await synth.generate_stream("describe", _image_contexts())
@@ -185,22 +195,10 @@ class TestAnswerSynthesizerPolicy:
         assert policy.max_images == 1
 
     @pytest.mark.asyncio
-    async def test_replacing_the_policy_applies_a_refreshed_capability(self) -> None:
-        synth = AnswerSynthesizer(
-            image_policy=answer_image_policy(), model_func=_stream_func("ok [1-1].")
-        )
-
-        _, blind = await synth.generate_stream("describe", _image_contexts())
-        synth.set_image_policy(answer_image_policy(max_images=4))
-        _, sighted = await synth.generate_stream("describe", _image_contexts())
-
-        assert cast(Any, blind).trace["answer_images_total"] == 0
-        assert cast(Any, sighted).trace["answer_images_total"] == 1
-
-    @pytest.mark.asyncio
     async def test_returns_answer_packed_contexts(self) -> None:
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(max_images=0),
+            model_profile=answer_model_profile(),
             model_func=_stream_func("answer"),
         )
         contexts: RetrievalContexts = {
@@ -230,6 +228,7 @@ class TestAnswerSynthesizerPolicy:
     async def test_the_settled_answer_drops_a_model_generated_references_tail(self) -> None:
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
             model_func=_stream_func("Growth is 15% [1-1].", "\n\n### References\n- [1] x.pdf"),
         )
 
@@ -254,7 +253,11 @@ class TestAnswerSynthesizerStream:
                 yield token
 
         model_func = AsyncMock(return_value=mock_tokens())
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
 
         _ctx, token_iter = await synth.generate_stream("test", _text_contexts())
 
@@ -264,7 +267,11 @@ class TestAnswerSynthesizerStream:
 
     @pytest.mark.asyncio
     async def test_generate_stream_no_model_func(self) -> None:
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=None)
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=None,
+        )
         contexts: RetrievalContexts = {"chunks": []}
         ctx, token_iter = await synth.generate_stream("test", contexts)
         assert token_iter is None
@@ -276,7 +283,11 @@ class TestAnswerSynthesizerStream:
             yield "I am DlightRAG."
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
         contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
 
         ctx, token_iter = await synth.generate_stream("who are u", contexts)
@@ -295,7 +306,11 @@ class TestAnswerSynthesizerStream:
                 yield token
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
 
         result_contexts, token_iter = await synth.generate_stream("query", _text_contexts())
 
@@ -309,7 +324,11 @@ class TestAnswerSynthesizerStream:
             yield "text"
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
 
         await synth.generate_stream("query", _text_contexts())
 
@@ -323,7 +342,11 @@ class TestAnswerSynthesizerStream:
             yield "token"
 
         model_func = AsyncMock(return_value=mock_stream())
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
 
         _, token_iter = await synth.generate_stream("query", _text_contexts())
 
@@ -342,15 +365,26 @@ class TestAnswerSynthesizerStream:
 
 
 class TestAnswerSynthesizerCapacity:
-    def test_default_evidence_ceiling_is_156000(self) -> None:
-        synth = AnswerSynthesizer(image_policy=answer_image_policy())
+    def test_evidence_capacity_uses_the_full_residual_model_input(self) -> None:
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=ModelProfile(
+                context_window_tokens=10_000,
+                max_input_tokens=9_000,
+                max_output_tokens=1_000,
+            ),
+        )
 
         prepared = synth._prepare_model_call(
             "question", _text_contexts(), conversation_history=PriorTurns()
         )
 
-        assert prepared.trace["answer_context_window_tokens"] == 260_000
-        assert prepared.trace["answer_evidence_ceiling"] == 156_000
+        assert prepared.trace["answer_input_limit_tokens"] == 8_500
+        assert prepared.trace["context_policy_revision"] == "m1-v1"
+        assert prepared.trace["answer_evidence_capacity_tokens"] == 8_500 - (
+            prepared.trace["answer_input_tokens"] - prepared.trace["answer_evidence_tokens"]
+        )
+        assert prepared.trace["answer_evidence_capacity_tokens"] > 6_000
 
     def test_fixed_evidence_overflow_raises_without_trimming_evidence(self) -> None:
         contexts: RetrievalContexts = {
@@ -366,16 +400,17 @@ class TestAnswerSynthesizerCapacity:
             "relationships": [],
         }
         original_content = contexts["chunks"][0]["content"]
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(context_window_tokens=200))
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(context_window_tokens=200),
+        )
 
         with pytest.raises(AnswerInputOverflowError):
             synth._prepare_model_call("question", contexts, conversation_history=PriorTurns())
 
         assert contexts["chunks"][0]["content"] == original_content
 
-    def test_oldest_history_dropped_first_without_mutating_evidence(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_pinned_history_is_not_locally_trimmed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import dlightrag.core.answer.synthesizer as answer_module
 
         monkeypatch.setattr(answer_module, "answer_core", lambda: "SYS")
@@ -399,26 +434,29 @@ class TestAnswerSynthesizerCapacity:
         }
         original_chunks = [dict(contexts["chunks"][0])]
         # A window whose input budget only fits recent history plus fixed input.
-        synth = AnswerSynthesizer(image_policy=answer_image_policy(context_window_tokens=33_000))
-
-        prepared = synth._prepare_model_call(
-            "current question",
-            contexts,
-            conversation_history=PriorTurns(
-                [
-                    {"role": "user", "content": "OLD-HISTORY " + ("old " * 200)},
-                    {"role": "assistant", "content": "old answer " * 60},
-                    {"role": "user", "content": "RECENT-HISTORY follow-up"},
-                    {"role": "assistant", "content": "recent answer"},
-                ]
-            ),
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(context_window_tokens=500),
         )
 
-        history_text = "\n".join(str(message["content"]) for message in prepared.messages[1:-1])
-        assert "OLD-HISTORY" not in history_text
-        assert "RECENT-HISTORY" in history_text
+        history = PriorTurns(
+            [
+                {"role": "user", "content": "OLD-HISTORY " + ("old " * 200)},
+                {"role": "assistant", "content": "old answer " * 60},
+                {"role": "user", "content": "RECENT-HISTORY follow-up"},
+                {"role": "assistant", "content": "recent answer"},
+            ]
+        )
+
+        with pytest.raises(AnswerInputOverflowError):
+            synth._prepare_model_call(
+                "current question",
+                contexts,
+                conversation_history=history,
+            )
+
+        assert len(history) == 4
         assert contexts["chunks"] == original_chunks
-        assert prepared.trace["answer_history_messages_dropped"] == 2
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,9 @@ from dlightrag.storage.answer_runs import (
     PendingArtifact,
     PendingArtifactReference,
     PGAnswerRunStore,
+    answer_run_request_fingerprint,
 )
+from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [
     pytest.mark.integration,
@@ -87,7 +89,7 @@ async def pool() -> AsyncIterator[Any]:
 
 @pytest.fixture
 async def store(pool: Any) -> PGAnswerRunStore:
-    created = PGAnswerRunStore(pool=pool)
+    created = FingerprintingAnswerRunStore(pool=pool)
     await created.initialize()
     # Retention exempts conversation-linked runs, so the whole operational schema
     # is established here exactly as a real process establishes it at startup.
@@ -298,6 +300,14 @@ class TestCreation:
         second = await store.create_run(owner_id=_OWNER, request=_request(), idempotency_key="k1")
         assert second.replayed is True
         assert second.run.run_id == first.run.run_id
+        lookup = await store.replay_run(
+            owner_id=_OWNER,
+            idempotency_key="k1",
+            idempotency_fingerprint=answer_run_request_fingerprint(_request()),
+        )
+        assert lookup is not None
+        assert lookup.replayed is True
+        assert lookup.run.run_id == first.run.run_id
 
     async def test_replay_returns_current_status_not_queued(self, store) -> None:
         first = await store.create_run(owner_id=_OWNER, request=_request(), idempotency_key="k1")
@@ -909,6 +919,51 @@ class TestTerminalTransitions:
 
 
 class TestShutdownAndRecovery:
+    async def test_active_requirements_include_only_work_that_may_execute(
+        self,
+        store,
+        pool,
+    ) -> None:
+        cancelled = await store.create_run(
+            owner_id=_OWNER,
+            request=_request(context_policy_revision="cancelled", pinned_models=[]),
+        )
+        await _claimed(store)
+        await store.request_cancellation(owner_id=_OWNER, run_id=cancelled.run.run_id)
+        await _expire_lease(pool, cancelled.run.run_id)
+
+        abandoned = await store.create_run(
+            owner_id=_OWNER,
+            request=_request(context_policy_revision="abandoned", pinned_models=[]),
+        )
+        await _claimed(store)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE dlightrag_answer_runs "
+                "SET recovery_count = $2, lease_expires_at = NOW() - INTERVAL '1 second' "
+                "WHERE run_id = $1",
+                uuid.UUID(abandoned.run.run_id),
+                MAX_CONSECUTIVE_RECOVERIES,
+            )
+
+        recoverable = await store.create_run(
+            owner_id=_OWNER,
+            request=_request(context_policy_revision="recoverable", pinned_models=[]),
+        )
+        await _claimed(store)
+        await _expire_lease(pool, recoverable.run.run_id)
+        await store.create_run(
+            owner_id=_OWNER,
+            request=_request(context_policy_revision="queued", pinned_models=[]),
+        )
+
+        requirements = await store.list_active_run_requirements()
+
+        assert {row["context_policy_revision"] for row in requirements} == {
+            "queued",
+            "recoverable",
+        }
+
     async def test_graceful_requeue_preserves_progress_without_counting_recovery(
         self, store, pool
     ) -> None:

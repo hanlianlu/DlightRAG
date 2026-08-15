@@ -27,6 +27,28 @@ def run_request(**overrides: Any) -> dict[str, Any]:
         "links": [],
         "attachments": [],
         "history_attachments": [],
+        "pinned_models": [
+            {
+                "role": "query",
+                "fingerprint": {
+                    "provider": "openai",
+                    "model": "test-model",
+                    "endpoint_fingerprint": None,
+                },
+                "profile": {
+                    "context_window_tokens": 1_000_000,
+                    "max_input_tokens": None,
+                    "max_output_tokens": 128_000,
+                    "supports_images": True,
+                    "supports_tools": True,
+                    "supports_reasoning": True,
+                },
+            }
+        ],
+        "context_policy_revision": "m1-v1",
+        "model_catalog_revision": "2026-08-14",
+        "idempotency_fingerprint": "test-public-request-hash",
+        "image_descriptions": [],
         **overrides,
     }
 

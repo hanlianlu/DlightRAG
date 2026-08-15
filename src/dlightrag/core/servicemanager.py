@@ -22,7 +22,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -36,8 +36,17 @@ if TYPE_CHECKING:
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag_agent.tools import AgentTool
+from dlightrag_ai.capacity import (
+    CONTEXT_POLICY,
+    CONTEXT_POLICY_REVISION,
+    ModelCapabilityError,
+    ModelProfile,
+)
+from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag_ai.completion import CompletionModel
+from dlightrag_ai.fingerprints import model_fingerprint
 from dlightrag_ai.media import MAX_DECODE_IMAGE_PIXELS
+from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.tool_model import ToolModel
 from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
@@ -45,23 +54,37 @@ from dlightrag_rag.retrieval import MetadataFilter
 from PIL import Image
 
 from dlightrag.contracts import VisualAssetSize
-from dlightrag.core.agent.orchestrator import AnswerOrchestrator
+from dlightrag.core.agent.orchestrator import (
+    AnswerOrchestrator,
+    research_history_input_measure,
+)
 from dlightrag.core.answer.capability import (
     AnswerImageCapability,
     check_answer_image_capability,
     derive_effective_max_images,
 )
 from dlightrag.core.answer.errors import (
+    AnswerInputOverflowError,
+    AnswerModelCapabilityError,
+    AnswerResourceAdmissionError,
     CurrentImagePayloadError,
+)
+from dlightrag.core.answer.history import (
+    HistoryProjectionOverflowError,
+    HistoryProjectionTarget,
+    project_history,
 )
 from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
-from dlightrag.core.answer.turn import PreparedAnswerTurn
 from dlightrag.core.answer_runs.coordinator import RunSession
 from dlightrag.core.answer_runs.execution import (
     AnswerRunInput,
+    AnswerRunRequest,
     AttachmentReference,
     LinkReference,
+    PinnedModelProfile,
+    build_current_answer_resources,
+    in_memory_attachment_loader,
 )
 from dlightrag.core.answer_runs.models import (
     AgentRunState,
@@ -85,9 +108,18 @@ from dlightrag.core.request.workspaces import (
     resolve_query_workspaces,
     validate_query_workspace_selection,
 )
+from dlightrag.core.resources.models import (
+    ResourceManifestEntry,
+    ResourceRegistryError,
+    TextWindowBudget,
+)
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
-from dlightrag.model_settings import model_settings_for_role, rerank_scoring_model_settings
+from dlightrag.model_settings import (
+    model_profile_for_role,
+    model_settings_for_role,
+    rerank_scoring_model_settings,
+)
 from dlightrag.observability import LangfuseTelemetry
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import safe_source_filename
@@ -97,6 +129,7 @@ from dlightrag.storage.answer_runs import (
     CancellationOutcome,
     PGAnswerRunStore,
     RunCreation,
+    answer_run_request_fingerprint,
     artifact_digest,
 )
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
@@ -104,7 +137,6 @@ from dlightrag.storage.migrations import SchemaValidationError
 from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
-
 _MAX_RETRY_INTERVAL: float = 300.0
 _QUERY_WORKSPACE_MAX_CONCURRENCY = 8
 _SCHEMA_CACHE_MAX_ENTRIES = 128
@@ -126,6 +158,34 @@ class _OrchestratorRun:
     current_image_count: int
     ws_list: list[str]
     registry: ResourceRegistry | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AcceptanceProjection:
+    history: PriorTurns
+    image_descriptions: tuple[str, ...]
+    pinned_models: tuple[PinnedModelProfile, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedAnswerResources:
+    models: _RequestModelContext
+    web_search: ExaSearch | None
+    registry: ResourceRegistry | None
+    resource_tools: list[AgentTool]
+    resource_manifest: tuple[ResourceManifestEntry, ...]
+    current_images: list[dict[str, Any]]
+    current_image_count: int
+    research: bool
+    image_budget: AnswerImageBudget | None
+    query_images: list[dict[str, Any]] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _RequestModelContext:
+    extract: ModelProfile
+    query: ModelProfile
+    vlm: ModelProfile
 
 
 def _exa_contents_text(web_search: ExaSearch) -> Callable[[str], Awaitable[str | None]]:
@@ -253,6 +313,10 @@ class RAGServiceUnavailableError(Exception):
         super().__init__(self.detail)
 
 
+class IncompatibleAnswerRunError(RuntimeError):
+    """An accepted run cannot execute under this binary or endpoint deployment."""
+
+
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:
     from dlightrag_ai.media import image_bytes_to_data_uri, verify_web_image_bytes
 
@@ -288,13 +352,15 @@ class RAGServiceManager:
         # In-flight workspace initializations started when a request resolves its scope.
         self._warmups: set[asyncio.Task[None]] = set()
 
-        self._answer_synthesizer: AnswerSynthesizer | None = None
+        self._answer_synthesizers_by_profile: dict[ModelProfile, AnswerSynthesizer] = {}
         self._answer_model: CompletionModel | None = None
+        self._declared_model_profiles: dict[ModelRole, ModelProfile] = {}
+        self._model_profiles: dict[ModelRole, ModelProfile] = {}
         self._ingest_jobs = IngestJobCoordinator(
             self._get_ingest_service,
             input_root=self._config.input_dir_path,
         )
-        self._retrieval_planner: RetrievalPlanner | None = None
+        self._retrieval_planners_by_profile: dict[ModelProfile, RetrievalPlanner] = {}
         self._planner_model: CompletionModel | None = None
         self._vlm_func: Callable[..., Any] | None = None
         self._vlm_model: CompletionModel | None = None
@@ -329,6 +395,8 @@ class RAGServiceManager:
         from dlightrag.observability import init_tracing
 
         manager = cls(config=config)
+        manager._resolve_model_profiles()
+        manager._validate_startup_model_capabilities()
         init_tracing(manager._config)
 
         # Bind the process-wide domain pool to this service config so the
@@ -341,8 +409,9 @@ class RAGServiceManager:
         default_ws = normalize_workspace(manager._config.workspace)
         default_err: Exception | None = None
         try:
-            await manager._initialize_workspace_registry()
             await manager._initialize_answer_run_store()
+            await manager._validate_active_answer_run_compatibility()
+            await manager._initialize_workspace_registry()
 
             # Bind the retrieval-planner LLM during startup; this does not make a model call.
             manager._get_retrieval_planner()
@@ -360,8 +429,8 @@ class RAGServiceManager:
                 logger.warning(
                     "Failed to warm up default workspace '%s'", default_ws, exc_info=True
                 )
-        except SchemaValidationError:
-            # No process repairs a schema by staying up, so never degrade into it.
+        except SchemaValidationError, IncompatibleAnswerRunError:
+            # Schema/run incompatibility needs operator action; never degrade into it.
             await manager.aclose()
             raise
 
@@ -375,6 +444,59 @@ class RAGServiceManager:
             manager._startup_warnings.append(f"Default workspace init failed: {detail}")
             logger.error("RAG service started in degraded mode: %s", detail)
         return manager
+
+    def _resolve_model_profiles(self) -> None:
+        """Snapshot every reachable role before startup opens external state."""
+        self._declared_model_profiles = {
+            role: model_profile_for_role(self._config, role) for role in MODEL_ROLE_NAMES
+        }
+        self._model_profiles = dict(self._declared_model_profiles)
+
+    def _declared_model_profile(self, role: ModelRole) -> ModelProfile:
+        profile = self._declared_model_profiles.get(role)
+        if profile is None:
+            profile = model_profile_for_role(self._config, role)
+            self._declared_model_profiles[role] = profile
+            self._model_profiles.setdefault(role, profile)
+        return profile
+
+    def _model_profile(self, role: ModelRole) -> ModelProfile:
+        profile = self._model_profiles.get(role)
+        if profile is None:
+            profile = self._declared_model_profile(role)
+            self._model_profiles[role] = profile
+        return profile
+
+    def _request_model_context(
+        self,
+        pinned: Mapping[ModelRole, ModelProfile] | None,
+    ) -> _RequestModelContext:
+        if pinned is not None:
+            return _RequestModelContext(
+                extract=pinned["extract"],
+                query=pinned["query"],
+                vlm=pinned["vlm"],
+            )
+        return _RequestModelContext(
+            extract=self._model_profile("extract"),
+            query=self._model_profile("query"),
+            vlm=self._model_profile("vlm"),
+        )
+
+    def _narrow_role_image_profile(
+        self,
+        role: ModelRole,
+        status: ImageCapabilityStatus,
+    ) -> None:
+        declared = self._declared_model_profile(role)
+        self._model_profiles[role] = replace(
+            declared,
+            supports_images=declared.supports_images and status == "supported",
+        )
+
+    def _validate_startup_model_capabilities(self) -> None:
+        if self._config.web_search.api_key and not self._model_profile("query").supports_tools:
+            raise ModelCapabilityError(role="query", capability="tool calling")
 
     async def _initialize_workspace_registry(self) -> None:
         """Migrate the durable workspace registry, or validate it on a reader."""
@@ -414,6 +536,46 @@ class RAGServiceManager:
         except Exception as exc:
             self._startup_warnings.append("Answer run store unavailable")
             logger.warning("Answer run store initialization failed: %s", exc)
+
+    async def _validate_active_answer_run_compatibility(self) -> None:
+        """Reject a rolling deployment that cannot execute already accepted inputs."""
+        store = self._answer_run_store
+        if store is None:
+            return
+        current_fingerprints = {
+            role: model_fingerprint(model_settings_for_role(self._config, role))
+            for role in MODEL_ROLE_NAMES
+        }
+        for requirement in await store.list_active_run_requirements():
+            try:
+                policy_revision = str(requirement.get("context_policy_revision") or "")
+                raw_pins = requirement.get("pinned_models")
+                if not isinstance(raw_pins, list):
+                    raise ValueError("pinned_models must be an array")
+                pinned_models = tuple(PinnedModelProfile.from_json(item) for item in raw_pins)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise IncompatibleAnswerRunError(
+                    "active answer runs use an incompatible durable input schema; "
+                    "drain or owner-cancel them before deployment"
+                ) from exc
+            if policy_revision != CONTEXT_POLICY_REVISION:
+                raise IncompatibleAnswerRunError(
+                    "active answer runs use another context policy revision; "
+                    "drain or owner-cancel them before deployment"
+                )
+            pinned = {item.role: item for item in pinned_models}
+            if len(pinned_models) != len(MODEL_ROLE_NAMES) or set(pinned) != set(MODEL_ROLE_NAMES):
+                raise IncompatibleAnswerRunError(
+                    "active answer runs do not contain the complete model role set; "
+                    "drain or owner-cancel them before deployment"
+                )
+            if any(
+                pinned[role].fingerprint != current_fingerprints[role] for role in MODEL_ROLE_NAMES
+            ):
+                raise IncompatibleAnswerRunError(
+                    "active answer runs target another model endpoint configuration; "
+                    "drain or owner-cancel them before deployment"
+                )
 
     async def _start_answer_runtime(self) -> None:
         """Begin executing accepted runs once startup validated their schema.
@@ -612,9 +774,7 @@ class RAGServiceManager:
 
     def _cache_answer_image_capability(self, capability: AnswerImageCapability) -> None:
         self._answer_image_capability = capability
-        synthesizer = getattr(self, "_answer_synthesizer", None)
-        if synthesizer is not None:
-            synthesizer.set_image_policy(self._answer_image_policy())
+        self._narrow_role_image_profile("query", capability.status)
 
     async def _maybe_reprobe_answer_image_capability(self) -> None:
         """Lazily re-probe when the cached answer capability is ``unknown``.
@@ -630,6 +790,22 @@ class RAGServiceManager:
             return
         self._cache_answer_image_capability(await self._discover_answer_image_capability())
 
+    async def _confirmed_live_answer_image_context(
+        self,
+        _models: _RequestModelContext,
+    ) -> tuple[_RequestModelContext, AnswerImageCapability | None]:
+        """Refresh and return one internally consistent live image context."""
+        await self._maybe_reprobe_answer_image_capability()
+        refreshed = self._request_model_context(None)
+        return refreshed, self._answer_image_capability
+
+    async def _pinned_answer_image_context(
+        self,
+        models: _RequestModelContext,
+    ) -> tuple[_RequestModelContext, AnswerImageCapability]:
+        """Project the already accepted query capability without a live probe."""
+        return models, self._answer_image_capability_from_profile(models.query)
+
     async def _discover_answer_image_capability(self) -> AnswerImageCapability:
         """Probe ``model_settings_for_role(config, "query")`` and build a capability.
 
@@ -640,11 +816,15 @@ class RAGServiceManager:
         """
         ceiling = int(self._config.answer.max_images)
         cfg = model_settings_for_role(self._config, "query")
-        outcome = (
-            await self._image_capabilities.resolve(cfg)
-            if ceiling > 0
-            else ImageProbeOutcome(status="unsupported", failure_kind="config_disabled")
-        )
+        if ceiling <= 0:
+            outcome = ImageProbeOutcome(status="unsupported", failure_kind="config_disabled")
+        elif not self._declared_model_profile("query").supports_images:
+            outcome = ImageProbeOutcome(
+                status="unsupported",
+                failure_kind="profile_declared_unsupported",
+            )
+        else:
+            outcome = await self._image_capabilities.resolve(cfg)
         return AnswerImageCapability(
             status=outcome.status,
             configured_ceiling=ceiling,
@@ -666,11 +846,17 @@ class RAGServiceManager:
         """
         if int(self._config.answer.max_images) <= 0:
             self._vlm_image_status = "unsupported"
+            self._narrow_role_image_profile("vlm", self._vlm_image_status)
+            return
+        if not self._declared_model_profile("vlm").supports_images:
+            self._vlm_image_status = "unsupported"
+            self._narrow_role_image_profile("vlm", self._vlm_image_status)
             return
         outcome = await self._image_capabilities.resolve(
             model_settings_for_role(self._config, "vlm")
         )
         self._vlm_image_status = outcome.status
+        self._narrow_role_image_profile("vlm", self._vlm_image_status)
 
     async def _maybe_reprobe_vlm_image_capability(self) -> None:
         """Lazily re-probe the VLM role while its capability is still ``unknown``."""
@@ -945,33 +1131,63 @@ class RAGServiceManager:
 
         return {"workspaces": results, "total_errors": total_errors}
 
-    def _get_answer_synthesizer(self) -> AnswerSynthesizer:
+    def _get_answer_synthesizer(
+        self,
+        model_profile: ModelProfile,
+    ) -> AnswerSynthesizer:
         """Lazy-create the AnswerSynthesizer from global config."""
         if self._closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
-        if self._answer_synthesizer is None:
-            synthesizer = AnswerSynthesizer(
-                model_func=None,
-                image_policy=self._answer_image_policy(),
-            )
-            answer_model = CompletionModel(
+        if cached := self._answer_synthesizers_by_profile.get(model_profile):
+            return cached
+        synthesizer = AnswerSynthesizer(
+            model_func=None,
+            image_policy=self._answer_image_policy(model_profile),
+            model_profile=model_profile,
+            context_policy=CONTEXT_POLICY,
+        )
+        if self._answer_model is None:
+            self._answer_model = CompletionModel(
                 model_settings_for_role(self._config, "query"),
                 telemetry=LangfuseTelemetry(),
             )
-            synthesizer.model_func = answer_model
-            self._answer_model = answer_model
-            self._answer_synthesizer = synthesizer
-        return self._answer_synthesizer
+        synthesizer.model_func = self._answer_model
+        self._answer_synthesizers_by_profile[model_profile] = synthesizer
+        return synthesizer
 
-    def _answer_image_policy(self) -> AnswerImagePolicy:
+    def _answer_image_policy(
+        self,
+        profile: ModelProfile,
+    ) -> AnswerImagePolicy:
         """Compose the Answer transport policy for the answer model's own capability."""
-        capability = self._answer_image_capability
-        return self._image_policy(capability.effective_max_images if capability is not None else 0)
+        return self._image_policy(
+            int(self._config.answer.max_images) if profile.supports_images else 0
+        )
 
-    def _vlm_image_policy(self) -> AnswerImagePolicy:
+    def _answer_image_capability_from_profile(
+        self,
+        profile: ModelProfile,
+    ) -> AnswerImageCapability:
+        settings = model_settings_for_role(self._config, "query")
+        ceiling = int(self._config.answer.max_images)
+        status: ImageCapabilityStatus = "supported" if profile.supports_images else "unsupported"
+        return AnswerImageCapability(
+            status=status,
+            configured_ceiling=ceiling,
+            effective_max_images=derive_effective_max_images(status, ceiling),
+            provider=settings.provider,
+            base_url=settings.base_url,
+            model=settings.model,
+            failure_kind=None if profile.supports_images else "pinned_profile_unsupported",
+        )
+
+    def _vlm_image_policy(
+        self,
+        profile: ModelProfile,
+    ) -> AnswerImagePolicy:
         """Compose the same transport policy for the VLM role's own capability."""
         return self._image_policy(
-            derive_effective_max_images(self._vlm_image_status, int(self._config.answer.max_images))
+            int(self._config.answer.max_images) if profile.supports_images else 0
         )
 
     def _image_policy(self, max_images: int) -> AnswerImagePolicy:
@@ -985,7 +1201,6 @@ class RAGServiceManager:
             min_px=answer.image_min_px,
             quality=answer.image_quality,
             min_quality=answer.image_min_quality,
-            context_window_tokens=answer.context_window_tokens,
         )
 
     @staticmethod
@@ -1031,23 +1246,28 @@ class RAGServiceManager:
 
         return _bounded
 
-    def _get_retrieval_planner(self) -> RetrievalPlanner:
+    def _get_retrieval_planner(
+        self,
+        model_profile: ModelProfile | None = None,
+    ) -> RetrievalPlanner:
         """Return the manager-owned RetrievalPlanner, creating it when needed."""
         if self._closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
-        if self._retrieval_planner is None:
-            from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE
-
-            envelope = self._config.answer.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
+        profile = model_profile or self._model_profile("extract")
+        if cached := self._retrieval_planners_by_profile.get(profile):
+            return cached
+        if self._planner_model is None:
             self._planner_model = CompletionModel(
                 model_settings_for_role(self._config, "extract"),
                 telemetry=LangfuseTelemetry(),
             )
-            self._retrieval_planner = RetrievalPlanner(
-                llm_func=self._sem_bound(self._planner_model),
-                input_token_envelope=max(1, envelope),
-            )
-        return self._retrieval_planner
+        planner = RetrievalPlanner(
+            llm_func=self._sem_bound(self._planner_model),
+            model_profile=profile,
+            context_policy=CONTEXT_POLICY,
+        )
+        self._retrieval_planners_by_profile[profile] = planner
+        return planner
 
     def _get_web_search(self) -> ExaSearch | None:
         """Return the manager-owned web search client, or None when unconfigured."""
@@ -1082,10 +1302,11 @@ class RAGServiceManager:
         """
         from dlightrag.core.request.images import QueryImageDescriber
 
+        profile = self._model_profile("vlm")
         return QueryImageDescriber(
             vlm_func=self._get_or_create_vlm_func(),
-            max_images=MAX_QUERY_IMAGES if self._vlm_image_status == "supported" else 0,
-            image_policy=self._vlm_image_policy(),
+            max_images=MAX_QUERY_IMAGES if profile.supports_images else 0,
+            image_policy=self._vlm_image_policy(profile),
         )
 
     def _get_or_create_vlm_func(self) -> Callable[..., Any]:
@@ -1138,11 +1359,13 @@ class RAGServiceManager:
         query: str,
         *,
         text_history: PriorTurns | None,
+        planner: RetrievalPlanner | None = None,
         current_image_descriptions: list[str] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
+        preserve_query: bool | None = None,
     ) -> RetrievalPlan:
         """Plan one retrieval query inside the canonical retrieval operation."""
-        planner = self._get_retrieval_planner()
+        effective_planner = planner or self._get_retrieval_planner()
         from dlightrag.observability import trace_observation
 
         async with trace_observation(
@@ -1155,11 +1378,12 @@ class RAGServiceManager:
             },
         ) as trace:
             schema = await self._get_schema(workspaces)
-            plan = await planner.plan(
+            plan = await effective_planner.plan(
                 query,
                 conversation_history=text_history,
                 schema=schema,
                 current_image_descriptions=current_image_descriptions,
+                preserve_query=preserve_query,
             )
             trace.update(
                 output={
@@ -1230,6 +1454,22 @@ class RAGServiceManager:
         Nothing can warm earlier than this: ``all_workspaces`` is a flag, not a
         list, so which services to open is unknown until the registry answers.
         """
+        resolved = await self._resolve_query_workspace_scope(
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+        )
+        self._start_query_service_warmup(resolved)
+        return resolved
+
+    async def _resolve_query_workspace_scope(
+        self,
+        *,
+        workspace: str | None,
+        workspaces: list[str] | None,
+        all_workspaces: bool,
+    ) -> list[str]:
+        """Resolve the stable public workspace set without starting services."""
         validate_query_workspace_selection(
             all_workspaces=all_workspaces,
             workspace=workspace,
@@ -1243,7 +1483,6 @@ class RAGServiceManager:
             all_workspaces=all_workspaces,
             available_workspaces=available,
         )
-        self._start_query_service_warmup(resolved)
         return resolved
 
     # --- Read operations (single or federated) ---
@@ -1300,6 +1539,8 @@ class RAGServiceManager:
         filters: MetadataFilter | None,
         query_images: list[dict[str, Any]] | None,
         image_descriptions: list[str] | None,
+        preserve_query: bool | None = None,
+        planner: RetrievalPlanner | None = None,
     ) -> RetrievalResult:
         """Plan and execute one retrieval over already-resolved workspaces."""
         requested_top_k = _positive_int_or_none(top_k)
@@ -1337,8 +1578,10 @@ class RAGServiceManager:
                     plan = await self._plan_retrieval(
                         query,
                         text_history=history,
+                        planner=planner,
                         current_image_descriptions=descriptions or None,
                         workspaces=workspaces,
+                        preserve_query=preserve_query,
                     )
                     effective_query = plan.standalone_query
                     effective_filters = filters if filters is not None else plan.metadata_filter
@@ -1378,9 +1621,93 @@ class RAGServiceManager:
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from e
 
+    async def _resolve_answer_resources(
+        self,
+        resources: list[ResourceInput] | None,
+        *,
+        models: _RequestModelContext,
+        text_window_budget: TextWindowBudget,
+        confirm_image_context: Callable[
+            [_RequestModelContext],
+            Awaitable[tuple[_RequestModelContext, AnswerImageCapability | None]],
+        ],
+        fetched_bytes_sink: Callable[[Any], Awaitable[None]] | None = None,
+    ) -> _ResolvedAnswerResources:
+        """Resolve resource capabilities, manifests, tools, and image transport once."""
+        if resources and not models.query.supports_tools:
+            raise AnswerModelCapabilityError()
+        declared_image_count = sum(
+            1
+            for resource in resources or ()
+            if resource.loader is None
+            and (resource.declared_mime or "").lower().startswith("image/")
+        )
+        image_capability: AnswerImageCapability | None = None
+        if declared_image_count:
+            models, image_capability = await confirm_image_context(models)
+            check_answer_image_capability(
+                image_count=declared_image_count,
+                capability=image_capability,
+            )
+        (
+            current_images,
+            remaining_resources,
+            current_image_resources,
+        ) = await self._prepare_current_images(resources)
+        if current_images and not declared_image_count:
+            models, image_capability = await confirm_image_context(models)
+        check_answer_image_capability(
+            image_count=len(current_images),
+            capability=image_capability,
+        )
+
+        web_search = self._get_web_search()
+        registry, resource_tools = self._build_resource_context(
+            remaining_resources,
+            text_window_budget=text_window_budget,
+            web_search=web_search,
+            fetched_bytes_sink=fetched_bytes_sink,
+            vlm_profile=models.vlm,
+        )
+        try:
+            current_image_resource_ids = (
+                tuple(registry.register(resource) for resource in current_image_resources)
+                if registry is not None
+                else ()
+            )
+            resource_manifest = registry.manifest() if registry is not None else ()
+            research = web_search is not None or bool(resource_manifest)
+            image_budget: AnswerImageBudget | None = None
+            query_images: list[dict[str, Any]] | None = current_images or None
+            if research:
+                image_budget = self._answer_image_policy(models.query).new_budget()
+                query_images = (
+                    await self._budget_agent_images(
+                        current_images,
+                        image_budget,
+                        current_image_resource_ids,
+                    )
+                    or None
+                )
+            return _ResolvedAnswerResources(
+                models=models,
+                web_search=web_search,
+                registry=registry,
+                resource_tools=resource_tools,
+                resource_manifest=resource_manifest,
+                current_images=current_images,
+                current_image_count=len(current_images),
+                research=research,
+                image_budget=image_budget,
+                query_images=query_images,
+            )
+        except BaseException:
+            if registry is not None:
+                await registry.aclose()
+            raise
+
     async def _prepare_orchestrated_run(
         self,
-        turn: PreparedAnswerTurn,
         *,
         workspace: str | None,
         workspaces: list[str] | None,
@@ -1390,162 +1717,115 @@ class RAGServiceManager:
         filters: MetadataFilter | None,
         resources: list[ResourceInput] | None,
         fetched_bytes_sink: Callable[[Any], Awaitable[None]] | None = None,
+        pinned_image_descriptions: tuple[str, ...],
+        projected_history: PriorTurns,
+        model_profiles: Mapping[ModelRole, ModelProfile],
     ) -> _OrchestratorRun:
-        """Resolve one answer request into a capability-driven orchestrator."""
+        """Build execution collaborators from one immutable accepted run input."""
+        history = projected_history
+        models = self._request_model_context(model_profiles)
+        query_profile = models.query
+        extract_profile = models.extract
         ws_list = await self._open_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
         )
-        # One window for the whole request: planning and answering must agree on what
-        # the conversation is, or a rewrite can cite a turn the answer never sees.
-        history = PriorTurns(list(turn.text_history)).recent(
-            max_messages=self._config.max_conversation_turns * 2,
-            max_tokens=self._config.max_conversation_tokens,
+        planner = self._get_retrieval_planner(extract_profile)
+        text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(query_profile))
+        resolved = await self._resolve_answer_resources(
+            resources,
+            models=models,
+            text_window_budget=text_window_budget,
+            confirm_image_context=self._pinned_answer_image_context,
+            fetched_bytes_sink=fetched_bytes_sink,
         )
-        declared_image_count = sum(
-            1
-            for resource in resources or ()
-            if resource.loader is None
-            and (resource.declared_mime or "").lower().startswith("image/")
-        )
-        if declared_image_count:
-            await self._maybe_reprobe_answer_image_capability()
-            check_answer_image_capability(
-                image_count=declared_image_count,
-                capability=self._answer_image_capability,
-            )
-        (
-            current_images,
-            remaining_resources,
-            current_image_resources,
-        ) = await self._prepare_current_images(resources)
-        if current_images and not declared_image_count:
-            await self._maybe_reprobe_answer_image_capability()
-        check_answer_image_capability(
-            image_count=len(current_images),
-            capability=self._answer_image_capability,
-        )
+        try:
+            image_descriptions = list(pinned_image_descriptions)
 
-        web_search = self._get_web_search()
-        if resources:
-            await self._maybe_reprobe_vlm_image_capability()
-        registry, resource_tools = self._build_resource_context(
-            remaining_resources, web_search=web_search, fetched_bytes_sink=fetched_bytes_sink
-        )
-        current_image_resource_ids = (
-            tuple(registry.register(resource) for resource in current_image_resources)
-            if registry is not None
-            else ()
-        )
-        resource_manifest = registry.manifest() if registry is not None else ()
-        research = web_search is not None or bool(resource_manifest)
-        image_descriptions: list[str] = []
-        prepared_task: asyncio.Task[list[str]] | None = None
-
-        async def prepare_images_once() -> list[str]:
-            nonlocal prepared_task
-
-            async def prepare() -> list[str]:
-                if not current_images:
-                    return image_descriptions
-                result = await prepare_query_images(
-                    query_images=current_images,
-                    describer=self._query_image_describer(),
+            async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
+                return await self._retrieve(
+                    search_query,
+                    workspaces=ws_list,
+                    history=history,
+                    top_k=top_k,
+                    chunk_top_k=chunk_top_k,
+                    bm25_query=None,
+                    filters=filters,
+                    query_images=resolved.current_images,
+                    image_descriptions=image_descriptions,
+                    preserve_query=True if resolved.research else None,
+                    planner=planner,
                 )
-                image_descriptions[:] = result
-                return image_descriptions
 
-            if prepared_task is None:
-                prepared_task = asyncio.create_task(prepare())
-            return await prepared_task
+            model_func: Callable[..., Any] | None = None
+            stream_model_func: Callable[..., AsyncIterator[str]] | None = None
+            if resolved.research:
+                tool_model = self._get_query_tool_model()
 
-        async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
-            descriptions = await prepare_images_once() if current_images else image_descriptions
-            return await self._retrieve(
-                search_query,
-                workspaces=ws_list,
-                history=None if research else history,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                bm25_query=None,
-                filters=filters,
-                query_images=current_images,
-                image_descriptions=descriptions,
-            )
+                async def _model_func(**kwargs: Any) -> Any:
+                    async with self._direct_llm_sem:
+                        return await tool_model(**kwargs)
 
-        model_func: Callable[..., Any] | None = None
-        stream_model_func: Callable[..., AsyncIterator[str]] | None = None
-        if research:
-            tool_model = self._get_query_tool_model()
-
-            async def _model_func(**kwargs: Any) -> Any:
-                async with self._direct_llm_sem:
-                    return await tool_model(**kwargs)
-
-            def _stream_model_func(**kwargs: Any) -> AsyncIterator[str]:
-                async def _bounded() -> AsyncIterator[str]:
-                    await self._direct_llm_sem.acquire()
-                    inner = tool_model.stream_text(**kwargs)
-                    try:
-                        async for token in inner:
-                            yield token
-                    finally:
+                def _stream_model_func(**kwargs: Any) -> AsyncIterator[str]:
+                    async def _bounded() -> AsyncIterator[str]:
+                        await self._direct_llm_sem.acquire()
+                        inner = tool_model.stream_text(**kwargs)
                         try:
-                            close = getattr(inner, "aclose", None)
-                            if callable(close):
-                                result = close()
-                                if inspect.isawaitable(result):
-                                    await cast(Awaitable[Any], result)
+                            async for token in inner:
+                                yield token
                         finally:
-                            self._direct_llm_sem.release()
+                            try:
+                                close = getattr(inner, "aclose", None)
+                                if callable(close):
+                                    result = close()
+                                    if inspect.isawaitable(result):
+                                        await cast(Awaitable[Any], result)
+                            finally:
+                                self._direct_llm_sem.release()
 
-                return _bounded()
+                    return _bounded()
 
-            model_func = _model_func
-            stream_model_func = _stream_model_func
+                model_func = _model_func
+                stream_model_func = _stream_model_func
 
-        image_budget: AnswerImageBudget | None = None
-        if research:
-            image_budget = self._answer_image_policy().new_budget()
-            query_images = (
-                await self._budget_agent_images(
-                    current_images,
-                    image_budget,
-                    current_image_resource_ids,
-                )
-                or None
+            synthesizer = self._get_answer_synthesizer(query_profile)
+            orchestrator = AnswerOrchestrator(
+                synthesizer=synthesizer,
+                retrieve_knowledge_base=retrieve_knowledge_base,
+                search_web=(
+                    resolved.web_search.search if resolved.web_search is not None else None
+                ),
+                model_func=model_func,
+                stream_model_func=stream_model_func,
+                resource_tools=resolved.resource_tools,
+                resource_manifest=resolved.resource_manifest,
+                register_web_source=(
+                    resolved.registry.register_discovered_link
+                    if resolved.registry is not None and resolved.web_search is not None
+                    else None
+                ),
+                image_budget=resolved.image_budget,
+                text_window_budget=text_window_budget,
+                model_profile=query_profile,
+                context_policy=CONTEXT_POLICY,
+                max_agent_turns=self._config.max_agent_turns,
+                telemetry=LangfuseTelemetry(),
             )
-        else:
-            query_images = current_images or None
 
-        orchestrator = AnswerOrchestrator(
-            synthesizer=self._get_answer_synthesizer(),
-            retrieve_knowledge_base=retrieve_knowledge_base,
-            search_web=web_search.search if web_search is not None else None,
-            model_func=model_func,
-            stream_model_func=stream_model_func,
-            resource_tools=resource_tools,
-            resource_manifest=resource_manifest,
-            register_web_source=(
-                registry.register_discovered_link
-                if registry is not None and web_search is not None
-                else None
-            ),
-            image_budget=image_budget,
-            context_window_tokens=self._config.answer.context_window_tokens,
-            max_agent_turns=self._config.max_agent_turns,
-            telemetry=LangfuseTelemetry(),
-        )
-        return _OrchestratorRun(
-            orchestrator=orchestrator,
-            image_descriptions=image_descriptions,
-            query_images=query_images,
-            history=history,
-            current_image_count=len(current_images),
-            ws_list=ws_list,
-            registry=registry,
-        )
+            return _OrchestratorRun(
+                orchestrator=orchestrator,
+                image_descriptions=image_descriptions,
+                query_images=resolved.query_images,
+                history=history,
+                current_image_count=resolved.current_image_count,
+                ws_list=ws_list,
+                registry=resolved.registry,
+            )
+        except BaseException:
+            if resolved.registry is not None:
+                await resolved.registry.aclose()
+            raise
 
     async def _prepare_current_images(
         self,
@@ -1557,8 +1837,9 @@ class RAGServiceManager:
         (materialized under SSRF revalidation) become internal current-image
         blocks fed to VLM description, direct visual retrieval, and final answer
         transport. Their verified bytes also stay in the request-local registry
-        for focused ``inspect_resource`` calls; a remote image is not fetched
-        twice. Durable lazy resources (prior attachments) and every non-image
+        for focused ``inspect_resource`` calls, so one preparation pass never
+        fetches the same remote image twice. Durable lazy resources (prior
+        attachments) and every non-image
         resource remain lazy. Non-image bytes never enter the image chain.
         """
         if not resources:
@@ -1626,8 +1907,10 @@ class RAGServiceManager:
         self,
         resources: list[ResourceInput] | None,
         *,
+        text_window_budget: TextWindowBudget,
         web_search: ExaSearch | None = None,
         fetched_bytes_sink: Callable[[Any], Awaitable[None]] | None = None,
+        vlm_profile: ModelProfile,
     ) -> tuple[ResourceRegistry | None, list[AgentTool]]:
         """Register request-local resources and their peer tools.
 
@@ -1651,14 +1934,17 @@ class RAGServiceManager:
             url_text_fallback=_exa_contents_text(web_search) if web_search is not None else None,
             fetched_bytes_sink=fetched_bytes_sink,
         )
-        for resource in resources or []:
-            registry.register(resource)
+        try:
+            for resource in resources or []:
+                registry.register(resource)
+        except (ValueError, ResourceRegistryError) as exc:
+            raise AnswerResourceAdmissionError() from exc
 
         # Visual inspection is a VLM-role capability: a text-only answer model
         # must not withdraw it, and a zero effective ceiling leaves no image slot,
         # so an inspector built on that policy could only ever fail.
-        vlm_policy = self._vlm_image_policy()
-        visual_supported = self._vlm_image_status == "supported" and vlm_policy.max_images > 0
+        vlm_policy = self._vlm_image_policy(vlm_profile)
+        visual_supported = vlm_profile.supports_images and vlm_policy.max_images > 0
         inspector: ResourceInspector | None = None
         if visual_supported:
             inspector = ResourceInspector(
@@ -1668,6 +1954,7 @@ class RAGServiceManager:
             )
         tools = build_resource_tools(
             registry,
+            text_window_budget=text_window_budget,
             inspector=inspector,
             visual_supported=visual_supported,
         )
@@ -1764,6 +2051,7 @@ class RAGServiceManager:
         creation = await store.create_run(
             owner_id=owner_id,
             request=request.as_request(),
+            idempotency_fingerprint=request.idempotency_fingerprint,
             idempotency_key=idempotency_key,
             artifacts=artifacts,
             references=references,
@@ -1771,6 +2059,22 @@ class RAGServiceManager:
         if self._answer_coordinator is not None:
             self._answer_coordinator.wake()
         return creation
+
+    async def areplay_answer_run(
+        self,
+        *,
+        owner_id: str,
+        idempotency_key: str,
+        idempotency_fingerprint: str,
+    ) -> AnswerRunRecord | None:
+        """Return an already accepted keyed run without rebuilding resolved input."""
+        store = await self._get_answer_run_store()
+        replay = await store.replay_run(
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            idempotency_fingerprint=idempotency_fingerprint,
+        )
+        return replay.run if replay is not None else None
 
     async def aget_answer_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Read one owned run; unknown and foreign identifiers both return ``None``."""
@@ -1816,15 +2120,13 @@ class RAGServiceManager:
 
         store = await self._get_answer_run_store()
         request = _Input.from_request(session.request)
+        model_profiles = self._validate_pinned_model_profiles(request)
         # Retrieval planning, resource admission, and image description all run
         # before the first retrieval, so the run reports the planning phase the
         # durable contract names rather than opening on `searching`.
         await session.enter_phase("planning")
-        prepared_turn = PreparedAnswerTurn.stateless(
-            request.query, history=[dict(message) for message in request.history]
-        )
+        projected_history = PriorTurns([dict(message) for message in request.history])
         run = await self._prepare_orchestrated_run(
-            prepared_turn,
             workspace=None,
             workspaces=list(request.workspaces) or None,
             all_workspaces=False,
@@ -1835,6 +2137,9 @@ class RAGServiceManager:
                 request, owner_id=session.owner_id, store=store
             ),
             fetched_bytes_sink=_fetched_bytes_sink(session, store),
+            pinned_image_descriptions=request.image_descriptions,
+            projected_history=projected_history,
+            model_profiles=model_profiles,
         )
         stream: AsyncIterator[str] | None = None
         try:
@@ -1936,8 +2241,6 @@ class RAGServiceManager:
         other attachment, including every prior-turn one, stays lazy and is read
         only through resource tools.
         """
-        from dlightrag.core.resources import ResourceInput as _ResourceInput
-
         if not request.links and not request.attachments and not request.history_attachments:
             return None
 
@@ -1956,29 +2259,13 @@ class RAGServiceManager:
 
             return _read
 
-        resources: list[ResourceInput] = [
-            _ResourceInput(filename=link.filename, url=link.url, declared_mime=link.mime_type)
-            for link in request.links
-        ]
-        for attachment in request.attachments:
-            if attachment.mime_type.lower().startswith("image/"):
-                resources.append(
-                    _ResourceInput(
-                        filename=attachment.filename,
-                        declared_mime=attachment.mime_type,
-                        content=await _load(attachment.digest),
-                    )
-                )
-                continue
-            resources.append(
-                _ResourceInput(
-                    filename=attachment.filename,
-                    declared_mime=attachment.mime_type,
-                    loader=_loader(attachment.digest),
-                )
-            )
+        resources = await build_current_answer_resources(
+            links=request.links,
+            attachments=request.attachments,
+            attachment_loaders=[_loader(attachment.digest) for attachment in request.attachments],
+        )
         resources.extend(
-            _ResourceInput(
+            ResourceInput(
                 filename=attachment.filename,
                 declared_mime=attachment.mime_type,
                 loader=_loader(attachment.digest),
@@ -2084,22 +2371,45 @@ class RAGServiceManager:
         ``aget_answer_run``, ``asubscribe_answer_run``, and
         ``acancel_answer_run``.
         """
+        owner = owner_id or DEPLOYMENT_OWNER_ID
+        request = await self._normalized_answer_run_request(
+            query,
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            filters=filters,
+            history=history,
+            semantic_highlights=semantic_highlights,
+            resources=resources,
+        )
+        fingerprint = answer_run_request_fingerprint(request.as_request())
+        if idempotency_key is not None:
+            replay = await self.areplay_answer_run(
+                owner_id=owner,
+                idempotency_key=idempotency_key,
+                idempotency_fingerprint=fingerprint,
+            )
+            if replay is not None:
+                return RunCreation(run=replay, replayed=True)
+        attachment_bytes = _attachment_bytes(resources)
+        acceptance_resources = await build_current_answer_resources(
+            links=request.links,
+            attachments=request.attachments,
+            attachment_loaders=[
+                in_memory_attachment_loader(content) for content in attachment_bytes
+            ],
+        )
         return await self.astart_answer_run(
-            owner_id=owner_id or DEPLOYMENT_OWNER_ID,
-            request=await self._durable_run_input(
-                query,
-                workspace=workspace,
-                workspaces=workspaces,
-                all_workspaces=all_workspaces,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                filters=filters,
-                history=history,
-                semantic_highlights=semantic_highlights,
-                resources=resources,
+            owner_id=owner,
+            request=await self.aprepare_answer_run_input(
+                request,
+                resources=acceptance_resources or None,
+                idempotency_fingerprint=fingerprint,
             ),
             idempotency_key=idempotency_key,
-            attachment_bytes=_attachment_bytes(resources),
+            attachment_bytes=attachment_bytes,
         )
 
     async def aanswer_stream(
@@ -2145,7 +2455,7 @@ class RAGServiceManager:
             async for event in events:
                 yield event
 
-    async def _durable_run_input(
+    async def _normalized_answer_run_request(
         self,
         query: str,
         *,
@@ -2158,9 +2468,9 @@ class RAGServiceManager:
         history: list[dict[str, Any]] | None,
         semantic_highlights: bool,
         resources: list[ResourceInput] | None,
-    ) -> AnswerRunInput:
-        """Normalize one in-process request into an accepted run's immutable input."""
-        ws_list = await self._open_query_workspaces(
+    ) -> AnswerRunRequest:
+        """Normalize one in-process public request without resolved model input."""
+        ws_list = await self._resolve_query_workspace_scope(
             workspace=workspace,
             workspaces=workspaces,
             all_workspaces=all_workspaces,
@@ -2189,7 +2499,7 @@ class RAGServiceManager:
                     byte_size=len(resource.content),
                 )
             )
-        return AnswerRunInput(
+        return AnswerRunRequest(
             query=query,
             workspaces=tuple(ws_list),
             history=tuple(dict(message) for message in history or ()),
@@ -2200,6 +2510,193 @@ class RAGServiceManager:
             links=tuple(links),
             attachments=tuple(attachments),
         )
+
+    async def _project_answer_run_acceptance(
+        self,
+        request: AnswerRunRequest,
+        *,
+        resources: list[ResourceInput] | None,
+    ) -> _AcceptanceProjection:
+        """Resolve the exact shared-history envelopes without building the run rig."""
+        from dlightrag.core.memory.evidence import EvidenceLedger
+        from dlightrag.core.tools import compose_research_tools
+
+        if resources:
+            await self._maybe_reprobe_vlm_image_capability()
+        model_profiles: dict[ModelRole, ModelProfile] = {
+            role: self._model_profile(role) for role in MODEL_ROLE_NAMES
+        }
+        models = self._request_model_context(model_profiles)
+        planner = self._get_retrieval_planner(models.extract)
+        text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(models.query))
+        resolved = await self._resolve_answer_resources(
+            resources,
+            models=models,
+            text_window_budget=text_window_budget,
+            confirm_image_context=self._confirmed_live_answer_image_context,
+        )
+        try:
+            ws_list = await self._open_query_workspaces(
+                workspace=None,
+                workspaces=list(request.workspaces),
+                all_workspaces=False,
+            )
+            models = resolved.models
+            model_profiles["extract"] = models.extract
+            model_profiles["query"] = models.query
+            model_profiles["vlm"] = models.vlm
+            image_descriptions = tuple(
+                await prepare_query_images(
+                    query_images=resolved.current_images,
+                    describer=self._query_image_describer(),
+                )
+                if resolved.current_images
+                else ()
+            )
+            schema = await self._get_schema(ws_list)
+            targets = [
+                HistoryProjectionTarget(
+                    "planner",
+                    models.extract,
+                    planner.history_input_measure(
+                        request.query,
+                        schema=schema,
+                        current_image_descriptions=list(image_descriptions) or None,
+                        preserve_query=True if resolved.research else None,
+                    ),
+                )
+            ]
+            if resolved.research:
+                evidence = EvidenceLedger(image_budget=resolved.image_budget)
+
+                async def unused_retrieve(_query: str) -> RetrievalResult:
+                    raise RuntimeError("acceptance tool definitions are never executed")
+
+                tools, tool_cache = compose_research_tools(
+                    evidence=evidence,
+                    trace={},
+                    retrieve_knowledge_base=unused_retrieve,
+                    search_web=(
+                        resolved.web_search.search if resolved.web_search is not None else None
+                    ),
+                    resource_tools=resolved.resource_tools,
+                    register_web_source=(
+                        resolved.registry.register_discovered_link
+                        if resolved.registry is not None and resolved.web_search is not None
+                        else None
+                    ),
+                )
+                try:
+                    measure = research_history_input_measure(
+                        model_profile=models.query,
+                        context_policy=CONTEXT_POLICY,
+                        query=request.query,
+                        query_images=resolved.query_images,
+                        resource_manifest=resolved.resource_manifest,
+                        image_budget=resolved.image_budget,
+                        tools=tools,
+                        retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
+                    )
+                finally:
+                    await tool_cache.aclose()
+                targets.append(
+                    HistoryProjectionTarget(
+                        "research_seed",
+                        models.query,
+                        measure,
+                        proactive_compaction=True,
+                    )
+                )
+            else:
+                synthesizer = AnswerSynthesizer(
+                    image_policy=self._answer_image_policy(models.query),
+                    model_profile=models.query,
+                    context_policy=CONTEXT_POLICY,
+                    model_func=None,
+                )
+                targets.append(
+                    HistoryProjectionTarget(
+                        "fast_generation",
+                        models.query,
+                        synthesizer.history_input_measure(request.query),
+                    )
+                )
+            try:
+                history = project_history(
+                    [dict(message) for message in request.history],
+                    targets=targets,
+                )
+            except HistoryProjectionOverflowError as exc:
+                raise AnswerInputOverflowError(str(exc)) from exc
+            return _AcceptanceProjection(
+                history=history,
+                image_descriptions=image_descriptions,
+                pinned_models=self._pin_model_profiles(model_profiles),
+            )
+        finally:
+            if resolved.registry is not None:
+                await resolved.registry.aclose()
+
+    async def aprepare_answer_run_input(
+        self,
+        request: AnswerRunRequest,
+        *,
+        resources: list[ResourceInput] | None,
+        idempotency_fingerprint: str,
+    ) -> AnswerRunInput:
+        """Resolve one normalized public request into immutable durable input."""
+        projection = await self._project_answer_run_acceptance(
+            request,
+            resources=resources,
+        )
+        return AnswerRunInput(
+            query=request.query,
+            workspaces=request.workspaces,
+            history=tuple(dict(message) for message in projection.history.messages),
+            top_k=request.top_k,
+            chunk_top_k=request.chunk_top_k,
+            filters=request.filters,
+            semantic_highlights=request.semantic_highlights,
+            links=request.links,
+            attachments=request.attachments,
+            history_attachments=request.history_attachments,
+            pinned_models=projection.pinned_models,
+            context_policy_revision=CONTEXT_POLICY_REVISION,
+            model_catalog_revision=MODEL_CATALOG_REVISION,
+            idempotency_fingerprint=idempotency_fingerprint,
+            image_descriptions=projection.image_descriptions,
+        )
+
+    def _pin_model_profiles(
+        self,
+        profiles: Mapping[ModelRole, ModelProfile],
+    ) -> tuple[PinnedModelProfile, ...]:
+        return tuple(
+            PinnedModelProfile(
+                role=role,
+                fingerprint=model_fingerprint(model_settings_for_role(self._config, role)),
+                profile=profiles[role],
+            )
+            for role in MODEL_ROLE_NAMES
+        )
+
+    def _validate_pinned_model_profiles(
+        self,
+        request: AnswerRunInput,
+    ) -> dict[ModelRole, ModelProfile]:
+        if request.context_policy_revision != CONTEXT_POLICY_REVISION:
+            raise IncompatibleAnswerRunError(
+                "answer run context policy revision does not match this binary; "
+                "drain active runs before deployment"
+            )
+        pinned = {item.role: item for item in request.pinned_models}
+        if len(request.pinned_models) != len(MODEL_ROLE_NAMES) or set(pinned) != set(
+            MODEL_ROLE_NAMES
+        ):
+            raise IncompatibleAnswerRunError(
+                "answer run does not contain the complete pinned model role set"
+            )
+        return {role: pinned[role].profile for role in MODEL_ROLE_NAMES}
 
     # --- Management ---
 
@@ -2269,8 +2766,8 @@ class RAGServiceManager:
         planner_model, self._planner_model = self._planner_model, None
         query_tool_model, self._query_tool_model = self._query_tool_model, None
         web_search, self._web_search = self._web_search, None
-        self._answer_synthesizer = None
-        self._retrieval_planner = None
+        self._answer_synthesizers_by_profile.clear()
+        self._retrieval_planners_by_profile.clear()
 
         for component in (
             query_tool_model,

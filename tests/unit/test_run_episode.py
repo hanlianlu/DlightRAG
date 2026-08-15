@@ -31,7 +31,7 @@ def _exchange(call_id: str, *, reasoning: str) -> list[dict[str, Any]]:
 
 
 def test_a_short_run_replays_every_exchange_in_full() -> None:
-    episode = RunEpisode()
+    episode = RunEpisode(retained_tail_tokens=20_000)
     episode.record(_exchange("first", reasoning="short"))
     episode.record(_exchange("second", reasoning="short"))
 
@@ -42,7 +42,7 @@ def test_a_short_run_replays_every_exchange_in_full() -> None:
 
 
 def test_an_exchange_past_the_recent_budget_keeps_its_call_without_the_reasoning() -> None:
-    episode = RunEpisode()
+    episode = RunEpisode(retained_tail_tokens=20_000)
     episode.record(_exchange("first", reasoning="short"))
     episode.record(_exchange("second", reasoning="n" * 200_000))
 

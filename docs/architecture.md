@@ -116,19 +116,25 @@ visual handle. The control prompt tells the model not to repeat inspection for a
 general description when the current image is already visible.
 
 Full resource bytes never enter model context. Only bounded text windows, capped
-tool observations, and budgeted image blocks do. One `AnswerCapacity` shares the
-configured context window across evidence packing and final answer generation:
-evidence is bounded to a fraction of the window, each tool observation is
-capped, and a fixed final-generation reserve is input-packing headroom, not an
-output cap.
+tool observations, and budgeted image blocks do. Every reachable model endpoint
+has an immutable `ModelProfile`: context window (`C`), optional provider input
+limit (`I`), optional output limit (`O`), and capability flags. Facts resolve by
+normalized provider/model/endpoint identity from an explicit root override, a
+trusted adapter, or the versioned AI catalog; an unknown identity fails closed.
+The revisioned `ContextPolicy` derives one hard input limit
+`L = min(I if known else C, floor(0.85C))`, proactive research compaction at
+`floor(0.85L)`, and output allowance `min(O, C - input)` when `O` is known.
+Evidence, resource windows, and tool observations consume the actual residual
+of the model request rather than independent global token caps.
 
 `RetrievalPlanner` is an internal node of the canonical retrieval operation; the
 answer workflow never creates or injects a plan. It never receives attachment
 bytes, converted attachment text, or resource manifests. Fast answers give
 retrieval the bounded prior turns so the planner can resolve references. Public
-retrieve and research KB tool calls are history-free, so their caller-chosen
-semantic query is preserved while lexical terms, inferred metadata filters, and
-optional current-image hints are derived. Explicit filters and BM25 terms remain
+retrieve calls are history-free. Research KB tool calls receive the one pinned
+history projection, but `preserve_query` keeps their caller-chosen semantic query
+unchanged while lexical terms, inferred metadata filters, and optional
+current-image hints are derived. Explicit filters and BM25 terms remain
 authoritative.
 
 Workspace resolution stays at the manager request boundary. It starts cold

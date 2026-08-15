@@ -32,7 +32,6 @@ def test_answer_image_policy_is_frozen_and_creates_fresh_budgets() -> None:
         min_px=32,
         quality=85,
         min_quality=72,
-        context_window_tokens=260_000,
     )
 
     first = policy.new_budget()

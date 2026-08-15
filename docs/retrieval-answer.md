@@ -292,9 +292,10 @@ picks one of two paths:
   provider-native reasoning so a thinking model resumes its own chain, while
   older exchanges keep only the call and its result, so a later turn still sees
   which angles are spent without paying for the thinking behind them.
-  When a request will not fit, both paths shed the oldest conversation turns
-  first through `PriorTurns`, since those are the only part that can go without
-  losing evidence or the question itself.
+  Before acceptance, one shared projector keeps the newest complete
+  user/assistant pairs that fit every reachable planner and generation
+  envelope. The resulting `PriorTurns` is stored by value and reused unchanged;
+  workers never trim history independently.
   Evidence-producing Web result URLs receive opaque request-local resource ids,
   allowing a later `read_resource` call to deepen a selected source without a
   raw-URL tool.
@@ -317,11 +318,17 @@ exact source/page/sheet/cell locator. Full resource bytes never enter model
 context — only bounded text windows, capped tool observations, and budgeted image
 blocks do.
 
-`AnswerCapacity` shares the configured `answer.context_window_tokens` window
-across evidence packing and final answer generation. Evidence is bounded to 60
-percent of the window, each tool observation is capped at 16,000 tokens, and a
-32,768-token final-generation reserve is input-packing headroom only — it is not
-`max_output_tokens` and never forces an answer of that size.
+Each model call uses the immutable profile pinned for its normalized endpoint
+and the run's pinned context-policy revision. The hard input limit is the lower
+of a published input limit and 85 percent of the physical context window.
+Evidence, resource reads, and parallel tool observations share the request's
+measured residual capacity. Before parallel tools execute, the exact next-control
+residual is divided by the number of calls. A resource read fits its complete
+model-visible result — locator, text, visual handles, and mandatory continuation
+cursor — inside that per-call share before advancing the cursor. When a model
+publishes an output limit, generation is capped by the smaller of that limit and
+the physical context remaining after input. Unknown endpoint capacity fails
+before the run is accepted.
 
 ## Answer Generation
 
@@ -410,8 +417,8 @@ preview, and its text observation remains.
 `/retrieve` and `/answer` both accept an explicit `chunk_top_k` request to
 override the configured chunk/visual candidate budget; otherwise DlightRAG uses
 `config.chunk_top_k`. For `/answer`, retrieval deliberately over-fetches those
-candidates, then the answer stage packs evidence into the shared
-`answer.context_window_tokens` capacity. `chunk_top_k` maps to LightRAG
+candidates, then the answer stage packs evidence into the resolved query
+model's remaining input capacity. `chunk_top_k` maps to LightRAG
 `QueryParam.chunk_top_k`; LightRAG `top_k` remains the separate KG
 entity/relationship breadth. Retrieved
 visual chunks are admitted in reranked order within the answer image
@@ -481,9 +488,11 @@ into workspace documents, never written to LightRAG `full_docs`, `doc_status`,
 chunks, vectors, BM25, LLM cache, or KG rows, and never enter `/retrieve`. A
 request-local `ResourceRegistry` owns every resource for the lifetime of one
 answer: inline bytes stay in memory, HTTPS links are fetched lazily and
-revalidated on every read (HTTPS-only, SSRF guard, per/total byte and pixel
-limits), and full bytes never enter model context — only bounded text windows,
-capped observations, and budgeted image blocks do.
+revalidated on every live read (HTTPS-only, SSRF guard, per/total byte and pixel
+limits). Checkpoint-restored URL bytes already passed that gate and are replayed
+without another network request or DNS lookup. Full bytes never enter model
+context — only bounded text windows, capped observations, and budgeted image
+blocks do.
 
 `read_resource` is deterministic. UTF-8 and CSV text decode directly; HTML, PDF,
 DOCX, PPTX, and XLSX are converted through selected MarkItDown converters with
@@ -492,7 +501,11 @@ OOXML archives pass a central-directory zip-bomb preflight (entry-count,
 per-entry, total-size, and expansion-ratio limits) before any converter opens
 them. Continuation cursors are opaque, request-local tokens bound to a resource
 and focus; they expose no path, offset, or provider locator and never cross
-requests.
+requests. A cursor is single-use. Its compact durable state records the original
+focus-plan budget, current rank position, and absolute character offset; the
+deterministic focus plan is cached in memory and rebuilt once after recovery.
+Changing a later observation budget therefore neither skips nor repeats text,
+and consumed cursors do not accumulate in checkpoints.
 
 `inspect_resource` performs focused visual inspection through the VLM role
 (falling back to the default LLM). Images are bounded through the one canonical

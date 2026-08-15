@@ -22,6 +22,7 @@ from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode, urlsplit
 
 from dlightrag_ai.contracts import AsymmetricMode, ChatProvider, InputModality
+from dlightrag_ai.fingerprints import normalized_endpoint_fingerprint
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -142,6 +143,41 @@ class ModelConfig(BaseModel):
     def validate_structured_output_mode(self) -> Self:
         if self.provider == "anthropic" and self.structured_output == "json_object":
             raise ValueError("Anthropic native structured output requires json_schema")
+        return self
+
+
+class ModelCapacityOverrideConfig(BaseModel):
+    """Explicit capacity and capability facts for one model endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ChatProvider = "openai"
+    model: str
+    base_url: str | None = None
+    context_window_tokens: int = Field(ge=1)
+    max_input_tokens: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    supports_images: bool = False
+    supports_tools: bool = False
+    supports_reasoning: bool = False
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _fold_provider(cls, value: Any) -> Any:
+        return _canonical_provider_name(value)
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str) -> str:
+        model = value.strip()
+        if not model:
+            raise ValueError("model must be non-empty")
+        return model
+
+    @model_validator(mode="after")
+    def _validate_input_limit(self) -> Self:
+        if self.max_input_tokens is not None and self.max_input_tokens > self.context_window_tokens:
+            raise ValueError("max_input_tokens cannot exceed context_window_tokens")
         return self
 
 
@@ -436,11 +472,6 @@ class AnswerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    context_window_tokens: int = Field(
-        default=260_000,
-        ge=1,
-        description="Model context window shared by evidence packing and final answer generation.",
-    )
     max_attachments: int = Field(
         default=6,
         ge=0,
@@ -825,6 +856,7 @@ class DlightragConfig(BaseSettings):
 
     # ===== Model config =====
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    model_capacity_overrides: list[ModelCapacityOverrideConfig] = Field(default_factory=list)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     rerank: RerankConfig = Field(default_factory=RerankConfig)
     parser: ParserConfig = Field(default_factory=ParserConfig)
@@ -836,6 +868,27 @@ class DlightragConfig(BaseSettings):
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
     access_control: AccessControlConfig = Field(default_factory=AccessControlConfig)
+
+    @field_validator("model_capacity_overrides")
+    @classmethod
+    def _reject_duplicate_model_capacity_overrides(
+        cls,
+        overrides: list[ModelCapacityOverrideConfig],
+    ) -> list[ModelCapacityOverrideConfig]:
+        seen: set[tuple[str, str, str | None]] = set()
+        for override in overrides:
+            fingerprint = (
+                override.provider,
+                override.model,
+                normalized_endpoint_fingerprint(override.base_url),
+            )
+            if fingerprint in seen:
+                raise ValueError(
+                    "duplicate model capacity override for "
+                    f"provider={override.provider!r}, model={override.model!r}"
+                )
+            seen.add(fingerprint)
+        return overrides
 
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")
@@ -985,8 +1038,6 @@ class DlightragConfig(BaseSettings):
     max_entity_tokens: int = Field(default=6000, ge=1)
     max_relation_tokens: int = Field(default=8000, ge=1)
     max_total_tokens: int = Field(default=40000, ge=1)
-    max_conversation_turns: int = Field(default=50, ge=0)
-    max_conversation_tokens: int = Field(default=65536, ge=1)
 
     # ===== Knowledge Graph =====
     kg_chunk_pick_method: Literal["VECTOR", "WEIGHT"] = Field(

@@ -16,6 +16,7 @@ from dlightrag.config import (
     LLMConfig,
     LLMRolesConfig,
     MinerUSidecarConfig,
+    ModelCapacityOverrideConfig,
     ModelConfig,
     ParserSidecarsConfig,
     RerankConfig,
@@ -139,6 +140,44 @@ class TestModelConfig:
             ModelConfig(**kwargs)
 
 
+class TestModelCapacityOverrideConfig:
+    def test_accepts_complete_per_model_capacity_facts(self) -> None:
+        override = ModelCapacityOverrideConfig(
+            provider="openai",
+            model="private-model",
+            base_url="http://localhost:8888/v1",
+            context_window_tokens=262_144,
+            max_input_tokens=200_000,
+            max_output_tokens=32_768,
+            supports_images=True,
+            supports_tools=True,
+            supports_reasoning=False,
+        )
+
+        config = _settings_config(model_capacity_overrides=[override])
+
+        assert config.model_capacity_overrides == [override]
+
+    def test_rejects_duplicate_model_fingerprints(self) -> None:
+        override = {
+            "provider": "openai",
+            "model": "private-model",
+            "base_url": "HTTPS://LOCALHOST:443/v1/../v1",
+            "context_window_tokens": 262_144,
+        }
+
+        with pytest.raises(ValidationError, match="duplicate model capacity override"):
+            _settings_config(
+                model_capacity_overrides=[
+                    override,
+                    {
+                        **override,
+                        "base_url": "https://localhost/v1",
+                    },
+                ]
+            )
+
+
 class TestEmbeddingConfig:
     def test_defaults(self):
         cfg = EmbeddingConfig()
@@ -243,7 +282,6 @@ class TestCitationHighlightConfig:
 class TestAnswerConfig:
     def test_defaults_keep_prompt_context_controls(self):
         cfg = AnswerConfig()
-        assert cfg.context_window_tokens == 260_000
         assert cfg.image_max_pixels == 40_000_000
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
@@ -262,7 +300,6 @@ class TestAnswerConfig:
             {"image_max_pixels": 0},
             {"image_min_px": 0},
             {"image_min_quality": 96},
-            {"context_window_tokens": 0},
             {"max_attachments": -1},
             {"max_attachment_bytes": 0},
             {"max_total_attachment_bytes": 0},

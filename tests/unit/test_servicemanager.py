@@ -2,7 +2,6 @@
 """Tests for RAGServiceManager: workspace pool, routing, health tracking."""
 
 import asyncio
-import importlib
 import io
 import json
 import threading
@@ -14,6 +13,9 @@ from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION, ModelCapabilityError, ModelProfile
+from dlightrag_ai.catalog import MODEL_CATALOG_REVISION, UnknownModelProfileError
+from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_rag.retrieval import MetadataFilter
 from PIL import Image
 
@@ -21,19 +23,27 @@ from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
     LLMConfig,
+    ModelCapacityOverrideConfig,
     ModelConfig,
     RerankConfig,
     WebSearchConfig,
     set_config,
 )
+from dlightrag.core.answer_runs.execution import AnswerRunInput, AnswerRunRequest
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
 from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
-from dlightrag.core.resources.models import ResourceInput
+from dlightrag.core.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.base import SourceDocument
+from tests.unit.conftest import answer_model_profile
+
+_TEST_PLANNER_PROFILE = ModelProfile(
+    context_window_tokens=1_200_000,
+    max_input_tokens=1_000_000,
+)
 
 
 def test_manager_applies_product_image_decode_ceiling(test_cfg, monkeypatch) -> None:
@@ -54,6 +64,10 @@ def _png_bytes() -> bytes:
     output = io.BytesIO()
     Image.new("RGB", (24, 24), (20, 80, 160)).save(output, "PNG")
     return output.getvalue()
+
+
+def _text_window_budget() -> TextWindowBudget:
+    return TextWindowBudget(tokens=1_000)
 
 
 class _AttrStream:
@@ -83,6 +97,34 @@ def _scripted_stream(text: str) -> Any:
         return _tokens()
 
     return _stream_text
+
+
+def _synthesizer_mock() -> AsyncMock:
+    engine = AsyncMock()
+    engine.history_input_measure = MagicMock(
+        return_value=lambda messages: (
+            100 + sum(len(str(message.get("content") or "")) for message in messages)
+        )
+    )
+    return engine
+
+
+def _install_answer_synthesizer(
+    manager: RAGServiceManager,
+    synthesizer: Any,
+    profile: ModelProfile | None = None,
+) -> None:
+    manager._answer_synthesizers_by_profile[profile or manager._model_profile("query")] = (
+        synthesizer
+    )
+
+
+def _install_retrieval_planner(
+    manager: RAGServiceManager,
+    planner: RetrievalPlanner,
+    profile: ModelProfile | None = None,
+) -> None:
+    manager._retrieval_planners_by_profile[profile or manager._model_profile("extract")] = planner
 
 
 class _MemoryRunSession:
@@ -142,7 +184,7 @@ async def _durable_answer(manager: Any, query: str, **kwargs: Any) -> RetrievalR
             if resource.content is not None
         }
     )
-    run_input = await manager._durable_run_input(
+    request = await manager._normalized_answer_run_request(
         query,
         workspace=kwargs.pop("workspace", None),
         workspaces=kwargs.pop("workspaces", None),
@@ -153,6 +195,11 @@ async def _durable_answer(manager: Any, query: str, **kwargs: Any) -> RetrievalR
         history=kwargs.pop("history", None),
         semantic_highlights=kwargs.pop("semantic_highlights", False),
         resources=resources,
+    )
+    run_input = await manager.aprepare_answer_run_input(
+        request,
+        resources=resources,
+        idempotency_fingerprint="test-public-input",
     )
     assert not kwargs, f"unexpected answer options: {sorted(kwargs)}"
     stored = await manager._execute_answer_run(_MemoryRunSession(run_input.as_request()))
@@ -204,7 +251,7 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
     planner.plan.return_value = RetrievalPlan(
         standalone_query="standalone",
     )
-    manager._retrieval_planner = planner
+    _install_retrieval_planner(manager, planner)
     manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
     history = PriorTurns([{"role": "user", "content": "Earlier"}])
 
@@ -308,13 +355,16 @@ async def test_query_workspace_warmup_cancels_siblings_on_failure(test_cfg) -> N
 
 async def test_private_generation_helper_hands_prepared_history_to_engine(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
-    engine = AsyncMock()
+    engine = _synthesizer_mock()
     engine.generate_stream.return_value = ({"chunks": []}, _AttrStream(["a"]))
-    manager._answer_synthesizer = engine
+    _install_answer_synthesizer(manager, engine)
     manager._retrieve = AsyncMock(  # type: ignore[method-assign]
         return_value=RetrievalResult(contexts={"chunks": []})
     )
-    history = [{"role": "user", "content": "Earlier"}]
+    history = [
+        {"role": "user", "content": "Earlier"},
+        {"role": "assistant", "content": "Earlier answer"},
+    ]
 
     await _durable_answer(manager, "follow up", workspaces=["default"], history=history)
 
@@ -326,6 +376,17 @@ def test_cfg(tmp_path) -> DlightragConfig:
     cfg = DlightragConfig(
         working_dir=str(tmp_path / "dlightrag_storage"),
         llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
+        model_capacity_overrides=[
+            ModelCapacityOverrideConfig(
+                provider="openai",
+                model="gpt-5.4-mini",
+                context_window_tokens=400_000,
+                max_output_tokens=128_000,
+                supports_images=True,
+                supports_tools=True,
+                supports_reasoning=True,
+            )
+        ],
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -849,12 +910,18 @@ class TestRouting:
         mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
         mock_create.return_value = mock_svc
 
-        mock_engine = AsyncMock()
+        mock_engine = _synthesizer_mock()
         mock_engine.generate_stream.return_value = (mock_contexts, _AttrStream(["a"]))
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_synthesizer = mock_engine
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_answer_synthesizer(manager, mock_engine)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         await _durable_answer(manager, "query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -901,7 +968,13 @@ class TestAnswerViaEngine:
         )
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._retrieval_planner = RetrievalPlanner(llm_func=llm_func)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=llm_func,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
         manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
 
         plan = await manager._plan_retrieval("raw query", text_history=None, workspaces=["ws_a"])
@@ -944,13 +1017,19 @@ class TestAnswerViaEngine:
         mock_svc.aretrieve.return_value = mock_retrieval
         mock_create.return_value = mock_svc
 
-        mock_engine = AsyncMock()
+        mock_engine = _synthesizer_mock()
         answer_text = "Answer [1-1]."
         mock_engine.generate_stream.return_value = (mock_contexts, _AttrStream([answer_text]))
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_synthesizer = mock_engine
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_answer_synthesizer(manager, mock_engine)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         result = await _durable_answer(manager, "what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -1006,12 +1085,18 @@ class TestAnswerViaEngine:
         mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
         mock_create.return_value = mock_svc
 
-        mock_engine = AsyncMock()
+        mock_engine = _synthesizer_mock()
         mock_engine.generate_stream.return_value = (mock_contexts, _AttrStream(["a"]))
 
         manager = RAGServiceManager(config=cfg)
-        manager._answer_synthesizer = mock_engine
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_answer_synthesizer(manager, mock_engine)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         result = await _durable_answer(manager, "query", workspace="ws_a")
 
@@ -1036,12 +1121,18 @@ class TestAnswerViaEngine:
         mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
         mock_create.return_value = mock_svc
 
-        mock_engine = AsyncMock()
+        mock_engine = _synthesizer_mock()
         mock_engine.generate_stream.return_value = (mock_contexts, _AttrStream(["a"]))
 
         manager = RAGServiceManager(config=cfg)
-        manager._answer_synthesizer = mock_engine
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_answer_synthesizer(manager, mock_engine)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         result = await _durable_answer(manager, "query", workspace="ws_a", chunk_top_k=7)
 
@@ -1065,10 +1156,18 @@ class TestAnswerViaEngine:
         service = AsyncMock()
         service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
         manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
-        mock_engine = AsyncMock()
+        mock_engine = _synthesizer_mock()
         mock_engine.generate_stream.return_value = ({"chunks": []}, _AttrStream(["a"]))
-        manager._answer_synthesizer = mock_engine
-        history = [{"role": "user", "content": "Earlier"}]
+        mock_engine.history_input_measure = MagicMock(
+            return_value=lambda messages: (
+                100 + sum(len(str(message.get("content") or "")) for message in messages)
+            )
+        )
+        _install_answer_synthesizer(manager, mock_engine)
+        history = [
+            {"role": "user", "content": "Earlier"},
+            {"role": "assistant", "content": "Earlier answer"},
+        ]
 
         await _durable_answer(manager, "follow up", workspace="ws_a", history=history)
 
@@ -1125,12 +1224,19 @@ class TestAnswerViaEngine:
         )
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_synthesizer = AsyncMock()
-        manager._answer_synthesizer.generate_stream.side_effect = [
+        synthesizer = _synthesizer_mock()
+        synthesizer.generate_stream.side_effect = [
             (mock_contexts, _AttrStream(["Market growth improved [1-1]."])),
             (mock_contexts, _AttrStream(["Market growth improved [1-1]."])),
         ]
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_answer_synthesizer(manager, synthesizer)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         plain = await _durable_answer(manager, "query", workspace="ws_a")
         highlighted = await _durable_answer(
@@ -1164,12 +1270,18 @@ class TestAnswerViaEngine:
         mock_contexts = {"chunks": [{"text": "ctx"}], "entities": [], "relationships": []}
         mock_fed_retrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
 
-        mock_engine = AsyncMock()
+        mock_engine = _synthesizer_mock()
         mock_engine.generate_stream.return_value = (mock_contexts, _AttrStream(["a"]))
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_synthesizer = mock_engine
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_answer_synthesizer(manager, mock_engine)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         result = await _durable_answer(manager, "query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
@@ -1188,13 +1300,19 @@ class TestAnswerViaEngine:
     ) -> None:
         contexts = {"chunks": [], "entities": [], "relationships": []}
         mock_federated.return_value = RetrievalResult(contexts=contexts)
-        engine = AsyncMock()
+        engine = _synthesizer_mock()
         engine.generate_stream.return_value = (contexts, _AttrStream(["answer"]))
         manager = RAGServiceManager(config=test_cfg)
         manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
         manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
-        manager._answer_synthesizer = engine
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_answer_synthesizer(manager, engine)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         result = await _durable_answer(manager, "query", all_workspaces=True)
 
@@ -1205,15 +1323,16 @@ class TestAnswerViaEngine:
     def test_get_answer_synthesizer_lazy_creates(self, test_cfg) -> None:
         """_get_answer_synthesizer() lazily creates an AnswerSynthesizer instance."""
         manager = RAGServiceManager(config=test_cfg)
-        assert manager._answer_synthesizer is None
+        assert manager._answer_synthesizers_by_profile == {}
         with patch(
             "dlightrag.core.servicemanager.CompletionModel",
             return_value=MagicMock(),
         ):
-            engine = manager._get_answer_synthesizer()
+            profile = manager._model_profile("query")
+            engine = manager._get_answer_synthesizer(profile)
             assert engine is not None
             # Second call returns same instance
-            engine2 = manager._get_answer_synthesizer()
+            engine2 = manager._get_answer_synthesizer(profile)
             assert engine2 is engine
 
     def test_answer_synthesizer_failure_never_constructs_provider(self, test_cfg) -> None:
@@ -1227,7 +1346,7 @@ class TestAnswerViaEngine:
             patch("dlightrag.core.servicemanager.CompletionModel") as completion,
             pytest.raises(RuntimeError, match="synthesizer failed"),
         ):
-            manager._get_answer_synthesizer()
+            manager._get_answer_synthesizer(manager._model_profile("query"))
 
         completion.assert_not_called()
 
@@ -1242,17 +1361,42 @@ class TestAnswerViaEngine:
             "dlightrag.core.servicemanager.CompletionModel",
             return_value=MagicMock(),
         ):
-            engine = manager._get_answer_synthesizer()
+            engine = manager._get_answer_synthesizer(manager._model_profile("query"))
 
         policy = engine._image_policy
         assert policy.max_pixels == 123
-        assert policy.context_window_tokens == test_cfg.answer.context_window_tokens
-
+        assert engine._model_profile.context_window_tokens == 400_000
         # One immutable policy, one fresh budget per call -- never shared state.
         first = policy.new_budget()
         first.count = 1
         assert policy.new_budget().count == 0
         assert policy.new_budget().max_pixels == 123
+
+    def test_pinned_wrappers_do_not_replace_live_model_wrappers(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        pinned_query = ModelProfile(
+            context_window_tokens=250_000,
+            max_output_tokens=16_000,
+            supports_tools=True,
+        )
+        pinned_extract = ModelProfile(context_window_tokens=125_000)
+
+        with patch(
+            "dlightrag.core.servicemanager.CompletionModel",
+            return_value=MagicMock(),
+        ):
+            live_query = manager._model_profile("query")
+            live_synthesizer = manager._get_answer_synthesizer(live_query)
+            live_planner = manager._get_retrieval_planner()
+            pinned_synthesizer = manager._get_answer_synthesizer(pinned_query)
+            pinned_planner = manager._get_retrieval_planner(pinned_extract)
+
+        assert pinned_synthesizer is not live_synthesizer
+        assert pinned_planner is not live_planner
+        assert manager._get_answer_synthesizer(live_query) is live_synthesizer
+        assert manager._get_retrieval_planner() is live_planner
+        assert manager._get_answer_synthesizer(pinned_query) is pinned_synthesizer
+        assert manager._get_retrieval_planner(pinned_extract) is pinned_planner
 
     def test_get_retrieval_planner_uses_extract_role_model(self, test_cfg) -> None:
         from dlightrag.model_settings import model_settings_for_role
@@ -1911,7 +2055,176 @@ class TestDegradedMode:
 
         manager = await RAGServiceManager.acreate(config=test_cfg)
 
-        assert manager._retrieval_planner is not None
+        assert manager._retrieval_planners_by_profile
+
+    @pytest.mark.parametrize("role", ["extract", "keyword", "query", "vlm"])
+    async def test_startup_resolves_every_reachable_model_profile(
+        self,
+        role: str,
+        monkeypatch: pytest.MonkeyPatch,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        unknown = ModelConfig(model=f"unknown-{role}", api_key="test")
+        roles = test_cfg.llm.roles.model_copy(update={role: unknown})
+        cfg = test_cfg.model_copy(update={"llm": test_cfg.llm.model_copy(update={"roles": roles})})
+        initialize_registry = AsyncMock()
+        monkeypatch.setattr(
+            RAGServiceManager,
+            "_initialize_workspace_registry",
+            initialize_registry,
+        )
+
+        with pytest.raises(UnknownModelProfileError):
+            await RAGServiceManager.acreate(config=cfg)
+
+        initialize_registry.assert_not_awaited()
+
+
+async def test_keyed_sdk_replay_bypasses_resolved_input_preparation(test_cfg) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    existing = MagicMock(owner_id="owner", run_id="run-1", status="running")
+    manager.areplay_answer_run = AsyncMock(return_value=existing)  # type: ignore[method-assign]
+    manager.aprepare_answer_run_input = AsyncMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("replay must not prepare model input")
+    )
+    manager._start_query_service_warmup = MagicMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("replay must not warm workspaces")
+    )
+
+    creation = await manager.acreate_answer_run(
+        "question",
+        workspaces=["default"],
+        idempotency_key="key-1",
+        owner_id="owner",
+    )
+
+    assert creation.replayed is True
+    assert creation.run is existing
+    manager.aprepare_answer_run_input.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(test_cfg) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    manager._resolve_query_workspace_scope = AsyncMock(  # type: ignore[method-assign]
+        return_value=["default"]
+    )
+    prepared = MagicMock()
+    creation = MagicMock()
+    manager.aprepare_answer_run_input = AsyncMock(  # type: ignore[method-assign]
+        return_value=prepared
+    )
+    manager.astart_answer_run = AsyncMock(return_value=creation)  # type: ignore[method-assign]
+    payload = b"\x89PNG\r\n\x1a\nnot-promoted-without-image-mime"
+
+    result = await manager.acreate_answer_run(
+        "question",
+        resources=[ResourceInput(filename="chart.png", content=payload)],
+    )
+
+    assert result is creation
+    prepare_call = manager.aprepare_answer_run_input.await_args  # type: ignore[attr-defined]
+    assert prepare_call is not None
+    (resource,) = prepare_call.kwargs["resources"]
+    assert resource.declared_mime == "application/octet-stream"
+    assert resource.content is None
+    assert resource.loader is not None
+    assert await resource.loader() == payload
+    start_call = manager.astart_answer_run.await_args  # type: ignore[attr-defined]
+    assert start_call is not None
+    assert start_call.kwargs["request"] is prepared
+    assert start_call.kwargs["attachment_bytes"] == [payload]
+
+    async def test_startup_rejects_web_research_without_query_tool_support(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        profile = test_cfg.model_capacity_overrides[0].model_copy(update={"supports_tools": False})
+        cfg = test_cfg.model_copy(
+            update={
+                "model_capacity_overrides": [profile],
+                "web_search": WebSearchConfig(api_key="k"),
+            }
+        )
+        initialize_registry = AsyncMock()
+        monkeypatch.setattr(
+            RAGServiceManager,
+            "_initialize_workspace_registry",
+            initialize_registry,
+        )
+
+        with pytest.raises(ModelCapabilityError, match="tool calling"):
+            await RAGServiceManager.acreate(config=cfg)
+
+        initialize_registry.assert_not_awaited()
+
+    async def test_startup_aborts_before_workspace_init_for_an_active_old_policy_run(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        seed = RAGServiceManager(config=test_cfg)
+        seed._resolve_model_profiles()
+        profiles: dict[ModelRole, ModelProfile] = {
+            role: seed._model_profile(role) for role in MODEL_ROLE_NAMES
+        }
+        request = AnswerRunInput(
+            query="accepted",
+            pinned_models=seed._pin_model_profiles(profiles),
+            context_policy_revision="old-policy",
+            model_catalog_revision=MODEL_CATALOG_REVISION,
+            idempotency_fingerprint="public-input",
+        )
+        store = AsyncMock()
+        store.list_active_run_requirements.return_value = (
+            {
+                "context_policy_revision": request.context_policy_revision,
+                "pinned_models": [item.as_json() for item in request.pinned_models],
+            },
+        )
+
+        async def initialize_store(manager: RAGServiceManager) -> None:
+            manager._answer_run_store = store
+
+        initialize_registry = AsyncMock()
+        monkeypatch.setattr(
+            RAGServiceManager,
+            "_initialize_answer_run_store",
+            initialize_store,
+        )
+        monkeypatch.setattr(
+            RAGServiceManager,
+            "_initialize_workspace_registry",
+            initialize_registry,
+        )
+
+        with pytest.raises(RuntimeError, match="drain or owner-cancel"):
+            await RAGServiceManager.acreate(config=test_cfg)
+
+        initialize_registry.assert_not_awaited()
+
+    def test_worker_uses_persisted_profiles_when_live_catalog_facts_change(
+        self,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        manager._resolve_model_profiles()
+        profiles: dict[ModelRole, ModelProfile] = {
+            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+        }
+        pinned = manager._pin_model_profiles(profiles)
+        request = AnswerRunInput(
+            query="accepted",
+            pinned_models=pinned,
+            context_policy_revision=CONTEXT_POLICY_REVISION,
+            model_catalog_revision="older-catalog",
+            idempotency_fingerprint="public-input",
+        )
+        manager._model_profiles["query"] = ModelProfile(context_window_tokens=10_000)
+
+        resolved = manager._validate_pinned_model_profiles(request)
+
+        assert resolved == {item.role: item.profile for item in pinned}
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_create_sets_degraded_on_failure(self, mock_create, test_cfg) -> None:
@@ -2078,7 +2391,7 @@ class TestClose:
         for component in (answer_model, planner_model, vlm_model, tool_model, web_search):
             component.aclose.assert_awaited_once()
         with pytest.raises(RAGServiceUnavailableError):
-            manager._get_answer_synthesizer()
+            manager._get_answer_synthesizer(manager._model_profile("query"))
         with pytest.raises(RAGServiceUnavailableError):
             manager._get_retrieval_planner()
         with pytest.raises(RAGServiceUnavailableError):
@@ -2173,7 +2486,13 @@ class TestPlannerSchemaScope:
         )
 
         llm = AsyncMock(return_value='{"standalone_query": "q", "filters": {}}')
-        manager._retrieval_planner = RetrievalPlanner(llm_func=llm)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=llm,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
 
         await manager._plan_retrieval("q", text_history=None, workspaces=["reports"])
         await manager._plan_retrieval("q", text_history=None, workspaces=["legal"])
@@ -2340,18 +2659,39 @@ class TestExaContentsFallback:
         resources = [ResourceInput(content=b"payload")]
 
         registry, _tools = manager._build_resource_context(
-            resources, web_search=manager._get_web_search()
+            resources,
+            text_window_budget=_text_window_budget(),
+            web_search=manager._get_web_search(),
+            vlm_profile=manager._model_profile("vlm"),
         )
         assert registry is not None
         assert registry._url_text_fallback is not None
 
         plain = RAGServiceManager(config=test_cfg)
-        registry2, _t2 = plain._build_resource_context(resources, web_search=None)
+        registry2, _t2 = plain._build_resource_context(
+            resources,
+            text_window_budget=_text_window_budget(),
+            web_search=None,
+            vlm_profile=plain._model_profile("vlm"),
+        )
         assert registry2 is not None
         assert registry2._url_text_fallback is None
 
 
 class TestAgenticAnswerCapability:
+    def test_private_host_resource_link_is_an_answer_input_error(self, test_cfg) -> None:
+        from dlightrag.core.answer.errors import AnswerResourceAdmissionError
+
+        manager = RAGServiceManager(config=test_cfg)
+
+        with pytest.raises(AnswerResourceAdmissionError):
+            manager._build_resource_context(
+                [ResourceInput(url="https://127.0.0.1/private.pdf")],
+                text_window_budget=_text_window_budget(),
+                web_search=None,
+                vlm_profile=manager._model_profile("vlm"),
+            )
+
     async def test_without_exa_fast_path_never_builds_a_tool_model(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2361,14 +2701,40 @@ class TestAgenticAnswerCapability:
         manager._retrieve = AsyncMock(  # type: ignore[method-assign]
             return_value=RetrievalResult(contexts={"chunks": []})
         )
-        engine = AsyncMock()
+        engine = _synthesizer_mock()
         engine.generate_stream.return_value = ({"chunks": []}, _AttrStream(["a"]))
-        manager._answer_synthesizer = engine
+        _install_answer_synthesizer(manager, engine)
 
         await _durable_answer(manager, "q", workspace="alpha")
 
         # No Exa and no resources means the fast path -- no control tool model.
         create.assert_not_called()
+
+    async def test_resources_fail_before_preparation_without_query_tool_support(
+        self,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        from dlightrag.core.answer.errors import AnswerModelCapabilityError
+
+        profile = test_cfg.model_capacity_overrides[0].model_copy(update={"supports_tools": False})
+        cfg = test_cfg.model_copy(update={"model_capacity_overrides": [profile]})
+        manager = RAGServiceManager(config=cfg)
+        manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("workspace initialization is unreachable")
+        )
+        manager._prepare_current_images = AsyncMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("resource preparation is unreachable")
+        )
+
+        with pytest.raises(AnswerModelCapabilityError, match="cannot use the tools"):
+            await manager.aprepare_answer_run_input(
+                AnswerRunRequest(query="question", workspaces=("alpha",)),
+                resources=[ResourceInput(filename="notes.txt", content=b"notes")],
+                idempotency_fingerprint="public-input",
+            )
+
+        manager._prepare_current_images.assert_not_awaited()
+        manager._open_query_workspaces.assert_not_awaited()
 
     def test_with_exa_one_tool_model_is_shared(self, test_cfg, monkeypatch) -> None:
         from dlightrag.model_settings import model_settings_for_role
@@ -2422,7 +2788,9 @@ class TestAgenticAnswerCapability:
         describer = manager._query_image_describer()
         registry, _tools = manager._build_resource_context(
             [ResourceInput(content=b"payload")],
+            text_window_budget=_text_window_budget(),
             web_search=None,
+            vlm_profile=manager._model_profile("vlm"),
         )
         await manager.aclose()
 
@@ -2476,7 +2844,7 @@ class TestAgenticAnswerCapability:
             model="vision-test",
             failure_kind=None,
         )
-        budget = manager._answer_image_policy().new_budget()
+        budget = manager._answer_image_policy(manager._model_profile("query")).new_budget()
         add_user_image = budget.add_user_image
 
         def capture_budget(value, *, label):
@@ -2498,7 +2866,8 @@ class TestAgenticAnswerCapability:
     ) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        manager._answer_synthesizer = MagicMock()
+        synthesizer = MagicMock()
+        _install_answer_synthesizer(manager, synthesizer)
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
@@ -2513,7 +2882,7 @@ class TestAgenticAnswerCapability:
         assert {tool.name for tool in init["resource_tools"]} >= {"read_resource"}
         assert callable(init["register_web_source"])
         assert "answer_stream" in _CapturingOrchestrator.last
-        manager._answer_synthesizer.generate.assert_not_called()
+        synthesizer.generate.assert_not_called()
 
     async def test_image_attachment_without_exa_keeps_agentic_inspection(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
@@ -2531,7 +2900,7 @@ class TestAgenticAnswerCapability:
             failure_kind=None,
         )
         manager._vlm_image_status = "supported"
-        manager._answer_synthesizer = MagicMock()
+        _install_answer_synthesizer(manager, MagicMock())
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.CompletionModel",
             MagicMock(return_value=AsyncMock(return_value="visual evidence")),
@@ -2588,7 +2957,9 @@ class TestAgenticAnswerCapability:
 
         registry, tools = manager._build_resource_context(
             [ResourceInput(filename="chart.png", content=_png_bytes(), declared_mime="image/png")],
+            text_window_budget=_text_window_budget(),
             web_search=None,
+            vlm_profile=manager._model_profile("vlm"),
         )
 
         # A zero ceiling means no image block can ever be sent, so an inspector
@@ -2606,7 +2977,13 @@ class TestAgenticAnswerCapability:
         service = AsyncMock()
         service.aretrieve.return_value = RetrievalResult()
         manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
-        manager._retrieval_planner = RetrievalPlanner(llm_func=None)
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(
+                llm_func=None,
+                model_profile=_TEST_PLANNER_PROFILE,
+            ),
+        )
         manager._query_tool_model = AsyncMock()
         manager._web_search = AsyncMock()
 
@@ -2621,15 +2998,15 @@ class TestAgenticAnswerCapability:
     ) -> None:
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        manager._answer_synthesizer = MagicMock()
+        _install_answer_synthesizer(manager, MagicMock())
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
-        answer_turn = importlib.import_module("dlightrag.core.answer.turn")
-        turn = answer_turn.PreparedAnswerTurn.stateless("question")
+        profiles: dict[ModelRole, ModelProfile] = {
+            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+        }
 
         await manager._prepare_orchestrated_run(
-            turn,
             workspace="alpha",
             workspaces=None,
             all_workspaces=False,
@@ -2637,9 +3014,171 @@ class TestAgenticAnswerCapability:
             chunk_top_k=None,
             filters=None,
             resources=None,
+            pinned_image_descriptions=(),
+            projected_history=PriorTurns(),
+            model_profiles=profiles,
         )
 
         assert _CapturingOrchestrator.last["init"]["search_web"] is not None
+
+    async def test_prepared_run_does_not_reproject_persisted_history(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        _install_answer_synthesizer(manager, MagicMock())
+        manager._get_schema = AsyncMock(side_effect=AssertionError("schema lookup is unreachable"))
+        monkeypatch.setattr(
+            "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
+        )
+        monkeypatch.setattr(
+            "dlightrag.core.servicemanager.project_history",
+            MagicMock(side_effect=AssertionError("history projection is unreachable")),
+        )
+        projected = PriorTurns(
+            [
+                {"role": "user", "content": "persisted question"},
+                {"role": "assistant", "content": "persisted answer"},
+            ]
+        )
+        profiles: dict[ModelRole, ModelProfile] = {
+            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+        }
+
+        run = await manager._prepare_orchestrated_run(
+            workspace="alpha",
+            workspaces=None,
+            all_workspaces=False,
+            top_k=None,
+            chunk_top_k=None,
+            filters=None,
+            resources=None,
+            pinned_image_descriptions=(),
+            projected_history=projected,
+            model_profiles=profiles,
+        )
+
+        assert run.history is projected
+
+    async def test_acceptance_projection_does_not_build_the_execution_rig(
+        self,
+        test_cfg,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
+        manager = RAGServiceManager(config=cfg)
+        manager._open_query_workspaces = AsyncMock(return_value=["alpha"])  # type: ignore[method-assign]
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
+        manager._web_search = AsyncMock()
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(llm_func=None, model_profile=_TEST_PLANNER_PROFILE),
+        )
+        monkeypatch.setattr(
+            "dlightrag.core.servicemanager.AnswerOrchestrator",
+            MagicMock(side_effect=AssertionError("orchestrator is execution-only")),
+        )
+        monkeypatch.setattr(
+            "dlightrag.core.servicemanager.ToolModel",
+            MagicMock(side_effect=AssertionError("tool model is execution-only")),
+        )
+
+        prepared = await manager.aprepare_answer_run_input(
+            AnswerRunRequest(query="question", workspaces=("alpha",)),
+            resources=None,
+            idempotency_fingerprint="public-input",
+        )
+
+        assert prepared.idempotency_fingerprint == "public-input"
+
+    async def test_acceptance_closes_resources_when_workspace_resolution_fails(
+        self,
+        test_cfg,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        registry = AsyncMock()
+        manager._resolve_answer_resources = AsyncMock(  # type: ignore[method-assign]
+            return_value=SimpleNamespace(registry=registry)
+        )
+        manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RAGServiceUnavailableError("database unavailable")
+        )
+
+        with pytest.raises(RAGServiceUnavailableError, match="database unavailable"):
+            await manager._project_answer_run_acceptance(
+                AnswerRunRequest(query="question", workspaces=("alpha",)),
+                resources=None,
+            )
+
+        registry.aclose.assert_awaited_once()
+
+    async def test_run_preparation_closes_resources_before_ownership_transfer(
+        self,
+        test_cfg,
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        manager._open_query_workspaces = AsyncMock(return_value=["alpha"])  # type: ignore[method-assign]
+        registry = AsyncMock()
+        manager._resolve_answer_resources = AsyncMock(  # type: ignore[method-assign]
+            return_value=SimpleNamespace(registry=registry, research=True)
+        )
+        manager._get_query_tool_model = MagicMock(  # type: ignore[method-assign]
+            side_effect=RAGServiceUnavailableError("manager closed")
+        )
+        profiles: dict[ModelRole, ModelProfile] = {
+            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+        }
+
+        with pytest.raises(RAGServiceUnavailableError, match="manager closed"):
+            await manager._prepare_orchestrated_run(
+                workspace="alpha",
+                workspaces=None,
+                all_workspaces=False,
+                top_k=None,
+                chunk_top_k=None,
+                filters=None,
+                resources=None,
+                pinned_image_descriptions=(),
+                projected_history=PriorTurns(),
+                model_profiles=profiles,
+            )
+
+        registry.aclose.assert_awaited_once()
+
+    async def test_acceptance_pins_the_profile_snapshot_it_projected(
+        self,
+        test_cfg,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        manager._open_query_workspaces = AsyncMock(return_value=["alpha"])  # type: ignore[method-assign]
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
+        _install_retrieval_planner(
+            manager,
+            RetrievalPlanner(llm_func=None, model_profile=_TEST_PLANNER_PROFILE),
+        )
+        project = manager._project_answer_run_acceptance
+
+        async def project_then_narrow(*args: Any, **kwargs: Any):
+            projection = await project(*args, **kwargs)
+            manager._model_profiles["query"] = ModelProfile(
+                context_window_tokens=10_000,
+                supports_images=False,
+            )
+            return projection
+
+        monkeypatch.setattr(manager, "_project_answer_run_acceptance", project_then_narrow)
+
+        prepared = await manager.aprepare_answer_run_input(
+            AnswerRunRequest(query="question", workspaces=("alpha",)),
+            resources=None,
+            idempotency_fingerprint="public-input",
+        )
+
+        query_pin = next(item for item in prepared.pinned_models if item.role == "query")
+        assert query_pin.profile.context_window_tokens == 400_000
+        assert query_pin.profile.supports_images is True
 
     async def test_agentic_kb_tool_plans_the_agent_query_lazily(self, test_cfg) -> None:
         from dlightrag_ai.messages import AssistantTurn, ToolCall
@@ -2673,9 +3212,13 @@ class TestAgenticAnswerCapability:
         model.complete_text = AsyncMock(return_value="Answer.")
         model.stream_text = _scripted_stream("Answer.")
         manager._query_tool_model = model
-        manager._answer_synthesizer = AnswerSynthesizer(
-            image_policy=manager._answer_image_policy(),
-            model_func=None,
+        _install_answer_synthesizer(
+            manager,
+            AnswerSynthesizer(
+                image_policy=manager._answer_image_policy(answer_model_profile()),
+                model_profile=answer_model_profile(),
+                model_func=None,
+            ),
         )
 
         await _durable_answer(
@@ -2691,7 +3234,11 @@ class TestAgenticAnswerCapability:
         retrieve_call = manager._retrieve.await_args  # type: ignore[attr-defined]
         assert retrieve_call is not None
         assert retrieve_call.args[0] == "agent chosen terms"
-        assert retrieve_call.kwargs["history"] is None
+        assert retrieve_call.kwargs["history"].messages == [
+            {"role": "user", "content": "Earlier context"},
+            {"role": "assistant", "content": "Earlier answer"},
+        ]
+        assert retrieve_call.kwargs["preserve_query"] is True
         assert "plan" not in retrieve_call.kwargs
 
     async def test_agentic_kb_searches_describe_current_images_once(self, test_cfg) -> None:
@@ -2764,9 +3311,13 @@ class TestAgenticAnswerCapability:
         model.complete_text = AsyncMock(return_value="Answer [1-1].")
         model.stream_text = _scripted_stream("Answer [1-1].")
         manager._query_tool_model = model
-        manager._answer_synthesizer = AnswerSynthesizer(
-            image_policy=manager._answer_image_policy(),
-            model_func=None,
+        _install_answer_synthesizer(
+            manager,
+            AnswerSynthesizer(
+                image_policy=manager._answer_image_policy(answer_model_profile()),
+                model_profile=answer_model_profile(),
+                model_func=None,
+            ),
         )
 
         await _durable_answer(
@@ -2785,7 +3336,8 @@ class TestAgenticAnswerCapability:
         describer.describe.assert_awaited_once()
         assert manager._retrieve.await_count == 2  # type: ignore[attr-defined]
         for call in manager._retrieve.await_args_list:  # type: ignore[attr-defined]
-            assert call.kwargs["history"] is None
+            assert call.kwargs["history"].messages == []
+            assert call.kwargs["preserve_query"] is True
             assert call.kwargs["image_descriptions"] == ["Image 1: chart"]
 
     async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
@@ -2863,8 +3415,13 @@ class TestAgenticAnswerCapability:
         model.stream_text = _scripted_stream("Answer [1-1][2-1].")
         manager._query_tool_model = model
         # A real synthesizer owns the tools-disabled final call for research too.
-        manager._answer_synthesizer = AnswerSynthesizer(
-            image_policy=manager._answer_image_policy(), model_func=None
+        _install_answer_synthesizer(
+            manager,
+            AnswerSynthesizer(
+                image_policy=manager._answer_image_policy(answer_model_profile()),
+                model_profile=answer_model_profile(),
+                model_func=None,
+            ),
         )
 
         result = await _durable_answer(manager, "What about it?", workspace="alpha")
@@ -2875,6 +3432,7 @@ class TestAgenticAnswerCapability:
         retrieve_call = manager._retrieve.await_args  # type: ignore[attr-defined]
         assert retrieve_call is not None
         assert retrieve_call.args[0] == "inflation 2026"
-        assert retrieve_call.kwargs["history"] is None
+        assert retrieve_call.kwargs["history"].messages == []
+        assert retrieve_call.kwargs["preserve_query"] is True
         assert "plan" not in retrieve_call.kwargs
         web.search.assert_awaited_once_with("inflation 2026")

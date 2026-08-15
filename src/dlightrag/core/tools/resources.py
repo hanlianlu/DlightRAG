@@ -15,11 +15,13 @@ from typing import cast
 from dlightrag_agent.tools import AgentTool, ToolResult
 from pydantic import BaseModel, ConfigDict, Field
 
+from dlightrag.core.resources.formatting import (
+    format_resource_read,
+    resource_read_continuation,
+)
 from dlightrag.core.resources.models import (
-    ResourceReadResult,
     ResourceRegistryError,
-    TextWindowLocator,
-    VisualHandle,
+    TextWindowBudget,
 )
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.resources.visual import (
@@ -29,7 +31,7 @@ from dlightrag.core.resources.visual import (
 )
 
 _READ_DESCRIPTION = (
-    "Read bounded text (at most 16K tokens) from a registered resource. An "
+    "Read bounded text from a registered resource. An "
     "optional focus reranks the resource's windows so the most relevant one is "
     "returned first; pass the returned cursor to continue with that same focus. The result "
     "includes a structural locator, the text, any inspectable visual handles, and "
@@ -80,23 +82,30 @@ class _InspectResourceArgs(BaseModel):
     )
 
 
-def _read_resource_tool(registry: ResourceRegistry) -> AgentTool:
+def _read_resource_tool(
+    registry: ResourceRegistry,
+    text_window_budget: TextWindowBudget,
+) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         read_args = cast(_ReadResourceArgs, args)
         try:
             result = await registry.read(
-                read_args.resource_id, focus=read_args.focus, cursor=read_args.cursor
+                read_args.resource_id,
+                max_window_tokens=text_window_budget.tokens,
+                focus=read_args.focus,
+                cursor=read_args.cursor,
             )
         except ResourceRegistryError:
             raise
         except Exception as exc:
             raise ResourceRegistryError("resource read failed") from exc
         return ToolResult(
-            content=_format_read(result),
+            content=format_resource_read(result),
             details={
                 "resource_id": result.resource_id,
                 **registry.evidence_source(result.resource_id),
             },
+            protected_suffix=resource_read_continuation(result),
         )
 
     return AgentTool(
@@ -127,6 +136,7 @@ def _inspect_resource_tool(inspector: ResourceInspector) -> AgentTool:
                 "resource_id": result.resource_id,
                 **inspector.evidence_source(result.resource_id),
             },
+            protected_suffix=_inspection_continuation(result),
         )
 
     return AgentTool(
@@ -140,45 +150,28 @@ def _inspect_resource_tool(inspector: ResourceInspector) -> AgentTool:
 def build_resource_tools(
     registry: ResourceRegistry,
     *,
+    text_window_budget: TextWindowBudget,
     inspector: ResourceInspector | None = None,
     visual_supported: bool = False,
 ) -> list[AgentTool]:
     """Return the resource peer tools; inspect only for a verified capability."""
-    tools = [_read_resource_tool(registry)]
+    tools = [_read_resource_tool(registry, text_window_budget)]
     if inspector is not None and visual_supported:
         tools.append(_inspect_resource_tool(inspector))
     return tools
 
 
-def _format_read(result: ResourceReadResult) -> str:
-    parts: list[str] = []
-    if result.locator is not None:
-        parts.append(f"[{_describe_text_locator(result.locator)}]")
-    parts.append(result.content)
-    if result.visual_handles:
-        parts.append(f"[visual handles: {_describe_handles(result.visual_handles)}]")
-    if result.has_more and result.next_cursor:
-        parts.append(f"[more text available; cursor={result.next_cursor}]")
-    return "\n".join(parts)
-
-
-def _describe_text_locator(locator: TextWindowLocator) -> str:
-    if locator.char_start is not None:
-        return f"lines {locator.start}-{locator.end}, chars {locator.char_start}-{locator.char_end}"
-    return f"lines {locator.start}-{locator.end}"
-
-
-def _describe_handles(handles: tuple[VisualHandle, ...]) -> str:
-    return ", ".join(
-        handle.handle_id + (f" ({handle.label})" if handle.label else "") for handle in handles
-    )
-
-
 def _format_inspection(result: ResourceInspectionResult) -> str:
     parts = [f"[derived_by_vlm | {_describe_inspection_locator(result.locator)}]", result.content]
-    if result.has_more and result.next_cursor:
-        parts.append(f"[more pages; cursor={result.next_cursor}]")
+    if continuation := _inspection_continuation(result):
+        parts.append(continuation)
     return "\n".join(parts)
+
+
+def _inspection_continuation(result: ResourceInspectionResult) -> str:
+    if result.has_more and result.next_cursor:
+        return f"[more pages; cursor={result.next_cursor}]"
+    return ""
 
 
 def _describe_inspection_locator(locator: InspectionLocator) -> str:

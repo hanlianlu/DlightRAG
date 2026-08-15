@@ -1,0 +1,44 @@
+{
+  "revision": "2026-08-14",
+  "models": [
+    {
+      "provider": "openai",
+      "model": "xiaomi/mimo-v2.5",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 1050000,
+        "max_input_tokens": null,
+        "max_output_tokens": 131072,
+        "supports_images": true,
+        "supports_tools": true,
+        "supports_reasoning": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "z-ai/glm-5.2",
+      "base_url": "https://openrouter.ai/api/v1",
+      "profile": {
+        "context_window_tokens": 1048576,
+        "max_input_tokens": null,
+        "max_output_tokens": 262144,
+        "supports_images": false,
+        "supports_tools": true,
+        "supports_reasoning": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com",
+      "profile": {
+        "context_window_tokens": 1048576,
+        "max_input_tokens": null,
+        "max_output_tokens": 393216,
+        "supports_images": false,
+        "supports_tools": true,
+        "supports_reasoning": true
+      }
+    }
+  ]
+}

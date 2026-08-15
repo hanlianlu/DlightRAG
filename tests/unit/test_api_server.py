@@ -28,6 +28,7 @@ from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
 from dlightrag.storage.answer_runs import AnswerRunRecord, RunCreation
+from tests.unit.conftest import prepare_test_answer_run_input
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -165,6 +166,7 @@ def mock_manager(mock_service, test_config):
     manager.astart_answer_run = AsyncMock(
         return_value=RunCreation(run=_queued_run_record(), replayed=False)
     )
+    manager.aprepare_answer_run_input = AsyncMock(side_effect=prepare_test_answer_run_input)
     manager.aget_answer_run = AsyncMock(return_value=_queued_run_record())
     manager.alist_ingested_files = mock_service.alist_ingested_files
     manager.adelete_files = mock_service.adelete_files

@@ -33,7 +33,8 @@ def _make_manager() -> RAGServiceManager:
     manager._degraded = False
     manager._startup_warnings = []
     manager._backoff = {}
-    manager._answer_synthesizer = None
+    manager._answer_synthesizers_by_profile = {}
+    manager._retrieval_planners_by_profile = {}
     manager._ingest_jobs = IngestJobCoordinator(
         lambda workspace: manager._get_service(workspace),
         input_root=config.input_dir_path,

@@ -4,19 +4,23 @@
 from typing import Any
 
 import pytest
+from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
+from dlightrag_ai.tokens import estimate_messages_tokens
 
 from dlightrag.core.agent.context import ContextAssembler
-from dlightrag.core.answer.capacity import AnswerCapacity
+from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
+from dlightrag.prompts import CONTROL_TURN_INSTRUCTION
 
 _WINDOW = 80_000
+_RETAINED_TAIL = 13_600
 
 
 def _assembler(history: list[dict[str, Any]]) -> ContextAssembler:
     return ContextAssembler(
-        AnswerCapacity(_WINDOW),
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
         query="What changed?",
         history=PriorTurns(history),
         query_images=None,
@@ -55,24 +59,144 @@ def _ledger(passages: int, *, chars: int = 2_000) -> EvidenceLedger:
     return evidence
 
 
-async def test_a_long_conversation_sheds_turns_instead_of_overflowing() -> None:
+async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
     history = _long_history(40)
-    messages = await _assembler(history).control_turn(evidence=_ledger(0), episode=RunEpisode())
 
-    replayed = [message for message in messages if message["role"] in {"user", "assistant"}]
-    assert len(replayed) < len(history)
+    with pytest.raises(AnswerInputOverflowError, match="proactive compaction threshold"):
+        await _assembler(history).control_turn(
+            evidence=_ledger(0),
+            episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+            tool_schema_tokens=0,
+        )
 
 
-async def test_evidence_keeps_its_share_when_the_conversation_is_long() -> None:
+async def test_evidence_uses_the_residual_after_pinned_conversation_history() -> None:
     evidence = _ledger(5)
-    messages = await _assembler(_long_history(40)).control_turn(
-        evidence=evidence, episode=RunEpisode()
+    messages = await _assembler(_long_history(25)).control_turn(
+        evidence=evidence,
+        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=0,
     )
 
     packed = str(messages[-1])
-    # Old chat turns go first: a long conversation must not squeeze evidence out of the window.
+    # Accepted history stays pinned; evidence consumes the model residual.
     assert "passage 4" in packed
     assert "Knowledge-base evidence" in packed
+
+
+async def test_control_evidence_and_tool_schemas_stop_at_compaction_threshold() -> None:
+    assembler = _assembler([])
+    tool_schema_tokens = 5_000
+
+    messages = await assembler.control_turn(
+        evidence=_ledger(100, chars=4_000),
+        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=tool_schema_tokens,
+    )
+
+    used = estimate_messages_tokens(messages) + tool_schema_tokens
+    profile = ModelProfile(context_window_tokens=_WINDOW)
+    assert used <= CONTEXT_POLICY.compaction_trigger(profile)
+    assert CONTEXT_POLICY.hard_input_limit(profile) - used > 0
+
+
+def test_control_output_allowance_preserves_tool_observation_headroom() -> None:
+    profile = ModelProfile(
+        context_window_tokens=100_000,
+        max_output_tokens=80_000,
+    )
+    assembler = ContextAssembler(
+        model_profile=profile,
+        query="What changed?",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+    )
+    tool_schema_tokens = 2_000
+    messages = [{"role": "user", "content": "question"}]
+
+    allowance = assembler.control_output_allowance(
+        messages,
+        tool_schema_tokens=tool_schema_tokens,
+    )
+
+    gap = CONTEXT_POLICY.hard_input_limit(profile) - CONTEXT_POLICY.compaction_trigger(profile)
+    assert allowance == gap - tool_schema_tokens
+    assert profile.max_output_tokens is not None
+    assert allowance < profile.max_output_tokens
+
+
+def test_control_output_rejects_tool_schemas_that_consume_the_accumulation_gap() -> None:
+    profile = ModelProfile(context_window_tokens=10_000, max_output_tokens=8_000)
+    assembler = ContextAssembler(
+        model_profile=profile,
+        query="What changed?",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+    )
+    gap = CONTEXT_POLICY.hard_input_limit(profile) - CONTEXT_POLICY.compaction_trigger(profile)
+
+    with pytest.raises(AnswerInputOverflowError, match="no model residual"):
+        assembler.control_output_allowance(
+            [{"role": "user", "content": "question"}],
+            tool_schema_tokens=gap,
+        )
+
+
+def test_observation_residual_targets_the_next_control_threshold() -> None:
+    profile = ModelProfile(context_window_tokens=100_000)
+    assembler = ContextAssembler(
+        model_profile=profile,
+        query="What changed?",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+    )
+    assistant = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read_resource", "arguments": "{}"},
+            }
+        ],
+    }
+    transcript = [
+        {"role": "system", "content": "control"},
+        {"role": "user", "content": "question"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "large transient evidence"},
+                {"type": "text", "text": CONTROL_TURN_INSTRUCTION},
+            ],
+        },
+        assistant,
+    ]
+    next_fixed = [
+        transcript[0],
+        transcript[1],
+        assistant,
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "read_resource",
+            "content": "",
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": CONTROL_TURN_INSTRUCTION}],
+        },
+    ]
+    used = estimate_messages_tokens(next_fixed)
+
+    residual = assembler.observation_residual(transcript, tool_schema_tokens=0)
+
+    assert residual == CONTEXT_POLICY.compaction_trigger(profile) - used
+    assert residual > 0
 
 
 async def test_research_turn_packing_runs_off_the_event_loop(
@@ -93,7 +217,14 @@ async def test_research_turn_packing_runs_off_the_event_loop(
     monkeypatch.setattr(context_module, "estimate_messages_tokens", estimate)
     assembler = _assembler(_long_history(2))
 
-    await assembler.control_turn(evidence=_ledger(3), episode=RunEpisode())
-    await assembler.answer_turn(evidence=_ledger(3), episode=RunEpisode())
+    await assembler.control_turn(
+        evidence=_ledger(3),
+        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=0,
+    )
+    await assembler.answer_turn(
+        evidence=_ledger(3),
+        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+    )
 
     assert estimator_threads and loop_thread not in estimator_threads

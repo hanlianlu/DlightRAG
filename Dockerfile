@@ -55,5 +55,5 @@ EXPOSE 8100 8101
 
 USER app
 
-# Default: start the REST API server
+# Default image role; deployments can override it for MCP or maintenance commands.
 CMD ["dlightrag-api"]

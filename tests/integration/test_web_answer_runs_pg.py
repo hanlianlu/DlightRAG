@@ -27,12 +27,14 @@ from dlightrag.storage.answer_runs import (
     PendingArtifact,
     PendingArtifactReference,
     PGAnswerRunStore,
+    answer_run_request_fingerprint,
     artifact_digest,
 )
 from dlightrag.storage.web_conversations import (
     ConversationSubmissionConflict,
     PGWebConversationStore,
 )
+from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [
     pytest.mark.integration,
@@ -99,7 +101,7 @@ async def pool(db_name: str) -> AsyncIterator[Any]:
 
 @pytest.fixture
 async def runs(pool: Any) -> PGAnswerRunStore:
-    store = PGAnswerRunStore(pool=pool)
+    store = FingerprintingAnswerRunStore(pool=pool)
     await store.initialize()
     return store
 
@@ -129,12 +131,19 @@ async def _submit(
     request: dict[str, Any] | None = None,
     artifacts: list[PendingArtifact] | None = None,
     references: list[PendingArtifactReference] | None = None,
+    idempotency_fingerprint: str | None = None,
 ):
+    effective_request = request if request is not None else _request()
     return await store.create_answer_turn(
         principal_id=owner,
         conversation_id=conversation_id,
         submission_id=submission_id or str(uuid.uuid4()),
-        request=request if request is not None else _request(),
+        request=effective_request,
+        idempotency_fingerprint=(
+            idempotency_fingerprint
+            if idempotency_fingerprint is not None
+            else answer_run_request_fingerprint(effective_request)
+        ),
         artifacts=artifacts or [],
         references=references or [],
         title_hint="why",
@@ -270,6 +279,42 @@ async def test_replaying_a_submission_returns_the_same_run_and_turn(
     assert await _count(pool, "web_conversation_turns") == 1
 
 
+async def test_public_fingerprint_controls_atomic_web_replay(
+    store: PGWebConversationStore, pool: Any
+) -> None:
+    conversation_id = await _conversation(store)
+    submission_id = str(uuid.uuid4())
+    public_fingerprint = answer_run_request_fingerprint(_request())
+
+    first = await _submit(
+        store,
+        conversation_id,
+        submission_id=submission_id,
+        request=_request(pinned_models=[{"revision": "old"}]),
+        idempotency_fingerprint=public_fingerprint,
+    )
+    replay = await _submit(
+        store,
+        conversation_id,
+        submission_id=submission_id,
+        request=_request(pinned_models=[{"revision": "new"}]),
+        idempotency_fingerprint=public_fingerprint,
+    )
+
+    assert first is not None and replay is not None
+    assert replay.replayed is True
+    assert replay.turn.answer_run_id == first.turn.answer_run_id
+    with pytest.raises(ConversationSubmissionConflict):
+        await _submit(
+            store,
+            conversation_id,
+            submission_id=submission_id,
+            request=_request(pinned_models=[{"revision": "old"}]),
+            idempotency_fingerprint=answer_run_request_fingerprint(_request("changed")),
+        )
+    assert await _count(pool, "dlightrag_answer_runs") == 1
+
+
 async def test_concurrent_identical_submissions_create_exactly_one_turn(
     store: PGWebConversationStore, pool: Any
 ) -> None:
@@ -401,10 +446,12 @@ async def test_a_run_created_outside_a_conversation_keeps_the_same_key_namespace
     submission_id = str(uuid.uuid4())
     await _submit(store, conversation_id, submission_id=submission_id)
 
+    other_request = _request("something else")
     with pytest.raises(IdempotencyKeyConflict):
         await runs.create_run(
             owner_id=_OWNER,
-            request=_request("something else"),
+            request=other_request,
+            idempotency_fingerprint=answer_run_request_fingerprint(other_request),
             idempotency_key=submission_id,
         )
 
@@ -463,7 +510,13 @@ async def _hold_conversation_lock(conn: Any, conversation_id: str) -> Any:
 
 async def _link_turn(conn: Any, runs: PGAnswerRunStore, conversation_id: str) -> str:
     """Create the run and its turn the way an accepted submission would."""
-    creation = await runs.create_run_in(conn, owner_id=_OWNER, request=_request("late"))
+    request = _request("late")
+    creation = await runs.create_run_in(
+        conn,
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+    )
     await conn.execute(
         "INSERT INTO web_conversation_turns "
         "(turn_id, principal_id, conversation_id, turn_number, submission_id, answer_run_id) "
@@ -644,7 +697,12 @@ async def test_a_failed_or_cancelled_linked_run_prunes_and_cascades_its_turn(
 async def test_an_unlinked_successful_run_still_prunes(
     store: PGWebConversationStore, runs: PGAnswerRunStore, pool: Any
 ) -> None:
-    creation = await runs.create_run(owner_id=_OWNER, request=_request())
+    request = _request()
+    creation = await runs.create_run(
+        owner_id=_OWNER,
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+    )
     await _finish(pool, creation.run.run_id, status="succeeded")
     await _backdate_finish(pool, creation.run.run_id, days=45)
 
@@ -668,7 +726,12 @@ async def test_a_turn_cannot_reference_a_run_another_principal_owns(
 ) -> None:
     """The foreign key carries the principal, so the link is owner-scoped."""
     conversation_id = await _conversation(store)
-    foreign = await runs.create_run(owner_id=_OTHER_OWNER, request=_request())
+    request = _request()
+    foreign = await runs.create_run(
+        owner_id=_OTHER_OWNER,
+        request=request,
+        idempotency_fingerprint=answer_run_request_fingerprint(request),
+    )
 
     async with pool.acquire() as conn:
         with pytest.raises(asyncpg.exceptions.ForeignKeyViolationError):
@@ -709,6 +772,7 @@ async def test_trimming_the_conversation_window_removes_the_oldest_runs(
             conversation_id=conversation_id,
             submission_id=str(uuid.uuid4()),
             request=_request(f"question {index}"),
+            idempotency_fingerprint=answer_run_request_fingerprint(_request(f"question {index}")),
             title_hint="why",
             max_turns=2,
             ttl_days=_TTL_DAYS,

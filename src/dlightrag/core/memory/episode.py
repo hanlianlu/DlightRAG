@@ -6,20 +6,20 @@ from typing import Any, cast
 
 from dlightrag_ai.tokens import estimate_messages_tokens
 
-# The budget pi replays verbatim before it reduces older turns.
-_KEEP_RECENT_TOKENS = 20_000
-
 
 class RunEpisode:
     """Every assistant/tool exchange one research run produced, newest first to replay.
 
     Provider-native reasoning is what makes an exchange expensive and is valid
-    only as an unmodified replay, so the newest ``_KEEP_RECENT_TOKENS`` worth
-    carry it and older exchanges keep just the call and its result: a later turn
+    only as an unmodified replay, so the policy-sized recent tail carries it and
+    older exchanges keep just the call and its result: a later turn
     still sees which angle was spent without paying for the thinking behind it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, retained_tail_tokens: int) -> None:
+        if retained_tail_tokens < 0:
+            raise ValueError("retained_tail_tokens cannot be negative")
+        self._retained_tail_tokens = retained_tail_tokens
         self._exchanges: list[list[dict[str, Any]]] = []
 
     def record(self, exchange: list[dict[str, Any]]) -> None:
@@ -48,7 +48,7 @@ class RunEpisode:
             return []
         newest = len(self._exchanges) - 1
         replay_from = newest
-        budget = _KEEP_RECENT_TOKENS - estimate_messages_tokens(self._exchanges[newest])
+        budget = self._retained_tail_tokens - estimate_messages_tokens(self._exchanges[newest])
         for index in reversed(range(newest)):
             budget -= estimate_messages_tokens(self._exchanges[index])
             if budget < 0:

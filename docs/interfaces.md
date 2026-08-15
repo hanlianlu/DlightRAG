@@ -564,7 +564,8 @@ is incompatible with the running revision answers HTTP 503 `unavailable` with a
 fixed detail and no schema detail. Terminal run failures carry one stable
 `error_kind`: an answer-input kind (`CURRENT_IMAGES_UNSUPPORTED`,
 `CURRENT_IMAGE_LIMIT_EXCEEDED`, `CURRENT_DOCUMENT_PARSE_FAILED`,
-`ANSWER_INPUT_OVERFLOW`, `ANSWER_IMAGE_CAPABILITY_UNKNOWN`),
+`ANSWER_INPUT_OVERFLOW`, `ANSWER_IMAGE_CAPABILITY_UNKNOWN`,
+`MODEL_CAPABILITY_UNAVAILABLE`, `ANSWER_RESOURCE_INVALID`),
 `invalid_tool_configuration`, a checkpoint kind (`checkpoint_too_large`,
 `checkpoint_incompatible`, `checkpoint_corrupt`), `run_abandoned` when a run
 exceeds its crash-recovery bound, or `ANSWER_STREAM_FAILED`.

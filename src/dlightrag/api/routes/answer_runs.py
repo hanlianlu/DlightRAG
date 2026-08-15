@@ -31,9 +31,11 @@ from dlightrag.api.principal import owner_id_from_user
 from dlightrag.app_state import request_config
 from dlightrag.config import AnswerConfig
 from dlightrag.core.answer_runs.execution import (
-    AnswerRunInput,
+    AnswerRunRequest,
     AttachmentReference,
     LinkReference,
+    build_current_answer_resources,
+    in_memory_attachment_loader,
 )
 from dlightrag.core.answer_runs.results import project_answer_result
 from dlightrag.core.client_contracts import conversation_history_as_dicts
@@ -43,6 +45,7 @@ from dlightrag.storage.answer_runs import (
     AnswerRunEvent,
     AnswerRunRecord,
     IdempotencyKeyConflict,
+    answer_run_request_fingerprint,
     artifact_digest,
 )
 
@@ -188,15 +191,15 @@ def _idempotency_key(request: Request) -> str | None:
     return value if value and value.strip() else None
 
 
-def _run_input(
+def _run_request(
     body: AnswerRequest,
     uploads: list[_UploadedAttachment],
     *,
     workspaces: list[str],
-) -> AnswerRunInput:
-    """Normalize one validated request into the run's immutable input."""
+) -> AnswerRunRequest:
+    """Normalize one validated transport request before model resolution."""
     filters = body.filters.model_dump(exclude_none=True, mode="json") if body.filters else None
-    return AnswerRunInput(
+    return AnswerRunRequest(
         query=body.query,
         workspaces=tuple(workspaces),
         history=tuple(conversation_history_as_dicts(body.history) or ()),
@@ -292,10 +295,32 @@ async def create_answer_run(
         all_workspaces=body.all_workspaces,
     )
     try:
+        run_request = _run_request(body, uploads, workspaces=workspaces)
+        owner_id = owner_id_from_user(user)
+        idempotency_key = _idempotency_key(request)
+        idempotency_fingerprint = answer_run_request_fingerprint(run_request.as_request())
+        if idempotency_key is not None:
+            replay = await manager.areplay_answer_run(
+                owner_id=owner_id,
+                idempotency_key=idempotency_key,
+                idempotency_fingerprint=idempotency_fingerprint,
+            )
+            if replay is not None:
+                return _descriptor(replay)
+        resources = await build_current_answer_resources(
+            links=run_request.links,
+            attachments=run_request.attachments,
+            attachment_loaders=[in_memory_attachment_loader(upload.content) for upload in uploads],
+        )
+        run_input = await manager.aprepare_answer_run_input(
+            run_request,
+            resources=resources or None,
+            idempotency_fingerprint=idempotency_fingerprint,
+        )
         creation = await manager.astart_answer_run(
-            owner_id=owner_id_from_user(user),
-            request=_run_input(body, uploads, workspaces=workspaces),
-            idempotency_key=_idempotency_key(request),
+            owner_id=owner_id,
+            request=run_input,
+            idempotency_key=idempotency_key,
             attachment_bytes=[upload.content for upload in uploads],
         )
     except IdempotencyKeyConflict:

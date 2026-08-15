@@ -33,7 +33,6 @@ class AnswerImagePolicy:
     min_px: int
     quality: int
     min_quality: int
-    context_window_tokens: int
 
     def new_budget(self, *, max_px: int | None = None) -> AnswerImageBudget:
         """Create a fresh mutable budget for one run or provider call.

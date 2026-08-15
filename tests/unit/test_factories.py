@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.completion import CompletionModel
 from dlightrag_ai.providers.base import CompletionOutput
 from dlightrag_ai.settings import ModelSettings
@@ -18,11 +19,13 @@ from dlightrag.config import (
     EmbeddingConfig,
     LLMConfig,
     LLMRolesConfig,
+    ModelCapacityOverrideConfig,
     ModelConfig,
     RerankConfig,
 )
 from dlightrag.model_settings import (
     embedding_settings,
+    model_profile_for_role,
     model_settings_for_role,
     rerank_scoring_model_settings,
     rerank_settings,
@@ -104,6 +107,98 @@ def test_root_maps_explicit_keyless_role_to_immutable_ai_settings() -> None:
     assert settings.base_url == "http://host.docker.internal:8888/v1"
     with pytest.raises(TypeError):
         operator.setitem(settings.model_kwargs["reasoning"], "enabled", True)
+
+
+def test_root_resolves_model_profiles_independently_per_role() -> None:
+    config = DlightragConfig(
+        llm=LLMConfig(
+            default=ModelConfig(
+                model="z-ai/glm-5.2",
+                base_url="https://openrouter.ai/api/v1",
+            ),
+            roles=LLMRolesConfig(
+                extract=ModelConfig(
+                    model="deepseek-v4-flash",
+                    base_url="https://api.deepseek.com",
+                    api_key=None,
+                ),
+                query=ModelConfig(
+                    model="private-query",
+                    base_url="http://localhost:8888/v1",
+                    api_key=None,
+                ),
+            ),
+        ),
+        model_capacity_overrides=[
+            ModelCapacityOverrideConfig(
+                provider="openai",
+                model="private-query",
+                base_url="http://localhost:8888/v1",
+                context_window_tokens=262_144,
+                max_input_tokens=200_000,
+                max_output_tokens=32_768,
+                supports_tools=True,
+                supports_reasoning=True,
+            )
+        ],
+        embedding=_embedding_config(),
+    )
+
+    assert model_profile_for_role(config, "keyword").max_output_tokens == 262_144
+    assert model_profile_for_role(config, "extract").max_output_tokens == 393_216
+    query = model_profile_for_role(config, "query")
+    assert query.context_window_tokens == 262_144
+    assert query.max_input_tokens == 200_000
+    assert query.supports_tools is True
+
+
+def test_root_consults_adapter_profile_before_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter_profile = ModelProfile(context_window_tokens=123_456, supports_tools=True)
+    metadata = MagicMock(return_value=adapter_profile)
+    monkeypatch.setattr("dlightrag.model_settings.get_adapter_model_profile", metadata)
+    config = DlightragConfig(
+        llm=LLMConfig(
+            default=ModelConfig(
+                model="z-ai/glm-5.2",
+                base_url="https://openrouter.ai/api/v1",
+            )
+        ),
+        embedding=_embedding_config(),
+    )
+
+    profile = model_profile_for_role(config, "query")
+
+    assert profile is adapter_profile
+    metadata.assert_called_once_with(
+        "openai",
+        model="z-ai/glm-5.2",
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+
+def test_root_override_short_circuits_adapter_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = MagicMock(side_effect=AssertionError("override must win before adapter loading"))
+    monkeypatch.setattr("dlightrag.model_settings.get_adapter_model_profile", metadata)
+    config = DlightragConfig(
+        llm=LLMConfig(default=ModelConfig(model="private-model")),
+        model_capacity_overrides=[
+            ModelCapacityOverrideConfig(
+                provider="openai",
+                model="private-model",
+                context_window_tokens=200_000,
+            )
+        ],
+        embedding=_embedding_config(),
+    )
+
+    profile = model_profile_for_role(config, "query")
+
+    assert profile.context_window_tokens == 200_000
+    metadata.assert_not_called()
 
 
 def test_model_fingerprint_canonicalizes_endpoint_without_retaining_url() -> None:

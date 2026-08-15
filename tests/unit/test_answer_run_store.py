@@ -67,8 +67,16 @@ class TestCreationValidation:
 
     async def test_rejects_a_blank_owner(self) -> None:
         with pytest.raises(ValueError):
-            await PGAnswerRunStore().create_run(owner_id="   ", request={"query": "a"})
+            await PGAnswerRunStore().create_run(
+                owner_id="   ",
+                request={"query": "a"},
+                idempotency_fingerprint="test-fingerprint",
+            )
 
     async def test_rejects_a_request_that_is_not_json(self) -> None:
         with pytest.raises(TypeError):
-            await PGAnswerRunStore().create_run(owner_id="owner", request={"q": object()})
+            await PGAnswerRunStore().create_run(
+                owner_id="owner",
+                request={"q": object()},
+                idempotency_fingerprint="test-fingerprint",
+            )

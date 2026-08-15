@@ -72,6 +72,59 @@ def test_llm_azure_requires_user_base_url(wiz):
     assert block["base_url"] == "https://x.openai.azure.com/v1"
 
 
+def test_known_llm_resolves_capacity_from_shared_catalog(wiz):
+    block, _ = wiz.resolve_llm_choice(
+        "OpenRouter",
+        model="z-ai/glm-5.2",
+        base_url=None,
+    )
+
+    profile = wiz.catalog_model_profile(block)
+
+    assert profile["context_window_tokens"] == 1_048_576
+    assert profile["max_output_tokens"] == 262_144
+
+
+def test_malformed_endpoint_is_unknown_instead_of_crashing_catalog_resolution(wiz):
+    block = {
+        "provider": "openai",
+        "model": "private-model",
+        "base_url": "https://example.com:not-a-port/v1",
+    }
+
+    assert wiz.catalog_model_profile(block) is None
+
+
+def test_unknown_llm_prompts_for_one_complete_capacity_override(wiz):
+    block, _ = wiz.resolve_llm_choice(
+        "Other (OpenAI-compatible)",
+        model="private-model",
+        base_url="http://localhost:8888/v1",
+    )
+    prompter = _ScriptedPrompter(
+        [
+            "262144",
+            "200000",
+            "32768",
+            True,
+            True,
+            False,
+        ]
+    )
+
+    override = wiz.ask_model_capacity_override(prompter, block)
+
+    assert override == {
+        **block,
+        "context_window_tokens": 262_144,
+        "max_input_tokens": 200_000,
+        "max_output_tokens": 32_768,
+        "supports_images": True,
+        "supports_tools": True,
+        "supports_reasoning": False,
+    }
+
+
 def test_embedding_mapping_prefills_dim(wiz):
     block, env_key = wiz.resolve_embedding_choice(
         "Voyage", model="voyage-multimodal-3.5", base_url=None
@@ -563,6 +616,7 @@ def test_models_step_writes_keyless_role_to_yaml_and_removes_stale_env(wiz, tmp_
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", env)
     monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing.env.example")
+    monkeypatch.setattr(wiz, "catalog_model_profile", lambda _block: {"context_window_tokens": 1})
     prompter = _ScriptedPrompter(
         [
             "Custom · separate extraction/keyword models",
@@ -822,6 +876,7 @@ def test_models_step_reprompts_for_reranker_key(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", env)
     monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    monkeypatch.setattr(wiz, "catalog_model_profile", lambda _block: {"context_window_tokens": 1})
     prompter = _ScriptedPrompter(
         [
             wiz.MODEL_MODE_CUSTOM,
@@ -1060,7 +1115,10 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
         "  base_url: https://api.voyageai.com/v1\n"
         "rerank:\n  enabled: true\n  strategy: voyage_reranker\n  model: rerank-2.5-lite\n"
-        "answer:\n  context_window_tokens: 260000\n  max_attachments: 6\n"
+        "model_capacity_overrides:\n"
+        "  - provider: openai\n    model: gpt-x\n    base_url: https://api.x\n"
+        "    context_window_tokens: 123456\n    max_output_tokens: 8192\n"
+        "answer:\n  max_attachments: 6\n"
         "  max_attachment_bytes: 104857600\n  max_total_attachment_bytes: 134217728\n"
         "  max_images: 12\n"
         "parser_sidecars:\n  mineru:\n    api_mode: local\n"
@@ -1092,9 +1150,11 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     assert s["workspace"] == "default"
     assert s["keys_set"] == {"LLM": True, "Embedding": True, "Rerank": False}
     assert "sk-a" not in repr(s) and "sk-b" not in repr(s)
-    # Answer context + attachment settings are surfaced for review.
+    assert s["model_capacities"]["default"]["source"] == "override"
+    assert s["model_capacities"]["default"]["context_window_tokens"] == 123456
+    assert s["model_capacities"]["extract"] == {"source": "unknown"}
+    # Attachment settings are surfaced independently from model capacity.
     assert s["answer"] == {
-        "context_window_tokens": 260000,
         "max_attachments": 6,
         "max_attachment_bytes": 104857600,
         "max_total_attachment_bytes": 134217728,
@@ -1144,20 +1204,18 @@ def test_read_config_summary_uses_answer_defaults_when_absent(wiz, tmp_path):
     env = tmp_path / ".env"
     env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
     s = wiz.read_config_summary(cfg, env)
-    # Absent answer block falls back to the shipped 260K / 6 / 100 MiB / 128 MiB defaults.
-    assert s["answer"]["context_window_tokens"] == 260000
+    # Absent answer block falls back to attachment/image product defaults only.
+    assert "context_window_tokens" not in s["answer"]
     assert s["answer"]["max_attachments"] == 6
     assert s["answer"]["max_attachment_bytes"] == 100 * 1024 * 1024
     assert s["answer"]["max_total_attachment_bytes"] == 128 * 1024 * 1024
 
 
-def test_context_window_note_explains_model_requirement(wiz):
-    # The wizard must warn that the query/default model has to satisfy the window.
-    note = wiz.CONTEXT_WINDOW_NOTE
-    assert "260,000" in note or "260000" in note
-    assert "context window" in note.lower()
-    assert "final answer generation" in note
-    assert "final " + "synthesis" not in note
+def test_model_capacity_note_explains_catalog_and_unknown_overrides(wiz):
+    note = wiz.MODEL_CAPACITY_NOTE
+    assert "versioned catalog" in note
+    assert "unknown or private endpoint" in note
+    assert "never guesses or probes" in note
 
 
 def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
@@ -1169,9 +1227,12 @@ def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
         "llm:\n  default:\n    provider: openai\n    model: gpt-x\n"
         "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
         "rerank:\n  strategy: chat_llm_reranker\n"
+        "model_capacity_overrides:\n"
+        "  - provider: openai\n    model: gpt-x\n"
+        "    context_window_tokens: 123456\n    max_output_tokens: 8192\n"
         "parser_sidecars:\n  mineru:\n    api_mode: local\n"
         "workspace: default\n"
-        "answer:\n  context_window_tokens: 123456\n  max_attachments: 7\n"
+        "answer:\n  max_attachments: 7\n"
         "  max_attachment_bytes: 3145728\n",
         encoding="utf-8",
     )
@@ -1181,7 +1242,7 @@ def test_render_summary_shows_context_and_attachment_settings(wiz, tmp_path):
     console = Console(record=True, width=100)
     wiz.render_summary(console, wiz.read_config_summary(cfg, env))
     text = console.export_text()
-    assert "123,456 tokens" in text
+    assert "override · C 123,456 · I = C · O 8,192" in text
     assert "7 max" in text
     assert "3 MiB each" in text
     assert "visual inspection" in text.lower()

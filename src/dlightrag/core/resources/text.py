@@ -12,7 +12,6 @@ from __future__ import annotations
 from charset_normalizer import from_bytes
 from dlightrag_ai.tokens import estimate_tokens
 
-from dlightrag.core.answer.capacity import MAX_TOOL_OBSERVATION_TOKENS
 from dlightrag.core.resources.models import ResourceDecodeError, TextWindowLocator
 
 # Bytes that legitimately appear in decoded single-/multi-byte text. High bytes
@@ -77,7 +76,11 @@ def _looks_binary(content: bytes) -> bool:
     return len(nontext) / len(sample) > _BINARY_RATIO
 
 
-def build_text_windows(text: str) -> list[tuple[TextWindowLocator, str]]:
+def build_text_windows(
+    text: str,
+    *,
+    max_window_tokens: int,
+) -> list[tuple[TextWindowLocator, str]]:
     """Split *text* into windows within the observation budget.
 
     Each window's content is an exact contiguous slice of *text*; concatenating
@@ -87,6 +90,8 @@ def build_text_windows(text: str) -> list[tuple[TextWindowLocator, str]]:
     an explicit intra-line character span so the structural locator stays
     truthful.
     """
+    if max_window_tokens < 1:
+        raise ValueError("max_window_tokens must be positive")
     segments = text.splitlines(keepends=True)
     if not segments:
         return []
@@ -111,11 +116,17 @@ def build_text_windows(text: str) -> list[tuple[TextWindowLocator, str]]:
     for offset, segment in enumerate(segments):
         line_no = offset + 1
         segment_tokens = max(1, estimate_tokens(segment))
-        if segment_tokens > MAX_TOOL_OBSERVATION_TOKENS:
+        if segment_tokens > max_window_tokens:
             flush(line_no - 1)
-            windows.extend(_split_oversized_line(segment, line_no))
+            windows.extend(
+                _split_oversized_line(
+                    segment,
+                    line_no,
+                    max_window_tokens=max_window_tokens,
+                )
+            )
             continue
-        if pending and pending_tokens + segment_tokens > MAX_TOOL_OBSERVATION_TOKENS:
+        if pending and pending_tokens + segment_tokens > max_window_tokens:
             flush(line_no - 1)
         if not pending:
             pending_start = line_no
@@ -125,13 +136,18 @@ def build_text_windows(text: str) -> list[tuple[TextWindowLocator, str]]:
     return windows
 
 
-def _split_oversized_line(line: str, line_no: int) -> list[tuple[TextWindowLocator, str]]:
+def _split_oversized_line(
+    line: str,
+    line_no: int,
+    *,
+    max_window_tokens: int,
+) -> list[tuple[TextWindowLocator, str]]:
     """Split one over-budget physical line into intra-line character windows."""
     windows: list[tuple[TextWindowLocator, str]] = []
     start = 0
     length = len(line)
     while start < length:
-        span = _fit_char_span(line, start)
+        span = _fit_char_span(line, start, max_window_tokens=max_window_tokens)
         end = start + span
         locator = TextWindowLocator(
             unit="line",
@@ -145,20 +161,20 @@ def _split_oversized_line(line: str, line_no: int) -> list[tuple[TextWindowLocat
     return windows
 
 
-def _fit_char_span(line: str, start: int) -> int:
+def _fit_char_span(line: str, start: int, *, max_window_tokens: int) -> int:
     """Return the largest character count from *start* within the token budget.
 
     The estimator never decreases as characters are appended, so a bisection
     finds the longest prefix that fits; at least one character always advances.
     """
     remaining = len(line) - start
-    high = min(remaining, MAX_TOOL_OBSERVATION_TOKENS * _MAX_CHARS_PER_TOKEN)
-    if estimate_tokens(line[start : start + high]) <= MAX_TOOL_OBSERVATION_TOKENS:
+    high = min(remaining, max_window_tokens * _MAX_CHARS_PER_TOKEN)
+    if estimate_tokens(line[start : start + high]) <= max_window_tokens:
         return high
     low = 1
     while low < high:
         midpoint = (low + high + 1) // 2
-        if estimate_tokens(line[start : start + midpoint]) <= MAX_TOOL_OBSERVATION_TOKENS:
+        if estimate_tokens(line[start : start + midpoint]) <= max_window_tokens:
             low = midpoint
         else:
             high = midpoint - 1

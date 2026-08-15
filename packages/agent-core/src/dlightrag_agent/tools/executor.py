@@ -5,10 +5,13 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from dlightrag_ai.messages import AssistantTurn, ToolCall, ToolChoice
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry
+from dlightrag_ai.tokens import estimate_tokens, truncate_to_estimated_tokens
 from pydantic import ValidationError
 
 from dlightrag_agent.tools.contracts import (
@@ -18,6 +21,7 @@ from dlightrag_agent.tools.contracts import (
     ToolModelFunc,
     ToolObservation,
     ToolResult,
+    ToolResultCapacityError,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,15 +45,26 @@ class ToolTurnExecutor:
         tools: list[AgentTool],
         *,
         tool_choice: ToolChoice = "auto",
+        observation_budget: Callable[[list[dict[str, Any]]], int] | None = None,
+        max_tokens: int | None = None,
     ) -> ExecutedTurn:
-        assistant = await self._model_func(
-            messages=messages,
-            tools=[tool.definition for tool in tools],
-            tool_choice=tool_choice,
-        )
+        model_kwargs: dict[str, Any] = {
+            "messages": messages,
+            "tools": [tool.definition for tool in tools],
+            "tool_choice": tool_choice,
+        }
+        if max_tokens is not None:
+            model_kwargs["max_tokens"] = max_tokens
+        assistant = await self._model_func(**model_kwargs)
         transcript = [*messages, _assistant_message(assistant)]
         if not assistant.tool_calls:
             return ExecutedTurn(assistant=assistant, results=(), messages=transcript)
+
+        max_observation_tokens = (
+            observation_budget(transcript) if observation_budget is not None else None
+        )
+        if max_observation_tokens is not None and max_observation_tokens < 0:
+            raise ValueError("observation budget cannot be negative")
 
         tools_by_name = {tool.name: tool for tool in tools}
         if assistant.stop_reason == "length":
@@ -79,8 +94,62 @@ class ToolTurnExecutor:
                     for task in tasks:
                         task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
+        if max_observation_tokens is not None:
+            results = _fit_results(results, max_tokens=max_observation_tokens)
         transcript.extend(_tool_message(result) for result in results)
         return ExecutedTurn(assistant=assistant, results=results, messages=transcript)
+
+
+def _fit_results(
+    results: tuple[ToolExecution, ...],
+    *,
+    max_tokens: int,
+) -> tuple[ToolExecution, ...]:
+    remaining = max_tokens
+    fitted: list[ToolExecution] = []
+    for index, execution in enumerate(results):
+        result_count = len(results) - index
+        allowance = remaining // result_count
+        content = _fit_result_content(execution.result, max_tokens=allowance)
+        remaining = max(0, remaining - estimate_tokens(content))
+        if content == execution.result.content:
+            fitted.append(execution)
+            continue
+        fitted.append(
+            replace(
+                execution,
+                result=replace(execution.result, content=content),
+                observation=replace(execution.observation, content_chars=len(content)),
+            )
+        )
+    return tuple(fitted)
+
+
+def _fit_result_content(result: ToolResult, *, max_tokens: int) -> str:
+    if estimate_tokens(result.content) <= max_tokens:
+        return result.content
+    if max_tokens < 1:
+        raise ToolResultCapacityError("tool result has no residual model input capacity")
+    marker = "[tool result truncated to the shared model residual]"
+    suffix = result.protected_suffix.strip()
+    suffix_tokens = estimate_tokens(suffix)
+    if suffix and suffix_tokens > max_tokens:
+        raise ToolResultCapacityError("tool result continuation does not fit the model residual")
+    fixed = "\n".join(part for part in (marker, suffix) if part)
+    fixed_tokens = estimate_tokens(fixed)
+    if fixed_tokens >= max_tokens:
+        return suffix or truncate_to_estimated_tokens(marker, max_tokens)
+    body = result.content
+    if suffix and body.endswith(result.protected_suffix):
+        body = body[: -len(result.protected_suffix)].rstrip()
+    body_tokens = max_tokens - fixed_tokens
+    while body_tokens >= 0:
+        truncated = truncate_to_estimated_tokens(body, body_tokens)
+        fitted = "\n".join(part for part in (truncated, fixed) if part)
+        if estimate_tokens(fitted) <= max_tokens:
+            return fitted
+        body_tokens -= 1
+    return suffix
 
 
 async def _execute_call(

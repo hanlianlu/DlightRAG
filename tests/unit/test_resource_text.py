@@ -3,9 +3,10 @@
 
 import pytest
 
-from dlightrag.core.answer.capacity import MAX_TOOL_OBSERVATION_TOKENS
 from dlightrag.core.resources.models import ResourceDecodeError, TextWindowLocator
 from dlightrag.core.resources.text import build_text_windows, decode_text
+
+_WINDOW_TOKENS = 100
 
 
 def test_decodes_utf8_bom() -> None:
@@ -80,7 +81,7 @@ def test_empty_content_decodes_to_empty_string() -> None:
 
 
 def test_single_window_has_structural_line_locator() -> None:
-    windows = build_text_windows("alpha\nbeta\ngamma")
+    windows = build_text_windows("alpha\nbeta\ngamma", max_window_tokens=_WINDOW_TOKENS)
 
     assert len(windows) == 1
     locator, content = windows[0]
@@ -92,14 +93,14 @@ def test_windows_split_above_observation_budget() -> None:
     lines = [f"line {index} " + "x" * 30 for index in range(2000)]
     text = "\n".join(lines)
 
-    windows = build_text_windows(text)
+    windows = build_text_windows(text, max_window_tokens=_WINDOW_TOKENS)
 
     assert len(windows) >= 2
     # Every window stays within the per-observation token budget.
     from dlightrag_ai.tokens import estimate_tokens
 
     for _, content in windows:
-        assert estimate_tokens(content) <= MAX_TOOL_OBSERVATION_TOKENS
+        assert estimate_tokens(content) <= _WINDOW_TOKENS
     # Windows are contiguous and cover every line exactly once.
     assert windows[0][0].start == 1
     assert windows[-1][0].end == len(lines)
@@ -111,13 +112,13 @@ def test_single_line_over_budget_splits_into_subline_windows() -> None:
     from dlightrag_ai.tokens import estimate_tokens
 
     # One physical line (no newline) far larger than a single observation budget.
-    line = "x" * (MAX_TOOL_OBSERVATION_TOKENS * 8)
+    line = "x" * (_WINDOW_TOKENS * 8)
 
-    windows = build_text_windows(line)
+    windows = build_text_windows(line, max_window_tokens=_WINDOW_TOKENS)
 
     assert len(windows) >= 2
     for _, content in windows:
-        assert estimate_tokens(content) <= MAX_TOOL_OBSERVATION_TOKENS
+        assert estimate_tokens(content) <= _WINDOW_TOKENS
     # Character sub-windows reconstruct the original line with no drop/duplication.
     assert "".join(content for _, content in windows) == line
     # Locators stay truthful: every sub-window lives on the same single line and

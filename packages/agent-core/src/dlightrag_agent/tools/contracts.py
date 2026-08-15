@@ -12,6 +12,10 @@ type ToolModelFunc = Callable[..., Awaitable[AssistantTurn]]
 type ToolExecute = Callable[[BaseModel], Awaitable["ToolResult"]]
 
 
+class ToolResultCapacityError(RuntimeError):
+    """A model-visible tool result cannot preserve its required content."""
+
+
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """Text returned to the model plus transport-private details."""
@@ -19,6 +23,7 @@ class ToolResult:
     content: str
     details: dict[str, Any] | None = None
     cached: bool = False
+    protected_suffix: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,4 +97,5 @@ __all__ = [
     "ToolModelFunc",
     "ToolObservation",
     "ToolResult",
+    "ToolResultCapacityError",
 ]

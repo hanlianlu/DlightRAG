@@ -233,8 +233,21 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         from dlightrag.web.routes import router as web_router
         from dlightrag.web.static_files import NoCacheStaticFiles
 
+        async def prepare_web_answer_run_input(
+            request,
+            *,
+            resources,
+            idempotency_fingerprint,
+        ):
+            return await application.state.manager.aprepare_answer_run_input(
+                request,
+                resources=resources,
+                idempotency_fingerprint=idempotency_fingerprint,
+            )
+
         application.state.web_conversation_service = WebConversationService(
             store=PGWebConversationStore(),
+            prepare_run_input=prepare_web_answer_run_input,
             max_turns=cfg.web_conversations.max_turns,
             ttl_days=cfg.web_conversations.ttl_days,
             max_attachments=cfg.answer.max_attachments,

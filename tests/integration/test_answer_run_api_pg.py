@@ -28,6 +28,7 @@ from dlightrag.api.principal import owner_id_from_user
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
 from dlightrag.storage.answer_runs import PGAnswerRunStore
+from tests.unit.conftest import prepare_test_answer_run_input
 
 pytestmark = [
     pytest.mark.integration,
@@ -97,6 +98,20 @@ class _StoreBackedManager:
         self._store = store
         self.config = config
 
+    async def aprepare_answer_run_input(
+        self,
+        request: Any,
+        *,
+        resources: Any,
+        idempotency_fingerprint: str,
+    ) -> Any:
+        pinned = await prepare_test_answer_run_input(
+            request,
+            resources=resources,
+            idempotency_fingerprint=idempotency_fingerprint,
+        )
+        return pinned
+
     async def astart_answer_run(
         self,
         *,
@@ -110,6 +125,7 @@ class _StoreBackedManager:
         return await self._store.create_run(
             owner_id=owner_id,
             request=request.as_request(),
+            idempotency_fingerprint=request.idempotency_fingerprint,
             idempotency_key=idempotency_key,
             artifacts=[PendingArtifact(content=content) for content in attachment_bytes],
             references=[
@@ -124,6 +140,20 @@ class _StoreBackedManager:
                 for item in request.attachments
             ],
         )
+
+    async def areplay_answer_run(
+        self,
+        *,
+        owner_id: str,
+        idempotency_key: str,
+        idempotency_fingerprint: str,
+    ) -> Any:
+        replay = await self._store.replay_run(
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            idempotency_fingerprint=idempotency_fingerprint,
+        )
+        return replay.run if replay is not None else None
 
     async def aget_answer_run(self, *, owner_id: str, run_id: str) -> Any:
         return await self._store.get_run(owner_id=owner_id, run_id=run_id)

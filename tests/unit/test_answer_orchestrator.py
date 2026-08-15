@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 from dlightrag_agent.tools import AgentTool, ToolResult
+from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag_ai.messages import AssistantTurn, ToolCall
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -22,11 +23,11 @@ from dlightrag.core.answer.errors import (
 )
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
-from dlightrag.core.resources.models import ResourceManifestEntry
+from dlightrag.core.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
 from dlightrag.core.tools import SearchInput, compose_research_tools
-from tests.unit.conftest import answer_image_policy
+from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
 class ScriptedAgent:
@@ -39,14 +40,21 @@ class ScriptedAgent:
         self._final_text = final_text
         self.turn_calls: list[dict[str, Any]] = []
         self.final_calls: list[list[dict[str, Any]]] = []
+        self.final_call_kwargs: list[dict[str, Any]] = []
 
     async def turn(self, **kwargs: Any) -> AssistantTurn:
         self.turn_calls.append(kwargs)
         return self._turns.pop(0)
 
-    def stream_final(self, *, messages: list[dict[str, Any]]) -> AsyncIterator[str]:
+    def stream_final(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
         """Tools-disabled final stream the orchestrator must route through."""
         self.final_calls.append(messages)
+        self.final_call_kwargs.append({"messages": messages, **kwargs})
         text = self._final_text
 
         async def tokens() -> AsyncIterator[str]:
@@ -179,14 +187,18 @@ def _web_result(text: str = "web fact", *, url: str = "https://example.com/a") -
     )
 
 
-def _research_synthesizer() -> AnswerSynthesizer:
+def _research_synthesizer(model_profile: ModelProfile | None = None) -> AnswerSynthesizer:
     """Real synthesizer that owns research finalization via injected callables.
 
     Its own ``model_func`` stays ``None``: the research path must generate the
     final answer through the injected tools-disabled callables, never through
     the synthesizer's fast-path ``generate`` model function.
     """
-    return AnswerSynthesizer(image_policy=answer_image_policy(), model_func=None)
+    return AnswerSynthesizer(
+        image_policy=answer_image_policy(),
+        model_profile=model_profile or answer_model_profile(),
+        model_func=None,
+    )
 
 
 def _fast_synthesizer(answer_text: str = "Fast answer [1-1].") -> AnswerSynthesizer:
@@ -196,7 +208,11 @@ def _fast_synthesizer(answer_text: str = "Fast answer [1-1].") -> AnswerSynthesi
 
         return tokens()
 
-    return AnswerSynthesizer(image_policy=answer_image_policy(), model_func=model_func)
+    return AnswerSynthesizer(
+        image_policy=answer_image_policy(),
+        model_profile=answer_model_profile(),
+        model_func=model_func,
+    )
 
 
 def _research(
@@ -205,15 +221,16 @@ def _research(
     search: Any,
     *,
     stream_model_func: Any = None,
-    context_window_tokens: int = 260_000,
+    model_profile: ModelProfile | None = None,
     resource_tools: list[AgentTool] | None = None,
     register_web_source: Any = None,
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
     max_agent_turns: int = 50,
     image_budget: AnswerImageBudget | None = None,
 ) -> _DrainedOrchestrator:
+    effective_profile = model_profile or answer_model_profile()
     return _DrainedOrchestrator(
-        synthesizer=_research_synthesizer(),
+        synthesizer=_research_synthesizer(effective_profile),
         retrieve_knowledge_base=retrieve,
         search_web=search,
         model_func=agent.turn,
@@ -221,9 +238,12 @@ def _research(
         resource_tools=resource_tools,
         resource_manifest=resource_manifest,
         register_web_source=register_web_source,
-        context_window_tokens=context_window_tokens,
+        model_profile=effective_profile,
         max_agent_turns=max_agent_turns,
         image_budget=image_budget,
+        text_window_budget=TextWindowBudget(
+            tokens=CONTEXT_POLICY.hard_input_limit(effective_profile)
+        ),
     )
 
 
@@ -269,6 +289,8 @@ async def test_pure_knowledge_base_takes_fast_path_with_no_control_turn() -> Non
         synthesizer=_fast_synthesizer(),
         retrieve_knowledge_base=retrieve,
         search_web=None,
+        model_profile=answer_model_profile(),
+        text_window_budget=TextWindowBudget(tokens=850_000),
     )
     assert orchestrator.uses_research_path is False
 
@@ -280,6 +302,79 @@ async def test_pure_knowledge_base_takes_fast_path_with_no_control_turn() -> Non
     assert retrieved == ["what is X?"]
 
 
+async def test_research_calls_receive_exact_model_output_allowance() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    agent = ScriptedAgent(_answer("stop"), final_text="Final answer.")
+    profile = ModelProfile(
+        context_window_tokens=100_000,
+        max_input_tokens=85_000,
+        max_output_tokens=777,
+        supports_tools=True,
+    )
+    orchestrator = _research(
+        agent,
+        retrieve,
+        None,
+        model_profile=profile,
+        resource_tools=[_fake_read_tool()],
+        resource_manifest=(
+            ResourceManifestEntry(
+                resource_id="att-1",
+                filename="notes.txt",
+                declared_mime="text/plain",
+                source="bytes",
+                byte_size=10,
+            ),
+        ),
+    )
+
+    await orchestrator.answer("question")
+
+    assert agent.turn_calls[0]["max_tokens"] == 777
+    assert agent.final_call_kwargs[0]["max_tokens"] == 777
+
+
+async def test_tool_schema_overflow_fails_before_research_model_call() -> None:
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    agent = ScriptedAgent(_answer("unreachable"))
+    oversized_tool = AgentTool(
+        "read_resource",
+        "schema " * 50_000,
+        _ReadResourceInput,
+        _fake_read_tool().execute,
+    )
+    orchestrator = _research(
+        agent,
+        retrieve,
+        None,
+        model_profile=ModelProfile(
+            context_window_tokens=50_000,
+            max_input_tokens=42_500,
+            max_output_tokens=1_000,
+            supports_tools=True,
+        ),
+        resource_tools=[oversized_tool],
+        resource_manifest=(
+            ResourceManifestEntry(
+                resource_id="att-1",
+                filename="notes.txt",
+                declared_mime="text/plain",
+                source="bytes",
+                byte_size=10,
+            ),
+        ),
+    )
+
+    with pytest.raises(AnswerInputOverflowError):
+        await orchestrator.answer("question")
+
+    assert agent.turn_calls == []
+
+
 async def test_fast_path_streams_one_synthesis() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
@@ -288,6 +383,8 @@ async def test_fast_path_streams_one_synthesis() -> None:
         synthesizer=_fast_synthesizer(),
         retrieve_knowledge_base=retrieve,
         search_web=None,
+        model_profile=answer_model_profile(),
+        text_window_budget=TextWindowBudget(tokens=850_000),
     )
 
     async def model_func(*, messages: list[dict[str, Any]], stream: bool = False, **_kw: Any):
@@ -325,6 +422,8 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
         synthesizer=_research_synthesizer(),
         retrieve_knowledge_base=retrieve,
         search_web=None,
+        model_profile=answer_model_profile(),
+        text_window_budget=TextWindowBudget(tokens=850_000),
         model_func=agent.turn,
         stream_model_func=agent.stream_final,
         resource_tools=[
@@ -429,6 +528,8 @@ async def test_current_image_manifest_binds_resources_and_marks_images_visible()
     orchestrator = _DrainedOrchestrator(
         synthesizer=_research_synthesizer(),
         retrieve_knowledge_base=retrieve,
+        model_profile=answer_model_profile(),
+        text_window_budget=TextWindowBudget(tokens=850_000),
         model_func=agent.turn,
         stream_model_func=agent.stream_final,
         resource_tools=[_fake_read_tool()],
@@ -722,6 +823,7 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
 
 async def test_every_model_visible_tool_field_describes_itself() -> None:
     from dlightrag.core.memory.evidence import EvidenceLedger
+    from dlightrag.core.resources.models import TextWindowBudget
     from dlightrag.core.tools.resources import build_resource_tools
 
     async def retrieve(_query: str) -> RetrievalResult:
@@ -736,7 +838,10 @@ async def test_every_model_visible_tool_field_describes_itself() -> None:
         retrieve_knowledge_base=retrieve,
         search_web=search,
         resource_tools=build_resource_tools(
-            cast(Any, None), inspector=cast(Any, object()), visual_supported=True
+            cast(Any, None),
+            text_window_budget=TextWindowBudget(tokens=1_000),
+            inspector=cast(Any, object()),
+            visual_supported=True,
         ),
         register_web_source=None,
     )
@@ -1109,7 +1214,16 @@ async def test_input_over_envelope_stops_before_agent_or_retrieval() -> None:
 
     agent = ScriptedAgent()
     # An input budget of one token cannot fit the fixed system prompt/query.
-    orchestrator = _research(agent, retrieve, search, context_window_tokens=32_769)
+    orchestrator = _research(
+        agent,
+        retrieve,
+        search,
+        model_profile=answer_model_profile(
+            context_window_tokens=2,
+            max_input_tokens=1,
+            max_output_tokens=None,
+        ),
+    )
 
     with pytest.raises(AnswerInputOverflowError):
         await orchestrator.answer("Question")
@@ -1151,6 +1265,7 @@ async def test_tool_cancellation_is_never_downgraded_to_a_failure() -> None:
 
 async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> None:
     streamed_messages: list[list[dict[str, Any]]] = []
+    streamed_max_tokens: list[int] = []
 
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
@@ -1162,8 +1277,9 @@ async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> N
         yield "Final "
         yield "answer [1-1][2-1]."
 
-    def stream_text(*, messages: list[dict[str, Any]]):
+    def stream_text(*, messages: list[dict[str, Any]], max_tokens: int):
         streamed_messages.append(messages)
+        streamed_max_tokens.append(max_tokens)
         return tokens()
 
     agent = ScriptedAgent(
@@ -1187,6 +1303,7 @@ async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> N
         "search_web",
     }
     assert agent.turn_calls[0]["tool_choice"] == "auto"
+    assert streamed_max_tokens == [128_000]
     assert "Answer the original request now" in str(streamed_messages[0][-1]["content"])
     assert [token async for token in stream] == ["Final ", "answer [1-1][2-1]."]
     assert cast(Any, stream).answer == "Final answer [1-1][2-1]."
@@ -1242,7 +1359,10 @@ async def test_research_stream_final_flows_through_synthesizer_no_context() -> N
     async def tokens():
         yield "Best-effort answer."
 
-    def stream_text(*, messages: list[dict[str, Any]]):
+    max_tokens_seen: list[int] = []
+
+    def stream_text(*, messages: list[dict[str, Any]], max_tokens: int):
+        max_tokens_seen.append(max_tokens)
         return tokens()
 
     agent = ScriptedAgent(_answer("control draft"))
@@ -1255,6 +1375,7 @@ async def test_research_stream_final_flows_through_synthesizer_no_context() -> N
 
     assert stream is not None
     emitted = [token async for token in stream]
+    assert max_tokens_seen == [128_000]
     assert emitted[0].startswith(NO_CONTEXT_DISCLAIMER)
     assert "Best-effort answer." in "".join(emitted)
     assert not contexts["chunks"]

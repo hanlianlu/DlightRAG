@@ -169,7 +169,10 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     """
     from dlightrag.config import reset_config, set_config
     from dlightrag.core.service import RAGService
-    from dlightrag.storage.answer_runs import PGAnswerRunStore
+    from dlightrag.storage.answer_runs import (
+        PGAnswerRunStore,
+        answer_run_request_fingerprint,
+    )
     from dlightrag.storage.pool import pg_pool
 
     conn_kwargs = pg_conn_kwargs_from_env()
@@ -226,9 +229,11 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         # Corpus reads run read-only; the domain pool still accepts run state.
         store = PGAnswerRunStore()
         await store.initialize(validate_only=True)
+        run_request = {"query": "reader operational write", "workspaces": [workspace]}
         creation = await store.create_run(
             owner_id="reader-owner",
-            request={"query": "reader operational write", "workspaces": [workspace]},
+            request=run_request,
+            idempotency_fingerprint=answer_run_request_fingerprint(run_request),
         )
         assert (
             await store.get_run(owner_id="reader-owner", run_id=creation.run.run_id)

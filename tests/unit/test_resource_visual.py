@@ -280,7 +280,7 @@ async def test_inspect_docx_embedded_visual_handle() -> None:
                 declared_mime=DOCX_MIME,
             )
         )
-        read = await registry.read(resource_id)
+        read = await registry.read(resource_id, max_window_tokens=1_000)
         handle_id = read.visual_handles[0].handle_id
         inspector = _inspector(registry, vlm)
 
@@ -302,7 +302,7 @@ async def test_inspect_xlsx_sheet_cell_handle_carries_anchor() -> None:
                 declared_mime=XLSX_MIME,
             )
         )
-        read = await registry.read(resource_id)
+        read = await registry.read(resource_id, max_window_tokens=1_000)
         handle_id = read.visual_handles[0].handle_id
         inspector = _inspector(registry, vlm)
 

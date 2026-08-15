@@ -34,6 +34,21 @@ class ResourceDecodeError(ResourceRegistryError):
     """Raised when resource bytes are not decodable, mismatched text."""
 
 
+@dataclass(slots=True)
+class TextWindowBudget:
+    """Mutable formatted resource-read allowance updated before each tool batch."""
+
+    tokens: int
+
+    def __post_init__(self) -> None:
+        self.update(self.tokens)
+
+    def update(self, tokens: int) -> None:
+        if tokens < 0:
+            raise ValueError("text window budget cannot be negative")
+        self.tokens = tokens
+
+
 @dataclass(frozen=True)
 class ResourceInput:
     """Immutable answer resource: inline bytes, an inert HTTPS link, or a loader.
@@ -114,5 +129,6 @@ __all__ = [
     "ResourceReadResult",
     "ResourceRegistryError",
     "TextWindowLocator",
+    "TextWindowBudget",
     "VisualHandle",
 ]

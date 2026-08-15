@@ -375,6 +375,53 @@ OpenRouter are `provider: openai` plus their `base_url` — there is no
 `provider: deepseek` or `provider: openrouter`, and any unknown value is
 rejected when the config loads.
 
+### Model capacity profiles
+
+Each chat model resolves an endpoint-scoped capacity profile containing its
+context window (`C`), optional maximum input (`I`), optional maximum output
+(`O`), and image/tool/reasoning capabilities. DlightRAG matches the normalized
+`provider`, exact `model`, and normalized `base_url`; the same model name at a
+different endpoint is a different profile. Resolution precedence is an
+explicit root override, trusted provider-adapter facts, then the versioned
+catalog shipped by `dlightrag-ai`. Unknown endpoints fail closed instead of
+inheriting a global default or being probed.
+
+Adapter facts are an optional, static class-level declaration: DlightRAG asks
+the selected adapter without constructing a client or making a network call.
+An adapter that publishes no model facts returns no profile and resolution
+continues to the catalog. The currently cataloged endpoints remain in the
+shared catalog so runtime and the stdlib-only setup wizard use identical facts.
+
+The setup wizard reads that same catalog. It asks for an override only when a
+selected endpoint is unknown. For a manually configured private or newly
+released model, provide one complete override at the root:
+
+```yaml
+model_capacity_overrides:
+  - provider: openai
+    model: private-model
+    base_url: http://localhost:8888/v1
+    context_window_tokens: 262144
+    max_input_tokens: 200000
+    max_output_tokens: 32768
+    supports_images: true
+    supports_tools: true
+    supports_reasoning: false
+```
+
+`context_window_tokens` is required. `max_input_tokens` and
+`max_output_tokens` may be omitted only when the endpoint does not publish
+those separate limits. Capability flags default to `false`; set them from
+trusted endpoint documentation. Duplicate normalized endpoint identities and
+an input limit greater than the context window are configuration errors.
+
+Capacity arithmetic is owned by one immutable, revisioned policy. Its hard
+input limit is `L = min(I if known else C, floor(0.85C))`; research compacts
+proactively at `floor(0.85L)`. A request with known `O` receives at most
+`min(O, C - input)` output tokens. Capacity is not configured under `answer`;
+there is no evidence ratio, fixed generation reserve, or fixed tool-observation
+token cap.
+
 ### LLM Structured Output
 
 Planner and other small control-plane calls pass a `StructuredOutput` contract
@@ -616,8 +663,8 @@ configured provider surfaces as a request error during ingest, so lower it then.
 BM25 is part of the supported DlightRAG retrieval path. BM25 candidate breadth
 follows the configured chunk candidate budget. `/retrieve` does not re-cap
 fused chunks after semantic/BM25 merge; `/answer` packs final prompt evidence
-against the shared `answer.context_window_tokens` capacity. Language profiles and
-scoring constants are advanced index signatures.
+against the resolved query model's remaining input capacity. Language profiles
+and scoring constants are advanced index signatures.
 
 Defaults:
 
@@ -735,7 +782,6 @@ rerank:
 
 answer:
   max_images: 12
-  context_window_tokens: 260000
   max_attachments: 6
   max_attachment_bytes: 104857600
   max_total_attachment_bytes: 134217728
@@ -748,10 +794,7 @@ answer:
   image_min_quality: 79
 ```
 
-`answer.context_window_tokens` (default 260,000) is the shared model context
-window used by evidence packing and final answer generation. Evidence is capped
-at 60 percent of it; a 32,768-token generation reserve is input-packing headroom
-only, not `max_output_tokens` and not an output cap. `answer.max_attachments` (6),
+`answer.max_attachments` (6),
 `answer.max_attachment_bytes` (100 MiB), and `answer.max_total_attachment_bytes`
 (128 MiB) bound answer attachment admission. `query_images` remains the
 retrieve-only current-image path.
@@ -927,8 +970,6 @@ extraction for every interface.
 ## Conversation And Upload Limits
 
 ```yaml
-max_conversation_turns: 50
-max_conversation_tokens: 65536
 max_upload_bytes: 104857600
 max_upload_size_mb: 512
 ingest_timeout:
@@ -941,22 +982,24 @@ the agent calls no tool or a tool batch adds no evidence. The cap bounds a run
 that keeps finding new evidence -- an open-web question can always find one more
 page -- and answers from what it already has instead of failing.
 
-`max_conversation_turns` and `max_conversation_tokens` bound the conversation
-window once for the whole answer request. Fast retrieval planning, research
-control, and final generation therefore cannot disagree about which prior turns
-exist. Research KB tool queries are already formulated by the agent, so their
-internal RetrievalPlanner receives no history and preserves those queries. The
-complete RetrievalPlanner request is bounded to `answer.context_window_tokens`
-minus the generation reserve. Current query text and current image descriptions
-are fixed inputs. Optional metadata schema and old conversation messages yield
-when the envelope is full: the schema is omitted first, then history is evicted
-oldest first. Each prior image description is capped at 512 tokens.
+Conversation history is projected once when an answer run is accepted. The
+projector keeps the newest contiguous complete user/assistant pairs that fit
+every reachable planner, research, and synthesis request. For each target, its
+allowance is the smaller of 20 percent of that model's hard input limit and the
+residual after fixed input; research targets use their proactive compaction
+threshold. The resulting history and resolved model profiles are pinned in the
+durable run, so planner, research control, and final generation cannot disagree
+about which prior turns exist. Research KB tool queries are already formulated
+by the agent, so their internal RetrievalPlanner receives the pinned history for
+lexical/filter inference while `preserve_query` keeps the agent's semantic query
+unchanged.
 
-Three separate limits bound a conversation, and they answer different questions.
+Transport and retention limits answer different questions.
 `MAX_HISTORY_MESSAGES` and `MAX_HISTORY_CONTENT_CHARS` are transport contracts
 that also size the JSON body limit, so they are a security bound rather than a
 memory policy. `web_conversations.max_turns` decides how many turns are retained
-in PostgreSQL. Only the two settings above decide how much reaches a model.
+in PostgreSQL. The pinned model profiles and context policy decide how much
+reaches a model.
 
 `max_upload_bytes` is the per-file cap for REST multipart ingest and Web
 workspace/folder uploads. It also supplies the tighter receive-layer cap for

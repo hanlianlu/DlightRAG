@@ -48,7 +48,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
-    command: ["dlightrag-api"]
 
   dlightrag-mcp:
     restart: unless-stopped

@@ -198,6 +198,15 @@ def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
     assert "COPY --from=uv-bin /usr/local/bin/uv /bin/" in dockerfile
 
 
+def test_runtime_image_defaults_to_api_and_mcp_overrides_it() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+
+    assert 'CMD ["dlightrag-api"]' in dockerfile
+    assert "command" not in compose["services"]["dlightrag-api"]
+    assert compose["services"]["dlightrag-mcp"]["command"] == ["dlightrag-mcp"]
+
+
 def test_docx_native_parser_runtime_dependency_is_direct() -> None:
     """LightRAG native DOCX parsing needs python-docx available at DlightRAG runtime."""
     dependencies = _dependencies()

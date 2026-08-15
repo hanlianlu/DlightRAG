@@ -16,7 +16,9 @@ questionary/rich are imported lazily inside the interactive functions.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import platform
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -24,21 +26,20 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 REPO_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = REPO_ROOT / "config.yaml"
 ENV_PATH = REPO_ROOT / ".env"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
+MODEL_CATALOG_PATH = REPO_ROOT / "packages" / "ai" / "src" / "dlightrag_ai" / "model_catalog.json"
 MINERU_ENV_PATH = REPO_ROOT / ".env.mineru"
 MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / ".env.mineru.example"
 API_READY_URL = "http://localhost:8100/ready"
 WEB_URL = "http://localhost:8100/web/"
 
-# Mirror of the shipped AnswerConfig defaults (see
-# src/dlightrag/config.py), used only to display sensible values when a
-# hand-edited config.yaml omits an Answer block. The runtime remains the sole
-# source of truth; these never write config.
-DEFAULT_CONTEXT_WINDOW_TOKENS = 260_000
+# Mirror of the shipped AnswerConfig attachment/image defaults, used only to
+# display sensible values when a hand-edited config.yaml omits an Answer block.
 DEFAULT_MAX_ATTACHMENTS = 6
 DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
@@ -133,6 +134,97 @@ def resolve_llm_choice(provider_name: str, *, model: str, base_url: str | None) 
     return _model_block(spec, model, base_url), "DLIGHTRAG_LLM__DEFAULT__API_KEY"
 
 
+def _normalized_endpoint(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").rstrip(".").lower()
+        if scheme not in {"http", "https"} or not hostname:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    if port == {"http": 80, "https": 443}[scheme]:
+        port = None
+    authority = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None:
+        authority = f"{authority}:{port}"
+    path = posixpath.normpath(parsed.path or "/")
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return urlunsplit((scheme, authority, path, "", ""))
+
+
+def _model_catalog() -> dict:
+    return json.loads(MODEL_CATALOG_PATH.read_text(encoding="utf-8"))
+
+
+def catalog_model_profile(block: dict) -> dict | None:
+    """Return shared catalog facts for one exact model endpoint."""
+    identity = (
+        str(block.get("provider") or ""),
+        str(block.get("model") or ""),
+        _normalized_endpoint(block.get("base_url")),
+    )
+    for item in _model_catalog().get("models", []):
+        candidate = (
+            str(item.get("provider") or ""),
+            str(item.get("model") or ""),
+            _normalized_endpoint(item.get("base_url")),
+        )
+        if candidate == identity:
+            return dict(item["profile"])
+    return None
+
+
+def _optional_positive_int(value: str, *, field: str) -> int | None:
+    text = value.strip()
+    if not text:
+        return None
+    parsed = int(text)
+    if parsed < 1:
+        raise ValueError(f"{field} must be positive")
+    return parsed
+
+
+def ask_model_capacity_override(prompter: Prompter, block: dict) -> dict:
+    """Collect complete operator facts for a model absent from the catalog."""
+    context_window = int(
+        _ask_required(
+            lambda: prompter.text(f"Context window tokens for {block['model']} (required)")
+        )
+    )
+    if context_window < 1:
+        raise ValueError("context_window_tokens must be positive")
+    max_input = _optional_positive_int(
+        prompter.text("Maximum request input tokens (optional)"),
+        field="max_input_tokens",
+    )
+    if max_input is not None and max_input > context_window:
+        raise ValueError("max_input_tokens cannot exceed context_window_tokens")
+    max_output = _optional_positive_int(
+        prompter.text("Maximum completion output tokens (optional)"),
+        field="max_output_tokens",
+    )
+    identity = {
+        "provider": block["provider"],
+        "model": block["model"],
+    }
+    if block.get("base_url") is not None:
+        identity["base_url"] = block["base_url"]
+    return {
+        **identity,
+        "context_window_tokens": context_window,
+        "max_input_tokens": max_input,
+        "max_output_tokens": max_output,
+        "supports_images": prompter.confirm("Does this model accept image input?"),
+        "supports_tools": prompter.confirm("Does this model support tool calling?"),
+        "supports_reasoning": prompter.confirm("Does this model support reasoning tokens?"),
+    }
+
+
 def resolve_embedding_choice(
     provider_name: str, *, model: str, base_url: str | None
 ) -> tuple[dict, str]:
@@ -176,6 +268,7 @@ def write_config_yaml(
     *,
     llm_default: dict | None = None,
     llm_roles: dict[str, dict] | None = None,
+    model_capacity_overrides: list[dict] | None = None,
     embedding: dict | None = None,
     rerank: dict | None = None,
     parser_kind: str | None = None,
@@ -195,6 +288,11 @@ def write_config_yaml(
             for role, block in llm_roles.items():
                 roles.setdefault(role, {})
                 _apply_model_block(roles[role], block)
+    if model_capacity_overrides is not None:
+        if model_capacity_overrides:
+            data["model_capacity_overrides"] = model_capacity_overrides
+        else:
+            data.pop("model_capacity_overrides", None)
     if embedding is not None:
         _apply_model_block(data["embedding"], embedding)
     if rerank is not None:
@@ -576,7 +674,7 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
 
     mode = prompter.select(MODEL_MODE_PROMPT, MODEL_MODE_CHOICES)
 
-    console.print(CONTEXT_WINDOW_NOTE)
+    console.print(MODEL_CAPACITY_NOTE)
     name, model, base_url, key = _ask_model(prompter, PROVIDERS_LLM, "LLM")
     llm_block, llm_env = resolve_llm_choice(name, model=model, base_url=base_url)
     if key is None:
@@ -596,6 +694,20 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
             else:
                 env_values[LLM_ROLE_ENV_KEYS[role]] = rk
             llm_roles[role] = block
+
+    capacity_overrides: list[dict] = []
+    seen_models: set[tuple[str, str, str | None]] = set()
+    for block in (llm_block, *llm_roles.values()):
+        identity = (
+            str(block.get("provider") or ""),
+            str(block.get("model") or ""),
+            _normalized_endpoint(block.get("base_url")),
+        )
+        if identity in seen_models:
+            continue
+        seen_models.add(identity)
+        if catalog_model_profile(block) is None:
+            capacity_overrides.append(ask_model_capacity_override(prompter, block))
 
     console.print(EMBEDDING_MODALITY_NOTE)
     ename, emodel, ebase, ekey = _ask_model(prompter, PROVIDERS_EMBED, "Embedding")
@@ -633,6 +745,7 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         CONFIG_PATH,
         llm_default=llm_block,
         llm_roles=llm_roles,
+        model_capacity_overrides=capacity_overrides,
         embedding=embed_block,
         rerank=rerank_block,
     )
@@ -691,13 +804,12 @@ EMBEDDING_MODALITY_NOTE = (
     "retrieved through its VLM description alone.[/dim]"
 )
 
-# Shown before the LLM provider list: the query/default model reads the whole
-# packed Answer context, so it must accept the declared context window.
-CONTEXT_WINDOW_NOTE = (
-    "[dim]The query and default LLM must accept the configured Answer context "
-    "window (answer.context_window_tokens, default 260,000): evidence packing and "
-    "final answer generation share it, so pick a model whose context window is at least "
-    "that large.[/dim]"
+# Shown before the LLM provider list: known models resolve without operator input,
+# while private/proxied endpoints require explicit facts rather than a probe.
+MODEL_CAPACITY_NOTE = (
+    "[dim]DlightRAG resolves known model capacity from its versioned catalog. "
+    "For an unknown or private endpoint, this wizard asks for an explicit capacity "
+    "override; it never guesses or probes the context window.[/dim]"
 )
 
 MODELS_OVERWRITE_CONFIRM = (
@@ -806,6 +918,24 @@ def is_configured(env_path: Path | None = None) -> bool:
     return all(env.get(key) for key in REQUIRED_ENV_KEYS)
 
 
+def _capacity_summary(block: dict, overrides: list[dict]) -> dict:
+    identity = (
+        str(block.get("provider") or ""),
+        str(block.get("model") or ""),
+        _normalized_endpoint(block.get("base_url")),
+    )
+    for override in overrides:
+        candidate = (
+            str(override.get("provider") or ""),
+            str(override.get("model") or ""),
+            _normalized_endpoint(override.get("base_url")),
+        )
+        if candidate == identity:
+            return {"source": "override", **dict(override)}
+    profile = catalog_model_profile(block)
+    return {"source": "catalog", **profile} if profile is not None else {"source": "unknown"}
+
+
 def read_config_summary(config_path: Path, env_path: Path) -> dict:
     """Build a display-ready, masked summary of the current config (never secrets)."""
     data = _yaml().load(config_path)
@@ -813,6 +943,7 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
     llm = data.get("llm", {}) or {}
     default = llm.get("default", {}) or {}
     roles = llm.get("roles", {}) or {}
+    capacity_overrides = data.get("model_capacity_overrides", []) or []
     embedding = data.get("embedding", {}) or {}
     rerank = data.get("rerank", {}) or {}
     answer = data.get("answer", {}) or {}
@@ -840,6 +971,13 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             }
             for role, block in roles.items()
         },
+        "model_capacities": {
+            "default": _capacity_summary(default, capacity_overrides),
+            **{
+                role: _capacity_summary(block or {}, capacity_overrides)
+                for role, block in roles.items()
+            },
+        },
         "embedding": {
             "provider": embedding.get("provider", "?"),
             "model": embedding.get("model", "?"),
@@ -853,9 +991,6 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "base_url": rerank.get("base_url"),
         },
         "answer": {
-            "context_window_tokens": answer.get(
-                "context_window_tokens", DEFAULT_CONTEXT_WINDOW_TOKENS
-            ),
             "max_attachments": answer.get("max_attachments", DEFAULT_MAX_ATTACHMENTS),
             "max_attachment_bytes": answer.get(
                 "max_attachment_bytes", DEFAULT_MAX_ATTACHMENT_BYTES
@@ -888,10 +1023,12 @@ def render_summary(console, summary: dict) -> None:
     table.add_row("LLM", f"{default['provider']} · {default['model']}")
     if default.get("base_url"):
         table.add_row("", f"[dim]{default['base_url']}[/dim]")
+    table.add_row("  capacity", _capacity_label(summary["model_capacities"]["default"]))
     for role, block in summary["llm_roles"].items():
         table.add_row(f"  • {role}", f"{block['provider']} · {block['model']}")
         if block.get("base_url"):
             table.add_row("", f"[dim]{block['base_url']}[/dim]")
+        table.add_row("    capacity", _capacity_label(summary["model_capacities"][role]))
     embedding = summary["embedding"]
     table.add_row(
         "Embedding", f"{embedding['provider']} · {embedding['model']} (dim {embedding['dim']})"
@@ -909,7 +1046,6 @@ def render_summary(console, summary: dict) -> None:
     answer = summary["answer"]
     per_mib = answer["max_attachment_bytes"] // (1024 * 1024)
     total_mib = answer["max_total_attachment_bytes"] // (1024 * 1024)
-    table.add_row("Answer context", f"{answer['context_window_tokens']:,} tokens")
     table.add_row(
         "Answer attachments",
         f"{answer['max_attachments']} max · ≤ {per_mib} MiB each · ≤ {total_mib} MiB total",
@@ -931,6 +1067,17 @@ def render_summary(console, summary: dict) -> None:
         ),
     )
     console.print(table)
+
+
+def _capacity_label(capacity: dict) -> str:
+    if capacity["source"] == "unknown":
+        return "unknown · configure an override"
+    context = f"C {int(capacity['context_window_tokens']):,}"
+    max_input = capacity.get("max_input_tokens")
+    max_output = capacity.get("max_output_tokens")
+    input_label = f"I {int(max_input):,}" if max_input is not None else "I = C"
+    output_label = f"O {int(max_output):,}" if max_output is not None else "O omitted"
+    return f"{capacity['source']} · {context} · {input_label} · {output_label}"
 
 
 def _bring_up_stack(console, *, profile: str | None = None) -> int:

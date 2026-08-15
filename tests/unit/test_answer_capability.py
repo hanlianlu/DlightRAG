@@ -5,6 +5,7 @@ import asyncio
 import base64
 import dataclasses
 import io
+from unittest.mock import AsyncMock
 
 import pytest
 from dlightrag_ai.settings import ModelSettings
@@ -20,6 +21,7 @@ from dlightrag.config import (
     EmbeddingConfig,
     LLMConfig,
     LLMRolesConfig,
+    ModelCapacityOverrideConfig,
     ModelConfig,
 )
 from dlightrag.core.answer.capability import (
@@ -75,6 +77,17 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
                 )
             ),
         ),
+        model_capacity_overrides=[
+            ModelCapacityOverrideConfig(
+                provider="openai",
+                model="local-query",
+                base_url="http://host.docker.internal:8888/v1",
+                context_window_tokens=100_000,
+                max_output_tokens=10_000,
+                supports_images=True,
+                supports_tools=True,
+            )
+        ],
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -114,6 +127,18 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
 
 def _reprobe_config() -> DlightragConfig:
     return DlightragConfig(
+        model_capacity_overrides=[
+            ModelCapacityOverrideConfig(
+                provider="openai",
+                model="z-ai/glm-5.2",
+                base_url="https://openrouter.ai/api/v1",
+                context_window_tokens=1_048_576,
+                max_output_tokens=262_144,
+                supports_images=True,
+                supports_tools=True,
+                supports_reasoning=True,
+            )
+        ],
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -157,6 +182,29 @@ async def test_unknown_capability_lazily_reprobes_to_supported(
     assert cap.effective_max_images == 8
 
 
+async def test_confirmed_image_context_refreshes_the_query_profile_after_reprobe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = RAGServiceManager(config=_reprobe_config())
+    manager._resolve_model_profiles()
+    declared = manager._declared_model_profile("query")
+    manager._model_profiles["query"] = dataclasses.replace(declared, supports_images=False)
+    manager._answer_image_capability = _capability("unknown", 0)
+    before = manager._request_model_context(None)
+
+    async def reprobe() -> None:
+        manager._model_profiles["query"] = declared
+        manager._answer_image_capability = _capability("supported", 8)
+
+    monkeypatch.setattr(manager, "_maybe_reprobe_answer_image_capability", reprobe)
+
+    after, capability = await manager._confirmed_live_answer_image_context(before)
+
+    assert before.query.supports_images is False
+    assert after.query.supports_images is True
+    assert capability is not None and capability.status == "supported"
+
+
 async def test_reprobe_updates_cached_synthesizer_image_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -178,8 +226,13 @@ async def test_reprobe_updates_cached_synthesizer_image_budget(
     }
     manager = RAGServiceManager(config=_reprobe_config())
     manager._answer_image_capability = _capability("unknown", 0)
-    synthesizer = AnswerSynthesizer(image_policy=manager._answer_image_policy())
-    manager._answer_synthesizer = synthesizer
+    manager._narrow_role_image_profile("query", "unknown")
+    old_profile = manager._model_profile("query")
+    synthesizer = AnswerSynthesizer(
+        image_policy=manager._answer_image_policy(old_profile),
+        model_profile=old_profile,
+    )
+    manager._answer_synthesizers_by_profile[old_profile] = synthesizer
 
     async def fake_discover() -> AnswerImageCapability:
         return _capability("supported", 8)
@@ -188,9 +241,12 @@ async def test_reprobe_updates_cached_synthesizer_image_budget(
 
     before = synthesizer._prepare_prompt_context("question", contexts)
     await manager._maybe_reprobe_answer_image_capability()
-    after = synthesizer._prepare_prompt_context("question", contexts)
+    manager._answer_model = AsyncMock()
+    refreshed = manager._get_answer_synthesizer(manager._model_profile("query"))
+    after = refreshed._prepare_prompt_context("question", contexts)
 
     assert before.trace["answer_context_images_sent"] == 0
+    assert refreshed is not synthesizer
     assert after.trace["answer_context_images_sent"] == 1
 
 
@@ -410,11 +466,25 @@ async def test_cancelled_probe_finishes_provider_close(
 
 
 def _role_config(**roles: ModelConfig) -> DlightragConfig:
+    default = ModelConfig(model="default-model", api_key="default-key")
+    profiles: dict[tuple[str, str, str | None], ModelCapacityOverrideConfig] = {}
+    for model in (default, *roles.values()):
+        identity = (model.provider, model.model, model.base_url)
+        profiles[identity] = ModelCapacityOverrideConfig(
+            provider=model.provider,
+            model=model.model,
+            base_url=model.base_url,
+            context_window_tokens=100_000,
+            max_output_tokens=10_000,
+            supports_images=True,
+            supports_tools=True,
+        )
     return DlightragConfig(
         llm=LLMConfig(
-            default=ModelConfig(model="default-model", api_key="default-key"),
+            default=default,
             roles=LLMRolesConfig(**roles),
         ),
+        model_capacity_overrides=list(profiles.values()),
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -426,13 +496,17 @@ def _role_config(**roles: ModelConfig) -> DlightragConfig:
 
 async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -> None:
     from dlightrag.core.resources import ResourceInput
+    from dlightrag.core.resources.models import TextWindowBudget
 
     manager = RAGServiceManager(config=_role_config())
     manager._answer_image_capability = _capability("unsupported", 0)
     manager._vlm_image_status = "supported"
+    manager._narrow_role_image_profile("vlm", "supported")
 
     _registry, tools = manager._build_resource_context(
-        [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")]
+        [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
+        text_window_budget=TextWindowBudget(tokens=1_000),
+        vlm_profile=manager._model_profile("vlm"),
     )
 
     assert [tool.name for tool in tools] == ["read_resource", "inspect_resource"]
@@ -440,13 +514,19 @@ async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -
 
 async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_images() -> None:
     from dlightrag.core.resources import ResourceInput
+    from dlightrag.core.resources.models import TextWindowBudget
 
     manager = RAGServiceManager(config=_role_config())
     manager._answer_image_capability = _capability("supported", 8)
     manager._vlm_image_status = "unsupported"
 
     _registry, tools = manager._build_resource_context(
-        [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")]
+        [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
+        text_window_budget=TextWindowBudget(tokens=1_000),
+        vlm_profile=dataclasses.replace(
+            manager._model_profile("vlm"),
+            supports_images=False,
+        ),
     )
 
     assert [tool.name for tool in tools] == ["read_resource"]
@@ -468,6 +548,7 @@ async def test_query_image_description_is_disabled_without_vlm_image_support() -
     manager = RAGServiceManager(config=_role_config())
     manager._answer_image_capability = _capability("supported", 8)
     manager._vlm_image_status = "unknown"
+    manager._narrow_role_image_profile("vlm", "unknown")
     manager._vlm_func = lambda **_kwargs: None
 
     describer = manager._query_image_describer()
@@ -490,6 +571,31 @@ async def test_zero_configured_ceiling_disables_answer_images_without_a_model_ca
     assert capability.status == "unsupported"
     assert capability.failure_kind == "config_disabled"
     assert capability.effective_max_images == 0
+
+
+async def test_live_probe_cannot_widen_profile_declared_image_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+    manager = RAGServiceManager(config=config)
+    resolve = AsyncMock(return_value=ImageProbeOutcome(status="supported"))
+    monkeypatch.setattr(manager._image_capabilities, "resolve", resolve)
+
+    await manager._probe_answer_image_capability()
+
+    capability = manager.answer_image_capability
+    assert capability is not None
+    assert capability.status == "unsupported"
+    assert capability.failure_kind == "profile_declared_unsupported"
+    assert manager._model_profile("query").supports_images is False
+    resolve.assert_not_awaited()
 
 
 async def test_zero_configured_ceiling_settles_the_vlm_role_without_a_model_call(

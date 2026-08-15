@@ -6,7 +6,9 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.structured import StructuredOutput
+from dlightrag_ai.tokens import estimate_messages_tokens
 from dlightrag_rag.retrieval import MetadataFilter
 
 from dlightrag.core.memory.conversation import PriorTurns
@@ -15,6 +17,15 @@ from dlightrag.core.request.retrieval_planner import (
     RetrievalPlanner,
     _build_custom_keys_hint,
     _build_schema_section,
+)
+
+_TEST_PROFILE = ModelProfile(
+    context_window_tokens=1_200_000,
+    max_input_tokens=1_000_000,
+)
+_SMALL_PROFILE = ModelProfile(
+    context_window_tokens=1_295,
+    max_input_tokens=1_100,
 )
 
 # ---------------------------------------------------------------------------
@@ -89,7 +100,7 @@ class TestStatelessPlan:
             captured_messages.extend(kwargs["messages"])
             return json.dumps({"standalone_query": "rewritten", "filters": {}})
 
-        planner = RetrievalPlanner(llm_func=llm_func)
+        planner = RetrievalPlanner(llm_func=llm_func, model_profile=_TEST_PROFILE)
         await planner.plan(
             "QUERY-MARKER explain this",
             conversation_history=PriorTurns([{"role": "user", "content": "HISTORY-MARKER"}]),
@@ -125,7 +136,7 @@ class TestStatelessPlan:
             captured_messages.extend(kwargs["messages"])
             return json.dumps({"standalone_query": "rewritten", "filters": {}})
 
-        planner = RetrievalPlanner(llm_func=llm_func)
+        planner = RetrievalPlanner(llm_func=llm_func, model_profile=_TEST_PROFILE)
         await planner.plan(
             long_query,
             schema={"columns": [], "custom_keys": [long_key]},
@@ -145,7 +156,7 @@ class TestStatelessPlan:
 
 class TestPlanNoLLM:
     async def test_no_llm_returns_fallback(self):
-        planner = RetrievalPlanner(llm_func=None)
+        planner = RetrievalPlanner(llm_func=None, model_profile=_TEST_PROFILE)
         plan = await planner.plan("hello")
         assert plan.standalone_query == "hello"
         assert plan.metadata_filter is None
@@ -154,14 +165,14 @@ class TestPlanNoLLM:
 class TestPlanWithLLM:
     async def test_basic_query(self):
         llm = AsyncMock(return_value=json.dumps({"standalone_query": "what is X", "filters": {}}))
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("what is X")
         assert plan.standalone_query == "what is X"
         assert plan.metadata_filter is None
 
     async def test_llm_call_uses_structured_output_contract(self):
         llm = AsyncMock(return_value=json.dumps({"standalone_query": "what is X", "filters": {}}))
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
         await planner.plan("what is X")
 
@@ -171,6 +182,24 @@ class TestPlanWithLLM:
         assert isinstance(structured_output, StructuredOutput)
         assert structured_output.name == "retrieval_plan"
 
+    async def test_exact_request_measure_sets_model_output_allowance(self):
+        llm = AsyncMock(return_value=json.dumps({"standalone_query": "what is X", "filters": {}}))
+        profile = ModelProfile(
+            context_window_tokens=100_000,
+            max_input_tokens=85_000,
+            max_output_tokens=73,
+        )
+        planner = RetrievalPlanner(llm_func=llm, model_profile=profile)
+
+        measure = planner.history_input_measure("what is X")
+        await planner.plan("what is X")
+
+        await_args = llm.await_args
+        assert await_args is not None
+        messages = await_args.kwargs["messages"]
+        assert measure([]) == estimate_messages_tokens(messages)
+        assert await_args.kwargs["max_tokens"] == 73
+
     async def test_llm_call_uses_messages_first_contract(self):
         calls: list[tuple[list[dict[str, object]], StructuredOutput]] = []
 
@@ -178,7 +207,7 @@ class TestPlanWithLLM:
             calls.append((messages, structured_output))
             return json.dumps({"standalone_query": "messages-first", "filters": {}})
 
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
         plan = await planner.plan("what is X")
 
@@ -203,7 +232,7 @@ class TestPlanWithLLM:
         ) -> str:
             return json.dumps({"standalone_query": "legacy prompt style", "filters": {}})
 
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
         with patch("dlightrag.core.request.retrieval_planner.asyncio.sleep", new=AsyncMock()):
             plan = await planner.plan("what is X")
@@ -219,7 +248,7 @@ class TestPlanWithLLM:
                 }
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         history = [
             {"role": "user", "content": "Tell me about France"},
             {"role": "assistant", "content": "France is a country in Europe."},
@@ -242,7 +271,7 @@ class TestPlanWithLLM:
                 }
             )
 
-        planner = RetrievalPlanner(llm_func=llm_func)
+        planner = RetrievalPlanner(llm_func=llm_func, model_profile=_TEST_PROFILE)
 
         plan = await planner.plan("agent chosen terms")
 
@@ -275,7 +304,7 @@ class TestPlanWithLLM:
                 }
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("find report.pdf")
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.filename == "report.pdf"
@@ -303,7 +332,7 @@ class TestPlanWithLLM:
                 }
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
         with caplog.at_level(logging.INFO, logger="dlightrag.core.request.retrieval_planner"):
             await planner.plan("find report.pdf")
@@ -335,7 +364,7 @@ class TestPlanWithLLM:
                 }
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("2024 reports")
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.creation_date_from is not None
@@ -365,7 +394,7 @@ class TestPlanWithLLM:
                 }
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("query written by Auth not-a-date")
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.creation_date_from is None
@@ -381,7 +410,7 @@ class TestPlanWithLLM:
                 }
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("tell me about Ada's ideas")
         assert plan.metadata_filter is None
         assert plan.metadata_filter_confidence == "low"
@@ -397,7 +426,7 @@ class TestPlanWithLLM:
                 }
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
 
         plan = await planner.plan("find Ada material")
 
@@ -416,7 +445,7 @@ class TestPlanFallback:
             captured_messages.extend(kwargs["messages"])
             return '{"standalone_query":"q","filters":{}}'
 
-        planner = RetrievalPlanner(llm_func=llm_func, input_token_envelope=1_100)
+        planner = RetrievalPlanner(llm_func=llm_func, model_profile=_SMALL_PROFILE)
         plan = await planner.plan(
             "short query",
             schema={"columns": [], "custom_keys": ["schema " * 2_000]},
@@ -430,16 +459,16 @@ class TestPlanFallback:
         self,
     ):
         llm = AsyncMock(return_value='{"standalone_query":"unused","filters":{}}')
-        planner = RetrievalPlanner(llm_func=llm, input_token_envelope=1_100)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_SMALL_PROFILE)
 
         plan = await planner.plan("query " * 1_000)
 
-        assert plan.outcome == "fallback_input_overflow"
+        assert plan.outcome == "planner_input_overflow"
         llm.assert_not_awaited()
 
     async def test_llm_exception_returns_fallback(self):
         llm = AsyncMock(side_effect=RuntimeError("LLM error"))
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         with patch("dlightrag.core.request.retrieval_planner.asyncio.sleep", new=AsyncMock()):
             plan = await planner.plan("query")
         assert plan.standalone_query == "query"
@@ -447,7 +476,7 @@ class TestPlanFallback:
 
     async def test_plan_uses_retry_helper_and_falls_back_on_exhausted_provider(self):
         llm = AsyncMock(return_value='{"standalone_query":"should not be used","filters":{}}')
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         planner._call_llm_with_retry = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
         plan = await planner.plan("query")
@@ -459,13 +488,13 @@ class TestPlanFallback:
 
     async def test_empty_response_returns_fallback(self):
         llm = AsyncMock(return_value="")
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("query")
         assert plan.standalone_query == "query"
 
     async def test_invalid_json_returns_fallback(self):
         llm = AsyncMock(return_value="this is not json")
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("query")
         assert plan.standalone_query == "query"
 
@@ -476,7 +505,7 @@ class TestPlanFallback:
                 '"filters": {}}\n```'
             )
         )
-        planner = RetrievalPlanner(llm_func=llm)
+        planner = RetrievalPlanner(llm_func=llm, model_profile=_TEST_PROFILE)
         plan = await planner.plan("query")
         assert plan.standalone_query == "query"
         assert plan.bm25_query == "parsed terms"

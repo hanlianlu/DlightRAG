@@ -182,7 +182,6 @@ direct_visual_top_k: 20  # DlightRAG: image->image query-vector retrieval breadt
 
 answer:
   max_images: 12
-  context_window_tokens: 260000        # Shared evidence-packing and synthesis window.
   max_attachments: 6
   max_attachment_bytes: 104857600      # 100 MiB per answer attachment.
   max_total_attachment_bytes: 134217728  # 128 MiB total across answer attachments.

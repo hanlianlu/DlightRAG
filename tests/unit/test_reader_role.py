@@ -11,13 +11,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig
+from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig
 
 
 def _config(*, service_role: str = "writer", **overrides) -> DlightragConfig:
     return cast(Any, DlightragConfig)(
         _env_file=None,
         service_role=service_role,
+        llm=LLMConfig(),
         embedding=EmbeddingConfig(
             provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
         ),
@@ -423,7 +424,11 @@ def _patch_manager_startup(
     monkeypatch.setattr(pg_pool, "bind", lambda _config: None)
     monkeypatch.setattr(RAGServiceManager, "_initialize_workspace_registry", AsyncMock())
     monkeypatch.setattr(RAGServiceManager, "_probe_role_image_capabilities", AsyncMock())
-    monkeypatch.setattr(RAGServiceManager, "_get_retrieval_planner", lambda self: None)
+    monkeypatch.setattr(
+        RAGServiceManager,
+        "_get_retrieval_planner",
+        lambda self, model_profile=None: None,
+    )
     monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", AsyncMock())
     monkeypatch.setattr(servicemanager_module.RAGService, "acreate", AsyncMock())
     if stub_answer_store:
@@ -445,6 +450,9 @@ def _patch_answer_run_store(
             validate_calls.append(validate_only)
             if failure is not None:
                 raise failure
+
+        async def list_active_run_requirements(self) -> tuple[Any, ...]:
+            return ()
 
     def _factory() -> Any:
         store = _Store()

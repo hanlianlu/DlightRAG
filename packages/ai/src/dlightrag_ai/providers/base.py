@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
+from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.messages import (
     AssistantTurn,
     ToolCallingUnavailableError,
@@ -134,6 +135,17 @@ class CompletionProvider(ABC):
     (Anthropic, Gemini).  Providers without native support fall back to
     ``json_object`` mode or a strict-mode json_schema via the OpenAI API.
     """
+
+    @classmethod
+    def declared_model_profile(
+        cls,
+        *,
+        model: str,
+        base_url: str | None,
+    ) -> ModelProfile | None:
+        """Return trusted static endpoint facts when this adapter publishes them."""
+        del model, base_url
+        return None
 
     def __init__(
         self,

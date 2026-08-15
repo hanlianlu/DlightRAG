@@ -19,9 +19,10 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.api.answer_stream import follow_run_frames
 from dlightrag.api.server import create_app
 from dlightrag.storage.answer_runs import AnswerRunEvent, IdempotencyKeyConflict
-from dlightrag.storage.web_conversations import ConversationSubmissionConflict
+from dlightrag.storage.web_conversations import ConversationSnapshot, ConversationSubmissionConflict
 from dlightrag.web.answer_events import browser_frame, render_done_event
 from dlightrag.web.conversations import WebConversationService, project_conversation_turn
+from tests.unit.conftest import prepare_test_answer_run_input
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
     SUBMISSION_ID,
@@ -123,6 +124,43 @@ async def test_replaying_a_submission_returns_the_authoritative_run(
     assert response.status_code == 202
     assert response.json()["run_id"] == RUN_ID
     assert response.json()["status"] == "running"
+
+
+async def test_service_replays_before_preparing_resolved_run_input() -> None:
+    now = datetime.datetime.now(datetime.UTC)
+    store = AsyncMock()
+    store.snapshot.return_value = ConversationSnapshot(
+        principal_id="anonymous",
+        conversation_id=_CID,
+        content_revision=1,
+        title="Conversation",
+        created_at=now,
+        updated_at=now,
+        turns=(),
+    )
+    existing = linked_turn(answer_run(status="running"))
+    store.replay_answer_turn.return_value = existing
+    prepare = AsyncMock(side_effect=AssertionError("replay must not prepare model input"))
+    service = WebConversationService(
+        store=store,
+        prepare_run_input=prepare,
+        max_turns=100,
+        ttl_days=30,
+        max_attachments=6,
+    )
+
+    submission = await service.start_answer(
+        None,
+        conversation_id=_CID,
+        submission_id=SUBMISSION_ID,
+        query="What changed?",
+        workspaces=["default"],
+    )
+
+    assert submission is not None
+    assert submission.run.status == "running"
+    prepare.assert_not_awaited()
+    store.create_answer_turn.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -243,7 +281,11 @@ async def scoped_client(manager: AsyncMock, test_config):
     manager.config = test_config
     application.state.manager = manager
     application.state.web_conversation_service = WebConversationService(
-        store=store, max_turns=100, ttl_days=30, max_attachments=6
+        store=store,
+        prepare_run_input=prepare_test_answer_run_input,
+        max_turns=100,
+        ttl_days=30,
+        max_attachments=6,
     )
     transport = ASGITransport(app=application)
     async with AsyncClient(
@@ -510,6 +552,60 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
     # The turn model never re-exposes stored source or principal state.
     assert "answer_sources" not in turn.model_dump()
     assert "principal_id" not in turn.model_dump_json()
+
+
+def test_a_retained_legacy_terminal_turn_does_not_require_execution_pins() -> None:
+    turn = project_conversation_turn(
+        linked_turn(
+            answer_run(
+                status="succeeded",
+                request={"query": "Legacy question", "workspaces": ["default"]},
+                result=stored_result(),
+            )
+        )
+    )
+
+    assert turn.user_text == "Legacy question"
+    assert turn.assistant_text == "Revenue increased [1]."
+
+
+async def test_retained_legacy_terminal_attachment_does_not_require_execution_pins() -> None:
+    digest = "a" * 64
+    run = answer_run(
+        status="succeeded",
+        request={
+            "query": "Legacy attachment",
+            "workspaces": ["default"],
+            "attachments": [
+                {
+                    "digest": digest,
+                    "filename": "notes.txt",
+                    "mime_type": "text/plain",
+                    "ordinal": 0,
+                    "byte_size": 7,
+                }
+            ],
+        },
+        result=stored_result(),
+    )
+    store = AsyncMock()
+    store.find_turn_by_run.return_value = linked_turn(run)
+    run_store = AsyncMock()
+    run_store.load_artifact.return_value = b"content"
+    service = WebConversationService(
+        store=store,
+        prepare_run_input=prepare_test_answer_run_input,
+        run_store=run_store,
+        max_turns=100,
+        ttl_days=30,
+        max_attachments=6,
+    )
+
+    attachment = await service.attachment(None, RUN_ID, 0)
+
+    assert attachment is not None
+    assert attachment[0].digest == digest
+    assert attachment[1] == b"content"
 
 
 def test_uploads_are_addressed_through_their_run() -> None:

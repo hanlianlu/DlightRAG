@@ -9,6 +9,7 @@ from dlightrag_agent.tools.contracts import (
     ToolModelFunc,
     ToolObservation,
     ToolResult,
+    ToolResultCapacityError,
 )
 from dlightrag_agent.tools.executor import ToolTurnExecutor
 
@@ -20,5 +21,6 @@ __all__ = [
     "ToolModelFunc",
     "ToolObservation",
     "ToolResult",
+    "ToolResultCapacityError",
     "ToolTurnExecutor",
 ]

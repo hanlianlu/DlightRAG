@@ -10,11 +10,19 @@ import os
 from pathlib import Path
 
 import pytest
+from dlightrag_ai.capacity import ModelProfile
+from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
 
 from dlightrag import config as config_module
 from dlightrag.config import DlightragConfig
 from dlightrag.core.answer.images import AnswerImagePolicy
+from dlightrag.core.answer_runs.execution import (
+    AnswerRunInput,
+    AnswerRunRequest,
+    PinnedModelProfile,
+)
+from dlightrag.core.resources.models import ResourceInput
 
 _REPO_CONFIG_YAML = Path(__file__).resolve().parents[2] / "config.yaml"
 # Bound before the fixture patches the name, otherwise the wrapper recurses.
@@ -40,9 +48,52 @@ def answer_image_policy(**overrides: int) -> AnswerImagePolicy:
         "min_px": 1024,
         "quality": 89,
         "min_quality": 79,
-        "context_window_tokens": 260_000,
     }
     return AnswerImagePolicy(**(fields | overrides))
+
+
+def answer_model_profile(**overrides: int | bool | None) -> ModelProfile:
+    """Resolved answer-model facts for tests that do not exercise the catalog."""
+    fields: dict[str, int | bool | None] = {
+        "context_window_tokens": 1_000_000,
+        "max_input_tokens": None,
+        "max_output_tokens": 128_000,
+        "supports_images": True,
+        "supports_tools": True,
+        "supports_reasoning": True,
+    }
+    return ModelProfile(**(fields | overrides))  # type: ignore[arg-type]
+
+
+async def prepare_test_answer_run_input(
+    request: AnswerRunRequest,
+    *,
+    resources: list[ResourceInput] | None,  # noqa: ARG001
+    idempotency_fingerprint: str,
+) -> AnswerRunInput:
+    """Pin one normalized request for tests that do not exercise model resolution."""
+    return AnswerRunInput(
+        query=request.query,
+        workspaces=request.workspaces,
+        history=request.history,
+        top_k=request.top_k,
+        chunk_top_k=request.chunk_top_k,
+        filters=request.filters,
+        semantic_highlights=request.semantic_highlights,
+        links=request.links,
+        attachments=request.attachments,
+        history_attachments=request.history_attachments,
+        pinned_models=(
+            PinnedModelProfile(
+                role="query",
+                fingerprint=ModelFingerprint("openai", "test-model", None),
+                profile=answer_model_profile(),
+            ),
+        ),
+        context_policy_revision="m1-v1",
+        model_catalog_revision="2026-08-14",
+        idempotency_fingerprint=idempotency_fingerprint,
+    )
 
 
 @pytest.fixture(autouse=True)

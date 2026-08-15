@@ -25,11 +25,20 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION, ModelProfile
+from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
+from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
+from dlightrag_ai.settings import MODEL_ROLE_NAMES
 from playwright.sync_api import Browser, Page, sync_playwright
 
 from dlightrag.api.server import create_app
 from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.core.answer_runs.execution import (
+    AnswerRunInput,
+    AttachmentReference,
+    PinnedModelProfile,
+)
 from dlightrag.storage.answer_runs import AnswerRunEvent, AnswerRunRecord
 from dlightrag.storage.web_conversations import LinkedTurn
 from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary
@@ -51,6 +60,47 @@ _ANSWER_TOKENS = ("DlightRAG is a ", "multimodal RAG system.")
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
+_E2E_PROFILE = ModelProfile(
+    context_window_tokens=1_000_000,
+    max_output_tokens=128_000,
+    supports_images=True,
+    supports_tools=True,
+    supports_reasoning=True,
+)
+
+
+def _run_request(
+    *,
+    query: str,
+    workspaces: Any,
+    attachments: Any,
+    idempotency_fingerprint: str,
+) -> dict[str, Any]:
+    return AnswerRunInput(
+        query=query,
+        workspaces=tuple(workspaces),
+        attachments=tuple(
+            AttachmentReference(
+                digest=attachment.content_sha256,
+                filename=attachment.filename,
+                mime_type=attachment.mime_type,
+                ordinal=attachment.ordinal,
+                byte_size=attachment.byte_size,
+            )
+            for attachment in attachments
+        ),
+        pinned_models=tuple(
+            PinnedModelProfile(
+                role=role,
+                fingerprint=ModelFingerprint("openai", f"e2e-{role}", None),
+                profile=_E2E_PROFILE,
+            )
+            for role in MODEL_ROLE_NAMES
+        ),
+        context_policy_revision=CONTEXT_POLICY_REVISION,
+        model_catalog_revision=MODEL_CATALOG_REVISION,
+        idempotency_fingerprint=idempotency_fingerprint,
+    ).as_request()
 
 
 def _run_record(
@@ -199,20 +249,12 @@ class E2EConversationService:
                         conversation=self._summary(value),
                     )
             run_id = str(uuid4())
-            request = {
-                "query": query,
-                "workspaces": list(workspaces),
-                "attachments": [
-                    {
-                        "digest": attachment.content_sha256,
-                        "filename": attachment.filename,
-                        "mime_type": attachment.mime_type,
-                        "ordinal": attachment.ordinal,
-                        "byte_size": attachment.byte_size,
-                    }
-                    for attachment in attachments
-                ],
-            }
+            request = _run_request(
+                query=query,
+                workspaces=workspaces,
+                attachments=attachments,
+                idempotency_fingerprint=submission_id,
+            )
             turn = LinkedTurn(
                 turn_id=str(uuid4()),
                 turn_number=len(value["turns"]) + 1,
@@ -315,24 +357,26 @@ class E2EConversationService:
         }
         for index in range(1, turn_count + 1):
             run_id = str(uuid4())
-            request = {
-                "query": f"Image question {index}",
-                "workspaces": ["default"],
-                "attachments": [
-                    {
-                        "digest": f"{index:064d}",
-                        "filename": "chart.png",
-                        "mime_type": "image/png",
-                        "ordinal": 1,
-                        "byte_size": len(_PNG),
-                    }
-                ],
-            }
+            submission_id = str(uuid4())
+            request = _run_request(
+                query=f"Image question {index}",
+                workspaces=["default"],
+                attachments=(
+                    SimpleNamespace(
+                        content_sha256=f"{index:064d}",
+                        filename="chart.png",
+                        mime_type="image/png",
+                        ordinal=1,
+                        byte_size=len(_PNG),
+                    ),
+                ),
+                idempotency_fingerprint=submission_id,
+            )
             value["turns"].append(
                 LinkedTurn(
                     turn_id=str(uuid4()),
                     turn_number=index,
-                    submission_id=str(uuid4()),
+                    submission_id=submission_id,
                     created_at=now,
                     run=_run_record(
                         run_id,

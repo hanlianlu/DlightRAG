@@ -22,6 +22,8 @@ from unittest.mock import MagicMock
 
 import asyncpg
 import pytest
+from dlightrag_ai.capacity import ModelProfile
+from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
 from dlightrag.citations.streaming import AnswerStream
@@ -33,14 +35,14 @@ from dlightrag.core.answer_runs.coordinator import (
     DurableWrites,
     RunSession,
 )
-from dlightrag.core.answer_runs.execution import AnswerRunInput
+from dlightrag.core.answer_runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.core.answer_runs.models import AgentRunState
 from dlightrag.core.answer_runs.subscription import RunEventBroker
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.memory.episode import RunEpisode
+from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources import registry as registry_module
-from dlightrag.core.resources.models import ResourceInput
+from dlightrag.core.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.core.resources.registry import ResourceRegistry
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import (
@@ -49,8 +51,9 @@ from dlightrag.core.servicemanager import (
     _OrchestratorRun,
 )
 from dlightrag.core.tools import ExactCallCache
-from dlightrag.storage.answer_runs import PGAnswerRunStore
+from dlightrag.storage.answer_runs import PGAnswerRunStore, answer_run_request_fingerprint
 from dlightrag.storage.web_conversations import PGWebConversationStore
+from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [
     pytest.mark.integration,
@@ -67,7 +70,29 @@ _PG_CONN_KWARGS: dict[str, Any] = dict(
 
 _OWNER = "owner-alpha"
 _REQUEST: dict[str, Any] = {"query": "why", "workspaces": ["default"]}
+_REQUEST_FINGERPRINT = answer_run_request_fingerprint(_REQUEST)
 _VISUAL_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
+
+
+def _episode() -> _RunEpisode:
+    return _RunEpisode(retained_tail_tokens=20_000)
+
+
+def _answer_run_input() -> AnswerRunInput:
+    return AnswerRunInput(
+        query="why",
+        workspaces=("default",),
+        pinned_models=(
+            PinnedModelProfile(
+                role="query",
+                fingerprint=ModelFingerprint("openai", "test-model", None),
+                profile=ModelProfile(context_window_tokens=1_000_000),
+            ),
+        ),
+        context_policy_revision="m1-v1",
+        model_catalog_revision="2026-08-14",
+        idempotency_fingerprint="public-request-hash",
+    )
 
 
 async def _pg_available() -> bool:
@@ -97,7 +122,7 @@ async def store() -> AsyncIterator[PGAnswerRunStore]:
     )
     try:
         assert pool is not None
-        created = PGAnswerRunStore(pool=pool)
+        created = FingerprintingAnswerRunStore(pool=pool)
         await created.initialize()
         # Retention exempts conversation-linked runs, so the whole operational
         # schema is established here exactly as a real process establishes it.
@@ -140,7 +165,11 @@ def _status_is(store: PGAnswerRunStore, run_id: str, status: str) -> Any:
 
 
 async def test_checkpointed_turn_survives_a_new_worker(store: PGAnswerRunStore) -> None:
-    creation = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=_REQUEST,
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
     run_id = creation.run.run_id
     seen: list[int] = []
 
@@ -184,8 +213,17 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
     store: PGAnswerRunStore,
 ) -> None:
     """Every run-owning process trims expired event logs and prunes expired runs."""
-    expired = await store.create_run(owner_id=_OWNER, request=_REQUEST)
-    live = await store.create_run(owner_id=_OWNER, request={**_REQUEST, "query": "recent"})
+    expired = await store.create_run(
+        owner_id=_OWNER,
+        request=_REQUEST,
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
+    live_request = {**_REQUEST, "query": "recent"}
+    live = await store.create_run(
+        owner_id=_OWNER,
+        request=live_request,
+        idempotency_fingerprint=answer_run_request_fingerprint(live_request),
+    )
     for creation in (expired, live):
         claim = await store.claim_next(worker_id="retention-setup")
         assert claim is not None
@@ -234,7 +272,11 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
 async def test_graceful_shutdown_requeues_without_crash_recovery(
     store: PGAnswerRunStore,
 ) -> None:
-    creation = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=_REQUEST,
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
     run_id = creation.run.run_id
     running = asyncio.Event()
 
@@ -258,7 +300,11 @@ async def test_graceful_shutdown_requeues_without_crash_recovery(
 async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
     store: PGAnswerRunStore,
 ) -> None:
-    creation = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=_REQUEST,
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
     run_id = creation.run.run_id
 
     async def body(session: RunSession) -> Mapping[str, Any]:
@@ -296,7 +342,11 @@ async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
 async def test_running_run_observes_cancellation_and_commits_cancelled(
     store: PGAnswerRunStore,
 ) -> None:
-    creation = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=_REQUEST,
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
     run_id = creation.run.run_id
     started = asyncio.Event()
 
@@ -325,14 +375,18 @@ async def test_running_run_observes_cancellation_and_commits_cancelled(
 
 
 async def test_checkpoint_round_trips_through_jsonb(store: PGAnswerRunStore) -> None:
-    creation = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=_REQUEST,
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
     run_id = creation.run.run_id
     claimed = await store.claim_next(worker_id="worker-1")
     assert claimed is not None
 
     evidence = EvidenceLedger()
     evidence.add_contexts({"chunks": [{"chunk_id": "c1", "content": "text", "_workspace": "ws"}]})
-    episode = RunEpisode()
+    episode = _episode()
     episode.record([{"role": "assistant", "content": "", "provider_state": {"native": True}}])
     registry = ResourceRegistry()
     registry.register(ResourceInput(content=b"bytes", filename="a.txt"))
@@ -370,7 +424,7 @@ async def test_checkpoint_round_trips_through_jsonb(store: PGAnswerRunStore) -> 
     resumed_registry.register(ResourceInput(content=b"bytes", filename="a.txt"))
     resumed = AgentRunState(
         evidence=EvidenceLedger(),
-        episode=RunEpisode(),
+        episode=_episode(),
         tool_cache=ExactCallCache(),
         registry=resumed_registry,
         trace={},
@@ -404,7 +458,11 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     store: PGAnswerRunStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Durable web bytes survive a restart even when the page no longer resolves."""
-    creation = await store.create_run(owner_id=_OWNER, request=_REQUEST)
+    creation = await store.create_run(
+        owner_id=_OWNER,
+        request=_REQUEST,
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
+    )
     run_id = creation.run.run_id
     claimed = await store.claim_next(worker_id="worker-1")
     assert claimed is not None
@@ -430,7 +488,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
 
     state = AgentRunState(
         evidence=EvidenceLedger(),
-        episode=RunEpisode(),
+        episode=_episode(),
         tool_cache=ExactCallCache(),
         registry=registry,
         trace={},
@@ -473,7 +531,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     )
     resumed = AgentRunState(
         evidence=EvidenceLedger(),
-        episode=RunEpisode(),
+        episode=_episode(),
         tool_cache=ExactCallCache(),
         registry=resumed_registry,
         trace={},
@@ -532,7 +590,8 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     """A descriptor-only caller still gets a finished run and a safe canonical result."""
     manager = _answer_manager(store)
     creation = await manager.astart_answer_run(
-        owner_id=_OWNER, request=AnswerRunInput(query="why", workspaces=("default",))
+        owner_id=_OWNER,
+        request=_answer_run_input(),
     )
     run_id = creation.run.run_id
     try:
@@ -579,13 +638,16 @@ def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
     manager._answer_coordinator = None
     manager._answer_store_lock = asyncio.Lock()
     manager._answer_runtime_lock = asyncio.Lock()
+    manager._validate_pinned_model_profiles = MagicMock()  # type: ignore[method-assign]
     orchestrator = AnswerOrchestrator(
         synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
         retrieve_knowledge_base=_retrieve_visual,
+        model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
+        text_window_budget=TextWindowBudget(tokens=850_000),
     )
 
-    async def _prepare(turn: Any, **kwargs: Any) -> _OrchestratorRun:
+    async def _prepare(**kwargs: Any) -> _OrchestratorRun:
         return _OrchestratorRun(
             orchestrator=orchestrator,
             image_descriptions=[],

@@ -8,11 +8,15 @@ its own: the run row remains authoritative for status, turns, and cancellation.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from dlightrag_ai.capacity import ModelProfile
+from dlightrag_ai.fingerprints import ModelFingerprint
+
 from dlightrag.core.answer_runs.models import AgentRunState
+from dlightrag.core.resources.models import ResourceInput
 
 #: Encode one control turn's restorable state into its checkpoint envelope.
 type CheckpointEncoder = Callable[[AgentRunState], Awaitable[Mapping[str, Any]]]
@@ -46,6 +50,24 @@ class AttachmentReference:
         return f"history-attachment-{self.ordinal}"
 
 
+async def _current_attachment_resource(
+    reference: AttachmentReference,
+    load: Callable[[], Awaitable[bytes]],
+) -> ResourceInput:
+    """Rebuild one current attachment under its durable declared MIME."""
+    if reference.mime_type.strip().casefold().startswith("image/"):
+        return ResourceInput(
+            filename=reference.filename,
+            declared_mime=reference.mime_type,
+            content=await load(),
+        )
+    return ResourceInput(
+        filename=reference.filename,
+        declared_mime=reference.mime_type,
+        loader=load,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class LinkReference:
     """One ordered HTTPS attachment link, kept inert until an explicit read."""
@@ -64,14 +86,94 @@ class LinkReference:
         }
 
 
-@dataclass(frozen=True, slots=True)
-class AnswerRunInput:
-    """The normalized, immutable request one accepted run executes.
+def in_memory_attachment_loader(content: bytes) -> Callable[[], Awaitable[bytes]]:
+    """Return a stable async loader over bytes already admitted in memory."""
 
-    Workspace authorization is evaluated once before the run is accepted, so the
-    stored input carries the resulting workspace set and never a token, mutable
-    claim, transport header, temporary path, or authorization-dependent URL.
-    """
+    async def load() -> bytes:
+        return content
+
+    return load
+
+
+async def build_current_answer_resources(
+    *,
+    links: Sequence[LinkReference],
+    attachments: Sequence[AttachmentReference],
+    attachment_loaders: Sequence[Callable[[], Awaitable[bytes]]],
+) -> list[ResourceInput]:
+    """Rebuild links and current attachments exactly as the durable run will."""
+    if len(attachments) != len(attachment_loaders):
+        raise ValueError("current attachment references and loaders must have equal length")
+    resources = [
+        ResourceInput(
+            filename=link.filename,
+            url=link.url,
+            declared_mime=link.mime_type,
+        )
+        for link in links
+    ]
+    for reference, load in zip(attachments, attachment_loaders, strict=True):
+        resources.append(await _current_attachment_resource(reference, load))
+    return resources
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedModelProfile:
+    """One accepted run's immutable model identity and capacity facts."""
+
+    role: str
+    fingerprint: ModelFingerprint
+    profile: ModelProfile
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "role": self.role,
+            "fingerprint": {
+                "provider": self.fingerprint.provider,
+                "model": self.fingerprint.model,
+                "endpoint_fingerprint": self.fingerprint.endpoint_fingerprint,
+            },
+            "profile": {
+                "context_window_tokens": self.profile.context_window_tokens,
+                "max_input_tokens": self.profile.max_input_tokens,
+                "max_output_tokens": self.profile.max_output_tokens,
+                "supports_images": self.profile.supports_images,
+                "supports_tools": self.profile.supports_tools,
+                "supports_reasoning": self.profile.supports_reasoning,
+            },
+        }
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> PinnedModelProfile:
+        fingerprint = value.get("fingerprint")
+        profile = value.get("profile")
+        if not isinstance(fingerprint, Mapping) or not isinstance(profile, Mapping):
+            raise ValueError("pinned model profile requires fingerprint and profile objects")
+        return cls(
+            role=str(value.get("role") or ""),
+            fingerprint=ModelFingerprint(
+                provider=str(fingerprint.get("provider") or ""),
+                model=str(fingerprint.get("model") or ""),
+                endpoint_fingerprint=(
+                    str(fingerprint["endpoint_fingerprint"])
+                    if fingerprint.get("endpoint_fingerprint") is not None
+                    else None
+                ),
+            ),
+            profile=ModelProfile(
+                context_window_tokens=int(profile["context_window_tokens"]),
+                max_input_tokens=_optional_int(profile.get("max_input_tokens")),
+                max_output_tokens=_optional_int(profile.get("max_output_tokens")),
+                supports_images=bool(profile.get("supports_images")),
+                supports_tools=bool(profile.get("supports_tools")),
+                supports_reasoning=bool(profile.get("supports_reasoning")),
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerRunRequest:
+    """Normalized public request before model resolution and history projection."""
 
     query: str
     workspaces: tuple[str, ...] = ()
@@ -82,8 +184,6 @@ class AnswerRunInput:
     semantic_highlights: bool = False
     links: tuple[LinkReference, ...] = ()
     attachments: tuple[AttachmentReference, ...] = ()
-    #: Earlier conversation uploads this run may read but never sends as a
-    #: current-turn image; they point at artifacts an earlier run already stored.
     history_attachments: tuple[AttachmentReference, ...] = ()
 
     def as_request(self) -> dict[str, Any]:
@@ -101,18 +201,8 @@ class AnswerRunInput:
         }
 
     @classmethod
-    def from_request(cls, request: Mapping[str, Any]) -> AnswerRunInput:
-        attachments = _attachment_references(request.get("attachments"))
-        history_attachments = _attachment_references(request.get("history_attachments"))
-        links = tuple(
-            LinkReference(
-                url=str(item["url"]),
-                filename=(str(item["filename"]) if item.get("filename") else None),
-                ordinal=int(item["ordinal"]),
-                mime_type=(str(item["mime_type"]) if item.get("mime_type") else None),
-            )
-            for item in request.get("links") or ()
-        )
+    def from_request(cls, request: Mapping[str, Any]) -> AnswerRunRequest:
+        """Decode the stable public fields present in both legacy and resolved rows."""
         filters = request.get("filters")
         return cls(
             query=str(request.get("query") or ""),
@@ -122,9 +212,93 @@ class AnswerRunInput:
             chunk_top_k=_optional_int(request.get("chunk_top_k")),
             filters=dict(filters) if isinstance(filters, Mapping) else None,
             semantic_highlights=bool(request.get("semantic_highlights")),
+            links=_link_references(request.get("links")),
+            attachments=_attachment_references(request.get("attachments")),
+            history_attachments=_attachment_references(request.get("history_attachments")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerRunInput:
+    """The normalized, immutable request one accepted run executes.
+
+    Workspace authorization is evaluated once before the run is accepted, so the
+    stored input carries the resulting workspace set and never a token, mutable
+    claim, transport header, temporary path, or authorization-dependent URL.
+    """
+
+    query: str
+    pinned_models: tuple[PinnedModelProfile, ...]
+    context_policy_revision: str
+    model_catalog_revision: str
+    idempotency_fingerprint: str
+    workspaces: tuple[str, ...] = ()
+    history: tuple[Mapping[str, Any], ...] = ()
+    top_k: int | None = None
+    chunk_top_k: int | None = None
+    filters: Mapping[str, Any] | None = None
+    semantic_highlights: bool = False
+    links: tuple[LinkReference, ...] = ()
+    attachments: tuple[AttachmentReference, ...] = ()
+    #: Earlier conversation uploads this run may read but never sends as a
+    #: current-turn image; they point at artifacts an earlier run already stored.
+    history_attachments: tuple[AttachmentReference, ...] = ()
+    image_descriptions: tuple[str, ...] = ()
+
+    def as_request(self) -> dict[str, Any]:
+        return {
+            "query": self.query,
+            "workspaces": list(self.workspaces),
+            "history": [dict(message) for message in self.history],
+            "top_k": self.top_k,
+            "chunk_top_k": self.chunk_top_k,
+            "filters": dict(self.filters) if self.filters else None,
+            "semantic_highlights": self.semantic_highlights,
+            "links": [item.as_json() for item in self.links],
+            "attachments": [item.as_json() for item in self.attachments],
+            "history_attachments": [item.as_json() for item in self.history_attachments],
+            "pinned_models": [item.as_json() for item in self.pinned_models],
+            "context_policy_revision": self.context_policy_revision,
+            "model_catalog_revision": self.model_catalog_revision,
+            "idempotency_fingerprint": self.idempotency_fingerprint,
+            "image_descriptions": list(self.image_descriptions),
+        }
+
+    @classmethod
+    def from_request(cls, request: Mapping[str, Any]) -> AnswerRunInput:
+        attachments = _attachment_references(request.get("attachments"))
+        history_attachments = _attachment_references(request.get("history_attachments"))
+        links = _link_references(request.get("links"))
+        filters = request.get("filters")
+        pinned_models = tuple(
+            PinnedModelProfile.from_json(item) for item in request.get("pinned_models") or ()
+        )
+        context_policy_revision = str(request.get("context_policy_revision") or "")
+        model_catalog_revision = str(request.get("model_catalog_revision") or "")
+        idempotency_fingerprint = str(request.get("idempotency_fingerprint") or "")
+        if (
+            not pinned_models
+            or not context_policy_revision
+            or not model_catalog_revision
+            or not idempotency_fingerprint
+        ):
+            raise ValueError("answer run input is missing pinned model capacity facts")
+        return cls(
+            query=str(request.get("query") or ""),
+            pinned_models=pinned_models,
+            context_policy_revision=context_policy_revision,
+            model_catalog_revision=model_catalog_revision,
+            idempotency_fingerprint=idempotency_fingerprint,
+            workspaces=tuple(str(value) for value in request.get("workspaces") or ()),
+            history=tuple(dict(message) for message in request.get("history") or ()),
+            top_k=_optional_int(request.get("top_k")),
+            chunk_top_k=_optional_int(request.get("chunk_top_k")),
+            filters=dict(filters) if isinstance(filters, Mapping) else None,
+            semantic_highlights=bool(request.get("semantic_highlights")),
             links=links,
             attachments=attachments,
             history_attachments=history_attachments,
+            image_descriptions=tuple(str(item) for item in request.get("image_descriptions") or ()),
         )
 
 
@@ -136,6 +310,18 @@ def _attachment_references(value: Any) -> tuple[AttachmentReference, ...]:
             mime_type=str(item["mime_type"]),
             ordinal=int(item["ordinal"]),
             byte_size=int(item.get("byte_size") or 0),
+        )
+        for item in value or ()
+    )
+
+
+def _link_references(value: Any) -> tuple[LinkReference, ...]:
+    return tuple(
+        LinkReference(
+            url=str(item["url"]),
+            filename=(str(item["filename"]) if item.get("filename") else None),
+            ordinal=int(item["ordinal"]),
+            mime_type=(str(item["mime_type"]) if item.get("mime_type") else None),
         )
         for item in value or ()
     )
@@ -165,8 +351,12 @@ def _optional_int(value: Any) -> int | None:
 
 __all__ = [
     "AnswerRunInput",
+    "AnswerRunRequest",
     "AttachmentReference",
+    "build_current_answer_resources",
     "CheckpointEncoder",
+    "in_memory_attachment_loader",
     "LinkReference",
+    "PinnedModelProfile",
     "SessionBoundaries",
 ]

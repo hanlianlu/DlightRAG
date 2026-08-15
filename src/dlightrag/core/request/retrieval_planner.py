@@ -11,15 +11,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.structured import StructuredOutput
 from dlightrag_ai.telemetry import safe_log_text
-from dlightrag_ai.tokens import (
-    estimate_tokens,
-)
+from dlightrag_ai.tokens import estimate_messages_tokens
 from dlightrag_rag.retrieval import MetadataFilter
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.prompts import (
     RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE,
@@ -27,13 +25,6 @@ from dlightrag.prompts import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Planning packs into the same declared answer context window as control and
-# final calls, minus the shared final-generation reserve. There is no separate
-# fixed planner envelope.
-_DEFAULT_RETRIEVAL_PLANNER_INPUT_TOKEN_ENVELOPE = (
-    AnswerCapacity(260_000).context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
-)
 
 
 def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
@@ -52,13 +43,13 @@ RetrievalPlannerOutcome = Literal[
     "fallback_no_model",
     "fallback_provider_error",
     "fallback_invalid_response",
-    "fallback_input_overflow",
+    "planner_input_overflow",
 ]
 RetrievalPlannerFallbackOutcome = Literal[
     "fallback_no_model",
     "fallback_provider_error",
     "fallback_invalid_response",
-    "fallback_input_overflow",
+    "planner_input_overflow",
 ]
 
 
@@ -169,8 +160,15 @@ def _planner_user_payload(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _planner_request_tokens(system_tokens: int, user_payload: str) -> int:
-    return system_tokens + estimate_tokens(user_payload)
+def _planner_messages(system_prompt: str, user_payload: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_payload},
+    ]
+
+
+def _planner_request_tokens(system_prompt: str, user_payload: str) -> int:
+    return estimate_messages_tokens(_planner_messages(system_prompt, user_payload))
 
 
 def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int = 3) -> str:
@@ -196,10 +194,13 @@ class RetrievalPlanner:
         self,
         llm_func: Callable[..., Any] | None = None,
         *,
-        input_token_envelope: int = _DEFAULT_RETRIEVAL_PLANNER_INPUT_TOKEN_ENVELOPE,
+        model_profile: ModelProfile,
+        context_policy: ContextPolicy = CONTEXT_POLICY,
     ) -> None:
         self._llm_func = llm_func
-        self._input_token_envelope = max(1, int(input_token_envelope))
+        self._model_profile = model_profile
+        self._context_policy = context_policy
+        self._input_limit_tokens = context_policy.hard_input_limit(model_profile)
 
     async def _call_llm(
         self,
@@ -207,19 +208,65 @@ class RetrievalPlanner:
         system_prompt: str,
         *,
         structured_output: StructuredOutput = RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
+        max_tokens: int | None = None,
     ) -> str:
         """Call the planner LLM using DlightRAG's messages-first contract."""
         llm_func = self._llm_func
         if llm_func is None:
             raise RuntimeError("Query planning requires an LLM function")
 
-        return await llm_func(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
-            structured_output=structured_output,
+        kwargs: dict[str, Any] = {
+            "messages": _planner_messages(system_prompt, query),
+            "structured_output": structured_output,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        return await llm_func(**kwargs)
+
+    def history_input_measure(
+        self,
+        query: str,
+        *,
+        schema: dict[str, Any] | None = None,
+        current_image_descriptions: list[str] | None = None,
+        preserve_query: bool | None = None,
+    ) -> Callable[[list[dict[str, Any]]], int]:
+        """Return the exact planner serializer used by the shared projector."""
+        system_prompt, render_input = self._input_renderer(
+            query,
+            schema=schema,
+            current_image_descriptions=current_image_descriptions,
+            preserve_query=preserve_query,
         )
+        return lambda messages: _planner_request_tokens(system_prompt, render_input(messages))
+
+    def _input_renderer(
+        self,
+        query: str,
+        *,
+        schema: dict[str, Any] | None,
+        current_image_descriptions: list[str] | None,
+        preserve_query: bool | None,
+    ) -> tuple[str, Callable[[list[dict[str, Any]]], str]]:
+        system_prompt = RETRIEVAL_PLANNER_SYSTEM_PROMPT
+        if current_image_descriptions:
+            system_prompt += "\n\n" + RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE
+        metadata_schema = _build_schema_context(schema)
+
+        def render(messages: list[dict[str, Any]], schema_text: str) -> str:
+            return _planner_user_payload(
+                query,
+                metadata_schema=schema_text,
+                history=messages,
+                current_images=current_image_descriptions,
+                preserve_query=not bool(messages) if preserve_query is None else preserve_query,
+            )
+
+        if metadata_schema:
+            fixed_payload = render([], metadata_schema)
+            if _planner_request_tokens(system_prompt, fixed_payload) > self._input_limit_tokens:
+                metadata_schema = ""
+        return system_prompt, lambda messages: render(messages, metadata_schema)
 
     async def plan(
         self,
@@ -228,6 +275,7 @@ class RetrievalPlanner:
         conversation_history: PriorTurns | None = None,
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
+        preserve_query: bool | None = None,
     ) -> RetrievalPlan:
         """Produce one retrieval plan from one LLM call.
 
@@ -239,49 +287,28 @@ class RetrievalPlanner:
         if self._llm_func is None:
             return RetrievalPlan.fallback(query, "fallback_no_model")
 
-        # Truncate history
         history = conversation_history or PriorTurns()
-        preserve_query = not bool(history)
-
-        # Schema is fetched and cached by the service manager, then passed in.
-        schema_context = _build_schema_context(schema)
-        system_prompt = RETRIEVAL_PLANNER_SYSTEM_PROMPT
-
         structured_output = RETRIEVAL_PLAN_STRUCTURED_OUTPUT
-        if current_image_descriptions:
-            system_prompt += "\n\n" + RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE
+        system_prompt, render_input = self._input_renderer(
+            query,
+            schema=schema,
+            current_image_descriptions=current_image_descriptions,
+            preserve_query=preserve_query,
+        )
+        input_limit = self._input_limit_tokens
 
-        def render_input(messages: list[dict[str, Any]], metadata_schema: str) -> str:
-            return _planner_user_payload(
-                query,
-                metadata_schema=metadata_schema,
-                history=messages,
-                current_images=current_image_descriptions,
-                preserve_query=preserve_query,
-            )
+        def fit_to_envelope() -> tuple[str, int, bool]:
+            payload = render_input(history.messages)
+            input_tokens = _planner_request_tokens(system_prompt, payload)
+            return payload, input_tokens, input_tokens <= input_limit
 
-        system_tokens = estimate_tokens(system_prompt)
-        envelope = self._input_token_envelope
-
-        def fit_to_envelope() -> tuple[str, bool]:
-            """Drop the schema, then the oldest turns, until the request fits."""
-            metadata_schema = schema_context
-            payload = render_input(history.messages, metadata_schema)
-            if metadata_schema and _planner_request_tokens(system_tokens, payload) > envelope:
-                metadata_schema = ""
-            kept = history.fit(
-                envelope,
-                lambda messages: _planner_request_tokens(
-                    system_tokens, render_input(messages, metadata_schema)
-                ),
-            )
-            payload = render_input(kept, metadata_schema)
-            fits = _planner_request_tokens(system_tokens, payload) <= envelope
-            return payload, fits
-
-        planner_input, fits_envelope = await asyncio.to_thread(fit_to_envelope)
+        planner_input, input_tokens, fits_envelope = await asyncio.to_thread(fit_to_envelope)
         if not fits_envelope:
-            return RetrievalPlan.fallback(query, "fallback_input_overflow")
+            return RetrievalPlan.fallback(query, "planner_input_overflow")
+        max_tokens = self._context_policy.output_allowance(
+            self._model_profile,
+            input_tokens=input_tokens,
+        )
 
         llm_start = time.monotonic()
         response = await self._call_llm_with_retry(
@@ -289,13 +316,14 @@ class RetrievalPlanner:
             system_prompt,
             structured_output=structured_output,
             start_time=llm_start,
+            max_tokens=max_tokens,
         )
         if response is None:
             return RetrievalPlan.fallback(query, "fallback_provider_error")
         plan = self._parse_response(response, query, structured_output=structured_output)
         if plan is None:
             return RetrievalPlan.fallback(query, "fallback_invalid_response")
-        if preserve_query:
+        if preserve_query is True or (preserve_query is None and not history):
             plan.standalone_query = query
 
         logger.info(
@@ -317,6 +345,7 @@ class RetrievalPlanner:
         *,
         structured_output: StructuredOutput,
         start_time: float,
+        max_tokens: int | None,
     ) -> str | None:
         """Call the planner LLM with adaptive exponential-backoff retry.
 
@@ -326,7 +355,10 @@ class RetrievalPlanner:
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 response = await self._call_llm(
-                    query, system_prompt, structured_output=structured_output
+                    query,
+                    system_prompt,
+                    structured_output=structured_output,
+                    max_tokens=max_tokens,
                 )
                 logger.info(
                     "[Planner] LLM call: %.1fs (attempt %d)",

@@ -360,6 +360,20 @@ FROM dlightrag_answer_runs
 WHERE owner_id = $1 AND idempotency_key = $2
 """  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
 
+_SELECT_ACTIVE_RUN_REQUIREMENTS = """
+SELECT DISTINCT
+    request_json->>'context_policy_revision' AS context_policy_revision,
+    request_json->'pinned_models' AS pinned_models
+FROM dlightrag_answer_runs
+WHERE status IN ('queued', 'running')
+    AND cancel_requested_at IS NULL
+    AND NOT (
+            status = 'running'
+            AND lease_expires_at < NOW()
+            AND recovery_count >= $1
+    )
+"""
+
 _SELECT_RUN = f"""
 SELECT {_RUN_COLUMNS}
 FROM dlightrag_answer_runs
@@ -964,11 +978,56 @@ class PGAnswerRunStore:
     # Creation and owner-scoped reads
     # ------------------------------------------------------------------
 
+    async def replay_run(
+        self,
+        *,
+        owner_id: str,
+        idempotency_key: str,
+        idempotency_fingerprint: str,
+    ) -> RunCreation | None:
+        """Return an accepted keyed run before any request enrichment is repeated."""
+        owner = _require_owner(owner_id)
+        if not idempotency_key:
+            raise ValueError("idempotency_key must be non-empty")
+        if not idempotency_fingerprint:
+            raise ValueError("idempotency_fingerprint must be non-empty")
+
+        async def _operation(conn: Any) -> RunCreation | None:
+            row = await conn.fetchrow(_SELECT_RUN_BY_KEY, owner, idempotency_key)
+            if row is None:
+                return None
+            if str(row["request_fingerprint"]) != idempotency_fingerprint:
+                raise IdempotencyKeyConflict(
+                    "idempotency key was reused with different request input"
+                )
+            return RunCreation(run=answer_run_record(row), replayed=True)
+
+        return await self._run_read(_operation)
+
+    async def list_active_run_requirements(self) -> tuple[Mapping[str, Any], ...]:
+        """Return distinct requirements for active runs that may execute."""
+
+        async def _operation(conn: Any) -> tuple[Mapping[str, Any], ...]:
+            rows = await conn.fetch(
+                _SELECT_ACTIVE_RUN_REQUIREMENTS,
+                MAX_CONSECUTIVE_RECOVERIES,
+            )
+            return tuple(
+                {
+                    "context_policy_revision": row["context_policy_revision"],
+                    "pinned_models": _json_array(row["pinned_models"]),
+                }
+                for row in rows
+            )
+
+        return await self._run_read(_operation)
+
     async def create_run(
         self,
         *,
         owner_id: str,
         request: Mapping[str, Any],
+        idempotency_fingerprint: str,
         idempotency_key: str | None = None,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
@@ -992,6 +1051,7 @@ class PGAnswerRunStore:
                     conn,
                     owner_id=owner_id,
                     request=request,
+                    idempotency_fingerprint=idempotency_fingerprint,
                     idempotency_key=idempotency_key,
                     artifacts=artifacts,
                     references=references,
@@ -1005,6 +1065,7 @@ class PGAnswerRunStore:
         *,
         owner_id: str,
         request: Mapping[str, Any],
+        idempotency_fingerprint: str,
         idempotency_key: str | None = None,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
@@ -1021,7 +1082,9 @@ class PGAnswerRunStore:
             # A fetched resource is worker-fenced run state, never accepted input.
             raise ValueError("fetched_resource references cannot be run creation inputs")
         payload = _canonical_request_json(request)
-        fingerprint = answer_run_request_fingerprint(request)
+        if not idempotency_fingerprint:
+            raise ValueError("idempotency_fingerprint must be non-empty")
+        fingerprint = idempotency_fingerprint
         run_uuid = _new_run_id()
         row = await conn.fetchrow(
             _INSERT_RUN, owner, run_uuid, idempotency_key, payload, fingerprint
@@ -1860,6 +1923,15 @@ def _json_object(value: Any) -> dict[str, Any]:
         loaded = json.loads(value)
         return dict(loaded) if isinstance(loaded, dict) else {}
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _json_array(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        loaded = json.loads(value)
+        return list(loaded) if isinstance(loaded, list) else []
+    return list(value) if isinstance(value, list | tuple) else []
 
 
 def answer_run_record(row: Any) -> AnswerRunRecord:

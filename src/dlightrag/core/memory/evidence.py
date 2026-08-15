@@ -12,7 +12,6 @@ from dlightrag_rag.retrieval import ContextRow
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.utils import context_chunk_key
-from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import RetrievalContexts
@@ -35,10 +34,10 @@ class EvidenceLedger:
     """Accumulate one answer's evidence under stable numeric citation ids.
 
     The ledger stores only the windows tools or initial retrieval actually
-    returned, with stable source and locator identity.  ``transform`` renders
-    evidence bounded by one :class:`AnswerCapacity`: recent evidence is kept
-    verbatim and older evidence collapses to compact re-readable handles that
-    still preserve citation identity.  There are no per-source quotas or image
+    returned, with stable source and locator identity. ``transform`` renders
+    evidence inside the caller's residual request capacity: recent evidence is
+    kept verbatim and older evidence collapses to compact re-readable handles
+    that still preserve citation identity. There are no per-source quotas or image
     lanes; one shared image budget carries every evidence visual.
     """
 
@@ -175,28 +174,28 @@ class EvidenceLedger:
 
     def transform(
         self,
-        capacity: AnswerCapacity,
         *,
-        fixed_input_tokens: int,
+        residual_tokens: int,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        """Render evidence bounded by the capacity evidence ceiling.
+        """Render evidence bounded by the caller's residual request capacity.
 
         The most recent evidence is rendered verbatim up to the ceiling; older
         evidence collapses to compact re-readable handles.  Citation identities
         are preserved because the indexer always spans every accumulated source,
         so ``[n-m]`` markers still resolve for collapsed sources.
         """
+        if residual_tokens < 0:
+            raise ValueError("residual_tokens cannot be negative")
         chunks = self.contexts["chunks"]
         indexer = CitationIndexer()
         indexer.build_index(chunks)
-        ceiling = capacity.evidence_ceiling(fixed_input_tokens=fixed_input_tokens)
 
         kept_keys: set[str] = set()
         running = 0
         cutoff = False
         for chunk in reversed(chunks):
             cost = _chunk_evidence_cost(chunk)
-            if not cutoff and running + cost <= ceiling:
+            if not cutoff and running + cost <= residual_tokens:
                 running += cost
                 kept_keys.add(self._chunk_identity(chunk))
             else:

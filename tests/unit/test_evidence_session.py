@@ -6,7 +6,6 @@ import threading
 
 import pytest
 
-from dlightrag.core.answer.capacity import AnswerCapacity
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.retrieval.web_search import WebSearchHit, web_context_rows
@@ -279,10 +278,8 @@ def test_transform_keeps_recent_evidence_and_collapses_older_to_handles() -> Non
     # Recent observation: small and must be retained verbatim.
     ledger.add_rows([_corpus_row(workspace="beta", chunk="new", content="RECENT-EVIDENCE key")])
 
-    capacity = AnswerCapacity(260_000)
-    # A ceiling that only fits the small recent observation.
-    fixed = capacity.context_window_tokens - 32_768 - 60
-    blocks, indexer = ledger.transform(capacity, fixed_input_tokens=fixed)
+    # A residual window that only fits the small recent observation.
+    blocks, indexer = ledger.transform(residual_tokens=60)
 
     text = "\n".join(str(b["text"]) for b in blocks if b.get("type") == "text")
     assert "RECENT-EVIDENCE key" in text
@@ -304,9 +301,7 @@ def test_transform_keeps_a_collapsed_web_resource_re_readable() -> None:
     )
     ledger.add_rows([_corpus_row(workspace="beta", chunk="new", content="RECENT")])
 
-    capacity = AnswerCapacity(260_000)
-    fixed = capacity.context_window_tokens - 32_768 - 60
-    blocks, _ = ledger.transform(capacity, fixed_input_tokens=fixed)
+    blocks, _ = ledger.transform(residual_tokens=60)
 
     text = "\n".join(str(block["text"]) for block in blocks if block["type"] == "text")
     assert "OLD-WEB-EVIDENCE" not in text
@@ -318,8 +313,7 @@ def test_transform_preserves_stable_citation_ids_across_full_render() -> None:
     ledger.add_rows([_corpus_row(chunk="c1", content="alpha evidence")])
     ledger.add_rows(_web("web evidence"))
 
-    capacity = AnswerCapacity(260_000)
-    blocks, indexer = ledger.transform(capacity, fixed_input_tokens=0)
+    blocks, indexer = ledger.transform(residual_tokens=1_000_000)
 
     text = "\n".join(str(b["text"]) for b in blocks if b.get("type") == "text")
     # Nothing collapses when the whole window is available.

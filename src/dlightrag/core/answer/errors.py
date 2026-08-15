@@ -18,6 +18,8 @@ ANSWER_IMAGE_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
 ANSWER_INPUT_OVERFLOW = "ANSWER_INPUT_OVERFLOW"
 ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 INVALID_TOOL_CONFIGURATION = "invalid_tool_configuration"
+MODEL_CAPABILITY_UNAVAILABLE = "MODEL_CAPABILITY_UNAVAILABLE"
+ANSWER_RESOURCE_INVALID = "ANSWER_RESOURCE_INVALID"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
@@ -72,6 +74,26 @@ class AnswerInputOverflowError(AnswerInputError):
         super().__init__(public_message, error_kind=ANSWER_INPUT_OVERFLOW)
 
 
+class AnswerModelCapabilityError(AnswerInputError):
+    """The request requires a capability absent from its resolved model profile."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The configured query model cannot use the tools required for this answer request.",
+            error_kind=MODEL_CAPABILITY_UNAVAILABLE,
+        )
+
+
+class AnswerResourceAdmissionError(AnswerInputError):
+    """A caller resource violates the safe Answer admission contract."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "An answer attachment or link could not be admitted safely.",
+            error_kind=ANSWER_RESOURCE_INVALID,
+        )
+
+
 class InvalidToolConfigurationError(RuntimeError):
     """A run composed two peer tools that share one model-visible name.
 
@@ -100,13 +122,17 @@ __all__ = [
     "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
     "ANSWER_INPUT_OVERFLOW",
     "ANSWER_STREAM_FAILED",
+    "ANSWER_RESOURCE_INVALID",
     "CURRENT_DOCUMENT_PARSE_FAILED",
     "CURRENT_IMAGES_UNSUPPORTED",
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "INVALID_TOOL_CONFIGURATION",
+    "MODEL_CAPABILITY_UNAVAILABLE",
     "AnswerInputError",
     "AnswerImageError",
     "AnswerInputOverflowError",
+    "AnswerModelCapabilityError",
+    "AnswerResourceAdmissionError",
     "CurrentDocumentParseError",
     "CurrentImagePayloadError",
     "InvalidToolConfigurationError",

@@ -12,11 +12,9 @@ content blocks so there is no separate VLM path -- the provider decides how to
 handle multimodal content.
 
 Both streaming and non-streaming paths use the same freetext system prompt and
-the same evidence preparation.  Sources are projected from validated inline
-citation markers.  Input packing is bounded by one :class:`AnswerCapacity`:
-evidence is at most the capacity evidence ceiling, recent history is retained
-first, and fixed evidence that cannot fit beside the generation reserve is
-rejected rather than silently trimmed.
+the same evidence preparation. Sources are projected from validated inline
+citation markers. Input packing is bounded by the answer model's resolved
+profile and the current immutable context policy.
 """
 
 import asyncio
@@ -25,11 +23,11 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.tokens import estimate_content_tokens, estimate_messages_tokens
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
-from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.answer.context import AnswerContextPacker
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
@@ -62,6 +60,7 @@ class _PreparedModelCall:
     indexer: CitationIndexer
     trace: dict[str, Any]
     no_context: bool
+    max_output_tokens: int | None
 
 
 class AnswerSynthesizer:
@@ -80,18 +79,48 @@ class AnswerSynthesizer:
         self,
         *,
         image_policy: AnswerImagePolicy,
+        model_profile: ModelProfile,
+        context_policy: ContextPolicy = CONTEXT_POLICY,
         model_func: Callable[..., Any] | None = None,
     ) -> None:
         self.model_func = model_func
         self._image_policy = image_policy
+        self._model_profile = model_profile
+        self._context_policy = context_policy
 
-    def set_image_policy(self, policy: AnswerImagePolicy) -> None:
-        """Adopt a refreshed transport policy -- e.g. after a capability probe."""
-        self._image_policy = policy
+    def history_input_measure(
+        self,
+        query: str,
+    ) -> Callable[[list[dict[str, Any]]], int]:
+        """Return the exact zero-evidence final-call serializer for history fitting."""
 
-    @property
-    def _capacity(self) -> AnswerCapacity:
-        return AnswerCapacity(max(1, self._image_policy.context_window_tokens))
+        def measure(history: list[dict[str, Any]]) -> int:
+            system_prompt = answer_core()
+            budget = self._image_policy.new_budget()
+            empty_contexts: RetrievalContexts = {
+                "chunks": [],
+                "entities": [],
+                "relationships": [],
+            }
+            prepared = self._prepare_prompt_context(
+                query,
+                empty_contexts,
+                image_budget=budget,
+            )
+            excerpt_blocks = self._build_excerpt_blocks(
+                prepared.contexts,
+                prepared.indexer,
+                image_blocks_by_context_key=prepared.chunk_image_blocks,
+            )
+            messages = self._compose_user_messages(
+                system_prompt,
+                prepared.user_prompt,
+                excerpt_blocks,
+                history_messages=history,
+            )
+            return estimate_messages_tokens(messages)
+
+        return measure
 
     # ------------------------------------------------------------------
     # Public API
@@ -130,7 +159,13 @@ class AnswerSynthesizer:
             query[:60],
         )
 
-        token_iterator = await self.model_func(messages=prepared.messages, stream=True)
+        call_kwargs: dict[str, Any] = {
+            "messages": prepared.messages,
+            "stream": True,
+        }
+        if prepared.max_output_tokens is not None:
+            call_kwargs["max_tokens"] = prepared.max_output_tokens
+        token_iterator = await self.model_func(**call_kwargs)
         if prepared.no_context:
             token_iterator = _prepend_no_context_stream(token_iterator)
 
@@ -161,8 +196,29 @@ class AnswerSynthesizer:
         """
         result_trace = dict(trace or {})
         no_context = not _has_research_evidence(contexts, messages)
+        input_tokens = estimate_messages_tokens(messages)
+        input_limit = self._context_policy.hard_input_limit(self._model_profile)
+        if input_tokens > input_limit:
+            raise AnswerInputOverflowError(
+                "Research final input exceeds the resolved model input limit: "
+                f"{input_tokens} > {input_limit} estimated input tokens"
+            )
+        max_output_tokens = self._context_policy.output_allowance(
+            self._model_profile,
+            input_tokens=input_tokens,
+        )
 
-        token_iterator: AsyncIterator[str] = stream(messages=messages)
+        call_kwargs: dict[str, Any] = {"messages": messages}
+        if max_output_tokens is not None:
+            call_kwargs["max_tokens"] = max_output_tokens
+        token_iterator: AsyncIterator[str] = stream(**call_kwargs)
+        result_trace.update(
+            {
+                "answer_input_limit_tokens": input_limit,
+                "context_policy_revision": self._context_policy.revision,
+                "answer_input_tokens": input_tokens,
+            }
+        )
         if no_context:
             token_iterator = _prepend_no_context_stream(token_iterator)
             result_trace["answer_no_context"] = True
@@ -216,38 +272,35 @@ class AnswerSynthesizer:
                 indexer=prepared.indexer,
                 trace=prepared.trace,
                 no_context=no_context,
+                max_output_tokens=None,
             )
             return call, evidence_tokens, total_tokens
 
-        kept_history = PriorTurns(original_history).fit(
-            self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE,
-            lambda history: build(history)[2],
-        )
-        result, evidence_tokens, total_tokens = build(kept_history)
-        input_budget = self._capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
-        if total_tokens > input_budget:
+        input_limit = self._context_policy.hard_input_limit(self._model_profile)
+        result, evidence_tokens, total_tokens = build(original_history)
+        if total_tokens > input_limit:
             raise AnswerInputOverflowError(
-                "Fixed answer input does not fit beside the generation reserve: "
-                f"{total_tokens} > {input_budget} estimated input tokens"
+                "Fixed answer input exceeds the resolved model input limit: "
+                f"{total_tokens} > {input_limit} estimated input tokens"
             )
         overhead_tokens = total_tokens - evidence_tokens
-        evidence_ceiling = self._capacity.evidence_ceiling(fixed_input_tokens=overhead_tokens)
-        if evidence_tokens > evidence_ceiling:
-            raise AnswerInputOverflowError(
-                "Fixed answer evidence exceeds the packable evidence ceiling: "
-                f"{evidence_tokens} > {evidence_ceiling} estimated evidence tokens"
-            )
+        evidence_capacity = max(0, input_limit - overhead_tokens)
+        result.max_output_tokens = self._context_policy.output_allowance(
+            self._model_profile,
+            input_tokens=total_tokens,
+        )
         result.trace.update(
             {
-                "answer_context_window_tokens": self._capacity.context_window_tokens,
+                "answer_input_limit_tokens": input_limit,
+                "context_policy_revision": self._context_policy.revision,
                 "answer_evidence_tokens": evidence_tokens,
-                "answer_evidence_ceiling": evidence_ceiling,
+                "answer_evidence_capacity_tokens": evidence_capacity,
                 "answer_input_tokens": total_tokens,
-                "answer_history_messages_input": len(original_history),
-                "answer_history_messages_kept": len(kept_history),
-                "answer_history_messages_dropped": len(original_history) - len(kept_history),
+                "answer_history_messages": len(original_history),
             }
         )
+        if result.max_output_tokens is not None:
+            result.trace["answer_output_allowance_tokens"] = result.max_output_tokens
         return result
 
     def _compose_user_messages(

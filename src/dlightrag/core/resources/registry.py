@@ -25,12 +25,14 @@ from typing import Any, Literal
 
 import httpx
 from dlightrag_ai.media import verify_web_image_bytes
+from dlightrag_ai.tokens import estimate_tokens
 
 from dlightrag.core.resources.converters import (
     ExtractedVisual,
     convert_resource,
     is_convertible,
 )
+from dlightrag.core.resources.formatting import format_resource_read
 from dlightrag.core.resources.lexical import bm25_rank, mixed_script_terms
 from dlightrag.core.resources.models import (
     EXTRACTION_TEXT,
@@ -57,6 +59,8 @@ _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 _DEFAULT_MAX_TOTAL_ATTACHMENT_BYTES = 128 * 1024 * 1024
 
 _PDF_MIME = "application/pdf"
+_CURSOR_TOKEN_BYTES = 18
+_CURSOR_PLACEHOLDER = "x" * 24
 
 # A request-local, provider-neutral fallback that returns already-usable text for
 # a public URL, or ``None`` when it cannot. The manager composition root adapts
@@ -106,12 +110,14 @@ class _Registered:
 class _CursorState:
     resource_id: str
     focus: str | None
-    window_index: int
+    plan_window_tokens: int
+    plan_position: int
+    char_offset: int
 
 
 @dataclass
 class _ConvertedResource:
-    windows: list[tuple[TextWindowLocator, str]]
+    text: str
     handles: tuple[VisualHandle, ...]
 
 
@@ -144,6 +150,7 @@ class ResourceRegistry:
         self._caller_dedup: set[tuple[str, bytes]] = set()
         self._fetched: dict[str, bytes] = {}
         self._cursors: dict[str, _CursorState] = {}
+        self._cursor_plans: dict[tuple[str, str | None, int], tuple[tuple[int, int], ...]] = {}
         self._paths: dict[str, Path] = {}
         self._converted: dict[str, _ConvertedResource] = {}
         self._visual_assets: dict[str, ExtractedVisual] = {}
@@ -313,7 +320,9 @@ class ResourceRegistry:
                 token: {
                     "resource_id": cursor.resource_id,
                     "focus": cursor.focus,
-                    "window_index": cursor.window_index,
+                    "plan_window_tokens": cursor.plan_window_tokens,
+                    "plan_position": cursor.plan_position,
+                    "char_offset": cursor.char_offset,
                 }
                 for token, cursor in self._cursors.items()
             },
@@ -378,7 +387,9 @@ class ResourceRegistry:
             str(token): _CursorState(
                 resource_id=str(cursor["resource_id"]),
                 focus=cursor.get("focus"),
-                window_index=int(cursor.get("window_index") or 0),
+                plan_window_tokens=int(cursor["plan_window_tokens"]),
+                plan_position=int(cursor["plan_position"]),
+                char_offset=int(cursor["char_offset"]),
             )
             for token, cursor in (state.get("cursors") or {}).items()
         }
@@ -451,22 +462,27 @@ class ResourceRegistry:
         self,
         resource_id: str,
         *,
+        max_window_tokens: int,
         focus: str | None = None,
         cursor: str | None = None,
     ) -> ResourceReadResult:
+        """Return one page whose complete model-visible envelope fits the budget."""
+        if max_window_tokens < 1:
+            raise ResourceAdmissionError("resource read has no residual model capacity")
         resource = self._require(resource_id)
-        position = 0
         effective_focus = focus
+        cursor_state: _CursorState | None = None
         if cursor is not None:
-            state = self._resolve_cursor(cursor, resource_id=resource_id)
-            if focus is not None and focus != state.focus:
+            cursor_state = self._resolve_cursor(cursor, resource_id=resource_id)
+            if focus is not None and focus != cursor_state.focus:
                 raise ResourceCursorError("cursor is not valid for this resource read")
-            effective_focus = state.focus
-            position = state.window_index
+            effective_focus = cursor_state.focus
 
-        windows, resource_handles = await self._read_windows(resource)
-        if not windows:
-            return ResourceReadResult(
+        view = await self._read_text_view(resource)
+        text = view.text
+        resource_handles = view.handles
+        if not text:
+            result = ResourceReadResult(
                 resource_id=resource_id,
                 locator=None,
                 content="",
@@ -475,17 +491,48 @@ class ResourceRegistry:
                 next_cursor=None,
                 visual_handles=resource_handles,
             )
+            if estimate_tokens(format_resource_read(result)) > max_window_tokens:
+                raise ResourceAdmissionError(
+                    "resource read envelope exceeds residual model capacity"
+                )
+            return result
 
-        # Focus reorders the read sequence without changing any window's bytes or
-        # the <=16K contract. Visual handles ride the first *returned* window so
-        # they are never lost when focus selects a nonzero physical window.
-        order = await asyncio.to_thread(_focus_order, windows, effective_focus)
-        position = min(position, len(order) - 1)
-        locator, chunk = windows[order[position]]
-        has_more = position + 1 < len(order)
-        next_cursor = (
-            self._mint_cursor(resource_id, effective_focus, position + 1) if has_more else None
+        plan_window_tokens = (
+            cursor_state.plan_window_tokens if cursor_state is not None else max_window_tokens
         )
+        plan = await self._cursor_plan(
+            resource_id,
+            text,
+            effective_focus,
+            plan_window_tokens=plan_window_tokens,
+        )
+        plan_position = cursor_state.plan_position if cursor_state is not None else 0
+        char_offset = cursor_state.char_offset if cursor_state is not None else plan[0][0]
+        visual_handles = () if cursor_state is not None else resource_handles
+        locator, chunk, next_position, next_offset = await asyncio.to_thread(
+            _read_cursor_span,
+            text,
+            plan,
+            resource_id=resource_id,
+            plan_position=plan_position,
+            char_offset=char_offset,
+            max_window_tokens=max_window_tokens,
+            visual_handles=visual_handles,
+        )
+        has_more = next_position < len(plan)
+        if cursor is not None:
+            self._consume_cursor(cursor, cursor_state)
+        next_cursor = None
+        if has_more:
+            next_cursor = self._mint_cursor(
+                _CursorState(
+                    resource_id=resource_id,
+                    focus=effective_focus,
+                    plan_window_tokens=plan_window_tokens,
+                    plan_position=next_position,
+                    char_offset=next_offset,
+                )
+            )
         return ResourceReadResult(
             resource_id=resource_id,
             locator=locator,
@@ -493,37 +540,43 @@ class ResourceRegistry:
             extraction_status=EXTRACTION_TEXT,
             has_more=has_more,
             next_cursor=next_cursor,
-            visual_handles=resource_handles if position == 0 else (),
+            visual_handles=visual_handles,
         )
 
-    async def _read_windows(
-        self, resource: _Registered
-    ) -> tuple[list[tuple[TextWindowLocator, str]], tuple[VisualHandle, ...]]:
-        view = self._text_views.get(resource.resource_id)
-        if view is not None:
-            return view.windows, view.handles
+    async def _read_text_view(self, resource: _Registered) -> _ConvertedResource:
         if resource.url is not None:
-            return await self._read_link_windows(resource)
+            return await self._read_link_text_view(resource)
+        cached = self._text_views.get(resource.resource_id)
+        if cached is not None:
+            return cached
         content = await self._materialize_bytes(resource)
-        return await self._windows_from_content(resource, content)
+        return await self._text_view_from_content(resource, content)
 
-    async def _windows_from_content(
-        self, resource: _Registered, content: bytes
-    ) -> tuple[list[tuple[TextWindowLocator, str]], tuple[VisualHandle, ...]]:
+    async def _text_view_from_content(
+        self,
+        resource: _Registered,
+        content: bytes,
+    ) -> _ConvertedResource:
         if is_convertible(resource.filename, resource.declared_mime):
-            converted = await self._ensure_converted(resource, content)
-            return converted.windows, converted.handles
-        return await asyncio.to_thread(
-            _decode_to_windows, content, _charset_of(resource.declared_mime)
-        ), ()
+            view = await self._ensure_converted(resource, content)
+        else:
+            text = await asyncio.to_thread(
+                decode_text,
+                content,
+                declared_charset=_charset_of(resource.declared_mime),
+            )
+            view = _ConvertedResource(text=text, handles=())
+        if view.text:
+            self._text_views[resource.resource_id] = view
+        return view
 
-    async def _read_link_windows(
-        self, resource: _Registered
-    ) -> tuple[list[tuple[TextWindowLocator, str]], tuple[VisualHandle, ...]]:
+    async def _read_link_text_view(self, resource: _Registered) -> _ConvertedResource:
         """Read a link, falling back to provider text only when direct fails/empty.
 
-        SSRF revalidation runs before any direct or fallback path, so a private,
-        invalid, or credential URL raises here and never reaches the fallback.
+        Checkpoint-restored bytes already passed the complete fetch gate and
+        never re-enter the network path. Otherwise SSRF revalidation runs before
+        any direct, cached, or fallback path, so a private, invalid, or credential
+        URL raises here and never reaches the fallback.
         The Exa Contents fallback is tried at most once per resource — only after
         a direct fetch/decode/conversion fails or yields empty — and its text
         enters the same bounded window pipeline under the original resource id.
@@ -533,27 +586,33 @@ class ResourceRegistry:
             raise ResourceNotFoundError(f"resource {resource.resource_id} has no link")
         restored = self._restored_bytes(resource.resource_id)
         if restored is not None:
-            return await self._windows_from_content(resource, restored)
+            cached = self._text_views.get(resource.resource_id)
+            if cached is not None:
+                return cached
+            return await self._text_view_from_content(resource, restored)
         await avalidate_public_https_url(url)
+        cached = self._text_views.get(resource.resource_id)
+        if cached is not None:
+            return cached
         try:
             content = await self._materialize_fetched(
                 resource.resource_id, lambda: self._fetch_link(url)
             )
-            windows, handles = await self._windows_from_content(resource, content)
+            view = await self._text_view_from_content(resource, content)
         except ResourceAdmissionError:
             # A per-attachment or request-wide byte limit is a real bound, not a
             # direct-extraction failure; never mask it by fetching provider text.
             raise
         except Exception:
-            view = await self._fallback_text_view(resource, url)
-            if view is not None:
-                return view.windows, view.handles
+            fallback = await self._fallback_text_view(resource, url)
+            if fallback is not None:
+                return fallback
             raise
-        if not windows:
-            view = await self._fallback_text_view(resource, url)
-            if view is not None:
-                return view.windows, view.handles
-        return windows, handles
+        if not view.text:
+            fallback = await self._fallback_text_view(resource, url)
+            if fallback is not None:
+                return fallback
+        return view
 
     async def _ensure_converted(
         self, resource: _Registered, content: bytes | None = None
@@ -571,7 +630,7 @@ class ResourceRegistry:
             self._visual_assets[visual.handle_id] = visual
             handles.append(VisualHandle(handle_id=visual.handle_id, label=visual.anchor))
         entry = _ConvertedResource(
-            windows=await asyncio.to_thread(build_text_windows, converted.text),
+            text=converted.text,
             handles=tuple(handles),
         )
         self._converted[resource.resource_id] = entry
@@ -626,6 +685,7 @@ class ResourceRegistry:
             self._converted.clear()
             self._visual_assets.clear()
             self._text_views.clear()
+            self._cursor_plans.clear()
             self._fetch_tasks.clear()
             self._fallback_tasks.clear()
             self._fallback_done.clear()
@@ -784,7 +844,8 @@ class ResourceRegistry:
             self._fallback_tasks.pop(resource_id, None)
             if text and text.strip() and resource_id not in self._text_views:
                 self._text_views[resource_id] = _ConvertedResource(
-                    windows=await asyncio.to_thread(build_text_windows, text), handles=()
+                    text=text,
+                    handles=(),
                 )
             return self._text_views.get(resource_id)
 
@@ -803,10 +864,36 @@ class ResourceRegistry:
         ).hexdigest()
         return f"res-{digest[:24]}"
 
-    def _mint_cursor(self, resource_id: str, focus: str | None, window_index: int) -> str:
-        token = secrets.token_urlsafe(18)
-        self._cursors[token] = _CursorState(resource_id, focus, window_index)
+    async def _cursor_plan(
+        self,
+        resource_id: str,
+        text: str,
+        focus: str | None,
+        *,
+        plan_window_tokens: int,
+    ) -> tuple[tuple[int, int], ...]:
+        key = (resource_id, focus, plan_window_tokens)
+        cached = self._cursor_plans.get(key)
+        if cached is not None:
+            return cached
+        plan = await asyncio.to_thread(
+            _build_cursor_plan,
+            text,
+            focus,
+            max_window_tokens=plan_window_tokens,
+        )
+        self._cursor_plans[key] = plan
+        return plan
+
+    def _mint_cursor(self, state: _CursorState) -> str:
+        token = secrets.token_urlsafe(_CURSOR_TOKEN_BYTES)
+        self._cursors[token] = state
         return token
+
+    def _consume_cursor(self, cursor: str, state: _CursorState | None) -> None:
+        if state is None or self._cursors.get(cursor) != state:
+            raise ResourceCursorError("cursor is not valid for this resource read")
+        self._cursors.pop(cursor)
 
     def _resolve_cursor(self, cursor: str, *, resource_id: str) -> _CursorState:
         state = self._cursors.get(cursor)
@@ -840,6 +927,120 @@ def _is_pdf(filename: str | None, declared_mime: str | None) -> bool:
     return False
 
 
+def _line_bounds(text: str, offset: int) -> tuple[int, int, int]:
+    position = 0
+    for line_number, line in enumerate(text.splitlines(keepends=True), start=1):
+        line_end = position + len(line)
+        if offset < line_end:
+            return line_number, position, line_end
+        position = line_end
+    raise ValueError("text offset is outside the resource")
+
+
+def _build_cursor_plan(
+    text: str,
+    focus: str | None,
+    *,
+    max_window_tokens: int,
+) -> tuple[tuple[int, int], ...]:
+    windows = build_text_windows(text, max_window_tokens=max_window_tokens)
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    for _, chunk in windows:
+        end = offset + len(chunk)
+        spans.append((offset, end))
+        offset = end
+    order = _focus_order(windows, focus)
+    return tuple(spans[index] for index in order)
+
+
+def _read_cursor_span(
+    text: str,
+    plan: tuple[tuple[int, int], ...],
+    *,
+    resource_id: str,
+    plan_position: int,
+    char_offset: int,
+    max_window_tokens: int,
+    visual_handles: tuple[VisualHandle, ...],
+) -> tuple[TextWindowLocator, str, int, int]:
+    if plan_position < 0 or plan_position >= len(plan):
+        raise ResourceCursorError("cursor has no remaining resource text")
+    span_start, end = plan[plan_position]
+    start = char_offset
+    if start < span_start or start >= end:
+        raise ResourceCursorError("cursor does not match the current resource text")
+    if start < 0 or end <= start or end > len(text):
+        raise ResourceCursorError("cursor does not match the current resource text")
+    content_budget = max_window_tokens
+    while content_budget >= 1:
+        consumed_end = _bounded_span_end(
+            text,
+            start,
+            end,
+            max_window_tokens=content_budget,
+        )
+        if consumed_end < end:
+            next_position = plan_position
+            next_offset = consumed_end
+        else:
+            next_position = plan_position + 1
+            next_offset = plan[next_position][0] if next_position < len(plan) else consumed_end
+        has_more = next_position < len(plan)
+        locator = _locator_for_span(text, start, consumed_end)
+        result = ResourceReadResult(
+            resource_id=resource_id,
+            locator=locator,
+            content=text[start:consumed_end],
+            extraction_status=EXTRACTION_TEXT,
+            has_more=has_more,
+            next_cursor=_CURSOR_PLACEHOLDER if has_more else None,
+            visual_handles=visual_handles,
+        )
+        used = estimate_tokens(format_resource_read(result))
+        if used <= max_window_tokens:
+            return locator, result.content, next_position, next_offset
+        content_budget -= max(1, used - max_window_tokens)
+    raise ResourceAdmissionError("resource read envelope exceeds residual model capacity")
+
+
+def _bounded_span_end(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    max_window_tokens: int,
+) -> int:
+    """Return a bounded prefix end without crossing from a partial line."""
+    _, line_start, line_end = _line_bounds(text, start)
+    candidate_end = min(end, line_end) if start != line_start else end
+    windows = build_text_windows(
+        text[start:candidate_end],
+        max_window_tokens=max_window_tokens,
+    )
+    if not windows:
+        raise ValueError("cursor span contains no resource text")
+    return start + len(windows[0][1])
+
+
+def _locator_for_span(text: str, start: int, end: int) -> TextWindowLocator:
+    start_line, start_line_offset, start_line_end = _line_bounds(text, start)
+    end_line, end_line_offset, end_line_end = _line_bounds(text, end - 1)
+    if start_line == end_line:
+        if start == start_line_offset and end == start_line_end:
+            return TextWindowLocator(unit="line", start=start_line, end=end_line)
+        return TextWindowLocator(
+            unit="line",
+            start=start_line,
+            end=end_line,
+            char_start=start - start_line_offset + 1,
+            char_end=end - end_line_offset,
+        )
+    if start != start_line_offset or end != end_line_end:
+        raise ValueError("multi-line cursor spans must align to physical lines")
+    return TextWindowLocator(unit="line", start=start_line, end=end_line)
+
+
 def _focus_order(windows: list[tuple[TextWindowLocator, str]], focus: str | None) -> list[int]:
     """Return read positions ordered by focus relevance, physical order otherwise."""
     count = len(windows)
@@ -864,13 +1065,6 @@ def _charset_of(declared_mime: str | None) -> str | None:
         if key.strip().lower() == "charset" and value:
             return value.strip().strip('"')
     return None
-
-
-def _decode_to_windows(
-    content: bytes, declared_charset: str | None
-) -> list[tuple[TextWindowLocator, str]]:
-    """Decode and window one direct-text resource in a single worker-thread hop."""
-    return build_text_windows(decode_text(content, declared_charset=declared_charset))
 
 
 __all__ = [

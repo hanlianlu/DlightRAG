@@ -4,10 +4,10 @@
 import asyncio
 from typing import Any
 
+from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.tokens import estimate_messages_tokens
 
 from dlightrag.citations.indexer import CitationIndexer
-from dlightrag.core.answer.capacity import FINAL_GENERATION_CAPACITY_RESERVE, AnswerCapacity
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode
@@ -34,17 +34,18 @@ class ContextAssembler:
 
     def __init__(
         self,
-        capacity: AnswerCapacity,
         *,
+        model_profile: ModelProfile,
+        context_policy: ContextPolicy = CONTEXT_POLICY,
         query: str,
         history: PriorTurns,
         query_images: list[dict[str, Any]] | None,
         resource_manifest: tuple[ResourceManifestEntry, ...],
     ) -> None:
-        self._capacity = capacity
-        self._input_budget = max(
-            1, capacity.context_window_tokens - FINAL_GENERATION_CAPACITY_RESERVE
-        )
+        self._model_profile = model_profile
+        self._context_policy = context_policy
+        self._input_limit = context_policy.hard_input_limit(model_profile)
+        self._control_target = context_policy.compaction_trigger(model_profile)
         self._history = history
         self._question = _question_message(query, query_images, resource_manifest)
 
@@ -53,8 +54,14 @@ class ContextAssembler:
         *,
         evidence: EvidenceLedger,
         episode: RunEpisode,
+        tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
-        return await asyncio.to_thread(self._build_control_turn, evidence, episode)
+        return await asyncio.to_thread(
+            self._build_control_turn,
+            evidence,
+            episode,
+            tool_schema_tokens,
+        )
 
     async def answer_turn(
         self,
@@ -64,18 +71,110 @@ class ContextAssembler:
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
         return await asyncio.to_thread(self._build_answer_turn, evidence, episode)
 
+    def measure_control_input(
+        self,
+        *,
+        evidence: EvidenceLedger,
+        episode: RunEpisode,
+    ) -> int:
+        """Measure the exact control-turn messages without enforcing the limit."""
+        return estimate_messages_tokens(self._compose_control_turn(evidence, episode))
+
+    def observation_residual(
+        self,
+        transcript_with_assistant: list[dict[str, Any]],
+        *,
+        tool_schema_tokens: int,
+    ) -> int:
+        """Return capacity left for the next model-visible tool-result batch."""
+        fixed = list(transcript_with_assistant)
+        if len(fixed) >= 2 and _is_control_evidence_message(fixed[-2]):
+            fixed.pop(-2)
+        assistant = fixed[-1] if fixed else {}
+        tool_messages = [_empty_tool_message(call) for call in assistant.get("tool_calls") or ()]
+        instruction = {
+            "role": "user",
+            "content": [{"type": "text", "text": CONTROL_TURN_INSTRUCTION}],
+        }
+        used = estimate_messages_tokens([*fixed, *tool_messages, instruction]) + tool_schema_tokens
+        return max(0, self._control_target - used)
+
+    def output_allowance(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        additional_input_tokens: int = 0,
+    ) -> int | None:
+        """Preflight one exact model request and return its provider output cap."""
+        if additional_input_tokens < 0:
+            raise ValueError("additional_input_tokens cannot be negative")
+        input_tokens = estimate_messages_tokens(messages) + additional_input_tokens
+        self._check_input_tokens(input_tokens)
+        return self._context_policy.output_allowance(
+            self._model_profile,
+            input_tokens=input_tokens,
+        )
+
+    def control_output_allowance(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tool_schema_tokens: int,
+    ) -> int:
+        """Bound control output while preserving dynamic space for tool results."""
+        provider_allowance = self.output_allowance(
+            messages,
+            additional_input_tokens=tool_schema_tokens,
+        )
+        accumulation_gap = self._input_limit - self._control_target
+        control_allowance = accumulation_gap - tool_schema_tokens
+        if control_allowance <= 0:
+            raise AnswerInputOverflowError(
+                "Research tool schemas leave no model residual for a control completion"
+            )
+        return (
+            control_allowance
+            if provider_allowance is None
+            else min(provider_allowance, control_allowance)
+        )
+
     def _build_control_turn(
         self,
         evidence: EvidenceLedger,
         episode: RunEpisode,
+        tool_schema_tokens: int,
+    ) -> list[dict[str, Any]]:
+        messages = self._compose_control_turn(
+            evidence,
+            episode,
+            tool_schema_tokens=tool_schema_tokens,
+        )
+        input_tokens = estimate_messages_tokens(messages) + tool_schema_tokens
+        if input_tokens > self._control_target:
+            raise AnswerInputOverflowError(
+                "Research control input exceeds the proactive compaction threshold: "
+                f"{input_tokens} > {self._control_target} estimated input tokens"
+            )
+        return messages
+
+    def _compose_control_turn(
+        self,
+        evidence: EvidenceLedger,
+        episode: RunEpisode,
+        *,
+        tool_schema_tokens: int = 0,
     ) -> list[dict[str, Any]]:
         system = {"role": "system", "content": agent_control_prompt()}
-        head = self._head(system, episode.messages(), evidence, final=False)
+        head = self._head(system, episode.messages())
         messages = list(head)
         if evidence.row_count:
-            blocks, _ = self._pack(evidence, head=head, final=False)
+            blocks, _ = self._pack(
+                evidence,
+                head=head,
+                final=False,
+                tool_schema_tokens=tool_schema_tokens,
+            )
             messages.append({"role": "user", "content": blocks})
-        self._check(messages)
         return messages
 
     def _build_answer_turn(
@@ -84,7 +183,7 @@ class ContextAssembler:
         episode: RunEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
         system = {"role": "system", "content": answer_core()}
-        head = self._head(system, episode.last_exchange, evidence, final=True)
+        head = self._head(system, episode.last_exchange)
         blocks, indexer = self._pack(evidence, head=head, final=True)
         messages = [*head, {"role": "user", "content": blocks}]
         self._check(messages)
@@ -94,19 +193,8 @@ class ContextAssembler:
         self,
         system: dict[str, Any],
         carried: list[dict[str, Any]],
-        evidence: EvidenceLedger,
-        *,
-        final: bool,
     ) -> list[dict[str, Any]]:
-        # Evidence outranks old chat, so the block it would render with the whole window to
-        # itself is reserved before history is fitted into what remains.
-        wanted, _ = self._pack(evidence, head=[], final=final)
-        reserved = estimate_messages_tokens([{"role": "user", "content": wanted}])
-        kept = self._history.fit(
-            max(1, self._input_budget - reserved),
-            lambda history: estimate_messages_tokens([system, *history, self._question, *carried]),
-        )
-        return [system, *kept, self._question, *carried]
+        return [system, *self._history.messages, self._question, *carried]
 
     def _pack(
         self,
@@ -114,19 +202,38 @@ class ContextAssembler:
         *,
         head: list[dict[str, Any]],
         final: bool,
+        tool_schema_tokens: int = 0,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        blocks, indexer = evidence.transform(
-            self._capacity, fixed_input_tokens=estimate_messages_tokens(head)
-        )
         instruction = FINAL_TURN_INSTRUCTION if final else CONTROL_TURN_INSTRUCTION
-        return [*blocks, {"type": "text", "text": instruction}], indexer
+        instruction_block = {"type": "text", "text": instruction}
+        fixed_input_tokens = estimate_messages_tokens(
+            [*head, {"role": "user", "content": [instruction_block]}]
+        )
+        target = self._input_limit if final else self._control_target
+        residual = max(0, target - tool_schema_tokens - fixed_input_tokens)
+        while True:
+            blocks, indexer = evidence.transform(residual_tokens=residual)
+            content = [*blocks, instruction_block]
+            rendered_tokens = (
+                estimate_messages_tokens([*head, {"role": "user", "content": content}])
+                + tool_schema_tokens
+            )
+            if rendered_tokens <= target:
+                return content, indexer
+            if residual == 0:
+                raise AnswerInputOverflowError(
+                    "Fixed research evidence handles exceed the resolved model input target"
+                )
+            residual = max(0, residual - (rendered_tokens - target))
 
     def _check(self, messages: list[dict[str, Any]]) -> None:
-        input_tokens = estimate_messages_tokens(messages)
-        if input_tokens > self._input_budget:
+        self._check_input_tokens(estimate_messages_tokens(messages))
+
+    def _check_input_tokens(self, input_tokens: int) -> None:
+        if input_tokens > self._input_limit:
             raise AnswerInputOverflowError(
-                "Research input does not fit beside the generation reserve: "
-                f"{input_tokens} > {self._input_budget} estimated input tokens"
+                "Research input exceeds the resolved model input limit: "
+                f"{input_tokens} > {self._input_limit} estimated input tokens"
             )
 
 
@@ -143,6 +250,27 @@ def _question_message(
         content.append({"type": "text", "text": manifest})
     content.extend(query_images or [])
     return {"role": "user", "content": content}
+
+
+def _is_control_evidence_message(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    return bool(
+        message.get("role") == "user"
+        and isinstance(content, list)
+        and content
+        and isinstance(content[-1], dict)
+        and content[-1].get("text") == CONTROL_TURN_INSTRUCTION
+    )
+
+
+def _empty_tool_message(call: dict[str, Any]) -> dict[str, Any]:
+    function = call.get("function") or {}
+    return {
+        "role": "tool",
+        "tool_call_id": str(call.get("id") or ""),
+        "name": str(function.get("name") or ""),
+        "content": "",
+    }
 
 
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:

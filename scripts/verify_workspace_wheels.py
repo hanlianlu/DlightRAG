@@ -170,6 +170,7 @@ class WheelFacts:
     legal_hashes: tuple[str, str]
     has_py_typed: bool
     has_frontend: bool
+    has_model_catalog: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +182,7 @@ class SdistFacts:
     legal_hashes: tuple[str, str]
     has_py_typed: bool
     has_frontend: bool
+    has_model_catalog: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +268,7 @@ def _wheel_facts(
             "dlightrag/web/static/generated/style.css",
             "dlightrag/web/static/generated/js/main.js",
         }.issubset(wheel.namelist())
+        has_model_catalog = "dlightrag_ai/model_catalog.json" in wheel.namelist()
         sources = (
             (name, wheel.read(name))
             for name in wheel.namelist()
@@ -287,6 +290,7 @@ def _wheel_facts(
         legal_hashes,
         has_py_typed,
         has_frontend,
+        has_model_catalog,
     )
 
 
@@ -481,6 +485,7 @@ def _sdist_facts(
         legal_members: dict[str, bytes] = {}
         has_py_typed = False
         frontend_members: set[str] = set()
+        has_model_catalog = False
         sources: list[tuple[str, bytes]] = []
         for member in members:
             parts = Path(member.name).parts
@@ -494,6 +499,8 @@ def _sdist_facts(
                     legal_members[Path(member.name).name] = legal_file.read()
             if member.name == expected_py_typed:
                 has_py_typed = True
+            if member.name == f"{sdist_root}/src/dlightrag_ai/model_catalog.json":
+                has_model_catalog = True
             if len(parts) > 1:
                 frontend_members.add("/".join(parts[1:]))
             relative_parts = parts[1:]
@@ -523,6 +530,7 @@ def _sdist_facts(
             "src/dlightrag/web/static/generated/style.css",
             "src/dlightrag/web/static/generated/js/main.js",
         }.issubset(frontend_members),
+        has_model_catalog,
     )
 
 
@@ -603,6 +611,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError(f"{distribution}: wheel must contain repository LICENSE and NOTICE")
         if not facts.has_py_typed:
             raise ValueError(f"{distribution}: wheel must contain py.typed")
+        if distribution == "dlightrag-ai" and not facts.has_model_catalog:
+            raise ValueError("dlightrag-ai: wheel must contain model_catalog.json")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: wheel must contain generated frontend assets")
 
@@ -619,6 +629,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             raise ValueError(f"{distribution}: sdist must contain repository LICENSE and NOTICE")
         if not facts.has_py_typed:
             raise ValueError(f"{distribution}: sdist must contain py.typed")
+        if distribution == "dlightrag-ai" and not facts.has_model_catalog:
+            raise ValueError("dlightrag-ai: sdist must contain model_catalog.json")
         if distribution == "dlightrag" and not facts.has_frontend:
             raise ValueError("dlightrag: sdist must contain generated frontend assets")
 
