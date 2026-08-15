@@ -30,14 +30,8 @@ from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.answer_runs.checkpoints import encode_checkpoint_state, restore_agent_state
-from dlightrag.core.answer_runs.coordinator import (
-    AnswerRunCoordinator,
-    DurableWrites,
-    RunSession,
-)
 from dlightrag.core.answer_runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.core.answer_runs.models import AgentRunState
-from dlightrag.core.answer_runs.subscription import RunEventBroker
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
@@ -51,7 +45,14 @@ from dlightrag.core.servicemanager import (
     _OrchestratorRun,
 )
 from dlightrag.core.tools import ExactCallCache
-from dlightrag.storage.answer_runs import PGAnswerRunStore, answer_run_request_fingerprint
+from dlightrag.runtime import (
+    DurableWrites,
+    RunCoordinator,
+    RunEventBroker,
+    RunSession,
+    answer_run_request_fingerprint,
+)
+from dlightrag.storage.answer_runs import PGAnswerRunStore
 from dlightrag.storage.web_conversations import PGWebConversationStore
 from tests.conftest import FingerprintingAnswerRunStore
 
@@ -182,12 +183,12 @@ async def test_checkpointed_turn_survives_a_new_worker(store: PGAnswerRunStore) 
             await asyncio.sleep(30)
         return {"answer": "second attempt", "turns": session.completed_turns}
 
-    first = AnswerRunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    first = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
     await first.start()
     await _settle(_checkpoint_committed(store, run_id))
     await first.aclose()
 
-    second = AnswerRunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    second = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
     await second.start()
     try:
         await _settle(_status_is(store, run_id, "succeeded"))
@@ -247,7 +248,7 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
         await held.wait()
         return {"answer": "held"}
 
-    coordinator = AnswerRunCoordinator(
+    coordinator = RunCoordinator(
         store=store,
         executor=_Executor(body),
         max_async=1,
@@ -285,7 +286,7 @@ async def test_graceful_shutdown_requeues_without_crash_recovery(
         await asyncio.sleep(30)
         return {"answer": "unreachable"}
 
-    coordinator = AnswerRunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    coordinator = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
     await coordinator.start()
     await asyncio.wait_for(running.wait(), timeout=10)
     await coordinator.aclose()
@@ -315,7 +316,7 @@ async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
         await session.flush_tokens()
         return {"answer": "hello world"}
 
-    coordinator = AnswerRunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    coordinator = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
     await coordinator.start()
     try:
         await _settle(_status_is(store, run_id, "succeeded"))
@@ -357,7 +358,7 @@ async def test_running_run_observes_cancellation_and_commits_cancelled(
             await asyncio.sleep(0.01)
         return {"answer": "unreachable"}
 
-    coordinator = AnswerRunCoordinator(
+    coordinator = RunCoordinator(
         store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.05
     )
     await coordinator.start()
@@ -629,11 +630,13 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
 
 def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
     """The manager surface a durable run needs, bound to the throwaway database."""
+    from dlightrag.application import ApplicationHealth
+
     config = MagicMock()
     config.max_async = 1
     manager = RAGServiceManager.__new__(RAGServiceManager)
     manager._config = config
-    manager._closed = False
+    manager._health = ApplicationHealth(readiness_probe=None)
     manager._answer_run_store = store
     manager._answer_coordinator = None
     manager._answer_store_lock = asyncio.Lock()

@@ -18,7 +18,7 @@ from dlightrag.core.principal import owner_id_from_principal
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.scope import RequestScope, request_scope_context
 from dlightrag.mcp import server as mcp_server
-from dlightrag.storage.answer_runs import AnswerRunRecord
+from dlightrag.runtime import AnswerRunRecord
 
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
@@ -667,7 +667,7 @@ async def test_mcp_answer_returns_a_descriptor_without_waiting(
 async def test_mcp_answer_reports_a_reused_key_with_different_input(
     mock_mcp_manager: AsyncMock,
 ) -> None:
-    from dlightrag.storage.answer_runs import IdempotencyKeyConflict
+    from dlightrag.runtime import IdempotencyKeyConflict
 
     mock_mcp_manager.acreate_answer_run.side_effect = IdempotencyKeyConflict("reused")
 

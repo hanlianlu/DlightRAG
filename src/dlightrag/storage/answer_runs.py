@@ -12,16 +12,36 @@ Lease duration, batch sizes, retention, and the crash-recovery bound are fixed
 internal constants; this module deliberately exposes no operator knobs.
 """
 
-import datetime
-import hashlib
 import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 import asyncpg
 
+from dlightrag.runtime import (
+    AnswerRunEvent,
+    AnswerRunEventType,
+    AnswerRunPhase,
+    AnswerRunRecord,
+    AnswerRunStatus,
+    ArtifactAttachOutcome,
+    CancellationOutcome,
+    CheckpointCommit,
+    ClaimedRun,
+    IdempotencyKeyConflict,
+    LeaseRenewal,
+    PendingArtifact,
+    PendingArtifactReference,
+    RunArtifactReference,
+    RunCheckpoint,
+    RunCreation,
+    RunDeletion,
+    ShutdownOutcome,
+    SweepOutcome,
+    TerminalOutcome,
+    canonical_run_request_json,
+)
 from dlightrag.storage.migrations import (
     ForeignKeyRequirement,
     Migration,
@@ -30,22 +50,12 @@ from dlightrag.storage.migrations import (
     verify_migrations,
 )
 
-type AnswerRunStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
-type AnswerRunPhase = Literal["planning", "searching", "researching", "generating"]
-type AnswerRunEventType = Literal["progress", "token", "reset", "done", "error"]
-type ArtifactReferenceKind = Literal["current_attachment", "history_attachment", "fetched_resource"]
-#: How a graceful shutdown left one owned run.
-type ShutdownOutcome = Literal["requeued", "cancelled", "lease_lost"]
-#: Whether a fenced worker's artifact write landed, or why it was refused.
-type ArtifactAttachOutcome = Literal["attached", "lease_lost", "turn_mismatch"]
-
 ANSWER_RUN_MIGRATION_SCOPE = "answer_runs"
 
 #: Terminal rows and every terminal run's event log expire 30 days after finish.
 RUN_RETENTION_SECONDS = 30 * 24 * 3600
 #: A worker renews this window while it holds a run; expiry makes the row reclaimable.
 ANSWER_RUN_LEASE_SECONDS = 60
-ANSWER_RUN_HEARTBEAT_SECONDS = 20
 #: Consecutive expired-lease reclaims allowed without a committed checkpoint. The
 #: next reclaim fails the run instead, so a process-killing run cannot monopolize
 #: every worker while a checkpointing run survives many restarts.
@@ -53,13 +63,8 @@ MAX_CONSECUTIVE_RECOVERIES = 4
 RUN_ABANDONED_ERROR_KIND = "run_abandoned"
 
 _ABANDONED_ERROR_MESSAGE = "Answer run exceeded its crash-recovery bound."
-_TERMINAL_STATUSES = ("succeeded", "failed", "cancelled")
 _BATCH_LIMIT = 200
 _EVENT_PAGE_LIMIT = 500
-
-
-class IdempotencyKeyConflict(RuntimeError):
-    """One owner reused an idempotency key with different normalized input."""
 
 
 _CREATE_RUNS = """
@@ -747,185 +752,6 @@ def _new_run_id() -> uuid.UUID:
     return uuid.uuid7()
 
 
-def _canonical_request_json(request: Mapping[str, Any]) -> str:
-    """Serialize a normalized request to its one canonical JSON representation."""
-    return json.dumps(
-        dict(request),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def answer_run_request_fingerprint(request: Mapping[str, Any]) -> str:
-    """Digest the canonical request so key replays can detect changed input."""
-    return hashlib.sha256(_canonical_request_json(request).encode("utf-8")).hexdigest()
-
-
-def artifact_digest(content: bytes) -> str:
-    """Content address for one immutable artifact."""
-    return hashlib.sha256(content).hexdigest()
-
-
-@dataclass(frozen=True, slots=True)
-class AnswerRunRecord:
-    """Authoritative lifecycle state of one durable Answer run."""
-
-    owner_id: str
-    run_id: str
-    idempotency_key: str | None
-    request: Mapping[str, Any]
-    status: AnswerRunStatus
-    phase: AnswerRunPhase | None
-    stop_reason: str | None
-    completed_turns: int
-    cancel_requested_at: datetime.datetime | None
-    lease_owner: str | None
-    lease_expires_at: datetime.datetime | None
-    fencing_epoch: int
-    recovery_count: int
-    next_event_sequence: int
-    events_trimmed_at: datetime.datetime | None
-    result: Mapping[str, Any] | None
-    error_kind: str | None
-    error_message: str | None
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-    started_at: datetime.datetime | None
-    finished_at: datetime.datetime | None
-
-    @property
-    def cancel_requested(self) -> bool:
-        return self.cancel_requested_at is not None
-
-    @property
-    def terminal(self) -> bool:
-        return self.status in _TERMINAL_STATUSES
-
-
-@dataclass(frozen=True, slots=True)
-class RunCheckpoint:
-    """Restorable agent state plus the turn number copied from the run row."""
-
-    version: int
-    completed_turns: int
-    state: Mapping[str, Any]
-
-
-@dataclass(frozen=True, slots=True)
-class AnswerRunEvent:
-    """One durable event in a run's gap-free sequence."""
-
-    sequence: int
-    event_type: AnswerRunEventType
-    payload: Mapping[str, Any]
-    created_at: datetime.datetime
-
-
-@dataclass(frozen=True, slots=True)
-class RunCreation:
-    """Result of an owner-scoped create, including idempotent replays."""
-
-    run: AnswerRunRecord
-    replayed: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ClaimedRun:
-    """A run this worker now owns, with the checkpoint it must restore."""
-
-    run: AnswerRunRecord
-    checkpoint: RunCheckpoint | None
-
-
-@dataclass(frozen=True, slots=True)
-class LeaseRenewal:
-    """Whether a fenced worker still owns its run, and its cancellation state."""
-
-    renewed: bool
-    cancel_requested: bool
-
-
-@dataclass(frozen=True, slots=True)
-class CheckpointCommit:
-    """Definite outcome of one control-turn compare-and-set."""
-
-    outcome: Literal["committed", "lease_lost", "corrupt"]
-    completed_turns: int
-
-
-@dataclass(frozen=True, slots=True)
-class TerminalOutcome:
-    """Result of a fenced terminal transition and its single terminal event."""
-
-    committed: bool
-    status: AnswerRunStatus | None
-    event_sequence: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class CancellationOutcome:
-    """Result of an owner-scoped cancellation request."""
-
-    outcome: Literal["unknown", "cancelled", "pending", "already_terminal"]
-    run: AnswerRunRecord | None
-
-
-@dataclass(frozen=True, slots=True)
-class SweepOutcome:
-    """Rows the slot-free sweeper finalized in one pass."""
-
-    cancelled: int
-    abandoned: int
-
-
-@dataclass(frozen=True, slots=True)
-class RunDeletion:
-    """Rows and now-unreferenced blobs removed by deletion or retention."""
-
-    runs: int
-    artifacts: int
-
-
-@dataclass(frozen=True, slots=True)
-class PendingArtifact:
-    """Immutable bytes to persist inside one owner's content-addressed namespace."""
-
-    content: bytes
-
-    @property
-    def digest(self) -> str:
-        return artifact_digest(self.content)
-
-
-@dataclass(frozen=True, slots=True)
-class PendingArtifactReference:
-    """One ordered run input or discovered resource pointing at stored bytes."""
-
-    resource_id: str
-    reference_kind: ArtifactReferenceKind
-    ordinal: int
-    digest: str
-    filename: str
-    mime_type: str
-    transform_locator: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class RunArtifactReference:
-    """A stored run-artifact reference read back with its creation time."""
-
-    resource_id: str
-    reference_kind: ArtifactReferenceKind
-    ordinal: int
-    digest: str
-    filename: str
-    mime_type: str
-    transform_locator: Mapping[str, Any]
-    created_at: datetime.datetime
-
-
 class PGAnswerRunStore:
     """Owner-scoped durable Answer run state backed by PostgreSQL."""
 
@@ -1043,7 +869,7 @@ class PGAnswerRunStore:
         # before a connection is acquired rather than inside a transaction that
         # would then have to unwind.
         _require_owner(owner_id)
-        _canonical_request_json(request)
+        canonical_run_request_json(request)
 
         async def _operation(conn: Any) -> RunCreation:
             async with conn.transaction():
@@ -1081,7 +907,7 @@ class PGAnswerRunStore:
         if any(reference.reference_kind == "fetched_resource" for reference in references):
             # A fetched resource is worker-fenced run state, never accepted input.
             raise ValueError("fetched_resource references cannot be run creation inputs")
-        payload = _canonical_request_json(request)
+        payload = canonical_run_request_json(request)
         if not idempotency_fingerprint:
             raise ValueError("idempotency_fingerprint must be non-empty")
         fingerprint = idempotency_fingerprint
@@ -1996,7 +1822,6 @@ def _reference_record(row: Any) -> RunArtifactReference:
 
 
 __all__ = [
-    "ANSWER_RUN_HEARTBEAT_SECONDS",
     "ANSWER_RUN_LEASE_SECONDS",
     "ANSWER_RUN_MIGRATIONS",
     "ANSWER_RUN_MIGRATION_SCOPE",
@@ -2004,31 +1829,8 @@ __all__ = [
     "MAX_CONSECUTIVE_RECOVERIES",
     "RUN_ABANDONED_ERROR_KIND",
     "RUN_RETENTION_SECONDS",
-    "AnswerRunEvent",
-    "AnswerRunEventType",
-    "AnswerRunPhase",
-    "AnswerRunRecord",
-    "AnswerRunStatus",
-    "ArtifactAttachOutcome",
-    "ArtifactReferenceKind",
-    "CancellationOutcome",
-    "CheckpointCommit",
-    "ClaimedRun",
-    "IdempotencyKeyConflict",
-    "LeaseRenewal",
     "PGAnswerRunStore",
-    "PendingArtifact",
-    "PendingArtifactReference",
-    "RunArtifactReference",
-    "RunCheckpoint",
-    "RunCreation",
-    "RunDeletion",
-    "ShutdownOutcome",
-    "SweepOutcome",
-    "TerminalOutcome",
     "answer_run_columns",
     "answer_run_record",
-    "answer_run_request_fingerprint",
-    "artifact_digest",
     "parse_run_id",
 ]

@@ -5,6 +5,7 @@ import asyncio
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from dlightrag.application import ApplicationHealth
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
@@ -29,9 +30,8 @@ def _make_manager() -> RAGServiceManager:
     manager = RAGServiceManager.__new__(RAGServiceManager)
     manager._config = config
     manager._services = {}
-    manager._ready = True
-    manager._degraded = False
-    manager._startup_warnings = []
+    manager._health = ApplicationHealth(readiness_probe=None)
+    manager._health.mark_ready()
     manager._backoff = {}
     manager._answer_synthesizers_by_profile = {}
     manager._retrieval_planners_by_profile = {}

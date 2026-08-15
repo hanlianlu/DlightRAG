@@ -17,6 +17,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from dlightrag.api import auth as auth_module
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
+from dlightrag.application import ApplicationHealth
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import (
     AccessControlConfig,
@@ -27,7 +28,7 @@ from dlightrag.config import (
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
-from dlightrag.storage.answer_runs import AnswerRunRecord, RunCreation
+from dlightrag.runtime import AnswerRunRecord, RunCreation
 from tests.unit.conftest import prepare_test_answer_run_input
 
 # ---------------------------------------------------------------------------
@@ -102,6 +103,8 @@ def _api_app(test_config: DlightragConfig) -> Iterator[FastAPI]:
     app.dependency_overrides.clear()
     if hasattr(app.state, "manager"):
         del app.state.manager
+    if hasattr(app.state, "health"):
+        del app.state.health
 
 
 @pytest.fixture
@@ -135,7 +138,7 @@ def mock_service():
 
 
 @pytest.fixture
-def mock_manager(mock_service, test_config):
+def mock_manager(_api_app: FastAPI, mock_service, test_config):
     """Create a mock RAGServiceManager that delegates to mock_service."""
     manager = AsyncMock()
     manager.config = test_config
@@ -184,9 +187,6 @@ def mock_manager(mock_service, test_config):
     )
     manager.acreate_workspace = AsyncMock()
     manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
-    manager.is_ready = lambda: True
-    manager.is_degraded = lambda: False
-    manager.get_warnings = lambda: []
     manager.get_error_info = lambda: {"last_error": None, "timestamp": None, "retry_after": 30.0}
     from dlightrag.core.answer.capability import AnswerImageCapability
 
@@ -199,6 +199,17 @@ def mock_manager(mock_service, test_config):
         model="test-model",
         failure_kind=None,
     )
+    from dlightrag.core.answer.capability import answer_image_capability_summary
+    from dlightrag.core.servicemanager import _postgres_not_ready_detail
+
+    manager.health = ApplicationHealth(
+        readiness_probe=lambda: _postgres_not_ready_detail(test_config),
+    )
+    manager.health.mark_ready()
+    manager.health.set_answer_image_capability(
+        answer_image_capability_summary(manager.answer_image_capability)
+    )
+    _api_app.state.health = manager.health
     manager.close = AsyncMock()
     return manager
 
@@ -1173,8 +1184,7 @@ class TestHealthEndpointEnhanced:
     async def test_health_shows_degraded(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.is_degraded = lambda: True
-        mock_manager.get_warnings = lambda: ["Embedding unreachable"]
+        mock_manager.health.mark_degraded("Embedding unreachable")
         app.state.manager = mock_manager
         resp = await client.get("/health")
         body = resp.json()
@@ -1187,8 +1197,6 @@ class TestHealthEndpointEnhanced:
         mock_config: DlightragConfig,
         mock_manager,
     ) -> None:
-        mock_manager.is_degraded = lambda: False
-        mock_manager.get_warnings = lambda: []
         app.state.manager = mock_manager
         resp = await client.get("/health")
         body = resp.json()
@@ -1234,7 +1242,7 @@ class TestReadinessEndpoint:
     ) -> None:
         from dlightrag.storage.pool import pg_pool
 
-        mock_manager.is_ready = lambda: False
+        mock_manager.health.mark_closed()
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
         app.state.manager = mock_manager
@@ -1299,13 +1307,13 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import dlightrag.api.routes.status as status_module
+        import dlightrag.storage.lightrag_readonly as readonly_module
         from dlightrag.storage.pool import pg_pool
 
         mock_config.service_role = "reader"
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         monkeypatch.setattr(
-            status_module,
+            readonly_module,
             "verify_reader_corpus_session",
             AsyncMock(side_effect=RuntimeError("corpus pool is not read-only")),
         )
@@ -1327,13 +1335,13 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import dlightrag.api.routes.status as status_module
+        import dlightrag.storage.lightrag_readonly as readonly_module
         from dlightrag.storage.pool import pg_pool
 
         mock_config.service_role = "reader"
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         corpus_probe = AsyncMock()
-        monkeypatch.setattr(status_module, "verify_reader_corpus_session", corpus_probe)
+        monkeypatch.setattr(readonly_module, "verify_reader_corpus_session", corpus_probe)
         app.state.manager = mock_manager
 
         response = await client.get("/ready")
@@ -1427,16 +1435,12 @@ class TestReadinessEndpoint:
     async def test_the_cached_verdict_expires(
         self,
         client: AsyncClient,
-        mock_config: DlightragConfig,
         mock_manager,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.api.routes.status import ReadinessProbeCache
-        from dlightrag.storage.pool import pg_pool
-
-        probe = AsyncMock(return_value="off")
-        monkeypatch.setattr(pg_pool, "run_once", probe)
-        app.state.readiness_cache = ReadinessProbeCache(0.0)
+        probe = AsyncMock(return_value=None)
+        health = ApplicationHealth(readiness_probe=probe, readiness_cache_seconds=0.0)
+        health.mark_ready()
+        app.state.health = health
         app.state.manager = mock_manager
 
         await client.get("/ready")
@@ -1444,10 +1448,9 @@ class TestReadinessEndpoint:
 
         assert probe.await_count == 2
 
-    async def test_a_not_ready_manager_invalidates_the_cached_verdict(
+    async def test_a_not_ready_transition_invalidates_the_cached_verdict(
         self,
         client: AsyncClient,
-        mock_config: DlightragConfig,
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1459,40 +1462,12 @@ class TestReadinessEndpoint:
         app.state.manager = mock_manager
 
         assert (await client.get("/ready")).status_code == 200
-        mock_manager.is_ready = lambda: False
+        mock_manager.health.mark_degraded("temporary startup failure")
         assert (await client.get("/ready")).status_code == 503
-        mock_manager.is_ready = lambda: True
+        mock_manager.health.mark_ready()
         assert (await client.get("/ready")).status_code == 200
 
         assert probe.await_count == 2
-
-    async def test_invalidation_discards_an_inflight_pre_transition_verdict(self) -> None:
-        from dlightrag.api.routes.status import ReadinessProbeCache
-
-        cache = ReadinessProbeCache(60.0)
-        old_started = asyncio.Event()
-        release_old = asyncio.Event()
-        calls = 0
-
-        async def probe() -> str | None:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                old_started.set()
-                await release_old.wait()
-                return None
-            return "new failure"
-
-        old_waiter = asyncio.create_task(cache.detail(probe))
-        await old_started.wait()
-        cache.invalidate()
-        assert await cache.detail(probe) == "new failure"
-        release_old.set()
-        assert await old_waiter is None
-
-        # Completion of the disowned old probe must not overwrite the new memo.
-        assert await cache.detail(probe) == "new failure"
-        assert calls == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1935,6 +1910,18 @@ class TestAPIContracts:
         assert "AnswerResponse" in schemas
         assert "AnswerRunDescriptor" in schemas
         assert "AnswerRunStatusResponse" in schemas
+        assert "AnswerRunStatus" not in schemas
+        assert "AnswerRunPhase" not in schemas
+        assert schemas["AnswerRunDescriptor"]["properties"]["status"] == {
+            "type": "string",
+            "enum": ["queued", "running", "succeeded", "failed", "cancelled"],
+            "title": "Status",
+        }
+        phase_schema = schemas["AnswerRunStatusResponse"]["properties"]["phase"]
+        assert phase_schema["anyOf"][0] == {
+            "type": "string",
+            "enum": ["planning", "searching", "researching", "generating"],
+        }
         ingest_properties = schemas["IngestRequest"]["properties"]
         assert "download_uri" in ingest_properties
         assert "download_uris" in ingest_properties

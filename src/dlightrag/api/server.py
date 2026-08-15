@@ -84,6 +84,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.exception("Failed to initialize RAG service manager")
         raise
     _app.state.manager = manager
+    _app.state.health = manager.health
     conversation_service = None
     try:
         conversation_service = getattr(_app.state, "web_conversation_service", None)

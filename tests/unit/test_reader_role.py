@@ -364,29 +364,31 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
 
 
 async def test_reader_workspace_registry_schema_failure_stops_startup() -> None:
+    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
     from dlightrag.storage.migrations import SchemaValidationError
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config(service_role="reader")
-    manager._startup_warnings = []
+    manager._health = ApplicationHealth(readiness_probe=None)
 
     with pytest.raises(SchemaValidationError):
         await _initialize_registry(manager, SchemaValidationError("workspace_registry"))
 
-    assert manager._startup_warnings == []
+    assert manager.health.warnings == ()
 
 
 async def test_transient_workspace_registry_failure_only_warns() -> None:
+    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config()
-    manager._startup_warnings = []
+    manager._health = ApplicationHealth(readiness_probe=None)
 
     await _initialize_registry(manager, RuntimeError("transient"))
 
-    assert manager._startup_warnings == ["Workspace registry unavailable"]
+    assert manager.health.warnings == ("Workspace registry unavailable",)
 
 
 async def _initialize_registry(manager: Any, failure: Exception) -> None:
@@ -557,6 +559,7 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
 async def test_reader_answer_run_store_starts_in_validation_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
 
     _built, validate_calls = _patch_answer_run_store(monkeypatch)
@@ -565,7 +568,7 @@ async def test_reader_answer_run_store_starts_in_validation_mode(
     manager._config = _config(service_role="reader")
     manager._answer_run_store = None
     manager._answer_store_lock = asyncio.Lock()
-    manager._closed = False
+    manager._health = ApplicationHealth(readiness_probe=None)
 
     await manager._get_answer_run_store()
 
@@ -588,7 +591,7 @@ async def test_manager_startup_initializes_the_answer_run_store_before_readiness
     manager = await RAGServiceManager.acreate(config=_config(service_role=service_role))
 
     assert validate_calls == [expected_validate_only]
-    assert manager.is_ready()
+    assert manager.health.is_ready
     # The one store built at startup is the one every later caller reuses.
     assert await manager._get_answer_run_store() is built[0]
     assert len(built) == 1
@@ -648,8 +651,8 @@ async def test_manager_startup_degrades_on_a_transient_answer_run_store_failure(
 
     manager = await RAGServiceManager.acreate(config=_config())
 
-    assert manager.is_ready()
-    assert any("Answer run store" in warning for warning in manager.get_warnings())
+    assert manager.health.is_ready
+    assert any("Answer run store" in warning for warning in manager.health.warnings)
 
 
 async def test_reader_serves_web_routes() -> None:
@@ -668,11 +671,12 @@ async def test_reader_serves_web_routes() -> None:
 
 
 async def test_reader_does_not_recover_ingest_jobs() -> None:
+    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config(service_role="reader")
-    manager._startup_warnings = []
+    manager._health = ApplicationHealth(readiness_probe=None)
     recovery = AsyncMock()
     manager._ingest_jobs = cast(Any, SimpleNamespace(start_recovery=recovery))
 
@@ -682,11 +686,12 @@ async def test_reader_does_not_recover_ingest_jobs() -> None:
 
 
 async def test_writer_recovers_ingest_jobs() -> None:
+    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config()
-    manager._startup_warnings = []
+    manager._health = ApplicationHealth(readiness_probe=None)
     recovery = AsyncMock()
     manager._ingest_jobs = cast(Any, SimpleNamespace(start_recovery=recovery))
 

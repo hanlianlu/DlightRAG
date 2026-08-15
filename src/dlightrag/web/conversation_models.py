@@ -2,11 +2,11 @@
 """Browser-safe contracts for durable Web conversations."""
 
 import datetime
-from typing import Literal
 
 from pydantic import Field, field_validator
 
 from dlightrag.core.client_contracts import ClientContractModel
+from dlightrag.runtime import AnswerRunStatus
 
 
 class ConversationSummary(ClientContractModel):
@@ -33,7 +33,7 @@ class ConversationTurn(ClientContractModel):
     turn_number: int
     answer_run_id: str
     submission_id: str
-    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    status: AnswerRunStatus
     cancel_requested: bool = False
     user_text: str
     assistant_text: str
@@ -48,7 +48,7 @@ class AnswerRunDescriptor(ClientContractModel):
     """What the browser needs to follow one accepted submission."""
 
     run_id: str
-    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    status: AnswerRunStatus
     cancel_requested: bool = False
     turn_id: str
     turn_number: int

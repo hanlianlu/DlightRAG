@@ -187,6 +187,7 @@ source_modules = [
     "dlightrag.utils",
     "dlightrag.prompts",
     "dlightrag.citations",
+    "dlightrag.application",
     "dlightrag.models",
     "dlightrag.core",
     "dlightrag.storage",
@@ -198,6 +199,51 @@ forbidden_modules = [
     "dlightrag.web",
     "dlightrag.api",
     "dlightrag.mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "runtime-independence"
+name = "Durable runtime must remain storage and product-policy neutral"
+type = "forbidden"
+source_modules = ["dlightrag.runtime"]
+forbidden_modules = [
+    "dlightrag.core",
+    "dlightrag.storage",
+    "dlightrag.api",
+    "dlightrag.mcp",
+    "dlightrag.web",
+    "dlightrag_rag",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "application-health-independence"
+name = "Application health must remain composition and adapter neutral"
+type = "forbidden"
+source_modules = ["dlightrag.application"]
+forbidden_modules = [
+    "dlightrag.core",
+    "dlightrag.storage",
+    "dlightrag.api",
+    "dlightrag.mcp",
+    "dlightrag.web",
+    "dlightrag_rag",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "status-route-health-only"
+name = "Status routes consume application health, not implementations"
+type = "forbidden"
+source_modules = ["dlightrag.api.routes.status"]
+forbidden_modules = [
+    "dlightrag.core.answer",
+    "dlightrag.core.servicemanager",
+    "dlightrag.storage",
 ]
 
 [[tool.importlinter.contracts]]

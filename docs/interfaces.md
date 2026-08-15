@@ -544,17 +544,20 @@ image resources is rejected fail-closed with a stable `error_kind`
 HTTP 400 (or a classified SSE `error` event carrying `error_kind` when streaming),
 MCP returns the error text, and the SDK raises `AnswerImageError`.
 
-`GET /health` is liveness only: it answers from in-process state (degraded flag,
-startup warnings, storage backends, `answer_image_capability`), stays HTTP 200
+`GET /health` is liveness only: it answers from `ApplicationHealth` in-process
+state (degraded state, startup warnings, and the projected
+`answer_image_capability`) plus configured storage backend names, stays HTTP 200
 when the process is degraded, and never touches PostgreSQL, so an unauthenticated
 poll loop cannot become database load. Unauthenticated `GET /ready` is the
-traffic-readiness probe: HTTP 200 only after the manager is initialized and the
-DlightRAG domain session is writable. A reader additionally proves its corpus
-session is still read-only and still resolves the corpus. Its database verdict is
-memoized for a few seconds, and a not-ready manager drops that memo so a startup
-or schema transition is never answered from a stale verdict. Any failed readiness
-condition returns a minimal HTTP 503 with a fixed detail string and no exception
-text.
+traffic-readiness probe: HTTP 200 only after `ApplicationHealth` is marked ready
+and its injected readiness adapter confirms the DlightRAG domain session is
+writable. A reader additionally proves its corpus session is still read-only and
+still resolves the corpus. `ApplicationHealth` single-flights and memoizes that
+adapter verdict for two seconds; ready, degraded, and closed transitions
+invalidate the memo so a startup or schema transition is never answered from a
+stale verdict. The status route imports neither the manager nor PostgreSQL. Any
+failed condition returns a minimal HTTP 503 with a fixed detail string and no
+exception text.
 
 Error responses are `{detail, error_type, error_kind?}`. `error_type` is one of
 `validation` (400/413/422), `auth` (401/403), `unavailable` (503),
@@ -568,7 +571,9 @@ fixed detail and no schema detail. Terminal run failures carry one stable
 `MODEL_CAPABILITY_UNAVAILABLE`, `ANSWER_RESOURCE_INVALID`),
 `invalid_tool_configuration`, a checkpoint kind (`checkpoint_too_large`,
 `checkpoint_incompatible`, `checkpoint_corrupt`), `run_abandoned` when a run
-exceeds its crash-recovery bound, or `ANSWER_STREAM_FAILED`.
+exceeds its crash-recovery bound, `run_execution_failed` when Runtime catches an
+unclassified runtime or executor failure outside the Answer taxonomy, or
+`ANSWER_STREAM_FAILED`.
 
 A saturated service does not refuse an answer: accepted runs queue until an
 execution slot frees or the caller cancels the run, with no queue timeout, queue

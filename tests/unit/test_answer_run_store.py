@@ -5,8 +5,8 @@ import re
 
 import pytest
 
+from dlightrag.runtime import RUN_HEARTBEAT_SECONDS
 from dlightrag.storage.answer_runs import (
-    ANSWER_RUN_HEARTBEAT_SECONDS,
     ANSWER_RUN_LEASE_SECONDS,
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
@@ -59,7 +59,7 @@ class TestFixedRuntimeBounds:
         assert RUN_RETENTION_SECONDS == 30 * 24 * 3600
 
     def test_workers_heartbeat_well_inside_their_lease(self) -> None:
-        assert 0 < ANSWER_RUN_HEARTBEAT_SECONDS <= ANSWER_RUN_LEASE_SECONDS // 2
+        assert 0 < RUN_HEARTBEAT_SECONDS <= ANSWER_RUN_LEASE_SECONDS // 2
 
 
 class TestCreationValidation:

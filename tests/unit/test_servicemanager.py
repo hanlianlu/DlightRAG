@@ -174,7 +174,7 @@ class _MemoryArtifactStore:
 async def _durable_answer(manager: Any, query: str, **kwargs: Any) -> RetrievalResult:
     """Execute one durable answer run in process and restore its canonical result."""
     from dlightrag.core.answer_runs.results import restore_answer_result
-    from dlightrag.storage.answer_runs import artifact_digest
+    from dlightrag.runtime import artifact_digest
 
     resources = kwargs.pop("resources", None)
     manager._answer_run_store = _MemoryArtifactStore(
@@ -606,7 +606,7 @@ class TestBackoff:
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
             await manager._get_service("ws_a")
-        assert not manager.is_ready()
+        assert not manager.health.is_ready
         assert "ws_a" in manager._backoff
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
@@ -2042,8 +2042,8 @@ class TestDegradedMode:
     async def test_create_sets_ready_on_success(self, mock_create, test_cfg) -> None:
         mock_create.return_value = AsyncMock()
         manager = await RAGServiceManager.acreate(config=test_cfg)
-        assert manager.is_ready()
-        assert not manager.is_degraded()
+        assert manager.health.is_ready
+        assert not manager.health.is_degraded
         # Warnings may include "Workspace registry unavailable" in tests
         # without a running PostgreSQL — that's expected and non-fatal.
 
@@ -2230,9 +2230,9 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
     async def test_create_sets_degraded_on_failure(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("DB down")
         manager = await RAGServiceManager.acreate(config=test_cfg)
-        assert not manager.is_ready()
-        assert manager.is_degraded()
-        assert any("DB down" in w for w in manager.get_warnings())
+        assert not manager.health.is_ready
+        assert manager.health.is_degraded
+        assert any("DB down" in w for w in manager.health.warnings)
 
     async def test_create_warms_default_workspace_only(
         self, monkeypatch: pytest.MonkeyPatch, test_cfg
@@ -2258,7 +2258,7 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
 
         manager = await RAGServiceManager.acreate(config=cfg)
 
-        assert manager.is_ready()
+        assert manager.health.is_ready
         assert created == ["default"]
 
 
@@ -2349,12 +2349,12 @@ class TestClose:
         svc_a = AsyncMock()
         svc_b = AsyncMock()
         manager._services = {"a": svc_a, "b": svc_b}
-        manager._ready = True
+        manager.health.mark_ready()
         await manager.aclose()
         svc_a.aclose.assert_awaited_once()
         svc_b.aclose.assert_awaited_once()
         assert manager._services == {}
-        assert not manager._ready
+        assert not manager.health.is_ready
 
     async def test_close_prevents_recreating_vlm_provider(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch

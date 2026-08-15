@@ -14,21 +14,21 @@ import pytest
 from dlightrag_agent.tools import ToolResult
 
 from dlightrag.core.answer_runs.checkpoints import (
-    CheckpointError,
     decode_checkpoint_state,
     encode_checkpoint_state,
     restore_agent_state,
 )
-from dlightrag.core.answer_runs.models import (
-    CHECKPOINT_SCHEMA_VERSION,
-    MAX_CHECKPOINT_BYTES,
-    AgentRunState,
-)
+from dlightrag.core.answer_runs.models import AgentRunState
 from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceInput
 from dlightrag.core.resources.registry import ResourceRegistry, ResourceStateMismatchError
 from dlightrag.core.tools import ExactCallCache
+from dlightrag.runtime import (
+    CHECKPOINT_SCHEMA_VERSION,
+    MAX_CHECKPOINT_BYTES,
+    CheckpointError,
+)
 
 _PNG = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-corpus-visual").decode("ascii")
 _ATTACHMENT_BYTES = b"\x89PNG\r\n\x1a\nfake-attachment"

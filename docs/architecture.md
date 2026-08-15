@@ -17,7 +17,10 @@ in [postgresql.md](postgresql.md).
 Clients
   -> REST / Web / MCP / SDK adapters
   -> RAGServiceManager
-       workspace routing, user scope, federation, writer/reader role gating
+       composition, workspace routing, user scope, writer/reader role gating
+       -> dlightrag.runtime RunCoordinator
+            neutral lifecycle records, store port, leases, events, checkpoints
+            -> PGAnswerRunStore adapter
   -> RAGService
        one workspace runtime, ingest, retrieve, answer, reset
   -> LightRAG main
@@ -177,6 +180,14 @@ interrupted mid-stream emits `reset` and regenerates. Four tables own that state
 [durable-answer-runs.md](durable-answer-runs.md) for the full contract and
 [postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
 
+`dlightrag.runtime` owns the storage-neutral records, store protocol,
+subscription, coordinator, fenced session, checkpoint failures, and caller-wait
+failures. It imports neither Answer policy nor PostgreSQL. The current Answer
+executor classifies product errors into `RunExecutionError` before they cross
+that boundary; `PGAnswerRunStore` implements the runtime store port. The old
+`core.answer_runs.coordinator` and `core.answer_runs.subscription` paths do not
+exist.
+
 ## Web Conversation Boundary
 
 The browser channel wraps the same durable runs with a principal-scoped
@@ -282,6 +293,7 @@ L6  core orchestration                             ingest, retrieve, answer, vis
 L5  LightRAG/store adapters                        patches, parser sidecar, BM25, filtered VDB
 L4  workspace cores and model adapters             AI execution; Agent tools; RAG/LightRAG adapters
 L3  PostgreSQL, sourcing, citations                product/domain implementations
+L2c application, runtime                           health and durable lifecycle contracts
 L2b model settings, schemas                        resolved foundation values
 L2a config, scope, protocols                       shared configuration and contracts
 L1  observability                                  Langfuse telemetry adapter
@@ -300,7 +312,9 @@ AI but not product/RAG/storage/transport code; and RAG may use AI and LightRAG
 APIs but cannot import the product, Agent, PostgreSQL, or transport packages.
 Existing root contracts continue to
 keep `api`/`mcp`/`web` out of internal modules, order the foundation and core
-coordination stacks, and separate resources from model-visible tool adapters.
+coordination stacks, keep Runtime free of Answer/RAG/storage/transport code,
+make status routes depend only on `ApplicationHealth`, and separate resources
+from model-visible tool adapters.
 The same checks run against installed wheel contents so an editable workspace
 cannot hide an undeclared dependency; that artifact gate also rejects imports
 of LightRAG's concrete PostgreSQL backend, whose external submodule path cannot

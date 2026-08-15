@@ -1,8 +1,15 @@
 # Durable Answer Runs
 
-This document defines the Answer runtime. It is a product contract, not a
-Web-only workflow: REST, MCP, Web, and the Python manager all use the same
-durable run coordinator.
+This document defines durable Answer behavior across two owners. The neutral
+`dlightrag.runtime` package owns lifecycle records, the store port, fenced
+sessions, subscriptions, checkpoint failures, and `RunCoordinator`. The Answer
+executor owns retrieval/synthesis and converts product failures to
+`RunExecutionError` before Runtime sees them. REST, MCP, Web, and the Python
+manager all use that same coordinator.
+
+`PGAnswerRunStore` is the current store-port adapter. Runtime never imports
+PostgreSQL, Answer implementation, RAG implementation, or a transport package;
+the adapter imports the records it persists from Runtime.
 
 ## Goals
 

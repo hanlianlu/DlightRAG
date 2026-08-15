@@ -53,6 +53,7 @@ from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelI
 from dlightrag_rag.retrieval import MetadataFilter
 from PIL import Image
 
+from dlightrag.application import ApplicationHealth
 from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.agent.orchestrator import (
     AnswerOrchestrator,
@@ -60,14 +61,18 @@ from dlightrag.core.agent.orchestrator import (
 )
 from dlightrag.core.answer.capability import (
     AnswerImageCapability,
+    answer_image_capability_summary,
     check_answer_image_capability,
     derive_effective_max_images,
 )
 from dlightrag.core.answer.errors import (
+    AnswerInputError,
     AnswerInputOverflowError,
     AnswerModelCapabilityError,
     AnswerResourceAdmissionError,
     CurrentImagePayloadError,
+    InvalidToolConfigurationError,
+    classify_answer_error,
 )
 from dlightrag.core.answer.history import (
     HistoryProjectionOverflowError,
@@ -76,7 +81,6 @@ from dlightrag.core.answer.history import (
 )
 from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
-from dlightrag.core.answer_runs.coordinator import RunSession
 from dlightrag.core.answer_runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
@@ -86,12 +90,7 @@ from dlightrag.core.answer_runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.core.answer_runs.models import (
-    AgentRunState,
-    AnswerRunCancelledError,
-    AnswerRunFailedError,
-    CheckpointError,
-)
+from dlightrag.core.answer_runs.models import AgentRunState
 from dlightrag.core.answer_runs.results import restore_answer_result, store_answer_result
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
@@ -121,17 +120,27 @@ from dlightrag.model_settings import (
     rerank_scoring_model_settings,
 )
 from dlightrag.observability import LangfuseTelemetry
-from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
-from dlightrag.sourcing.source_contract import safe_source_filename
-from dlightrag.storage.answer_runs import (
+from dlightrag.runtime import (
+    AnswerRunCancelledError,
     AnswerRunEvent,
+    AnswerRunFailedError,
     AnswerRunRecord,
     CancellationOutcome,
-    PGAnswerRunStore,
+    CheckpointError,
+    LeaseLostError,
+    PendingArtifact,
+    PendingArtifactReference,
+    RunCancelledError,
+    RunCoordinator,
     RunCreation,
+    RunExecutionError,
+    RunSession,
     answer_run_request_fingerprint,
     artifact_digest,
 )
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.sourcing.source_contract import safe_source_filename
+from dlightrag.storage.answer_runs import PGAnswerRunStore
 from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
 from dlightrag.storage.migrations import SchemaValidationError
 from dlightrag.utils import normalize_workspace
@@ -140,6 +149,31 @@ logger = logging.getLogger(__name__)
 _MAX_RETRY_INTERVAL: float = 300.0
 _QUERY_WORKSPACE_MAX_CONCURRENCY = 8
 _SCHEMA_CACHE_MAX_ENTRIES = 128
+
+
+async def _postgres_not_ready_detail(config: DlightragConfig) -> str | None:
+    """Project the current PostgreSQL adapter's role-specific readiness."""
+    from dlightrag.storage.pool import pg_pool
+
+    try:
+        read_only = await pg_pool.run_once(lambda conn: conn.fetchval("SHOW transaction_read_only"))
+        if str(read_only).lower() != "off":
+            raise RuntimeError("domain pool session is read-only")
+    except Exception:
+        logger.warning("Domain PostgreSQL readiness probe failed", exc_info=True)
+        return "DlightRAG domain database session is not writable"
+
+    if not config.is_reader:
+        return None
+
+    from dlightrag.storage.lightrag_readonly import verify_reader_corpus_session
+
+    try:
+        await verify_reader_corpus_session()
+    except Exception:
+        logger.warning("Reader corpus PostgreSQL readiness probe failed", exc_info=True)
+        return "Reader corpus database session is not read-only or is unavailable"
+    return None
 
 
 def _attachment_bytes(resources: list[ResourceInput] | None) -> list[bytes]:
@@ -276,14 +310,32 @@ class _ManagerAnswerExecutor:
         self._manager = manager
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
-        return await self._manager._execute_answer_run(session)
+        try:
+            return await self._manager._execute_answer_run(session)
+        except (
+            asyncio.CancelledError,
+            RunCancelledError,
+            LeaseLostError,
+            CheckpointError,
+            RunExecutionError,
+        ):
+            raise
+        except Exception as exc:
+            logger.warning("Answer run %s execution failed", session.run_id, exc_info=True)
+            # Only the Answer taxonomy vets a public message; a foreign attribute is untrusted.
+            message = (
+                exc.public_message
+                if isinstance(exc, AnswerInputError | InvalidToolConfigurationError)
+                and exc.public_message
+                else "Answer run failed."
+            )
+            raise RunExecutionError(classify_answer_error(exc), message) from exc
 
 
 def _fetched_bytes_sink(
     session: RunSession, store: PGAnswerRunStore
 ) -> Callable[[Any], Awaitable[None]]:
     """Persist each validated fetched resource under this worker's live fence."""
-    from dlightrag.storage.answer_runs import PendingArtifact, PendingArtifactReference
 
     async def _persist(fetched: Any) -> None:
         artifact = PendingArtifact(content=fetched.content)
@@ -340,11 +392,9 @@ class RAGServiceManager:
         self._services: dict[str, RAGService] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-        # Health/error tracking
-        self._ready: bool = False
-        self._degraded: bool = False
-        self._closed: bool = False
-        self._startup_warnings: list[str] = []
+        self._health = ApplicationHealth(
+            readiness_probe=lambda: _postgres_not_ready_detail(self._config),
+        )
 
         # Per-workspace backoff: workspace -> (last_error_ts, retry_interval)
         self._backoff: dict[str, tuple[float, float]] = {}
@@ -378,7 +428,7 @@ class RAGServiceManager:
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._answer_run_store: PGAnswerRunStore | None = None
-        self._answer_coordinator: Any | None = None
+        self._answer_coordinator: RunCoordinator | None = None
         # Separate locks: starting the runtime needs the store, so one lock for
         # both would deadlock on itself.
         self._answer_store_lock = asyncio.Lock()
@@ -388,6 +438,10 @@ class RAGServiceManager:
     def config(self) -> DlightragConfig:
         """Read-only access to the manager configuration for UI/API adapters."""
         return self._config
+
+    @property
+    def health(self) -> ApplicationHealth:
+        return self._health
 
     @classmethod
     async def acreate(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
@@ -437,11 +491,10 @@ class RAGServiceManager:
         await manager._start_ingest_job_recovery()
         await manager._start_answer_runtime()
         if default_ws in manager._services:
-            manager._ready = True
+            manager._health.mark_ready()
         else:
-            manager._degraded = True
             detail = getattr(default_err, "detail", str(default_err)) if default_err else "unknown"
-            manager._startup_warnings.append(f"Default workspace init failed: {detail}")
+            manager._health.mark_degraded(f"Default workspace init failed: {detail}")
             logger.error("RAG service started in degraded mode: %s", detail)
         return manager
 
@@ -514,7 +567,7 @@ class RAGServiceManager:
         except SchemaValidationError:
             raise
         except Exception as exc:
-            self._startup_warnings.append("Workspace registry unavailable")
+            self._health.add_warning("Workspace registry unavailable")
             logger.warning("Workspace registry initialization failed: %s", exc)
 
     async def _initialize_answer_run_store(self) -> None:
@@ -534,7 +587,7 @@ class RAGServiceManager:
         except SchemaValidationError:
             raise
         except Exception as exc:
-            self._startup_warnings.append("Answer run store unavailable")
+            self._health.add_warning("Answer run store unavailable")
             logger.warning("Answer run store initialization failed: %s", exc)
 
     async def _validate_active_answer_run_compatibility(self) -> None:
@@ -588,7 +641,7 @@ class RAGServiceManager:
         try:
             await self.astart_answer_runtime()
         except Exception as exc:
-            self._startup_warnings.append("Answer runtime unavailable")
+            self._health.add_warning("Answer runtime unavailable")
             logger.warning("Answer runtime failed to start: %s", exc)
 
     async def _get_workspace_registry(self) -> PGWorkspaceRegistry:
@@ -743,7 +796,7 @@ class RAGServiceManager:
         try:
             await self._ingest_jobs.start_recovery()
         except Exception:
-            self._startup_warnings.append("Ingest job recovery unavailable")
+            self._health.add_warning("Ingest job recovery unavailable")
             logger.warning("Ingest job recovery initialization failed", exc_info=True)
 
     @property
@@ -774,6 +827,7 @@ class RAGServiceManager:
 
     def _cache_answer_image_capability(self, capability: AnswerImageCapability) -> None:
         self._answer_image_capability = capability
+        self._health.set_answer_image_capability(answer_image_capability_summary(capability))
         self._narrow_role_image_profile("query", capability.status)
 
     async def _maybe_reprobe_answer_image_capability(self) -> None:
@@ -1136,7 +1190,7 @@ class RAGServiceManager:
         model_profile: ModelProfile,
     ) -> AnswerSynthesizer:
         """Lazy-create the AnswerSynthesizer from global config."""
-        if self._closed:
+        if self._health.is_closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
         if cached := self._answer_synthesizers_by_profile.get(model_profile):
             return cached
@@ -1251,7 +1305,7 @@ class RAGServiceManager:
         model_profile: ModelProfile | None = None,
     ) -> RetrievalPlanner:
         """Return the manager-owned RetrievalPlanner, creating it when needed."""
-        if self._closed:
+        if self._health.is_closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
         profile = model_profile or self._model_profile("extract")
         if cached := self._retrieval_planners_by_profile.get(profile):
@@ -1271,7 +1325,7 @@ class RAGServiceManager:
 
     def _get_web_search(self) -> ExaSearch | None:
         """Return the manager-owned web search client, or None when unconfigured."""
-        if self._closed:
+        if self._health.is_closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
         key = self._config.web_search.api_key
         if not key:
@@ -1284,7 +1338,7 @@ class RAGServiceManager:
 
     def _get_query_tool_model(self) -> ToolModel:
         """Return the agent control model used by the research answer path."""
-        if self._closed:
+        if self._health.is_closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
         if self._query_tool_model is None:
             self._query_tool_model = ToolModel(
@@ -1310,7 +1364,7 @@ class RAGServiceManager:
         )
 
     def _get_or_create_vlm_func(self) -> Callable[..., Any]:
-        if self._closed:
+        if self._health.is_closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
         if self._vlm_func is None:
             self._vlm_model = CompletionModel(
@@ -1965,7 +2019,7 @@ class RAGServiceManager:
     async def _get_answer_run_store(self) -> PGAnswerRunStore:
         if self._answer_run_store is not None:
             return self._answer_run_store
-        if self._closed:
+        if self._health.is_closed:
             raise RAGServiceUnavailableError("Answer runtime is shutting down")
         async with self._answer_store_lock:
             if self._answer_run_store is None:
@@ -1985,23 +2039,21 @@ class RAGServiceManager:
         """
         if self._answer_coordinator is not None:
             return
-        if self._closed:
+        if self._health.is_closed:
             raise RAGServiceUnavailableError("Answer runtime is shutting down")
-        from dlightrag.core.answer_runs.coordinator import AnswerRunCoordinator
-
         async with self._answer_runtime_lock:
             if self._answer_coordinator is not None:
                 return
-            if self._closed:
+            if self._health.is_closed:
                 raise RAGServiceUnavailableError("Answer runtime is shutting down")
             store = await self._get_answer_run_store()
-            coordinator = AnswerRunCoordinator(
+            coordinator = RunCoordinator(
                 store=store,
                 executor=_ManagerAnswerExecutor(self),
                 max_async=int(self._config.max_async),
             )
             await coordinator.start()
-            if self._closed:
+            if self._health.is_closed:
                 # The manager closed while the store was initializing; publishing
                 # now would leave a claiming worker that ``aclose`` never joins.
                 await coordinator.aclose()
@@ -2021,8 +2073,6 @@ class RAGServiceManager:
         The runtime is started first, so an accepted run executes even when no
         caller ever subscribes to its events.
         """
-        from dlightrag.storage.answer_runs import PendingArtifact, PendingArtifactReference
-
         await self.astart_answer_runtime()
         store = await self._get_answer_run_store()
         artifacts = [PendingArtifact(content=content) for content in attachment_bytes]
@@ -2741,7 +2791,7 @@ class RAGServiceManager:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
 
-        self._closed = True
+        self._health.mark_closed()
         cancellation: asyncio.CancelledError | None = None
         await self._ingest_jobs.close()
         if self._answer_coordinator is not None:
@@ -2796,7 +2846,6 @@ class RAGServiceManager:
             except Exception:
                 logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
         self._services.clear()
-        self._ready = False
 
         from dlightrag.storage.pool import pg_pool
 
@@ -2807,18 +2856,6 @@ class RAGServiceManager:
         shutdown_tracing()
         if cancellation is not None:
             raise cancellation
-
-    # --- Health ---
-
-    def is_ready(self) -> bool:
-        """Check if manager is ready (default workspace initialized)."""
-        return self._ready
-
-    def is_degraded(self) -> bool:
-        return self._degraded
-
-    def get_warnings(self) -> list[str]:
-        return list(self._startup_warnings)
 
 
 def _positive_int_or_none(value: Any) -> int | None:

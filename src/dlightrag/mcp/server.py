@@ -67,7 +67,7 @@ from dlightrag.mcp.contracts import (
     ListFilesInput,
     RetrieveInput,
 )
-from dlightrag.storage.answer_runs import AnswerRunRecord, IdempotencyKeyConflict
+from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
 
 logger = logging.getLogger(__name__)
 

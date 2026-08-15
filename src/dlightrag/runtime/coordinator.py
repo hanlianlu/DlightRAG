@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The local owner of accepted Answer run execution.
+"""The local owner of accepted durable run execution.
 
 One coordinator per process schedules, executes, and finalizes durable runs. It
 reserves a local execution slot *before* it claims a row, so a worker never
@@ -19,28 +19,24 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
-from dlightrag.core.answer.errors import (
-    AnswerInputError,
-    InvalidToolConfigurationError,
-    classify_answer_error,
-)
-from dlightrag.core.answer_runs.models import CheckpointError, CheckpointErrorKind
-from dlightrag.core.answer_runs.subscription import RunEventBroker, follow_run_events
-from dlightrag.storage.answer_runs import (
-    ANSWER_RUN_HEARTBEAT_SECONDS,
+from dlightrag.runtime.contracts import AnswerRunPhase
+from dlightrag.runtime.errors import CheckpointError, CheckpointErrorKind, RunExecutionError
+from dlightrag.runtime.records import (
     AnswerRunEvent,
-    AnswerRunPhase,
-    AnswerRunRecord,
     ClaimedRun,
     PendingArtifact,
     PendingArtifactReference,
     RunCheckpoint,
 )
+from dlightrag.runtime.store import AnswerRunStore
+from dlightrag.runtime.subscription import RunEventBroker, follow_run_events
 
 logger = logging.getLogger(__name__)
 
 #: How often an idle worker rechecks the queue for another host's work.
 SWEEP_SECONDS = 1.0
+#: Cadence for renewing an owned run's storage lease.
+RUN_HEARTBEAT_SECONDS = 20.0
 #: How often each process runs the 30-day event trim and run/artifact prune.
 #: Every pass is bounded, ``SKIP LOCKED``, and idempotent, so running it on every
 #: run-owning process needs no leader election and exposes no operator knob.
@@ -57,23 +53,12 @@ SHUTDOWN_WRITE_GRACE_SECONDS = 5.0
 TOKEN_BATCH_CHARS = 512
 TOKEN_BATCH_SECONDS = 0.25
 
-_FAILED_MESSAGE = "Answer run failed."
+_RUN_EXECUTION_FAILED = "run_execution_failed"
+_RUN_EXECUTION_FAILED_MESSAGE = "Run execution failed."
 
 
 def _startup_jitter(cadence: float) -> float:
     return random.uniform(0.0, max(0.0, cadence) * _MAINTENANCE_JITTER_FRACTION)  # noqa: S311
-
-
-def _public_message(exc: BaseException) -> str:
-    """Keep the actionable message the answer taxonomy already vetted for clients.
-
-    Only the taxonomy's own errors are trusted: an arbitrary exception may carry
-    a ``public_message`` attribute that nothing sanitized, and an unclassified
-    one may carry provider or filesystem detail in its text.
-    """
-    if isinstance(exc, AnswerInputError | InvalidToolConfigurationError):
-        return exc.public_message or _FAILED_MESSAGE
-    return _FAILED_MESSAGE
 
 
 class RunCancelledError(Exception):
@@ -116,102 +101,8 @@ class DurableWrites:
             await asyncio.wait(tuple(self._writes), timeout=remaining)
 
 
-class AnswerRunStore(Protocol):
-    """The durable operations a coordinator is allowed to perform."""
-
-    async def claim_next(self, *, worker_id: str) -> ClaimedRun | None: ...
-
-    async def heartbeat(
-        self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
-    ) -> Any: ...
-
-    async def record_phase(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        phase: AnswerRunPhase,
-    ) -> int | None: ...
-
-    async def append_token_batch(
-        self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int, text: str
-    ) -> int | None: ...
-
-    async def append_reset(
-        self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
-    ) -> int | None: ...
-
-    async def commit_checkpoint(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        expected_completed_turns: int,
-        version: int,
-        state: Mapping[str, Any],
-    ) -> Any: ...
-
-    async def attach_artifacts(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        expected_completed_turns: int,
-        artifacts: Sequence[PendingArtifact] = (),
-        references: Sequence[PendingArtifactReference] = (),
-    ) -> str: ...
-
-    async def finish_success(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        result: Mapping[str, Any],
-        stop_reason: str | None = None,
-    ) -> Any: ...
-
-    async def finish_failure(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        error_kind: str,
-        error_message: str,
-    ) -> Any: ...
-
-    async def finish_cancelled(
-        self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
-    ) -> Any: ...
-
-    async def release_for_shutdown(
-        self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
-    ) -> str: ...
-
-    async def sweep_once(self) -> Any: ...
-
-    async def trim_expired_event_logs(self) -> int: ...
-
-    async def prune_expired_runs(self) -> Any: ...
-
-    async def get_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None: ...
-
-    async def read_event_page(
-        self, *, owner_id: str, run_id: str, after_sequence: int = 0
-    ) -> tuple[AnswerRunEvent, ...]: ...
-
-
-class AnswerRunExecutor(Protocol):
-    """Executes one claimed run and returns its canonical result payload."""
+class RunExecutor(Protocol):
+    """Executes one claimed run or raises an owner-classified failure."""
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]: ...
 
@@ -410,17 +301,17 @@ class RunSession:
             self._notify()
 
 
-class AnswerRunCoordinator:
-    """Schedule, execute, and finalize this process's durable Answer runs."""
+class RunCoordinator:
+    """Schedule, execute, and finalize this process's durable runs."""
 
     def __init__(
         self,
         *,
         store: AnswerRunStore,
-        executor: AnswerRunExecutor,
+        executor: RunExecutor,
         max_async: int,
         worker_id: str | None = None,
-        heartbeat_seconds: float = ANSWER_RUN_HEARTBEAT_SECONDS,
+        heartbeat_seconds: float = RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
         maintenance_seconds: float = MAINTENANCE_SECONDS,
     ) -> None:
@@ -609,9 +500,17 @@ class AnswerRunCoordinator:
             )
         except CheckpointError as exc:
             await self._finish_failure(session, exc.kind, exc.public_message)
-        except Exception as exc:
-            logger.warning("Answer run %s failed", session.run_id, exc_info=True)
-            await self._finish_failure(session, classify_answer_error(exc), _public_message(exc))
+        except RunExecutionError as exc:
+            await self._finish_failure(session, exc.kind, exc.public_message)
+        except Exception:
+            logger.warning(
+                "Run %s failed with an unclassified executor error", session.run_id, exc_info=True
+            )
+            await self._finish_failure(
+                session,
+                _RUN_EXECUTION_FAILED,
+                _RUN_EXECUTION_FAILED_MESSAGE,
+            )
         finally:
             heartbeat.cancel()
             try:
@@ -725,14 +624,14 @@ class AnswerRunCoordinator:
 
 __all__ = [
     "MAINTENANCE_SECONDS",
+    "RUN_HEARTBEAT_SECONDS",
     "SHUTDOWN_WRITE_GRACE_SECONDS",
     "SWEEP_SECONDS",
     "TOKEN_BATCH_CHARS",
     "TOKEN_BATCH_SECONDS",
-    "AnswerRunCoordinator",
-    "AnswerRunExecutor",
-    "AnswerRunStore",
     "DurableWrites",
+    "RunCoordinator",
+    "RunExecutor",
     "LeaseLostError",
     "RunCancelledError",
     "RunSession",

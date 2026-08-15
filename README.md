@@ -18,9 +18,10 @@ Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 ```text
 Clients
   -> REST / Web / MCP / SDK adapters
-  -> RAGServiceManager
-  -> RAGService
-  -> LightRAG main
+  -> RAGServiceManager (composition)
+       -> RAGService -> LightRAG main -> corpus storage
+       -> dlightrag.runtime RunCoordinator -> Answer executor + PG run store
+       -> ApplicationHealth -> liveness/readiness projection
   -> PostgreSQL 18 storage ecosystem
 ```
 
@@ -34,7 +35,10 @@ capability probing ship as `dlightrag-ai`; generic tool execution ships as
 storage-neutral retrieval records/fusion ship as `dlightrag-rag-core`. The
 `dlightrag` distribution maps product configuration and composes those cores
 into the REST, Web, MCP, SDK, and PostgreSQL-backed product. CI builds and
-inspects all four wheels outside the editable workspace.
+inspects all four wheels outside the editable workspace. Inside that root
+distribution, `dlightrag.runtime` owns storage-neutral durable-run contracts and
+coordination, while `ApplicationHealth` is the single process-health state
+projected by status interfaces.
 
 ## Choose Your Deployment Path
 

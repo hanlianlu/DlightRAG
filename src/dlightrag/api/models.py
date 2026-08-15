@@ -17,6 +17,7 @@ from dlightrag.core.client_contracts import (
     RetrieveRequestContract,
 )
 from dlightrag.core.request.workspaces import QueryWorkspaceSelection
+from dlightrag.runtime import AnswerRunPhase, AnswerRunStatus
 
 # Maximum UTF-8 history payload plus query/workspace/JSON framing. Shared by the
 # REST multipart parser and its receive-layer body cap.
@@ -108,7 +109,7 @@ class AnswerRunDescriptor(ClientContractModel):
     """The 202 acceptance every answer request receives, replay included."""
 
     run_id: str
-    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    status: AnswerRunStatus
     status_url: str
     events_url: str
     cancel_url: str
@@ -117,7 +118,7 @@ class AnswerRunDescriptor(ClientContractModel):
 class AnswerRunStatusResponse(AnswerRunDescriptor):
     """Authoritative lifecycle state, plus the canonical result once it exists."""
 
-    phase: Literal["planning", "searching", "researching", "generating"] | None = None
+    phase: AnswerRunPhase | None = None
     completed_turns: int = 0
     cancel_requested: bool = False
     result: AnswerResponse | None = None

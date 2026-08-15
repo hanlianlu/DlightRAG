@@ -4,7 +4,7 @@
 import datetime
 from typing import Any
 
-from dlightrag.storage.answer_runs import AnswerRunRecord, AnswerRunStatus
+from dlightrag.runtime import AnswerRunRecord, AnswerRunStatus
 from dlightrag.storage.web_conversations import LinkedTurn
 from dlightrag.web.conversation_models import ConversationSummary
 from dlightrag.web.conversations import WebAnswerSubmission

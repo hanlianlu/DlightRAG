@@ -14,24 +14,26 @@ from typing import Any, cast
 
 import pytest
 
-import dlightrag.core.answer_runs.coordinator as coordinator_module
-from dlightrag.core.answer_runs.coordinator import (
-    AnswerRunCoordinator,
-    LeaseLostError,
-    RunCancelledError,
-    RunSession,
-)
-from dlightrag.core.answer_runs.models import CheckpointError
-from dlightrag.storage.answer_runs import (
+import dlightrag.runtime.coordinator as coordinator_module
+from dlightrag.runtime import (
     AnswerRunEvent,
     AnswerRunRecord,
+    ArtifactAttachOutcome,
     CheckpointCommit,
+    CheckpointError,
     ClaimedRun,
+    LeaseLostError,
     LeaseRenewal,
     PendingArtifact,
     PendingArtifactReference,
+    RunCancelledError,
     RunCheckpoint,
+    RunCoordinator,
     RunDeletion,
+    RunExecutionError,
+    RunSession,
+    ShutdownOutcome,
+    SweepOutcome,
     TerminalOutcome,
     artifact_digest,
 )
@@ -306,7 +308,7 @@ class _MemoryStore:
 
     async def release_for_shutdown(
         self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
-    ) -> str:
+    ) -> ShutdownOutcome:
         row = self.runs[run_id]
         if not self._owns(row, worker_id, fencing_epoch):
             return "lease_lost"
@@ -326,9 +328,9 @@ class _MemoryStore:
         row["lease_live"] = False
         return "requeued"
 
-    async def sweep_once(self) -> Any:
+    async def sweep_once(self) -> SweepOutcome:
         self.sweeps += 1
-        return None
+        return SweepOutcome(cancelled=0, abandoned=0)
 
     async def trim_expired_event_logs(self) -> int:
         self.trims += 1
@@ -337,7 +339,7 @@ class _MemoryStore:
             raise RuntimeError("trim unavailable")
         return self.trim_batches.pop(0) if self.trim_batches else 0
 
-    async def prune_expired_runs(self) -> Any:
+    async def prune_expired_runs(self) -> RunDeletion:
         self.prunes += 1
         return RunDeletion(runs=self.prune_batches.pop(0) if self.prune_batches else 0, artifacts=0)
 
@@ -364,9 +366,9 @@ class _MemoryStore:
         worker_id: str,
         fencing_epoch: int,
         expected_completed_turns: int,
-        artifacts: Sequence[Any] = (),
-        references: Sequence[Any] = (),
-    ) -> str:
+        artifacts: Sequence[PendingArtifact] = (),
+        references: Sequence[PendingArtifactReference] = (),
+    ) -> ArtifactAttachOutcome:
         row = self.runs[run_id]
         if not self._owns(row, worker_id, fencing_epoch):
             return "lease_lost"
@@ -412,7 +414,7 @@ async def _settle(predicate: Any, *, timeout: float = 2.0) -> None:
 
 
 def _coordinator(store: _MemoryStore, executor: _Executor, *, max_async: int = 2):
-    return AnswerRunCoordinator(store=store, executor=executor, max_async=max_async)
+    return RunCoordinator(store=store, executor=executor, max_async=max_async)
 
 
 def _traceback_depth(exc: BaseException) -> int:
@@ -462,7 +464,7 @@ class TestSchedulingAndLease:
                 stopped.set()
             return {"answer": "unreachable"}
 
-        coordinator = AnswerRunCoordinator(
+        coordinator = RunCoordinator(
             store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
         )
         store.add_run("run-a")
@@ -510,7 +512,7 @@ class TestSchedulingAndLease:
             await hold.wait()
             return {"answer": "done"}
 
-        coordinator = AnswerRunCoordinator(
+        coordinator = RunCoordinator(
             store=store, executor=_Executor(body), max_async=1, sweep_seconds=0.01
         )
         store.add_run("run-a")
@@ -526,8 +528,8 @@ class TestSchedulingAndLease:
 class TestRetentionMaintenance:
     """Retention runs on every run-owning process, needs no slot, and leaks no task."""
 
-    async def _running(self, store: _MemoryStore, **kwargs: Any) -> AnswerRunCoordinator:
-        coordinator = AnswerRunCoordinator(
+    async def _running(self, store: _MemoryStore, **kwargs: Any) -> RunCoordinator:
+        coordinator = RunCoordinator(
             store=store,
             executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
             max_async=1,
@@ -549,7 +551,7 @@ class TestRetentionMaintenance:
         store = _MemoryStore()
         store.trim_batches = [200, 200, 0]
         store.prune_batches = [200, 0]
-        coordinator = AnswerRunCoordinator(
+        coordinator = RunCoordinator(
             store=store,
             executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
             max_async=1,
@@ -710,14 +712,14 @@ class TestDurableProgress:
         assert store.runs["run-a"]["error_kind"] == "checkpoint_too_large"
         assert store.events["run-a"][-1].payload["kind"] == "checkpoint_too_large"
 
-    async def test_a_sanitized_input_rejection_keeps_its_actionable_message(self) -> None:
-        """The taxonomy already vetted ``public_message``; a generic one helps nobody."""
-        from dlightrag.core.answer.errors import CurrentDocumentParseError
-
+    async def test_an_owner_classified_failure_keeps_its_actionable_message(self) -> None:
         store = _MemoryStore()
 
         async def body(session: RunSession) -> Mapping[str, Any]:
-            raise CurrentDocumentParseError("report.pdf")
+            raise RunExecutionError(
+                "CURRENT_DOCUMENT_PARSE_FAILED",
+                "Could not read report.pdf.",
+            )
 
         coordinator = _coordinator(store, _Executor(body), max_async=1)
         store.add_run("run-a")
@@ -746,8 +748,8 @@ class TestDurableProgress:
             await coordinator.aclose()
 
         payload = store.events["run-a"][-1].payload
-        assert payload["kind"] == "ANSWER_STREAM_FAILED"
-        assert payload["message"] == "Answer run failed."
+        assert payload["kind"] == "run_execution_failed"
+        assert payload["message"] == "Run execution failed."
 
     async def test_a_foreign_public_message_attribute_never_reaches_a_client(self) -> None:
         """Only the answer taxonomy vets a client-safe message; the shape does not."""
@@ -767,7 +769,7 @@ class TestDurableProgress:
         finally:
             await coordinator.aclose()
 
-        assert store.events["run-a"][-1].payload["message"] == "Answer run failed."
+        assert store.events["run-a"][-1].payload["message"] == "Run execution failed."
 
     async def test_missing_checkpoint_for_a_resumed_turn_is_incompatible(self) -> None:
         store = _MemoryStore()
@@ -897,7 +899,7 @@ class TestHeartbeatResilience:
             await session.check_cancelled()
             return {"answer": "survived"}
 
-        coordinator = AnswerRunCoordinator(
+        coordinator = RunCoordinator(
             store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
         )
         await coordinator.start()
@@ -922,7 +924,7 @@ class TestHeartbeatResilience:
             return {"answer": "never"}
 
         executor = _Executor(body)
-        coordinator = AnswerRunCoordinator(
+        coordinator = RunCoordinator(
             store=store, executor=executor, max_async=1, heartbeat_seconds=0.01
         )
         await coordinator.start()
@@ -948,7 +950,7 @@ class TestHeartbeatResilience:
             await _settle(lambda: store.heartbeats >= 1)
             return {"answer": "kept"}
 
-        coordinator = AnswerRunCoordinator(
+        coordinator = RunCoordinator(
             store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
         )
         await coordinator.start()
@@ -982,7 +984,7 @@ class TestCancellationAndShutdown:
                 await asyncio.sleep(0.005)
             return {"answer": "unreachable"}
 
-        coordinator = AnswerRunCoordinator(
+        coordinator = RunCoordinator(
             store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
         )
         store.add_run("run-a")
@@ -1210,7 +1212,7 @@ async def _noop(session: RunSession) -> Mapping[str, Any]:
 
 @pytest.mark.parametrize("max_async", [1, 4])
 def test_execution_slots_are_bounded_by_max_async(max_async: int) -> None:
-    coordinator = AnswerRunCoordinator(
+    coordinator = RunCoordinator(
         store=_MemoryStore(), executor=_Executor(_noop), max_async=max_async
     )
     assert coordinator.max_async == max_async

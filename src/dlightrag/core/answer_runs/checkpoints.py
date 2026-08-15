@@ -19,10 +19,10 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
-from dlightrag.core.answer_runs.models import (
+from dlightrag.core.answer_runs.models import AgentRunState
+from dlightrag.runtime import (
     CHECKPOINT_SCHEMA_VERSION,
     MAX_CHECKPOINT_BYTES,
-    AgentRunState,
     CheckpointError,
 )
 
@@ -321,7 +321,6 @@ def _decode_image(payload: str) -> tuple[str | None, bytes]:
 
 __all__ = [
     "ArtifactReader",
-    "CheckpointError",
     "CorpusImageLoader",
     "decode_checkpoint_state",
     "encode_checkpoint_state",

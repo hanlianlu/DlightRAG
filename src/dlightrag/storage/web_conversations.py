@@ -19,15 +19,17 @@ from uuid import uuid4
 
 import asyncpg
 
+from dlightrag.runtime import (
+    AnswerRunRecord,
+    PendingArtifact,
+    PendingArtifactReference,
+    RunDeletion,
+)
 from dlightrag.storage.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
     ANSWER_RUN_SCHEMA_TABLES,
-    AnswerRunRecord,
-    PendingArtifact,
-    PendingArtifactReference,
     PGAnswerRunStore,
-    RunDeletion,
     answer_run_columns,
     answer_run_record,
 )

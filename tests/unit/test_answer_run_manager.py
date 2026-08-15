@@ -6,17 +6,18 @@ import base64
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
+from dlightrag.application import ApplicationHealth
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
+from dlightrag.core.answer.errors import CurrentDocumentParseError
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
-from dlightrag.core.answer_runs.coordinator import RunSession
 from dlightrag.core.answer_runs.execution import (
     AnswerRunInput,
     AttachmentReference,
@@ -28,12 +29,15 @@ from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import (
     RAGServiceManager,
     RAGServiceUnavailableError,
+    _ManagerAnswerExecutor,
     _OrchestratorRun,
 )
-from dlightrag.storage.answer_runs import (
+from dlightrag.runtime import (
     ClaimedRun,
     PendingArtifact,
     RunCheckpoint,
+    RunExecutionError,
+    RunSession,
     artifact_digest,
 )
 
@@ -142,7 +146,7 @@ def _manager(store: _RecordingStore) -> RAGServiceManager:
     config.max_async = 2
     manager = RAGServiceManager.__new__(RAGServiceManager)
     manager._config = config
-    manager._closed = False
+    manager._health = ApplicationHealth(readiness_probe=None)
     manager._answer_run_store = cast(Any, store)
     manager._answer_coordinator = None
     manager._answer_store_lock = asyncio.Lock()
@@ -157,6 +161,37 @@ def _bare_manager() -> RAGServiceManager:
     manager = _manager(_RecordingStore())
     manager._answer_run_store = None
     return manager
+
+
+async def test_manager_executor_classifies_actionable_answer_errors() -> None:
+    manager = MagicMock()
+    manager._execute_answer_run = AsyncMock(side_effect=CurrentDocumentParseError("report.pdf"))
+    executor = _ManagerAnswerExecutor(cast(RAGServiceManager, manager))
+
+    with pytest.raises(RunExecutionError) as raised:
+        await executor.execute(cast(RunSession, MagicMock()))
+
+    assert raised.value.kind == "CURRENT_DOCUMENT_PARSE_FAILED"
+    assert "report.pdf" in raised.value.public_message
+
+
+async def test_manager_executor_classifies_unknown_errors_without_leaking_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = MagicMock()
+    manager._execute_answer_run = AsyncMock(
+        side_effect=RuntimeError("postgres://user:secret@host/db")
+    )
+    executor = _ManagerAnswerExecutor(cast(RAGServiceManager, manager))
+    session = MagicMock(run_id="run-correlated")
+
+    with pytest.raises(RunExecutionError) as raised:
+        await executor.execute(cast(RunSession, session))
+
+    assert raised.value.kind == "ANSWER_STREAM_FAILED"
+    assert raised.value.public_message == "Answer run failed."
+    assert "Answer run run-correlated execution failed" in caplog.text
+    assert "postgres://user:secret@host/db" in caplog.text
 
 
 def _install_store_class(
@@ -196,15 +231,15 @@ def _runtime_tasks() -> list[str]:
     for task in asyncio.all_tasks():
         code = getattr(task.get_coro(), "cr_code", None)
         name = str(getattr(code, "co_qualname", ""))
-        if name.startswith("AnswerRunCoordinator."):
+        if name.startswith("RunCoordinator."):
             names.append(name)
     return sorted(names)
 
 
 _ONE_RUNTIME = [
-    "AnswerRunCoordinator._maintain_forever",
-    "AnswerRunCoordinator._schedule_forever",
-    "AnswerRunCoordinator._sweep_forever",
+    "RunCoordinator._maintain_forever",
+    "RunCoordinator._schedule_forever",
+    "RunCoordinator._sweep_forever",
 ]
 
 
@@ -350,7 +385,7 @@ class TestRuntimeStartup:
     ) -> None:
         created = _install_store_class(monkeypatch)
         manager = _bare_manager()
-        manager._closed = True
+        manager.health.mark_closed()
 
         with pytest.raises(RAGServiceUnavailableError):
             await manager.astart_answer_runtime()
@@ -374,7 +409,7 @@ class TestRuntimeStartup:
 
         start = asyncio.ensure_future(manager.astart_answer_runtime())
         await initializing.wait()
-        manager._closed = True
+        manager.health.mark_closed()
         release.set()
 
         with pytest.raises(RAGServiceUnavailableError):

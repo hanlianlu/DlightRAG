@@ -39,9 +39,6 @@ SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
 def mock_manager():
     """Create a mock RAGServiceManager for web route tests."""
     manager = AsyncMock()
-    manager.is_ready.return_value = True
-    manager.is_degraded.return_value = False
-    manager.get_warnings.return_value = []
     manager.answer_image_capability = AnswerImageCapability(
         status="supported",
         configured_ceiling=8,

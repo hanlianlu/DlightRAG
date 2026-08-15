@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Durable Answer run event subscriptions.
+"""Durable run event subscriptions.
 
 A subscriber replays every committed event from its cursor and then follows the
 run until its terminal event. PostgreSQL is authoritative: local notification
@@ -15,7 +15,7 @@ import contextlib
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from typing import Protocol
 
-from dlightrag.storage.answer_runs import AnswerRunEvent
+from dlightrag.runtime.records import AnswerRunEvent
 
 #: Poll cadence for a quiet run; a local commit wakes its subscribers sooner.
 EVENT_POLL_SECONDS = 1.0

@@ -120,7 +120,7 @@ class _StoreBackedManager:
         idempotency_key: str | None = None,
         attachment_bytes: Any = (),
     ) -> Any:
-        from dlightrag.storage.answer_runs import PendingArtifact, PendingArtifactReference
+        from dlightrag.runtime import PendingArtifact, PendingArtifactReference
 
         return await self._store.create_run(
             owner_id=owner_id,

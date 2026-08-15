@@ -11,10 +11,11 @@ from typing import Any, Literal
 from pydantic import Field
 
 from dlightrag.core.client_contracts import ClientContractModel
+from dlightrag.runtime import AnswerRunPhase
 
 
 class AnswerProgressEvent(ClientContractModel):
-    phase: Literal["planning", "searching", "researching", "generating"]
+    phase: AnswerRunPhase
 
 
 class AnswerDoneEvent(ClientContractModel):

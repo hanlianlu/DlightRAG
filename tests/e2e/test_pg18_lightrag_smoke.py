@@ -169,10 +169,8 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     """
     from dlightrag.config import reset_config, set_config
     from dlightrag.core.service import RAGService
-    from dlightrag.storage.answer_runs import (
-        PGAnswerRunStore,
-        answer_run_request_fingerprint,
-    )
+    from dlightrag.runtime import answer_run_request_fingerprint
+    from dlightrag.storage.answer_runs import PGAnswerRunStore
     from dlightrag.storage.pool import pg_pool
 
     conn_kwargs = pg_conn_kwargs_from_env()

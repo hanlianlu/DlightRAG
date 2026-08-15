@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 
-from dlightrag.core.answer_runs.models import AnswerRunCancelledError, AnswerRunFailedError
+from dlightrag.runtime import AnswerRunCancelledError, AnswerRunFailedError
 
 logger = logging.getLogger(__name__)
 
