@@ -184,9 +184,19 @@ interrupted mid-stream emits `reset` and regenerates. Four tables own that state
 subscription, coordinator, fenced session, checkpoint failures, and caller-wait
 failures. It imports neither Answer policy nor PostgreSQL. The current Answer
 executor classifies product errors into `RunExecutionError` before they cross
-that boundary; `PGAnswerRunStore` implements the runtime store port. The old
+that boundary; `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore`
+implements the runtime store port. The old
 `core.answer_runs.coordinator` and `core.answer_runs.subscription` paths do not
 exist.
+
+`dlightrag-rag-core` owns `CorpusBackendFactory`, `CorpusCoordination`, and
+`CorpusMaintenanceStore`. The root PostgreSQL adapter implements those ports and
+hides environment translation, server/version/extension checks, advisory-lock
+lifetimes, reader attachment, catalog scans, workspace maintenance, and raw
+database exceptions. The current manager composes the adapter; the independently
+installable RAG package, Runtime, status routes, API, Web, and MCP never import
+it. Corpus and operational pools remain separate even when they use the same
+endpoint.
 
 ## Web Conversation Boundary
 

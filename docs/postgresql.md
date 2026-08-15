@@ -87,9 +87,11 @@ postgres_pool_close_timeout: 5.0
 SSL belongs with the endpoint in `.env`
 (`DLIGHTRAG_POSTGRES_SSL_MODE`, `_SSL_ROOT_CERT`, `_SSL_CERT`, `_SSL_KEY`,
 `_SSL_CRL`). It is bridged to LightRAG's `POSTGRES_SSL_*` environment
-contract. DlightRAG's domain-store pool, reset helpers, and status probes use
-the same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do
-not need a second SSL configuration surface.
+contract once, when the root PostgreSQL corpus adapter is constructed.
+DlightRAG's domain-store pool, maintenance adapter, and readiness adapter use the
+same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do not
+need a second SSL configuration surface. Constructing configuration alone does
+not mutate LightRAG's process environment.
 
 Connection budgets are split deliberately:
 
@@ -234,6 +236,14 @@ DlightRAG uses two asyncpg pools:
 The dedicated DlightRAG pool avoids contention between LightRAG internals and
 metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
 and session-level PostgreSQL tuning.
+
+All concrete implementations live under `dlightrag.adapters.postgres`; the old
+`dlightrag.storage` package does not exist. RAG owns storage-neutral
+`CorpusBackendFactory`, `CorpusCoordination`, and `CorpusMaintenanceStore`
+interfaces. Their PostgreSQL implementations own version and extension checks,
+initialization and pipeline-recovery advisory locks, read-only corpus attach,
+workspace catalog cleanup, and readiness probing without exposing asyncpg
+connections or exception classes to RAG, reset, Web, API, or MCP code.
 
 ## Service roles and shared artifacts
 

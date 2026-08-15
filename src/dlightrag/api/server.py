@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from dlightrag_rag.ports import CorpusSchemaError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -25,9 +26,11 @@ from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
 from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES
+from dlightrag.core.ingest_job_coordinator import IngestJobSchemaError
 from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
-from dlightrag.storage.migrations import SchemaValidationError
+from dlightrag.runtime import RunSchemaError
+from dlightrag.web.conversation_models import WebConversationSchemaError
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
@@ -87,7 +90,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _app.state.health = manager.health
     conversation_service = None
     try:
-        conversation_service = getattr(_app.state, "web_conversation_service", None)
+        if getattr(_app.state, "web_enabled", False):
+            conversation_service = manager.create_web_conversation_service()
+            _app.state.web_conversation_service = conversation_service
         if conversation_service is not None:
             await conversation_service.initialize()
         yield
@@ -206,10 +211,9 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         body = ErrorDetail(detail=str(exc), error_type="validation")
         return JSONResponse(status_code=400, content=body.model_dump())
 
-    @application.exception_handler(SchemaValidationError)
     async def schema_validation_error_handler(
         request: Request,  # noqa: ARG001
-        exc: SchemaValidationError,
+        exc: Exception,
     ) -> JSONResponse:
         """An incompatible schema is an operator fault; callers see no schema detail."""
         logger.error("Durable schema is incompatible with this revision", exc_info=exc)
@@ -219,41 +223,26 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         )
         return JSONResponse(status_code=503, content=body.model_dump())
 
+    for schema_error in (
+        CorpusSchemaError,
+        IngestJobSchemaError,
+        RunSchemaError,
+        WebConversationSchemaError,
+    ):
+        application.add_exception_handler(schema_error, schema_validation_error_handler)
+
     # -- API routes --
     application.include_router(router)
 
     # -- Web frontend --
     if include_web_app:
-        from dlightrag.storage.web_conversations import PGWebConversationStore
         from dlightrag.web.auth import WebAuthMiddleware
-        from dlightrag.web.conversations import (
-            WebConversationService,
-            WebConversationUnavailableError,
-        )
+        from dlightrag.web.conversations import WebConversationUnavailableError
         from dlightrag.web.deps import _TEMPLATE_DIR
         from dlightrag.web.routes import router as web_router
         from dlightrag.web.static_files import NoCacheStaticFiles
 
-        async def prepare_web_answer_run_input(
-            request,
-            *,
-            resources,
-            idempotency_fingerprint,
-        ):
-            return await application.state.manager.aprepare_answer_run_input(
-                request,
-                resources=resources,
-                idempotency_fingerprint=idempotency_fingerprint,
-            )
-
-        application.state.web_conversation_service = WebConversationService(
-            store=PGWebConversationStore(),
-            prepare_run_input=prepare_web_answer_run_input,
-            max_turns=cfg.web_conversations.max_turns,
-            ttl_days=cfg.web_conversations.ttl_days,
-            max_attachments=cfg.answer.max_attachments,
-            validate_schema_only=cfg.is_reader,
-        )
+        application.state.web_enabled = True
 
         @application.exception_handler(WebConversationUnavailableError)
         async def web_conversation_unavailable_handler(

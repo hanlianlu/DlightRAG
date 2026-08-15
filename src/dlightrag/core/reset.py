@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag_ai.telemetry import safe_log_text
+from dlightrag_rag.ports import CorpusMaintenanceStore
 
 from dlightrag.core.lightrag_lifecycle import shutdown_lightrag_worker_pools
 from dlightrag.utils import normalize_workspace
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 async def areset(
     service: Any,
     *,
+    maintenance: CorpusMaintenanceStore,
     keep_files: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -112,7 +114,7 @@ async def areset(
 
     # Phase 3: Orphan PG table scan (safety net)
     try:
-        orphans = await _clean_orphan_tables(workspace, dry_run=dry_run)
+        orphans = await maintenance.clean_orphan_rows(workspace, dry_run=dry_run)
         stats["orphan_tables_cleaned"] = orphans
     except Exception as exc:
         errors.append(f"Phase 3 (orphan tables): {exc}")
@@ -121,7 +123,7 @@ async def areset(
     # Also clean workspace metadata
     try:
         if not dry_run:
-            await _clean_workspace_meta(workspace, config=service.config)
+            await maintenance.delete_workspace_record(workspace)
     except Exception as exc:
         errors.append(f"Phase 3 (workspace meta): {exc}")
         logger.warning("areset Phase 3 workspace meta failed: %s", exc)
@@ -155,12 +157,6 @@ async def areset(
 # -- Internal helpers ----------------------------------------------------------
 
 
-async def _quote_public_table(conn: Any, table: str) -> str:
-    """Return a safely quoted public-table identifier for dynamic SQL."""
-    quoted = await conn.fetchval("SELECT quote_ident($1)", table)
-    return f"public.{quoted}"
-
-
 def _workspace_input_dir(input_root: Path, workspace: str) -> Path | None:
     """Return the direct input_dir child for a normalized workspace."""
     workspace_id = normalize_workspace(workspace)
@@ -189,128 +185,13 @@ async def _cancel_pending_tasks(service: Any, *, dry_run: bool) -> int:
     return await shutdown_lightrag_worker_pools(service.lightrag, dry_run=dry_run)
 
 
-async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
-    """Phase 3: Scan PG catalog for orphan lightrag_*/dlightrag_* tables and delete rows.
-
-    Uses a direct ``asyncpg`` connection: LightRAG's process-wide pool is
-    already bound to the default workspace's settings and rejects
-    per-workspace reconfiguration.
-    """
-    import asyncpg
-
-    from dlightrag.config import get_config
-
-    config = get_config()
-
-    try:
-        conn = await asyncpg.connect(**config.pg_connection_kwargs())
-    except Exception as exc:
-        logger.warning("Failed to connect via asyncpg for orphan table cleanup: %s", exc)
-        return 0
-
-    try:
-        table_rows = await conn.fetch(
-            "SELECT tablename FROM pg_tables "
-            "WHERE schemaname = 'public' "
-            "AND (tablename LIKE 'lightrag_%' OR tablename LIKE 'dlightrag_%') "
-            "ORDER BY tablename"
-        )
-        if not table_rows:
-            return 0
-
-        cleaned = 0
-        for row in table_rows:
-            table = row["tablename"]
-
-            col = await conn.fetchrow(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_schema = 'public' "
-                "AND table_name = $1 AND column_name = 'workspace'",
-                table,
-            )
-            if col is None:
-                continue
-
-            qualified_table = await _quote_public_table(conn, table)
-            count_row = await conn.fetchrow(
-                f"SELECT COUNT(*) as count FROM {qualified_table} WHERE workspace = $1",  # noqa: S608
-                workspace,
-            )
-            count = count_row["count"] if count_row else 0
-
-            if count > 0:
-                if not dry_run:
-                    await conn.execute(
-                        f"DELETE FROM {qualified_table} WHERE workspace = $1",  # noqa: S608
-                        workspace,
-                    )
-                cleaned += 1
-
-        # Do NOT drop emptied tables here. DlightRAG-owned metadata and ingest-job
-        # tables are migration-managed global tables that carry a workspace column,
-        # not per-workspace artifacts. Resetting the last workspace empties them;
-        # dropping them orphans the migration ledger and breaks the running app.
-        return cleaned
-    except Exception as exc:
-        logger.warning("PG orphan table cleanup failed: %s", exc)
-        return 0
-    finally:
-        await conn.close()
-
-
-async def _clean_workspace_meta(workspace: str, config: Any | None = None) -> None:
-    """Delete workspace record from dlightrag_workspace_meta."""
-    import asyncpg
-
-    if config is None:
-        from dlightrag.config import get_config
-
-        config = get_config()
-
-    conn = await asyncpg.connect(**config.pg_connection_kwargs())
-    try:
-        exists = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = 'public' "
-            "AND table_name = 'dlightrag_workspace_meta')"
-        )
-        if exists:
-            await conn.execute(
-                "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
-                workspace,
-            )
-    finally:
-        await conn.close()
-
-
-async def _list_all_workspaces(config: Any | None = None) -> list[str]:
-    """Return all known workspace IDs from the database."""
-    try:
-        import asyncpg
-
-        if config is None:
-            from dlightrag.config import get_config
-
-            config = get_config()
-
-        conn = await asyncpg.connect(**config.pg_connection_kwargs())
-        try:
-            rows = await conn.fetch(
-                "SELECT DISTINCT workspace FROM dlightrag_workspace_meta ORDER BY workspace"
-            )
-        finally:
-            await conn.close()
-        return [r["workspace"] for r in rows]
-    except Exception:
-        return []
-
-
 # -- Orphaned workspace cleanup ------------------------------------------------
 
 
 async def areset_orphaned_workspace(
     workspace: str,
     *,
+    maintenance: CorpusMaintenanceStore,
     keep_files: bool = False,
     dry_run: bool = False,
     input_dir: str | None = None,
@@ -333,7 +214,7 @@ async def areset_orphaned_workspace(
 
     # Clean orphan PG table rows
     try:
-        orphans = await _clean_orphan_tables(workspace, dry_run=dry_run)
+        orphans = await maintenance.clean_orphan_rows(workspace, dry_run=dry_run)
         stats["orphan_tables_cleaned"] = orphans
     except Exception as exc:
         errors.append(f"Orphan tables: {exc}")
@@ -341,7 +222,7 @@ async def areset_orphaned_workspace(
     # Clean workspace metadata row (if any)
     try:
         if not dry_run:
-            await _clean_workspace_meta(workspace)
+            await maintenance.delete_workspace_record(workspace)
     except Exception as exc:
         errors.append(f"Workspace meta: {exc}")
 

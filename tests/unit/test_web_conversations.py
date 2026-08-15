@@ -383,14 +383,18 @@ async def test_store_unavailability_returns_retryable_503(
     path: str,
     store_method: str,
 ) -> None:
-    from dlightrag.web.conversations import WebConversationService
+    from dlightrag.web.conversations import (
+        WebConversationService,
+        WebConversationUnavailableError,
+    )
 
     store = AsyncMock()
-    getattr(store, store_method).side_effect = ConnectionError("database unavailable")
+    getattr(store, store_method).side_effect = WebConversationUnavailableError()
     application = create_app(include_web_app=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
         prepare_run_input=prepare_test_answer_run_input,
+        run_store=AsyncMock(),
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
@@ -419,28 +423,22 @@ async def test_store_unavailability_returns_retryable_503(
         ),
     ),
 )
-async def test_postgres_shutdown_returns_retryable_503(shutdown_error: Exception) -> None:
-    from dlightrag.web.conversations import WebConversationService
+async def test_postgres_adapter_translates_shutdown_errors(shutdown_error: Exception) -> None:
+    from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+    from dlightrag.web.conversations import WebConversationUnavailableError
 
-    store = AsyncMock()
-    store.list_conversations.side_effect = shutdown_error
-    application = create_app(include_web_app=True)
-    application.state.web_conversation_service = WebConversationService(
-        store=store,
-        prepare_run_input=prepare_test_answer_run_input,
-        max_turns=100,
-        ttl_days=30,
-        max_attachments=6,
-    )
-    transport = ASGITransport(app=application)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/web/conversations")
+    class Acquire:
+        async def __aenter__(self):
+            raise shutdown_error
 
-    assert response.status_code == 503
-    assert response.json() == {
-        "detail": "Web conversation storage is unavailable",
-        "error_type": "unavailable",
-    }
+        async def __aexit__(self, *_exc: object) -> bool:
+            return False
+
+    pool = SimpleNamespace(acquire=lambda: Acquire())
+    store = PGWebConversationStore(pool=pool)
+
+    with pytest.raises(WebConversationUnavailableError):
+        await store._run_read(AsyncMock())
 
 
 @pytest.mark.parametrize(
@@ -467,6 +465,7 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
     application.state.web_conversation_service = WebConversationService(
         store=store,
         prepare_run_input=prepare_test_answer_run_input,
+        run_store=AsyncMock(),
         max_turns=100,
         ttl_days=30,
         max_attachments=6,

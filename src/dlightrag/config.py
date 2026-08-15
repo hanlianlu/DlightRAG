@@ -1593,15 +1593,11 @@ class DlightragConfig(BaseSettings):
             os.environ["INPUT_DIR"] = str(self.input_dir_path)
 
     def model_post_init(self, _context) -> None:
-        """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
+        """Resolve process-relative paths without mutating backend state."""
         # Resolve working_dir to absolute path
         path = Path(self.working_dir)
         if not path.is_absolute():
             self.working_dir = str(path.resolve())
-
-        self.apply_lightrag_sidecar_env()
-        self.apply_lightrag_backend_env(force=False)
-        self.apply_lightrag_runtime_env(force=True)
 
 
 # Singleton for standalone mode (MCP/API server)

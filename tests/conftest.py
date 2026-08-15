@@ -8,6 +8,9 @@ from typing import Any
 
 import pytest
 
+from dlightrag.adapters.postgres.answer_runs import (
+    PGAnswerRunStore,
+)
 from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
@@ -22,9 +25,6 @@ from dlightrag.runtime import (
     PendingArtifactReference,
     RunCreation,
     answer_run_request_fingerprint,
-)
-from dlightrag.storage.answer_runs import (
-    PGAnswerRunStore,
 )
 
 

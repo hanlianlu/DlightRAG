@@ -26,6 +26,8 @@ from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
+from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.answer.synthesizer import AnswerSynthesizer
@@ -52,8 +54,6 @@ from dlightrag.runtime import (
     RunSession,
     answer_run_request_fingerprint,
 )
-from dlightrag.storage.answer_runs import PGAnswerRunStore
-from dlightrag.storage.web_conversations import PGWebConversationStore
 from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [

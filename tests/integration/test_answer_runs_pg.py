@@ -21,16 +21,14 @@ from typing import Any
 import asyncpg
 import pytest
 
+from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.runtime import (
+    MAX_CONSECUTIVE_RECOVERIES,
+    RUN_ABANDONED_ERROR_KIND,
     IdempotencyKeyConflict,
     PendingArtifact,
     PendingArtifactReference,
     answer_run_request_fingerprint,
-)
-from dlightrag.storage.answer_runs import (
-    MAX_CONSECUTIVE_RECOVERIES,
-    RUN_ABANDONED_ERROR_KIND,
-    PGAnswerRunStore,
 )
 from tests.conftest import FingerprintingAnswerRunStore
 
@@ -95,7 +93,7 @@ async def store(pool: Any) -> PGAnswerRunStore:
     await created.initialize()
     # Retention exempts conversation-linked runs, so the whole operational schema
     # is established here exactly as a real process establishes it at startup.
-    from dlightrag.storage.web_conversations import PGWebConversationStore
+    from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 
     await PGWebConversationStore(pool=pool, run_store=created).initialize()
     return created
@@ -265,7 +263,7 @@ class TestSchema:
                 )
 
     async def test_preserves_ingest_job_migration_scope(self, store, pool) -> None:
-        from dlightrag.storage.ingest_jobs import PGIngestJobStore
+        from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
 
         await PGIngestJobStore(pool=pool).initialize()
         async with pool.acquire() as conn:

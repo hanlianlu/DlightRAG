@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
@@ -113,15 +113,14 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     manager = AsyncMock()
     conversation_service = AsyncMock()
     application = create_app(include_web_app=True)
-    installed_service = application.state.web_conversation_service
-    application.state.web_conversation_service = conversation_service
+    manager.create_web_conversation_service = MagicMock(return_value=conversation_service)
     monkeypatch.setattr(RAGServiceManager, "acreate", AsyncMock(return_value=manager))
 
     async with application.router.lifespan_context(application):
         conversation_service.initialize.assert_awaited_once_with()
         assert application.state.web_conversation_service is conversation_service
 
-    assert installed_service is not conversation_service
+    manager.create_web_conversation_service.assert_called_once_with()
     manager.aclose.assert_awaited_once_with()
 
 

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the offline workspace BM25 rebuild command."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -78,32 +79,6 @@ async def test_bm25_rebuild_rejects_incompatible_config(
         await run_rebuild_bm25(config=cast(Any, config), assume_yes=True)
 
 
-async def test_bm25_prerequisites_provision_extensions_and_close_connection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.core.retrieval.bm25 import BM25Profile
-    from dlightrag.maintenance import rebuild_bm25 as module
-
-    conn = AsyncMock()
-    connect = AsyncMock(return_value=conn)
-    ensure_major = AsyncMock()
-    ensure_extensions = AsyncMock()
-    monkeypatch.setattr(module.asyncpg, "connect", connect)
-    monkeypatch.setattr(module, "ensure_postgres_major", ensure_major)
-    monkeypatch.setattr(module, "ensure_postgres_extensions", ensure_extensions)
-    config = SimpleNamespace(
-        pg_connection_kwargs=MagicMock(return_value={"host": "db", "port": 5432})
-    )
-    profiles = (BM25Profile(name="en", text_config="english", languages=("en",)),)
-
-    await module._ensure_bm25_prerequisites(cast(Any, config), profiles)
-
-    connect.assert_awaited_once_with(host="db", port=5432)
-    ensure_major.assert_awaited_once_with(conn)
-    ensure_extensions.assert_awaited_once_with(conn, ("pg_textsearch",))
-    conn.close.assert_awaited_once()
-
-
 async def test_bm25_rebuild_provisions_indexes_then_relabels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -111,8 +86,25 @@ async def test_bm25_rebuild_provisions_indexes_then_relabels(
 
     config = _config()
     events: list[object] = []
-    prerequisites = AsyncMock(side_effect=lambda *_args, **_kwargs: events.append("prerequisites"))
-    monkeypatch.setattr(module, "_ensure_bm25_prerequisites", prerequisites)
+
+    class Coordination:
+        @asynccontextmanager
+        async def workspace_initialization(self):
+            events.append("prerequisites:enter")
+            try:
+                yield
+            finally:
+                events.append("prerequisites:exit")
+
+    class Factory:
+        def __init__(self, resolved_config: object) -> None:
+            assert resolved_config is config
+            events.append("factory")
+
+        def create(self) -> SimpleNamespace:
+            return SimpleNamespace(coordination=Coordination())
+
+    monkeypatch.setattr(module, "PGCorpusBackendFactory", Factory)
 
     async def rebuild(config: Any, **kwargs: Any) -> dict[str, int]:
         events.append(("rebuild", config, kwargs))
@@ -129,8 +121,8 @@ async def test_bm25_rebuild_provisions_indexes_then_relabels(
     )
 
     assert stats == {"processed_chunks": 3, "updated_chunks": 3}
-    assert events[0] == "prerequisites"
-    rebuild_event = cast(tuple[str, Any, dict[str, Any]], events[1])
+    assert events[:3] == ["factory", "prerequisites:enter", "prerequisites:exit"]
+    rebuild_event = cast(tuple[str, Any, dict[str, Any]], events[3])
     assert rebuild_event[0] == "rebuild"
     assert rebuild_event[1] is config
     assert rebuild_event[2] == {"pool": fake_pool, "batch_size": 25}

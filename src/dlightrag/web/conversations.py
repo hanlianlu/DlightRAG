@@ -10,12 +10,11 @@ stored a second time under the conversation.
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
-import asyncpg
 from dlightrag_ai.media import thumbnail_bytes
 
 from dlightrag.api.auth import UserContext
@@ -36,31 +35,24 @@ from dlightrag.runtime import (
     PendingArtifactReference,
     answer_run_request_fingerprint,
     artifact_digest,
-)
-from dlightrag.storage.answer_runs import PGAnswerRunStore, parse_run_id
-from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
-from dlightrag.storage.web_conversations import (
-    AnswerTurnCreation,
-    ConversationSnapshot,
-    ConversationSubmissionConflict,
-    LinkedTurn,
-    PGWebConversationStore,
+    parse_run_id,
 )
 from dlightrag.web.attachment_models import ValidatedWebAttachment
 from dlightrag.web.conversation_models import (
+    AnswerTurnCreation,
     ConversationAttachmentReference,
     ConversationHistory,
+    ConversationSnapshot,
+    ConversationSubmissionConflict,
     ConversationSummary,
     ConversationTurn,
+    LinkedTurn,
+    WebConversationUnavailableError,
 )
 from dlightrag.web.safe_html import safe_answer_done
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
-_WEB_STORAGE_UNAVAILABLE_EXCEPTIONS = (
-    *POSTGRES_UNAVAILABLE_EXCEPTIONS,
-    asyncpg.InterfaceError,
-)
 
 
 class AnswerRunInputPreparer(Protocol):
@@ -71,6 +63,76 @@ class AnswerRunInputPreparer(Protocol):
         resources: list[ResourceInput] | None,
         idempotency_fingerprint: str,
     ) -> AnswerRunInput: ...
+
+
+class AnswerArtifactStore(Protocol):
+    async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None: ...
+
+
+class WebConversationStore(Protocol):
+    async def initialize(self, *, validate_only: bool = False) -> None: ...
+
+    async def prune_expired(self, *, ttl_days: int, batch_size: int = 500) -> int: ...
+
+    async def create_conversation(self, principal_id: str) -> dict[str, Any]: ...
+
+    async def list_conversations(
+        self, principal_id: str, *, ttl_days: int
+    ) -> list[dict[str, Any]]: ...
+
+    async def rename_conversation(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        title: str,
+        ttl_days: int,
+    ) -> dict[str, Any] | None: ...
+
+    async def delete_conversation(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        ttl_days: int,
+    ) -> bool: ...
+
+    async def delete_all_conversations(self, principal_id: str) -> int: ...
+
+    async def snapshot(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        ttl_days: int,
+        max_turns: int = 100,
+    ) -> ConversationSnapshot | None: ...
+
+    async def find_turn_by_run(self, principal_id: str, run_id: str) -> LinkedTurn | None: ...
+
+    async def replay_answer_turn(
+        self,
+        *,
+        principal_id: str,
+        conversation_id: str,
+        submission_id: str,
+        idempotency_fingerprint: str,
+    ) -> LinkedTurn | None: ...
+
+    async def create_answer_turn(
+        self,
+        *,
+        principal_id: str,
+        conversation_id: str,
+        submission_id: str,
+        request: Mapping[str, Any],
+        idempotency_fingerprint: str,
+        artifacts: Sequence[PendingArtifact],
+        references: Sequence[PendingArtifactReference],
+        title_hint: str | None,
+        max_turns: int,
+        ttl_days: int,
+    ) -> AnswerTurnCreation | None: ...
 
 
 _HISTORY_THUMBNAIL_MAX_PX = 320
@@ -89,12 +151,6 @@ def _is_image_mime(mime_type: str | None) -> bool:
     return bool(mime_type) and mime_type.lower().startswith("image/")
 
 
-class WebConversationUnavailableError(RuntimeError):
-    """Raised when durable Web conversation storage cannot be reached."""
-
-    detail = "Web conversation storage is unavailable"
-
-
 @dataclass(frozen=True, slots=True)
 class WebAnswerSubmission:
     """The run and conversation entry one accepted browser submission created."""
@@ -111,9 +167,9 @@ class WebConversationService:
     def __init__(
         self,
         *,
-        store: PGWebConversationStore,
+        store: WebConversationStore,
         prepare_run_input: AnswerRunInputPreparer,
-        run_store: PGAnswerRunStore | None = None,
+        run_store: AnswerArtifactStore,
         max_turns: int,
         ttl_days: int,
         max_attachments: int,
@@ -121,7 +177,7 @@ class WebConversationService:
     ) -> None:
         self._store = store
         self._prepare_run_input = prepare_run_input
-        self._run_store = run_store or PGAnswerRunStore()
+        self._run_store = run_store
         self._max_turns = max_turns
         self._ttl_days = ttl_days
         self._max_attachments = max_attachments
@@ -436,10 +492,7 @@ class WebConversationService:
         )
 
     async def _store_call(self, operation: Awaitable[T]) -> T:
-        try:
-            return await operation
-        except _WEB_STORAGE_UNAVAILABLE_EXCEPTIONS as exc:
-            raise WebConversationUnavailableError from exc
+        return await operation
 
 
 # ---------------------------------------------------------------------------

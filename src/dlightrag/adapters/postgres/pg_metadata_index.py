@@ -5,20 +5,21 @@ import json
 import logging
 from typing import Any
 
+from dlightrag_rag.ports import CorpusSchemaError
 from dlightrag_rag.retrieval import MetadataFilter
 
-from dlightrag.core.retrieval.metadata_fields import (
-    FILTER_FIELD_COLUMNS,
-    METADATA_FIELDS,
-    canonical_metadata_key,
-)
-from dlightrag.storage.migrations import (
+from dlightrag.adapters.postgres._migrations import (
     Migration,
     TableRequirement,
     apply_migrations,
     verify_migrations,
 )
-from dlightrag.storage.sql_identifiers import pg_identifier
+from dlightrag.adapters.postgres.identifiers import pg_identifier
+from dlightrag.core.retrieval.metadata_fields import (
+    FILTER_FIELD_COLUMNS,
+    METADATA_FIELDS,
+    canonical_metadata_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +259,7 @@ class PGMetadataIndex:
         self._workspace = workspace
 
     async def _run(self, operation):
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         return await pg_pool.run(operation)
 
@@ -272,12 +273,14 @@ class PGMetadataIndex:
                     scope="doc_metadata",
                     migrations=_SCHEMA_MIGRATIONS,
                     tables=_SCHEMA_TABLES,
+                    schema_error=CorpusSchemaError,
                 )
                 return
             await apply_migrations(
                 conn,
                 scope="doc_metadata",
                 migrations=_SCHEMA_MIGRATIONS,
+                schema_error=CorpusSchemaError,
                 require_applied_prefix=False,
             )
 

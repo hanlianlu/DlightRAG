@@ -189,8 +189,6 @@ source_modules = [
     "dlightrag.citations",
     "dlightrag.application",
     "dlightrag.models",
-    "dlightrag.core",
-    "dlightrag.storage",
     "dlightrag.sourcing",
     "dlightrag.observability",
     "dlightrag.maintenance",
@@ -202,13 +200,66 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "core-no-api-or-mcp"
+name = "Core modules do not directly import API or MCP transports"
+type = "forbidden"
+source_modules = ["dlightrag.core"]
+forbidden_modules = ["dlightrag.api", "dlightrag.mcp"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+id = "core-domain-no-web"
+name = "Core domain modules do not directly assemble Web"
+type = "forbidden"
+source_modules = [
+    "dlightrag.core._lightrag_patches",
+    "dlightrag.core.access",
+    "dlightrag.core.agent",
+    "dlightrag.core.answer",
+    "dlightrag.core.answer_runs",
+    "dlightrag.core.client_attachments",
+    "dlightrag.core.client_contracts",
+    "dlightrag.core.client_execution",
+    "dlightrag.core.client_payloads",
+    "dlightrag.core.client_requests",
+    "dlightrag.core.contract_guard",
+    "dlightrag.core.document_embedding",
+    "dlightrag.core.federation",
+    "dlightrag.core.ingest_job_coordinator",
+    "dlightrag.core.ingestion",
+    "dlightrag.core.lightrag_lifecycle",
+    "dlightrag.core.lightrag_stores",
+    "dlightrag.core.memory",
+    "dlightrag.core.principal",
+    "dlightrag.core.request",
+    "dlightrag.core.reset",
+    "dlightrag.core.resources",
+    "dlightrag.core.retrieval",
+    "dlightrag.core.scope",
+    "dlightrag.core.service",
+    "dlightrag.core.sidecar_provenance",
+    "dlightrag.core.source_download",
+    "dlightrag.core.tools",
+    "dlightrag.core.visual_assets",
+]
+forbidden_modules = ["dlightrag.web"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+id = "postgres-adapter-owner-direction"
+name = "PostgreSQL adapters may implement owners but never import API or MCP"
+type = "forbidden"
+source_modules = ["dlightrag.adapters.postgres"]
+forbidden_modules = ["dlightrag.api", "dlightrag.mcp"]
+
+[[tool.importlinter.contracts]]
 id = "runtime-independence"
 name = "Durable runtime must remain storage and product-policy neutral"
 type = "forbidden"
 source_modules = ["dlightrag.runtime"]
 forbidden_modules = [
     "dlightrag.core",
-    "dlightrag.storage",
+    "dlightrag.adapters.postgres",
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",
@@ -225,7 +276,7 @@ type = "forbidden"
 source_modules = ["dlightrag.application"]
 forbidden_modules = [
     "dlightrag.core",
-    "dlightrag.storage",
+    "dlightrag.adapters.postgres",
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",
@@ -243,7 +294,7 @@ source_modules = ["dlightrag.api.routes.status"]
 forbidden_modules = [
     "dlightrag.core.answer",
     "dlightrag.core.servicemanager",
-    "dlightrag.storage",
+    "dlightrag.adapters.postgres",
 ]
 
 [[tool.importlinter.contracts]]
@@ -259,11 +310,23 @@ forbidden_modules = [
     "dlightrag.model_settings",
     "dlightrag.models",
     "dlightrag.core",
-    "dlightrag.storage",
+    "dlightrag.adapters.postgres",
     "dlightrag.sourcing",
     "dlightrag.observability",
     "dlightrag.citations",
 ]
+
+[[tool.importlinter.contracts]]
+id = "transport-postgres-adapter-direction"
+name = "Transport owners do not import PostgreSQL implementations directly"
+type = "forbidden"
+source_modules = [
+    "dlightrag.api",
+    "dlightrag.web",
+    "dlightrag.mcp",
+]
+forbidden_modules = ["dlightrag.adapters.postgres"]
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 id = "foundation-layers"

@@ -89,14 +89,14 @@ class TestReaderPoolSessionModes:
 
 class TestPgPoolBinding:
     def test_bind_same_signature_ok(self) -> None:
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
         pool.bind(_config())  # identical signature -> no raise
 
     def test_bind_incompatible_role_raises(self) -> None:
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
@@ -104,7 +104,7 @@ class TestPgPoolBinding:
             pool.bind(_config(service_role="reader"))
 
     def test_bind_incompatible_endpoint_raises(self) -> None:
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
@@ -112,7 +112,7 @@ class TestPgPoolBinding:
             pool.bind(_config(postgres_host="other-host"))
 
     async def test_close_clears_binding(self) -> None:
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         pool = PGPool()
         pool.bind(_config())
@@ -229,14 +229,25 @@ class _SchemaConn:
         return "OK"
 
 
-def _required_domain_scopes() -> list[tuple[str, tuple[Any, ...], tuple[Any, ...], Any]]:
+def _required_domain_scopes() -> list[
+    tuple[str, tuple[Any, ...], tuple[Any, ...], Any, type[RuntimeError]]
+]:
     """Each domain store with the scope, versions, and tables it validates.
 
     The Web conversation store validates the durable Answer run schema too: its
     turns carry a foreign key into ``dlightrag_answer_runs``, so a reader whose
     run schema is absent must fail there as well.
     """
-    from dlightrag.storage import answer_runs, pg_metadata_index, web_conversations, workspaces
+    from dlightrag_rag.ports import CorpusSchemaError
+
+    from dlightrag.adapters.postgres import (
+        answer_runs,
+        pg_metadata_index,
+        web_conversations,
+        workspaces,
+    )
+    from dlightrag.runtime import RunSchemaError
+    from dlightrag.web.conversation_models import WebConversationSchemaError
 
     return [
         (
@@ -244,31 +255,35 @@ def _required_domain_scopes() -> list[tuple[str, tuple[Any, ...], tuple[Any, ...
             workspaces._SCHEMA_MIGRATIONS,
             workspaces._SCHEMA_TABLES,
             workspaces.PGWorkspaceRegistry,
+            CorpusSchemaError,
         ),
         (
             "doc_metadata",
             pg_metadata_index._SCHEMA_MIGRATIONS,
             pg_metadata_index._SCHEMA_TABLES,
             pg_metadata_index.PGMetadataIndex,
+            CorpusSchemaError,
         ),
         (
             "answer_runs",
             answer_runs.ANSWER_RUN_MIGRATIONS,
             answer_runs.ANSWER_RUN_SCHEMA_TABLES,
             answer_runs.PGAnswerRunStore,
+            RunSchemaError,
         ),
         (
             "web_conversations",
             web_conversations.WEB_CONVERSATION_MIGRATIONS,
             web_conversations.WEB_CONVERSATION_SCHEMA_TABLES,
             web_conversations.PGWebConversationStore,
+            WebConversationSchemaError,
         ),
     ]
 
 
 def _prerequisite_versions(scope: str) -> set[tuple[str, str]]:
     """Versions another scope must already carry before this one validates."""
-    from dlightrag.storage import answer_runs
+    from dlightrag.adapters.postgres import answer_runs
 
     if scope != "web_conversations":
         return set()
@@ -279,7 +294,7 @@ def _prerequisite_versions(scope: str) -> set[tuple[str, str]]:
 
 
 def _prerequisite_tables(scope: str) -> tuple[Any, ...]:
-    from dlightrag.storage import answer_runs
+    from dlightrag.adapters.postgres import answer_runs
 
     return answer_runs.ANSWER_RUN_SCHEMA_TABLES if scope == "web_conversations" else ()
 
@@ -287,7 +302,7 @@ def _prerequisite_tables(scope: str) -> tuple[Any, ...]:
 @contextmanager
 def _domain_pool_routed_to(conn: _SchemaConn) -> Iterator[None]:
     """Route every domain-store operation at ``conn`` without a real pool."""
-    from dlightrag.storage.pool import pg_pool
+    from dlightrag.adapters.postgres._pool import pg_pool
 
     async def _run(operation: Any) -> Any:
         return await operation(conn)
@@ -301,7 +316,7 @@ def _domain_pool_routed_to(conn: _SchemaConn) -> Iterator[None]:
 
 @pytest.mark.parametrize("scope_index", range(4))
 async def test_reader_startup_validates_domain_schema_without_ddl(scope_index: int) -> None:
-    scope, migrations, tables, store_cls = _required_domain_scopes()[scope_index]
+    scope, migrations, tables, store_cls, _schema_error = _required_domain_scopes()[scope_index]
     conn = _SchemaConn(
         {(scope, migration.version) for migration in migrations} | _prerequisite_versions(scope),
         tables + _prerequisite_tables(scope),
@@ -315,13 +330,14 @@ async def test_reader_startup_validates_domain_schema_without_ddl(scope_index: i
 
 @pytest.mark.parametrize("scope_index", range(4))
 async def test_reader_startup_fails_on_incompatible_domain_schema(scope_index: int) -> None:
-    from dlightrag.storage.migrations import SchemaValidationError
+    from dlightrag.runtime import RunSchemaError
 
-    scope, _migrations, tables, store_cls = _required_domain_scopes()[scope_index]
+    scope, _migrations, tables, store_cls, schema_error = _required_domain_scopes()[scope_index]
     conn = _SchemaConn(set(), tables + _prerequisite_tables(scope))
     expected = "answer_runs" if scope == "web_conversations" else scope
+    expected_error = RunSchemaError if scope == "web_conversations" else schema_error
 
-    with _domain_pool_routed_to(conn), pytest.raises(SchemaValidationError, match=expected):
+    with _domain_pool_routed_to(conn), pytest.raises(expected_error, match=expected):
         await store_cls().initialize(validate_only=True)
 
     assert conn.executed == []
@@ -330,9 +346,7 @@ async def test_reader_startup_fails_on_incompatible_domain_schema(scope_index: i
 @pytest.mark.parametrize("scope_index", range(4))
 async def test_reader_startup_fails_when_a_required_table_is_absent(scope_index: int) -> None:
     """Every declared version can be recorded while a required table is gone."""
-    from dlightrag.storage.migrations import SchemaValidationError
-
-    scope, migrations, tables, store_cls = _required_domain_scopes()[scope_index]
+    scope, migrations, tables, store_cls, schema_error = _required_domain_scopes()[scope_index]
     conn = _SchemaConn(
         {(scope, migration.version) for migration in migrations} | _prerequisite_versions(scope),
         tables[1:] + _prerequisite_tables(scope),
@@ -340,7 +354,7 @@ async def test_reader_startup_fails_when_a_required_table_is_absent(scope_index:
 
     with (
         _domain_pool_routed_to(conn),
-        pytest.raises(SchemaValidationError, match=f"table {tables[0].name}"),
+        pytest.raises(schema_error, match=f"table {tables[0].name}"),
     ):
         await store_cls().initialize(validate_only=True)
 
@@ -349,14 +363,15 @@ async def test_reader_startup_fails_when_a_required_table_is_absent(scope_index:
 
 @pytest.mark.parametrize("scope_index", range(4))
 async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_index: int) -> None:
-    from dlightrag.storage.migrations import SchemaValidationError
+    from dlightrag.runtime import RunSchemaError
 
-    _scope, _migrations, tables, store_cls = _required_domain_scopes()[scope_index]
+    _scope, _migrations, tables, store_cls, schema_error = _required_domain_scopes()[scope_index]
     conn = _SchemaConn(set(), tables + _prerequisite_tables(_scope), ledger_exists=False)
+    expected_error = RunSchemaError if _scope == "web_conversations" else schema_error
 
     with (
         _domain_pool_routed_to(conn),
-        pytest.raises(SchemaValidationError, match="dlightrag_schema_migrations"),
+        pytest.raises(expected_error, match="dlightrag_schema_migrations"),
     ):
         await store_cls().initialize(validate_only=True)
 
@@ -364,16 +379,17 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
 
 
 async def test_reader_workspace_registry_schema_failure_stops_startup() -> None:
+    from dlightrag_rag.ports import CorpusSchemaError
+
     from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.storage.migrations import SchemaValidationError
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config(service_role="reader")
     manager._health = ApplicationHealth(readiness_probe=None)
 
-    with pytest.raises(SchemaValidationError):
-        await _initialize_registry(manager, SchemaValidationError("workspace_registry"))
+    with pytest.raises(CorpusSchemaError):
+        await _initialize_registry(manager, CorpusSchemaError("workspace_registry"))
 
     assert manager.health.warnings == ()
 
@@ -392,21 +408,10 @@ async def test_transient_workspace_registry_failure_only_warns() -> None:
 
 
 async def _initialize_registry(manager: Any, failure: Exception) -> None:
-    import dlightrag.storage.workspaces as workspaces_module
-
-    class _FailingRegistry:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        async def initialize(self, *, validate_only: bool = False) -> None:
-            raise failure
-
-    original = workspaces_module.PGWorkspaceRegistry
-    workspaces_module.PGWorkspaceRegistry = _FailingRegistry  # type: ignore[misc]
-    try:
-        await manager._initialize_workspace_registry()
-    finally:
-        workspaces_module.PGWorkspaceRegistry = original  # type: ignore[misc]
+    maintenance = AsyncMock()
+    maintenance.initialize.side_effect = failure
+    manager._corpus_maintenance = maintenance
+    await manager._initialize_workspace_registry()
 
 
 def _patch_manager_startup(
@@ -419,8 +424,8 @@ def _patch_manager_startup(
     """
     import dlightrag.core.servicemanager as servicemanager_module
     import dlightrag.observability as observability
+    from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.storage.pool import pg_pool
 
     monkeypatch.setattr(observability, "init_tracing", lambda _config: None)
     monkeypatch.setattr(pg_pool, "bind", lambda _config: None)
@@ -441,8 +446,8 @@ def _patch_answer_run_store(
     monkeypatch: pytest.MonkeyPatch, *, failure: Exception | None = None
 ) -> tuple[list[Any], list[bool]]:
     """Replace the durable operational stores with ones that record their startup."""
-    import dlightrag.storage.answer_runs as answer_runs_module
-    import dlightrag.storage.web_conversations as web_conversations_module
+    import dlightrag.adapters.postgres.answer_runs as answer_runs_module
+    import dlightrag.adapters.postgres.web_conversations as web_conversations_module
 
     built: list[Any] = []
     validate_calls: list[bool] = []
@@ -465,7 +470,9 @@ def _patch_answer_run_store(
     # The Web conversation link table is part of the same operational schema; it
     # is recorded separately so run-store assertions stay exact.
     monkeypatch.setattr(
-        web_conversations_module, "PGWebConversationStore", lambda: _WebSchemaRecorder()
+        web_conversations_module,
+        "PGWebConversationStore",
+        lambda **_kwargs: _WebSchemaRecorder(),
     )
     return built, validate_calls
 
@@ -486,8 +493,9 @@ async def test_reader_startup_never_degrades_past_a_schema_failure(
     failing_step: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from dlightrag_rag.ports import CorpusSchemaError
+
     from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.storage.migrations import SchemaValidationError
 
     _patch_manager_startup(monkeypatch)
     recovery = AsyncMock()
@@ -495,12 +503,12 @@ async def test_reader_startup_never_degrades_past_a_schema_failure(
     monkeypatch.setattr(
         RAGServiceManager,
         failing_step,
-        AsyncMock(side_effect=SchemaValidationError("doc_metadata is missing versions")),
+        AsyncMock(side_effect=CorpusSchemaError("doc_metadata is missing versions")),
     )
     closed = AsyncMock()
     monkeypatch.setattr(RAGServiceManager, "aclose", closed)
 
-    with pytest.raises(SchemaValidationError, match="doc_metadata"):
+    with pytest.raises(CorpusSchemaError, match="doc_metadata"):
         await RAGServiceManager.acreate(config=_config(service_role="reader"))
 
     closed.assert_awaited_once_with()
@@ -511,15 +519,16 @@ async def test_service_creation_propagates_a_schema_failure_without_backoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``_get_service`` must not turn a terminal schema failure into a retryable one."""
+    from dlightrag_rag.ports import CorpusSchemaError
+
     import dlightrag.core.servicemanager as servicemanager_module
     from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.storage.migrations import SchemaValidationError
 
-    failure = SchemaValidationError("doc_metadata is missing versions: column_title")
+    failure = CorpusSchemaError("doc_metadata is missing versions: column_title")
     monkeypatch.setattr(servicemanager_module.RAGService, "acreate", AsyncMock(side_effect=failure))
     manager = RAGServiceManager(config=_config(service_role="reader"))
 
-    with pytest.raises(SchemaValidationError) as excinfo:
+    with pytest.raises(CorpusSchemaError) as excinfo:
         await manager._get_service("default")
 
     assert excinfo.value is failure
@@ -531,12 +540,13 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real ``_get_service`` conversion path must stay transparent at startup."""
+    from dlightrag_rag.ports import CorpusSchemaError
+
     import dlightrag.core.servicemanager as servicemanager_module
     from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.storage.migrations import SchemaValidationError
 
     _patch_manager_startup(monkeypatch)
-    failure = SchemaValidationError("doc_metadata is missing versions: column_title")
+    failure = CorpusSchemaError("doc_metadata is missing versions: column_title")
     monkeypatch.setattr(servicemanager_module.RAGService, "acreate", AsyncMock(side_effect=failure))
     recovery = AsyncMock()
     monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", recovery)
@@ -547,7 +557,7 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
 
     monkeypatch.setattr(RAGServiceManager, "aclose", _aclose)
 
-    with pytest.raises(SchemaValidationError) as excinfo:
+    with pytest.raises(CorpusSchemaError) as excinfo:
         await RAGServiceManager.acreate(config=_config(service_role="reader"))
 
     assert excinfo.value is failure
@@ -626,15 +636,15 @@ async def test_reader_startup_aborts_when_the_answer_run_schema_is_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.storage.migrations import SchemaValidationError
+    from dlightrag.runtime import RunSchemaError
 
     _patch_manager_startup(monkeypatch, stub_answer_store=False)
-    failure = SchemaValidationError("scope 'answer_runs' is missing table dlightrag_answer_runs")
+    failure = RunSchemaError("scope 'answer_runs' is missing table dlightrag_answer_runs")
     _patch_answer_run_store(monkeypatch, failure=failure)
     closed = AsyncMock()
     monkeypatch.setattr(RAGServiceManager, "aclose", closed)
 
-    with pytest.raises(SchemaValidationError) as excinfo:
+    with pytest.raises(RunSchemaError) as excinfo:
         await RAGServiceManager.acreate(config=_config(service_role="reader"))
 
     assert excinfo.value is failure
@@ -667,7 +677,8 @@ async def test_reader_serves_web_routes() -> None:
         config_module._config = original
 
     assert "/web/answer" in set(app.openapi()["paths"])
-    assert app.state.web_conversation_service is not None
+    assert app.state.web_enabled is True
+    assert not hasattr(app.state, "web_conversation_service")
 
 
 async def test_reader_does_not_recover_ingest_jobs() -> None:
@@ -704,7 +715,7 @@ class TestReadOnlyAdapter:
     def test_overrides_initdb_without_ddl_bootstrap(self) -> None:
         from lightrag.kg.postgres_impl import PostgreSQLDB
 
-        from dlightrag.storage.lightrag_readonly import ReadOnlyPostgreSQLDB
+        from dlightrag.adapters.postgres.lightrag_readonly import ReadOnlyPostgreSQLDB
 
         # The reader adapter must override initdb so reconnect never re-enters
         # LightRAG's extension/table/graph bootstrap.
@@ -716,7 +727,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_initializes_binds_schema_and_status(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.storage.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.lightrag_readonly as readonly
 
         class FakeConn:
             def __init__(self) -> None:
@@ -858,7 +869,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_reuses_db_and_preserves_signature_checks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.storage.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.lightrag_readonly as readonly
 
         class FakeConn:
             async def fetchval(self, sql: str, *args: Any) -> Any:
@@ -940,7 +951,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_releases_db_when_schema_verification_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.storage.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.lightrag_readonly as readonly
 
         class FakeConn:
             async def fetchval(self, sql: str, *args: Any) -> Any:
@@ -1008,7 +1019,7 @@ class TestReadOnlyAdapter:
     async def test_read_only_db_rollback_finishes_before_propagating_cancellation(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.storage.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.lightrag_readonly as readonly
 
         close_started = asyncio.Event()
         allow_close = asyncio.Event()
@@ -1051,7 +1062,7 @@ class TestReadOnlyAdapter:
     async def test_attach_entry_point_signature_mismatch_keeps_refcount(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import dlightrag.storage.lightrag_readonly as readonly
+        import dlightrag.adapters.postgres.lightrag_readonly as readonly
 
         class FakeConn:
             async def fetchval(self, sql: str, *args: Any) -> Any:

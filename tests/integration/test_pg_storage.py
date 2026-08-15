@@ -61,7 +61,7 @@ _TEST_WORKSPACES = (_TEST_WORKSPACE_ALPHA, _TEST_WORKSPACE_BETA)
 async def _open_workspace_registry() -> tuple[Any, Any]:
     import asyncpg
 
-    from dlightrag.storage.workspaces import PGWorkspaceRegistry
+    from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
 
     pool = await asyncpg.create_pool(
         host=str(_PG_CONN_KWARGS["host"]),

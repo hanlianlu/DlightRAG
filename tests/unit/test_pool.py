@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for dlightrag.storage.pool.PGPool singleton."""
+"""Tests for dlightrag.adapters.postgres._pool.PGPool singleton."""
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,7 +14,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_get_creates_pool(self) -> None:
         """First call to get() creates the asyncpg pool with config values."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         mock_pool = MagicMock()
         pool = PGPool()
@@ -40,7 +40,8 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
+                new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
         ):
@@ -60,7 +61,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_double_get_reuses_pool(self) -> None:
         """Calling get() twice returns the same pool and creates it only once."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         mock_pool = MagicMock()
         pool = PGPool()
@@ -83,7 +84,8 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
+                new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
         ):
@@ -97,7 +99,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_close_cleans_up(self) -> None:
         """close() calls pool.close() and resets internal state."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         mock_pool = AsyncMock()
         pool = PGPool()
@@ -111,7 +113,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_close_is_idempotent(self) -> None:
         """close() on an already-closed pool does not raise."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         pool = PGPool()
         # pool._pool is None — calling close should be a no-op
@@ -120,7 +122,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_get_after_close_recreates_pool(self) -> None:
         """After close(), get() creates a fresh pool."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         mock_pool1 = AsyncMock()
         mock_pool2 = AsyncMock()
@@ -144,7 +146,7 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool",
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(side_effect=[mock_pool1, mock_pool2]),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
@@ -160,7 +162,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_get_applies_session_settings_and_statement_cache(self) -> None:
         """Domain store pools should use the same PG session tuning as LightRAG."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         mock_pool = MagicMock()
         pool = PGPool()
@@ -184,7 +186,8 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
+                new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
         ):
@@ -209,7 +212,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_get_forwards_ssl_connection_kwargs(self) -> None:
         """Managed PostgreSQL SSL settings must reach DlightRAG domain pools."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         mock_pool = MagicMock()
         pool = PGPool()
@@ -231,7 +234,8 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
+                new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
         ):
@@ -252,7 +256,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_run_retries_operation_on_transient_error_without_destroying_pool(self) -> None:
         """Transient errors retry the operation on the same pool — the pool survives."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         the_pool = MagicMock()
         the_pool.close = AsyncMock()
@@ -292,7 +296,7 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool",
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
@@ -308,7 +312,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_run_once_does_not_replay_operation_after_transient_error(self) -> None:
         """Outcome-sensitive writes get one attempt even for transient errors."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         the_pool = MagicMock()
         connection = object()
@@ -332,7 +336,7 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool",
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ),
             patch("dlightrag.config.get_config", return_value=mock_config),
@@ -349,7 +353,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_get_applies_command_timeout(self) -> None:
         """A configured command_timeout is forwarded to asyncpg.create_pool."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         mock_pool = MagicMock()
         pool = PGPool()
@@ -370,7 +374,8 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
+                new=AsyncMock(return_value=mock_pool),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
         ):
@@ -381,7 +386,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_run_acquires_with_configured_timeout(self) -> None:
         """run() passes the configured acquire timeout to pool.acquire()."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         the_pool = MagicMock()
         the_pool.acquire.return_value.__aenter__.return_value = object()
@@ -400,7 +405,7 @@ class TestPGPoolGet:
 
         with (
             patch(
-                "dlightrag.storage.pool.asyncpg.create_pool",
+                "dlightrag.adapters.postgres._pool.asyncpg.create_pool",
                 new=AsyncMock(return_value=the_pool),
             ),
             patch("dlightrag.config.get_config", return_value=mock_config),
@@ -413,7 +418,7 @@ class TestPGPoolGet:
     @pytest.mark.asyncio
     async def test_close_terminates_on_timeout(self) -> None:
         """If graceful close exceeds the timeout, the pool is force-terminated."""
-        from dlightrag.storage.pool import PGPool
+        from dlightrag.adapters.postgres._pool import PGPool
 
         async def _hang() -> None:
             await asyncio.sleep(10)

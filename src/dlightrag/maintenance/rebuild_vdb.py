@@ -17,6 +17,8 @@ from lightrag.namespace import NameSpace
 from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
+from dlightrag.adapters.postgres._pool import pg_pool
+from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
 from dlightrag.core.lightrag_stores import LightRAGStores
@@ -24,7 +26,6 @@ from dlightrag.core.retrieval.bm25 import rebuild_postgres_bm25
 from dlightrag.core.service import RAGService
 from dlightrag.model_settings import embedding_settings
 from dlightrag.observability import LangfuseTelemetry
-from dlightrag.storage.pool import pg_pool
 
 logger = logging.getLogger(__name__)
 
@@ -137,9 +138,7 @@ class DlightRAGRebuildTool(RebuildTool):
 
         self.storage_names = self.resolve_storage_names()
         self.workspace = self.config.workspace
-        self.config.apply_lightrag_backend_env(force=True)
-        self.config.apply_lightrag_runtime_env(force=True)
-        self.config.apply_lightrag_sidecar_env()
+        PGCorpusBackendFactory(self.config)
 
         print("\nChecking configuration...")
         for storage_name in set(self.storage_names.values()):

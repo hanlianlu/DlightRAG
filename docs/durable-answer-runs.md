@@ -7,9 +7,10 @@ executor owns retrieval/synthesis and converts product failures to
 `RunExecutionError` before Runtime sees them. REST, MCP, Web, and the Python
 manager all use that same coordinator.
 
-`PGAnswerRunStore` is the current store-port adapter. Runtime never imports
-PostgreSQL, Answer implementation, RAG implementation, or a transport package;
-the adapter imports the records it persists from Runtime.
+`dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the store
+port. Runtime never imports PostgreSQL, Answer implementation, RAG
+implementation, or a transport package; the root adapter imports the records it
+persists from Runtime. No `dlightrag.storage` compatibility package exists.
 
 ## Goals
 

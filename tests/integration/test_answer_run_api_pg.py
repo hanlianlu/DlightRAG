@@ -23,11 +23,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.principal import owner_id_from_user
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
-from dlightrag.storage.answer_runs import PGAnswerRunStore
 from tests.unit.conftest import prepare_test_answer_run_input
 
 pytestmark = [

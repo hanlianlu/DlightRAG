@@ -20,7 +20,8 @@ Clients
   -> REST / Web / MCP / SDK adapters
   -> RAGServiceManager (composition)
        -> RAGService -> LightRAG main -> corpus storage
-       -> dlightrag.runtime RunCoordinator -> Answer executor + PG run store
+      -> dlightrag.runtime RunCoordinator -> Answer executor + root PG adapter
+      -> dlightrag-rag-core corpus ports -> root PG corpus adapter
        -> ApplicationHealth -> liveness/readiness projection
   -> PostgreSQL 18 storage ecosystem
 ```
@@ -37,8 +38,10 @@ storage-neutral retrieval records/fusion ship as `dlightrag-rag-core`. The
 into the REST, Web, MCP, SDK, and PostgreSQL-backed product. CI builds and
 inspects all four wheels outside the editable workspace. Inside that root
 distribution, `dlightrag.runtime` owns storage-neutral durable-run contracts and
-coordination, while `ApplicationHealth` is the single process-health state
-projected by status interfaces.
+coordination; `dlightrag-rag-core` owns storage-neutral corpus coordination and
+maintenance ports; and `dlightrag.adapters.postgres` owns every concrete
+PostgreSQL implementation. `ApplicationHealth` is the single process-health
+state projected by status interfaces.
 
 ## Choose Your Deployment Path
 

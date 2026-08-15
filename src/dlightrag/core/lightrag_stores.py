@@ -35,8 +35,8 @@ import json
 import logging
 from typing import Any, ClassVar
 
+from dlightrag.adapters.postgres.identifiers import pg_qualified_identifier
 from dlightrag.core.retrieval.bm25_language import BM25_LANGUAGE_COLUMN
-from dlightrag.storage.sql_identifiers import pg_qualified_identifier
 
 logger = logging.getLogger(__name__)
 

@@ -15,6 +15,10 @@ type CheckpointErrorKind = Literal[
 ]
 
 
+class RunSchemaError(RuntimeError):
+    """The durable run schema is incompatible with this Runtime revision."""
+
+
 class CheckpointError(RuntimeError):
     """One durable checkpoint cannot be safely written or restored.
 
@@ -62,4 +66,5 @@ __all__ = [
     "CheckpointError",
     "CheckpointErrorKind",
     "RunExecutionError",
+    "RunSchemaError",
 ]

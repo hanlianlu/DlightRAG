@@ -14,9 +14,22 @@ before chunks_vdb is wrapped by FilteredVectorStorage.
 import logging
 from typing import Any
 
-from dlightrag.storage.lightrag_readonly import READ_ONLY_STORAGE_ATTRS
-
 logger = logging.getLogger(__name__)
+
+READ_ONLY_STORAGE_ATTRS = (
+    "full_docs",
+    "text_chunks",
+    "full_entities",
+    "full_relations",
+    "entity_chunks",
+    "relation_chunks",
+    "entities_vdb",
+    "relationships_vdb",
+    "chunks_vdb",
+    "chunk_entity_relation_graph",
+    "llm_response_cache",
+    "doc_status",
+)
 
 
 class LightRAGContractGuard:

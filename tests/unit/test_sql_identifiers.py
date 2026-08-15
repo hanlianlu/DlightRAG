@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
+from dlightrag.adapters.postgres.identifiers import pg_identifier, pg_qualified_identifier
 
 
 def test_pg_identifier_accepts_simple_identifiers() -> None:

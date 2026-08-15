@@ -19,7 +19,18 @@ from typing import Any
 
 import asyncpg
 
+from dlightrag.adapters.postgres._migrations import (
+    ForeignKeyRequirement,
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
+)
 from dlightrag.runtime import (
+    ANSWER_RUN_LEASE_SECONDS,
+    MAX_CONSECUTIVE_RECOVERIES,
+    RUN_ABANDONED_ERROR_KIND,
+    RUN_RETENTION_SECONDS,
     AnswerRunEvent,
     AnswerRunEventType,
     AnswerRunPhase,
@@ -37,30 +48,15 @@ from dlightrag.runtime import (
     RunCheckpoint,
     RunCreation,
     RunDeletion,
+    RunSchemaError,
     ShutdownOutcome,
     SweepOutcome,
     TerminalOutcome,
     canonical_run_request_json,
-)
-from dlightrag.storage.migrations import (
-    ForeignKeyRequirement,
-    Migration,
-    TableRequirement,
-    apply_migrations,
-    verify_migrations,
+    parse_run_id,
 )
 
 ANSWER_RUN_MIGRATION_SCOPE = "answer_runs"
-
-#: Terminal rows and every terminal run's event log expire 30 days after finish.
-RUN_RETENTION_SECONDS = 30 * 24 * 3600
-#: A worker renews this window while it holds a run; expiry makes the row reclaimable.
-ANSWER_RUN_LEASE_SECONDS = 60
-#: Consecutive expired-lease reclaims allowed without a committed checkpoint. The
-#: next reclaim fails the run instead, so a process-killing run cannot monopolize
-#: every worker while a checkpointing run survives many restarts.
-MAX_CONSECUTIVE_RECOVERIES = 4
-RUN_ABANDONED_ERROR_KIND = "run_abandoned"
 
 _ABANDONED_ERROR_MESSAGE = "Answer run exceeded its crash-recovery bound."
 _BATCH_LIMIT = 200
@@ -764,7 +760,7 @@ class PGAnswerRunStore:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
 
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         return await pg_pool.run(operation)
 
@@ -773,7 +769,7 @@ class PGAnswerRunStore:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
 
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         return await pg_pool.run_once(operation)
 
@@ -789,12 +785,14 @@ class PGAnswerRunStore:
                     scope=ANSWER_RUN_MIGRATION_SCOPE,
                     migrations=ANSWER_RUN_MIGRATIONS,
                     tables=ANSWER_RUN_SCHEMA_TABLES,
+                    schema_error=RunSchemaError,
                 )
                 return
             await apply_migrations(
                 conn,
                 scope=ANSWER_RUN_MIGRATION_SCOPE,
                 migrations=ANSWER_RUN_MIGRATIONS,
+                schema_error=RunSchemaError,
             )
 
         await self._run_write(_operation)
@@ -1730,18 +1728,6 @@ def _require_owner(owner_id: str) -> str:
     return owner
 
 
-def parse_run_id(run_id: str) -> uuid.UUID | None:
-    """Parse a caller-supplied run id; malformed ids read as unknown, not as errors.
-
-    Parsing only: it grants no access, so an adapter can reject an unusable id
-    before any owner-scoped query without reaching around the store.
-    """
-    try:
-        return uuid.UUID(str(run_id))
-    except ValueError:
-        return None
-
-
 def _json_object(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
@@ -1822,15 +1808,10 @@ def _reference_record(row: Any) -> RunArtifactReference:
 
 
 __all__ = [
-    "ANSWER_RUN_LEASE_SECONDS",
     "ANSWER_RUN_MIGRATIONS",
     "ANSWER_RUN_MIGRATION_SCOPE",
     "ANSWER_RUN_SCHEMA_TABLES",
-    "MAX_CONSECUTIVE_RECOVERIES",
-    "RUN_ABANDONED_ERROR_KIND",
-    "RUN_RETENTION_SECONDS",
     "PGAnswerRunStore",
     "answer_run_columns",
     "answer_run_record",
-    "parse_run_id",
 ]

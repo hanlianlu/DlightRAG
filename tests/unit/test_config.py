@@ -51,6 +51,12 @@ def _default_test_config() -> DlightragConfig:
     )
 
 
+def _bridge_lightrag_env(config: DlightragConfig) -> None:
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+    PGCorpusBackendFactory(config)
+
+
 class TestJwtAudience:
     @staticmethod
     def _config(value: Any) -> DlightragConfig:
@@ -663,6 +669,9 @@ def test_parser_defaults_export_lightrag_env() -> None:
             mineru=MinerUSidecarConfig(backend="pipeline", language="korean"),
         ),
     )
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+    PGCorpusBackendFactory(cfg)
 
     assert cfg.parser_rules == "*:mineru-iteP"
     assert cfg.parser_sidecars.docling is None
@@ -678,6 +687,9 @@ def test_parser_defaults_export_lightrag_env() -> None:
 
 def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
     cfg = _default_test_config()
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+    PGCorpusBackendFactory(cfg)
 
     assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
     assert cfg.pg_hnsw_m == 32
@@ -929,6 +941,7 @@ def test_pg_connection_kwargs_includes_ssl_require_and_exports_lightrag_env(
         postgres_ssl_root_cert="/certs/root.crt",
         postgres_ssl_crl="/certs/root.crl",
     )
+    _bridge_lightrag_env(cfg)
 
     assert cfg.pg_connection_kwargs()["ssl"] is True
     assert os.environ["POSTGRES_SSL_MODE"] == "require"
@@ -1013,6 +1026,7 @@ def test_dotenv_ignores_raw_upstream_parser_env(tmp_path, monkeypatch: pytest.Mo
     )
     mineru = cfg.parser_sidecars.mineru
     assert mineru is not None
+    _bridge_lightrag_env(cfg)
 
     assert cfg.llm.default.api_key == "sk-env"
     assert os.environ["VLM_PROCESS_ENABLE"] == "true"
@@ -1048,7 +1062,7 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     ):
         monkeypatch.delenv(key, raising=False)
 
-    _settings_config(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -1069,6 +1083,7 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
             },
         },
     )
+    _bridge_lightrag_env(cfg)
 
     assert os.environ["VLM_PROCESS_ENABLE"] == "true"
     assert os.environ["VLM_MAX_IMAGE_BYTES"] == "7000000"
@@ -1101,6 +1116,7 @@ def test_docling_parser_exports_only_docling_and_shared_vlm_env(
             },
         },
     )
+    _bridge_lightrag_env(cfg)
 
     assert cfg.parser_rules == "*:docling-iteP"
     assert cfg.parser_sidecars.docling is not None
@@ -1117,7 +1133,8 @@ def test_docling_parser_exports_only_docling_and_shared_vlm_env(
 def test_mineru_parser_clears_stale_docling_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOCLING_ENDPOINT", "http://stale-docling:5001")
 
-    _default_test_config()
+    cfg = _default_test_config()
+    _bridge_lightrag_env(cfg)
 
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["VLM_MIN_IMAGE_PIXEL"] == "80"
@@ -1150,6 +1167,7 @@ def test_mineru_takes_priority_when_both_parser_sidecars_are_configured() -> Non
             "docling": {"endpoint": "http://docling.internal:5001"},
         },
     )
+    _bridge_lightrag_env(cfg)
 
     assert cfg.parser_rules == "*:mineru-iteP"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://mineru.internal:8210"
@@ -1162,7 +1180,7 @@ def test_mineru_backend_maps_to_env_and_uses_canonical_default(
     monkeypatch.delenv("MINERU_LOCAL_BACKEND", raising=False)
 
     # Explicit backend is exported to LightRAG's MINERU_LOCAL_BACKEND env.
-    _settings_config(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -1171,11 +1189,12 @@ def test_mineru_backend_maps_to_env_and_uses_canonical_default(
         ),
         parser_sidecars={"mineru": {"backend": "pipeline"}},
     )
+    _bridge_lightrag_env(cfg)
     assert os.environ["MINERU_LOCAL_BACKEND"] == "pipeline"
 
     # Unset backend exports DlightRAG's canonical default instead of inheriting upstream.
     monkeypatch.delenv("MINERU_LOCAL_BACKEND", raising=False)
-    _settings_config(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -1184,6 +1203,7 @@ def test_mineru_backend_maps_to_env_and_uses_canonical_default(
         ),
         parser_sidecars=ParserSidecarsConfig(mineru=MinerUSidecarConfig(language="ch")),
     )
+    _bridge_lightrag_env(cfg)
     assert os.environ["MINERU_LOCAL_BACKEND"] == "hybrid-engine"
 
 
@@ -1269,6 +1289,9 @@ def test_postgres_session_settings_merge_hnsw_defaults(
         postgres_pool_close_timeout=2.5,
         postgres_lightrag_pool_max_size=18,
     )
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+    PGCorpusBackendFactory(cfg)
 
     assert cfg.domain_pool_server_settings() == {
         "hnsw.ef_search": "384",
@@ -1299,7 +1322,9 @@ def test_lightrag_workspace_env_is_not_globalized(monkeypatch: pytest.MonkeyPatc
         ),
         workspace="fresh_workspace",
     )
-    cfg.apply_lightrag_backend_env(force=True)
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+    PGCorpusBackendFactory(cfg)
 
     assert "POSTGRES_WORKSPACE" not in os.environ
 
@@ -1335,6 +1360,9 @@ def test_lightrag_parser_env_follows_active_sidecar(
             "docling": {"endpoint": "http://docling.internal:5001"},
         },
     )
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+    PGCorpusBackendFactory(cfg)
 
     assert os.environ["LIGHTRAG_PARSER"] == cfg.parser_rules == "*:docling-iteP"
 
@@ -1415,6 +1443,7 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
             startup_probe=False,
         ),
     )
+    _bridge_lightrag_env(cfg)
 
     assert cfg.api_port == 9900
     assert cfg.llm.default.api_key == "sk-explicit"
@@ -1482,7 +1511,7 @@ def test_blank_sidecar_values_do_not_override_typed_defaults(
     monkeypatch.delenv("MINERU_LOCAL_ENDPOINT", raising=False)
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
 
-    DlightragConfig(
+    cfg = DlightragConfig(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -1490,6 +1519,7 @@ def test_blank_sidecar_values_do_not_override_typed_defaults(
             startup_probe=False,
         ),
     )
+    _bridge_lightrag_env(cfg)
 
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == MinerUSidecarConfig().local_endpoint

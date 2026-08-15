@@ -24,6 +24,13 @@ from dlightrag.runtime.errors import (
     CheckpointError,
     CheckpointErrorKind,
     RunExecutionError,
+    RunSchemaError,
+)
+from dlightrag.runtime.policy import (
+    ANSWER_RUN_LEASE_SECONDS,
+    MAX_CONSECUTIVE_RECOVERIES,
+    RUN_ABANDONED_ERROR_KIND,
+    RUN_RETENTION_SECONDS,
 )
 from dlightrag.runtime.records import (
     AnswerRunEvent,
@@ -48,6 +55,7 @@ from dlightrag.runtime.records import (
     answer_run_request_fingerprint,
     artifact_digest,
     canonical_run_request_json,
+    parse_run_id,
 )
 from dlightrag.runtime.store import AnswerRunStore
 from dlightrag.runtime.subscription import (
@@ -58,6 +66,7 @@ from dlightrag.runtime.subscription import (
 )
 
 __all__ = [
+    "ANSWER_RUN_LEASE_SECONDS",
     "AnswerRunEvent",
     "AnswerRunEventType",
     "AnswerRunCancelledError",
@@ -78,6 +87,7 @@ __all__ = [
     "LeaseRenewal",
     "LeaseLostError",
     "MAINTENANCE_SECONDS",
+    "MAX_CONSECUTIVE_RECOVERIES",
     "PendingArtifact",
     "PendingArtifactReference",
     "RunArtifactReference",
@@ -87,6 +97,7 @@ __all__ = [
     "RunCancelledError",
     "RunCoordinator",
     "RunExecutionError",
+    "RunSchemaError",
     "RunExecutor",
     "RunEventBroker",
     "RunSession",
@@ -100,9 +111,12 @@ __all__ = [
     "answer_run_request_fingerprint",
     "artifact_digest",
     "canonical_run_request_json",
+    "parse_run_id",
     "CHECKPOINT_SCHEMA_VERSION",
     "MAX_CHECKPOINT_BYTES",
     "RUN_HEARTBEAT_SECONDS",
+    "RUN_ABANDONED_ERROR_KIND",
+    "RUN_RETENTION_SECONDS",
     "EVENT_POLL_SECONDS",
     "EventReader",
     "follow_run_events",

@@ -6,8 +6,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from dlightrag.core.service import RAGService
 
 _FAKE_STORAGE_ATTRS = ("full_docs", "chunks_vdb", "doc_status")
@@ -38,6 +36,10 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
     service._cancel_checker = None
     service.enable_vlm = False
     service._table_schema = None
+    maintenance = MagicMock()
+    maintenance.clean_orphan_rows = AsyncMock(return_value=0)
+    maintenance.delete_workspace_record = AsyncMock(return_value=True)
+    cast(Any, service)._corpus_backend = SimpleNamespace(maintenance=maintenance)
 
     # Create fake LightRAG storages (dynamic-discovery friendly)
     lightrag = _FakeLightRAG()
@@ -53,23 +55,6 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
     service._metadata_index.clear = AsyncMock()
 
     return service
-
-
-@pytest.fixture(autouse=True)
-def _pg_cleanup_patches():
-    """Avoid real PostgreSQL cleanup calls in unit tests."""
-    with (
-        patch(
-            "dlightrag.core.reset._clean_orphan_tables",
-            new_callable=AsyncMock,
-            return_value=0,
-        ),
-        patch(
-            "dlightrag.core.reset._clean_workspace_meta",
-            new_callable=AsyncMock,
-        ),
-    ):
-        yield
 
 
 class TestAresetPhase0:
@@ -163,19 +148,14 @@ class TestAresetPhase3:
 
     async def test_runs_on_pg_backend(self) -> None:
         service = _make_service()
-        with (
-            patch(
-                "dlightrag.core.reset._clean_orphan_tables",
-                new_callable=AsyncMock,
-                return_value=3,
-            ),
-            patch(
-                "dlightrag.core.reset._clean_workspace_meta",
-                new_callable=AsyncMock,
-            ),
-        ):
-            result = await service.areset()
+        maintenance = cast(Any, service._corpus_backend).maintenance
+        maintenance.clean_orphan_rows.return_value = 3
+
+        result = await service.areset()
+
         assert result["orphan_tables_cleaned"] == 3
+        maintenance.clean_orphan_rows.assert_awaited_once_with("test_ws", dry_run=False)
+        maintenance.delete_workspace_record.assert_awaited_once_with("test_ws")
 
 
 class TestAresetPhase4:

@@ -11,21 +11,21 @@ finalizer, or reconnect has to commit it afterwards.
 
 from __future__ import annotations
 
-import datetime
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
 import asyncpg
 
-from dlightrag.runtime import (
-    AnswerRunRecord,
-    PendingArtifact,
-    PendingArtifactReference,
-    RunDeletion,
+from dlightrag.adapters.postgres._errors import is_postgres_unavailable
+from dlightrag.adapters.postgres._migrations import (
+    ForeignKeyRequirement,
+    Migration,
+    TableRequirement,
+    apply_migrations,
+    verify_migrations,
 )
-from dlightrag.storage.answer_runs import (
+from dlightrag.adapters.postgres.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
     ANSWER_RUN_SCHEMA_TABLES,
@@ -33,12 +33,19 @@ from dlightrag.storage.answer_runs import (
     answer_run_columns,
     answer_run_record,
 )
-from dlightrag.storage.migrations import (
-    ForeignKeyRequirement,
-    Migration,
-    TableRequirement,
-    apply_migrations,
-    verify_migrations,
+from dlightrag.runtime import (
+    PendingArtifact,
+    PendingArtifactReference,
+    RunDeletion,
+    RunSchemaError,
+)
+from dlightrag.web.conversation_models import (
+    AnswerTurnCreation,
+    ConversationSnapshot,
+    ConversationSubmissionConflict,
+    LinkedTurn,
+    WebConversationSchemaError,
+    WebConversationUnavailableError,
 )
 
 _CREATE_CONVERSATIONS = """
@@ -419,45 +426,6 @@ SELECT count(*)::int AS count FROM deleted
 """
 
 
-@dataclass(frozen=True, slots=True)
-class LinkedTurn:
-    """One conversation entry and the authoritative run state behind it."""
-
-    turn_id: str
-    turn_number: int
-    submission_id: str
-    created_at: datetime.datetime
-    run: AnswerRunRecord
-
-    @property
-    def answer_run_id(self) -> str:
-        return self.run.run_id
-
-
-@dataclass(frozen=True, slots=True)
-class ConversationSnapshot:
-    principal_id: str
-    conversation_id: str
-    content_revision: int
-    title: str | None
-    created_at: datetime.datetime
-    updated_at: datetime.datetime
-    turns: tuple[LinkedTurn, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AnswerTurnCreation:
-    """The run and the conversation entry one submission durably created."""
-
-    turn: LinkedTurn
-    summary: dict[str, Any]
-    replayed: bool
-
-
-class ConversationSubmissionConflict(RuntimeError):
-    """One principal reused a submission id with a different conversation or input."""
-
-
 #: The two indexes that make one submission id one turn in the owner's namespace.
 #: Only these mean "this key is already accepted"; any other violation is a bug.
 _SUBMISSION_KEY_INDEXES = frozenset(
@@ -488,22 +456,32 @@ class PGWebConversationStore:
         self._initialized = False
 
     async def _run_read(self, operation, *, retry: bool = True):
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
+        try:
+            if self._pool is not None:
+                async with self._pool.acquire() as conn:
+                    return await operation(conn)
 
-        from dlightrag.storage.pool import pg_pool
+            from dlightrag.adapters.postgres._pool import pg_pool
 
-        return await (pg_pool.run(operation) if retry else pg_pool.run_once(operation))
+            return await (pg_pool.run(operation) if retry else pg_pool.run_once(operation))
+        except Exception as exc:
+            if is_postgres_unavailable(exc):
+                raise WebConversationUnavailableError from exc
+            raise
 
     async def _run_write(self, operation):
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
+        try:
+            if self._pool is not None:
+                async with self._pool.acquire() as conn:
+                    return await operation(conn)
 
-        from dlightrag.storage.pool import pg_pool
+            from dlightrag.adapters.postgres._pool import pg_pool
 
-        return await pg_pool.run_once(operation)
+            return await pg_pool.run_once(operation)
+        except Exception as exc:
+            if is_postgres_unavailable(exc):
+                raise WebConversationUnavailableError from exc
+            raise
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         """Create the Web conversation schema, or validate it (reader).
@@ -521,23 +499,27 @@ class PGWebConversationStore:
                     scope=ANSWER_RUN_MIGRATION_SCOPE,
                     migrations=ANSWER_RUN_MIGRATIONS,
                     tables=ANSWER_RUN_SCHEMA_TABLES,
+                    schema_error=RunSchemaError,
                 )
                 await verify_migrations(
                     conn,
                     scope="web_conversations",
                     migrations=WEB_CONVERSATION_MIGRATIONS,
                     tables=WEB_CONVERSATION_SCHEMA_TABLES,
+                    schema_error=WebConversationSchemaError,
                 )
                 return
             await apply_migrations(
                 conn,
                 scope=ANSWER_RUN_MIGRATION_SCOPE,
                 migrations=ANSWER_RUN_MIGRATIONS,
+                schema_error=RunSchemaError,
             )
             await apply_migrations(
                 conn,
                 scope="web_conversations",
                 migrations=WEB_CONVERSATION_MIGRATIONS,
+                schema_error=WebConversationSchemaError,
             )
 
         await self._run_write(_operation)

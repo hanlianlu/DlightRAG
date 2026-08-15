@@ -4,6 +4,7 @@
 import asyncio
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,7 +16,11 @@ def _coordinator() -> IngestJobCoordinator:
     async def _unused(workspace: str):  # pragma: no cover - never awaited here
         raise AssertionError("service lookup is not part of cancellation")
 
-    return IngestJobCoordinator(_unused, input_root=Path("/tmp/dlightrag-test"))
+    return IngestJobCoordinator(
+        _unused,
+        input_root=Path("/tmp/dlightrag-test"),
+        store=AsyncMock(),
+    )
 
 
 async def _register(coordinator: IngestJobCoordinator, job_id: str, workspace: str) -> None:

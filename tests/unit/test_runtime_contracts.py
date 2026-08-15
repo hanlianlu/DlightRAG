@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parents[2]
 _STATUS_VALUES = ("queued", "running", "succeeded", "failed", "cancelled")
 _PHASE_VALUES = ("planning", "searching", "researching", "generating")
 _RUNTIME_RECORD_NAMES = frozenset(
@@ -88,7 +89,7 @@ def test_run_status_and_phase_literals_have_one_runtime_owner() -> None:
         _STATUS_VALUES: [],
         _PHASE_VALUES: [],
     }
-    for path in Path("src/dlightrag").rglob("*.py"):
+    for path in (_ROOT / "src/dlightrag").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not (
@@ -106,17 +107,17 @@ def test_run_status_and_phase_literals_have_one_runtime_owner() -> None:
             if values in owners:
                 owners[values].append(path)
 
-    expected = [Path("src/dlightrag/runtime/contracts.py")]
+    expected = [_ROOT / "src/dlightrag/runtime/contracts.py"]
     assert owners[_STATUS_VALUES] == expected
     assert owners[_PHASE_VALUES] == expected
 
 
-def test_postgres_store_does_not_publish_or_supply_runtime_records() -> None:
-    storage_path = Path("src/dlightrag/storage/answer_runs.py")
-    storage_tree = ast.parse(storage_path.read_text(encoding="utf-8"), filename=str(storage_path))
+def test_postgres_adapter_does_not_publish_or_supply_runtime_records() -> None:
+    adapter_path = _ROOT / "src/dlightrag/adapters/postgres/answer_runs.py"
+    adapter_tree = ast.parse(adapter_path.read_text(encoding="utf-8"), filename=str(adapter_path))
     public_names = {
         item.value
-        for node in storage_tree.body
+        for node in adapter_tree.body
         if isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
         and isinstance(node.value, ast.List)
@@ -126,11 +127,12 @@ def test_postgres_store_does_not_publish_or_supply_runtime_records() -> None:
     assert public_names.isdisjoint(_RUNTIME_RECORD_NAMES)
 
     stale_imports: list[tuple[Path, str]] = []
-    for path in Path("src/dlightrag").rglob("*.py"):
+    for path in (_ROOT / "src/dlightrag").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not (
-                isinstance(node, ast.ImportFrom) and node.module == "dlightrag.storage.answer_runs"
+                isinstance(node, ast.ImportFrom)
+                and node.module == "dlightrag.adapters.postgres.answer_runs"
             ):
                 continue
             stale_imports.extend(

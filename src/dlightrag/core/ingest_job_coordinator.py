@@ -13,11 +13,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from dlightrag_ai.telemetry import safe_log_text
 
 from dlightrag.core.client_contracts import SourceType
-from dlightrag.storage.ingest_jobs import (
-    JOB_HEARTBEAT_SECONDS,
-    JOB_LEASE_SECONDS,
-    JOB_ORPHAN_AFTER_SECONDS,
-)
 from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
@@ -25,9 +20,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+JOB_RETENTION_SECONDS = 7 * 24 * 3600
+JOB_LEASE_SECONDS = 300
+JOB_HEARTBEAT_SECONDS = 60
+JOB_ORPHAN_AFTER_SECONDS = 12 * JOB_LEASE_SECONDS
+JOB_ABANDONED_ERROR = "ingest job abandoned after process exit"
+JOB_STATES_WITH_RESULT = ("succeeded", "partial")
+
 
 class LeaseLostError(RuntimeError):
     """This worker's ingest-job lease was taken over by another owner mid-run."""
+
+
+class IngestJobSchemaError(RuntimeError):
+    """The durable ingest-job schema is incompatible with this coordinator revision."""
 
 
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
@@ -36,6 +42,9 @@ _JOB_SWEEP_SECONDS = JOB_ORPHAN_AFTER_SECONDS // 2
 
 
 class IngestJobStore(Protocol):
+    async def initialize(self) -> None:
+        raise NotImplementedError
+
     async def create(
         self,
         *,
@@ -89,11 +98,17 @@ class IngestJobCoordinator:
     """Manage durable ingest jobs, recovery, and in-process task lifecycle."""
 
     def __init__(
-        self, get_service: Callable[[str], Awaitable[RAGService]], *, input_root: Path
+        self,
+        get_service: Callable[[str], Awaitable[RAGService]],
+        *,
+        input_root: Path,
+        store: IngestJobStore,
     ) -> None:
         self._get_service = get_service
         self._input_root = input_root
-        self._store: IngestJobStore | None = None
+        self._store = store
+        self._store_started = False
+        self._store_lock = asyncio.Lock()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._workspaces: dict[str, str] = {}
         self._recovery_started = False
@@ -102,15 +117,16 @@ class IngestJobCoordinator:
         self._lease_owner = uuid.uuid4().hex
 
     async def get_store(self) -> IngestJobStore:
-        if self._store is None:
-            from dlightrag.storage.ingest_jobs import PGIngestJobStore
-
-            store = PGIngestJobStore()
-            await store.initialize()
-            self._store = store
-            # Recovery gets first refusal on a job sitting at the orphan boundary.
-            await self._recover_jobs(store)
-            self._sweeper = asyncio.create_task(self._sweep_jobs(store))
+        if not self._store_started:
+            async with self._store_lock:
+                if self._store_started:
+                    return self._store
+                await self._store.initialize()
+                store = self._store
+                # Recovery gets first refusal on a job sitting at the orphan boundary.
+                await self._recover_jobs(store)
+                self._sweeper = asyncio.create_task(self._sweep_jobs(store))
+                self._store_started = True
         return self._store
 
     async def start_recovery(self) -> None:
@@ -560,4 +576,4 @@ def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[st
     return 0, 0, len(errors), errors
 
 
-__all__ = ["IngestJobCoordinator"]
+__all__ = ["IngestJobCoordinator", "IngestJobSchemaError"]

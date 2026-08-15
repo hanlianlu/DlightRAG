@@ -58,8 +58,9 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from dlightrag.adapters.postgres._pool import pg_pool
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
     from dlightrag.core.service import RAGService
-    from dlightrag.storage.pool import pg_pool
 
     conn_kwargs = pg_conn_kwargs_from_env()
     workspace = make_workspace_name()
@@ -71,7 +72,11 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     set_config(cfg)
     install_fake_model_functions(monkeypatch, dim=cfg.embedding.dim)
 
-    service = await RAGService.acreate(config=cfg, enable_vlm=True)
+    service = await RAGService.acreate(
+        config=cfg,
+        enable_vlm=True,
+        corpus_backend_factory=PGCorpusBackendFactory(cfg),
+    )
     doc_path = tmp_path / "pg18-native-smoke.md"
     doc_text = (
         "# PG18 native smoke document\n\n"
@@ -167,11 +172,12 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     reads the corpus through read-only sessions while its DlightRAG domain pool
     stays writable for durable Answer run state.
     """
+    from dlightrag.adapters.postgres._pool import pg_pool
+    from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
     from dlightrag.config import reset_config, set_config
     from dlightrag.core.service import RAGService
     from dlightrag.runtime import answer_run_request_fingerprint
-    from dlightrag.storage.answer_runs import PGAnswerRunStore
-    from dlightrag.storage.pool import pg_pool
 
     conn_kwargs = pg_conn_kwargs_from_env()
     workspace = make_workspace_name("reader")
@@ -184,7 +190,10 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     install_fake_model_functions(monkeypatch, dim=writer_cfg.embedding.dim)
 
     # ── Writer: provision schema + ingest ──────────────────────────────
-    writer = await RAGService.acreate(config=writer_cfg)
+    writer = await RAGService.acreate(
+        config=writer_cfg,
+        corpus_backend_factory=PGCorpusBackendFactory(writer_cfg),
+    )
     try:
         doc_path = tmp_path / "reader-smoke.md"
         doc_path.write_text(
@@ -211,7 +220,10 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     reader_cfg = writer_cfg.model_copy(update={"service_role": "reader"})
     set_config(reader_cfg)
     pg_pool.bind(reader_cfg)
-    reader = await RAGService.acreate(config=reader_cfg)
+    reader = await RAGService.acreate(
+        config=reader_cfg,
+        corpus_backend_factory=PGCorpusBackendFactory(reader_cfg),
+    )
     try:
         assert reader.config.is_reader
 
@@ -251,7 +263,10 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     # ── Cleanup: remove the workspace via a writer ─────────────────────
     set_config(writer_cfg)
     pg_pool.bind(writer_cfg)
-    cleanup = await RAGService.acreate(config=writer_cfg)
+    cleanup = await RAGService.acreate(
+        config=writer_cfg,
+        corpus_backend_factory=PGCorpusBackendFactory(writer_cfg),
+    )
     try:
         await cleanup.areset(keep_files=False)
     finally:

@@ -20,7 +20,7 @@ from typing import Any
 
 from dlightrag_rag.retrieval import MetadataScope
 
-from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
+from dlightrag.adapters.postgres.identifiers import pg_identifier, pg_qualified_identifier
 
 logger = logging.getLogger(__name__)
 

@@ -4,6 +4,7 @@
 import datetime
 import hashlib
 import json
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -40,6 +41,14 @@ def answer_run_request_fingerprint(request: Mapping[str, Any]) -> str:
 def artifact_digest(content: bytes) -> str:
     """Content address for one immutable run artifact."""
     return hashlib.sha256(content).hexdigest()
+
+
+def parse_run_id(run_id: str) -> uuid.UUID | None:
+    """Parse an opaque run id; malformed caller input reads as unknown."""
+    try:
+        return uuid.UUID(str(run_id))
+    except ValueError:
+        return None
 
 
 class IdempotencyKeyConflict(RuntimeError):
@@ -227,4 +236,5 @@ __all__ = [
     "answer_run_request_fingerprint",
     "artifact_digest",
     "canonical_run_request_json",
+    "parse_run_id",
 ]

@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 import asyncpg
+from dlightrag_rag.ports import CorpusSchemaError
 from lightrag.kg.pgtable_impl import PGTableGraphStorage
 from lightrag.kg.postgres_impl import ClientManager, PostgreSQLDB, namespace_to_table_name
 from lightrag.kg.shared_storage import (
@@ -30,25 +31,10 @@ from lightrag.kg.shared_storage import (
 from lightrag.lightrag import StoragesStatus
 from pgvector.asyncpg import register_vector
 
-from dlightrag.storage.migrations import SchemaValidationError
-from dlightrag.storage.sql_identifiers import pg_qualified_identifier
+from dlightrag.adapters.postgres.identifiers import pg_qualified_identifier
+from dlightrag.core.contract_guard import READ_ONLY_STORAGE_ATTRS
 
 logger = logging.getLogger(__name__)
-
-READ_ONLY_STORAGE_ATTRS = (
-    "full_docs",
-    "text_chunks",
-    "full_entities",
-    "full_relations",
-    "entity_chunks",
-    "relation_chunks",
-    "entities_vdb",
-    "relationships_vdb",
-    "chunks_vdb",
-    "chunk_entity_relation_graph",
-    "llm_response_cache",
-    "doc_status",
-)
 
 # PGTableGraphStorage keeps the whole graph in two shared tables scoped by
 # (workspace, namespace). LightRAG's namespace_to_table_name() has no entry
@@ -251,7 +237,7 @@ def _required_tables(storages: list[Any]) -> set[str]:
 async def _verify_reader_session(conn: asyncpg.Connection) -> None:
     read_only = await conn.fetchval("SHOW transaction_read_only")
     if str(read_only).lower() != "on":
-        raise SchemaValidationError(
+        raise CorpusSchemaError(
             "LightRAG reader pool is not read-only; expected default_transaction_read_only=on"
         )
 
@@ -267,7 +253,7 @@ async def _verify_required_tables(
                 f"SELECT 1 FROM {pg_qualified_identifier(table)} LIMIT 1"  # noqa: S608
             )
         except Exception as exc:
-            raise SchemaValidationError(
+            raise CorpusSchemaError(
                 f"LightRAG table {table} is missing or unreadable; initialize it on the writer first"
             ) from exc
 

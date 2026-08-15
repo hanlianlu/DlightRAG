@@ -4,11 +4,13 @@
 import json
 from typing import Any
 
-from dlightrag.storage.ingest_jobs import (
+from dlightrag.adapters.postgres.ingest_jobs import (
+    PGIngestJobStore,
+)
+from dlightrag.core.ingest_job_coordinator import (
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,
-    PGIngestJobStore,
 )
 
 
@@ -409,7 +411,7 @@ async def test_ingest_job_store_deletes_workspace_jobs() -> None:
     conn.fetchval_results = [4]
     store = PGIngestJobStore(pool=_Pool(conn))
 
-    deleted = await store.delete_for_workspace("Project A")
+    deleted = await store.delete_for_workspace("project_a")
 
     assert deleted == 4
     query, args = conn.fetchvals[0]

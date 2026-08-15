@@ -5,17 +5,12 @@ import argparse
 import asyncio
 import logging
 
-import asyncpg
-
+from dlightrag.adapters.postgres._pool import pg_pool
+from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.retrieval.bm25 import (
-    BM25Profile,
-    profiles_from_config,
     rebuild_postgres_bm25,
-    required_postgres_extensions,
 )
-from dlightrag.storage.pool import pg_pool
-from dlightrag.storage.postgres_version import ensure_postgres_extensions, ensure_postgres_major
 
 DEFAULT_BATCH_SIZE = 500
 
@@ -49,18 +44,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--yes is required; stop DlightRAG writers first")
 
 
-async def _ensure_bm25_prerequisites(
-    config: DlightragConfig,
-    profiles: tuple[BM25Profile, ...],
-) -> None:
-    conn = await asyncpg.connect(**config.pg_connection_kwargs())
-    try:
-        await ensure_postgres_major(conn)
-        await ensure_postgres_extensions(conn, required_postgres_extensions(profiles))
-    finally:
-        await conn.close()
-
-
 async def run_rebuild_bm25(
     *,
     config: DlightragConfig | None = None,
@@ -79,10 +62,11 @@ async def run_rebuild_bm25(
     if resolved_config.is_reader:
         raise SystemExit("BM25 rebuild requires the writer service role")
 
-    profiles = profiles_from_config(resolved_config.bm25_profiles)
     pg_pool.bind(resolved_config)
     try:
-        await _ensure_bm25_prerequisites(resolved_config, profiles)
+        backend = PGCorpusBackendFactory(resolved_config).create()
+        async with backend.coordination.workspace_initialization():
+            pass
         return await rebuild_postgres_bm25(
             resolved_config,
             pool=pg_pool,

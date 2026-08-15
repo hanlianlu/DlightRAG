@@ -406,6 +406,9 @@ class _InMemoryIngestJobStore:
         self.pruned = False
         self.claim_results: dict[str, bool] = {}
 
+    async def initialize(self) -> None:
+        return None
+
     async def create(
         self,
         *,
@@ -565,22 +568,19 @@ class TestGetService:
 class TestWorkspaceCreation:
     """Test workspace creation registers discoverable workspace metadata."""
 
-    @patch("dlightrag.storage.workspaces.PGWorkspaceRegistry")
     async def test_initialize_registry_uses_canonical_workspace_id(
         self,
-        mock_registry_cls: MagicMock,
         test_cfg: DlightragConfig,
     ) -> None:
-        registry = MagicMock()
-        registry.initialize = AsyncMock()
-        registry.upsert = AsyncMock()
-        mock_registry_cls.return_value = registry
         cfg = test_cfg.model_copy(update={"workspace": "test-fallback-ws"})
         manager = RAGServiceManager(config=cfg)
+        maintenance = AsyncMock()
+        manager._corpus_maintenance = maintenance
 
         await manager._initialize_workspace_registry()
 
-        registry.upsert.assert_awaited_once_with(
+        maintenance.initialize.assert_awaited_once_with(validate_only=False)
+        maintenance.register_workspace.assert_awaited_once_with(
             workspace="test_fallback_ws",
             display_name="test-fallback-ws",
             embedding_model=cfg.embedding.model,
@@ -938,7 +938,7 @@ class TestAnswerViaEngine:
     @pytest.fixture(autouse=True)
     def _stub_planning_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            "dlightrag.adapters.postgres.pg_metadata_index.PGMetadataIndex.get_field_schema",
             AsyncMock(return_value={"columns": [], "custom_keys": []}),
         )
 
@@ -1544,7 +1544,7 @@ class TestDelegation:
 
         with (
             patch(
-                "dlightrag.storage.pg_metadata_index.PGMetadataIndex",
+                "dlightrag.adapters.postgres.pg_metadata_index.PGMetadataIndex",
                 return_value=metadata_index,
             ) as index_type,
             patch(
@@ -2022,9 +2022,9 @@ class TestDegradedMode:
     @pytest.fixture(autouse=True)
     def _isolate_workspace_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def fake_initialize_workspace_registry(manager: RAGServiceManager) -> None:
-            registry = AsyncMock()
-            registry.list.return_value = []
-            manager._workspace_registry = registry
+            maintenance = AsyncMock()
+            maintenance.list_workspace_records.return_value = ()
+            manager._corpus_maintenance = maintenance
 
         monkeypatch.setattr(
             RAGServiceManager,
@@ -2407,16 +2407,16 @@ class TestWorkspaceDiscovery:
 
     async def test_pg_discovery(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        manager._workspace_registry = AsyncMock()
-        manager._workspace_registry.list = AsyncMock(
-            return_value=[
+        manager._corpus_maintenance = AsyncMock()
+        manager._corpus_maintenance.list_workspace_records = AsyncMock(
+            return_value=(
                 {
                     "workspace": "project_a",
                     "display_name": "Project A",
                     "created_at": datetime(2026, 5, 25, tzinfo=UTC),
                 },
                 {"workspace": "project_b", "display_name": "Project B"},
-            ]
+            )
         )
 
         result = await manager.alist_workspaces()
@@ -2426,35 +2426,37 @@ class TestWorkspaceDiscovery:
 
     async def test_workspace_records_are_json_safe(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        manager._workspace_registry = AsyncMock()
-        manager._workspace_registry.list = AsyncMock(
-            return_value=[
+        manager._corpus_maintenance = AsyncMock()
+        manager._corpus_maintenance.list_workspace_records = AsyncMock(
+            return_value=(
                 {
                     "workspace": "project_a",
                     "display_name": "Project A",
                     "embedding_model": "voyage-multimodal-3.5",
                     "created_at": datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
                     "updated_at": datetime(2026, 5, 25, 12, 1, tzinfo=UTC),
-                }
-            ]
+                },
+            )
         )
 
         records = await manager.alist_workspace_records()
 
-        assert records == [
-            {
-                "workspace": "project_a",
-                "display_name": "Project A",
-                "embedding_model": "voyage-multimodal-3.5",
-                "created_at": "2026-05-25T12:00:00+00:00",
-                "updated_at": "2026-05-25T12:01:00+00:00",
-            }
-        ]
+        project = next(row for row in records if row["workspace"] == "project_a")
+        assert project == {
+            "workspace": "project_a",
+            "display_name": "Project A",
+            "embedding_model": "voyage-multimodal-3.5",
+            "created_at": "2026-05-25T12:00:00+00:00",
+            "updated_at": "2026-05-25T12:01:00+00:00",
+        }
+        assert any(row["workspace"] == test_cfg.workspace for row in records)
 
     async def test_fallback_returns_default(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        manager._workspace_registry = AsyncMock()
-        manager._workspace_registry.list = AsyncMock(side_effect=RuntimeError("registry down"))
+        manager._corpus_maintenance = AsyncMock()
+        manager._corpus_maintenance.list_workspace_records = AsyncMock(
+            side_effect=RuntimeError("registry down")
+        )
 
         result = await manager.alist_workspaces()
 
@@ -2481,7 +2483,7 @@ class TestPlannerSchemaScope:
             return schemas[workspaces]
 
         monkeypatch.setattr(
-            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            "dlightrag.adapters.postgres.pg_metadata_index.PGMetadataIndex.get_field_schema",
             get_field_schema,
         )
 
@@ -2510,7 +2512,7 @@ class TestPlannerSchemaScope:
         manager = RAGServiceManager(config=test_cfg)
         get_field_schema = AsyncMock(return_value={"columns": [], "custom_keys": ["department"]})
         monkeypatch.setattr(
-            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            "dlightrag.adapters.postgres.pg_metadata_index.PGMetadataIndex.get_field_schema",
             get_field_schema,
         )
 
@@ -2535,7 +2537,7 @@ class TestPlannerSchemaScope:
             return_value={"columns": [], "custom_keys": ["department", "jurisdiction"]}
         )
         monkeypatch.setattr(
-            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            "dlightrag.adapters.postgres.pg_metadata_index.PGMetadataIndex.get_field_schema",
             get_field_schema,
         )
 
@@ -2552,7 +2554,7 @@ class TestPlannerSchemaScope:
         manager = RAGServiceManager(config=test_cfg)
         get_field_schema = AsyncMock(return_value={"columns": [], "custom_keys": []})
         monkeypatch.setattr(
-            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            "dlightrag.adapters.postgres.pg_metadata_index.PGMetadataIndex.get_field_schema",
             get_field_schema,
         )
 
@@ -2568,7 +2570,7 @@ class TestPlannerSchemaScope:
         manager = RAGServiceManager(config=test_cfg)
         get_field_schema = AsyncMock(return_value={"columns": [], "custom_keys": []})
         monkeypatch.setattr(
-            "dlightrag.storage.pg_metadata_index.PGMetadataIndex.get_field_schema",
+            "dlightrag.adapters.postgres.pg_metadata_index.PGMetadataIndex.get_field_schema",
             get_field_schema,
         )
 

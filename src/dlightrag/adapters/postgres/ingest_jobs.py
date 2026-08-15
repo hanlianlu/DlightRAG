@@ -4,24 +4,17 @@
 import json
 from typing import Any
 
-from dlightrag.storage.migrations import Migration, apply_migrations
-from dlightrag.utils import normalize_workspace
+from dlightrag.adapters.postgres._migrations import Migration, apply_migrations
+from dlightrag.core.ingest_job_coordinator import (
+    JOB_ABANDONED_ERROR,
+    JOB_ORPHAN_AFTER_SECONDS,
+    JOB_RETENTION_SECONDS,
+    IngestJobSchemaError,
+)
 
 TABLE = "dlightrag_ingest_jobs"
-JOB_RETENTION_SECONDS = 7 * 24 * 3600
-JOB_LEASE_SECONDS = 300
-JOB_HEARTBEAT_SECONDS = 60
-# Liveness is the lease, nothing else: a live worker renews it every heartbeat.
-# This window is how long after a lease lapses we still expect its owner (or a
-# restarting process) to reclaim the job, and it partitions orphans exactly --
-# fresher ones are recovered, older ones are failed.
-JOB_ORPHAN_AFTER_SECONDS = 12 * JOB_LEASE_SECONDS
 # Caps every bulk statement here, not just the pruning ones.
 _BATCH_LIMIT = 1000
-ABANDONED_ERROR = "ingest job abandoned after process exit"
-# 'partial' means some items landed and some did not, so the result is still
-# worth returning -- unlike 'failed', where nothing did.
-JOB_STATES_WITH_RESULT = ("succeeded", "partial")
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_ingest_jobs (
@@ -265,7 +258,7 @@ class PGIngestJobStore:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
 
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         return await pg_pool.run(operation)
 
@@ -275,6 +268,7 @@ class PGIngestJobStore:
                 conn,
                 scope="ingest_jobs",
                 migrations=_SCHEMA_MIGRATIONS,
+                schema_error=IngestJobSchemaError,
             )
 
         await self._run(_operation)
@@ -287,7 +281,7 @@ class PGIngestJobStore:
         source_type: str,
         request: dict[str, Any],
     ) -> None:
-        workspace_id = normalize_workspace(workspace)
+        workspace_id = str(workspace).strip()
         if not workspace_id:
             raise ValueError("workspace cannot be empty")
 
@@ -390,7 +384,7 @@ class PGIngestJobStore:
             failed = await conn.fetchval(
                 _MARK_ABANDONED,
                 JOB_ORPHAN_AFTER_SECONDS,
-                json.dumps([ABANDONED_ERROR]),
+                json.dumps([JOB_ABANDONED_ERROR]),
                 _BATCH_LIMIT,
                 _MAX_JOB_ERRORS,
             )
@@ -404,7 +398,7 @@ class PGIngestJobStore:
 
     async def delete_for_workspace(self, workspace: str) -> int:
         """Delete all ingest job rows for a workspace."""
-        workspace_id = normalize_workspace(workspace)
+        workspace_id = str(workspace).strip()
         if not workspace_id:
             raise ValueError("workspace cannot be empty")
 
@@ -433,11 +427,5 @@ def _json_value(value: Any, *, default: Any) -> Any:
 
 
 __all__ = [
-    "ABANDONED_ERROR",
-    "JOB_HEARTBEAT_SECONDS",
-    "JOB_LEASE_SECONDS",
-    "JOB_ORPHAN_AFTER_SECONDS",
-    "JOB_RETENTION_SECONDS",
-    "JOB_STATES_WITH_RESULT",
     "PGIngestJobStore",
 ]

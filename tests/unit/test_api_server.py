@@ -199,11 +199,11 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
         model="test-model",
         failure_kind=None,
     )
+    from dlightrag.adapters.postgres.corpus import PGReadinessProbe
     from dlightrag.core.answer.capability import answer_image_capability_summary
-    from dlightrag.core.servicemanager import _postgres_not_ready_detail
 
     manager.health = ApplicationHealth(
-        readiness_probe=lambda: _postgres_not_ready_detail(test_config),
+        readiness_probe=PGReadinessProbe(test_config),
     )
     manager.health.mark_ready()
     manager.health.set_answer_image_capability(
@@ -1153,7 +1153,7 @@ class TestHealthEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
@@ -1219,7 +1219,7 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         mock_config_no_auth_override.auth_mode = "simple"
         mock_config_no_auth_override.api_auth_token = "required-elsewhere"
@@ -1240,7 +1240,7 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         mock_manager.health.mark_closed()
         probe = AsyncMock(return_value="off")
@@ -1264,7 +1264,7 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         mock_config.service_role = "reader"
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
@@ -1286,7 +1286,7 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
         app.state.manager = mock_manager
@@ -1307,13 +1307,17 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import dlightrag.storage.lightrag_readonly as readonly_module
-        from dlightrag.storage.pool import pg_pool
+        import dlightrag.adapters.postgres.corpus as corpus_module
+        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.corpus import PGReadinessProbe
 
         mock_config.service_role = "reader"
+        mock_manager.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
+        mock_manager.health.mark_ready()
+        app.state.health = mock_manager.health
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         monkeypatch.setattr(
-            readonly_module,
+            corpus_module,
             "verify_reader_corpus_session",
             AsyncMock(side_effect=RuntimeError("corpus pool is not read-only")),
         )
@@ -1335,13 +1339,17 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import dlightrag.storage.lightrag_readonly as readonly_module
-        from dlightrag.storage.pool import pg_pool
+        import dlightrag.adapters.postgres.corpus as corpus_module
+        from dlightrag.adapters.postgres._pool import pg_pool
+        from dlightrag.adapters.postgres.corpus import PGReadinessProbe
 
         mock_config.service_role = "reader"
+        mock_manager.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
+        mock_manager.health.mark_ready()
+        app.state.health = mock_manager.health
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         corpus_probe = AsyncMock()
-        monkeypatch.setattr(readonly_module, "verify_reader_corpus_session", corpus_probe)
+        monkeypatch.setattr(corpus_module, "verify_reader_corpus_session", corpus_probe)
         app.state.manager = mock_manager
 
         response = await client.get("/ready")
@@ -1357,7 +1365,7 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
@@ -1376,7 +1384,7 @@ class TestReadinessEndpoint:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A burst against a cold cache costs one round trip, not one per caller."""
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         started = asyncio.Event()
         release = asyncio.Event()
@@ -1405,7 +1413,7 @@ class TestReadinessEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         started = asyncio.Event()
         release = asyncio.Event()
@@ -1455,7 +1463,7 @@ class TestReadinessEndpoint:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Startup and schema transitions must never be served from a stale verdict."""
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)

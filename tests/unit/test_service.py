@@ -4,8 +4,10 @@
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -18,14 +20,18 @@ from dlightrag.core.service import RAGService, RemoteIngestWindowProgress
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 
 
-class _FakePostgresConn:
-    def __init__(self, *, max_connections: str = "80") -> None:
-        self.max_connections = max_connections
-
-    async def fetchval(self, sql: str, *args) -> str:
-        if sql == "SHOW max_connections":
-            return self.max_connections
-        raise AssertionError(f"unexpected SQL: {sql!r}")
+def _service(
+    config: DlightragConfig,
+    *,
+    corpus_backend_factory: Any | None = None,
+) -> RAGService:
+    return RAGService(
+        config=config,
+        corpus_backend_factory=cast(
+            Any,
+            corpus_backend_factory if corpus_backend_factory is not None else MagicMock(),
+        ),
+    )
 
 
 class _FakeChatModels:
@@ -47,7 +53,7 @@ class TestRAGServiceAingest:
     """Test ingestion logic -- replace defaults, azure lifecycle."""
 
     def _make_initialized_service(self, config: DlightragConfig) -> tuple[RAGService, MagicMock]:
-        service = RAGService(config=config)
+        service = _service(config)
         service._initialized = True
         ingestion = MagicMock()
         ingestion.aingest_file = AsyncMock(return_value={"status": "success"})
@@ -57,29 +63,26 @@ class TestRAGServiceAingest:
         service._ingestion_engine = ingestion
         return service, ingestion
 
-    @patch("dlightrag.storage.workspaces.PGWorkspaceRegistry")
     async def test_workspace_meta_upsert_uses_canonical_workspace_id(
         self,
-        mock_registry_cls: MagicMock,
         test_config: DlightragConfig,
     ) -> None:
-        registry = MagicMock()
-        registry.initialize = AsyncMock()
-        registry.upsert = AsyncMock()
-        mock_registry_cls.return_value = registry
         config = test_config.model_copy(update={"workspace": "test-fallback-ws"})
-        service = RAGService(config=config)
+        service = _service(config)
+        maintenance = MagicMock()
+        maintenance.register_workspace = AsyncMock()
+        cast(Any, service)._corpus_backend = SimpleNamespace(maintenance=maintenance)
 
         await service._upsert_workspace_meta()
 
-        registry.upsert.assert_awaited_once_with(
+        maintenance.register_workspace.assert_awaited_once_with(
             workspace="test_fallback_ws",
             display_name="test-fallback-ws",
             embedding_model=config.embedding.model,
         )
 
     async def test_aingest_not_initialized_raises(self, test_config: DlightragConfig) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.aingest(source_type="local", path="/tmp/f.pdf")
 
@@ -94,7 +97,10 @@ class TestRAGServiceAingest:
         monkeypatch.setattr(RAGService, "aclose", close)
 
         with pytest.raises(RuntimeError, match="initialization failed"):
-            await RAGService.acreate(config=test_config)
+            await RAGService.acreate(
+                config=test_config,
+                corpus_backend_factory=cast(Any, MagicMock()),
+            )
 
         close.assert_awaited_once()
 
@@ -181,7 +187,7 @@ class TestRAGServiceClose:
     async def test_close_defers_cancellation_until_all_resources_are_closed(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._rerank_func = AsyncMock()
         multimodal_embedder = AsyncMock()
@@ -207,7 +213,7 @@ class TestRAGServiceClose:
         service._lightrag.finalize_storages.assert_awaited_once()
 
     async def test_close_handles_errors(self, test_config: DlightragConfig) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._lightrag = MagicMock()
         service._lightrag.finalize_storages = AsyncMock(side_effect=RuntimeError("cleanup failed"))
@@ -218,7 +224,7 @@ class TestRAGServiceClose:
     async def test_close_only_closes_underlying_multimodal_embedder(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._multimodal_embedder = AsyncMock()
         service._document_embedder = MagicMock(spec=RobustDocumentEmbedder)
@@ -231,7 +237,7 @@ class TestRAGServiceClose:
     async def test_close_shuts_down_lightrag_role_worker_pools(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         lightrag = MagicMock()
         lightrag.finalize_storages = AsyncMock()
@@ -252,33 +258,14 @@ class TestRAGServiceClose:
     ) -> None:
         allow_lock = asyncio.Event()
 
-        class FakeConnection:
-            def __init__(self) -> None:
-                self.unlock_calls = 0
+        class FakeCoordination:
+            @asynccontextmanager
+            async def pipeline_recovery(self):
+                await allow_lock.wait()
+                yield
 
-            async def execute(self, sql: str, lock_key: int) -> None:
-                assert isinstance(lock_key, int)
-                if sql == "SELECT pg_advisory_lock($1)":
-                    await allow_lock.wait()
-                    return
-                assert sql == "SELECT pg_advisory_unlock($1)"
-                self.unlock_calls += 1
-
-        connection = FakeConnection()
-
-        class FakeAcquire:
-            async def __aenter__(self) -> FakeConnection:
-                return connection
-
-            async def __aexit__(self, *_exc: object) -> bool:
-                return False
-
-        pool = SimpleNamespace(acquire=lambda **_kwargs: FakeAcquire())
-        monkeypatch.setattr(
-            "dlightrag.storage.pool.pg_pool.get",
-            AsyncMock(return_value=pool),
-        )
-        service = RAGService(config=test_config)
+        service = _service(test_config)
+        cast(Any, service)._corpus_backend = SimpleNamespace(coordination=FakeCoordination())
         service._lightrag = MagicMock()
         service._lightrag.apipeline_process_enqueue_documents = AsyncMock()
 
@@ -290,7 +277,6 @@ class TestRAGServiceClose:
         await recovery
 
         service._lightrag.apipeline_process_enqueue_documents.assert_awaited_once_with()
-        assert connection.unlock_calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +290,7 @@ class TestRAGServiceRetrieve:
     def _make_retrieval_service(self, config: DlightragConfig) -> tuple[RAGService, MagicMock]:
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
-        service = RAGService(config=config)
+        service = _service(config)
         service._initialized = True
         orchestrator = MagicMock()
         orchestrator.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
@@ -526,7 +512,7 @@ class TestRAGServiceRetrieve:
         assert survivors[0]["image_data"] == "img-keep"
 
     async def test_aretrieve_not_initialized_raises(self, test_config):
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.aretrieve("query")
 
@@ -540,17 +526,17 @@ class TestRAGServiceFileManagement:
     """Test alist_ingested_files and adelete_files delegation."""
 
     async def test_alist_not_initialized_raises(self, test_config):
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.alist_ingested_files()
 
     async def test_adelete_not_initialized_raises(self, test_config):
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.adelete_files(filenames=["a.pdf"])
 
     async def test_alist_reads_lightrag_doc_status(self, test_config):
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._lightrag_stores = MagicMock()
         service._lightrag_stores.docs_by_status = AsyncMock(
@@ -568,7 +554,7 @@ class TestRAGServiceFileManagement:
         service._lightrag_stores.docs_by_status.assert_awaited_once()
 
     async def test_adelete_uses_cascade_pipeline(self, test_config):
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
@@ -611,51 +597,6 @@ class TestBuildVectorDbKwargs:
         test_config.vector_db_kwargs = {"cosine_better_than_threshold": 0.5}
         result = RAGService._build_vector_db_kwargs(test_config)
         assert result["cosine_better_than_threshold"] == 0.5
-
-
-# ---------------------------------------------------------------------------
-# TestRequiredPostgresExtensions
-# ---------------------------------------------------------------------------
-
-
-class TestRequiredPostgresExtensions:
-    """Test DlightRAG-owned PostgreSQL extension bootstrap policy."""
-
-    def test_bm25_defaults_require_textsearch_and_jieba(self, test_config: DlightragConfig) -> None:
-        test_config.bm25_enabled = True
-
-        assert RAGService._required_postgres_extensions(test_config) == (
-            "pg_textsearch",
-            "pg_jieba",
-        )
-
-    def test_bm25_disabled_requires_no_extra_extensions(self, test_config: DlightragConfig) -> None:
-        test_config.bm25_enabled = False
-
-        assert RAGService._required_postgres_extensions(test_config) == ()
-
-
-class TestPostgresConcurrencySanity:
-    """Test startup connection-budget warnings."""
-
-    async def test_warns_when_pool_budget_exceeds_postgres_headroom(
-        self,
-        test_config: DlightragConfig,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        monkeypatch.setenv("WEB_CONCURRENCY", "2")
-        test_config.postgres_lightrag_pool_max_size = 16
-        test_config.postgres_pool_max_size = 10
-        service = RAGService(config=test_config)
-
-        with caplog.at_level(logging.WARNING, logger="dlightrag.core.service"):
-            await service._check_postgres_concurrency_sanity(
-                _FakePostgresConn(max_connections="50")
-            )
-
-        assert "PostgreSQL connection budget is tight" in caplog.text
-        assert "estimated_pool_connections=52" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -831,7 +772,6 @@ class TestRAGServiceLightRAGMainPath:
     async def test_initialize_syncs_and_validates_parser_config(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        service = RAGService(config=test_config)
         events: list[str] = []
         monkeypatch.setattr(
             DlightragConfig,
@@ -856,6 +796,10 @@ class TestRAGServiceLightRAGMainPath:
             "lightrag.parser.routing.validate_parser_routing_config",
             lambda rules: events.append(f"validate:{rules}"),
         )
+        from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+        factory = PGCorpusBackendFactory(test_config)
+        service = _service(test_config, corpus_backend_factory=factory)
         monkeypatch.setattr(service, "_do_initialize_unified", AsyncMock())
 
         await service._do_initialize()
@@ -871,28 +815,16 @@ class TestRAGServiceLightRAGMainPath:
     async def test_writer_initialization_ignores_reader_attach_contract_drift(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         call_order: list[str] = []
         resume_pipeline = AsyncMock()
 
-        class FakeRecoveryConnection:
-            def __init__(self) -> None:
-                self.unlock_calls = 0
+        class FakeCoordination:
+            @asynccontextmanager
+            async def pipeline_recovery(self):
+                yield
 
-            async def execute(self, sql: str, lock_key: int) -> None:
-                if sql == "SELECT pg_advisory_unlock($1)":
-                    self.unlock_calls += 1
-
-        recovery_connection = FakeRecoveryConnection()
-
-        class FakeRecoveryAcquire:
-            async def __aenter__(self) -> FakeRecoveryConnection:
-                return recovery_connection
-
-            async def __aexit__(self, *_exc: object) -> bool:
-                return False
-
-        recovery_pool = SimpleNamespace(acquire=lambda **_kwargs: FakeRecoveryAcquire())
+        cast(Any, service)._corpus_backend = SimpleNamespace(coordination=FakeCoordination())
 
         class FakeGuard:
             def __init__(self, _lightrag: object) -> None:
@@ -948,10 +880,6 @@ class TestRAGServiceLightRAGMainPath:
             AsyncMock(side_effect=AssertionError("writer path must not attach read-only storages")),
         )
         monkeypatch.setattr("dlightrag.core.service.LightRAGContractGuard", FakeGuard)
-        monkeypatch.setattr(
-            "dlightrag.storage.pool.pg_pool.get",
-            AsyncMock(return_value=recovery_pool),
-        )
 
         with (
             patch("lightrag.LightRAG", FakeLightRAG),
@@ -978,13 +906,12 @@ class TestRAGServiceLightRAGMainPath:
         # only reaches them while this wrapper is installed.
         assert type(service._lightrag.text_chunks).__name__ == "FilteredChunkStore"
         resume_pipeline.assert_awaited_once_with()
-        assert recovery_connection.unlock_calls == 1
 
     async def test_reader_initialization_raises_on_reader_attach_contract_drift(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         reader_config = test_config.model_copy(update={"service_role": "reader"})
-        service = RAGService(config=reader_config)
+        service = _service(reader_config)
 
         class FakeGuard:
             def __init__(self, _lightrag: object) -> None:
@@ -1059,7 +986,7 @@ class TestRAGServiceLightRAGMainPath:
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         reader_config = test_config.model_copy(update={"service_role": "reader"})
-        service = RAGService(config=reader_config)
+        service = _service(reader_config)
         call_order: list[object] = []
 
         class FakeGuard:
@@ -1143,7 +1070,7 @@ class TestRAGServiceLightRAGMainPath:
 
     async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:
         """Downloads one blob into an ephemeral parser item and stores remote metadata."""
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
@@ -1187,7 +1114,7 @@ class TestRAGServiceLightRAGMainPath:
 
     async def test_aingest_unified_azure_blob_batch(self, test_config: DlightragConfig) -> None:
         """Prefix ingest calls the engine once with a prepared batch."""
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
@@ -1241,7 +1168,7 @@ class TestRAGServiceLightRAGMainPath:
 
     async def test_aingest_unified_s3(self, test_config: DlightragConfig) -> None:
         """S3 single-object ingest uses the same remote batch path."""
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
@@ -1294,7 +1221,7 @@ class TestRAGServiceLightRAGMainPath:
             async def aclose(self) -> None:
                 return None
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -1340,7 +1267,7 @@ class TestRAGServiceLightRAGMainPath:
             async def aclose(self) -> None:
                 return None
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -1382,7 +1309,7 @@ class TestRAGServiceLightRAGMainPath:
             async def aclose(self) -> None:
                 return None
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -1433,7 +1360,7 @@ class TestRAGServiceLightRAGMainPath:
             ) -> None:
                 destination.write_bytes(b"%PDF-retained")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         seen_items: list[PreparedIngestFile] = []
@@ -1480,7 +1407,7 @@ class TestRAGServiceLightRAGMainPath:
             ) -> None:
                 destination.write_bytes(b"%PDF-transient")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         seen_items: list[PreparedIngestFile] = []
@@ -1531,7 +1458,7 @@ class TestRAGServiceLightRAGMainPath:
             async def aclose(self) -> None:
                 self.closed = True
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         seen_items: list[PreparedIngestFile] = []
@@ -1580,7 +1507,7 @@ class TestRAGServiceLightRAGMainPath:
                 nonlocal materialized
                 materialized = True
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -1615,7 +1542,7 @@ class TestRAGServiceLightRAGMainPath:
             ) -> None:
                 raise AssertionError("materialization must not run")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -1649,7 +1576,7 @@ class TestRAGServiceLightRAGMainPath:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(b"%PDF-fake")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -1691,7 +1618,7 @@ class TestRAGServiceLightRAGMainPath:
                 nonlocal materialized
                 materialized = True
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
 
@@ -1739,7 +1666,7 @@ class TestRAGServiceLightRAGMainPath:
             ) -> None:
                 raise ValueError(f"download failed from {signed_url}")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
 
@@ -1773,7 +1700,7 @@ class TestRAGServiceLightRAGMainPath:
         def source_uri_for_key(_key: str) -> str:
             raise RuntimeError(f"resolver failed: https://fetch.example.com/?{secret}")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
 
@@ -1813,7 +1740,7 @@ class TestRAGServiceLightRAGMainPath:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(b"%PDF-fake")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -1887,7 +1814,7 @@ class TestRAGServiceLightRAGMainPath:
                 assert document.key == "asset-123/report.pdf"
                 destination.write_bytes(b"%PDF-fake")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         seen_items: list[PreparedIngestFile] = []
@@ -1930,7 +1857,7 @@ class TestRAGServiceLightRAGMainPath:
             ) -> None:
                 destination.write_bytes(b"%PDF-fake")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         seen_items: list[PreparedIngestFile] = []
@@ -1958,7 +1885,7 @@ class TestRAGServiceLightRAGMainPath:
         source.parent.mkdir(parents=True)
         source.write_bytes(b"%PDF-fake")
         explicit.write_bytes(b"%PDF-explicit")
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         seen_items: list[PreparedIngestFile] = []
@@ -2015,7 +1942,7 @@ class TestRAGServiceLightRAGMainPath:
             def aclose(self) -> None:
                 self.closed = True
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -2036,7 +1963,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_aingest_url_uses_url_data_source(self, test_config: DlightragConfig) -> None:
         """REST/MCP URL jobs enter the same remote ingest pipeline."""
         test_config.url_ingest_private_host_allowlist = ["*.corp.example"]
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -2122,7 +2049,7 @@ class TestRAGServiceLightRAGMainPath:
         request_fields: dict[str, object],
         constructor_fields: dict[str, object],
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service.aingest_source = AsyncMock(  # type: ignore[method-assign]
@@ -2149,7 +2076,7 @@ class TestRAGServiceLightRAGMainPath:
         self, test_config: DlightragConfig
     ) -> None:
         """Remote batch failures do not create obsolete temp directories."""
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_files = AsyncMock(
@@ -2184,7 +2111,7 @@ class TestRAGServiceLightRAGMainPath:
         fake_pdf = tmp_path / "f.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(
@@ -2228,7 +2155,7 @@ class TestRAGServiceLightRAGMainPath:
             path.write_bytes(b"fake")
         (upload_tmp_dir / "stale.pdf").write_bytes(b"stale")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
@@ -2294,7 +2221,7 @@ class TestRAGServiceLightRAGMainPath:
             return func(*args, **kwargs)
 
         monkeypatch.setattr(service_module.asyncio, "to_thread", fake_to_thread)
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
@@ -2316,7 +2243,7 @@ class TestRAGServiceLightRAGMainPath:
         pdf = upload_dir / "uploaded.pdf"
         pdf.write_bytes(b"%PDF-fake")
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
@@ -2352,7 +2279,7 @@ class TestRAGServiceLightRAGMainPath:
             events.append("ingest")
             return {"doc_id": "new-doc", "page_count": 1, "file_path": str(fake_pdf)}
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(side_effect=ingest_file)
@@ -2388,7 +2315,7 @@ class TestRAGServiceLightRAGMainPath:
             contexts={"chunks": []},
         )
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._retrieval_orchestrator = MagicMock()
         service._retrieval_orchestrator.aretrieve = AsyncMock(return_value=expected)
@@ -2405,7 +2332,7 @@ class TestRAGServiceLightRAGMainPath:
         """Case folding belongs to the SQL comparison, not to the value in flight."""
         from dlightrag_rag.retrieval import MetadataFilter
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._metadata_index = AsyncMock()
         service._metadata_index.query = AsyncMock(return_value=["doc-1"])
 
@@ -2420,7 +2347,7 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._metadata_index = AsyncMock()
         service._metadata_index.find_by_file_path = AsyncMock()
         service._metadata_index.find_by_filename = AsyncMock()
@@ -2467,7 +2394,7 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._metadata_index = AsyncMock()
         service._metadata_index.get_many = AsyncMock(
             return_value={
@@ -2503,7 +2430,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_get_metadata_hides_internal_paths_and_locator(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._metadata_index = AsyncMock()
         service._metadata_index.get.return_value = {
             "workspace": "finance",
@@ -2523,7 +2450,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_uses_metadata_locator_not_deleted_parser_path(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         deleted_parser_path = "/srv/dlightrag/inputs/finance/__remote_ingest__/url/batch/report.pdf"
         events: list[str] = []
         service.alist_failed_docs = AsyncMock(
@@ -2632,7 +2559,7 @@ class TestRAGServiceLightRAGMainPath:
         lightrag.apipeline_enqueue_documents = AsyncMock(side_effect=RuntimeError("enqueue failed"))
         lightrag.apipeline_process_enqueue_documents = AsyncMock()
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._lightrag = lightrag
         service._metadata_index = metadata_index
@@ -2668,7 +2595,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_remote_retry_uses_unique_parser_basename_and_original_metadata(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         seen_items: list[PreparedIngestFile] = []
@@ -2730,7 +2657,7 @@ class TestRAGServiceLightRAGMainPath:
         test_config: DlightragConfig,
         metadata: dict[str, str] | None,
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -2757,7 +2684,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_rejects_non_raising_ingest_failure(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -2796,7 +2723,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_hides_metadata_load_exception(
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -2823,7 +2750,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_preserves_original_when_ingest_raises(
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -2863,7 +2790,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_requires_returned_document_id(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -2894,7 +2821,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_deletes_old_metadata_for_new_batch_doc_id(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -2948,7 +2875,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_preserves_metadata_when_old_cleanup_fails(
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -2998,7 +2925,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_keeps_replacement_when_old_metadata_cleanup_fails(
         self, test_config: DlightragConfig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -3052,7 +2979,7 @@ class TestRAGServiceLightRAGMainPath:
         test_config: DlightragConfig,
         deletion_result: object,
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -3094,7 +3021,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_retry_failed_doc_keeps_old_metadata_for_same_single_doc_id(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.alist_failed_docs = AsyncMock(
             return_value=[
                 {
@@ -3158,7 +3085,7 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         from dlightrag.core.client_contracts import IngestDocument
 
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service.aingest = AsyncMock(return_value={"status": "success"})
 
@@ -3189,7 +3116,7 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         source = tmp_path / "report.pdf"
         source.write_bytes(b"%PDF-1.4")
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._ingestion_engine = AsyncMock()
         service._ingestion_engine.aingest_files.return_value = {
             "processed": 1,
@@ -3219,7 +3146,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_download_locator_dispatch_rejects_invalid_remote_locator(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service.aingest = AsyncMock()
 
         with pytest.raises(ValueError, match="durable download_uri"):
@@ -3233,7 +3160,7 @@ class TestRAGServiceLightRAGMainPath:
 
     async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
         """close() finalizes LightRAG storages."""
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._lightrag = AsyncMock()
 
@@ -3244,7 +3171,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_adelete_files_dry_run_reports_matches_without_mutating(
         self, test_config: DlightragConfig
     ) -> None:
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
@@ -3275,7 +3202,7 @@ class TestRAGServiceLightRAGMainPath:
 
     async def test_adelete_files_unified_not_found(self, test_config: DlightragConfig) -> None:
         """Deletion returns not_found when doc is not in doc_status or metadata."""
-        service = RAGService(config=test_config)
+        service = _service(test_config)
         service._initialized = True
         service._lightrag = MagicMock()
         service._lightrag.doc_status = MagicMock()

@@ -6,13 +6,29 @@ from typing import Any
 
 import pytest
 
-from dlightrag.storage.migrations import (
+from dlightrag.adapters.postgres._migrations import (
     ForeignKeyRequirement,
     Migration,
     TableRequirement,
-    apply_migrations,
-    verify_migrations,
 )
+from dlightrag.adapters.postgres._migrations import (
+    apply_migrations as _apply_migrations,
+)
+from dlightrag.adapters.postgres._migrations import (
+    verify_migrations as _verify_migrations,
+)
+
+
+class _SchemaError(RuntimeError):
+    """Owner-selected schema error used to exercise the shared primitive."""
+
+
+async def apply_migrations(conn: Any, **kwargs: Any) -> None:
+    await _apply_migrations(conn, schema_error=_SchemaError, **kwargs)
+
+
+async def verify_migrations(conn: Any, **kwargs: Any) -> None:
+    await _verify_migrations(conn, schema_error=_SchemaError, **kwargs)
 
 
 class _Tx:
@@ -397,12 +413,10 @@ async def test_verify_migrations_rejects_a_fully_recorded_ledger_missing_an_obje
     kind: str, expected: str
 ) -> None:
     """A ledger row survives a dropped object, so the ledger alone cannot be trusted."""
-    from dlightrag.storage.migrations import SchemaValidationError
-
     conn = _Conn(catalog=_damaged_catalog(kind))
     conn.applied.update({("example", "0001"), ("example", "0002")})
 
-    with pytest.raises(SchemaValidationError) as excinfo:
+    with pytest.raises(_SchemaError) as excinfo:
         await verify_migrations(
             conn,
             scope="example",
@@ -423,7 +437,7 @@ async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
     under the existing ledger, without referencing workspace documents, LightRAG
     tables, ingest jobs, or global migration tables.
     """
-    from dlightrag.storage.web_conversations import WEB_CONVERSATION_MIGRATIONS
+    from dlightrag.adapters.postgres.web_conversations import WEB_CONVERSATION_MIGRATIONS
 
     conn = _Conn()
     await apply_migrations(

@@ -1,15 +1,38 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for reset PostgreSQL helper boundaries."""
+"""Tests for PostgreSQL corpus maintenance behavior."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.core.reset import (
-    _clean_orphan_tables,
-    _clean_workspace_meta,
-    _list_all_workspaces,
-)
+from dlightrag.adapters.postgres.corpus import PGCorpusMaintenanceStore
+from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
+
+
+class _Acquire:
+    def __init__(self, conn: object) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> object:
+        return self._conn
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+class _Pool:
+    def __init__(self, conn: object) -> None:
+        self._conn = conn
+
+    def acquire(self) -> _Acquire:
+        return _Acquire(self._conn)
+
+
+def _maintenance_store(config: MagicMock, conn: object) -> PGCorpusMaintenanceStore:
+    return PGCorpusMaintenanceStore(
+        config.pg_connection_kwargs(),
+        workspace_registry=PGWorkspaceRegistry(pool=_Pool(conn)),
+    )
 
 
 class _Conn:
@@ -17,16 +40,9 @@ class _Conn:
         self.executed: list[tuple[str, tuple[object, ...]]] = []
         self.closed = False
 
-    async def fetchval(self, query: str) -> bool:
-        assert "dlightrag_workspace_meta" in query
-        return True
-
-    async def execute(self, query: str, *args: object) -> None:
+    async def execute(self, query: str, *args: object) -> str:
         self.executed.append((query, args))
-
-    async def fetch(self, query: str) -> list[dict[str, str]]:
-        assert "dlightrag_workspace_meta" in query
-        return [{"workspace": "default"}, {"workspace": "research"}]
+        return "DELETE 1"
 
     async def close(self) -> None:
         self.closed = True
@@ -45,42 +61,20 @@ def config() -> MagicMock:
     return cfg
 
 
-async def test_clean_workspace_meta_uses_configured_pg_endpoint(monkeypatch, config) -> None:
+async def test_delete_workspace_record_uses_the_operational_registry(monkeypatch, config) -> None:
     conn = _Conn()
+    connect = AsyncMock(side_effect=AssertionError("registry operations must not connect directly"))
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.asyncpg.connect", connect)
 
-    async def fake_connect(**kwargs):
-        assert kwargs == config.pg_connection_kwargs.return_value
-        return conn
-
-    import asyncpg
-
-    monkeypatch.setattr(asyncpg, "connect", fake_connect)
-
-    await _clean_workspace_meta("research", config=config)
+    store = _maintenance_store(config, conn)
+    assert await store.delete_workspace_record("research") is True
 
     config.pg_connection_kwargs.assert_called_once_with()
     assert conn.executed == [
         ("DELETE FROM dlightrag_workspace_meta WHERE workspace = $1", ("research",))
     ]
-    assert conn.closed is True
-
-
-async def test_list_all_workspaces_uses_configured_pg_endpoint(monkeypatch, config) -> None:
-    conn = _Conn()
-
-    async def fake_connect(**kwargs):
-        assert kwargs == config.pg_connection_kwargs.return_value
-        return conn
-
-    import asyncpg
-
-    monkeypatch.setattr(asyncpg, "connect", fake_connect)
-
-    workspaces = await _list_all_workspaces(config=config)
-
-    config.pg_connection_kwargs.assert_called_once_with()
-    assert workspaces == ["default", "research"]
-    assert conn.closed is True
+    connect.assert_not_awaited()
+    assert conn.closed is False
 
 
 async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, config) -> None:
@@ -112,8 +106,9 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
             assert args == ('dlightrag_bad"name',)
             return '"dlightrag_bad""name"'
 
-        async def execute(self, query: str, *args: object) -> None:
+        async def execute(self, query: str, *args: object) -> str:
             self.executed.append((query, args))
+            return "DELETE 1"
 
         async def close(self) -> None:
             self.closed = True
@@ -124,12 +119,10 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
         assert kwargs == config.pg_connection_kwargs.return_value
         return conn
 
-    import asyncpg
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.asyncpg.connect", fake_connect)
 
-    monkeypatch.setattr(asyncpg, "connect", fake_connect)
-    monkeypatch.setattr("dlightrag.config.get_config", lambda: config)
-
-    cleaned = await _clean_orphan_tables("research", dry_run=False)
+    store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
+    cleaned = await store.clean_orphan_rows("research", dry_run=False)
 
     assert cleaned == 1
     assert conn.executed == [
@@ -173,8 +166,9 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
             assert query == "SELECT quote_ident($1)"
             return "dlightrag_ingest_jobs"
 
-        async def execute(self, query: str, *args: object) -> None:
+        async def execute(self, query: str, *args: object) -> str:
             self.executed.append((query, args))
+            return "DELETE 1"
 
         async def close(self) -> None:
             self.closed = True
@@ -184,12 +178,10 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
     async def fake_connect(**kwargs):
         return conn
 
-    import asyncpg
+    monkeypatch.setattr("dlightrag.adapters.postgres.corpus.asyncpg.connect", fake_connect)
 
-    monkeypatch.setattr(asyncpg, "connect", fake_connect)
-    monkeypatch.setattr("dlightrag.config.get_config", lambda: config)
-
-    cleaned = await _clean_orphan_tables("default", dry_run=False)
+    store = PGCorpusMaintenanceStore(config.pg_connection_kwargs())
+    cleaned = await store.clean_orphan_rows("default", dry_run=False)
 
     assert cleaned == 1
     assert conn.executed == [

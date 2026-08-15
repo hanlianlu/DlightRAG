@@ -3,8 +3,6 @@
 
 from typing import Any
 
-from dlightrag.utils import normalize_workspace
-
 
 class PGFilePanelStore:
     """Read file-panel data without constructing a LightRAG service."""
@@ -17,13 +15,13 @@ class PGFilePanelStore:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
 
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         return await pg_pool.run(operation)
 
     async def list_processed_files(self, workspace: str) -> list[dict[str, Any]]:
         """Return processed document rows for *workspace* from doc_status."""
-        workspace_id = normalize_workspace(workspace)
+        workspace_id = str(workspace).strip()
         if not workspace_id:
             return []
 

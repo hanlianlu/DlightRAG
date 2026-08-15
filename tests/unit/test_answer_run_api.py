@@ -707,10 +707,10 @@ class TestCancel:
 async def test_schema_validation_error_is_a_safe_503(
     client: AsyncClient, run_manager: _RunManager
 ) -> None:
-    from dlightrag.storage.migrations import SchemaValidationError
+    from dlightrag.runtime import RunSchemaError
 
     run_manager.aget_answer_run = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
-        side_effect=SchemaValidationError("column dlightrag_answer_runs.secret is missing")
+        side_effect=RunSchemaError("column dlightrag_answer_runs.secret is missing")
     )
 
     response = await client.get(f"/answer/{_RUN_ID}")

@@ -5,15 +5,17 @@ import re
 
 import pytest
 
-from dlightrag.runtime import RUN_HEARTBEAT_SECONDS
-from dlightrag.storage.answer_runs import (
-    ANSWER_RUN_LEASE_SECONDS,
+from dlightrag.adapters.postgres.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
+    PGAnswerRunStore,
+)
+from dlightrag.runtime import (
+    ANSWER_RUN_LEASE_SECONDS,
     MAX_CONSECUTIVE_RECOVERIES,
     RUN_ABANDONED_ERROR_KIND,
+    RUN_HEARTBEAT_SECONDS,
     RUN_RETENTION_SECONDS,
-    PGAnswerRunStore,
 )
 
 

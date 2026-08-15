@@ -6,7 +6,7 @@ under concurrent ingestion/retrieval workloads.
 
 Usage::
 
-    from dlightrag.storage.pool import pg_pool
+    from dlightrag.adapters.postgres._pool import pg_pool
 
     pool = await pg_pool.get()           # lazily creates the pool
     async with pool.acquire() as conn:
@@ -22,6 +22,8 @@ from typing import Any, TypeVar
 
 import asyncpg
 
+from dlightrag.adapters.postgres._errors import is_postgres_unavailable
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MIN_SIZE = 2
@@ -32,20 +34,6 @@ _DEFAULT_RETRY_BACKOFF_MAX = 30.0
 
 T = TypeVar("T")
 
-POSTGRES_UNAVAILABLE_EXCEPTIONS = (
-    asyncio.TimeoutError,
-    TimeoutError,
-    ConnectionError,
-    OSError,
-    asyncpg.exceptions.TooManyConnectionsError,
-    asyncpg.exceptions.CannotConnectNowError,
-    asyncpg.exceptions.AdminShutdownError,
-    asyncpg.exceptions.CrashShutdownError,
-    asyncpg.exceptions.PostgresConnectionError,
-    asyncpg.exceptions.ConnectionDoesNotExistError,
-    asyncpg.exceptions.ConnectionFailureError,
-)
-
 
 class PGPool:
     """Lazy-created asyncpg pool for DlightRAG domain stores."""
@@ -54,10 +42,6 @@ class PGPool:
         self._pool: asyncpg.Pool | None = None
         self._lock: asyncio.Lock | None = None
         self._config: Any = None
-        self._transient_exceptions = (
-            *POSTGRES_UNAVAILABLE_EXCEPTIONS,
-            asyncpg.exceptions.InterfaceError,
-        )
 
     @staticmethod
     def _binding_signature(config: Any) -> tuple[Any, ...]:
@@ -169,7 +153,9 @@ class PGPool:
                 pool = await self.get()
                 async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
                     return await operation(conn)
-            except self._transient_exceptions as exc:
+            except Exception as exc:
+                if not is_postgres_unavailable(exc):
+                    raise
                 if attempt >= attempts:
                     raise
                 sleep_for = min(backoff * (2 ** (attempt - 1)), backoff_max)

@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -40,8 +40,7 @@ from dlightrag.core.answer_runs.execution import (
     PinnedModelProfile,
 )
 from dlightrag.runtime import AnswerRunEvent, AnswerRunRecord
-from dlightrag.storage.web_conversations import LinkedTurn
-from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary
+from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary, LinkedTurn
 from dlightrag.web.conversations import WebAnswerSubmission, project_conversation_turn
 
 MOCK_WORKSPACES = [
@@ -497,13 +496,13 @@ def e2e_base_url(
     }
     manager.aingest.return_value = {"job_id": "e2e-test-job", "file_count": 1}
     manager.adelete_files.return_value = {"deleted_count": 0}
+    manager.create_web_conversation_service = MagicMock(return_value=e2e_conversation_service)
 
     port = _free_port()
     import uvicorn
 
     with patch("dlightrag.api.server.RAGServiceManager.acreate", AsyncMock(return_value=manager)):
         app = create_app(include_web_app=True)
-        app.state.web_conversation_service = e2e_conversation_service
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
         server = uvicorn.Server(config)
         t = threading.Thread(target=server.run, daemon=True)

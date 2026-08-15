@@ -22,6 +22,12 @@ from typing import Any
 import asyncpg
 import pytest
 
+from dlightrag.adapters.postgres.answer_runs import (
+    PGAnswerRunStore,
+)
+from dlightrag.adapters.postgres.web_conversations import (
+    PGWebConversationStore,
+)
 from dlightrag.runtime import (
     IdempotencyKeyConflict,
     PendingArtifact,
@@ -29,13 +35,7 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
-from dlightrag.storage.answer_runs import (
-    PGAnswerRunStore,
-)
-from dlightrag.storage.web_conversations import (
-    ConversationSubmissionConflict,
-    PGWebConversationStore,
-)
+from dlightrag.web.conversation_models import ConversationSubmissionConflict
 from tests.conftest import FingerprintingAnswerRunStore
 
 pytestmark = [

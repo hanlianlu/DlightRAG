@@ -19,8 +19,11 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.api.answer_stream import follow_run_frames
 from dlightrag.api.server import create_app
 from dlightrag.runtime import AnswerRunEvent, IdempotencyKeyConflict
-from dlightrag.storage.web_conversations import ConversationSnapshot, ConversationSubmissionConflict
 from dlightrag.web.answer_events import browser_frame, render_done_event
+from dlightrag.web.conversation_models import (
+    ConversationSnapshot,
+    ConversationSubmissionConflict,
+)
 from dlightrag.web.conversations import WebConversationService, project_conversation_turn
 from tests.unit.conftest import prepare_test_answer_run_input
 from tests.unit.web.answer_run_fixtures import (
@@ -144,6 +147,7 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
     service = WebConversationService(
         store=store,
         prepare_run_input=prepare,
+        run_store=AsyncMock(),
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
@@ -283,6 +287,7 @@ async def scoped_client(manager: AsyncMock, test_config):
     application.state.web_conversation_service = WebConversationService(
         store=store,
         prepare_run_input=prepare_test_answer_run_input,
+        run_store=AsyncMock(),
         max_turns=100,
         ttl_days=30,
         max_attachments=6,

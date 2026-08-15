@@ -1,9 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Lightweight migrations for DlightRAG-owned PostgreSQL schemas."""
 
-import hashlib
 from dataclasses import dataclass
 from typing import Any
+
+from dlightrag.adapters.postgres._locks import advisory_lock_key
 
 _CREATE_LEDGER = """CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations (
     scope       TEXT NOT NULL,
@@ -114,28 +115,12 @@ class TableRequirement:
     unique_indexes: tuple[str, ...] = ()
 
 
-class SchemaValidationError(RuntimeError):
-    """A required schema is absent or incompatible with this software revision.
-
-    Raised only by validation paths. It is terminal for startup: no process can
-    repair it by staying up, so it must never degrade into partial readiness.
-    """
-
-
-_LOCK_NAMESPACE = "dlightrag_schema_migration"
-
-
-def _advisory_lock_key(scope: str) -> int:
-    """Stable signed 64-bit advisory-lock key for a migration scope."""
-    digest = hashlib.blake2b(f"{_LOCK_NAMESPACE}:{scope}".encode(), digest_size=8).digest()
-    return int.from_bytes(digest, "big", signed=True)
-
-
 async def apply_migrations(
     conn: Any,
     *,
     scope: str,
     migrations: tuple[Migration, ...],
+    schema_error: type[RuntimeError],
     require_applied_prefix: bool = True,
 ) -> None:
     """Ensure idempotent migrations and record their versions in the ledger.
@@ -150,7 +135,7 @@ async def apply_migrations(
     can opt out and replay any missing versions in the current declared order.
     """
     _validate_unique_versions(migrations)
-    lock_key = _advisory_lock_key(scope)
+    lock_key = advisory_lock_key("dlightrag_schema_migration", scope)
     await conn.execute("SELECT pg_advisory_lock($1)", lock_key)
     try:
         await conn.execute(_CREATE_LEDGER)
@@ -159,6 +144,7 @@ async def apply_migrations(
             scope,
             migrations,
             applied_versions,
+            schema_error=schema_error,
             require_applied_prefix=require_applied_prefix,
         )
         for migration in migrations:
@@ -184,6 +170,7 @@ async def verify_migrations(
     scope: str,
     migrations: tuple[Migration, ...],
     tables: tuple[TableRequirement, ...],
+    schema_error: type[RuntimeError],
 ) -> None:
     """Confirm this revision's schema is already present, issuing no DDL.
 
@@ -195,7 +182,7 @@ async def verify_migrations(
     """
     _validate_unique_versions(migrations)
     if not await conn.fetchval(_LEDGER_EXISTS):
-        raise SchemaValidationError(
+        raise schema_error(
             "dlightrag_schema_migrations is missing; apply DlightRAG migrations "
             "on a writer instance before starting a reader"
         )
@@ -204,7 +191,7 @@ async def verify_migrations(
         migration.version for migration in migrations if migration.version not in applied_versions
     ]
     if missing:
-        raise SchemaValidationError(
+        raise schema_error(
             f"Schema migration scope '{scope}' is missing versions: {', '.join(missing)}; "
             "apply DlightRAG migrations on a writer instance before starting a reader"
         )
@@ -213,7 +200,7 @@ async def verify_migrations(
     for table in tables:
         absent.extend(await _absent_table_objects(conn, table))
     if absent:
-        raise SchemaValidationError(
+        raise schema_error(
             f"Schema migration scope '{scope}' records every version but is missing: "
             f"{'; '.join(absent)}; apply DlightRAG migrations on a writer instance "
             "before starting a reader"
@@ -293,6 +280,7 @@ def _validate_applied_state(
     migrations: tuple[Migration, ...],
     applied_versions: set[str],
     *,
+    schema_error: type[RuntimeError],
     require_applied_prefix: bool,
 ) -> None:
     if not require_applied_prefix:
@@ -322,7 +310,7 @@ def _validate_applied_state(
         for version in declared_versions[first_missing_index:]
         if version in applied_versions
     ]
-    raise RuntimeError(
+    raise schema_error(
         "Schema migration ledger for "
         f"scope '{scope}' is non-prefix across current migrations; "
         f"missing current versions: {', '.join(missing_versions)}; "

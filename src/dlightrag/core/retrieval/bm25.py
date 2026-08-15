@@ -11,13 +11,13 @@ from typing import Any
 
 from dlightrag_rag.retrieval import ContextRow, MetadataScope, format_bm25_top, rrf_fuse
 
+from dlightrag.adapters.postgres.identifiers import pg_identifier, pg_qualified_identifier
 from dlightrag.core.retrieval.bm25_language import (
     BM25_FALLBACK_LANGUAGE,
     BM25_LANGUAGE_COLUMN,
     BM25LanguageClassifier,
     normalize_language_code,
 )
-from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
 BM25_LANGUAGE_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_bm25_language")

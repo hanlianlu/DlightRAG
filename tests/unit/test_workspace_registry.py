@@ -3,7 +3,9 @@
 
 from typing import Any
 
-from dlightrag.storage.workspaces import PGWorkspaceRegistry
+import pytest
+
+from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
 
 
 class _Acquire:
@@ -99,29 +101,6 @@ async def test_workspace_registry_initializes_and_migrates_schema() -> None:
     )
 
 
-async def test_workspace_registry_initialization_canonicalizes_existing_rows() -> None:
-    conn = _Conn()
-    conn.rows = [
-        {
-            "workspace": "imported-workspace",
-            "display_name": "Project Alpha",
-            "embedding_model": "voyage-multimodal-3.5",
-            "created_at": None,
-            "updated_at": None,
-        }
-    ]
-    registry = PGWorkspaceRegistry(pool=_Pool(conn))
-
-    await registry.initialize()
-
-    assert (
-        "imported_workspace",
-        "Project Alpha",
-        "voyage-multimodal-3.5",
-    ) in [args for _, args in conn.executed]
-    assert ("imported-workspace",) in [args for _, args in conn.executed]
-
-
 async def test_workspace_registry_upserts_lists_and_deletes() -> None:
     conn = _Conn()
     registry = PGWorkspaceRegistry(pool=_Pool(conn))
@@ -143,22 +122,13 @@ async def test_workspace_registry_upserts_lists_and_deletes() -> None:
     assert ("old_workspace",) in [args for _, args in conn.executed]
 
 
-async def test_workspace_registry_normalizes_write_operations() -> None:
+async def test_workspace_registry_rejects_an_empty_workspace() -> None:
     conn = _Conn()
     registry = PGWorkspaceRegistry(pool=_Pool(conn))
 
-    await registry.upsert(
-        workspace="Project Workspace",
-        display_name="Project Workspace",
-        embedding_model="voyage-multimodal-3.5",
-    )
-    exists = await registry.exists("Project Workspace")
-    await registry.delete("Project Workspace")
-
-    assert exists is False
-    assert (
-        "project_workspace",
-        "Project Workspace",
-        "voyage-multimodal-3.5",
-    ) in [args for _, args in conn.executed]
-    assert ("project_workspace",) in [args for _, args in conn.executed]
+    with pytest.raises(ValueError, match="workspace cannot be empty"):
+        await registry.upsert(
+            workspace="  ",
+            display_name="Empty",
+            embedding_model="voyage-multimodal-3.5",
+        )

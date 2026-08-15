@@ -27,13 +27,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
+    from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.config import DlightragConfig
     from dlightrag.core.request.images import QueryImageDescriber
     from dlightrag.core.resources import ResourceInput, ResourceRegistry
     from dlightrag.core.retrieval.web_search import ExaSearch
     from dlightrag.core.source_download import SourceDownloadTarget
-    from dlightrag.storage.file_panel import PGFilePanelStore
-    from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag_agent.tools import AgentTool
 from dlightrag_ai.capacity import (
@@ -50,9 +50,13 @@ from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.tool_model import ToolModel
 from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
+from dlightrag_rag.ports import CorpusMaintenanceStore, CorpusSchemaError
 from dlightrag_rag.retrieval import MetadataFilter
 from PIL import Image
 
+from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
+from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
 from dlightrag.application import ApplicationHealth
 from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.agent.orchestrator import (
@@ -95,7 +99,10 @@ from dlightrag.core.answer_runs.results import restore_answer_result, store_answ
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
-from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
+from dlightrag.core.ingest_job_coordinator import (
+    JOB_STATES_WITH_RESULT,
+    IngestJobCoordinator,
+)
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.core.lightrag_lifecycle import defer_cancellation
 from dlightrag.core.memory.conversation import PriorTurns
@@ -134,46 +141,20 @@ from dlightrag.runtime import (
     RunCoordinator,
     RunCreation,
     RunExecutionError,
+    RunSchemaError,
     RunSession,
     answer_run_request_fingerprint,
     artifact_digest,
 )
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import safe_source_filename
-from dlightrag.storage.answer_runs import PGAnswerRunStore
-from dlightrag.storage.ingest_jobs import JOB_STATES_WITH_RESULT
-from dlightrag.storage.migrations import SchemaValidationError
 from dlightrag.utils import normalize_workspace
+from dlightrag.web.conversation_models import WebConversationSchemaError
 
 logger = logging.getLogger(__name__)
 _MAX_RETRY_INTERVAL: float = 300.0
 _QUERY_WORKSPACE_MAX_CONCURRENCY = 8
 _SCHEMA_CACHE_MAX_ENTRIES = 128
-
-
-async def _postgres_not_ready_detail(config: DlightragConfig) -> str | None:
-    """Project the current PostgreSQL adapter's role-specific readiness."""
-    from dlightrag.storage.pool import pg_pool
-
-    try:
-        read_only = await pg_pool.run_once(lambda conn: conn.fetchval("SHOW transaction_read_only"))
-        if str(read_only).lower() != "off":
-            raise RuntimeError("domain pool session is read-only")
-    except Exception:
-        logger.warning("Domain PostgreSQL readiness probe failed", exc_info=True)
-        return "DlightRAG domain database session is not writable"
-
-    if not config.is_reader:
-        return None
-
-    from dlightrag.storage.lightrag_readonly import verify_reader_corpus_session
-
-    try:
-        await verify_reader_corpus_session()
-    except Exception:
-        logger.warning("Reader corpus PostgreSQL readiness probe failed", exc_info=True)
-        return "Reader corpus database session is not read-only or is unavailable"
-    return None
 
 
 def _attachment_bytes(resources: list[ResourceInput] | None) -> list[bytes]:
@@ -389,11 +370,14 @@ class RAGServiceManager:
         # Large document scans are DlightRAG product policy, not an AI package import side effect.
         Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
         self._config = config or get_config()
+        self._corpus_maintenance: CorpusMaintenanceStore = (
+            PGCorpusBackendFactory(self._config).create().maintenance
+        )
         self._services: dict[str, RAGService] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         self._health = ApplicationHealth(
-            readiness_probe=lambda: _postgres_not_ready_detail(self._config),
+            readiness_probe=PGReadinessProbe(self._config),
         )
 
         # Per-workspace backoff: workspace -> (last_error_ts, retry_interval)
@@ -409,6 +393,7 @@ class RAGServiceManager:
         self._ingest_jobs = IngestJobCoordinator(
             self._get_ingest_service,
             input_root=self._config.input_dir_path,
+            store=PGIngestJobStore(),
         )
         self._retrieval_planners_by_profile: dict[ModelProfile, RetrievalPlanner] = {}
         self._planner_model: CompletionModel | None = None
@@ -417,7 +402,6 @@ class RAGServiceManager:
         self._web_search: ExaSearch | None = None
         self._query_tool_model: ToolModel | None = None
         self._vlm_func_lock = asyncio.Lock()
-        self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         # Image capability is role-specific but cached per resolved model config,
@@ -428,6 +412,7 @@ class RAGServiceManager:
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._answer_run_store: PGAnswerRunStore | None = None
+        self._web_conversation_store: PGWebConversationStore | None = None
         self._answer_coordinator: RunCoordinator | None = None
         # Separate locks: starting the runtime needs the store, so one lock for
         # both would deadlock on itself.
@@ -456,7 +441,7 @@ class RAGServiceManager:
         # Bind the process-wide domain pool to this service config so the
         # endpoint and role cannot silently diverge from a caller-supplied SDK
         # config that never called set_config().
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         pg_pool.bind(manager._config)
 
@@ -476,14 +461,19 @@ class RAGServiceManager:
             try:
                 await manager._get_service(default_ws)
                 logger.info("Warmed up default workspace service '%s'", default_ws)
-            except SchemaValidationError:
+            except CorpusSchemaError:
                 raise
             except Exception as exc:
                 default_err = exc
                 logger.warning(
                     "Failed to warm up default workspace '%s'", default_ws, exc_info=True
                 )
-        except SchemaValidationError, IncompatibleAnswerRunError:
+        except (
+            CorpusSchemaError,
+            IncompatibleAnswerRunError,
+            RunSchemaError,
+            WebConversationSchemaError,
+        ):
             # Schema/run incompatibility needs operator action; never degrade into it.
             await manager.aclose()
             raise
@@ -553,18 +543,15 @@ class RAGServiceManager:
 
     async def _initialize_workspace_registry(self) -> None:
         """Migrate the durable workspace registry, or validate it on a reader."""
-        from dlightrag.storage.workspaces import PGWorkspaceRegistry
-
-        self._workspace_registry = PGWorkspaceRegistry()
         try:
-            await self._workspace_registry.initialize(validate_only=self._config.is_reader)
+            await self._corpus_maintenance.initialize(validate_only=self._config.is_reader)
             if not self._config.is_reader:
-                await self._workspace_registry.upsert(
+                await self._corpus_maintenance.register_workspace(
                     workspace=normalize_workspace(self._config.workspace),
                     display_name=self._config.workspace,
                     embedding_model=self._config.embedding.model,
                 )
-        except SchemaValidationError:
+        except CorpusSchemaError:
             raise
         except Exception as exc:
             self._health.add_warning("Workspace registry unavailable")
@@ -579,16 +566,36 @@ class RAGServiceManager:
         same schema because run retention exempts conversation-linked runs, so
         every process that owns runs also establishes that table.
         """
-        from dlightrag.storage.web_conversations import PGWebConversationStore
+        from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 
         try:
-            await self._get_answer_run_store()
-            await PGWebConversationStore().initialize(validate_only=self._config.is_reader)
-        except SchemaValidationError:
+            run_store = await self._get_answer_run_store()
+            store = PGWebConversationStore(run_store=run_store)
+            await store.initialize(validate_only=self._config.is_reader)
+            self._web_conversation_store = store
+        except RunSchemaError, WebConversationSchemaError:
             raise
         except Exception as exc:
             self._health.add_warning("Answer run store unavailable")
             logger.warning("Answer run store initialization failed: %s", exc)
+
+    def create_web_conversation_service(self):
+        """Compose the Web owner with the PostgreSQL stores validated at startup."""
+        from dlightrag.web.conversations import WebConversationService
+
+        store = self._web_conversation_store
+        run_store = self._answer_run_store
+        if store is None or run_store is None:
+            raise RuntimeError("Web conversation stores are not initialized")
+        return WebConversationService(
+            store=store,
+            run_store=run_store,
+            prepare_run_input=self.aprepare_answer_run_input,
+            max_turns=self._config.web_conversations.max_turns,
+            ttl_days=self._config.web_conversations.ttl_days,
+            max_attachments=self._config.answer.max_attachments,
+            validate_schema_only=self._config.is_reader,
+        )
 
     async def _validate_active_answer_run_compatibility(self) -> None:
         """Reject a rolling deployment that cannot execute already accepted inputs."""
@@ -643,13 +650,6 @@ class RAGServiceManager:
         except Exception as exc:
             self._health.add_warning("Answer runtime unavailable")
             logger.warning("Answer runtime failed to start: %s", exc)
-
-    async def _get_workspace_registry(self) -> PGWorkspaceRegistry:
-        if self._workspace_registry is None:
-            await self._initialize_workspace_registry()
-        if self._workspace_registry is None:
-            raise RuntimeError("Workspace registry unavailable")
-        return self._workspace_registry
 
     @staticmethod
     def _actionable_error(exc: Exception) -> str:
@@ -707,6 +707,7 @@ class RAGServiceManager:
                 svc = await RAGService.acreate(
                     config=ws_config,
                     rerank_supports_vision=self._rerank_supports_vision,
+                    corpus_backend_factory=PGCorpusBackendFactory(ws_config),
                 )
                 self._services[workspace] = svc
 
@@ -715,7 +716,7 @@ class RAGServiceManager:
 
                 logger.info("Created RAGService for workspace '%s'", safe_log_text(workspace))
                 return svc
-            except SchemaValidationError:
+            except CorpusSchemaError:
                 # Terminal: no backoff or retry can repair an absent schema, and
                 # startup must see the exact failure, not a generic unavailable.
                 raise
@@ -981,7 +982,7 @@ class RAGServiceManager:
 
     def _get_file_panel_store(self) -> PGFilePanelStore:
         if self._file_panel_store is None:
-            from dlightrag.storage.file_panel import PGFilePanelStore
+            from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
 
             self._file_panel_store = PGFilePanelStore()
         return self._file_panel_store
@@ -1023,8 +1024,8 @@ class RAGServiceManager:
         document_id: str,
     ) -> SourceDownloadTarget:
         """Prepare a source download without warming a workspace model service."""
+        from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
         from dlightrag.core.source_download import SourceDownloadService
-        from dlightrag.storage.pg_metadata_index import PGMetadataIndex
 
         workspace_id = normalize_workspace(workspace)
         index = PGMetadataIndex(workspace=workspace_id)
@@ -1124,6 +1125,11 @@ class RAGServiceManager:
 
                 result = await areset_orphaned_workspace(
                     requested_workspace,
+                    maintenance=PGCorpusBackendFactory(
+                        self._config.model_copy(update={"workspace": target_workspace})
+                    )
+                    .create()
+                    .maintenance,
                     keep_files=keep_files,
                     dry_run=dry_run,
                     input_dir=str(self._config.input_dir_path),
@@ -1388,7 +1394,7 @@ class RAGServiceManager:
         if cached is not None and now - cached[0] < 300.0:
             return cached[1]
 
-        from dlightrag.storage.pg_metadata_index import PGMetadataIndex
+        from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 
         try:
             schema = await PGMetadataIndex(
@@ -2023,7 +2029,7 @@ class RAGServiceManager:
             raise RAGServiceUnavailableError("Answer runtime is shutting down")
         async with self._answer_store_lock:
             if self._answer_run_store is None:
-                from dlightrag.storage.answer_runs import PGAnswerRunStore as _Store
+                from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore as _Store
 
                 store = _Store()
                 await store.initialize(validate_only=self._config.is_reader)
@@ -2757,23 +2763,24 @@ class RAGServiceManager:
 
     async def alist_workspace_records(self) -> list[dict[str, Any]]:
         """Return registered workspace records for UI/API adapters."""
+        default_record = {
+            "workspace": normalize_workspace(self._config.workspace),
+            "display_name": self._config.workspace,
+            "embedding_model": self._config.embedding.model,
+            "created_at": None,
+            "updated_at": None,
+        }
         try:
-            registry = await self._get_workspace_registry()
-            rows = await registry.list()
+            rows = await self._corpus_maintenance.list_workspace_records()
             if rows:
-                return [self._serialize_workspace_record(row) for row in rows]
+                records = [self._serialize_workspace_record(row) for row in rows]
+                if all(row["workspace"] != default_record["workspace"] for row in records):
+                    records.append(default_record)
+                return records
         except Exception as exc:
             logger.warning("Failed to list workspaces from registry: %s", exc)
 
-        return [
-            {
-                "workspace": normalize_workspace(self._config.workspace),
-                "display_name": self._config.workspace,
-                "embedding_model": self._config.embedding.model,
-                "created_at": None,
-                "updated_at": None,
-            }
-        ]
+        return [default_record]
 
     @staticmethod
     def _serialize_workspace_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -2847,7 +2854,7 @@ class RAGServiceManager:
                 logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
         self._services.clear()
 
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         try:
             await pg_pool.close()

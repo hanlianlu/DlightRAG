@@ -20,22 +20,26 @@ from typing import Any, cast
 
 import asyncpg
 import pytest
+from dlightrag_rag.ports import CorpusSchemaError
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig
-from dlightrag.storage import pg_metadata_index, web_conversations, workspaces
-from dlightrag.storage.answer_runs import (
+from dlightrag.adapters.postgres import pg_metadata_index, web_conversations, workspaces
+from dlightrag.adapters.postgres._migrations import (
+    Migration,
+    TableRequirement,
+)
+from dlightrag.adapters.postgres._migrations import (
+    apply_migrations as _apply_migrations,
+)
+from dlightrag.adapters.postgres._migrations import (
+    verify_migrations as _verify_migrations,
+)
+from dlightrag.adapters.postgres.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
     ANSWER_RUN_SCHEMA_TABLES,
     PGAnswerRunStore,
 )
-from dlightrag.storage.migrations import (
-    Migration,
-    SchemaValidationError,
-    TableRequirement,
-    apply_migrations,
-    verify_migrations,
-)
+from dlightrag.config import DlightragConfig, EmbeddingConfig
 
 pytestmark = [
     pytest.mark.integration,
@@ -49,6 +53,14 @@ _PG_CONN_KWARGS: dict[str, Any] = dict(
     password="dlightrag",
     database="dlightrag",
 )
+
+
+async def apply_migrations(conn: Any, **kwargs: Any) -> None:
+    await _apply_migrations(conn, schema_error=CorpusSchemaError, **kwargs)
+
+
+async def verify_migrations(conn: Any, **kwargs: Any) -> None:
+    await _verify_migrations(conn, schema_error=CorpusSchemaError, **kwargs)
 
 
 async def _pg_available() -> bool:
@@ -414,7 +426,7 @@ async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
     reader_pool = await _pool(reader_config, reader_config.lightrag_pool_server_settings())
     try:
         async with reader_pool.acquire() as conn:
-            with pytest.raises(SchemaValidationError) as excinfo:
+            with pytest.raises(CorpusSchemaError) as excinfo:
                 await verify_migrations(
                     conn,
                     scope=scope.name,

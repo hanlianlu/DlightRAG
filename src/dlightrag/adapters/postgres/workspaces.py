@@ -8,13 +8,14 @@ this table owns the user-facing workspace list, including empty workspaces.
 
 from typing import Any
 
-from dlightrag.storage.migrations import (
+from dlightrag_rag.ports import CorpusSchemaError
+
+from dlightrag.adapters.postgres._migrations import (
     Migration,
     TableRequirement,
     apply_migrations,
     verify_migrations,
 )
-from dlightrag.utils import normalize_workspace
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
@@ -42,14 +43,6 @@ ORDER BY workspace
 """
 
 _DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
-
-_EXISTS = "SELECT 1 FROM dlightrag_workspace_meta WHERE workspace = $1 LIMIT 1"
-
-_CANONICALIZATION_ROWS = """
-SELECT workspace, display_name, embedding_model
-FROM dlightrag_workspace_meta
-ORDER BY workspace
-"""
 
 _SCHEMA_MIGRATIONS = (
     Migration(
@@ -79,7 +72,7 @@ class PGWorkspaceRegistry:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
 
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         return await pg_pool.run(operation)
 
@@ -93,14 +86,15 @@ class PGWorkspaceRegistry:
                     scope="workspace_registry",
                     migrations=_SCHEMA_MIGRATIONS,
                     tables=_SCHEMA_TABLES,
+                    schema_error=CorpusSchemaError,
                 )
                 return
             await apply_migrations(
                 conn,
                 scope="workspace_registry",
                 migrations=_SCHEMA_MIGRATIONS,
+                schema_error=CorpusSchemaError,
             )
-            await _canonicalize_workspace_rows(conn)
 
         await self._run(_operation)
 
@@ -129,52 +123,19 @@ class PGWorkspaceRegistry:
         rows = await self._run(_operation)
         return [dict(row) for row in rows]
 
-    async def list_workspaces(self) -> list[str]:
-        """Return all workspace identifiers."""
-        return [row["workspace"] for row in await self.list()]
-
-    async def exists(self, workspace: str) -> bool:
-        """Return True when a registry row exists."""
-        workspace_id = _workspace_id(workspace)
-
-        async def _operation(conn: Any) -> Any:
-            return await conn.fetchrow(_EXISTS, workspace_id)
-
-        row = await self._run(_operation)
-        return row is not None
-
-    async def delete(self, workspace: str) -> None:
+    async def delete(self, workspace: str) -> bool:
         """Delete one workspace registry row."""
         workspace_id = _workspace_id(workspace)
 
-        async def _operation(conn: Any) -> None:
-            await conn.execute(_DELETE, workspace_id)
+        async def _operation(conn: Any) -> bool:
+            result = await conn.execute(_DELETE, workspace_id)
+            return result != "DELETE 0"
 
-        await self._run(_operation)
-
-
-async def _canonicalize_workspace_rows(conn: Any) -> None:
-    rows = await conn.fetch(_CANONICALIZATION_ROWS)
-    records = [dict(row) for row in rows]
-    existing = {str(row.get("workspace") or "") for row in records}
-    for row in records:
-        raw_workspace = str(row.get("workspace") or "")
-        workspace_id = normalize_workspace(raw_workspace)
-        if not workspace_id or workspace_id == raw_workspace:
-            continue
-        if workspace_id not in existing:
-            await conn.execute(
-                _UPSERT,
-                workspace_id,
-                str(row.get("display_name") or raw_workspace),
-                str(row.get("embedding_model") or ""),
-            )
-            existing.add(workspace_id)
-        await conn.execute(_DELETE, raw_workspace)
+        return await self._run(_operation)
 
 
 def _workspace_id(workspace: str) -> str:
-    workspace_id = normalize_workspace(workspace)
+    workspace_id = str(workspace).strip()
     if not workspace_id:
         raise ValueError("workspace cannot be empty")
     return workspace_id

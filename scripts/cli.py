@@ -263,7 +263,12 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         config = config.model_copy(update={"workspace": workspace})
     print(f"Workspace: {workspace}\n")
 
-    service = await RAGService.acreate(config=config)
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+
+    service = await RAGService.acreate(
+        config=config,
+        corpus_backend_factory=PGCorpusBackendFactory(config),
+    )
     try:
         result = await service.aingest(source_type=source, **kwargs)
         _print_json(result)

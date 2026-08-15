@@ -7,9 +7,9 @@ from typing import Any
 
 from dlightrag_rag.retrieval import MetadataFilter
 
+from dlightrag.adapters.postgres import pg_metadata_index
+from dlightrag.adapters.postgres.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
 from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-from dlightrag.storage import pg_metadata_index
-from dlightrag.storage.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
 
 
 def _index_sql() -> str:

@@ -3,7 +3,7 @@
 
 import pytest
 
-from dlightrag.storage.postgres_version import (
+from dlightrag.adapters.postgres._version import (
     ensure_postgres_extensions,
     parse_pgvector_version,
     parse_server_version_num,

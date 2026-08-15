@@ -222,7 +222,7 @@ def _install_store_class(
         async def sweep_once(self) -> Any:
             return None
 
-    monkeypatch.setattr("dlightrag.storage.answer_runs.PGAnswerRunStore", _Store)
+    monkeypatch.setattr("dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore", _Store)
     return created
 
 

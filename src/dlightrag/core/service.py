@@ -8,10 +8,7 @@ concurrent workers.
 """
 
 import asyncio
-import hashlib
 import logging
-import os
-import random
 import shutil
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
@@ -22,7 +19,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag_ai.embedding import MultimodalEmbedder, create_embedding_model
 from dlightrag_rag.lightrag_models import LightRagChatModels, build_lightrag_embedding
-from dlightrag_rag.ports import MetadataIndexProtocol
+from dlightrag_rag.ports import (
+    CorpusBackendFactory,
+    MetadataIndexProtocol,
+    WorkspaceCorpusBackend,
+)
 from dlightrag_rag.rerank import build_rerank_func, rerank_consumes_images
 from lightrag.constants import (
     DEFAULT_COSINE_THRESHOLD,
@@ -96,38 +97,10 @@ def _source_document_from_manifest(document: IngestDocument, *, key: str) -> Sou
     )
 
 
-# PostgreSQL advisory lock serializing first-time storage init across
-# concurrent workers (multi-Gunicorn processes, Docker scale-out, launchd
-# respawn). Wraps the multi-step DDL sequence — CREATE EXTENSION pgvector,
-# CREATE TABLE, CREATE INDEX, seed rows — as a critical section.
-# Per-statement IF NOT EXISTS isn't enough: the PG catalog has known races
-# on concurrent CREATE TABLE, and the sequence itself can't run in a single
-# transaction (CREATE EXTENSION / CREATE INDEX both bar that). First
-# acquirer runs _do_initialize(); other workers poll with backoff up to
-# 180s, then proceed against ready storage. Same pattern Flyway / Django
-# / Rails / golang-migrate all use; PG ships pg_try_advisory_lock for
-# exactly this purpose, so we are not working around a missing feature.
-#
-# Key layout matches ArtRAG: 6-byte project tag + 0x00 + 1-byte
-# namespace. 0x01 = init; 0x02..0xFF reserved for future DlightRAG
-# locks. Advisory locks are session-scoped and not persisted, so the
-# specific number is irrelevant beyond uniqueness within DlightRAG.
-_PG_INIT_LOCK_KEY = 0x446C_6967_6874_0001  # "Dlight\x00\x01"
-_PIPELINE_RECOVERY_LOCK_NAMESPACE = "dlightrag_pipeline_recovery"
-
 _REMOTE_INGEST_BATCH_SIZE = 64
 _REMOTE_DOWNLOAD_CONCURRENCY = 8
-_PROCESS_COUNT_ENV_VARS = ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS")
 
 RemoteIngestProgressCallback = Callable[["RemoteIngestWindowProgress"], Awaitable[None]]
-
-
-def _pipeline_recovery_lock_key(workspace: str) -> int:
-    digest = hashlib.blake2b(
-        f"{_PIPELINE_RECOVERY_LOCK_NAMESPACE}:{workspace}".encode(),
-        digest_size=8,
-    ).digest()
-    return int.from_bytes(digest, "big", signed=True)
 
 
 @dataclass(frozen=True)
@@ -203,31 +176,13 @@ def _log_download_locator_outcome(*, outcome: str, locator_kind: str, source_fil
     )
 
 
-def _configured_process_count() -> int:
-    """Best-effort process count from common server env vars."""
-    for name in _PROCESS_COUNT_ENV_VARS:
-        raw = os.environ.get(name)
-        if raw is None:
-            continue
-        try:
-            count = int(raw)
-        except ValueError:
-            continue
-        if count > 0:
-            return count
-    return 1
-
-
 from dlightrag_rag.retrieval import MetadataFilter  # noqa: E402
 
+from dlightrag.adapters.postgres.lightrag_readonly import (  # noqa: E402
+    attach_lightrag_storages_read_only,
+)
 from dlightrag.core.contract_guard import LightRAGContractGuard  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
-from dlightrag.storage.lightrag_readonly import attach_lightrag_storages_read_only  # noqa: E402
-from dlightrag.storage.postgres_version import (  # noqa: E402
-    ensure_pgvector_halfvec,
-    ensure_postgres_extensions,
-    ensure_postgres_major,
-)
 
 # Identity and storage plumbing: never part of a caller-facing answer or payload.
 _INTERNAL_FIELDS = frozenset({"workspace", "doc_id", "download_locator"})
@@ -243,12 +198,17 @@ class RAGService:
 
     Usage:
         # Production: use async factory method
-        rag = await RAGService.acreate(config=my_config, enable_vlm=True)
+        rag = await RAGService.acreate(
+            config=my_config,
+            enable_vlm=True,
+            corpus_backend_factory=backend_factory,
+        )
 
         # With callbacks:
         rag = await RAGService.acreate(
             config=my_config,
             cancel_checker=my_cancel_fn,
+            corpus_backend_factory=backend_factory,
         )
     """
 
@@ -259,6 +219,8 @@ class RAGService:
         enable_vlm: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         rerank_supports_vision: bool | None = None,
+        *,
+        corpus_backend_factory: CorpusBackendFactory,
     ) -> RAGService:
         """Async factory method - creates and initializes RAGService."""
         instance = cls(
@@ -266,6 +228,7 @@ class RAGService:
             enable_vlm=enable_vlm,
             cancel_checker=cancel_checker,
             rerank_supports_vision=rerank_supports_vision,
+            corpus_backend_factory=corpus_backend_factory,
         )
         try:
             await instance.initialize()
@@ -283,12 +246,16 @@ class RAGService:
         enable_vlm: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         rerank_supports_vision: bool | None = None,
+        *,
+        corpus_backend_factory: CorpusBackendFactory,
     ) -> None:
         """Store configuration only. Use RAGService.acreate() for full initialization."""
         self.config = config or get_config()
         self.enable_vlm = enable_vlm
         self._initialized: bool = False
         self._pipeline_recovery_task: asyncio.Task[None] | None = None
+        self._corpus_backend_factory = corpus_backend_factory
+        self._corpus_backend: WorkspaceCorpusBackend | None = None
 
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
@@ -446,139 +413,18 @@ class RAGService:
             max_total_tokens=config.max_total_tokens,
         )
 
-    @staticmethod
-    def _required_postgres_extensions(config: DlightragConfig) -> tuple[str, ...]:
-        """Return DlightRAG-owned PostgreSQL extensions required by runtime config."""
-        if not config.bm25_enabled:
-            return ()
-
-        from dlightrag.core.retrieval.bm25 import (
-            profiles_from_config,
-            required_postgres_extensions,
-        )
-
-        return required_postgres_extensions(profiles_from_config(config.bm25_profiles))
-
     async def initialize(self) -> None:
-        """Initialize LightRAG storages and caches (idempotent).
-
-        Uses PostgreSQL advisory lock for distributed coordination. DlightRAG's
-        core runtime is PostgreSQL-only, so unavailable PG is a startup error.
-        """
+        """Initialize LightRAG storages and caches (idempotent)."""
         if self._initialized:
             return
 
-        await self._initialize_with_pg_lock()
+        backend = self._corpus_backend_factory.create()
+        self._corpus_backend = backend
+        async with backend.coordination.workspace_initialization():
+            await self._do_initialize()
 
         self._initialized = True
         logger.debug("RAGService initialized")
-
-    async def _initialize_with_pg_lock(self) -> None:
-        """Initialize with PostgreSQL advisory lock for multi-worker safety.
-
-        The lock only coordinates ``_do_initialize()`` — LightRAG storage
-        creation and domain store setup. All DDL is idempotent (CREATE TABLE
-        IF NOT EXISTS), so stores self-initialize without needing the lock.
-        LightRAG owns its storage bootstrap; DlightRAG only bootstraps extensions
-        required by DlightRAG-owned stores such as pg_textsearch BM25.
-        """
-        try:
-            import asyncpg
-        except ImportError:
-            raise RuntimeError("asyncpg is required for DlightRAG PostgreSQL storage") from None
-
-        try:
-            conn = await asyncpg.connect(**self.config.pg_connection_kwargs())
-        except Exception as e:
-            raise RuntimeError(
-                "PostgreSQL is required for DlightRAG startup and could not be reached"
-            ) from e
-
-        try:
-            await ensure_postgres_major(conn)
-            if self.config.pg_vector_index_type == "HNSW_HALFVEC":
-                await ensure_pgvector_halfvec(conn)
-            await self._check_postgres_concurrency_sanity(conn)
-
-            if self.config.is_reader:
-                # Readers attach to an already-migrated corpus schema: no
-                # advisory lock, no extension creation, no migrations, no DDL.
-                logger.info("Initializing RAG pipelines in corpus-read-only reader role")
-                await self._do_initialize()
-                return
-
-            acquired = await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY)
-
-            if acquired:
-                logger.info("Acquired PG advisory lock, initializing RAG pipelines...")
-                try:
-                    await ensure_postgres_extensions(
-                        conn,
-                        self._required_postgres_extensions(self.config),
-                    )
-                    await self._do_initialize()
-                    logger.info("RAG pipelines initialized successfully")
-                finally:
-                    await conn.execute("SELECT pg_advisory_unlock($1)", _PG_INIT_LOCK_KEY)
-            else:
-                logger.info("Another worker is initializing, waiting for lock...")
-                waited = 0.0
-                backoff = 0.1
-                while waited < 180:
-                    # Jitter avoids thundering-herd when many workers
-                    # retry on the same beat.
-                    jitter = random.uniform(0, backoff * 0.5)  # noqa: S311 - non-security jitter
-                    await asyncio.sleep(backoff + jitter)
-                    waited += backoff + jitter
-                    if await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY):
-                        await conn.execute("SELECT pg_advisory_unlock($1)", _PG_INIT_LOCK_KEY)
-                        break
-                    backoff = min(backoff * 1.5, 5.0)
-                else:
-                    logger.warning("Lock acquisition timeout after 180s")
-                logger.info("Lock released, connecting to existing storages...")
-                await self._do_initialize()
-        finally:
-            await conn.close()
-
-    async def _check_postgres_concurrency_sanity(self, conn: Any) -> None:
-        """Warn when configured pools can exhaust server connections."""
-        try:
-            max_connections = int(await conn.fetchval("SHOW max_connections"))
-        except Exception:
-            logger.debug("Could not read PostgreSQL max_connections", exc_info=True)
-            return
-
-        config = self.config
-        per_process = config.postgres_lightrag_pool_max_size + config.postgres_pool_max_size
-        process_count = _configured_process_count()
-        estimated = per_process * process_count
-        reserved = max(5, max_connections // 10)
-        usable = max_connections - reserved
-
-        logger.info(
-            "PostgreSQL connection sanity: max_connections=%d usable_after_headroom=%d "
-            "configured_pool_connections_per_process=%d "
-            "(lightrag=%d, dlightrag=%d) process_count=%d estimated_pool_connections=%d",
-            max_connections,
-            usable,
-            per_process,
-            config.postgres_lightrag_pool_max_size,
-            config.postgres_pool_max_size,
-            process_count,
-            estimated,
-        )
-        if estimated > usable:
-            logger.warning(
-                "PostgreSQL connection budget is tight: estimated_pool_connections=%d "
-                "exceeds usable_after_headroom=%d (max_connections=%d, headroom=%d). "
-                "Lower postgres_lightrag_pool_max_size/postgres_pool_max_size/process count "
-                "or raise max_connections.",
-                estimated,
-                usable,
-                max_connections,
-                reserved,
-            )
 
     async def _do_initialize(self) -> None:
         """Create one LightRAG-backed unified pipeline."""
@@ -586,9 +432,6 @@ class RAGService:
 
         from dlightrag.core._lightrag_patches import apply as apply_lightrag_patches
 
-        self.config.apply_lightrag_backend_env(force=True)
-        self.config.apply_lightrag_sidecar_env()
-        self.config.apply_lightrag_runtime_env(force=True)
         validate_parser_routing_config(self.config.parser_rules)
         docling = self.config.parser_sidecars.docling
         apply_lightrag_patches(
@@ -772,7 +615,7 @@ class RAGService:
             )
         )
 
-        from dlightrag.storage.pool import pg_pool
+        from dlightrag.adapters.postgres._pool import pg_pool
 
         self._bm25 = await create_postgres_bm25(
             config,
@@ -808,25 +651,25 @@ class RAGService:
     async def _resume_lightrag_pipeline(self) -> None:
         """Run LightRAG's native sweep for pending and interrupted documents."""
         from dlightrag.observability import trace_observation
-        from dlightrag.storage.pool import pg_pool
 
         try:
-            pool = await pg_pool.get()
-            async with pool.acquire(timeout=self.config.postgres_acquire_timeout) as conn:
-                lock_key = _pipeline_recovery_lock_key(self.config.workspace)
-                await conn.execute("SELECT pg_advisory_lock($1)", lock_key)
-                try:
-                    async with trace_observation(
-                        "ingest_pipeline",
-                        as_type="chain",
-                        metadata={"trigger": "startup_recovery"},
-                    ):
-                        await self._lightrag.apipeline_process_enqueue_documents()
-                    logger.info("LightRAG startup pipeline recovery complete")
-                finally:
-                    await conn.execute("SELECT pg_advisory_unlock($1)", lock_key)
+            backend = self._require_corpus_backend()
+            async with backend.coordination.pipeline_recovery():
+                async with trace_observation(
+                    "ingest_pipeline",
+                    as_type="chain",
+                    metadata={"trigger": "startup_recovery"},
+                ):
+                    await self._lightrag.apipeline_process_enqueue_documents()
+                logger.info("LightRAG startup pipeline recovery complete")
         except Exception:
             logger.warning("LightRAG startup pipeline recovery failed", exc_info=True)
+
+    def _require_corpus_backend(self) -> WorkspaceCorpusBackend:
+        backend = self._corpus_backend
+        if backend is None:
+            raise RuntimeError("RAGService corpus backend is not initialized")
+        return backend
 
     async def _create_metadata_index(
         self,
@@ -835,7 +678,7 @@ class RAGService:
         validate_only: bool = False,
     ) -> MetadataIndexProtocol:
         """Create (or validate) the PostgreSQL metadata index backend."""
-        from dlightrag.storage.pg_metadata_index import PGMetadataIndex
+        from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 
         idx = PGMetadataIndex(workspace=config.workspace)
         await idx.initialize(validate_only=validate_only)
@@ -923,7 +766,12 @@ class RAGService:
         self.config.require_writer("workspace reset")
         from dlightrag.core.reset import areset
 
-        return await areset(self, keep_files=keep_files, dry_run=dry_run)
+        return await areset(
+            self,
+            maintenance=self._require_corpus_backend().maintenance,
+            keep_files=keep_files,
+            dry_run=dry_run,
+        )
 
     async def _shutdown_worker_pools(self) -> None:
         """Shutdown LightRAG priority-queue worker pools."""
@@ -932,11 +780,7 @@ class RAGService:
     async def _upsert_workspace_meta(self, *, display_name: str | None = None) -> None:
         """Persist this workspace in DlightRAG's PostgreSQL registry."""
         self.config.require_writer("workspace registration")
-        from dlightrag.storage.workspaces import PGWorkspaceRegistry
-
-        registry = PGWorkspaceRegistry()
-        await registry.initialize()
-        await registry.upsert(
+        await self._require_corpus_backend().maintenance.register_workspace(
             workspace=normalize_workspace(self.config.workspace),
             display_name=display_name or self.config.workspace,
             embedding_model=self.config.embedding.model,
