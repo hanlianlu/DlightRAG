@@ -7,6 +7,7 @@ from types import MappingProxyType
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
@@ -17,6 +18,9 @@ from dlightrag_ai.telemetry import NoopTelemetry
 from dlightrag_rag.ports import WorkspaceCorpusBackend
 from dlightrag_rag.settings import RagSettings
 from dlightrag_rag.workspace_rag import WorkspaceRag
+
+from dlightrag.core.servicemanager import RAGServiceManager
+from dlightrag.runtime import RunCoordinator
 
 
 class _Coordination:
@@ -89,6 +93,7 @@ def test_workspace_rag_constructor_accepts_only_final_collaborators() -> None:
         workspace_id="research_team",
         settings=settings,
         backend=backend,
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=NoopTelemetry(),
         rerank_supports_vision=True,
     )
@@ -107,6 +112,7 @@ def test_workspace_rag_rejects_backend_workspace_drift() -> None:
             workspace_id="research_team",
             settings=_settings(),
             backend=backend,
+            scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NoopTelemetry(),
         )
 
@@ -120,6 +126,7 @@ def test_workspace_rag_rejects_backend_role_drift() -> None:
             workspace_id="research_team",
             settings=_settings(),
             backend=backend,
+            scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NoopTelemetry(),
         )
 
@@ -142,6 +149,25 @@ def test_root_config_maps_independent_rag_pipeline_settings(test_config) -> None
     assert test_config.max_async == 3
 
 
+def test_ai_runtime_and_rag_concurrency_owners_vary_independently(test_config) -> None:
+    from dlightrag.model_settings import rag_settings
+
+    test_config.max_async = 3
+    test_config.runtime.answer_worker_concurrency = 5
+    test_config.rag_pipeline_max_async = 13
+
+    manager = RAGServiceManager(config=test_config)
+    coordinator = RunCoordinator(
+        store=AsyncMock(),
+        executor=AsyncMock(),
+        answer_worker_concurrency=test_config.runtime.answer_worker_concurrency,
+    )
+
+    assert manager._model_scheduler.max_concurrency == 3
+    assert coordinator.answer_worker_concurrency == 5
+    assert rag_settings(test_config).rag_pipeline_max_async == 13
+
+
 @pytest.mark.parametrize("workspace_id", ["Research Team", "research-team", "", "../research"])
 def test_workspace_rag_rejects_noncanonical_workspace_ids(workspace_id: str) -> None:
     with pytest.raises(ValueError, match="canonical workspace id"):
@@ -149,5 +175,6 @@ def test_workspace_rag_rejects_noncanonical_workspace_ids(workspace_id: str) -> 
             workspace_id=workspace_id,
             settings=_settings(),
             backend=_backend(),
+            scheduler=ModelScheduler(max_concurrency=1),
             telemetry=NoopTelemetry(),
         )

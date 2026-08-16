@@ -6,6 +6,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.telemetry import NoopTelemetry
 
 
@@ -67,11 +68,11 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
         self.doc_status = AsyncMock()
         return True
 
-    monkeypatch.setattr(
-        module,
-        "create_embedding_model",
-        lambda *_args, **_kwargs: fake_embedder,
-    )
+    def create_embedding_model(*_args: Any, **kwargs: Any) -> Any:
+        calls["scheduler"] = kwargs["scheduler"]
+        return fake_embedder
+
+    monkeypatch.setattr(module, "create_embedding_model", create_embedding_model)
     monkeypatch.setattr(
         module,
         "build_lightrag_embedding",
@@ -91,6 +92,8 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
         "doc_status": "PGDocStatusStorage",
     }
     assert calls["embedding_func"] is fake_embedding
+    assert isinstance(calls["scheduler"], ModelScheduler)
+    assert calls["scheduler"].max_concurrency == config.max_async
     assert calls["global_config"]["working_dir"] == "/tmp/dlightrag"
     assert calls["global_config"]["embedding_func"] is fake_embedding
 
@@ -356,6 +359,7 @@ def _fake_config() -> SimpleNamespace:
         kv_storage="PGKVStorage",
         doc_status_storage="PGDocStatusStorage",
         embedding_batch_num=7,
+        max_async=3,
         vector_db_kwargs={},
         metadata_filter_exact_vector_threshold=8192,
         parser_rules="*:mineru-iteP",

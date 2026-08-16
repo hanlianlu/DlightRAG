@@ -20,6 +20,7 @@ from dlightrag_ai.fingerprints import ModelFingerprint, model_fingerprint
 from dlightrag_ai.media import bounded_embedding_image_data_uri
 from dlightrag_ai.providers.embed_base import EmbeddingContext, EmbedProvider
 from dlightrag_ai.providers.embed_providers import get_embed_provider
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import EmbeddingSettings
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
 
@@ -68,6 +69,7 @@ class MultimodalEmbedder:
         asymmetric: AsymmetricMode = "auto",
         timeout: float = 120.0,
         fingerprint: ModelFingerprint,
+        scheduler: ModelScheduler,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self.model = model
@@ -80,6 +82,7 @@ class MultimodalEmbedder:
         self.supports_asymmetric = self.asymmetric
         self.api_key = api_key
         self.fingerprint = fingerprint
+        self._scheduler = scheduler
         self._telemetry = telemetry
         self._client = httpx.AsyncClient(
             timeout=timeout,
@@ -186,6 +189,23 @@ class MultimodalEmbedder:
         context: EmbeddingContext,
         modality: str,
     ) -> list[list[float]]:
+        return await self._scheduler.run(
+            lambda: self._execute_request(
+                payload,
+                expected_count=expected_count,
+                context=context,
+                modality=modality,
+            )
+        )
+
+    async def _execute_request(
+        self,
+        payload: dict[str, Any],
+        *,
+        expected_count: int,
+        context: EmbeddingContext,
+        modality: str,
+    ) -> list[list[float]]:
         async with self._telemetry.observe(
             f"embed_{self.model}",
             as_type="embedding",
@@ -244,6 +264,7 @@ class MultimodalEmbedder:
 def create_embedding_model(
     settings: EmbeddingSettings,
     *,
+    scheduler: ModelScheduler,
     telemetry: Telemetry = NOOP_TELEMETRY,
 ) -> MultimodalEmbedder:
     """Build a closeable embedding model from immutable settings."""
@@ -257,6 +278,7 @@ def create_embedding_model(
         asymmetric=settings.asymmetric,
         timeout=settings.timeout,
         fingerprint=model_fingerprint(settings),
+        scheduler=scheduler,
         telemetry=telemetry,
     )
 

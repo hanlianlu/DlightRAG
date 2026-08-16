@@ -8,6 +8,7 @@ import io
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelSettings
 from dlightrag_ai.vision import (
     ImageCapabilityStatus,
@@ -320,7 +321,7 @@ async def test_identical_resolved_configurations_share_one_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     probed = _probed_models(monkeypatch, "supported")
-    capabilities = ModelImageCapabilities()
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
     first = ModelSettings(
         provider="openai", model="shared", api_key="k", base_url="https://api.example/v1"
     )
@@ -337,7 +338,7 @@ async def test_distinct_resolved_configurations_are_probed_separately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     probed = _probed_models(monkeypatch, "supported", "unsupported")
-    capabilities = ModelImageCapabilities()
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
 
     answer = await capabilities.resolve(
         ModelSettings(provider="openai", model="answer-model", api_key="k")
@@ -350,11 +351,53 @@ async def test_distinct_resolved_configurations_are_probed_separately(
     assert (answer.status, vlm.status) == ("supported", "unsupported")
 
 
+async def test_distinct_capability_probes_share_scheduler_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = ModelScheduler(max_concurrency=1)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = 0
+
+    async def probe(_provider, *, model, model_kwargs=None):
+        nonlocal calls
+        del model, model_kwargs
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await release_first.wait()
+        return ImageProbeOutcome(status="supported")
+
+    class Provider:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", lambda *_a, **_k: Provider())
+    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", probe)
+    capabilities = ModelImageCapabilities(scheduler=scheduler)
+    first = asyncio.create_task(
+        capabilities.resolve(ModelSettings(provider="openai", model="first", api_key="k"))
+    )
+    await first_started.wait()
+    second = asyncio.create_task(
+        capabilities.resolve(ModelSettings(provider="openai", model="second", api_key="k"))
+    )
+    await asyncio.sleep(0)
+    assert calls == 1
+
+    release_first.set()
+    assert [outcome.status for outcome in await asyncio.gather(first, second)] == [
+        "supported",
+        "supported",
+    ]
+    assert calls == 2
+
+
 async def test_same_endpoint_with_a_different_key_is_not_deduplicated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     probed = _probed_models(monkeypatch, "supported")
-    capabilities = ModelImageCapabilities()
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
 
     await capabilities.resolve(ModelSettings(provider="openai", model="m", api_key="key-one"))
     await capabilities.resolve(ModelSettings(provider="openai", model="m", api_key="key-two"))
@@ -366,7 +409,10 @@ async def test_only_unknown_reprobes_and_only_once_per_cooldown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     probed = _probed_models(monkeypatch, "unknown")
-    capabilities = ModelImageCapabilities(reprobe_cooldown_seconds=3600.0)
+    capabilities = ModelImageCapabilities(
+        scheduler=ModelScheduler(max_concurrency=1),
+        reprobe_cooldown_seconds=3600.0,
+    )
     unknown = ModelSettings(provider="openai", model="flaky", api_key="k")
     terminal = ModelSettings(provider="openai", model="steady", api_key="k")
 
@@ -415,7 +461,10 @@ async def test_a_slow_probe_does_not_spend_its_own_cooldown(
 
     monkeypatch.setattr("dlightrag_ai.vision.get_provider", lambda *_a, **_k: _StubProvider())
     monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", slow_probe)
-    capabilities = ModelImageCapabilities(reprobe_cooldown_seconds=0.04)
+    capabilities = ModelImageCapabilities(
+        scheduler=ModelScheduler(max_concurrency=1),
+        reprobe_cooldown_seconds=0.04,
+    )
     cfg = ModelSettings(provider="openai", model="unreachable", api_key="k")
 
     await capabilities.resolve(cfg)
@@ -430,7 +479,7 @@ async def test_concurrent_resolution_of_one_configuration_probes_once(
     import asyncio
 
     probed = _probed_models(monkeypatch, "supported")
-    capabilities = ModelImageCapabilities()
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
     cfg = ModelSettings(provider="openai", model="single-flight", api_key="k")
 
     await asyncio.gather(*(capabilities.resolve(cfg) for _ in range(4)))
@@ -454,7 +503,7 @@ async def test_cancelled_probe_finishes_provider_close(
 
     monkeypatch.setattr("dlightrag_ai.vision.get_provider", lambda *_a, **_k: Provider())
     monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", cancelled_probe)
-    capabilities = ModelImageCapabilities()
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
     task = asyncio.create_task(
         capabilities.resolve(ModelSettings(provider="openai", model="cancelled", api_key="k"))
     )

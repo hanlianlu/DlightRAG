@@ -523,6 +523,14 @@ class AnswerConfig(BaseModel):
     )
 
 
+class RuntimeConfig(BaseModel):
+    """Durable Answer worker admission owned by the Runtime layer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer_worker_concurrency: int = Field(default=16, ge=1)
+
+
 class WebConversationsConfig(BaseModel):
     """Durable Web conversation retention controls."""
 
@@ -861,6 +869,7 @@ class DlightragConfig(BaseSettings):
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
     answer: AnswerConfig = Field(default_factory=AnswerConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     web_conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
@@ -941,7 +950,11 @@ class DlightragConfig(BaseSettings):
     )
 
     # Concurrency (product-tier; also surfaced in config.yaml).
-    max_async: int = Field(default=16, ge=1)
+    max_async: int = Field(
+        default=16,
+        ge=1,
+        description="Process-wide concurrent AI provider requests.",
+    )
     rag_pipeline_max_async: int = Field(
         default=16,
         ge=1,

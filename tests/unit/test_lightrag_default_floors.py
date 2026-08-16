@@ -19,7 +19,7 @@ UPSTREAM_FLOORS: dict[str, str] = {
     "top_k": "DEFAULT_TOP_K",
     "chunk_top_k": "DEFAULT_CHUNK_TOP_K",
     "chunk_p_token_size": "DEFAULT_CHUNK_P_SIZE",
-    "max_async": "DEFAULT_MAX_ASYNC",
+    "rag_pipeline_max_async": "DEFAULT_MAX_ASYNC",
     "embedding_func_max_async": "DEFAULT_EMBEDDING_FUNC_MAX_ASYNC",
     "embedding_batch_num": "DEFAULT_EMBEDDING_BATCH_NUM",
     "max_total_tokens": "DEFAULT_MAX_TOTAL_TOKENS",

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from dlightrag_ai.completion import CompletionModel
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelSettings
 
 
@@ -50,6 +51,7 @@ async def test_provider_error_text_is_redacted_when_sensitive_capture_is_disable
     )
     model = CompletionModel(
         ModelSettings(provider="openai", model="model"),
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=telemetry,
     )
 
@@ -83,6 +85,7 @@ async def test_stream_records_ttft_usage_cost_and_sensitive_text(monkeypatch) ->
     )
     model = CompletionModel(
         ModelSettings(provider="openai", model="stream-model"),
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=telemetry,
     )
 
@@ -139,6 +142,7 @@ async def test_stream_propagates_cancellation_without_false_error(monkeypatch) -
     )
     model = CompletionModel(
         ModelSettings(provider="openai", model="stream-model"),
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=telemetry,
     )
     stream = await model(messages=[{"role": "user", "content": "hi"}], stream=True)
@@ -177,6 +181,7 @@ async def test_stream_consumer_abandonment_closes_provider_iterator(monkeypatch)
     )
     model = CompletionModel(
         ModelSettings(provider="openai", model="stream-model"),
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=telemetry,
     )
     stream = await model(messages=[{"role": "user", "content": "hi"}], stream=True)

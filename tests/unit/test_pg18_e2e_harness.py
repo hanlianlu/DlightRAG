@@ -3,6 +3,8 @@
 
 from typing import Any
 
+from dlightrag_ai.scheduler import ModelScheduler
+
 from tests.e2e.pg18_harness import (
     REQUIRED_EXTENSIONS,
     e2e_enabled,
@@ -58,10 +60,21 @@ async def test_pg18_fake_model_factories_match_service_initialization(monkeypatc
 
     embedder = install_fake_model_functions(monkeypatch, dim=8)
     config: Any = object()
+    scheduler = ModelScheduler(max_concurrency=1)
 
-    chat_models = await service_module.LightRagChatModels.acreate(config)
+    chat_models = await service_module.LightRagChatModels.acreate(
+        config,
+        scheduler=scheduler,
+    )
     assert chat_models.default_func is not None
-    assert service_module.build_rerank_func(config, supports_vision=True) is None
+    assert (
+        service_module.build_rerank_func(
+            config,
+            scheduler=scheduler,
+            supports_vision=True,
+        )
+        is None
+    )
     assert chat_models.role_configs is None
-    assert service_module.create_embedding_model(config) is embedder
+    assert service_module.create_embedding_model(config, scheduler=scheduler) is embedder
     assert service_module.build_lightrag_embedding(config, embedder).embedding_dim == 8

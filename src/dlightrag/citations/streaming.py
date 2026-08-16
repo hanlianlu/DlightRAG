@@ -4,7 +4,7 @@
 import asyncio
 import inspect
 import logging
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
@@ -45,13 +45,14 @@ class AnswerStream(AsyncIterator[str]):
 
     async def aclose(self) -> None:
         """Cancel the underlying LLM stream to stop wasting tokens on disconnect."""
+        await self._gen.aclose()
         aclose = getattr(self._raw, "aclose", None)
         if callable(aclose):
             result = aclose()
             if inspect.isawaitable(result):
                 await cast(Awaitable[Any], result)
 
-    async def _iterate(self) -> AsyncIterator[str]:  # type: ignore[override]
+    async def _iterate(self) -> AsyncGenerator[str]:
         async for chunk in self._raw:
             self._parts.append(chunk)
             yield chunk
@@ -100,8 +101,8 @@ async def iter_answer_tokens(
 async def aclose_answer_stream(token_iter: object) -> None:
     """Close an answer token iterator if it supports ``aclose``.
 
-    Releases the bounded answer-stream slot and cancels the upstream LLM
-    connection. No-op for ``None``/``str`` iterators.
+    Releases any AI scheduler slot and cancels the upstream LLM connection.
+    No-op for ``None``/``str`` iterators.
     """
     aclose = getattr(token_iter, "aclose", None)
     if aclose is not None:

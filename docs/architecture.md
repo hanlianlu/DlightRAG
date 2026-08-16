@@ -274,8 +274,8 @@ top-level Python packages make their import directions observable in source and
 in built wheels:
 
 ```text
-dlightrag-ai          immutable settings/fingerprints; chat, tool, embedding,
-     ↑       ↑        HTTP rerank and image-probe model lifecycles
+dlightrag-ai          immutable settings/fingerprints; fair provider admission;
+     ↑       ↑        chat, tool, embedding, rerank and probe lifecycles
      │       │
 dlightrag-agent-core  generic tool contracts and deterministic turn execution
 

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for root settings mapping and AI model factories."""
 
+import asyncio
 import operator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.completion import CompletionModel
 from dlightrag_ai.providers.base import CompletionOutput
+from dlightrag_ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag_ai.settings import ModelSettings
 from dlightrag_ai.structured import StructuredOutput
 from pydantic import BaseModel, ConfigDict
@@ -260,6 +262,7 @@ async def test_ai_completion_model_owns_provider_telemetry_and_lifecycle(monkeyp
     )
     model = CompletionModel(
         ModelSettings(provider="openai", model="model-a", api_key="key"),
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=Telemetry(),
     )
 
@@ -296,7 +299,10 @@ def test_root_maps_embedding_settings_into_ai_factory(monkeypatch) -> None:
     monkeypatch.setattr(embedding, "get_embed_provider", lambda _name: provider)
 
     settings = embedding_settings(config)
-    model = embedding.create_embedding_model(settings)
+    model = embedding.create_embedding_model(
+        settings,
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
 
     assert settings.timeout == 45
     assert model.provider is provider
@@ -382,7 +388,8 @@ def test_incomplete_independent_reranker_falls_back_to_default(api_key: str) -> 
 async def test_structured_output_uses_openai_json_schema(monkeypatch) -> None:
     seen = _capture_provider(monkeypatch)
     model = CompletionModel(
-        ModelSettings(provider="openai", model="gpt-5.4-mini", api_key="sk-test")
+        ModelSettings(provider="openai", model="gpt-5.4-mini", api_key="sk-test"),
+        scheduler=ModelScheduler(max_concurrency=1),
     )
 
     await model(
@@ -406,7 +413,8 @@ async def test_structured_output_auto_uses_json_object_for_compatible_endpoint(
             model="deepseek-v4-flash",
             api_key="sk-test",
             base_url="https://api.deepseek.com",
-        )
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
     )
 
     await model(
@@ -426,7 +434,8 @@ async def test_explicit_json_schema_overrides_custom_endpoint(monkeypatch) -> No
             api_key="sk-test",
             base_url="https://llm.example.test/v1",
             structured_output="json_schema",
-        )
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
     )
 
     await model(
@@ -448,7 +457,10 @@ async def test_native_provider_auto_uses_json_schema(
     model_name,
 ) -> None:
     seen = _capture_provider(monkeypatch, supports_native_json_schema=True)
-    model = CompletionModel(ModelSettings(provider=provider, model=model_name, api_key="sk-test"))
+    model = CompletionModel(
+        ModelSettings(provider=provider, model=model_name, api_key="sk-test"),
+        scheduler=ModelScheduler(max_concurrency=1),
+    )
 
     await model(
         messages=[{"role": "user", "content": "hi"}],
@@ -461,14 +473,23 @@ async def test_native_provider_auto_uses_json_schema(
 
 async def test_openai_strict_schema_failure_retries_json_object(monkeypatch) -> None:
     seen: list[dict[str, Any]] = []
+    fallback_started = asyncio.Event()
+    release_fallback = asyncio.Event()
+    ordinary_started = asyncio.Event()
 
     class Provider:
         supports_native_json_schema = False
 
         async def complete(self, **kwargs: Any) -> str:
             seen.append(kwargs)
-            if kwargs["response_format"]["type"] == "json_schema":
+            response_format = kwargs["response_format"]
+            if response_format is None:
+                ordinary_started.set()
+                return "ordinary"
+            if response_format["type"] == "json_schema":
                 raise RuntimeError("strict schemas unsupported")
+            fallback_started.set()
+            await release_fallback.wait()
             return '{"answer": "ok"}'
 
         async def aclose(self) -> None:
@@ -478,16 +499,35 @@ async def test_openai_strict_schema_failure_retries_json_object(monkeypatch) -> 
         "dlightrag_ai.completion.get_provider",
         lambda *_args, **_kwargs: Provider(),
     )
+    scheduler = ModelScheduler(max_concurrency=1)
     model = CompletionModel(
-        ModelSettings(provider="openai", model="local-model", api_key="sk-test")
+        ModelSettings(provider="openai", model="local-model", api_key="sk-test"),
+        scheduler=scheduler,
     )
 
-    await model(
-        messages=[{"role": "user", "content": "hi"}],
-        structured_output=DEMO_STRUCTURED_OUTPUT,
-    )
+    async def structured_request() -> str:
+        with model_call_scope("run-a"):
+            return await model(
+                messages=[{"role": "user", "content": "hi"}],
+                structured_output=DEMO_STRUCTURED_OUTPUT,
+            )
 
-    assert [call["response_format"]["type"] for call in seen] == [
+    async def ordinary_request() -> str:
+        with model_call_scope("run-b"):
+            return await model(messages=[{"role": "user", "content": "other"}])
+
+    structured = asyncio.create_task(structured_request())
+    await fallback_started.wait()
+    ordinary = asyncio.create_task(ordinary_request())
+    await asyncio.sleep(0)
+    assert not ordinary_started.is_set()
+
+    release_fallback.set()
+    assert await structured == '{"answer": "ok"}'
+    assert await ordinary == "ordinary"
+
+    assert [call["response_format"]["type"] for call in seen[:2]] == [
         "json_schema",
         "json_object",
     ]
+    assert seen[2]["response_format"] is None

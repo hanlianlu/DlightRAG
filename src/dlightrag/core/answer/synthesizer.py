@@ -28,7 +28,7 @@ from dlightrag_ai.tokens import estimate_content_tokens, estimate_messages_token
 from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.citations.indexer import CitationIndexer
-from dlightrag.citations.streaming import AnswerStream
+from dlightrag.citations.streaming import AnswerStream, aclose_answer_stream
 from dlightrag.core.answer.context import AnswerContextPacker
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
@@ -436,8 +436,11 @@ async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:
         return
     if token_iterator is None:
         return
-    async for token in token_iterator:
-        yield token
+    try:
+        async for token in token_iterator:
+            yield token
+    finally:
+        await aclose_answer_stream(token_iterator)
 
 
 def _has_research_evidence(

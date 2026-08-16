@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dlightrag_ai.scheduler import ModelScheduler
 
 from dlightrag.config import (
     DlightragConfig,
@@ -71,6 +72,7 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
             self.closed = True
 
     monkeypatch.setattr(lightrag_models, "CompletionModel", FakeCompletionModel)
+    scheduler = ModelScheduler(max_concurrency=2)
     bundle = await lightrag_models.LightRagChatModels.acreate(
         ModelRoleSettings(
             default=ModelSettings(provider="openai", model="default-model"),
@@ -81,7 +83,8 @@ async def test_rag_chat_bundle_adapts_explicit_roles_and_closes_models(monkeypat
                     timeout=30,
                 )
             },
-        )
+        ),
+        scheduler=scheduler,
     )
 
     result = await bundle.default_func(
@@ -133,7 +136,8 @@ async def test_rag_chat_bundle_closes_created_models_when_role_construction_fail
             ModelRoleSettings(
                 default=ModelSettings(provider="openai", model="default-model"),
                 overrides={"keyword": ModelSettings(provider="openai", model="broken-role")},
-            )
+            ),
+            scheduler=ModelScheduler(max_concurrency=1),
         )
 
     assert len(FakeCompletionModel.instances) == 1
@@ -164,7 +168,8 @@ async def test_rag_chat_bundle_preserves_construction_error_when_cleanup_fails(
             ModelRoleSettings(
                 default=ModelSettings(provider="openai", model="default-model"),
                 overrides={"keyword": ModelSettings(provider="openai", model="broken-role")},
-            )
+            ),
+            scheduler=ModelScheduler(max_concurrency=1),
         )
 
 

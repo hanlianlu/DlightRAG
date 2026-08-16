@@ -494,28 +494,6 @@ class _InMemoryIngestJobStore:
         return before - len(self.rows)
 
 
-class TestDirectLLMSemaphore:
-    """The _sem_bound cap replaces the removed DlightRAG completion queue."""
-
-    async def test_serializes_owned_llm_calls(self, test_cfg) -> None:
-        manager = RAGServiceManager(config=test_cfg)
-        manager._direct_llm_sem = asyncio.Semaphore(1)
-        peak = 0
-        running = 0
-
-        async def fake_llm(*args: Any, **kwargs: Any) -> str:
-            nonlocal peak, running
-            running += 1
-            peak = max(peak, running)
-            await asyncio.sleep(0.01)
-            running -= 1
-            return "ok"
-
-        bound = manager._sem_bound(fake_llm)
-        await asyncio.gather(bound(), bound(), bound())
-        assert peak == 1
-
-
 class TestGetService:
     """Test workspace-keyed WorkspaceRag creation and caching."""
 
@@ -1414,12 +1392,12 @@ class TestAnswerViaEngine:
 
         create.assert_called_once_with(
             model_settings_for_role(test_cfg, "extract"),
+            scheduler=manager._model_scheduler,
             telemetry=ANY,
         )
         assert planner2 is planner
-        # The manager's direct-LLM semaphore wraps but does not own the AI model.
         assert callable(planner._llm_func)
-        assert planner._llm_func is not planner_model
+        assert planner._llm_func is planner_model
 
 
 class TestDelegation:
@@ -2754,6 +2732,7 @@ class TestAgenticAnswerCapability:
         assert manager._get_query_tool_model() is model
         create.assert_called_once_with(
             model_settings_for_role(cfg, "query"),
+            scheduler=manager._model_scheduler,
             telemetry=ANY,
         )
 

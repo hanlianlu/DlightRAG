@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import (
     EmbeddingSettings,
     ModelRoleSettings,
@@ -71,6 +72,7 @@ def _make_service(*, workspace: str = "test_ws") -> WorkspaceRag:
         workspace_id=workspace,
         settings=settings,
         backend=backend,
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=NoopTelemetry(),
     )
     service._initialized = True

@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from typing import Any
 
@@ -11,6 +11,7 @@ from dlightrag_ai.fingerprints import model_fingerprint
 from dlightrag_ai.messages import AssistantTurn, ToolChoice, ToolDefinition
 from dlightrag_ai.providers import get_provider
 from dlightrag_ai.providers.base import CompletionProvider
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelSettings
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
 
@@ -24,10 +25,12 @@ class ToolModel:
         self,
         settings: ModelSettings,
         *,
+        scheduler: ModelScheduler,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self.settings = settings
         self.fingerprint = model_fingerprint(settings)
+        self._scheduler = scheduler
         self._telemetry = telemetry
         self._ordinary_model_kwargs = settings.model_kwargs_copy()
         self._agentic_model_kwargs = settings.agentic_model_kwargs_copy()
@@ -45,6 +48,21 @@ class ToolModel:
         messages: list[dict[str, Any]],
         tools: list[ToolDefinition],
         tool_choice: ToolChoice = "auto",
+    ) -> AssistantTurn:
+        return await self._scheduler.run(
+            lambda: self._complete_tool_turn(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        )
+
+    async def _complete_tool_turn(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[ToolDefinition],
+        tool_choice: ToolChoice,
     ) -> AssistantTurn:
         async with self._telemetry.observe(
             "agent_model_turn",
@@ -87,12 +105,19 @@ class ToolModel:
             )
             return turn
 
-    async def stream_text(
+    def stream_text(
         self,
         *,
         messages: list[dict[str, Any]],
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str]:
         """Stream a tools-disabled final answer from a rich tool transcript."""
+        return self._scheduler.stream(lambda: self._stream_text(messages=messages))
+
+    async def _stream_text(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+    ) -> AsyncGenerator[str]:
         record_text = self._telemetry.capture_sensitive_data
         streamed: list[str] = []
         usage_details: dict[str, int | float] = {}
@@ -162,6 +187,13 @@ class ToolModel:
         messages: list[dict[str, Any]],
     ) -> str:
         """Return a tools-disabled final answer from a rich tool transcript."""
+        return await self._scheduler.run(lambda: self._complete_text(messages=messages))
+
+    async def _complete_text(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+    ) -> str:
         usage_details: dict[str, int | float] = {}
         cost_details: dict[str, int | float] = {}
         text = ""

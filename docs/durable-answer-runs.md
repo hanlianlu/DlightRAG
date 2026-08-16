@@ -106,15 +106,16 @@ There is no `stream` request field and no temporary Answer mode.
 
 ### Execution
 
-An answer execution slot is one of the `max_async` runs that a process may
-execute concurrently. It is not a token, context, image, storage, or PostgreSQL
-budget. A process reserves a local slot before it claims a row, so a worker
-never owns a lease while waiting for local capacity.
+An answer execution slot is one of the
+`runtime.answer_worker_concurrency` runs that a process may execute
+concurrently. It is not a token, context, image, storage, PostgreSQL, or model
+request budget. A process reserves a local slot before it claims a row, so a
+worker never owns a lease while waiting for local capacity.
 
-`max_async` remains the current process limit shared by Answer execution and
-root-composed model calls. LightRAG corpus processing is independent and uses
-`rag_pipeline_max_async`; lowering that RAG setting cannot reduce durable Answer
-worker admission. Task 8 separates the remaining Answer/model-call ownership.
+AI provider requests use the independent process-wide `max_async` scheduler.
+LightRAG corpus processing uses `rag_pipeline_max_async`. Changing either value
+does not change durable Answer worker admission; a run may issue multiple model
+requests, and those requests compete fairly with requests from other runs.
 
 The creating process wakes its worker after committing the run. A worker with a
 free slot claims the oldest eligible row with `FOR UPDATE SKIP LOCKED`, ordering

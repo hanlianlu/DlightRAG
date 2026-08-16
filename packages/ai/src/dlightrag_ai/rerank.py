@@ -7,6 +7,7 @@ import httpx
 
 from dlightrag_ai.providers.rerank_base import PreparedDocument, RerankProvider
 from dlightrag_ai.providers.rerank_providers import RERANK_PROVIDERS
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import RerankSettings
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry, telemetry_error_message
 
@@ -31,11 +32,13 @@ class RerankModel:
         settings: RerankSettings,
         provider: RerankProvider,
         *,
+        scheduler: ModelScheduler,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self.settings = settings
         self.provider = provider
         self.model = settings.model or provider.default_model
+        self._scheduler = scheduler
         self._telemetry = telemetry
         self._client = httpx.AsyncClient(timeout=60.0)
 
@@ -47,6 +50,15 @@ class RerankModel:
         top_n: int,
     ) -> list[dict[str, Any]]:
         """Return provider-indexed relevance scores for prepared documents."""
+        return await self._scheduler.run(lambda: self._score(query, documents, top_n=top_n))
+
+    async def _score(
+        self,
+        query: str,
+        documents: list[PreparedDocument],
+        *,
+        top_n: int,
+    ) -> list[dict[str, Any]]:
         payload = self.provider.build_payload(
             model=self.model,
             query=query,
@@ -84,6 +96,7 @@ class RerankModel:
 def create_rerank_model(
     settings: RerankSettings,
     *,
+    scheduler: ModelScheduler,
     telemetry: Telemetry = NOOP_TELEMETRY,
 ) -> RerankModel:
     """Validate and build one configured HTTP rerank model."""
@@ -92,7 +105,12 @@ def create_rerank_model(
         raise ValueError(f"{settings.strategy} requires api_key")
     if provider.requires_base_url and not settings.base_url:
         raise ValueError(f"{settings.strategy} requires base_url")
-    return RerankModel(settings, provider, telemetry=telemetry)
+    return RerankModel(
+        settings,
+        provider,
+        scheduler=scheduler,
+        telemetry=telemetry,
+    )
 
 
 __all__ = ["RerankModel", "create_rerank_model", "rerank_accepts_images"]

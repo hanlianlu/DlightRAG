@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from dlightrag.config import DlightragConfig, _find_yaml_config
 
@@ -93,6 +94,7 @@ class TestYamlConfigLoading:
         config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
 
         assert config["embedding"]["input_modality"] == "auto"
+        assert config["runtime"]["answer_worker_concurrency"] == 16
 
     def test_env_example_keeps_web_search_secret_and_answer_behavior_separate(self) -> None:
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
@@ -129,3 +131,24 @@ class TestConfigSources:
 
         config = _settings_config()
         assert config.llm.default.model == "gpt-5.4-mini"
+
+
+def test_runtime_answer_worker_concurrency_is_nested() -> None:
+    config = _settings_config(runtime={"answer_worker_concurrency": 7})
+
+    assert config.runtime.answer_worker_concurrency == 7
+
+
+def test_runtime_answer_worker_concurrency_uses_nested_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DLIGHTRAG_RUNTIME__ANSWER_WORKER_CONCURRENCY", "5")
+
+    assert _settings_config().runtime.answer_worker_concurrency == 5
+
+
+def test_flat_answer_worker_concurrency_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="answer_worker_concurrency"):
+        _settings_config(answer_worker_concurrency=5)

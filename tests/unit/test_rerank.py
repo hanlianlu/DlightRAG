@@ -23,6 +23,7 @@ from dlightrag_ai.providers.rerank_providers import (
     _azure_cohere_rerank_url,
 )
 from dlightrag_ai.rerank import RerankModel
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelSettings, RerankSettings
 from dlightrag_rag.rerank import (
     _build_scored_chunks,
@@ -66,7 +67,8 @@ async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None
             strategy="voyage_reranker",
             model="rerank-2.5",
             api_key="key",
-        )
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
     )
     scores = await model.score("query", [("text", None)], top_n=1)
     await model.aclose()
@@ -74,6 +76,49 @@ async def test_ai_rerank_model_owns_http_provider_execution(monkeypatch) -> None
     assert scores == [{"index": 0, "relevance_score": 0.8}]
     client.post.assert_awaited_once()
     client.aclose.assert_awaited_once()
+
+
+async def test_rerank_requests_share_scheduler_limit() -> None:
+    scheduler = ModelScheduler(max_concurrency=1)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = 0
+    provider = MagicMock()
+    provider.default_model = "rerank-default"
+    provider.build_payload.return_value = {"query": "query", "documents": ["text"]}
+    provider.request_url.return_value = "https://rerank.example/v1/rerank"
+    provider.request_headers.return_value = {}
+    provider.parse_results.return_value = [{"index": 0, "relevance_score": 0.8}]
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"results": []}
+    model = RerankModel(
+        RerankSettings(strategy="voyage_reranker", model="rerank-2.5", api_key="key"),
+        provider,
+        scheduler=scheduler,
+    )
+
+    async def post(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await release_first.wait()
+        return response
+
+    model._client.post = post  # pyright: ignore[reportPrivateUsage]
+    first = asyncio.create_task(model.score("first", [("text", None)], top_n=1))
+    await first_started.wait()
+    second = asyncio.create_task(model.score("second", [("text", None)], top_n=1))
+    await asyncio.sleep(0)
+    assert calls == 1
+
+    release_first.set()
+    assert await asyncio.gather(first, second) == [
+        [{"index": 0, "relevance_score": 0.8}],
+        [{"index": 0, "relevance_score": 0.8}],
+    ]
+    assert calls == 2
 
 
 async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled() -> None:
@@ -99,6 +144,7 @@ async def test_rerank_error_text_is_redacted_when_sensitive_capture_is_disabled(
             api_key="key",
         ),
         VoyageRerankProvider(),
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=Telemetry(),
     )
     model._client.post = AsyncMock(  # pyright: ignore[reportPrivateUsage]
@@ -289,6 +335,7 @@ class TestBuildRerankFunc:
 
         fn = build_rerank_func(
             RerankSettings(strategy="chat_llm_reranker"),
+            scheduler=ModelScheduler(max_concurrency=1),
             scoring_settings=ModelSettings(provider="openai", model="scoring-model"),
         )
         assert fn is not None
@@ -302,6 +349,7 @@ class TestBuildRerankFunc:
 
         fn = build_rerank_func(
             RerankSettings(strategy="voyage_reranker", api_key="voyage-key"),
+            scheduler=ModelScheduler(max_concurrency=1),
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -318,6 +366,7 @@ class TestBuildRerankFunc:
                 api_key="voyage-key",
                 score_threshold=0.42,
             ),
+            scheduler=ModelScheduler(max_concurrency=1),
         )
         assert fn is not None
         await fn("query", [{"content": "chunk"}], 1)
@@ -326,11 +375,17 @@ class TestBuildRerankFunc:
 
     def test_provider_requires_api_key(self):
         with pytest.raises(ValueError, match="requires api_key"):
-            build_rerank_func(RerankSettings(strategy="voyage_reranker"))
+            build_rerank_func(
+                RerankSettings(strategy="voyage_reranker"),
+                scheduler=ModelScheduler(max_concurrency=1),
+            )
 
     def test_provider_requires_base_url(self):
         with pytest.raises(ValueError, match="requires base_url"):
-            build_rerank_func(RerankSettings(strategy="aliyun_reranker", api_key="k"))
+            build_rerank_func(
+                RerankSettings(strategy="aliyun_reranker", api_key="k"),
+                scheduler=ModelScheduler(max_concurrency=1),
+            )
 
     def test_multimodal_on_text_only_provider_raises(self):
         with pytest.raises(ValueError, match="text-only"):
@@ -339,7 +394,8 @@ class TestBuildRerankFunc:
                     strategy="voyage_reranker",
                     api_key="k",
                     input_modality="multimodal",
-                )
+                ),
+                scheduler=ModelScheduler(max_concurrency=1),
             )
 
     async def test_http_rerank_keeps_bounded_orchestration_observation(
@@ -367,6 +423,7 @@ class TestBuildRerankFunc:
         )
         fn = build_rerank_func(
             RerankSettings(strategy="voyage_reranker", api_key="key"),
+            scheduler=ModelScheduler(max_concurrency=1),
             telemetry=Telemetry(),
         )
         assert fn is not None
@@ -1050,6 +1107,7 @@ class TestRunHttpRerankIntegration:
                 api_key="voyage-key",
             ),
             VoyageRerankProvider(),
+            scheduler=ModelScheduler(max_concurrency=1),
         )
         model._client = cast(Any, client)
 

@@ -6,7 +6,8 @@ reserves a local execution slot *before* it claims a row, so a worker never
 holds a lease while waiting for capacity, and every durable write it makes is
 predicated on its own lease owner and fencing epoch. Lease duration, heartbeat
 cadence, sweep cadence, and token coalescing are fixed internal constants; the
-only public bound is ``max_async``, which already bounds concurrent LLM calls.
+public worker bound is ``runtime.answer_worker_concurrency``. AI provider calls
+and RAG pipeline work have independent admission owners.
 """
 
 from __future__ import annotations
@@ -309,20 +310,22 @@ class RunCoordinator:
         *,
         store: AnswerRunStore,
         executor: RunExecutor,
-        max_async: int,
+        answer_worker_concurrency: int,
         worker_id: str | None = None,
         heartbeat_seconds: float = RUN_HEARTBEAT_SECONDS,
         sweep_seconds: float = SWEEP_SECONDS,
         maintenance_seconds: float = MAINTENANCE_SECONDS,
     ) -> None:
+        if answer_worker_concurrency < 1:
+            raise ValueError("answer_worker_concurrency must be positive")
         self._store = store
         self._executor = executor
-        self._max_async = max(1, int(max_async))
+        self._answer_worker_concurrency = int(answer_worker_concurrency)
         self._worker_id = worker_id or f"answer-worker-{uuid.uuid4().hex}"
         self._heartbeat_seconds = heartbeat_seconds
         self._sweep_seconds = sweep_seconds
         self._maintenance_seconds = maintenance_seconds
-        self._slots = asyncio.Semaphore(self._max_async)
+        self._slots = asyncio.Semaphore(self._answer_worker_concurrency)
         self._broker = RunEventBroker()
         self._writes = DurableWrites()
         self._wake = asyncio.Event()
@@ -334,8 +337,8 @@ class RunCoordinator:
         self._sessions: dict[str, RunSession] = {}
 
     @property
-    def max_async(self) -> int:
-        return self._max_async
+    def answer_worker_concurrency(self) -> int:
+        return self._answer_worker_concurrency
 
     @property
     def worker_id(self) -> str:

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from dlightrag_ai.completion import CompletionModel
+from dlightrag_ai.scheduler import ModelScheduler
 
 from dlightrag.citations.highlight import extract_highlights_for_sources
 from dlightrag.citations.schemas import HighlightSource
@@ -24,6 +25,7 @@ async def enrich_semantic_highlights[SourceT: HighlightSource](
     *,
     answer_text: str | None,
     config: DlightragConfig,
+    scheduler: ModelScheduler,
 ) -> list[SourceT]:
     """Return sources with optional semantic highlight phrases."""
     highlight_cfg = config.citations.highlights
@@ -36,6 +38,7 @@ async def enrich_semantic_highlights[SourceT: HighlightSource](
         telemetry = LangfuseTelemetry()
         llm_model = CompletionModel(
             model_settings_for_role(config, "keyword"),
+            scheduler=scheduler,
             telemetry=telemetry,
         )
         async with telemetry.observe(

@@ -183,12 +183,12 @@ async def test_checkpointed_turn_survives_a_new_worker(store: PGAnswerRunStore) 
             await asyncio.sleep(30)
         return {"answer": "second attempt", "turns": session.completed_turns}
 
-    first = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    first = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await first.start()
     await _settle(_checkpoint_committed(store, run_id))
     await first.aclose()
 
-    second = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    second = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await second.start()
     try:
         await _settle(_status_is(store, run_id, "succeeded"))
@@ -253,7 +253,7 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
     coordinator = RunCoordinator(
         store=store,
         executor=_Executor(body),
-        max_async=1,
+        answer_worker_concurrency=1,
         maintenance_seconds=0.05,
     )
     await coordinator.start()
@@ -288,7 +288,7 @@ async def test_graceful_shutdown_requeues_without_crash_recovery(
         await asyncio.sleep(30)
         return {"answer": "unreachable"}
 
-    coordinator = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    coordinator = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await coordinator.start()
     await asyncio.wait_for(running.wait(), timeout=10)
     await coordinator.aclose()
@@ -318,7 +318,7 @@ async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
         await session.flush_tokens()
         return {"answer": "hello world"}
 
-    coordinator = RunCoordinator(store=store, executor=_Executor(body), max_async=1)
+    coordinator = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await coordinator.start()
     try:
         await _settle(_status_is(store, run_id, "succeeded"))
@@ -361,7 +361,7 @@ async def test_running_run_observes_cancellation_and_commits_cancelled(
         return {"answer": "unreachable"}
 
     coordinator = RunCoordinator(
-        store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.05
+        store=store, executor=_Executor(body), answer_worker_concurrency=1, heartbeat_seconds=0.05
     )
     await coordinator.start()
     try:
@@ -635,7 +635,7 @@ def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
     from dlightrag.application import ApplicationHealth
 
     config = MagicMock()
-    config.max_async = 1
+    config.runtime.answer_worker_concurrency = 1
     manager = RAGServiceManager.__new__(RAGServiceManager)
     manager._config = config
     manager._health = ApplicationHealth(readiness_probe=None)

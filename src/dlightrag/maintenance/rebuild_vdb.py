@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 from dlightrag_ai.embedding import create_embedding_model
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.telemetry import Telemetry
 from dlightrag_rag.ingestion.document_embedding import (
     build_document_embedder,
@@ -293,8 +294,10 @@ async def run_rebuild(
 
     resolved_config = config or get_config()
     resolved_embedding = embedding_settings(resolved_config)
+    model_scheduler = ModelScheduler(max_concurrency=resolved_config.max_async)
     multimodal_embedder = create_embedding_model(
         resolved_embedding,
+        scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
     )
     embedding_func = build_lightrag_embedding(resolved_embedding, multimodal_embedder)

@@ -47,6 +47,7 @@ from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
 from dlightrag_ai.completion import CompletionModel
 from dlightrag_ai.fingerprints import model_fingerprint
 from dlightrag_ai.media import MAX_DECODE_IMAGE_PIXELS
+from dlightrag_ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.tool_model import ToolModel
@@ -296,26 +297,27 @@ class _ManagerAnswerExecutor:
         self._manager = manager
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
-        try:
-            return await self._manager._execute_answer_run(session)
-        except (
-            asyncio.CancelledError,
-            RunCancelledError,
-            LeaseLostError,
-            CheckpointError,
-            RunExecutionError,
-        ):
-            raise
-        except Exception as exc:
-            logger.warning("Answer run %s execution failed", session.run_id, exc_info=True)
-            # Only the Answer taxonomy vets a public message; a foreign attribute is untrusted.
-            message = (
-                exc.public_message
-                if isinstance(exc, AnswerInputError | InvalidToolConfigurationError)
-                and exc.public_message
-                else "Answer run failed."
-            )
-            raise RunExecutionError(classify_answer_error(exc), message) from exc
+        with model_call_scope((session.owner_id, session.run_id)):
+            try:
+                return await self._manager._execute_answer_run(session)
+            except (
+                asyncio.CancelledError,
+                RunCancelledError,
+                LeaseLostError,
+                CheckpointError,
+                RunExecutionError,
+            ):
+                raise
+            except Exception as exc:
+                logger.warning("Answer run %s execution failed", session.run_id, exc_info=True)
+                # Only the Answer taxonomy vets a public message; a foreign attribute is untrusted.
+                message = (
+                    exc.public_message
+                    if isinstance(exc, AnswerInputError | InvalidToolConfigurationError)
+                    and exc.public_message
+                    else "Answer run failed."
+                )
+                raise RunExecutionError(classify_answer_error(exc), message) from exc
 
 
 def _fetched_bytes_sink(
@@ -410,11 +412,14 @@ class RAGServiceManager:
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         # Image capability is role-specific but cached per resolved model config,
         # so roles that share one model share one probe.
-        self._image_capabilities = ModelImageCapabilities(telemetry=LangfuseTelemetry())
+        self._model_scheduler = ModelScheduler(max_concurrency=self._config.max_async)
+        self._image_capabilities = ModelImageCapabilities(
+            scheduler=self._model_scheduler,
+            telemetry=LangfuseTelemetry(),
+        )
         self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
-        self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._answer_run_store: PGAnswerRunStore | None = None
         self._web_conversation_store: PGWebConversationStore | None = None
         self._answer_coordinator: RunCoordinator | None = None
@@ -712,6 +717,7 @@ class RAGServiceManager:
                     workspace_id=workspace,
                     settings=rag_settings(ws_config),
                     backend=PGCorpusBackendFactory(ws_config).create(),
+                    scheduler=self._model_scheduler,
                     telemetry=LangfuseTelemetry(),
                     rerank_supports_vision=self._rerank_supports_vision,
                 )
@@ -1211,6 +1217,7 @@ class RAGServiceManager:
         if self._answer_model is None:
             self._answer_model = CompletionModel(
                 model_settings_for_role(self._config, "query"),
+                scheduler=self._model_scheduler,
                 telemetry=LangfuseTelemetry(),
             )
         synthesizer.model_func = self._answer_model
@@ -1293,21 +1300,6 @@ class RAGServiceManager:
 
         return await asyncio.to_thread(build)
 
-    def _sem_bound(self, func: Callable[..., Any]) -> Callable[..., Any]:
-        """Cap a DlightRAG-owned LLM callable by the direct-LLM concurrency semaphore.
-
-        Replaces the old per-func priority queue: planner/vlm now run inline (so
-        they nest under the request span), and this semaphore preserves the
-        ``max_async`` concurrency bound the queue used to provide.
-        """
-        sem = self._direct_llm_sem
-
-        async def _bounded(*args: Any, **kwargs: Any) -> Any:
-            async with sem:
-                return await func(*args, **kwargs)
-
-        return _bounded
-
     def _get_retrieval_planner(
         self,
         model_profile: ModelProfile | None = None,
@@ -1321,10 +1313,11 @@ class RAGServiceManager:
         if self._planner_model is None:
             self._planner_model = CompletionModel(
                 model_settings_for_role(self._config, "extract"),
+                scheduler=self._model_scheduler,
                 telemetry=LangfuseTelemetry(),
             )
         planner = RetrievalPlanner(
-            llm_func=self._sem_bound(self._planner_model),
+            llm_func=self._planner_model,
             model_profile=profile,
             context_policy=CONTEXT_POLICY,
         )
@@ -1351,6 +1344,7 @@ class RAGServiceManager:
         if self._query_tool_model is None:
             self._query_tool_model = ToolModel(
                 model_settings_for_role(self._config, "query"),
+                scheduler=self._model_scheduler,
                 telemetry=LangfuseTelemetry(),
             )
         return self._query_tool_model
@@ -1377,9 +1371,10 @@ class RAGServiceManager:
         if self._vlm_func is None:
             self._vlm_model = CompletionModel(
                 model_settings_for_role(self._config, "vlm"),
+                scheduler=self._model_scheduler,
                 telemetry=LangfuseTelemetry(),
             )
-            self._vlm_func = self._sem_bound(self._vlm_model)
+            self._vlm_func = self._vlm_model
         return self._vlm_func
 
     async def _get_schema(
@@ -1824,32 +1819,8 @@ class RAGServiceManager:
             stream_model_func: Callable[..., AsyncIterator[str]] | None = None
             if resolved.research:
                 tool_model = self._get_query_tool_model()
-
-                async def _model_func(**kwargs: Any) -> Any:
-                    async with self._direct_llm_sem:
-                        return await tool_model(**kwargs)
-
-                def _stream_model_func(**kwargs: Any) -> AsyncIterator[str]:
-                    async def _bounded() -> AsyncIterator[str]:
-                        await self._direct_llm_sem.acquire()
-                        inner = tool_model.stream_text(**kwargs)
-                        try:
-                            async for token in inner:
-                                yield token
-                        finally:
-                            try:
-                                close = getattr(inner, "aclose", None)
-                                if callable(close):
-                                    result = close()
-                                    if inspect.isawaitable(result):
-                                        await cast(Awaitable[Any], result)
-                            finally:
-                                self._direct_llm_sem.release()
-
-                    return _bounded()
-
-                model_func = _model_func
-                stream_model_func = _stream_model_func
+                model_func = tool_model
+                stream_model_func = tool_model.stream_text
 
             synthesizer = self._get_answer_synthesizer(query_profile)
             orchestrator = AnswerOrchestrator(
@@ -2058,7 +2029,7 @@ class RAGServiceManager:
             coordinator = RunCoordinator(
                 store=store,
                 executor=_ManagerAnswerExecutor(self),
-                max_async=int(self._config.max_async),
+                answer_worker_concurrency=self._config.runtime.answer_worker_concurrency,
             )
             await coordinator.start()
             if self._health.is_closed:
@@ -2262,6 +2233,7 @@ class RAGServiceManager:
                         finalized.sources,
                         answer_text=finalized.answer,
                         config=self._config,
+                        scheduler=self._model_scheduler,
                     )
                 trace = dict(getattr(stream, "trace", None) or {})
                 trace["query_image_description_count"] = len(run.image_descriptions)

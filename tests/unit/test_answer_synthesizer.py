@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the AnswerSynthesizer messages-first interface."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -8,8 +9,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from dlightrag_ai.capacity import ModelProfile
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_rag.retrieval import RetrievalContexts
 
+from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.memory.conversation import PriorTurns
@@ -298,6 +301,45 @@ class TestAnswerSynthesizerStream:
             f"{NO_CONTEXT_DISCLAIMER}\n\n",
             "I am DlightRAG.",
         ]
+
+    @pytest.mark.asyncio
+    async def test_closing_no_context_answer_releases_scheduled_model_stream(self) -> None:
+        scheduler = ModelScheduler(max_concurrency=1)
+        source_closed = asyncio.Event()
+        competing_started = asyncio.Event()
+
+        async def source():
+            try:
+                yield "first"
+                await asyncio.Event().wait()
+            finally:
+                source_closed.set()
+
+        async def model_func(**_kwargs: Any):
+            return scheduler.stream(source)
+
+        async def competing() -> None:
+            competing_started.set()
+
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+            model_func=model_func,
+        )
+        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+        _ctx, token_iter = await synth.generate_stream("who are u", contexts)
+        assert isinstance(token_iter, AnswerStream)
+        assert await anext(token_iter) == f"{NO_CONTEXT_DISCLAIMER}\n\n"
+        assert await anext(token_iter) == "first"
+        waiting = asyncio.create_task(scheduler.run(competing))
+        await asyncio.sleep(0)
+        assert not competing_started.is_set()
+
+        await token_iter.aclose()
+
+        assert source_closed.is_set()
+        await waiting
+        assert competing_started.is_set()
 
     @pytest.mark.asyncio
     async def test_generate_stream_returns_packed_contexts_and_tokens(self) -> None:

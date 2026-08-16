@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from dlightrag_ai.providers import get_provider
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelSettings
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry
 
@@ -92,10 +93,12 @@ class ModelImageCapabilities:
     def __init__(
         self,
         *,
+        scheduler: ModelScheduler,
         reprobe_cooldown_seconds: float = _REPROBE_COOLDOWN_SECONDS,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self._cooldown_seconds = reprobe_cooldown_seconds
+        self._scheduler = scheduler
         self._telemetry = telemetry
         self._identity_secret = secrets.token_bytes(32)
         self._outcomes: dict[str, ImageProbeOutcome] = {}
@@ -139,10 +142,12 @@ class ModelImageCapabilities:
                     timeout=settings.timeout,
                     max_retries=settings.max_retries,
                 )
-                outcome = await probe_image_capability(
-                    provider,
-                    model=settings.model,
-                    model_kwargs=settings.model_kwargs_copy() or None,
+                outcome = await self._scheduler.run(
+                    lambda: probe_image_capability(
+                        provider,
+                        model=settings.model,
+                        model_kwargs=settings.model_kwargs_copy() or None,
+                    )
                 )
             except Exception:
                 logger.debug("Image capability probe failed", exc_info=True)

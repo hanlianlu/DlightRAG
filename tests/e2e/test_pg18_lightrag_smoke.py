@@ -8,6 +8,7 @@ Run with:
 from pathlib import Path
 
 import pytest
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_rag.retrieval import MetadataFilter, MetadataScope
 from dlightrag_rag.retrieval.filtering import metadata_filter_scope
 from dlightrag_rag.retrieval.metadata_path import metadata_retrieve
@@ -79,6 +80,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         workspace_id=workspace,
         settings=rag_settings(cfg),
         backend=PGCorpusBackendFactory(cfg).create(),
+        scheduler=ModelScheduler(max_concurrency=cfg.max_async),
         telemetry=LangfuseTelemetry(),
     )
     doc_path = tmp_path / "pg18-native-smoke.md"
@@ -195,12 +197,14 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
     )
     set_config(writer_cfg)
     install_fake_model_functions(monkeypatch, dim=writer_cfg.embedding.dim)
+    model_scheduler = ModelScheduler(max_concurrency=writer_cfg.max_async)
 
     # ── Writer: provision schema + ingest ──────────────────────────────
     writer = await WorkspaceRag.acreate(
         workspace_id=workspace,
         settings=rag_settings(writer_cfg),
         backend=PGCorpusBackendFactory(writer_cfg).create(),
+        scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
     )
     try:
@@ -233,6 +237,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         workspace_id=workspace,
         settings=rag_settings(reader_cfg),
         backend=PGCorpusBackendFactory(reader_cfg).create(),
+        scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
     )
     try:
@@ -278,6 +283,7 @@ async def test_reader_role_attaches_read_only_and_rejects_writes(
         workspace_id=workspace,
         settings=rag_settings(writer_cfg),
         backend=PGCorpusBackendFactory(writer_cfg).create(),
+        scheduler=model_scheduler,
         telemetry=LangfuseTelemetry(),
     )
     try:

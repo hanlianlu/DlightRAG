@@ -413,8 +413,10 @@ async def _settle(predicate: Any, *, timeout: float = 2.0) -> None:
     raise AssertionError("condition never became true")
 
 
-def _coordinator(store: _MemoryStore, executor: _Executor, *, max_async: int = 2):
-    return RunCoordinator(store=store, executor=executor, max_async=max_async)
+def _coordinator(store: _MemoryStore, executor: _Executor, *, answer_worker_concurrency: int = 2):
+    return RunCoordinator(
+        store=store, executor=executor, answer_worker_concurrency=answer_worker_concurrency
+    )
 
 
 def _traceback_depth(exc: BaseException) -> int:
@@ -435,7 +437,7 @@ class TestSchedulingAndLease:
             await release.wait()
             return {"answer": "done"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         store.add_run("run-b")
         await coordinator.start()
@@ -465,7 +467,10 @@ class TestSchedulingAndLease:
             return {"answer": "unreachable"}
 
         coordinator = RunCoordinator(
-            store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
+            store=store,
+            executor=_Executor(body),
+            answer_worker_concurrency=1,
+            heartbeat_seconds=0.01,
         )
         store.add_run("run-a")
         await coordinator.start()
@@ -493,7 +498,7 @@ class TestSchedulingAndLease:
                 raise
             return {"answer": "no"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -513,7 +518,7 @@ class TestSchedulingAndLease:
             return {"answer": "done"}
 
         coordinator = RunCoordinator(
-            store=store, executor=_Executor(body), max_async=1, sweep_seconds=0.01
+            store=store, executor=_Executor(body), answer_worker_concurrency=1, sweep_seconds=0.01
         )
         store.add_run("run-a")
         await coordinator.start()
@@ -532,7 +537,7 @@ class TestRetentionMaintenance:
         coordinator = RunCoordinator(
             store=store,
             executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
-            max_async=1,
+            answer_worker_concurrency=1,
             sweep_seconds=60.0,
             **kwargs,
         )
@@ -554,7 +559,7 @@ class TestRetentionMaintenance:
         coordinator = RunCoordinator(
             store=store,
             executor=_Executor(lambda session: asyncio.sleep(0, {"answer": "x"})),
-            max_async=1,
+            answer_worker_concurrency=1,
         )
 
         await coordinator._maintain_once()
@@ -610,7 +615,7 @@ class TestDurableProgress:
                 await session.emit_token(token)
             return {"answer": "alpha beta gamma"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -636,7 +641,7 @@ class TestDurableProgress:
                 raise RuntimeError("process died")
             return {"answer": "resumed", "turns": session.completed_turns}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -665,7 +670,7 @@ class TestDurableProgress:
             await session.emit_token("fresh draft")
             return {"answer": "fresh draft"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
         try:
             await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
@@ -686,7 +691,7 @@ class TestDurableProgress:
             await session.emit_token("draft")
             return {"answer": "draft"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
         try:
             await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
@@ -701,7 +706,7 @@ class TestDurableProgress:
         async def body(session: RunSession) -> Mapping[str, Any]:
             raise CheckpointError("checkpoint_too_large", "too big")
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -721,7 +726,7 @@ class TestDurableProgress:
                 "Could not read report.pdf.",
             )
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -739,7 +744,7 @@ class TestDurableProgress:
         async def body(session: RunSession) -> Mapping[str, Any]:
             raise RuntimeError("postgres://user:secret@host/db is unreachable")
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -761,7 +766,7 @@ class TestDurableProgress:
         async def body(session: RunSession) -> Mapping[str, Any]:
             raise _Impostor("boom")
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -781,7 +786,7 @@ class TestDurableProgress:
             executed = True
             return {"answer": "never"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
         try:
             await _settle(lambda: store.runs["run-a"]["status"] == "failed")
@@ -810,7 +815,7 @@ class TestDurableProgress:
             )
             return {"answer": "ok"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -846,7 +851,7 @@ class TestDurableProgress:
             )
             return {"answer": "never"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
         try:
             await _settle(lambda: store.runs["run-a"]["status"] == "failed")
@@ -874,7 +879,7 @@ class TestDurableProgress:
             await session.check_cancelled()  # the next control boundary terminalizes
             return {"answer": "never"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         await coordinator.start()
         try:
             await _settle(lambda: store.runs["run-a"]["status"] == "failed")
@@ -900,7 +905,10 @@ class TestHeartbeatResilience:
             return {"answer": "survived"}
 
         coordinator = RunCoordinator(
-            store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
+            store=store,
+            executor=_Executor(body),
+            answer_worker_concurrency=1,
+            heartbeat_seconds=0.01,
         )
         await coordinator.start()
         try:
@@ -925,7 +933,7 @@ class TestHeartbeatResilience:
 
         executor = _Executor(body)
         coordinator = RunCoordinator(
-            store=store, executor=executor, max_async=1, heartbeat_seconds=0.01
+            store=store, executor=executor, answer_worker_concurrency=1, heartbeat_seconds=0.01
         )
         await coordinator.start()
         try:
@@ -951,7 +959,10 @@ class TestHeartbeatResilience:
             return {"answer": "kept"}
 
         coordinator = RunCoordinator(
-            store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
+            store=store,
+            executor=_Executor(body),
+            answer_worker_concurrency=1,
+            heartbeat_seconds=0.01,
         )
         await coordinator.start()
         try:
@@ -985,7 +996,10 @@ class TestCancellationAndShutdown:
             return {"answer": "unreachable"}
 
         coordinator = RunCoordinator(
-            store=store, executor=_Executor(body), max_async=1, heartbeat_seconds=0.01
+            store=store,
+            executor=_Executor(body),
+            answer_worker_concurrency=1,
+            heartbeat_seconds=0.01,
         )
         store.add_run("run-a")
         await coordinator.start()
@@ -1005,7 +1019,7 @@ class TestCancellationAndShutdown:
             await session.emit_token("partial")
             raise RunCancelledError
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -1024,7 +1038,7 @@ class TestCancellationAndShutdown:
             await asyncio.sleep(30)
             return {"answer": "unreachable"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         await running.wait()
@@ -1042,7 +1056,7 @@ class TestCancellationAndShutdown:
         async def body(session: RunSession) -> Mapping[str, Any]:
             return {"answer": "done"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         before = {task for task in asyncio.all_tasks()}
         await coordinator.start()
@@ -1071,7 +1085,7 @@ class TestCancellationAndShutdown:
         async def body(session: RunSession) -> Mapping[str, Any]:
             return {"answer": "done"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         before = {task for task in asyncio.all_tasks()}
         await coordinator.start()
@@ -1096,7 +1110,7 @@ class TestSubscriptions:
             await gate.wait()
             return {"answer": "one"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -1127,7 +1141,7 @@ class TestSubscriptions:
             await session.flush_tokens()
             return {"answer": "one"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -1158,7 +1172,7 @@ class TestSubscriptions:
             await release.wait()
             return {"answer": "still finished"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -1180,7 +1194,7 @@ class TestSubscriptions:
             await session.emit_token("shared")
             return {"answer": "shared"}
 
-        coordinator = _coordinator(store, _Executor(body), max_async=1)
+        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
@@ -1199,7 +1213,7 @@ class TestSubscriptions:
 
     async def test_unknown_run_yields_nothing_and_closes(self) -> None:
         store = _MemoryStore()
-        coordinator = _coordinator(store, _Executor(_noop), max_async=1)
+        coordinator = _coordinator(store, _Executor(_noop), answer_worker_concurrency=1)
 
         events = [event async for event in coordinator.subscribe(owner_id=_OWNER, run_id="missing")]
 
@@ -1210,9 +1224,22 @@ async def _noop(session: RunSession) -> Mapping[str, Any]:
     return {"answer": ""}
 
 
-@pytest.mark.parametrize("max_async", [1, 4])
-def test_execution_slots_are_bounded_by_max_async(max_async: int) -> None:
+@pytest.mark.parametrize("answer_worker_concurrency", [1, 4])
+def test_execution_slots_are_bounded_by_worker_concurrency(
+    answer_worker_concurrency: int,
+) -> None:
     coordinator = RunCoordinator(
-        store=_MemoryStore(), executor=_Executor(_noop), max_async=max_async
+        store=_MemoryStore(),
+        executor=_Executor(_noop),
+        answer_worker_concurrency=answer_worker_concurrency,
     )
-    assert coordinator.max_async == max_async
+    assert coordinator.answer_worker_concurrency == answer_worker_concurrency
+
+
+def test_answer_worker_concurrency_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="answer_worker_concurrency must be positive"):
+        RunCoordinator(
+            store=_MemoryStore(),
+            executor=_Executor(_noop),
+            answer_worker_concurrency=0,
+        )

@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from dlightrag_ai.fingerprints import model_fingerprint
 from dlightrag_ai.providers import get_provider
 from dlightrag_ai.providers.base import CompletionProvider
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelSettings
 from dlightrag_ai.structured import StructuredOutput
 from dlightrag_ai.telemetry import (
@@ -57,10 +58,12 @@ class CompletionModel:
         self,
         settings: ModelSettings,
         *,
+        scheduler: ModelScheduler,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self.settings = settings
         self.fingerprint = model_fingerprint(settings)
+        self._scheduler = scheduler
         self._telemetry = telemetry
         self._provider = get_provider(
             settings.provider,
@@ -75,9 +78,11 @@ class CompletionModel:
         stream = bool(kwargs.pop("stream", False))
         if stream:
             usage_holder = kwargs.pop("usage_holder", None)
-            return self._stream(messages, kwargs, usage_holder=usage_holder)
+            return self._scheduler.stream(
+                lambda: self._stream(messages, kwargs, usage_holder=usage_holder)
+            )
         kwargs.pop("usage_holder", None)
-        return await self._complete(messages, kwargs)
+        return await self._scheduler.run(lambda: self._complete(messages, kwargs))
 
     def _observation_kwargs(
         self,
@@ -205,7 +210,7 @@ class CompletionModel:
         request: dict[str, Any],
         *,
         usage_holder: dict[str, Any] | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str]:
         observation_kwargs = self._observation_kwargs(messages, request)
         model_kwargs, response_format, max_tokens = self._request_options(dict(request))
         active_usage_holder = usage_holder if usage_holder is not None else {}

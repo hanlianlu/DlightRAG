@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 from dlightrag_rag.retrieval import RetrievalResult
 
@@ -143,7 +144,7 @@ class _Session:
 
 def _manager(store: _RecordingStore) -> RAGServiceManager:
     config = MagicMock()
-    config.max_async = 2
+    config.runtime.answer_worker_concurrency = 2
     manager = RAGServiceManager.__new__(RAGServiceManager)
     manager._config = config
     manager._health = ApplicationHealth(readiness_probe=None)
@@ -161,6 +162,48 @@ def _bare_manager() -> RAGServiceManager:
     manager = _manager(_RecordingStore())
     manager._answer_run_store = None
     return manager
+
+
+async def test_manager_executor_scopes_child_model_calls_by_run() -> None:
+    scheduler = ModelScheduler(max_concurrency=1)
+    first_started = asyncio.Event()
+    second_queued = asyncio.Event()
+    release_first = asyncio.Event()
+    order: list[str] = []
+
+    async def operation(label: str, *, block: bool = False) -> str:
+        order.append(label)
+        if block:
+            first_started.set()
+            await release_first.wait()
+        return label
+
+    class Manager:
+        async def _execute_answer_run(self, session: Any) -> Mapping[str, Any]:
+            if session.run_id == "run-a":
+                first = asyncio.create_task(scheduler.run(lambda: operation("a1", block=True)))
+                await first_started.wait()
+                second = asyncio.create_task(scheduler.run(lambda: operation("a2")))
+                await asyncio.sleep(0)
+                second_queued.set()
+                await asyncio.gather(first, second)
+                return {"run": "a"}
+            await scheduler.run(lambda: operation("b1"))
+            return {"run": "b"}
+
+    executor = _ManagerAnswerExecutor(cast(RAGServiceManager, Manager()))
+    run_a = asyncio.create_task(
+        executor.execute(cast(RunSession, MagicMock(owner_id="owner", run_id="run-a")))
+    )
+    await second_queued.wait()
+    run_b = asyncio.create_task(
+        executor.execute(cast(RunSession, MagicMock(owner_id="owner", run_id="run-b")))
+    )
+    await asyncio.sleep(0)
+    release_first.set()
+
+    assert await asyncio.gather(run_a, run_b) == [{"run": "a"}, {"run": "b"}]
+    assert order == ["a1", "b1", "a2"]
 
 
 async def test_manager_executor_classifies_actionable_answer_errors() -> None:

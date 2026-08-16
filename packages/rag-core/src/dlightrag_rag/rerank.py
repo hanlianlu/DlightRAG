@@ -19,6 +19,7 @@ from dlightrag_ai.providers.rerank_base import (
     resolve_rerank_input_modality,
 )
 from dlightrag_ai.rerank import RerankModel, create_rerank_model, rerank_accepts_images
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelSettings, RerankSettings
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry, bounded_telemetry_text
 
@@ -314,6 +315,7 @@ class _RerankCallable:
 def build_rerank_func(
     settings: RerankSettings,
     *,
+    scheduler: ModelScheduler,
     scoring_settings: ModelSettings | None = None,
     supports_vision: bool | None = None,
     telemetry: Telemetry = NOOP_TELEMETRY,
@@ -331,7 +333,11 @@ def build_rerank_func(
                 "model does not support image input"
             )
         multimodal = settings.input_modality != "text" and supports_vision is not False
-        scoring_model = CompletionModel(scoring_settings, telemetry=telemetry)
+        scoring_model = CompletionModel(
+            scoring_settings,
+            scheduler=scheduler,
+            telemetry=telemetry,
+        )
         fn = partial(
             _chat_llm_rerank,
             scoring_func=scoring_model,
@@ -353,7 +359,11 @@ def build_rerank_func(
             f"{settings.strategy} is text-only and cannot honor input_modality='multimodal'; "
             "set rerank.input_modality to 'text' or 'auto'"
         )
-    model = create_rerank_model(settings, telemetry=telemetry)
+    model = create_rerank_model(
+        settings,
+        scheduler=scheduler,
+        telemetry=telemetry,
+    )
     budget_factory = partial(
         ImagePayloadBudget,
         max_total_bytes=_DEFAULT_IMAGE_MAX_TOTAL_BYTES,

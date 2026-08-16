@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag_ai.embedding import MultimodalEmbedder, create_embedding_model
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.telemetry import Telemetry
 from lightrag.constants import PARSED_DIR_NAME
 
@@ -177,6 +178,7 @@ class WorkspaceRag:
             workspace_id="research",
             settings=settings,
             backend=backend,
+            scheduler=scheduler,
             telemetry=telemetry,
         )
     """
@@ -188,6 +190,7 @@ class WorkspaceRag:
         workspace_id: str,
         settings: RagSettings,
         backend: WorkspaceCorpusBackend,
+        scheduler: ModelScheduler,
         telemetry: Telemetry,
         rerank_supports_vision: bool | None = None,
     ) -> WorkspaceRag:
@@ -196,6 +199,7 @@ class WorkspaceRag:
             workspace_id=workspace_id,
             settings=settings,
             backend=backend,
+            scheduler=scheduler,
             telemetry=telemetry,
             rerank_supports_vision=rerank_supports_vision,
         )
@@ -215,6 +219,7 @@ class WorkspaceRag:
         workspace_id: str,
         settings: RagSettings,
         backend: WorkspaceCorpusBackend,
+        scheduler: ModelScheduler,
         telemetry: Telemetry,
         rerank_supports_vision: bool | None = None,
     ) -> None:
@@ -227,6 +232,7 @@ class WorkspaceRag:
         if backend.read_only != settings.read_only:
             raise ValueError("backend reader role does not match RagSettings")
         self.settings = settings
+        self._model_scheduler = scheduler
         self.telemetry = telemetry
         self._initialized: bool = False
         self._pipeline_recovery_task: asyncio.Task[None] | None = None
@@ -324,6 +330,7 @@ class WorkspaceRag:
         # Build one service-owned model bundle for LightRAG's default and role calls.
         chat_models = await LightRagChatModels.acreate(
             settings.model_roles,
+            scheduler=self._model_scheduler,
             telemetry=self.telemetry,
         )
         self._chat_models = chat_models
@@ -331,6 +338,7 @@ class WorkspaceRag:
         resolved_rerank = settings.rerank
         rerank_func = build_rerank_func(
             resolved_rerank,
+            scheduler=self._model_scheduler,
             scoring_settings=(
                 settings.rerank_scoring_model
                 if resolved_rerank.enabled and resolved_rerank.strategy == "chat_llm_reranker"
@@ -351,6 +359,7 @@ class WorkspaceRag:
         resolved_embedding = settings.embedding
         multimodal_embedder = create_embedding_model(
             resolved_embedding,
+            scheduler=self._model_scheduler,
             telemetry=self.telemetry,
         )
         self._multimodal_embedder = multimodal_embedder

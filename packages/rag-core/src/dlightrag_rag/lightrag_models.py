@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 from dlightrag_ai.completion import CompletionModel
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import EmbeddingSettings, ModelRoleSettings
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry
 from lightrag import RoleLLMConfig
@@ -79,18 +80,27 @@ class LightRagChatModels:
         cls,
         settings: ModelRoleSettings,
         *,
+        scheduler: ModelScheduler,
         telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> LightRagChatModels:
         """Build all role models, closing earlier providers if construction fails."""
         models: list[CompletionModel] = []
         try:
-            default_model = CompletionModel(settings.default, telemetry=telemetry)
+            default_model = CompletionModel(
+                settings.default,
+                scheduler=scheduler,
+                telemetry=telemetry,
+            )
             models.append(default_model)
             default_func = adapt_completion_for_lightrag(default_model)
 
             role_configs: dict[str, Any] = {}
             for role, role_settings in settings.overrides.items():
-                model = CompletionModel(role_settings, telemetry=telemetry)
+                model = CompletionModel(
+                    role_settings,
+                    scheduler=scheduler,
+                    telemetry=telemetry,
+                )
                 models.append(model)
                 role_configs[role] = RoleLLMConfig(
                     func=adapt_completion_for_lightrag(model),

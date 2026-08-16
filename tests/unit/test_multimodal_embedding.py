@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for context-aware multimodal embedding."""
 
+import asyncio
 import io
 import threading
 from contextlib import asynccontextmanager
@@ -24,6 +25,7 @@ from dlightrag_ai.providers.embed_providers import (
     OpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
+from dlightrag_ai.scheduler import ModelScheduler
 from PIL import Image
 
 _TEST_FINGERPRINT = ModelFingerprint(
@@ -34,7 +36,12 @@ _TEST_FINGERPRINT = ModelFingerprint(
 
 
 def MultimodalEmbedder(**kwargs):
-    return _MultimodalEmbedder(fingerprint=_TEST_FINGERPRINT, **kwargs)
+    scheduler = kwargs.pop("scheduler", ModelScheduler(max_concurrency=1))
+    return _MultimodalEmbedder(
+        fingerprint=_TEST_FINGERPRINT,
+        scheduler=scheduler,
+        **kwargs,
+    )
 
 
 async def test_embedding_error_text_is_redacted_when_sensitive_capture_is_disabled() -> None:
@@ -297,6 +304,44 @@ async def test_embed_texts_posts_document_context() -> None:
     assert result == [[0.1, 0.2, 0.3]]
     payload = embedder._client.post.call_args.kwargs["json"]
     assert payload["input_type"] == "document"
+
+
+async def test_embedding_requests_share_scheduler_limit() -> None:
+    scheduler = ModelScheduler(max_concurrency=1)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = 0
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+        scheduler=scheduler,
+    )
+
+    async def post(payload: dict[str, Any]) -> dict[str, Any]:
+        nonlocal calls
+        del payload
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await release_first.wait()
+        return {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+
+    embedder._post = post  # pyright: ignore[reportPrivateUsage]
+    first = asyncio.create_task(embedder.embed_texts(["first"]))
+    await first_started.wait()
+    second = asyncio.create_task(embedder.embed_texts(["second"]))
+    await asyncio.sleep(0)
+    assert calls == 1
+
+    release_first.set()
+    assert await asyncio.gather(first, second) == [
+        [[0.1, 0.2, 0.3]],
+        [[0.1, 0.2, 0.3]],
+    ]
+    assert calls == 2
 
 
 async def test_embed_query_images_batches_with_query_context() -> None:

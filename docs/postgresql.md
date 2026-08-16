@@ -120,7 +120,8 @@ Concurrency knobs affect different bottlenecks:
 | `max_parallel_parse_mineru` | External parser workers for the MinerU-compatible route | Parser service, CPU/GPU, OCR latency |
 | `max_parallel_parse_docling` | External parser workers for the Docling route | Parser service, CPU/GPU, OCR latency |
 | `max_parallel_analyze` | visual/multimodal analysis workers | VLM endpoint limits |
-| `max_async` | Current Answer/model-call process concurrency | model endpoint and durable-run throughput |
+| `max_async` | Process-wide AI provider request concurrency | model endpoint throughput |
+| `runtime.answer_worker_concurrency` | Durable Answer runs executed per process | run throughput, CPU, and memory |
 | `rag_pipeline_max_async` | LightRAG pipeline LLM request concurrency | LLM endpoint limits |
 | `embedding_func_max_async` | embedding request concurrency | embedding endpoint and vector writes |
 

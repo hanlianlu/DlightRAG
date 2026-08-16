@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from dlightrag_ai.messages import AssistantTurn, ToolDefinition
+from dlightrag_ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag_ai.settings import ModelSettings
 from dlightrag_ai.tool_model import ToolModel
 
@@ -30,7 +31,8 @@ async def test_ai_tool_model_accepts_settings_and_owns_provider(monkeypatch) -> 
             model="query-model",
             model_kwargs={"reasoning": {"enabled": False}},
             agentic_model_kwargs={"reasoning": {"enabled": True}},
-        )
+        ),
+        scheduler=ModelScheduler(max_concurrency=1),
     )
 
     turn = await model(messages=[{"role": "user", "content": "q"}], tools=[])
@@ -65,7 +67,11 @@ async def test_tool_model_error_uses_privacy_safe_status(monkeypatch) -> None:
         "dlightrag_ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings(), telemetry=Telemetry())
+    model = ToolModel(
+        _query_settings(),
+        scheduler=ModelScheduler(max_concurrency=1),
+        telemetry=Telemetry(),
+    )
 
     with pytest.raises(RuntimeError, match="secret tool transcript"):
         await model(messages=[{"role": "user", "content": "secret"}], tools=[])
@@ -109,7 +115,7 @@ async def test_tool_model_passes_provider_settings_and_agentic_options(monkeypat
         agentic_model_kwargs={"thinking": {"type": "enabled"}},
     )
 
-    model = ToolModel(settings)
+    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
     await model(messages=[{"role": "user", "content": "q"}], tools=[])
 
     assert seen["provider"] == "openai"
@@ -141,7 +147,7 @@ async def test_query_tool_model_owns_query_role_provider_and_closes_it(monkeypat
         model_kwargs={"enable_thinking": False},
         agentic_model_kwargs={"enable_thinking": True},
     )
-    model = ToolModel(settings)
+    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
     tool = ToolDefinition(name="search", description="Search.", parameters={"type": "object"})
 
     turn = await model(
@@ -184,7 +190,7 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
         "dlightrag_ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings())
+    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
     messages = [{"role": "user", "content": "answer now"}]
 
     output = [token async for token in model.stream_text(messages=messages)]
@@ -224,7 +230,7 @@ async def test_query_tool_model_retries_empty_final_stream_with_ordinary_kwargs(
         model_kwargs={"thinking": {"type": "disabled"}},
         agentic_model_kwargs={"thinking": {"type": "enabled"}},
     )
-    model = ToolModel(settings)
+    model = ToolModel(settings, scheduler=ModelScheduler(max_concurrency=1))
 
     output = [
         token
@@ -256,7 +262,7 @@ async def test_query_tool_model_rejects_repeated_empty_final_stream(monkeypatch)
         "dlightrag_ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings())
+    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
 
     with pytest.raises(RuntimeError, match="empty final answer"):
         _ = [
@@ -288,7 +294,7 @@ async def test_tool_model_stream_abandonment_closes_provider_iterator(monkeypatc
         "dlightrag_ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings())
+    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
     stream = model.stream_text(messages=[{"role": "user", "content": "answer now"}])
 
     assert await anext(stream) == "first"
@@ -306,7 +312,7 @@ async def test_query_tool_model_completes_final_text_through_owned_provider(monk
         "dlightrag_ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
     )
-    model = ToolModel(_query_settings())
+    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
     messages = [{"role": "user", "content": "answer now"}]
 
     output = await model.complete_text(messages=messages)
@@ -324,11 +330,30 @@ async def test_query_tool_model_completes_final_text_through_owned_provider(monk
 async def test_query_tool_model_retries_empty_final_completion_with_ordinary_kwargs(
     monkeypatch,
 ) -> None:
-    provider = AsyncMock()
-    provider.complete_tool_turn.side_effect = [
-        AssistantTurn(text="", tool_calls=(), stop_reason="stop"),
-        AssistantTurn(text="final answer", tool_calls=(), stop_reason="stop"),
-    ]
+    first_attempt_started = asyncio.Event()
+    release_first_attempt = asyncio.Event()
+    second_attempt_started = asyncio.Event()
+    competing_started = asyncio.Event()
+
+    class Provider:
+        retry_attempts = 0
+
+        async def complete_tool_turn(self, messages, *_args, **_kwargs):
+            if messages[0]["content"] == "competing":
+                competing_started.set()
+                return AssistantTurn(text="other", tool_calls=(), stop_reason="stop")
+            self.retry_attempts += 1
+            if self.retry_attempts == 1:
+                first_attempt_started.set()
+                await release_first_attempt.wait()
+                return AssistantTurn(text="", tool_calls=(), stop_reason="stop")
+            second_attempt_started.set()
+            return AssistantTurn(text="final answer", tool_calls=(), stop_reason="stop")
+
+        async def aclose(self) -> None:
+            return None
+
+    provider = Provider()
     monkeypatch.setattr(
         "dlightrag_ai.tool_model.get_provider",
         lambda *_args, **_kwargs: provider,
@@ -337,14 +362,26 @@ async def test_query_tool_model_retries_empty_final_completion_with_ordinary_kwa
         model_kwargs={"thinking": {"type": "disabled"}},
         agentic_model_kwargs={"thinking": {"type": "enabled"}},
     )
-    model = ToolModel(settings)
+    scheduler = ModelScheduler(max_concurrency=1)
+    model = ToolModel(settings, scheduler=scheduler)
 
-    output = await model.complete_text(messages=[{"role": "user", "content": "answer now"}])
+    async def retrying_request() -> str:
+        with model_call_scope("run-a"):
+            return await model.complete_text(messages=[{"role": "user", "content": "retry"}])
 
-    assert output == "final answer"
-    assert [
-        call.kwargs["model_kwargs"] for call in provider.complete_tool_turn.await_args_list
-    ] == [
-        {"thinking": {"type": "enabled"}},
-        {"thinking": {"type": "disabled"}},
-    ]
+    async def competing_request() -> str:
+        with model_call_scope("run-b"):
+            return await model.complete_text(messages=[{"role": "user", "content": "competing"}])
+
+    retrying = asyncio.create_task(retrying_request())
+    await first_attempt_started.wait()
+    competing = asyncio.create_task(competing_request())
+    await asyncio.sleep(0)
+    release_first_attempt.set()
+    await second_attempt_started.wait()
+    assert not competing_started.is_set()
+
+    assert await retrying == "final answer"
+    assert await competing == "other"
+
+    assert provider.retry_attempts == 2

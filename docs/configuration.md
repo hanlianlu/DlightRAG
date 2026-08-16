@@ -28,8 +28,9 @@ Keep these in normal `config.yaml`:
 - domain entity guidance: `kg_entity_types`, `extraction.entity_type_prompt_file`
 - PostgreSQL endpoint, process role, and workspace identity: `workspace`,
   `service_role`, `postgres_*`
-- high-level concurrency raised above upstream defaults: `max_async`,
-  `rag_pipeline_max_async`, `embedding_func_max_async`, `embedding_batch_num`
+- high-level concurrency raised above upstream defaults: AI-provider `max_async`,
+  `runtime.answer_worker_concurrency`, `rag_pipeline_max_async`,
+  `embedding_func_max_async`, `embedding_batch_num`
 - retrieval/answer controls: `top_k`, `chunk_top_k`, `bm25_enabled`, `direct_visual_top_k`,
   `answer.*`
 - auth and observability mode switches when they are not secret
@@ -628,10 +629,14 @@ notes.
 
 ## Ingestion Concurrency And Queues
 
-`config.yaml` keeps only the high-level process and RAG concurrency knobs
-(`max_async`, `rag_pipeline_max_async`, `embedding_func_max_async`,
-`embedding_batch_num`). `rag_pipeline_max_async` bounds LightRAG pipeline LLM
-work independently from the current Answer/model-call process limit. The
+`config.yaml` keeps only the high-level AI, Runtime, and RAG concurrency knobs.
+`max_async` bounds all provider requests through the process-wide fair AI
+scheduler. `runtime.answer_worker_concurrency` bounds claimed durable Answer
+runs executed by one process. `rag_pipeline_max_async` bounds each workspace's
+LightRAG pipeline width; its provider requests still pass through the AI
+scheduler. `embedding_func_max_async` and `embedding_batch_num` shape LightRAG's
+embedding work without changing either worker admission or the global provider
+cap. The
 per-stage worker counts below already match LightRAG's defaults, so they are
 omitted from `config.yaml` and follow DlightRAG's code defaults; set them
 explicitly (in `config.yaml` or via `DLIGHTRAG_*` env) only when a deployment

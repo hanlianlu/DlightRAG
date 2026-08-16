@@ -11,6 +11,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.telemetry import NoopTelemetry
 from dlightrag_rag.ingestion.document_embedding import (
     RobustDocumentEmbedder,
@@ -40,6 +41,7 @@ def _service(
             Any,
             backend if backend is not None else _backend(workspace_id, read_only=config.is_reader),
         ),
+        scheduler=ModelScheduler(max_concurrency=1),
         telemetry=NoopTelemetry(),
     )
 
@@ -170,6 +172,7 @@ class TestWorkspaceRagAingest:
                         read_only=test_config.is_reader,
                     ),
                 ),
+                scheduler=ModelScheduler(max_concurrency=1),
                 telemetry=NoopTelemetry(),
             )
 
