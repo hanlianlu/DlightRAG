@@ -383,8 +383,8 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
 async def test_reader_workspace_registry_schema_failure_stops_startup() -> None:
     from dlightrag_rag.ports import CorpusSchemaError
 
-    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.health import ApplicationHealth
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config(service_role="reader")
@@ -397,8 +397,8 @@ async def test_reader_workspace_registry_schema_failure_stops_startup() -> None:
 
 
 async def test_transient_workspace_registry_failure_only_warns() -> None:
-    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.health import ApplicationHealth
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config()
@@ -575,8 +575,8 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
 async def test_reader_answer_run_store_starts_in_validation_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.health import ApplicationHealth
 
     _built, validate_calls = _patch_answer_run_store(monkeypatch)
 
@@ -688,8 +688,8 @@ async def test_reader_serves_web_routes() -> None:
 
 
 async def test_reader_does_not_recover_ingest_jobs() -> None:
-    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.health import ApplicationHealth
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config(service_role="reader")
@@ -703,8 +703,8 @@ async def test_reader_does_not_recover_ingest_jobs() -> None:
 
 
 async def test_writer_recovers_ingest_jobs() -> None:
-    from dlightrag.application import ApplicationHealth
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.health import ApplicationHealth
 
     manager = object.__new__(RAGServiceManager)
     manager._config = _config()

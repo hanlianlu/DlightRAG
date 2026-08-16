@@ -632,7 +632,7 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
 
 def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
     """The manager surface a durable run needs, bound to the throwaway database."""
-    from dlightrag.application import ApplicationHealth
+    from dlightrag.health import ApplicationHealth
 
     config = MagicMock()
     config.runtime.answer_worker_concurrency = 1

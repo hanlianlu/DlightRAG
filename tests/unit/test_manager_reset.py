@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 
-from dlightrag.application import ApplicationHealth
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
+from dlightrag.health import ApplicationHealth
 
 
 class _ResetJobStore:

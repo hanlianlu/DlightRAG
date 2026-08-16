@@ -3,7 +3,7 @@
 
 import asyncio
 
-from dlightrag.application import ApplicationHealth
+from dlightrag.health import ApplicationHealth
 
 
 async def test_readiness_is_single_flight_and_invalidated_by_state_transitions() -> None:

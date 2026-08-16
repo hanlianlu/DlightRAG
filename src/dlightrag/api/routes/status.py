@@ -12,8 +12,8 @@ from fastapi.responses import JSONResponse
 
 from dlightrag.api.models import HealthResponse, ReadinessResponse
 from dlightrag.app_state import request_config
-from dlightrag.application import ApplicationHealth
 from dlightrag.contracts import ServiceRole
+from dlightrag.health import ApplicationHealth
 
 router = APIRouter()
 

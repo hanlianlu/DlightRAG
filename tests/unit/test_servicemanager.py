@@ -1198,7 +1198,7 @@ class TestAnswerViaEngine:
         )
         trace_calls: list[dict[str, Any]] = []
         monkeypatch.setattr(
-            "dlightrag.observability.trace_observation",
+            "dlightrag.observability.tracing.trace_observation",
             _record_trace_calls(trace_calls),
         )
 

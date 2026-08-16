@@ -81,7 +81,6 @@ from dlightrag.access import (
 )
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
-from dlightrag.application import ApplicationHealth
 from dlightrag.core.agent.orchestrator import (
     AnswerOrchestrator,
     research_history_input_measure,
@@ -133,6 +132,7 @@ from dlightrag.core.resources.models import (
     ResourceRegistryError,
     TextWindowBudget,
 )
+from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import (
     model_profile_for_role,
     model_settings_for_role,

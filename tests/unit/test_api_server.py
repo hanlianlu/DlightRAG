@@ -19,7 +19,6 @@ from dlightrag.access import AuthenticationError, UserContext, authenticate_bear
 from dlightrag.access import authentication as authentication_module
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
-from dlightrag.application import ApplicationHealth
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import (
     AccessControlConfig,
@@ -30,6 +29,7 @@ from dlightrag.config import (
 from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
+from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import authentication_settings
 from dlightrag.runtime import AnswerRunRecord, RunCreation
 from tests.unit.conftest import prepare_test_answer_run_input

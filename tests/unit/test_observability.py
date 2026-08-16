@@ -11,6 +11,37 @@ import pytest
 from dlightrag_ai.telemetry import NoopTelemetry
 
 from dlightrag import observability
+from dlightrag.observability import langfuse as langfuse_state
+from dlightrag.observability import tracing as tracing_module
+from dlightrag.observability.masking import mask_langfuse_payload
+
+
+def test_importing_langfuse_adapter_does_not_initialize_tracing() -> None:
+    from dlightrag.observability import langfuse as langfuse_adapter
+
+    assert langfuse_adapter.current_client() is None
+
+
+def test_langfuse_masking_redacts_nested_secrets_and_binary_media() -> None:
+    assert mask_langfuse_payload(
+        {
+            "Authorization": "Bearer secret",
+            "nested": ({"account_key": "secret"}, b"abc"),
+            "image": {"type": "image_url", "image_url": {"url": "data:image/png,abc"}},
+        }
+    ) == {
+        "Authorization": "[redacted]",
+        "nested": [{"account_key": "[redacted]"}, "[bytes omitted: 3]"],
+        "image": {"type": "image_url", "image_url": "[image omitted]"},
+    }
+
+
+def test_langfuse_masking_bounds_large_text() -> None:
+    masked = mask_langfuse_payload("x" * 5000)
+
+    assert isinstance(masked, str)
+    assert masked[:4000] == "x" * 4000
+    assert masked.endswith("... [truncated 1000 chars]")
 
 
 class _RecordingObservation:
@@ -53,19 +84,16 @@ class _RecordingLangfuse:
 
 @pytest.fixture(autouse=True)
 def reset_langfuse_client() -> Generator[None]:
-    previous = observability._client
-    previous_sensitive = observability._trace_sensitive
-    observability._client = None
-    observability._trace_sensitive = True
+    previous = langfuse_state.current_client()
+    previous_sensitive = langfuse_state.trace_sensitive_enabled()
+    langfuse_state.install_client(None, trace_sensitive=True)
     yield
-    observability._client = previous
-    observability._trace_sensitive = previous_sensitive
+    langfuse_state.install_client(previous, trace_sensitive=previous_sensitive)
 
 
 async def test_trace_observation_captures_input_when_enabled() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
-    observability._trace_sensitive = True
+    langfuse_state.install_client(client, trace_sensitive=True)
 
     async with observability.trace_observation(
         "answer_pipeline", as_type="chain", input={"query": "q"}
@@ -82,7 +110,7 @@ async def test_noop_telemetry_accepts_updates_without_product_dependencies() -> 
 
 async def test_langfuse_telemetry_adapts_neutral_observation() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
+    langfuse_state.install_client(client, trace_sensitive=True)
 
     async with observability.LangfuseTelemetry().observe(
         "agent_tool",
@@ -101,7 +129,7 @@ async def test_langfuse_telemetry_adapts_neutral_observation() -> None:
 
 async def test_langfuse_telemetry_normalizes_provider_usage_and_cost() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
+    langfuse_state.install_client(client, trace_sensitive=True)
 
     async with observability.LangfuseTelemetry().observe(
         "llm_model",
@@ -122,8 +150,7 @@ async def test_langfuse_telemetry_normalizes_provider_usage_and_cost() -> None:
 
 async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
-    observability._trace_sensitive = False
+    langfuse_state.install_client(client, trace_sensitive=False)
 
     async with observability.trace_observation(
         "answer_pipeline", as_type="chain", input={"query": "secret prompt"}
@@ -136,17 +163,16 @@ async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
 async def test_answer_output_follows_the_same_privacy_switch_as_the_query() -> None:
     from dlightrag.core.servicemanager import answer_trace_output
 
-    observability._trace_sensitive = True
+    langfuse_state.install_client(langfuse_state.current_client(), trace_sensitive=True)
     assert answer_trace_output("the answer", [], {})["answer"] == "the answer"
 
-    observability._trace_sensitive = False
+    langfuse_state.install_client(langfuse_state.current_client(), trace_sensitive=False)
     assert "answer" not in answer_trace_output("the answer", [], {})
 
 
 async def test_trace_observation_records_error_text_when_enabled() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
-    observability._trace_sensitive = True
+    langfuse_state.install_client(client, trace_sensitive=True)
 
     with pytest.raises(RuntimeError):
         async with observability.trace_observation("answer_pipeline", as_type="chain"):
@@ -157,7 +183,7 @@ async def test_trace_observation_records_error_text_when_enabled() -> None:
 
 async def test_langfuse_telemetry_cancellation_is_not_an_error() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
+    langfuse_state.install_client(client, trace_sensitive=True)
 
     with pytest.raises(asyncio.CancelledError):
         async with observability.LangfuseTelemetry().observe(
@@ -171,8 +197,7 @@ async def test_langfuse_telemetry_cancellation_is_not_an_error() -> None:
 
 async def test_trace_observation_redacts_error_text_in_privacy_mode() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
-    observability._trace_sensitive = False
+    langfuse_state.install_client(client, trace_sensitive=False)
 
     with pytest.raises(RuntimeError):
         async with observability.trace_observation("answer_pipeline", as_type="chain"):
@@ -204,7 +229,7 @@ async def test_trace_observation_opens_the_session_before_the_span(
             order.append("span")
             return super().start_as_current_observation(**kwargs)
 
-    observability._client = _OrderedClient()
+    langfuse_state.install_client(_OrderedClient(), trace_sensitive=True)
 
     async with observability.trace_observation(
         "answer_pipeline", as_type="chain", session_id="conv-1"
@@ -219,7 +244,7 @@ async def test_trace_observation_without_a_session_claims_none(
 ) -> None:
     order: list[str] = []
     _record_propagation(monkeypatch, order)
-    observability._client = _RecordingLangfuse()
+    langfuse_state.install_client(_RecordingLangfuse(), trace_sensitive=True)
 
     async with observability.trace_observation("ingest_pipeline", as_type="chain"):
         pass
@@ -235,13 +260,13 @@ def test_init_tracing_reads_trace_sensitive_flag() -> None:
             langfuse_trace_sensitive_data=False,
         )
     )
-    assert observability._trace_sensitive is False
+    assert langfuse_state.trace_sensitive_enabled() is False
 
 
 def test_trace_sensitive_enabled_reflects_flag() -> None:
-    observability._trace_sensitive = False
+    langfuse_state.install_client(langfuse_state.current_client(), trace_sensitive=False)
     assert observability.trace_sensitive_enabled() is False
-    observability._trace_sensitive = True
+    langfuse_state.install_client(langfuse_state.current_client(), trace_sensitive=True)
     assert observability.trace_sensitive_enabled() is True
 
 
@@ -255,7 +280,7 @@ def test_langfuse_usage_details_normalizes_overlapping_provider_keys() -> None:
         "prompt_cache_hit_tokens": 0,
         "prompt_cache_miss_tokens": 3911,
     }
-    assert observability._langfuse_usage_details(raw) == {
+    assert tracing_module._langfuse_usage_details(raw) == {
         "input": 3911,
         "output": 254,
         "total": 4165,
@@ -263,7 +288,7 @@ def test_langfuse_usage_details_normalizes_overlapping_provider_keys() -> None:
 
 
 def test_langfuse_usage_details_derives_total_when_absent() -> None:
-    assert observability._langfuse_usage_details({"input_tokens": 10, "output_tokens": 4}) == {
+    assert tracing_module._langfuse_usage_details({"input_tokens": 10, "output_tokens": 4}) == {
         "input": 10,
         "output": 4,
         "total": 14,
@@ -272,7 +297,7 @@ def test_langfuse_usage_details_derives_total_when_absent() -> None:
 
 async def test_trace_observation_nests_child_observations() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
+    langfuse_state.install_client(client, trace_sensitive=True)
 
     async with observability.trace_observation(
         "answer_pipeline",
@@ -301,7 +326,7 @@ async def test_trace_observation_nests_child_observations() -> None:
 
 
 async def test_trace_observation_update_is_noop_without_client() -> None:
-    observability._client = None
+    langfuse_state.install_client(None, trace_sensitive=True)
 
     async with observability.trace_observation("disabled", as_type="chain") as trace:
         trace.update(output={"answer_len": 12})
@@ -358,7 +383,7 @@ def test_init_tracing_does_not_call_blocking_auth_check(monkeypatch: pytest.Monk
     observability.init_tracing(config)
 
     assert auth_called is False
-    assert isinstance(observability._client, FakeLangfuse)
+    assert isinstance(langfuse_state.current_client(), FakeLangfuse)
 
 
 def test_init_tracing_forwards_v4_client_options(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -430,7 +455,7 @@ def test_langfuse_mask_redacts_secrets_and_omits_images(monkeypatch: pytest.Monk
 
 
 def test_init_tracing_clears_previous_client_when_keys_missing() -> None:
-    observability._client = _RecordingLangfuse()
+    langfuse_state.install_client(_RecordingLangfuse(), trace_sensitive=True)
 
     config = SimpleNamespace(
         langfuse_public_key=None,
@@ -438,15 +463,15 @@ def test_init_tracing_clears_previous_client_when_keys_missing() -> None:
     )
     observability.init_tracing(config)
 
-    assert observability._client is None
+    assert langfuse_state.current_client() is None
 
 
 def test_shutdown_tracing_uses_sdk_shutdown_and_clears_client() -> None:
     client = _RecordingLangfuse()
-    observability._client = client
+    langfuse_state.install_client(client, trace_sensitive=True)
 
     observability.shutdown_tracing()
 
     assert client.shutdown_called is True
     assert client.flushed is False
-    assert observability._client is None
+    assert langfuse_state.current_client() is None

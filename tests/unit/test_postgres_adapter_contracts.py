@@ -56,7 +56,7 @@ def test_owner_modules_do_not_import_the_postgres_adapter() -> None:
     owner_files = [path for root in owner_roots for path in root.rglob("*.py")]
     owner_files.extend(
         (
-            _ROOT / "src/dlightrag/application.py",
+            _ROOT / "src/dlightrag/health.py",
             _ROOT / "src/dlightrag/api/routes/status.py",
         )
     )

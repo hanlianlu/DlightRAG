@@ -15,7 +15,6 @@ from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 from dlightrag_rag.retrieval import RetrievalResult
 
-from dlightrag.application import ApplicationHealth
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.agent.orchestrator import AnswerOrchestrator
 from dlightrag.core.answer.errors import CurrentDocumentParseError
@@ -33,6 +32,7 @@ from dlightrag.core.servicemanager import (
     _ManagerAnswerExecutor,
     _OrchestratorRun,
 )
+from dlightrag.health import ApplicationHealth
 from dlightrag.runtime import (
     ClaimedRun,
     PendingArtifact,

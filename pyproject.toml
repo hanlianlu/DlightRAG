@@ -183,7 +183,7 @@ source_modules = [
     "dlightrag.utils",
     "dlightrag.prompts",
     "dlightrag.citations",
-    "dlightrag.application",
+    "dlightrag.health",
     "dlightrag.observability",
     "dlightrag.maintenance",
 ]
@@ -221,7 +221,6 @@ source_modules = ["dlightrag.sdk"]
 forbidden_modules = [
     "dlightrag.adapters.postgres",
     "dlightrag.api",
-    "dlightrag.application",
     "dlightrag.core",
     "dlightrag.mcp",
     "dlightrag.web",
@@ -289,7 +288,7 @@ forbidden_modules = [
 id = "application-health-independence"
 name = "Application health must remain composition and adapter neutral"
 type = "forbidden"
-source_modules = ["dlightrag.application"]
+source_modules = ["dlightrag.health"]
 forbidden_modules = [
     "dlightrag.core",
     "dlightrag.adapters.postgres",
