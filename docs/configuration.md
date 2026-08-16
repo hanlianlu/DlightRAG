@@ -902,6 +902,12 @@ access-control deployment guidance. The related config fields are `auth_mode`,
 `api_auth_token`, `jwt_verification_key`, `jwt_jwks_url`, `jwt_issuer`,
 `jwt_audience`, `jwt_algorithm`, `cors_allow_origins`, and `access_control`.
 
+The Python SDK and CLI resolve their HTTP target from `DLIGHTRAG_API_URL` and an
+optional bearer from `DLIGHTRAG_API_TOKEN` (or the deployment-only
+`DLIGHTRAG_API_AUTH_TOKEN`). `DLIGHTRAG_CLIENT_TIMEOUT` bounds one caller-owned
+HTTP request and defaults to 120 seconds. It is independent of the server's
+inline retrieval timeout; `DLIGHTRAG_REQUEST_TIMEOUT` is not a client setting.
+
 ## MCP Streamable HTTP
 
 DlightRAG's HTTP MCP server uses the current Streamable HTTP transport on a

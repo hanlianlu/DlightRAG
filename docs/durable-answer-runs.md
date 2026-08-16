@@ -236,7 +236,7 @@ browser `done` frame carries rendered presentation (`html`, `answer`,
 Disconnecting the browser only closes that subscriber, and reconnecting resumes
 from the durable event sequence.
 
-One async helper in `dlightrag.client` owns REST create-and-wait behavior. It
+One async helper, `dlightrag.sdk.AnswerRunClient`, owns REST create-and-wait behavior. It
 creates the run, follows durable events, and falls back to status reads after a
 reconnect or an expired event log. The synchronous CLI invokes that helper
 through `asyncio.run`; the async evaluation script awaits it directly. Neither

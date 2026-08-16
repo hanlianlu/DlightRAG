@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 import pytest
 
-import dlightrag.client as client_module
-from dlightrag.client import (
+import dlightrag.sdk.client as client_module
+from dlightrag.sdk import (
     EVENT_READ_IDLE_SECONDS,
     MAX_RECONNECT_ATTEMPTS,
     AnswerAttachmentUpload,

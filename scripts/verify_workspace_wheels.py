@@ -889,6 +889,7 @@ def _smoke_root_interfaces() -> None:
     from dlightrag.config import DlightragConfig, RuntimeConfig
     from dlightrag.model_settings import rag_settings
     from dlightrag.runtime import answer_run_request_fingerprint
+    from dlightrag.sdk import AnswerRunClient
 
     config = DlightragConfig(
         max_async=2,
@@ -898,6 +899,8 @@ def _smoke_root_interfaces() -> None:
     settings = rag_settings(config)
     if len(DEPLOYMENT_OWNER_ID) != 64:
         raise ValueError("installed Access package did not expose a SHA-256 owner id")
+    if AnswerRunClient.__module__ != "dlightrag.sdk.client":
+        raise ValueError("installed SDK did not expose the durable Answer client")
     if dlightrag.DlightragConfig is not DlightragConfig:
         raise ValueError("installed root package did not expose its config owner")
     if config.max_async != 2:

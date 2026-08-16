@@ -119,9 +119,9 @@ def test_answer_cli_local_attachment_uses_multipart(
         return {"answer": "done", "references": []}
 
     monkeypatch.setattr(_cli.AnswerRunClient, "answer", fake_answer)
-    monkeypatch.setattr(_cli, "_get_api_url", lambda: "https://rag.example")
-    monkeypatch.setattr(_cli, "_auth_headers", lambda: {})
-    monkeypatch.setattr(_cli, "_get_timeout", lambda: 15)
+    monkeypatch.setattr(_cli.sdk_http, "api_url", lambda: "https://rag.example")
+    monkeypatch.setattr(_cli.sdk_http, "auth_headers", lambda: {})
+    monkeypatch.setattr(_cli.sdk_http, "client_timeout", lambda: 15)
 
     args = _parse_answer(
         [
@@ -180,9 +180,9 @@ def test_answer_cli_renders_structured_image_blocks(
         }
 
     monkeypatch.setattr(_cli.AnswerRunClient, "answer", fake_answer)
-    monkeypatch.setattr(_cli, "_get_api_url", lambda: "https://rag.example")
-    monkeypatch.setattr(_cli, "_auth_headers", lambda: {})
-    monkeypatch.setattr(_cli, "_get_timeout", lambda: 15)
+    monkeypatch.setattr(_cli.sdk_http, "api_url", lambda: "https://rag.example")
+    monkeypatch.setattr(_cli.sdk_http, "auth_headers", lambda: {})
+    monkeypatch.setattr(_cli.sdk_http, "client_timeout", lambda: 15)
 
     args = _parse_answer(["describe diagram"])
     cmd_answer(args)

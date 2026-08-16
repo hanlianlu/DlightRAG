@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 from lightrag.evaluation.eval_rag_quality import RAGEvaluator
 from lightrag.utils import logger
 
-from dlightrag.client import AnswerRunCancelledError, AnswerRunClient, AnswerRunFailedError
+from dlightrag.sdk import AnswerRunCancelledError, AnswerRunClient, AnswerRunFailedError
 
 
 class EvalError(RuntimeError):

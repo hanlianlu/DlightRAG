@@ -1,12 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""The async REST client for durable Answer runs.
-
-One helper owns create-and-wait: it accepts the 202 descriptor, follows the
-run's durable events, resumes after the last sequence it saw when a connection
-drops, and falls back to status reads when the event log has expired. Callers
-never implement their own polling loop, and detaching from the stream never
-cancels the run.
-"""
+"""The async REST client for durable Answer runs."""
 
 from __future__ import annotations
 
@@ -20,19 +13,14 @@ from typing import Any
 
 import httpx
 
-from dlightrag.runtime import AnswerRunCancelledError, AnswerRunFailedError
+from dlightrag.runtime.errors import AnswerRunCancelledError, AnswerRunFailedError
+from dlightrag.sdk.attachments import AnswerAttachmentUpload
 
 logger = logging.getLogger(__name__)
 
-#: How long to wait between status reads once events are unavailable.
 STATUS_POLL_SECONDS = 1.0
-#: How many consecutive transport failures a reconnecting stream tolerates.
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_BACKOFF_SECONDS = 0.5
-#: The server keeps a quiet run's stream alive with a comment every ten seconds,
-#: so longer silence is a half-open connection, not a slow run. The read timeout
-#: only bounds one silent read: the reconnect loop then resumes by sequence, so a
-#: caller's overall wait for a queued run stays unbounded.
 EVENT_READ_IDLE_SECONDS = 30.0
 _EVENT_STREAM_TIMEOUT = httpx.Timeout(
     connect=10.0, read=EVENT_READ_IDLE_SECONDS, write=10.0, pool=10.0
@@ -64,7 +52,7 @@ class AnswerRunDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
-class AnswerRunEvent:
+class AnswerStreamEvent:
     """One durable event replayed from the run's gap-free sequence."""
 
     sequence: int
@@ -72,25 +60,12 @@ class AnswerRunEvent:
     payload: Mapping[str, Any]
 
 
-@dataclass(frozen=True, slots=True)
-class AnswerAttachmentUpload:
-    """One multipart attachment sent with an answer request."""
-
-    filename: str
-    content: bytes
-    content_type: str = "application/octet-stream"
-
-
-def parse_sse_frames(chunk: str, *, buffer: str = "") -> tuple[list[AnswerRunEvent], str]:
-    """Decode complete SSE frames from ``buffer + chunk``; comments are keepalives.
-
-    Returns the decoded events and the incomplete tail to prepend next time, so a
-    frame split across network reads is never lost or double-decoded.
-    """
+def parse_sse_frames(chunk: str, *, buffer: str = "") -> tuple[list[AnswerStreamEvent], str]:
+    """Decode complete SSE frames and return their incomplete tail."""
     text = buffer + chunk
     frames = text.split("\n\n")
     tail = frames.pop()
-    events: list[AnswerRunEvent] = []
+    events: list[AnswerStreamEvent] = []
     for frame in frames:
         sequence: int | None = None
         event_type = "message"
@@ -114,7 +89,7 @@ def parse_sse_frames(chunk: str, *, buffer: str = "") -> tuple[list[AnswerRunEve
             logger.warning("Discarding an answer event with undecodable data")
             continue
         events.append(
-            AnswerRunEvent(
+            AnswerStreamEvent(
                 sequence=sequence,
                 event_type=event_type,
                 payload=payload if isinstance(payload, dict) else {"value": payload},
@@ -147,7 +122,7 @@ class AnswerRunClient:
         attachments: Sequence[AnswerAttachmentUpload] = (),
         idempotency_key: str | None = None,
     ) -> AnswerRunDescriptor:
-        """Submit one answer request and return its 202 descriptor."""
+        """Submit one Answer request and return its 202 descriptor."""
         headers = dict(self._headers)
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
@@ -170,7 +145,7 @@ class AnswerRunClient:
         return AnswerRunDescriptor.from_payload(response.json())
 
     async def status(self, run_id: str) -> dict[str, Any]:
-        """Read one run's authoritative status and, once it exists, its result."""
+        """Read one run's authoritative status and terminal result."""
         response = await self._client.get(self._url(f"/answer/{run_id}"), headers=self._headers)
         response.raise_for_status()
         return dict(response.json())
@@ -183,12 +158,8 @@ class AnswerRunClient:
         response.raise_for_status()
         return dict(response.json())
 
-    async def events(self, run_id: str, *, after: int = 0) -> AsyncGenerator[AnswerRunEvent]:
-        """Yield durable events after ``after``, reconnecting by sequence.
-
-        Raises ``httpx.HTTPStatusError`` with status 410 when the run's event log
-        has expired; callers then read the canonical result from ``status``.
-        """
+    async def events(self, run_id: str, *, after: int = 0) -> AsyncGenerator[AnswerStreamEvent]:
+        """Yield durable events after ``after``, reconnecting by sequence."""
         cursor = max(0, after)
         attempts = 0
         while True:
@@ -209,8 +180,6 @@ class AnswerRunClient:
                 logger.info("Answer event stream dropped; resuming after sequence %d", cursor)
                 await asyncio.sleep(RECONNECT_BACKOFF_SECONDS * attempts)
                 continue
-            # A closed stream without a terminal event means the run is still
-            # running behind a proxy timeout, or already ended: ask the run row.
             if (await self.status(run_id))["status"] in _TERMINAL_STATUSES:
                 return
             await asyncio.sleep(STATUS_POLL_SECONDS)
@@ -248,7 +217,7 @@ class AnswerRunClient:
                 raise
         return await self._await_terminal_status(descriptor.run_id)
 
-    async def _stream_once(self, run_id: str, cursor: int) -> AsyncGenerator[AnswerRunEvent]:
+    async def _stream_once(self, run_id: str, cursor: int) -> AsyncGenerator[AnswerStreamEvent]:
         headers = dict(self._headers)
         headers.pop("Content-Type", None)
         if cursor:
@@ -267,7 +236,6 @@ class AnswerRunClient:
                     yield event
 
     async def _await_terminal_status(self, run_id: str) -> dict[str, Any]:
-        """Read the run row until it is terminal; the result lives there too."""
         while True:
             status = await self.status(run_id)
             if status["status"] in _TERMINAL_STATUSES:
@@ -303,11 +271,8 @@ __all__ = [
     "EVENT_READ_IDLE_SECONDS",
     "MAX_RECONNECT_ATTEMPTS",
     "STATUS_POLL_SECONDS",
-    "AnswerAttachmentUpload",
-    "AnswerRunCancelledError",
     "AnswerRunClient",
     "AnswerRunDescriptor",
-    "AnswerRunEvent",
-    "AnswerRunFailedError",
+    "AnswerStreamEvent",
     "parse_sse_frames",
 ]

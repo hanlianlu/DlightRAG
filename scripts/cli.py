@@ -35,7 +35,6 @@ Usage:
 import argparse
 import asyncio
 import json
-import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -45,58 +44,18 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from dlightrag.client import (
-    AnswerAttachmentUpload,
-    AnswerRunCancelledError,
-    AnswerRunClient,
-    AnswerRunFailedError,
-)
 from dlightrag.core.client_requests import (
     ingest_kwargs_from_payload,
     ingest_spec_from_payload,
     query_image_blocks_from_urls,
 )
-
-DEFAULT_API_URL = "http://localhost:8100"
-DEFAULT_QUERY_TIMEOUT = 120
-
-
-def _get_timeout() -> int:
-    env_val = os.environ.get("DLIGHTRAG_REQUEST_TIMEOUT")
-    if env_val:
-        return int(env_val)
-    return DEFAULT_QUERY_TIMEOUT
-
-
-def _get_api_url() -> str:
-    return os.environ.get("DLIGHTRAG_API_URL", DEFAULT_API_URL)
-
-
-def _get_auth_token() -> str | None:
-    """Resolve API bearer token from env or simple-auth config."""
-    token = os.environ.get("DLIGHTRAG_API_TOKEN") or os.environ.get("DLIGHTRAG_API_AUTH_TOKEN")
-    if token:
-        return token
-
-    from dlightrag.config import DlightragConfig
-
-    config = DlightragConfig()  # pyright: ignore[reportCallIssue]
-    if config.auth_mode == "simple" and config.api_auth_token:
-        return config.api_auth_token
-    return None
-
-
-def _headers() -> dict[str, str]:
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    token = _get_auth_token()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
-def _auth_headers() -> dict[str, str]:
-    token = _get_auth_token()
-    return {"Authorization": f"Bearer {token}"} if token else {}
+from dlightrag.sdk import (
+    AnswerAttachmentUpload,
+    AnswerRunCancelledError,
+    AnswerRunClient,
+    AnswerRunFailedError,
+)
+from dlightrag.sdk import http as sdk_http
 
 
 def _print_json(data: Any) -> None:
@@ -300,7 +259,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 
 def cmd_query(args: argparse.Namespace) -> None:
-    url = f"{_get_api_url()}/retrieve"
+    url = f"{sdk_http.api_url()}/retrieve"
     payload = _apply_query_options({"query": args.query}, args)
 
     print(f"Query: {args.query}")
@@ -308,7 +267,12 @@ def cmd_query(args: argparse.Namespace) -> None:
         print(f"Workspaces: {', '.join(args.workspaces)}")
     print(f"API: {url}\n")
 
-    resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
+    resp = httpx.post(
+        url,
+        json=payload,
+        headers=sdk_http.json_headers(),
+        timeout=sdk_http.client_timeout(),
+    )
     resp.raise_for_status()
     _print_json(resp.json())
 
@@ -323,8 +287,12 @@ def _attachment_uploads(paths: list[str] | None) -> list[AnswerAttachmentUpload]
 @asynccontextmanager
 async def _answer_client() -> AsyncIterator[AnswerRunClient]:
     """Open the one REST client every answer command shares."""
-    async with httpx.AsyncClient(timeout=_get_timeout()) as http:
-        yield AnswerRunClient(http, base_url=_get_api_url(), headers=_auth_headers())
+    async with httpx.AsyncClient(timeout=sdk_http.client_timeout()) as http:
+        yield AnswerRunClient(
+            http,
+            base_url=sdk_http.api_url(),
+            headers=sdk_http.auth_headers(),
+        )
 
 
 async def _run_answer(args: argparse.Namespace) -> dict[str, Any]:
@@ -339,7 +307,7 @@ def cmd_answer(args: argparse.Namespace) -> None:
     print(f"Question: {args.query}")
     if args.workspaces:
         print(f"Workspaces: {', '.join(args.workspaces)}")
-    print(f"API: {_get_api_url()}/answer\n")
+    print(f"API: {sdk_http.api_url()}/answer\n")
 
     try:
         data = asyncio.run(_run_answer(args))
@@ -366,7 +334,7 @@ def cmd_answer(args: argparse.Namespace) -> None:
 
 async def _run_chat(args: argparse.Namespace) -> None:
     ws_info = f", workspaces={','.join(args.workspaces)}" if args.workspaces else ""
-    print(f"dlightrag chat (API={_get_api_url()}{ws_info})")
+    print(f"dlightrag chat (API={sdk_http.api_url()}{ws_info})")
     print("Type your question, or /quit to exit. Each request is stateless.\n")
 
     async with _answer_client() as client:
@@ -389,7 +357,7 @@ async def _run_chat(args: argparse.Namespace) -> None:
                 print(f"[error] HTTP {exc.response.status_code}: {exc.response.text}\n")
                 continue
             except httpx.ConnectError:
-                print(f"[error] Connection failed: {_get_api_url()}\n")
+                print(f"[error] Connection failed: {sdk_http.api_url()}\n")
                 continue
             except AnswerRunFailedError as exc:
                 print(f"[error] answer run failed ({exc.error_kind}): {exc.public_message}\n")
@@ -602,10 +570,10 @@ def main() -> None:
         print(f"HTTP {e.response.status_code}: {e.response.text}", file=sys.stderr)
         sys.exit(1)
     except httpx.TimeoutException:
-        print(f"Request timed out: {_get_api_url()}", file=sys.stderr)
+        print(f"Request timed out: {sdk_http.api_url()}", file=sys.stderr)
         sys.exit(1)
     except httpx.ConnectError:
-        print(f"Connection failed: {_get_api_url()}", file=sys.stderr)
+        print(f"Connection failed: {sdk_http.api_url()}", file=sys.stderr)
         sys.exit(1)
 
 

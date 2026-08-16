@@ -214,6 +214,24 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "sdk-independence"
+name = "SDK owns HTTP client behavior without product or transport dependencies"
+type = "forbidden"
+source_modules = ["dlightrag.sdk"]
+forbidden_modules = [
+    "dlightrag.adapters.postgres",
+    "dlightrag.api",
+    "dlightrag.application",
+    "dlightrag.core",
+    "dlightrag.mcp",
+    "dlightrag.web",
+    "dlightrag_rag",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
 id = "core-no-api-or-mcp"
 name = "Core modules do not directly import API or MCP transports"
 type = "forbidden"
