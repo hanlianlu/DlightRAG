@@ -61,7 +61,6 @@ def apply_docling_request_options(*, code_formula_preset: str | None = None) -> 
         return data
 
     setattr(patched_build_multipart_data, _PATCH_ATTR, True)
-    patched_build_multipart_data._dlightrag_original = original  # type: ignore[attr-defined]
     DoclingRawClient._build_multipart_data = patched_build_multipart_data
     # Both cache-signature call sites read this dict by reference; setdefault
     # mirrors the body patch so an upstream value always wins.

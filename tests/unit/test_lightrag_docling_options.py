@@ -47,7 +47,7 @@ def test_patch_adds_only_the_forwarded_fields_and_is_idempotent() -> None:
     client = _client(do_formula_enrichment=True)
     assert apply_docling_request_options(code_formula_preset="granite_docling") is False
 
-    original = getattr(DoclingRawClient._build_multipart_data, "_dlightrag_original", None)
+    original = getattr(DoclingRawClient._build_multipart_data, "__wrapped__", None)
     assert original is not None, "Docling option patch did not install"
 
     patched = client._build_multipart_data()

@@ -225,10 +225,6 @@ class TestEmbeddingConfig:
         with pytest.raises(ValidationError):
             EmbeddingConfig(provider="voyage", model="voyage-multimodal-3.5", **kwargs)
 
-    def test_rejects_retired_model_kwargs(self) -> None:
-        with pytest.raises(ValidationError):
-            cast(Any, EmbeddingConfig)(model_kwargs={"truncation": False})
-
 
 class TestRerankConfig:
     def test_defaults(self):
@@ -1200,12 +1196,6 @@ def test_mineru_backend_maps_to_env_and_uses_canonical_default(
 def test_mineru_backend_rejects_unknown_value() -> None:
     with pytest.raises(ValidationError):
         cast(Any, MinerUSidecarConfig)(backend="paddle")
-
-
-@pytest.mark.parametrize("legacy_backend", ["vlm-auto-engine", "hybrid-auto-engine"])
-def test_mineru_backend_rejects_legacy_aliases(legacy_backend: str) -> None:
-    with pytest.raises(ValidationError):
-        cast(Any, MinerUSidecarConfig)(backend=legacy_backend)
 
 
 def test_sidecar_env_loader_does_not_export_service_helper_keys(

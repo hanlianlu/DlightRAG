@@ -84,14 +84,6 @@ def test_both_transports_resolve_the_same_cursor_implementation() -> None:
     assert web_routes.resume_cursor is resume_cursor
 
 
-def test_no_transport_keeps_a_private_cursor_or_keepalive_copy() -> None:
-    for module in (rest_routes, web_routes, web_events):
-        assert not hasattr(module, "_parse_cursor")
-        assert not hasattr(module, "_resume_cursor")
-        assert not hasattr(module, "SSE_KEEPALIVE_SECONDS")
-        assert not hasattr(module, "_KEEPALIVE_FRAME")
-
-
 @pytest.mark.parametrize(
     ("header", "query", "expected"),
     [

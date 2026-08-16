@@ -29,16 +29,18 @@ def apply(
 ) -> None:
     """Apply all LightRAG patches. Idempotent."""
     applied = []
-    from dlightrag_rag.ingestion.parser_hygiene import apply_mineru_content_list_hygiene
+    if docling_active:
+        from dlightrag_rag.ingestion.docling_options import apply_docling_request_options
 
-    if apply_mineru_content_list_hygiene():
-        applied.append("mineru_content_list_hygiene")
-    from dlightrag_rag.ingestion.docling_options import apply_docling_request_options
+        if apply_docling_request_options(
+            code_formula_preset=docling_code_formula_preset,
+        ):
+            applied.append("docling_request_options")
+    else:
+        from dlightrag_rag.ingestion.parser_hygiene import apply_mineru_content_list_hygiene
 
-    if docling_active and apply_docling_request_options(
-        code_formula_preset=docling_code_formula_preset,
-    ):
-        applied.append("docling_request_options")
+        if apply_mineru_content_list_hygiene():
+            applied.append("mineru_content_list_hygiene")
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
     else:

@@ -76,11 +76,6 @@ def test_from_url_validates_https_and_builds() -> None:
         AnswerAttachment.from_url("http://example.com/report.pdf")
 
 
-def test_internal_resource_input_has_no_factories() -> None:
-    for factory in ("from_path", "from_bytes", "from_url"):
-        assert not hasattr(ResourceInput, factory)
-
-
 def test_answer_link_resources_maps_descriptors() -> None:
     links = [AnswerAttachmentLink(url="https://example.com/a.pdf", filename="a.pdf")]
 

@@ -82,11 +82,9 @@ def apply_mineru_content_list_hygiene() -> bool:
     """Patch LightRAG's MinerU ``_normalize_content_list`` with the transforms
     current upstream still needs. Idempotent; returns True when it installs.
     """
-    builder_cls = _resolve_builder_cls(None)
-    if builder_cls is None:  # pragma: no cover - MinerU parser always present
-        return False
+    from lightrag.parser.external.mineru.ir_builder import MinerUIRBuilder
 
-    original = builder_cls._normalize_content_list
+    original = MinerUIRBuilder._normalize_content_list
     if getattr(original, _PATCH_ATTR, False):
         return False
 
@@ -108,28 +106,12 @@ def apply_mineru_content_list_hygiene() -> bool:
         return original(self, content_list, raw_dir, document_name=document_name)
 
     setattr(patched_normalize_content_list, _PATCH_ATTR, True)
-    patched_normalize_content_list._dlightrag_original = original  # type: ignore[attr-defined]
-    builder_cls._normalize_content_list = patched_normalize_content_list
+    MinerUIRBuilder._normalize_content_list = patched_normalize_content_list
     logger.info(
         "Applied LightRAG MinerU content_list hygiene patch: %s",
         ", ".join(transform.__name__ for transform in transforms),
     )
     return True
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _resolve_builder_cls(builder_cls: Any | None) -> Any | None:
-    if builder_cls is not None:
-        return builder_cls
-    try:
-        from lightrag.parser.external.mineru.ir_builder import MinerUIRBuilder
-    except Exception:  # pragma: no cover - defensive import guard
-        return None
-    return MinerUIRBuilder
 
 
 def _is_drawing_alias(item: Any) -> bool:

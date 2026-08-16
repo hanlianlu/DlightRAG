@@ -1,8 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for DlightRAG's LightRAG parser hygiene boundary."""
 
+import sys
 from pathlib import Path
+from types import ModuleType
 
+import pytest
 from dlightrag_rag.ingestion.parser_hygiene import (
     apply_mineru_content_list_hygiene,
     filter_mineru_auxiliary_blocks,
@@ -14,9 +17,23 @@ def _unpatched_normalize_content_list():
     from lightrag.parser.external.mineru.ir_builder import MinerUIRBuilder
 
     apply_mineru_content_list_hygiene()
-    original = getattr(MinerUIRBuilder._normalize_content_list, "_dlightrag_original", None)
+    original = getattr(MinerUIRBuilder._normalize_content_list, "__wrapped__", None)
     assert original is not None, "MinerU hygiene patch did not install"
     return MinerUIRBuilder, original
+
+
+def test_active_mineru_patch_fails_closed_when_upstream_contract_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incompatible_builder = ModuleType("lightrag.parser.external.mineru.ir_builder")
+    monkeypatch.setitem(
+        sys.modules,
+        "lightrag.parser.external.mineru.ir_builder",
+        incompatible_builder,
+    )
+
+    with pytest.raises(ImportError):
+        apply_mineru_content_list_hygiene()
 
 
 def test_mineru_auxiliary_filter_preserves_semantic_and_upstream_owned_items() -> None:
