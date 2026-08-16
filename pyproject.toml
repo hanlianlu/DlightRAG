@@ -34,7 +34,6 @@ dependencies = [
     "langchain-text-splitters",
     # lightrag-server runtime dep when lightrag-hku is installed without the api extra.
     "bcrypt",
-    "aiofiles",
     # MCP server
     "mcp>=2.0.0",
     # REST API server

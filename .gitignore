@@ -58,6 +58,7 @@ output/
 # Linting/typing caches
 .ruff_cache/
 .mypy_cache/
+.import_linter_cache/
 
 # Node.js
 node_modules/

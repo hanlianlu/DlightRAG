@@ -240,6 +240,7 @@ def _render_answer_for_terminal(data: dict[str, Any]) -> str:
 
 
 async def _run_ingest(args: argparse.Namespace) -> None:
+    from dlightrag_ai.scheduler import ModelScheduler
     from dlightrag_rag.workspace_rag import WorkspaceRag
 
     from dlightrag.config import get_config
@@ -273,6 +274,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         workspace_id=workspace,
         settings=rag_settings(config),
         backend=PGCorpusBackendFactory(config).create(),
+        scheduler=ModelScheduler(max_concurrency=config.max_async),
         telemetry=LangfuseTelemetry(),
     )
     try:

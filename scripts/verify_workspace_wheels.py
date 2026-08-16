@@ -7,9 +7,13 @@ import argparse
 import ast
 import email.parser
 import hashlib
+import importlib
+import importlib.metadata
 import importlib.util
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -19,6 +23,8 @@ import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 _EXPECTED_PACKAGES = {
     "dlightrag": "dlightrag",
@@ -32,6 +38,46 @@ _EXPECTED_DLIGHTRAG_DEPENDENCIES = {
     "dlightrag-ai": set(),
     "dlightrag-rag-core": {"dlightrag-ai"},
 }
+_EXPECTED_EXTRAS = {
+    "dlightrag": set(),
+    "dlightrag-agent-core": set(),
+    "dlightrag-ai": {"all", "anthropic", "gemini", "openai"},
+    "dlightrag-rag-core": set(),
+}
+_WORKSPACE_MANIFESTS = {
+    "dlightrag": (Path("pyproject.toml"), ".", "src/dlightrag"),
+    "dlightrag-agent-core": (
+        Path("packages/agent-core/pyproject.toml"),
+        "packages/agent-core",
+        "src/dlightrag_agent",
+    ),
+    "dlightrag-ai": (
+        Path("packages/ai/pyproject.toml"),
+        "packages/ai",
+        "src/dlightrag_ai",
+    ),
+    "dlightrag-rag-core": (
+        Path("packages/rag-core/pyproject.toml"),
+        "packages/rag-core",
+        "src/dlightrag_rag",
+    ),
+}
+_EXPECTED_WORKSPACE_MEMBERS = [
+    "packages/ai",
+    "packages/agent-core",
+    "packages/rag-core",
+]
+_EXPECTED_WORKSPACE_SOURCES = {
+    "dlightrag-ai": {"workspace": True},
+    "dlightrag-agent-core": {"workspace": True},
+    "dlightrag-rag-core": {"workspace": True},
+}
+_ROOT_CONSOLE_SCRIPTS = (
+    "dlightrag-api",
+    "dlightrag-mcp",
+    "dlightrag-rebuild-bm25",
+    "dlightrag-rebuild-vdb",
+)
 _CONCRETE_LIGHTRAG_BACKEND = "lightrag.kg.postgres_impl"
 # import-linter rejects external submodules as contract targets, so the built
 # artifact gate owns this one exact LightRAG implementation prohibition.
@@ -62,11 +108,13 @@ def absent(name):
 
 _AI_SMOKE = (
     """
+import asyncio
 import importlib
 import importlib.util
 import pkgutil
 import sys
 from PIL import Image
+from dlightrag_ai.scheduler import ModelScheduler
 
 pillow_max_image_pixels = Image.MAX_IMAGE_PIXELS
 import dlightrag_ai
@@ -82,6 +130,12 @@ for module in pkgutil.walk_packages(dlightrag_ai.__path__, prefix='dlightrag_ai.
 
 assert optional_modules.isdisjoint(sys.modules)
 assert Image.MAX_IMAGE_PIXELS == pillow_max_image_pixels
+
+async def scheduler_smoke():
+    scheduler = ModelScheduler(max_concurrency=1)
+    assert await scheduler.run(lambda: asyncio.sleep(0, result='scheduled')) == 'scheduled'
+
+asyncio.run(scheduler_smoke())
 """
     + _ABSENT_HELPER
     + """
@@ -136,10 +190,15 @@ assert all(absent(name) for name in (
 
 _RAG_SMOKE = (
     """
+import asyncio
 import importlib
 import importlib.util
 import pkgutil
+import tempfile
+from pathlib import Path
 import dlightrag_rag
+from dlightrag_rag.ingestion.uploads import write_upload_stream
+from dlightrag_rag.retrieval.language import BM25LanguageClassifier
 from dlightrag_rag.retrieval import MetadataFilter, rrf_fuse
 
 for module in pkgutil.walk_packages(dlightrag_rag.__path__, prefix='dlightrag_rag.'):
@@ -149,6 +208,24 @@ rows = rrf_fuse([[{'chunk_id': 'a'}], [{'chunk_id': 'a'}]])
 assert rows[0]['chunk_id'] == 'a'
 assert abs(rows[0]['score'] - 2 / 61) < 1e-12
 assert MetadataFilter(filename=' example.pdf ').filename == 'example.pdf'
+classifier = BM25LanguageClassifier(('en', 'zh'))
+assert classifier.detect('The quick brown fox jumps over the lazy dog.') == 'en'
+
+class Upload:
+    def __init__(self):
+        self._chunks = [b'installed ', b'RAG upload', b'']
+
+    async def read(self, _size):
+        return self._chunks.pop(0)
+
+async def upload_smoke():
+    with tempfile.TemporaryDirectory() as raw_temp:
+        destination = Path(raw_temp) / 'upload.bin'
+        written = await write_upload_stream(Upload(), destination, max_bytes=1024)
+        assert written == 20
+        assert destination.read_bytes() == b'installed RAG upload'
+
+asyncio.run(upload_smoke())
 """
     + _ABSENT_HELPER
     + """
@@ -165,6 +242,7 @@ class WheelFacts:
     version: str
     dependencies: frozenset[str]
     requirements: tuple[str, ...]
+    extras: frozenset[str]
     top_level_packages: frozenset[str]
     license_files: frozenset[str]
     legal_hashes: tuple[str, str]
@@ -177,6 +255,7 @@ class WheelFacts:
 class SdistFacts:
     distribution: str
     version: str
+    extras: frozenset[str]
     top_level_packages: frozenset[str]
     license_files: frozenset[str]
     legal_hashes: tuple[str, str]
@@ -204,15 +283,16 @@ def _metadata_facts(
     raw: bytes,
     *,
     artifact: str,
-) -> tuple[str, str, tuple[str, ...], frozenset[str]]:
+) -> tuple[str, str, tuple[str, ...], frozenset[str], frozenset[str]]:
     metadata = email.parser.Parser().parsestr(raw.decode("utf-8"))
     distribution = _normalize_distribution(str(metadata.get("Name") or ""))
     version = str(metadata.get("Version") or "")
     requirements = tuple(metadata.get_all("Requires-Dist", []))
+    extras = frozenset(metadata.get_all("Provides-Extra", []))
     license_files = frozenset(metadata.get_all("License-File", []))
     if not distribution or not version:
         raise ValueError(f"{artifact}: missing distribution name or version")
-    return distribution, version, requirements, license_files
+    return distribution, version, requirements, extras, license_files
 
 
 def _sha256(raw: bytes) -> str:
@@ -251,7 +331,7 @@ def _wheel_facts(
         metadata_paths = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
         if len(metadata_paths) != 1:
             raise ValueError(f"{path.name}: expected one METADATA file")
-        distribution, version, requirements, license_files = _metadata_facts(
+        distribution, version, requirements, extras, license_files = _metadata_facts(
             wheel.read(metadata_paths[0]), artifact=path.name
         )
         dependencies = frozenset(_requirement_name(requirement) for requirement in requirements)
@@ -285,6 +365,7 @@ def _wheel_facts(
         version,
         dependencies,
         requirements,
+        extras,
         top_level,
         license_files,
         legal_hashes,
@@ -475,7 +556,7 @@ def _sdist_facts(
         metadata_file = sdist.extractfile(metadata_members[0])
         if metadata_file is None:
             raise ValueError(f"{path.name}: could not read PKG-INFO")
-        distribution, version, _, license_files = _metadata_facts(
+        distribution, version, _, extras, license_files = _metadata_facts(
             metadata_file.read(), artifact=path.name
         )
         sdist_root = Path(metadata_members[0].name).parts[0]
@@ -522,6 +603,7 @@ def _sdist_facts(
     return SdistFacts(
         distribution,
         version,
+        extras,
         frozenset(top_level),
         license_files,
         legal_hashes,
@@ -532,6 +614,108 @@ def _sdist_facts(
         }.issubset(frontend_members),
         has_model_catalog,
     )
+
+
+def verify_workspace_definition(workspace_root: Path) -> None:
+    """Verify source manifests and uv.lock describe the exact four-package workspace."""
+    workspace_root = workspace_root.resolve()
+    uv_executable = shutil.which("uv")
+    if uv_executable is None:
+        raise ValueError("uv is required to verify uv.lock")
+    lock_check = subprocess.run(  # noqa: S603 - fixed uv command against caller-selected root
+        [uv_executable, "lock", "--check"],
+        cwd=workspace_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if lock_check.returncode != 0:
+        detail = lock_check.stderr.strip() or lock_check.stdout.strip()
+        raise ValueError(f"uv.lock is stale: {detail}")
+    configs: dict[str, dict[str, object]] = {}
+    versions: set[str] = set()
+    direct_dependencies: dict[str, set[str]] = {}
+
+    for distribution, (relative_path, _, package_path) in _WORKSPACE_MANIFESTS.items():
+        manifest_path = workspace_root / relative_path
+        try:
+            config = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+            project = config["project"]
+            build_system = config["build-system"]
+            wheel_target = config["tool"]["hatch"]["build"]["targets"]["wheel"]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"{relative_path}: incomplete workspace manifest") from exc
+        if _normalize_distribution(str(project.get("name") or "")) != distribution:
+            raise ValueError(f"{relative_path}: unexpected project name")
+        version = str(project.get("version") or "")
+        versions.add(version)
+        if project.get("requires-python") != ">=3.14,<3.15":
+            raise ValueError(f"{distribution}: Python requirement must be >=3.14,<3.15")
+        if project.get("license") != "Apache-2.0":
+            raise ValueError(f"{distribution}: license must be Apache-2.0")
+        if build_system.get("build-backend") != "hatchling.build":
+            raise ValueError(f"{distribution}: build backend must be Hatchling")
+        if wheel_target.get("packages") != [package_path]:
+            raise ValueError(f"{distribution}: wheel must own only {package_path}")
+        dependencies = project.get("dependencies")
+        if not isinstance(dependencies, list) or not all(
+            isinstance(dependency, str) for dependency in dependencies
+        ):
+            raise ValueError(f"{distribution}: project dependencies must be strings")
+        direct_dependencies[distribution] = {
+            _requirement_name(dependency) for dependency in dependencies
+        }
+        configs[distribution] = config
+
+    if len(versions) != 1 or not next(iter(versions), ""):
+        raise ValueError(f"workspace manifest versions are not lockstep: {sorted(versions)}")
+    (version,) = versions
+
+    try:
+        root_uv = configs["dlightrag"]["tool"]["uv"]  # type: ignore[index]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("root manifest is missing [tool.uv]") from exc
+    if root_uv.get("workspace", {}).get("members") != _EXPECTED_WORKSPACE_MEMBERS:
+        raise ValueError("root workspace members differ from the four-package contract")
+    if root_uv.get("sources") != _EXPECTED_WORKSPACE_SOURCES:
+        raise ValueError("root workspace sources differ from the four-package contract")
+    expected_ai_source = {"dlightrag-ai": {"workspace": True}}
+    for distribution in ("dlightrag-agent-core", "dlightrag-rag-core"):
+        member_sources = (
+            configs[distribution].get("tool", {}).get("uv", {}).get("sources", {})  # type: ignore[union-attr]
+        )
+        if member_sources != expected_ai_source:
+            raise ValueError(f"{distribution}: workspace AI source is missing or stale")
+
+    lock_path = workspace_root / "uv.lock"
+    try:
+        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+        lock_packages = lock["package"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("uv.lock is missing package records") from exc
+    if lock.get("requires-python") != "==3.14.*":
+        raise ValueError("uv.lock Python requirement differs from workspace manifests")
+    if lock.get("manifest", {}).get("members") != list(_EXPECTED_PACKAGES):
+        raise ValueError("uv.lock manifest members differ from the four-package contract")
+    for distribution, (_, editable_path, _) in _WORKSPACE_MANIFESTS.items():
+        matches = [package for package in lock_packages if package.get("name") == distribution]
+        if len(matches) != 1:
+            raise ValueError(f"uv.lock must contain one workspace record for {distribution}")
+        package = matches[0]
+        if package.get("version") != version:
+            raise ValueError(f"uv.lock version drift for {distribution}")
+        if package.get("source") != {"editable": editable_path}:
+            raise ValueError(f"uv.lock editable source drift for {distribution}")
+        locked_dependencies = {
+            str(dependency.get("name")) for dependency in package.get("dependencies", [])
+        }
+        if locked_dependencies != direct_dependencies[distribution]:
+            raise ValueError(f"uv.lock direct dependencies drift for {distribution}")
+        expected_extras = set(
+            configs[distribution]["project"].get("optional-dependencies", {})  # type: ignore[index,union-attr]
+        )
+        if set(package.get("optional-dependencies", {})) != expected_extras:
+            raise ValueError(f"uv.lock optional dependency drift for {distribution}")
 
 
 def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
@@ -591,6 +775,11 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
                 f"{distribution}: expected DlightRAG dependencies {sorted(expected_dependencies)}, "
                 f"found {sorted(actual_dlightrag_dependencies)}"
             )
+        if set(facts.extras) != _EXPECTED_EXTRAS[distribution]:
+            raise ValueError(
+                f"{distribution}: expected extras {sorted(_EXPECTED_EXTRAS[distribution])}, "
+                f"found {sorted(facts.extras)}"
+            )
         if distribution == "dlightrag" and not any(
             requirement.lower().startswith("dlightrag-ai[all]")
             for requirement in facts.requirements
@@ -625,6 +814,8 @@ def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
             _EXPECTED_PACKAGES[distribution]
         }:
             raise ValueError("sdist metadata or top-level packages do not match workspace wheels")
+        if set(facts.extras) != _EXPECTED_EXTRAS[distribution]:
+            raise ValueError(f"{distribution}: sdist extras do not match workspace wheel metadata")
         if facts.license_files != {"LICENSE", "NOTICE"} or facts.legal_hashes != legal_hashes:
             raise ValueError(f"{distribution}: sdist must contain repository LICENSE and NOTICE")
         if not facts.has_py_typed:
@@ -656,8 +847,131 @@ def _wheel_path(dist_dir: Path, distribution: str) -> Path:
     return matches[0]
 
 
-def smoke_installed(dist_dir: Path) -> None:
+def _direct_url_path(value: str) -> Path | None:
+    parsed = urlparse(value)
+    if parsed.scheme != "file":
+        return None
+    return Path(url2pathname(unquote(parsed.path))).resolve()
+
+
+def _direct_url_sha256(value: dict[str, object]) -> str | None:
+    archive_info = value.get("archive_info")
+    if not isinstance(archive_info, dict):
+        return None
+    hashes = archive_info.get("hashes")
+    if isinstance(hashes, dict) and isinstance(hashes.get("sha256"), str):
+        return hashes["sha256"]
+    legacy_hash = archive_info.get("hash")
+    if isinstance(legacy_hash, str) and legacy_hash.startswith("sha256="):
+        return legacy_hash.removeprefix("sha256=")
+    return None
+
+
+def _wheel_installation_members(path: Path) -> tuple[str, str, dict[str, bytes]]:
+    with zipfile.ZipFile(path) as wheel:
+        metadata_paths = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+        if len(metadata_paths) != 1:
+            raise ValueError(f"{path.name}: expected one METADATA file")
+        distribution, version, _, _, _ = _metadata_facts(
+            wheel.read(metadata_paths[0]), artifact=path.name
+        )
+        members = {
+            name: wheel.read(name)
+            for name in wheel.namelist()
+            if not name.endswith("/") and not name.endswith(".dist-info/RECORD")
+        }
+    return distribution, version, members
+
+
+def _smoke_root_interfaces() -> None:
+    from dlightrag.config import DlightragConfig, RuntimeConfig
+    from dlightrag.model_settings import rag_settings
+    from dlightrag.runtime import answer_run_request_fingerprint
+
+    config = DlightragConfig(
+        max_async=2,
+        runtime=RuntimeConfig(answer_worker_concurrency=3),
+        rag_pipeline_max_async=5,
+    )
+    settings = rag_settings(config)
+    if config.max_async != 2:
+        raise ValueError("installed root config did not preserve AI concurrency")
+    if config.runtime.answer_worker_concurrency != 3:
+        raise ValueError("installed root config did not preserve Runtime concurrency")
+    if settings.rag_pipeline_max_async != 5:
+        raise ValueError("installed root mapping did not preserve RAG concurrency")
+    fingerprint = answer_run_request_fingerprint(
+        {"query": "installed wheel", "workspaces": ["default"]}
+    )
+    if len(fingerprint) != 64:
+        raise ValueError("installed Runtime did not produce a SHA-256 request fingerprint")
+
+
+def verify_installed(dist_dir: Path) -> None:
+    """Prove this interpreter loaded all four distributions from the current wheels."""
     dist_dir = dist_dir.resolve()
+    repository = dist_dir.parent.resolve()
+    versions: set[str] = set()
+    for expected_distribution, package in _EXPECTED_PACKAGES.items():
+        wheel_path = _wheel_path(dist_dir, expected_distribution).resolve()
+        distribution, version, members = _wheel_installation_members(wheel_path)
+        if distribution != expected_distribution:
+            raise ValueError(f"{wheel_path.name}: unexpected distribution {distribution}")
+        installed = importlib.metadata.distribution(expected_distribution)
+        if installed.version != version:
+            raise ValueError(
+                f"{expected_distribution}: installed version {installed.version} != {version}"
+            )
+        versions.add(version)
+
+        direct_url_raw = installed.read_text("direct_url.json")
+        if direct_url_raw is None:
+            raise ValueError(f"{expected_distribution}: missing direct_url.json")
+        direct_url = json.loads(direct_url_raw)
+        if not isinstance(direct_url, dict):
+            raise ValueError(f"{expected_distribution}: invalid direct_url.json")
+        if _direct_url_path(str(direct_url.get("url") or "")) != wheel_path:
+            raise ValueError(
+                f"{expected_distribution}: installed artifact is not {wheel_path.name}"
+            )
+        direct_url_hash = _direct_url_sha256(direct_url)
+        if direct_url_hash is not None and direct_url_hash != _sha256(wheel_path.read_bytes()):
+            raise ValueError(f"{expected_distribution}: installed artifact hash differs")
+
+        installed_files = {str(path).replace("\\", "/"): path for path in installed.files or ()}
+        for member, raw in members.items():
+            if member not in installed_files:
+                raise ValueError(f"{expected_distribution}: installed file missing: {member}")
+            installed_path = Path(str(installed.locate_file(installed_files[member]))).resolve()
+            if not installed_path.is_file() or _sha256(installed_path.read_bytes()) != _sha256(raw):
+                raise ValueError(f"{expected_distribution}: installed file differs: {member}")
+            if installed_path.is_relative_to(repository):
+                raise ValueError(
+                    f"{expected_distribution}: imported from checkout: {installed_path}"
+                )
+
+        module = importlib.import_module(package)
+        module_path = Path(str(module.__file__)).resolve()
+        if "site-packages" not in module_path.parts or module_path.is_relative_to(repository):
+            raise ValueError(f"{package}: not imported from isolated site-packages: {module_path}")
+
+    if len(versions) != 1:
+        raise ValueError(f"installed workspace versions are not lockstep: {sorted(versions)}")
+    _smoke_root_interfaces()
+
+
+def _venv_executable(venv: Path, name: str) -> Path:
+    if os.name == "nt":
+        return venv / "Scripts" / f"{name}.exe"
+    return venv / "bin" / name
+
+
+def smoke_installed(dist_dir: Path, *, config_path: Path) -> None:
+    dist_dir = dist_dir.resolve()
+    config_path = config_path.resolve()
+    uv_executable = shutil.which("uv")
+    if uv_executable is None:
+        raise ValueError("uv is required to smoke installed wheels")
     smoke_cases = (
         ("ai", ("dlightrag-ai",), _AI_SMOKE),
         ("ai-all", ("dlightrag-ai[all]",), _AI_ALL_SMOKE),
@@ -674,6 +988,9 @@ def smoke_installed(dist_dir: Path) -> None:
     }
     base_env = dict(os.environ)
     base_env.pop("PYTHONPATH", None)
+    for name in tuple(base_env):
+        if name.startswith("DLIGHTRAG_"):
+            base_env.pop(name)
     base_env["PYTHONSAFEPATH"] = "1"
 
     for label, distributions, code in smoke_cases:
@@ -681,14 +998,14 @@ def smoke_installed(dist_dir: Path) -> None:
             temp = Path(raw_temp)
             venv = temp / ".venv"
             _run_checked(
-                ["uv", "venv", "--python", "3.14", str(venv)],
+                [uv_executable, "venv", "--python", "3.14", str(venv)],
                 cwd=temp,
                 env=base_env,
             )
             python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             _run_checked(
                 [
-                    "uv",
+                    uv_executable,
                     "pip",
                     "install",
                     "--python",
@@ -705,6 +1022,62 @@ def smoke_installed(dist_dir: Path) -> None:
             )
             _run_checked([str(python), "-I", "-c", code], cwd=temp, env=base_env)
 
+    with tempfile.TemporaryDirectory(prefix="dlightrag-root-wheel-") as raw_temp:
+        temp = Path(raw_temp)
+        venv = temp / ".venv"
+        _run_checked(
+            [uv_executable, "venv", "--python", "3.14", str(venv)],
+            cwd=temp,
+            env=base_env,
+        )
+        python = _venv_executable(venv, "python")
+        _run_checked(
+            [
+                uv_executable,
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                *(str(_wheel_path(dist_dir, distribution)) for distribution in _EXPECTED_PACKAGES),
+            ],
+            cwd=temp,
+            env=base_env,
+        )
+        _run_checked(
+            [
+                str(python),
+                "-I",
+                str(Path(__file__).resolve()),
+                "--installed",
+                "--dist",
+                str(dist_dir),
+                "--config",
+                str(config_path),
+            ],
+            cwd=temp,
+            env=base_env,
+        )
+        for script in _ROOT_CONSOLE_SCRIPTS:
+            _run_checked(
+                [str(_venv_executable(venv, script)), "--help"],
+                cwd=temp,
+                env=base_env,
+            )
+        _run_checked(
+            [uv_executable, "pip", "install", "--python", str(python), "import-linter"],
+            cwd=temp,
+            env=base_env,
+        )
+        _run_checked(
+            [
+                str(_venv_executable(venv, "lint-imports")),
+                "--config",
+                str(config_path),
+            ],
+            cwd=temp,
+            env=base_env,
+        )
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -718,9 +1091,20 @@ def _parse_args() -> argparse.Namespace:
         help="Import-linter configuration used as the source policy",
     )
     parser.add_argument(
+        "--workspace-root",
+        type=Path,
+        help="Workspace containing the four manifests and uv.lock (defaults to config parent)",
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--smoke-installed",
         action="store_true",
-        help="Install core wheels into isolated Python 3.14 environments and run interface smokes",
+        help="Install all wheels into isolated Python 3.14 environments and run interface smokes",
+    )
+    mode.add_argument(
+        "--installed",
+        action="store_true",
+        help="Verify this interpreter is using the current built wheel set",
     )
     return parser.parse_args()
 
@@ -728,10 +1112,23 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     try:
+        workspace_root = args.workspace_root or args.config.resolve().parent
+        verify_workspace_definition(workspace_root)
         verify_dist(args.dist, config_path=args.config)
-        if args.smoke_installed:
-            smoke_installed(args.dist)
-    except (OSError, SyntaxError, ValueError, tarfile.TarError, zipfile.BadZipFile) as exc:
+        if args.installed:
+            verify_installed(args.dist)
+        elif args.smoke_installed:
+            smoke_installed(args.dist, config_path=args.config)
+    except (
+        ImportError,
+        importlib.metadata.PackageNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+        SyntaxError,
+        ValueError,
+        tarfile.TarError,
+        zipfile.BadZipFile,
+    ) as exc:
         print(f"workspace wheel verification failed: {exc}", file=sys.stderr)
         return 1
     print("workspace wheel verification passed")

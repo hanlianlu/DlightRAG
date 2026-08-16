@@ -25,6 +25,7 @@ def _write_wheel(
     distribution: str,
     package: str,
     requires: tuple[str, ...] = (),
+    provides_extras: tuple[str, ...] = (),
     source: str = "",
     version: str = "1.9.0",
     include_legal: bool = True,
@@ -40,6 +41,7 @@ def _write_wheel(
         f"Version: {version}",
         *(("License-File: LICENSE", "License-File: NOTICE") if include_legal else ()),
         *(f"Requires-Dist: {requirement}" for requirement in requires),
+        *(f"Provides-Extra: {extra}" for extra in provides_extras),
         "",
     ]
     with zipfile.ZipFile(dist_dir / f"{wheel_name}-{version}-py3-none-any.whl", "w") as wheel:
@@ -104,6 +106,7 @@ def _write_workspace_artifacts(
     ),
     ai_include_legal: bool = True,
     ai_include_model_catalog: bool = True,
+    ai_extras: tuple[str, ...] = ("all", "anthropic", "gemini", "openai"),
     root_include_frontend: bool = True,
     root_source: str = "",
     root_additional_sources: dict[str, str] | None = None,
@@ -113,6 +116,7 @@ def _write_workspace_artifacts(
         distribution="dlightrag-ai",
         package="dlightrag_ai",
         requires=("pydantic>=2.11.0",),
+        provides_extras=ai_extras,
         include_legal=ai_include_legal,
         additional_sources=(
             {"model_catalog.json": '{"revision":"test","models":[]}'}
@@ -157,6 +161,8 @@ def _verify_wheels(
             str(_REPO / "scripts" / "verify_workspace_wheels.py"),
             "--config",
             str(config_path),
+            "--workspace-root",
+            str(_REPO),
             "--dist",
             str(dist_dir),
         ],
@@ -164,6 +170,22 @@ def _verify_wheels(
         capture_output=True,
         text=True,
     )
+
+
+def test_workspace_wheel_verifier_exposes_installed_mode() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(_REPO / "scripts" / "verify_workspace_wheels.py"),
+            "--help",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "--installed" in completed.stdout
 
 
 def test_workspace_wheel_verifier_accepts_four_lockstep_artifacts(tmp_path: Path) -> None:
@@ -376,6 +398,15 @@ def test_workspace_wheel_verifier_requires_ai_model_catalog(tmp_path: Path) -> N
 
     assert completed.returncode == 1
     assert "model_catalog.json" in completed.stderr
+
+
+def test_workspace_wheel_verifier_requires_ai_extras(tmp_path: Path) -> None:
+    _write_workspace_artifacts(tmp_path, ai_extras=("openai",))
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "expected extras" in completed.stderr
 
 
 def test_workspace_wheel_verifier_requires_root_frontend(tmp_path: Path) -> None:

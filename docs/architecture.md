@@ -11,6 +11,12 @@ in [postgresql.md](postgresql.md).
   <img src="architecture.svg" alt="DlightRAG Architecture" width="1080" />
 </p>
 
+The figure keeps three views separate: compile-time package imports, runtime
+call/provider flow, and persistence adapter wiring. Solid slate lines are
+runtime calls, dashed open lines are dependencies or port implementation,
+dotted magenta lines are AI-provider admission, and `↻` marks the three
+independent concurrency owners.
+
 ## Runtime Ownership
 
 ```text
@@ -22,7 +28,7 @@ Clients
             neutral lifecycle records, store port, leases, events, checkpoints
             -> PGAnswerRunStore adapter
      -> WorkspaceRag
-       one workspace runtime, ingest, retrieve, answer, reset
+                one workspace runtime, ingest, retrieve, metadata, reset
   -> LightRAG main
        parser routing, staged ingest, chunks, doc status, KG, vectors
   -> DlightRAG PostgreSQL stores

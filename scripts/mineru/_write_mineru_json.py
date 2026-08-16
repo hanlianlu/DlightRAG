@@ -34,6 +34,9 @@ def main() -> None:
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: could not parse {target} — starting fresh ({exc})")
 
+    api_key = ""
+    base_url = ""
+    model = ""
     if disable:
         title_aided = {"enable": False}
     else:

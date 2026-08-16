@@ -51,6 +51,7 @@ def test_core_distribution_dependencies_follow_import_direction() -> None:
     assert agent == [f"dlightrag-ai=={version}", "pydantic>=2.11.0"]
     assert rag == [
         f"dlightrag-ai=={version}",
+        "aiofiles>=24.1.0",
         "aiobotocore>=3.9.0",
         "azure-storage-blob>=12.28.0",
         "botocore>=1.43.3",
@@ -61,6 +62,33 @@ def test_core_distribution_dependencies_follow_import_direction() -> None:
         "pillow>=12.3.0",
         "pydantic>=2.11.0",
     ]
+
+
+def test_workspace_sources_and_lock_are_exact() -> None:
+    root = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert root["tool"]["uv"]["workspace"]["members"] == [
+        "packages/ai",
+        "packages/agent-core",
+        "packages/rag-core",
+    ]
+    assert root["tool"]["uv"]["sources"] == {
+        "dlightrag-ai": {"workspace": True},
+        "dlightrag-agent-core": {"workspace": True},
+        "dlightrag-rag-core": {"workspace": True},
+    }
+
+    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+    workspace_sources = {
+        package["name"]: package["source"]
+        for package in lock["package"]
+        if package["name"].startswith("dlightrag")
+    }
+    assert workspace_sources == {
+        "dlightrag": {"editable": "."},
+        "dlightrag-agent-core": {"editable": "packages/agent-core"},
+        "dlightrag-ai": {"editable": "packages/ai"},
+        "dlightrag-rag-core": {"editable": "packages/rag-core"},
+    }
 
 
 def test_eval_dependency_group_uses_lightrag_evaluation_extra() -> None:

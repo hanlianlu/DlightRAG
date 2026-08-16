@@ -95,7 +95,8 @@ hooks:
 	@echo "Pre-commit hooks installed — will run on every git commit."
 
 sync-dev:
-	uv sync --group dev
+	uv lock --check
+	uv sync --locked --group dev
 
 lint:
 	uv run ruff check $(PYTHON_LINT_PATHS)

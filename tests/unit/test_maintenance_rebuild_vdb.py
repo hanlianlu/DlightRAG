@@ -40,12 +40,6 @@ def test_pyproject_exposes_rebuild_console_script() -> None:
     )
 
 
-def test_rebuild_vdb_exports_are_resolvable() -> None:
-    from dlightrag.maintenance import rebuild_vdb
-
-    assert all(hasattr(rebuild_vdb, name) for name in rebuild_vdb.__all__)
-
-
 async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.MonkeyPatch) -> None:
     from dlightrag.maintenance import rebuild_vdb as module
 

@@ -1,123 +1,106 @@
-<mxfile host="app.diagrams.net" modified="2026-05-24T00:00:00.000Z" agent="DlightRAG" version="24.7.17" type="device">
+<mxfile host="app.diagrams.net" modified="2026-08-16T00:00:00.000Z" agent="DlightRAG" version="31.1.8" type="device">
   <diagram id="dlightrag-architecture" name="Architecture">
     <mxGraphModel dx="1280" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="900" math="0" shadow="0">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
 
-        <mxCell id="title" value="DlightRAG Unified LightRAG Main Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=25;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
-          <mxGeometry x="64" y="24" width="680" height="34" as="geometry"/>
+        <mxCell id="title" value="DlightRAG Package Boundaries &amp; Runtime Flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Inter;fontSize=25;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="56" y="22" width="900" height="34" as="geometry"/>
         </mxCell>
-        <mxCell id="subtitle" value="One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, and doc status (MinerU/Docling are durable ingestion parsers only).&lt;br&gt;Answers use one attachment contract; fast mode runs fixed KB retrieval, while research mode lets the agent select peer tools. /retrieve stays knowledge-base only." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
-          <mxGeometry x="64" y="66" width="1120" height="46" as="geometry"/>
-        </mxCell>
-
-        <mxCell id="layer_interfaces" value="Interface Boundary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="64" y="126" width="1152" height="108" as="geometry"/>
-        </mxCell>
-        <mxCell id="adapters" value="&lt;b&gt;API, SDK, Web UI, MCP&lt;/b&gt;&lt;br&gt;transport, auth, uploads&lt;br&gt;one answer attachment contract" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=9;" vertex="1" parent="1">
-          <mxGeometry x="96" y="166" width="210" height="52" as="geometry"/>
-        </mxCell>
-        <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;workspace routing, stateless answers&lt;br&gt;service lifecycle, ingest jobs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="382" y="160" width="244" height="64" as="geometry"/>
-        </mxCell>
-        <mxCell id="service" value="&lt;b&gt;WorkspaceRag&lt;/b&gt;&lt;br&gt;per-workspace corpus capability" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
-          <mxGeometry x="704" y="160" width="244" height="64" as="geometry"/>
-        </mxCell>
-        <mxCell id="models" value="&lt;b&gt;Model Adapters&lt;/b&gt;&lt;br&gt;LLM, VLM, embedding&lt;br&gt;rerank roles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="1016" y="160" width="168" height="64" as="geometry"/>
+        <mxCell id="subtitle" value="Compile-time imports, runtime calls, provider admission, and persistence use distinct visual semantics." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontFamily=Inter;fontSize=12;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="56" y="64" width="1168" height="24" as="geometry"/>
         </mxCell>
 
-        <mxCell id="layer_runtime" value="Runtime Orchestration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d1d5db;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="64" y="270" width="1152" height="380" as="geometry"/>
+        <mxCell id="band_packages" value="Compile-time package dependency" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="56" y="98" width="1168" height="220" as="geometry"/>
         </mxCell>
-        <mxCell id="lane_ingest" value="Ingest/Admin Path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="92" y="316" width="330" height="290" as="geometry"/>
+        <mxCell id="pkg_root" value="&lt;b&gt;dlightrag&lt;/b&gt;&lt;br&gt;composition &#183; transports &#183; PostgreSQL adapters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="440" y="128" width="400" height="48" as="geometry"/>
         </mxCell>
-        <mxCell id="lane_lightrag" value="LightRAG Main Ownership" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#f59e0b;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#92400e;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="475" y="316" width="330" height="290" as="geometry"/>
+        <mxCell id="pkg_rag" value="&lt;b&gt;dlightrag-rag-core&lt;/b&gt;&lt;br&gt;WorkspaceRag &#183; LightRAG adapters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="270" y="198" width="280" height="48" as="geometry"/>
         </mxCell>
-        <mxCell id="lane_query" value="Answer Orchestration &amp; KB Retrieve" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="858" y="316" width="330" height="290" as="geometry"/>
+        <mxCell id="pkg_agent" value="&lt;b&gt;dlightrag-agent-core&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; generic tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="730" y="198" width="280" height="48" as="geometry"/>
         </mxCell>
-
-        <mxCell id="source_intake" value="&lt;b&gt;Source Intake&lt;/b&gt;&lt;br&gt;local, URL, SDK, cloud" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="118" y="360" width="130" height="58" as="geometry"/>
+        <mxCell id="pkg_ai" value="&lt;b&gt;dlightrag-ai&lt;/b&gt; &#183; ModelScheduler &#183; ModelProfile &#183; model lifecycles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="510" y="264" width="260" height="40" as="geometry"/>
         </mxCell>
-        <mxCell id="metadata" value="&lt;b&gt;Metadata&lt;/b&gt;&lt;br&gt;contracts + policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="270" y="360" width="124" height="58" as="geometry"/>
-        </mxCell>
-        <mxCell id="ingestion" value="&lt;b&gt;Unified Ingestion Engine&lt;/b&gt;&lt;br&gt;staging, metadata, LightRAG enqueue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="118" y="455" width="276" height="60" as="geometry"/>
-        </mxCell>
-        <mxCell id="visual_path" value="&lt;b&gt;Fused Visual Alignment&lt;/b&gt;&lt;br&gt;existing LightRAG drawing chunks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="118" y="535" width="276" height="50" as="geometry"/>
+        <mxCell id="pkg_caption" value="enforced in source and installed wheels" style="text;html=1;strokeColor=none;fillColor=none;align=right;verticalAlign=middle;whiteSpace=wrap;fontFamily=Inter;fontSize=10;fontColor=#64748b;" vertex="1" parent="1">
+          <mxGeometry x="852" y="274" width="340" height="20" as="geometry"/>
         </mxCell>
 
-        <mxCell id="parser_sidecars" value="&lt;b&gt;Parser Sidecars (MinerU/Docling)&lt;/b&gt;&lt;br&gt;durable ingestion only: text, tables, equations, images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="505" y="360" width="270" height="58" as="geometry"/>
+        <mxCell id="band_runtime" value="Runtime control &amp; data flow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="56" y="338" width="1168" height="320" as="geometry"/>
         </mxCell>
-        <mxCell id="kg_vectors" value="&lt;b&gt;KG + Vectors&lt;/b&gt;&lt;br&gt;chunks, entities&lt;br&gt;relationships" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=7;" vertex="1" parent="1">
-          <mxGeometry x="505" y="440" width="126" height="64" as="geometry"/>
+        <mxCell id="clients" value="&lt;b&gt;REST &#183; Web &#183; MCP &#183; SDK&lt;/b&gt;&lt;br&gt;auth &#183; uploads &#183; request contracts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="78" y="385" width="170" height="64" as="geometry"/>
         </mxCell>
-        <mxCell id="doc_status" value="&lt;b&gt;Doc Status&lt;/b&gt;&lt;br&gt;content hash&lt;br&gt;chunks list" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=7;" vertex="1" parent="1">
-          <mxGeometry x="649" y="440" width="126" height="64" as="geometry"/>
+        <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;composition root&lt;br&gt;workspace routing &#183; reader/writer gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="282" y="375" width="205" height="84" as="geometry"/>
         </mxCell>
-        <mxCell id="mix_retrieval" value="&lt;b&gt;LightRAG Mix Retrieval&lt;/b&gt;&lt;br&gt;retrieval base: aquery_data(mode=mix)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="505" y="525" width="270" height="58" as="geometry"/>
+        <mxCell id="run_coordinator" value="&lt;b&gt;RunCoordinator &#8635;&lt;/b&gt;&lt;br&gt;runtime.answer_worker_concurrency&lt;br&gt;leases &#183; events &#183; checkpoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+          <mxGeometry x="525" y="370" width="190" height="72" as="geometry"/>
         </mxCell>
-
-        <mxCell id="orchestrator" value="&lt;b&gt;AnswerOrchestrator&lt;/b&gt;&lt;br&gt;fast path vs research path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="884" y="352" width="276" height="50" as="geometry"/>
+        <mxCell id="orchestrator" value="&lt;b&gt;AnswerOrchestrator&lt;/b&gt;&lt;br&gt;fast path | research path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="750" y="370" width="200" height="72" as="geometry"/>
         </mxCell>
-        <mxCell id="kb_retrieve" value="&lt;b&gt;Canonical Retrieve&lt;/b&gt;&lt;br&gt;internal RetrievalPlanner&lt;br&gt;fast: history-aware rewrite&lt;br&gt;agent query preserved&lt;br&gt;mix + BM25 + visual + rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
-          <mxGeometry x="884" y="418" width="126" height="106" as="geometry"/>
+        <mxCell id="tool_turn" value="&lt;b&gt;dlightrag-agent-core&lt;/b&gt;&lt;br&gt;ToolTurnExecutor &#183; peer tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#7c3aed;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+          <mxGeometry x="525" y="460" width="190" height="60" as="geometry"/>
         </mxCell>
-        <mxCell id="resources" value="&lt;b&gt;ResourceRegistry&lt;/b&gt;&lt;br&gt;+ EvidenceLedger&lt;br&gt;request-local" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
-          <mxGeometry x="1034" y="418" width="126" height="48" as="geometry"/>
+        <mxCell id="synthesizer" value="&lt;b&gt;AnswerSynthesizer&lt;/b&gt;&lt;br&gt;Answer &#183; sources &#183; citations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+          <mxGeometry x="750" y="460" width="200" height="60" as="geometry"/>
         </mxCell>
-        <mxCell id="peer_tools" value="&lt;b&gt;Agent-selected peer tools&lt;/b&gt;&lt;br&gt;optional Exa search&lt;br&gt;read (MarkItDown)&lt;br&gt;inspect (VLM)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=6;" vertex="1" parent="1">
-          <mxGeometry x="1034" y="476" width="126" height="60" as="geometry"/>
+        <mxCell id="workspace_rag" value="&lt;b&gt;WorkspaceRag&lt;/b&gt;&lt;br&gt;canonical ingest &#183; retrieve &#183; reset&lt;br&gt;storage-neutral corpus capability" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+          <mxGeometry x="525" y="540" width="190" height="70" as="geometry"/>
         </mxCell>
-        <mxCell id="answer" value="&lt;b&gt;AnswerSynthesizer&lt;/b&gt; &amp;rarr; Answer/Sources&lt;br&gt;one final path, citations + highlights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="884" y="548" width="276" height="46" as="geometry"/>
+        <mxCell id="lightrag_main" value="&lt;b&gt;LightRAG main &#8635;&lt;/b&gt;&lt;br&gt;rag_pipeline_max_async / workspace&lt;br&gt;parser &#183; chunks &#183; KG &#183; vectors &#183; mix" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">
+          <mxGeometry x="750" y="540" width="200" height="70" as="geometry"/>
         </mxCell>
-
-        <mxCell id="layer_storage" value="PostgreSQL 18 Storage Ecosystem" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#86efac;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#166534;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="64" y="690" width="1152" height="150" as="geometry"/>
-        </mxCell>
-        <mxCell id="primary" value="&lt;b&gt;PostgreSQL Endpoint&lt;/b&gt;&lt;br&gt;write-capable app storage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
-          <mxGeometry x="120" y="748" width="250" height="58" as="geometry"/>
-        </mxCell>
-        <mxCell id="storage_surfaces" value="&lt;b&gt;Storage Surfaces&lt;/b&gt;&lt;br&gt;LightRAG chunks/doc status/KG/vectors/sidecars&lt;br&gt;DlightRAG metadata index + pg_textsearch BM25&lt;br&gt;Web conversations + one raw answer-attachment table" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22c55e;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
-          <mxGeometry x="470" y="734" width="340" height="86" as="geometry"/>
-        </mxCell>
-        <mxCell id="external_db_routing" value="&lt;b&gt;External DB Routing&lt;/b&gt;&lt;br&gt;managed by infrastructure" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
-          <mxGeometry x="920" y="748" width="240" height="58" as="geometry"/>
+        <mxCell id="model_scheduler" value="&lt;b&gt;ModelScheduler &#8635;&lt;/b&gt;&lt;br&gt;max_async / process&lt;br&gt;fair by durable run&lt;br&gt;&lt;br&gt;Completion &#183; Tool &#183; Embedding&lt;br&gt;Rerank &#183; capability probes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=9;" vertex="1" parent="1">
+          <mxGeometry x="990" y="370" width="190" height="240" as="geometry"/>
         </mxCell>
 
-        <mxCell id="e_adapters_manager" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="adapters" target="manager"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_manager_service" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="manager" target="service"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_models_service" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="models" target="service"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_service_ingest_lane" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="service" target="lane_ingest"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_service_query_lane" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="service" target="lane_query"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_source_metadata" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0369a1;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="source_intake" target="metadata"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_metadata_ingestion" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0369a1;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="metadata" target="ingestion"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_ingestion_parser" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="ingestion" target="parser_sidecars"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_ingestion_visual" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;endArrow=block;endFill=1;" edge="1" parent="1" source="ingestion" target="visual_path"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_parser_kg" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b45309;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="parser_sidecars" target="kg_vectors"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_kg_doc_status" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b45309;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="kg_vectors" target="doc_status"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_orch_kb" value="fast or selected tool" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0369a1;strokeWidth=1.35;endArrow=block;endFill=1;fontFamily=Inter;fontSize=10;fontColor=#075985;" edge="1" parent="1" source="orchestrator" target="kb_retrieve"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_orch_resources" value="request resources" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;endArrow=block;endFill=1;fontFamily=Inter;fontSize=10;fontColor=#9d174d;" edge="1" parent="1" source="orchestrator" target="resources"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_orch_peer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;endArrow=block;endFill=1;" edge="1" parent="1" source="orchestrator" target="peer_tools"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_resources_peer" value="read / inspect" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;endArrow=block;endFill=1;fontFamily=Inter;fontSize=10;fontColor=#9d174d;" edge="1" parent="1" source="resources" target="peer_tools"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_kb_answer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="kb_retrieve" target="answer"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_peer_answer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#475569;strokeWidth=1.35;endArrow=block;endFill=1;" edge="1" parent="1" source="peer_tools" target="answer"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_mix_retriever" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#b45309;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="mix_retrieval" target="kb_retrieve"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_ingestion_primary" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#15803d;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="ingestion" target="primary"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_visual_primary" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#15803d;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="visual_path" target="primary"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_kg_primary" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#15803d;strokeWidth=1.3;endArrow=block;endFill=1;" edge="1" parent="1" source="kg_vectors" target="primary"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e_external_db_routing" value="optional outside DlightRAG" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#15803d;strokeWidth=1.2;dashed=1;endArrow=block;endFill=1;fontFamily=Inter;fontSize=10;fontColor=#166534;" edge="1" parent="1" source="primary" target="external_db_routing"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="band_persistence" value="Persistence &amp; adapter boundary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="56" y="680" width="1168" height="145" as="geometry"/>
+        </mxCell>
+        <mxCell id="storage_ports" value="&lt;b&gt;Storage-neutral ports&lt;/b&gt;&lt;br&gt;AnswerRunStore &#183; corpus backend&lt;br&gt;metadata &#183; jobs &#183; maintenance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="90" y="720" width="300" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="postgres_adapters" value="&lt;b&gt;dlightrag.adapters.postgres&lt;/b&gt;&lt;br&gt;pools &#183; migrations &#183; SQL implementations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="490" y="720" width="300" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="postgres" value="&lt;b&gt;PostgreSQL 18&lt;/b&gt;&lt;br&gt;one write-capable endpoint&lt;br&gt;writer: migrations + corpus writes&lt;br&gt;reader: read-only corpus sessions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="890" y="710" width="300" height="95" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="dep_root_rag" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="520" y="176" as="sourcePoint"/><mxPoint x="410" y="198" as="targetPoint"/><Array as="points"><mxPoint x="520" y="188"/><mxPoint x="410" y="188"/></Array></mxGeometry></mxCell>
+        <mxCell id="dep_root_agent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="760" y="176" as="sourcePoint"/><mxPoint x="870" y="198" as="targetPoint"/><Array as="points"><mxPoint x="760" y="188"/><mxPoint x="870" y="188"/></Array></mxGeometry></mxCell>
+        <mxCell id="dep_root_ai" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="640" y="176" as="sourcePoint"/><mxPoint x="640" y="264" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="dep_rag_ai" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="410" y="246" as="sourcePoint"/><mxPoint x="580" y="264" as="targetPoint"/><Array as="points"><mxPoint x="410" y="254"/><mxPoint x="580" y="254"/></Array></mxGeometry></mxCell>
+        <mxCell id="dep_agent_ai" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#64748b;strokeWidth=1.2;dashed=1;endArrow=block;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="870" y="246" as="sourcePoint"/><mxPoint x="700" y="264" as="targetPoint"/><Array as="points"><mxPoint x="870" y="254"/><mxPoint x="700" y="254"/></Array></mxGeometry></mxCell>
+
+        <mxCell id="flow_clients_manager" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="248" y="417" as="sourcePoint"/><mxPoint x="282" y="417" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="flow_manager_run" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="487" y="406" as="sourcePoint"/><mxPoint x="525" y="406" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="flow_run_orchestrator" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="715" y="406" as="sourcePoint"/><mxPoint x="750" y="406" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="flow_manager_workspace" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="487" y="430" as="sourcePoint"/><mxPoint x="525" y="575" as="targetPoint"/><Array as="points"><mxPoint x="505" y="430"/><mxPoint x="505" y="575"/></Array></mxGeometry></mxCell>
+        <mxCell id="flow_orchestrator_tool" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="750" y="420" as="sourcePoint"/><mxPoint x="715" y="490" as="targetPoint"/><Array as="points"><mxPoint x="730" y="420"/><mxPoint x="730" y="490"/></Array></mxGeometry></mxCell>
+        <mxCell id="flow_orchestrator_synth" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="850" y="442" as="sourcePoint"/><mxPoint x="850" y="460" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="flow_orchestrator_workspace" value="retrieve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.2;endArrow=block;endFill=1;fontFamily=Inter;fontSize=9;fontColor=#475569;labelBackgroundColor=#ffffff;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="750" y="430" as="sourcePoint"/><mxPoint x="715" y="560" as="targetPoint"/><Array as="points"><mxPoint x="730" y="430"/><mxPoint x="730" y="560"/></Array></mxGeometry></mxCell>
+        <mxCell id="flow_workspace_lightrag" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.4;endArrow=block;endFill=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="715" y="575" as="sourcePoint"/><mxPoint x="750" y="575" as="targetPoint"/></mxGeometry></mxCell>
+
+        <mxCell id="admission_answer" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;dashed=1;dashPattern=1 4;endArrow=open;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="950" y="400" as="sourcePoint"/><mxPoint x="990" y="400" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="admission_agent" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;dashed=1;dashPattern=1 4;endArrow=open;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="715" y="470" as="sourcePoint"/><mxPoint x="990" y="490" as="targetPoint"/><Array as="points"><mxPoint x="970" y="452"/><mxPoint x="970" y="490"/></Array></mxGeometry></mxCell>
+        <mxCell id="admission_rag" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#db2777;strokeWidth=1.2;dashed=1;dashPattern=1 4;endArrow=open;endFill=0;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="950" y="575" as="sourcePoint"/><mxPoint x="990" y="575" as="targetPoint"/></mxGeometry></mxCell>
+
+        <mxCell id="flow_runtime_ports" value="uses" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#334155;strokeWidth=1.2;endArrow=block;endFill=1;fontFamily=Inter;fontSize=9;fontColor=#475569;labelBackgroundColor=#ffffff;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="385" y="459" as="sourcePoint"/><mxPoint x="240" y="720" as="targetPoint"/><Array as="points"><mxPoint x="385" y="670"/><mxPoint x="240" y="670"/></Array></mxGeometry></mxCell>
+        <mxCell id="implements_ports" value="implements" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#16a34a;strokeWidth=1.2;dashed=1;endArrow=open;endFill=0;fontFamily=Inter;fontSize=9;fontColor=#166534;labelBackgroundColor=#f8fafc;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="490" y="758" as="sourcePoint"/><mxPoint x="390" y="758" as="targetPoint"/></mxGeometry></mxCell>
+        <mxCell id="sql_postgres" value="SQL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#16a34a;strokeWidth=1.4;endArrow=block;endFill=1;fontFamily=Inter;fontSize=9;fontColor=#166534;labelBackgroundColor=#f8fafc;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="790" y="758" as="sourcePoint"/><mxPoint x="890" y="758" as="targetPoint"/></mxGeometry></mxCell>
+
+        <mxCell id="legend" value="Solid slate = runtime call/use   &#183;   Dashed open = import or implements   &#183;   Dotted magenta = provider admission   &#183;   &#8635; = independent concurrency owner" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Inter;fontSize=10;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="56" y="842" width="1168" height="28" as="geometry"/>
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
