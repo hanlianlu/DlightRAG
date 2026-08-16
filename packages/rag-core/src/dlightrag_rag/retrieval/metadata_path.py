@@ -3,10 +3,8 @@
 
 import logging
 
-from dlightrag_rag.ports import MetadataIndexProtocol
+from dlightrag_rag.ports import MetadataChunkStore, MetadataIndexProtocol
 from dlightrag_rag.retrieval import MetadataFilter, MetadataScope
-
-from dlightrag.core.retrieval.protocols import MetadataChunkStore
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +17,8 @@ async def metadata_retrieve(
 ) -> MetadataScope:
     """Resolve metadata filters to the documents they select.
 
-    Only the chunk *count* is read back — the ids stay in PostgreSQL, where the
-    vector and BM25 queries filter on ``full_doc_id`` directly.
+    Only the chunk *count* is read back; vector and BM25 adapters filter the
+    selected document ids on ``full_doc_id`` directly.
     """
     doc_ids = await metadata_index.query(filters)
     if not doc_ids:

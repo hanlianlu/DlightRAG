@@ -11,7 +11,7 @@ finalizer, or reconnect has to commit it afterwards.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
@@ -25,6 +25,7 @@ from dlightrag.adapters.postgres._migrations import (
     apply_migrations,
     verify_migrations,
 )
+from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.adapters.postgres.answer_runs import (
     ANSWER_RUN_MIGRATION_SCOPE,
     ANSWER_RUN_MIGRATIONS,
@@ -447,37 +448,30 @@ def _linked_turn(row: Any) -> LinkedTurn:
     )
 
 
-class PGWebConversationStore:
+class PGWebConversationStore(PostgresOperationRunner):
     """Durable PostgreSQL store for server-owned Web conversations."""
 
-    def __init__(self, *, pool: Any = None, run_store: PGAnswerRunStore | None = None) -> None:
-        self._pool = pool
+    def __init__(
+        self,
+        *,
+        pool: ConnectionPool | None = None,
+        run_store: PGAnswerRunStore | None = None,
+    ) -> None:
+        super().__init__(pool=pool)
         self._run_store = run_store or PGAnswerRunStore(pool=pool)
         self._initialized = False
 
-    async def _run_read(self, operation, *, retry: bool = True):
+    async def _run_read[T](self, operation: Callable[[Any], Awaitable[T]]) -> T:
         try:
-            if self._pool is not None:
-                async with self._pool.acquire() as conn:
-                    return await operation(conn)
-
-            from dlightrag.adapters.postgres._pool import pg_pool
-
-            return await (pg_pool.run(operation) if retry else pg_pool.run_once(operation))
+            return await self._run(operation)
         except Exception as exc:
             if is_postgres_unavailable(exc):
                 raise WebConversationUnavailableError from exc
             raise
 
-    async def _run_write(self, operation):
+    async def _run_write[T](self, operation: Callable[[Any], Awaitable[T]]) -> T:
         try:
-            if self._pool is not None:
-                async with self._pool.acquire() as conn:
-                    return await operation(conn)
-
-            from dlightrag.adapters.postgres._pool import pg_pool
-
-            return await pg_pool.run_once(operation)
+            return await self._run_once(operation)
         except Exception as exc:
             if is_postgres_unavailable(exc):
                 raise WebConversationUnavailableError from exc

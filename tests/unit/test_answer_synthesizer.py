@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from dlightrag_ai.capacity import ModelProfile
+from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.retrieval.protocols import RetrievalContexts
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 _PNG_B64 = (

@@ -26,6 +26,7 @@ from dlightrag.adapters.postgres._migrations import (
     apply_migrations,
     verify_migrations,
 )
+from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.runtime import (
     ANSWER_RUN_LEASE_SECONDS,
     MAX_CONSECUTIVE_RECOVERIES,
@@ -748,30 +749,18 @@ def _new_run_id() -> uuid.UUID:
     return uuid.uuid7()
 
 
-class PGAnswerRunStore:
+class PGAnswerRunStore(PostgresOperationRunner):
     """Owner-scoped durable Answer run state backed by PostgreSQL."""
 
-    def __init__(self, *, pool: Any = None) -> None:
-        self._pool = pool
+    def __init__(self, *, pool: ConnectionPool | None = None) -> None:
+        super().__init__(pool=pool)
         self._initialized = False
 
     async def _run_read[T](self, operation: Callable[[Any], Awaitable[T]]) -> T:
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
-
-        from dlightrag.adapters.postgres._pool import pg_pool
-
-        return await pg_pool.run(operation)
+        return await self._run(operation)
 
     async def _run_write[T](self, operation: Callable[[Any], Awaitable[T]]) -> T:
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
-
-        from dlightrag.adapters.postgres._pool import pg_pool
-
-        return await pg_pool.run_once(operation)
+        return await self._run_once(operation)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         """Create the durable Answer run schema, or validate it (reader)."""

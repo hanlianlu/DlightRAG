@@ -4,21 +4,19 @@
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_rag.retrieval import RetrievalResult
 
 from dlightrag.core.federation import (
     federated_retrieve,
     merge_results,
 )
-from dlightrag.core.retrieval.protocols import RetrievalResult
 
 
 def _make_result(
     chunks: list[dict] | None = None,
-    answer: str | None = None,
 ) -> RetrievalResult:
     """Helper to create a RetrievalResult with given data."""
     return RetrievalResult(
-        answer=answer,
         contexts={
             "chunks": chunks or [],
             "entities": [],
@@ -69,14 +67,6 @@ class TestMergeResults:
 
         assert len(merged.contexts["chunks"]) == 5
 
-    def test_answer_always_none(self) -> None:
-        r1 = _make_result(answer="Answer from A")
-        r2 = _make_result(answer="Answer from B")
-
-        merged = merge_results([r1, r2], ["ws-a", "ws-b"])
-
-        assert merged.answer is None
-
     def test_references_empty(self) -> None:
         r1 = _make_result(chunks=[{"id": "a1"}])
         r2 = _make_result(chunks=[{"id": "b1"}])
@@ -88,7 +78,6 @@ class TestMergeResults:
     def test_empty_results(self) -> None:
         merged = merge_results([], [])
         assert merged.contexts["chunks"] == []
-        assert merged.answer is None
 
     def test_canonicalizes_ref_ids_across_workspaces(self) -> None:
         """Two workspaces both ingesting different docs that happen to share a

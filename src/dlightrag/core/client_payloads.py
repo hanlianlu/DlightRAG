@@ -8,12 +8,11 @@ from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
 from dlightrag_ai.telemetry import safe_log_text
-from dlightrag_rag.retrieval import MetadataFilter
+from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
 
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.core.access import can_project_workspace_visual
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
 logger = logging.getLogger(__name__)

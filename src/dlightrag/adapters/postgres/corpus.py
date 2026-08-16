@@ -13,7 +13,9 @@ import asyncpg
 from dlightrag_rag.ports import (
     CorpusUnavailableError,
     WorkspaceCorpusBackend,
+    WorkspaceCorpusStores,
 )
+from dlightrag_rag.retrieval.bm25 import profile_languages, profiles_from_config
 
 from dlightrag.adapters.postgres._errors import is_postgres_unavailable
 from dlightrag.adapters.postgres._locks import advisory_lock_key
@@ -23,7 +25,15 @@ from dlightrag.adapters.postgres._version import (
     ensure_postgres_extensions,
     ensure_postgres_major,
 )
+from dlightrag.adapters.postgres.corpus_bm25 import (
+    create_postgres_bm25,
+    required_postgres_extensions,
+)
+from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
+from dlightrag.adapters.postgres.corpus_vectors import PGFilteredVectorSearch
+from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
 from dlightrag.adapters.postgres.lightrag_readonly import verify_reader_corpus_session
+from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
 from dlightrag.config import DlightragConfig
 
@@ -257,25 +267,66 @@ class PGCorpusMaintenanceStore:
         )
 
 
+class PGCorpusRuntimeBinder:
+    """Bind PostgreSQL corpus adapters to initialized LightRAG storage."""
+
+    def __init__(self, config: DlightragConfig) -> None:
+        self._config = config
+
+    async def bind(self, lightrag: Any) -> WorkspaceCorpusStores:
+        config = self._config
+        metadata_index = PGMetadataIndex(workspace=config.workspace)
+        await metadata_index.initialize(validate_only=config.is_reader)
+
+        chunks = PGCorpusChunkStore(lightrag)
+        filtered_vectors = (
+            PGFilteredVectorSearch(
+                lightrag.chunks_vdb,
+                exact_threshold=config.metadata_filter_exact_vector_threshold,
+            )
+            if lightrag.chunks_vdb is not None
+            else None
+        )
+        if filtered_vectors is not None and not config.is_reader:
+            await filtered_vectors.ensure_document_scope_index()
+
+        profiles = profiles_from_config(config.bm25_profiles) if config.bm25_enabled else ()
+        bm25 = await create_postgres_bm25(
+            config,
+            profiles=profiles or None,
+        )
+        logger.info(
+            "Corpus runtime stores attached (PostgreSQL metadata%s)",
+            ", validated" if config.is_reader else "",
+        )
+        return WorkspaceCorpusStores(
+            metadata_index=metadata_index,
+            chunks=chunks,
+            filtered_vectors=filtered_vectors,
+            bm25=bm25,
+            bm25_languages=profile_languages(profiles),
+        )
+
+
+def apply_lightrag_environment(config: DlightragConfig) -> None:
+    """Bridge typed host settings to LightRAG's environment interface."""
+    config.apply_lightrag_backend_env(force=True)
+    config.apply_lightrag_sidecar_env()
+    config.apply_lightrag_runtime_env(force=True)
+
+
 class PGCorpusBackendFactory:
     """Translate one root config into a coherent PostgreSQL corpus backend."""
 
     def __init__(self, config: DlightragConfig) -> None:
         self._config = config
         self._backend: WorkspaceCorpusBackend | None = None
-        config.apply_lightrag_backend_env(force=True)
-        config.apply_lightrag_sidecar_env()
-        config.apply_lightrag_runtime_env(force=True)
 
     def create(self) -> WorkspaceCorpusBackend:
         if self._backend is None:
+            apply_lightrag_environment(self._config)
             required_extensions: tuple[str, ...] = ()
             if self._config.bm25_enabled:
-                from dlightrag.core.retrieval.bm25 import (
-                    profiles_from_config,
-                    required_postgres_extensions,
-                )
-
                 required_extensions = required_postgres_extensions(
                     profiles_from_config(self._config.bm25_profiles)
                 )
@@ -292,6 +343,8 @@ class PGCorpusBackendFactory:
                     acquire_timeout=self._config.postgres_acquire_timeout,
                 ),
                 maintenance=PGCorpusMaintenanceStore(connection_kwargs),
+                runtime=PGCorpusRuntimeBinder(self._config),
+                ingest_jobs=PGIngestJobStore(),
             )
         return self._backend
 
@@ -327,5 +380,7 @@ __all__ = [
     "PGCorpusBackendFactory",
     "PGCorpusCoordination",
     "PGCorpusMaintenanceStore",
+    "PGCorpusRuntimeBinder",
     "PGReadinessProbe",
+    "apply_lightrag_environment",
 ]

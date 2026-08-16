@@ -697,7 +697,7 @@ class TestWebFiles:
         ],
     )
     def test_safe_relative_path_rejects_unsafe_paths(self, filename: str) -> None:
-        from dlightrag.core.ingestion.uploads import safe_upload_relative_path
+        from dlightrag_rag.ingestion.uploads import safe_upload_relative_path
 
         with pytest.raises(ValueError):
             safe_upload_relative_path(filename)

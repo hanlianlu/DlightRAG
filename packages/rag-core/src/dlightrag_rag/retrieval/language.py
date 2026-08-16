@@ -5,7 +5,6 @@ import re
 from functools import lru_cache
 from typing import Any
 
-BM25_LANGUAGE_COLUMN = "dlightrag_bm25_language"
 BM25_FALLBACK_LANGUAGE = "simple"
 _LINGUA_MIN_RELATIVE_DISTANCE = 0.08
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")

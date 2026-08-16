@@ -52,9 +52,8 @@ class MetadataFilter(BaseModel):
         """Store one instant regardless of how the caller wrote it.
 
         Offsets are accepted for compatibility and converted; a bare timestamp
-        is read as UTC rather than as the server's local time. The column is
-        naive so PostgreSQL cannot reinterpret the result against a session
-        timezone.
+        is read as UTC rather than as the server's local time. The normalized
+        value is naive UTC so a storage session cannot reinterpret it.
         """
         if value is None:
             return None
@@ -75,7 +74,7 @@ class MetadataScope:
 
     Retrieval filters by ``full_doc_id`` rather than by chunk id: the filter is
     a document-level predicate, and one document can own thousands of chunks, so
-    expanding it client-side would ship that fan-out to PostgreSQL and back on
+    expanding it client-side would ship that fan-out to the backend and back on
     every vector and BM25 query. ``chunk_count`` is only what the exact-scan
     branch needs to bound its brute-force cost.
     """

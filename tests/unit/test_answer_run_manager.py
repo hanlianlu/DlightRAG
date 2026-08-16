@@ -12,6 +12,7 @@ import pytest
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
+from dlightrag_rag.retrieval import RetrievalResult
 
 from dlightrag.application import ApplicationHealth
 from dlightrag.citations.streaming import AnswerStream
@@ -25,7 +26,6 @@ from dlightrag.core.answer_runs.execution import (
 )
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.resources.models import TextWindowBudget
-from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import (
     RAGServiceManager,
     RAGServiceUnavailableError,

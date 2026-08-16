@@ -2,74 +2,36 @@
 """Tests for storage.metadata_fields — field registry."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from dlightrag_rag.retrieval import MetadataFilter
-
-from dlightrag.core.retrieval.metadata_fields import (
+from dlightrag_rag.retrieval.metadata_fields import (
     FILTER_FIELD_COLUMNS,
-    METADATA_FIELDS,
+    METADATA_FIELD_IDS,
     NormalizedUserMetadata,
     extract_system_metadata,
     normalize_user_metadata,
 )
 
 
-def _writer_config():
-    """Minimal writer config so the RAGService write guard passes."""
-    from typing import Any, cast
-
-    from dlightrag.config import DlightragConfig, EmbeddingConfig
-
-    return cast(Any, DlightragConfig)(
-        _env_file=None,
-        embedding=EmbeddingConfig(
-            provider="voyage", model="m", api_key="k", dim=8, startup_probe=False
-        ),
-    )
-
-
-class TestMetadataFieldDef:
-    """MetadataFieldDef frozen dataclass basics."""
-
-    def test_frozen(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import MetadataFieldDef
-
-        f = MetadataFieldDef("x", "TEXT")
-        with pytest.raises(AttributeError):
-            f.field_id = "y"  # type: ignore[misc]
+def _writer_config() -> Any:
+    return SimpleNamespace(require_writer=lambda _operation: None)
 
 
 class TestMetadataFields:
-    """METADATA_FIELDS tuple — the canonical field registry."""
+    """Storage-neutral metadata field ids."""
 
     def test_has_filename(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        ids = [f.field_id for f in METADATA_FIELDS]
-        assert "filename" in ids
-
-    def test_filename_is_indexed(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        fn = next(f for f in METADATA_FIELDS if f.field_id == "filename")
-        assert fn.indexed
-
-    def test_all_fields_have_pg_type(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        for f in METADATA_FIELDS:
-            assert f.pg_type, f"{f.field_id} missing pg_type"
+        assert "filename" in METADATA_FIELD_IDS
 
     def test_field_ids_unique(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
-
-        ids = [f.field_id for f in METADATA_FIELDS]
-        assert len(ids) == len(set(ids))
+        assert len(METADATA_FIELD_IDS) == len(set(METADATA_FIELD_IDS))
 
 
 def test_metadata_registry_has_source_identity_and_download_locator() -> None:
-    ids = {field.field_id for field in METADATA_FIELDS}
+    ids = set(METADATA_FIELD_IDS)
 
     assert {"source_uri", "download_locator"} <= ids
 
@@ -87,12 +49,12 @@ def test_extract_system_metadata_stores_distinct_source_and_download_fields() ->
 
 
 class TestDerivedFunctions:
-    """Derived helper functions built from METADATA_FIELDS."""
+    """Derived helper functions built from neutral metadata ids."""
 
     def test_filter_fields_map_to_real_columns(self) -> None:
-        from dlightrag.core.retrieval.metadata_fields import FILTER_FIELD_COLUMNS
+        from dlightrag_rag.retrieval.metadata_fields import FILTER_FIELD_COLUMNS
 
-        columns = {f.field_id for f in METADATA_FIELDS}
+        columns = set(METADATA_FIELD_IDS)
         backing = {column for cols in FILTER_FIELD_COLUMNS.values() for column in cols}
         assert backing <= columns
         # Every filter the planner may emit resolves to a column.

@@ -8,7 +8,7 @@ so that adding a new source scheme is a single-edit change.
 
 from typing import Any
 
-from dlightrag.core.client_contracts import SourceType
+from dlightrag_rag.contracts import SourceType
 
 
 def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
@@ -53,4 +53,4 @@ def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
     return "local", {"path": file_path}
 
 
-__all__ = ["SourceType", "parse_remote_uri"]
+__all__ = ["parse_remote_uri"]

@@ -6,10 +6,10 @@ import re
 from typing import Any
 
 from dlightrag_rag.retrieval import MetadataFilter
+from dlightrag_rag.retrieval.metadata_fields import METADATA_FIELD_IDS
 
 from dlightrag.adapters.postgres import pg_metadata_index
 from dlightrag.adapters.postgres.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
-from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
 
 def _index_sql() -> str:
@@ -168,7 +168,7 @@ class TestMetadataSQL:
         assert "ON dlightrag_doc_metadata (workspace, download_locator)" in sql
 
     def test_upsert_fields_follow_metadata_registry(self):
-        expected = tuple(f.field_id for f in METADATA_FIELDS if f.field_id != "ingested_at")
+        expected = tuple(field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at")
 
         assert pg_metadata_index._UPSERT_FIELD_IDS == expected
 
@@ -206,15 +206,15 @@ class TestMetadataSQL:
         sql = "\n".join(stmt for migration in _SCHEMA_MIGRATIONS for stmt in migration.statements)
 
         assert "0001_base" in versions
-        for field in METADATA_FIELDS:
-            assert f"column_{field.field_id}" in versions
-            assert f"ADD COLUMN IF NOT EXISTS {field.field_id}" in sql
-            if field.indexed:
-                assert f"index_{field.field_id}_canonical" in versions
+        for field_id in METADATA_FIELD_IDS:
+            assert f"column_{field_id}" in versions
+            assert f"ADD COLUMN IF NOT EXISTS {field_id}" in sql
+        for field_id in pg_metadata_index._PG_INDEXED_FIELDS:
+            assert f"index_{field_id}_canonical" in versions
 
     def test_migrations_are_derived_not_recorded_history(self) -> None:
-        """Every version maps to something METADATA_FIELDS declares today."""
-        declared = {f.field_id for f in METADATA_FIELDS}
+        """Every version maps to a metadata field declared today."""
+        declared = set(METADATA_FIELD_IDS)
         allowed = (
             {"0001_base", "index_workspace_download_locator"}
             | {f"column_{field_id}" for field_id in declared}

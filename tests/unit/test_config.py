@@ -52,9 +52,9 @@ def _default_test_config() -> DlightragConfig:
 
 
 def _bridge_lightrag_env(config: DlightragConfig) -> None:
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 
-    PGCorpusBackendFactory(config)
+    apply_lightrag_environment(config)
 
 
 class TestJwtAudience:
@@ -669,9 +669,9 @@ def test_parser_defaults_export_lightrag_env() -> None:
             mineru=MinerUSidecarConfig(backend="pipeline", language="korean"),
         ),
     )
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 
-    PGCorpusBackendFactory(cfg)
+    apply_lightrag_environment(cfg)
 
     assert cfg.parser_rules == "*:mineru-iteP"
     assert cfg.parser_sidecars.docling is None
@@ -687,9 +687,9 @@ def test_parser_defaults_export_lightrag_env() -> None:
 
 def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
     cfg = _default_test_config()
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 
-    PGCorpusBackendFactory(cfg)
+    apply_lightrag_environment(cfg)
 
     assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
     assert cfg.pg_hnsw_m == 32
@@ -1289,9 +1289,9 @@ def test_postgres_session_settings_merge_hnsw_defaults(
         postgres_pool_close_timeout=2.5,
         postgres_lightrag_pool_max_size=18,
     )
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 
-    PGCorpusBackendFactory(cfg)
+    apply_lightrag_environment(cfg)
 
     assert cfg.domain_pool_server_settings() == {
         "hnsw.ef_search": "384",
@@ -1322,9 +1322,9 @@ def test_lightrag_workspace_env_is_not_globalized(monkeypatch: pytest.MonkeyPatc
         ),
         workspace="fresh_workspace",
     )
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 
-    PGCorpusBackendFactory(cfg)
+    apply_lightrag_environment(cfg)
 
     assert "POSTGRES_WORKSPACE" not in os.environ
 
@@ -1360,9 +1360,9 @@ def test_lightrag_parser_env_follows_active_sidecar(
             "docling": {"endpoint": "http://docling.internal:5001"},
         },
     )
-    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 
-    PGCorpusBackendFactory(cfg)
+    apply_lightrag_environment(cfg)
 
     assert os.environ["LIGHTRAG_PARSER"] == cfg.parser_rules == "*:docling-iteP"
 

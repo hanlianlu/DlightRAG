@@ -29,6 +29,7 @@ from dlightrag_ai.capacity import (
 from dlightrag_ai.messages import AssistantTurn
 from dlightrag_ai.telemetry import Telemetry
 from dlightrag_ai.tokens import estimate_tokens
+from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.core.agent.context import ContextAssembler
 from dlightrag.core.answer.errors import AnswerInputOverflowError
@@ -40,7 +41,6 @@ from dlightrag.core.memory.episode import RunEpisode
 from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.core.resources.registry import ResourceRegistry
-from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.core.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 
 logger = logging.getLogger(__name__)

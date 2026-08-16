@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from dlightrag.core.ingestion.docling_options import apply_docling_request_options
+from dlightrag_rag.ingestion.docling_options import apply_docling_request_options
 
 
 def _client(

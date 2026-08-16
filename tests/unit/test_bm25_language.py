@@ -4,9 +4,8 @@
 from types import SimpleNamespace
 
 import pytest
-
-from dlightrag.core.retrieval import bm25_language
-from dlightrag.core.retrieval.bm25_language import BM25LanguageClassifier
+from dlightrag_rag.retrieval import language as bm25_language
+from dlightrag_rag.retrieval.language import BM25LanguageClassifier
 
 
 def test_bm25_language_classifier_routes_plain_chinese() -> None:

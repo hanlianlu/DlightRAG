@@ -4,9 +4,8 @@
 from typing import Any
 
 import pytest
-
-from dlightrag.sourcing.aws_s3 import S3DataSource, generate_s3_presigned_url
-from dlightrag.sourcing.base import SourceDocument
+from dlightrag_rag.sourcing.aws_s3 import S3DataSource, generate_s3_presigned_url
+from dlightrag_rag.sourcing.base import SourceDocument
 
 
 class _FakeS3Client:

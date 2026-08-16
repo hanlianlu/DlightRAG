@@ -2,6 +2,7 @@
 """Tests for transport-neutral client request projection."""
 
 import pytest
+from dlightrag_rag.contracts import IngestDocument
 from pydantic import ValidationError
 
 from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
@@ -11,7 +12,6 @@ from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     ConversationMessage,
-    IngestDocument,
     IngestSpec,
     conversation_history_as_dicts,
 )

@@ -7,19 +7,19 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag_ai.telemetry import safe_log_text
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-
-from dlightrag.access_control import AccessAction
-from dlightrag.app_state import request_config
-from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.ingestion.uploads import (
+from dlightrag_rag.ingestion.uploads import (
     UploadTooLargeError,
     ignored_upload,
     safe_upload_destination,
     upload_batch_dir,
     write_upload_stream,
 )
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+
+from dlightrag.access_control import AccessAction
+from dlightrag.app_state import request_config
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.source_download import (
     LocalDownloadTarget,
     RedirectDownloadTarget,

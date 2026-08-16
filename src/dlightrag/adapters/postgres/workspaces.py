@@ -16,6 +16,7 @@ from dlightrag.adapters.postgres._migrations import (
     apply_migrations,
     verify_migrations,
 )
+from dlightrag.adapters.postgres._operations import PostgresOperationRunner
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
@@ -61,20 +62,8 @@ _SCHEMA_TABLES = (
 )
 
 
-class PGWorkspaceRegistry:
+class PGWorkspaceRegistry(PostgresOperationRunner):
     """Durable workspace registry backed by PostgreSQL."""
-
-    def __init__(self, *, pool: Any = None) -> None:
-        self._pool = pool
-
-    async def _run(self, operation):
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
-
-        from dlightrag.adapters.postgres._pool import pg_pool
-
-        return await pg_pool.run(operation)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         """Create/migrate the registry table, or validate it (reader)."""

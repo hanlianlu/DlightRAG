@@ -29,11 +29,11 @@ def apply(
 ) -> None:
     """Apply all LightRAG patches. Idempotent."""
     applied = []
-    from dlightrag.core.ingestion.parser_hygiene import apply_mineru_content_list_hygiene
+    from dlightrag_rag.ingestion.parser_hygiene import apply_mineru_content_list_hygiene
 
     if apply_mineru_content_list_hygiene():
         applied.append("mineru_content_list_hygiene")
-    from dlightrag.core.ingestion.docling_options import apply_docling_request_options
+    from dlightrag_rag.ingestion.docling_options import apply_docling_request_options
 
     if docling_active and apply_docling_request_options(
         code_formula_preset=docling_code_formula_preset,

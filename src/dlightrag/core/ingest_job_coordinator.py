@@ -8,11 +8,17 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag_ai.telemetry import safe_log_text
+from dlightrag_rag.contracts import SourceType
+from dlightrag_rag.ports import (
+    JOB_HEARTBEAT_SECONDS,
+    JOB_LEASE_SECONDS,
+    JOB_ORPHAN_AFTER_SECONDS,
+    IngestJobStore,
+)
 
-from dlightrag.core.client_contracts import SourceType
 from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
@@ -20,78 +26,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-JOB_RETENTION_SECONDS = 7 * 24 * 3600
-JOB_LEASE_SECONDS = 300
-JOB_HEARTBEAT_SECONDS = 60
-JOB_ORPHAN_AFTER_SECONDS = 12 * JOB_LEASE_SECONDS
-JOB_ABANDONED_ERROR = "ingest job abandoned after process exit"
-JOB_STATES_WITH_RESULT = ("succeeded", "partial")
-
 
 class LeaseLostError(RuntimeError):
     """This worker's ingest-job lease was taken over by another owner mid-run."""
 
 
-class IngestJobSchemaError(RuntimeError):
-    """The durable ingest-job schema is incompatible with this coordinator revision."""
-
-
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 # Sweeping faster than the orphan window means no dead worker waits two passes.
 _JOB_SWEEP_SECONDS = JOB_ORPHAN_AFTER_SECONDS // 2
-
-
-class IngestJobStore(Protocol):
-    async def initialize(self) -> None:
-        raise NotImplementedError
-
-    async def create(
-        self,
-        *,
-        job_id: str,
-        workspace: str,
-        source_type: str,
-        request: dict[str, Any],
-    ) -> None:
-        raise NotImplementedError
-
-    async def claim_running(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool:
-        raise NotImplementedError
-
-    async def heartbeat(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool:
-        raise NotImplementedError
-
-    async def record_window(
-        self,
-        job_id: str,
-        *,
-        total_delta: int,
-        processed_delta: int,
-        failed_delta: int,
-        current_window: int,
-        errors: list[str],
-        lease_owner: str,
-        lease_seconds: int,
-    ) -> bool:
-        raise NotImplementedError
-
-    async def finish(self, job_id: str, *, result: dict[str, Any], lease_owner: str) -> bool:
-        raise NotImplementedError
-
-    async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool:
-        raise NotImplementedError
-
-    async def get(self, job_id: str) -> dict[str, Any] | None:
-        raise NotImplementedError
-
-    async def list_recoverable(self) -> list[dict[str, Any]]:
-        raise NotImplementedError
-
-    async def prune(self) -> dict[str, int]:
-        raise NotImplementedError
-
-    async def delete_for_workspace(self, workspace: str) -> int:
-        raise NotImplementedError
 
 
 class IngestJobCoordinator:
@@ -576,4 +518,4 @@ def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[st
     return 0, 0, len(errors), errors
 
 
-__all__ = ["IngestJobCoordinator", "IngestJobSchemaError"]
+__all__ = ["IngestJobCoordinator"]

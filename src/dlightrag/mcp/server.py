@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
+from dlightrag_rag.contracts import SourceType
 from mcp import MCPError
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -35,7 +36,6 @@ from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     QueryImage,
-    SourceType,
     conversation_history_as_dicts,
 )
 from dlightrag.core.client_execution import execute_retrieve

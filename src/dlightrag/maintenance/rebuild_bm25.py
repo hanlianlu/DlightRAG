@@ -7,10 +7,10 @@ import logging
 
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
-from dlightrag.config import DlightragConfig, get_config, load_config, set_config
-from dlightrag.core.retrieval.bm25 import (
+from dlightrag.adapters.postgres.corpus_bm25 import (
     rebuild_postgres_bm25,
 )
+from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 
 DEFAULT_BATCH_SIZE = 500
 
@@ -66,12 +66,10 @@ async def run_rebuild_bm25(
     try:
         backend = PGCorpusBackendFactory(resolved_config).create()
         async with backend.coordination.workspace_initialization():
-            pass
-        return await rebuild_postgres_bm25(
-            resolved_config,
-            pool=pg_pool,
-            batch_size=batch_size,
-        )
+            return await rebuild_postgres_bm25(
+                resolved_config,
+                batch_size=batch_size,
+            )
     finally:
         await pg_pool.close()
 

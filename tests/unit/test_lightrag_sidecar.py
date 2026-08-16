@@ -4,8 +4,7 @@
 import json
 
 import pytest
-
-from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
+from dlightrag_rag.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 
 
 def test_collects_successful_drawing_assets_for_lightrag_mm_chunks(tmp_path) -> None:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from azure.storage.blob import generate_blob_sas
 
-from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
 
 
 def _parse_connection_string(connection_string: str) -> dict[str, str]:

@@ -9,8 +9,8 @@ from typing import Any
 from aiobotocore.session import AioSession
 from botocore.exceptions import BotoCoreError, NoCredentialsError, PartialCredentialsError
 
-from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
-from dlightrag.sourcing.uri import parse_remote_uri
+from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag_rag.sourcing.uri import parse_remote_uri
 
 
 class S3PresignError(RuntimeError):

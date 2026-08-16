@@ -618,6 +618,14 @@ class BM25ProfileConfig(BaseModel):
     def _normalize_languages(cls, value: list[str]) -> list[str]:
         return [language.strip().lower() for language in value if language.strip()]
 
+    @model_validator(mode="after")
+    def _validate_routing(self):
+        if self.fallback and self.languages:
+            raise ValueError("BM25 fallback profiles must not declare languages")
+        if not self.fallback and len(self.languages) != 1:
+            raise ValueError("BM25 language profiles must declare exactly one language")
+        return self
+
 
 def _redact_dict(data: dict[str, Any], patterns: tuple[str, ...]) -> dict[str, Any]:
     """Recursively redact values whose keys match sensitive patterns."""
@@ -1289,11 +1297,6 @@ class DlightragConfig(BaseSettings):
         profile_names = [profile.name for profile in self.bm25_profiles]
         if len(profile_names) != len(set(profile_names)):
             raise ValueError("bm25_profiles names must be unique")
-        for profile in self.bm25_profiles:
-            if profile.fallback and profile.languages:
-                raise ValueError("BM25 fallback profiles must not declare languages")
-            if not profile.fallback and len(profile.languages) != 1:
-                raise ValueError("BM25 language profiles must declare exactly one language")
         if self.bm25_enabled and not any(profile.fallback for profile in self.bm25_profiles):
             raise ValueError("bm25_profiles must include at least one fallback profile")
 

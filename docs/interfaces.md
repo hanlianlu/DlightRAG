@@ -73,7 +73,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from dlightrag import DlightragConfig, IngestSpec, RAGServiceManager
-from dlightrag.sourcing import AsyncDataSource, SourceDocument
+from dlightrag_rag.sourcing import AsyncDataSource, SourceDocument
 
 
 class BynderSource(AsyncDataSource):
@@ -883,9 +883,7 @@ they are read as request-local resources and never returned as durable image
 identifiers. Public answer/retrieve requests do not persist either.
 
 ```python
-from dlightrag_rag.retrieval import ContextRow
-
-from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag_rag.retrieval import ContextRow, RetrievalContexts
 ```
 
 ### chunks

@@ -25,6 +25,7 @@ from typing import Any, cast
 
 from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.tokens import estimate_content_tokens, estimate_messages_tokens
+from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
@@ -33,7 +34,6 @@ from dlightrag.core.answer.errors import AnswerInputOverflowError
 from dlightrag.core.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.prompts import answer_core
 
 logger = logging.getLogger(__name__)

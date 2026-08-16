@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag_ai.media import image_data_uri
+from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.utils import context_chunk_key
-from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 _INTERNAL_KEYS: frozenset[str] = frozenset(
     {

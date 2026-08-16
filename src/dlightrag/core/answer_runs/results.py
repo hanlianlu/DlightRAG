@@ -13,8 +13,12 @@ reading is honored.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
+
+from dlightrag_rag.contracts import Reference
+from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.citations.utils import context_chunk_key
@@ -22,12 +26,24 @@ from dlightrag.core.access import can_project_workspace_visual
 from dlightrag.core.answer.media import answer_blocks_from_markdown
 from dlightrag.core.answer_runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.core.client_payloads import project_contexts_for_client, project_source_payloads
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
-from dlightrag.models.schemas import Reference
 
 #: Core image route every transport reuses; the route itself authorizes reads.
 IMAGE_URL_PREFIX = "/images"
+
+
+@dataclass
+class AnswerResult:
+    """Current product Answer result, separate from corpus retrieval output."""
+
+    answer: str
+    contexts: RetrievalContexts = field(default_factory=dict)
+    references: list[Reference] = field(default_factory=list)
+    sources: list[SourceReference] = field(default_factory=list)
+    answer_images: list[dict[str, Any]] = field(default_factory=list)
+    answer_blocks: list[dict[str, Any]] = field(default_factory=list)
+    trace: dict[str, Any] = field(default_factory=dict)
+    image_descriptions: list[str] = field(default_factory=list)
 
 
 def store_answer_result(
@@ -58,7 +74,7 @@ def store_answer_result(
     }
 
 
-def restore_answer_result(stored: Mapping[str, Any]) -> RetrievalResult:
+def restore_answer_result(stored: Mapping[str, Any]) -> AnswerResult:
     """Rebuild the internal result an in-process caller receives.
 
     Transports still apply their own visual and download authorization; this
@@ -69,7 +85,7 @@ def restore_answer_result(stored: Mapping[str, Any]) -> RetrievalResult:
     )
     answer = str(stored.get("answer") or "")
     images = [_public_answer_image(image) for image in stored.get("answer_images") or () if image]
-    return RetrievalResult(
+    return AnswerResult(
         answer=answer,
         contexts=dict(stored.get("contexts") or {}),
         references=[Reference(id=source.id, title=source.title or "Source") for source in sources],
@@ -166,6 +182,7 @@ def _public_answer_image(image: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "AnswerResult",
     "IMAGE_URL_PREFIX",
     "project_answer_result",
     "restore_answer_result",

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import jwt
 import pytest
+from dlightrag_rag.retrieval import RetrievalResult
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
 
@@ -25,8 +26,8 @@ from dlightrag.config import (
     DlightragConfig,
     set_config,
 )
+from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
 from dlightrag.runtime import AnswerRunRecord, RunCreation
 from tests.unit.conftest import prepare_test_answer_run_input
@@ -126,11 +127,9 @@ def mock_service():
     """Create a mock RAGService."""
     service = AsyncMock()
     service.aingest = AsyncMock(return_value={"status": "success", "processed": 1})
-    service.aretrieve = AsyncMock(
-        return_value=RetrievalResult(answer="42", contexts={"chunks": []})
-    )
+    service.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
     service.aanswer = AsyncMock(
-        return_value=RetrievalResult(answer="The answer is 42", contexts={"chunks": []})
+        return_value=AnswerResult(answer="The answer is 42", contexts={"chunks": []})
     )
     service.alist_ingested_files = AsyncMock(return_value=[])
     service.adelete_files = AsyncMock(return_value=[{"status": "deleted"}])
@@ -1890,7 +1889,7 @@ class TestAnswerStreamMode:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         """Metadata validation happens below the request model, so it needs its own mapping."""
-        from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
+        from dlightrag_rag.retrieval.metadata_fields import MetadataValidationError
 
         mock_manager.aupdate_metadata = AsyncMock(
             side_effect=MetadataValidationError("title is a built-in metadata field")

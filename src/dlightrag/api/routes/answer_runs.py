@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
+from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
@@ -47,7 +48,6 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
-from dlightrag.sourcing.source_contract import safe_source_filename
 
 from .deps import authorized_workspaces, get_manager, resolve_authorized_query_workspaces
 

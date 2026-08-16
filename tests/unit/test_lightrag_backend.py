@@ -7,10 +7,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dlightrag_rag.retrieval.lightrag_backend import LightRAGMixBackend
+from dlightrag_rag.retrieval.provenance import hydrate_lightrag_chunk_provenance
 from PIL import Image
-
-from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
-from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
 
 def _write_image(path: Path) -> None:
@@ -186,9 +185,8 @@ async def test_provenance_hydrates_text_chunk_page_from_lightrag_block_sidecar(
 async def test_sidecar_provenance_index_loading_runs_off_the_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import asyncio
     import threading
-
-    from dlightrag.core.retrieval import provenance as provenance_module
 
     parsed_dir = tmp_path / "sample.parsed"
     parsed_dir.mkdir()
@@ -206,13 +204,17 @@ async def test_sidecar_provenance_index_loading_runs_off_the_event_loop(
     )
     loop_thread = threading.get_ident()
     load_threads: list[int] = []
-    real_load = provenance_module.load_block_provenance_index
+    real_to_thread = asyncio.to_thread
 
-    def load(*args: object, **kwargs: object) -> object:
-        load_threads.append(threading.get_ident())
-        return real_load(*args, **kwargs)  # type: ignore[arg-type]
+    async def to_thread(func, *args, **kwargs):  # noqa: ANN001, ANN202
+        def observed():
+            if getattr(func, "__name__", "") == "load_block_provenance_index":
+                load_threads.append(threading.get_ident())
+            return func(*args, **kwargs)
 
-    monkeypatch.setattr(provenance_module, "load_block_provenance_index", load)
+        return await real_to_thread(observed)
+
+    monkeypatch.setattr(asyncio, "to_thread", to_thread)
     stores = _stores(
         raw_chunks=[
             {

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import nh3
+from dlightrag_rag.sourcing.url import validate_public_web_url
 from fastapi import Cookie, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -14,7 +15,6 @@ from dlightrag.access_control import AccessControl, AccessDeniedError, access_co
 from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.core import access as core_access
-from dlightrag.sourcing.url import validate_public_web_url
 from dlightrag.web.markdown import (
     inject_highlights,
     normalize_chunk_source,

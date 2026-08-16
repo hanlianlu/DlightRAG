@@ -16,7 +16,8 @@ import pytest
 from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION, ModelCapabilityError, ModelProfile
 from dlightrag_ai.catalog import MODEL_CATALOG_REVISION, UnknownModelProfileError
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
-from dlightrag_rag.retrieval import MetadataFilter
+from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag_rag.sourcing.base import SourceDocument
 from PIL import Image
 
 from dlightrag.config import (
@@ -30,14 +31,13 @@ from dlightrag.config import (
     set_config,
 )
 from dlightrag.core.answer_runs.execution import AnswerRunInput, AnswerRunRequest
+from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
 from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.core.resources.models import ResourceInput, TextWindowBudget
-from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
-from dlightrag.sourcing.base import SourceDocument
 from tests.unit.conftest import answer_model_profile
 
 _TEST_PLANNER_PROFILE = ModelProfile(
@@ -171,7 +171,7 @@ class _MemoryArtifactStore:
         return ()
 
 
-async def _durable_answer(manager: Any, query: str, **kwargs: Any) -> RetrievalResult:
+async def _durable_answer(manager: Any, query: str, **kwargs: Any) -> AnswerResult:
     """Execute one durable answer run in process and restore its canonical result."""
     from dlightrag.core.answer_runs.results import restore_answer_result
     from dlightrag.runtime import artifact_digest

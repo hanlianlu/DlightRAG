@@ -3,21 +3,11 @@
 
 from typing import Any
 
+from dlightrag.adapters.postgres._operations import PostgresOperationRunner
 
-class PGFilePanelStore:
+
+class PGFilePanelStore(PostgresOperationRunner):
     """Read file-panel data without constructing a LightRAG service."""
-
-    def __init__(self, *, pool: Any = None) -> None:
-        self._pool = pool
-
-    async def _run(self, operation):
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
-
-        from dlightrag.adapters.postgres._pool import pg_pool
-
-        return await pg_pool.run(operation)
 
     async def list_processed_files(self, workspace: str) -> list[dict[str, Any]]:
         """Return processed document rows for *workspace* from doc_status."""

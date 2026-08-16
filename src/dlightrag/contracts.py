@@ -4,9 +4,7 @@
 from typing import Literal
 
 type ServiceRole = Literal["writer", "reader"]
-type VisualAssetSize = Literal["full", "thumb"]
 
 __all__ = [
     "ServiceRole",
-    "VisualAssetSize",
 ]

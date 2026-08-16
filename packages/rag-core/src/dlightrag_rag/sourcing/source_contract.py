@@ -1,12 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Source identity and durable download locator policies."""
 
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from string import ascii_letters, digits, hexdigits
 from urllib.parse import quote, unquote, urlsplit
 
-from dlightrag.sourcing.uri import parse_remote_uri
-from dlightrag.utils import normalize_workspace
+from dlightrag_rag.sourcing.uri import parse_remote_uri
 
 
 class SourceDownloadContractError(ValueError):
@@ -14,6 +14,7 @@ class SourceDownloadContractError(ValueError):
 
 
 _URI_LITERAL_CHARACTERS = frozenset(ascii_letters + digits + "-._~:/?#[]@!$&'()*+,;=")
+_CANONICAL_WORKSPACE_RE = re.compile(r"[a-z_][a-z0-9_]*")
 
 
 def _validate_uri_lexical_form(value: str) -> None:
@@ -42,12 +43,12 @@ def validate_source_uri(value: str) -> str:
 
 
 def local_source_uri(workspace: str, relative_path: str | Path) -> str:
-    safe_workspace = normalize_workspace(workspace)
+    safe_workspace = str(workspace)
     raw_path = Path(relative_path).as_posix()
     path = PurePosixPath(raw_path)
     windows_path = PureWindowsPath(raw_path)
     if (
-        not safe_workspace
+        not _CANONICAL_WORKSPACE_RE.fullmatch(safe_workspace)
         or not path.parts
         or path.is_absolute()
         or bool(windows_path.drive or windows_path.root)
@@ -101,7 +102,7 @@ def validate_download_uri(value: str) -> str:
                 raise ValueError
             return canonical
         if parsed.scheme == "https":
-            from dlightrag.sourcing.url import validate_public_https_url
+            from dlightrag_rag.sourcing.url import validate_public_https_url
 
             validate_public_https_url(canonical)
             if (

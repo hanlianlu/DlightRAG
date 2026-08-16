@@ -10,8 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from dlightrag_ai.telemetry import safe_log_text
-
-from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag_rag.retrieval import RetrievalContexts
 
 from .indexer import CitationIndexer
 from .schemas import ChunkSnippet, SourceReference

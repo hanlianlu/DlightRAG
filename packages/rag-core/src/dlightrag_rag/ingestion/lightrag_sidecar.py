@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from dlightrag.core.sidecar_provenance import resolve_sidecar_asset_path
+from dlightrag_rag.ingestion.sidecar_provenance import resolve_sidecar_asset_path
 
 
 @dataclass(frozen=True)

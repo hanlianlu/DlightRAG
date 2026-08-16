@@ -11,7 +11,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from dlightrag_rag.ports import CorpusSchemaError
+from dlightrag_rag.ports import CorpusSchemaError, IngestJobSchemaError
+from dlightrag_rag.retrieval.metadata_fields import MetadataValidationError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,8 +27,6 @@ from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
 from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES
-from dlightrag.core.ingest_job_coordinator import IngestJobSchemaError
-from dlightrag.core.retrieval.metadata_fields import MetadataValidationError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.runtime import RunSchemaError
 from dlightrag.web.conversation_models import WebConversationSchemaError

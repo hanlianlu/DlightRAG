@@ -3,10 +3,11 @@
 
 from unittest.mock import AsyncMock
 
+from dlightrag_rag.retrieval import RetrievalResult
+
 from dlightrag.api.models import MetadataFilterRequest, RetrieveRequest
 from dlightrag.core.client_contracts import QueryImage
 from dlightrag.core.client_execution import execute_retrieve
-from dlightrag.core.retrieval.protocols import RetrievalResult
 
 
 async def test_execute_retrieve_forwards_shared_query_kwargs() -> None:

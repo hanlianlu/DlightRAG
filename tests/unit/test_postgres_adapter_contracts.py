@@ -2,11 +2,24 @@
 """Ownership contracts for the root PostgreSQL adapters."""
 
 import ast
+import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SOURCE_ROOTS = (_ROOT / "src", _ROOT / "packages")
 _POSTGRES_ADAPTER = _ROOT / "src/dlightrag/adapters/postgres"
+_RAG_CORE = _ROOT / "packages/rag-core/src/dlightrag_rag"
+_RAW_SQL_RE = re.compile(
+    r"\b(?:SELECT\b.{0,500}\bFROM|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|"
+    r"CREATE\s+(?:TABLE|INDEX)|ALTER\s+TABLE|DROP\s+INDEX)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_POSTGRES_IDENTIFIERS = (
+    "LIGHTRAG_DOC_CHUNKS",
+    "dlightrag_doc_metadata",
+    "dlightrag_ingest_jobs",
+    "dlightrag_bm25_language",
+)
 _WEB_RECORD_NAMES = {
     "AnswerTurnCreation",
     "ConversationSnapshot",
@@ -68,6 +81,39 @@ def test_owner_modules_do_not_import_the_postgres_adapter() -> None:
                 )
             )
             for node in ast.walk(tree)
+        ):
+            offenders.append(path.relative_to(_ROOT))
+
+    assert offenders == []
+
+
+def test_rag_core_contains_no_postgres_schema_or_raw_sql() -> None:
+    offenders: list[Path] = []
+    for path in _RAG_CORE.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        docstrings: set[int] = set()
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if not body or not isinstance(body, list):
+                continue
+            first = body[0]
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                docstrings.add(id(first.value))
+        literals = (
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        )
+        if any(
+            _RAW_SQL_RE.search(literal)
+            or any(identifier in literal for identifier in _POSTGRES_IDENTIFIERS)
+            for literal in literals
         ):
             offenders.append(path.relative_to(_ROOT))
 

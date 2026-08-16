@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry
 from lightrag.constants import FULL_DOCS_FORMAT_PENDING_PARSE
 from lightrag.parser.routing import (
     chunk_strategy_key,
@@ -22,14 +23,17 @@ from lightrag.parser.routing import (
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path, resolve_sidecar_uri
 
-from dlightrag.core.document_embedding import DocumentEmbeddingInput, RobustDocumentEmbedder
-from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
-from dlightrag.core.ingestion.paths import lightrag_archived_source_path
-from dlightrag.core.retrieval.metadata_fields import (
+from dlightrag_rag.ingestion.document_embedding import (
+    DocumentEmbeddingInput,
+    RobustDocumentEmbedder,
+)
+from dlightrag_rag.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
+from dlightrag_rag.ingestion.paths import lightrag_archived_source_path
+from dlightrag_rag.retrieval.metadata_fields import (
     extract_system_metadata,
     normalize_user_metadata,
 )
-from dlightrag.sourcing.source_contract import local_source_uri, safe_source_filename
+from dlightrag_rag.sourcing.source_contract import local_source_uri, safe_source_filename
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +96,7 @@ class UnifiedIngestionEngine:
         parser_rules: str,
         chunk_options: dict[str, Any] | None,
         bm25_language_classifier: Any | None = None,
+        telemetry: Telemetry = NOOP_TELEMETRY,
     ) -> None:
         self._lightrag = lightrag
         self._stores = stores
@@ -101,13 +106,12 @@ class UnifiedIngestionEngine:
         self._parser_rules = parser_rules
         self._chunk_options = chunk_options or {}
         self._bm25_language_classifier = bm25_language_classifier
+        self._telemetry = telemetry
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
     async def _process_enqueued(self, doc_ids: list[str]) -> None:
         """Root span for the run, so extraction calls land in one trace instead of thousands."""
-        from dlightrag.observability import trace_observation
-
-        async with trace_observation(
+        async with self._telemetry.observe(
             "ingest_pipeline",
             as_type="chain",
             metadata={"document_count": len(doc_ids), "doc_ids": doc_ids},

@@ -18,23 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag_ai.embedding import MultimodalEmbedder, create_embedding_model
-from dlightrag_rag.lightrag_models import LightRagChatModels, build_lightrag_embedding
-from dlightrag_rag.ports import (
-    CorpusBackendFactory,
-    MetadataIndexProtocol,
-    WorkspaceCorpusBackend,
-)
-from dlightrag_rag.rerank import build_rerank_func, rerank_consumes_images
-from lightrag.constants import (
-    DEFAULT_COSINE_THRESHOLD,
-    PARSED_DIR_NAME,
-)
-
-from dlightrag.config import DlightragConfig, get_config
-from dlightrag.contracts import VisualAssetSize
-from dlightrag.core.client_contracts import IngestDocument, SourceType
-from dlightrag.core.ingestion.engine import PreparedIngestFile
-from dlightrag.core.ingestion.paths import (
+from dlightrag_rag.contracts import IngestDocument, SourceType, VisualAssetSize
+from dlightrag_rag.ingestion.engine import PreparedIngestFile
+from dlightrag_rag.ingestion.paths import (
     iter_ingestable_files,
     remote_ingest_batch_root,
     remote_parser_input_path,
@@ -43,6 +29,27 @@ from dlightrag.core.ingestion.paths import (
     staged_input_path,
     workspace_input_root,
 )
+from dlightrag_rag.lightrag_models import LightRagChatModels, build_lightrag_embedding
+from dlightrag_rag.ports import (
+    CorpusBackendFactory,
+    MetadataIndexProtocol,
+    WorkspaceCorpusBackend,
+)
+from dlightrag_rag.rerank import build_rerank_func, rerank_consumes_images
+from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag_rag.sourcing.source_contract import (
+    SourceDownloadContractError,
+    local_source_uri,
+    safe_source_filename,
+    validate_download_uri,
+    validate_source_uri,
+)
+from lightrag.constants import (
+    DEFAULT_COSINE_THRESHOLD,
+    PARSED_DIR_NAME,
+)
+
+from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.lightrag_lifecycle import defer_cancellation, shutdown_lightrag_worker_pools
 from dlightrag.model_settings import (
     embedding_settings,
@@ -51,24 +58,17 @@ from dlightrag.model_settings import (
     rerank_settings,
 )
 from dlightrag.observability import LangfuseTelemetry
-from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
-from dlightrag.sourcing.source_contract import (
-    SourceDownloadContractError,
-    local_source_uri,
-    safe_source_filename,
-    validate_download_uri,
-    validate_source_uri,
-)
 from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
-    from dlightrag.core.document_embedding import RobustDocumentEmbedder
-    from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
-    from dlightrag.core.lightrag_stores import LightRAGStores
-    from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
-    from dlightrag.core.retrieval.protocols import BM25Retriever, RetrievalBackend
-    from dlightrag.core.retrieval.provenance import ProvenanceCache
-    from dlightrag.core.retrieval.retriever import UnifiedRetriever
+    from dlightrag_rag.ingestion.document_embedding import RobustDocumentEmbedder
+    from dlightrag_rag.ingestion.engine import UnifiedIngestionEngine
+    from dlightrag_rag.lightrag_stores import LightRAGStores
+    from dlightrag_rag.ports import BM25Search, RetrievalBackend
+    from dlightrag_rag.retrieval.lightrag_backend import LightRAGMixBackend
+    from dlightrag_rag.retrieval.provenance import ProvenanceCache
+    from dlightrag_rag.retrieval.retriever import UnifiedRetriever
+
     from dlightrag.core.visual_assets import VisualAssetResolver
 
 logger = logging.getLogger(__name__)
@@ -176,13 +176,15 @@ def _log_download_locator_outcome(*, outcome: str, locator_kind: str, source_fil
     )
 
 
-from dlightrag_rag.retrieval import MetadataFilter  # noqa: E402
+from dlightrag_rag.retrieval import (  # noqa: E402
+    MetadataFilter,
+    RetrievalResult,
+)
 
 from dlightrag.adapters.postgres.lightrag_readonly import (  # noqa: E402
     attach_lightrag_storages_read_only,
 )
 from dlightrag.core.contract_guard import LightRAGContractGuard  # noqa: E402
-from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 
 # Identity and storage plumbing: never part of a caller-facing answer or payload.
 _INTERNAL_FIELDS = frozenset({"workspace", "doc_id", "download_locator"})
@@ -268,7 +270,7 @@ class RAGService:
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
         self._lightrag_stores: LightRAGStores | None = None
         self._ingestion_engine: UnifiedIngestionEngine | None = None
-        self._bm25: BM25Retriever | None = None
+        self._bm25: BM25Search | None = None
         self._retrieval_orchestrator: UnifiedRetriever | None = None
         self._chat_models: LightRagChatModels | None = None
         self._multimodal_embedder: MultimodalEmbedder | None = None
@@ -364,7 +366,7 @@ class RAGService:
         *,
         image_enabled: bool,
     ) -> RobustDocumentEmbedder:
-        from dlightrag.core.document_embedding import RobustDocumentEmbedder
+        from dlightrag_rag.ingestion.document_embedding import RobustDocumentEmbedder
 
         return RobustDocumentEmbedder(
             embedder=embedder,
@@ -403,7 +405,7 @@ class RAGService:
         stores: Any,
     ) -> LightRAGMixBackend:
         """Build the LightRAG retrieval backend from typed DlightRAG config."""
-        from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
+        from dlightrag_rag.retrieval.lightrag_backend import LightRAGMixBackend
 
         return LightRAGMixBackend(
             lightrag=lightrag,
@@ -428,9 +430,8 @@ class RAGService:
 
     async def _do_initialize(self) -> None:
         """Create one LightRAG-backed unified pipeline."""
+        from dlightrag_rag._lightrag_patches import apply as apply_lightrag_patches
         from lightrag.parser.routing import validate_parser_routing_config
-
-        from dlightrag.core._lightrag_patches import apply as apply_lightrag_patches
 
         validate_parser_routing_config(self.config.parser_rules)
         docling = self.config.parser_sidecars.docling
@@ -538,33 +539,41 @@ class RAGService:
             "attached (read-only)" if config.is_reader else "initialized",
         )
 
-        # Wrap chunks_vdb for metadata in-filtering
+        # Verify the private LightRAG surface before binding backend adapters.
         if lightrag.chunks_vdb is not None:
             await contract_guard.verify_all()
 
-            from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
+        corpus_stores = await self._require_corpus_backend().runtime.bind(lightrag)
+
+        # Wrap chunks_vdb for metadata in-filtering
+        if lightrag.chunks_vdb is not None:
+            from dlightrag_rag.retrieval.filtering import FilteredVectorStorage
+
+            if corpus_stores.filtered_vectors is None:
+                raise RuntimeError("Corpus backend did not provide filtered vector search")
 
             filtered_vdb = FilteredVectorStorage(
                 original=lightrag.chunks_vdb,
                 embedding_func=embedding_func,
-                exact_threshold=config.metadata_filter_exact_vector_threshold,
+                filtered_search=corpus_stores.filtered_vectors,
             )
-            if not config.is_reader:
-                await filtered_vdb.ensure_doc_scope_index()
             lightrag.chunks_vdb = filtered_vdb  # type: ignore[assignment]
 
         # Wrap text_chunks so the same scope reaches the entity/relation legs,
         # which resolve chunks by id and never pass through chunks_vdb.
         if lightrag.text_chunks is not None:
-            from dlightrag.core.retrieval.filtered_vdb import FilteredChunkStore
+            from dlightrag_rag.retrieval.filtering import FilteredChunkStore
 
             lightrag.text_chunks = FilteredChunkStore(  # type: ignore[assignment]
                 original=lightrag.text_chunks
             )
 
-        from dlightrag.core.lightrag_stores import LightRAGStores
+        from dlightrag_rag.lightrag_stores import LightRAGStores
 
-        self._lightrag_stores = LightRAGStores(lightrag)
+        self._lightrag_stores = LightRAGStores(
+            lightrag,
+            chunk_store=corpus_stores.chunks,
+        )
 
         from dlightrag.core.visual_assets import ThumbnailCache, VisualAssetResolver
 
@@ -579,25 +588,13 @@ class RAGService:
             stores=self._lightrag_stores,
         )
 
-        # Initialize metadata index
-        self._metadata_index = await self._create_metadata_index(
-            config, validate_only=config.is_reader
-        )
-        from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
-        from dlightrag.core.retrieval.bm25 import create_postgres_bm25, profiles_from_config
-        from dlightrag.core.retrieval.bm25_language import BM25LanguageClassifier
+        self._metadata_index = corpus_stores.metadata_index
+        from dlightrag_rag.ingestion.engine import UnifiedIngestionEngine
+        from dlightrag_rag.retrieval.language import BM25LanguageClassifier
 
-        bm25_profiles = profiles_from_config(config.bm25_profiles)
         bm25_language_classifier = (
-            BM25LanguageClassifier(
-                tuple(
-                    language
-                    for profile in bm25_profiles
-                    if not profile.fallback
-                    for language in profile.languages
-                )
-            )
-            if config.bm25_enabled
+            BM25LanguageClassifier(corpus_stores.bm25_languages)
+            if corpus_stores.bm25 is not None
             else None
         )
         self._ingestion_engine = (
@@ -612,19 +609,14 @@ class RAGService:
                 parser_rules=config.parser_rules,
                 chunk_options=config.parser.chunk_options,
                 bm25_language_classifier=bm25_language_classifier,
+                telemetry=LangfuseTelemetry(),
             )
         )
 
-        from dlightrag.adapters.postgres._pool import pg_pool
+        self._bm25 = corpus_stores.bm25
 
-        self._bm25 = await create_postgres_bm25(
-            config,
-            pool=pg_pool,
-            profiles=bm25_profiles,
-        )
-
-        from dlightrag.core.retrieval.retriever import UnifiedRetriever
-        from dlightrag.core.retrieval.visual import DirectVisualRetriever
+        from dlightrag_rag.retrieval.retriever import UnifiedRetriever
+        from dlightrag_rag.retrieval.visual import DirectVisualRetriever
 
         self._retrieval_orchestrator = UnifiedRetriever(
             backend=self._backend,
@@ -670,23 +662,6 @@ class RAGService:
         if backend is None:
             raise RuntimeError("RAGService corpus backend is not initialized")
         return backend
-
-    async def _create_metadata_index(
-        self,
-        config: DlightragConfig,
-        *,
-        validate_only: bool = False,
-    ) -> MetadataIndexProtocol:
-        """Create (or validate) the PostgreSQL metadata index backend."""
-        from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
-
-        idx = PGMetadataIndex(workspace=config.workspace)
-        await idx.initialize(validate_only=validate_only)
-        logger.info(
-            "Metadata index: PGMetadataIndex (PostgreSQL%s)",
-            ", validated" if validate_only else "",
-        )
-        return idx
 
     def _ensure_initialized(self) -> None:
         """Raise error if not initialized."""
@@ -809,7 +784,7 @@ class RAGService:
         if lightrag is None:
             return
 
-        from dlightrag.core.ingestion.cleanup import cascade_delete, collect_deletion_context
+        from dlightrag_rag.ingestion.cleanup import cascade_delete, collect_deletion_context
 
         identifiers: list[str] = []
         for candidate in (stored_file_path, str(file_path), file_path.name):
@@ -1359,7 +1334,7 @@ class RAGService:
     async def _aingest_url(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         documents = _ingest_documents(kwargs.get("documents"))
         if documents is not None:
-            from dlightrag.sourcing.url import URLDataSource
+            from dlightrag_rag.sourcing.url import URLDataSource
 
             source = URLDataSource(
                 documents=[
@@ -1392,7 +1367,7 @@ class RAGService:
         if kwargs.get("url"):
             urls = [str(kwargs["url"])]
 
-        from dlightrag.sourcing.url import URLDataSource
+        from dlightrag_rag.sourcing.url import URLDataSource
 
         source_kwargs: dict[str, Any] = {"urls": urls}
         if kwargs.get("filename") is not None:
@@ -1479,7 +1454,7 @@ class RAGService:
         if source is None:
             if not container_name:
                 raise ValueError("'container_name' is required for azure_blob source_type")
-            from dlightrag.sourcing.azure_blob import AzureBlobDataSource
+            from dlightrag_rag.sourcing.azure_blob import AzureBlobDataSource
 
             source = AzureBlobDataSource(
                 connection_string=self.config.blob_connection_string,
@@ -1501,7 +1476,7 @@ class RAGService:
         if source is None:
             if not bucket:
                 raise ValueError("'bucket' is required for s3 source_type")
-            from dlightrag.sourcing.aws_s3 import S3DataSource
+            from dlightrag_rag.sourcing.aws_s3 import S3DataSource
 
             source = S3DataSource(
                 bucket=str(bucket), region=kwargs.get("s3_region") or self.config.s3_region
@@ -1618,7 +1593,7 @@ class RAGService:
         stores = self._lightrag_stores
         provenance_cache: ProvenanceCache | None = None
         if stores is not None:
-            from dlightrag.core.retrieval.provenance import (
+            from dlightrag_rag.retrieval.provenance import (
                 ProvenanceCache,
                 hydrate_lightrag_chunk_provenance,
             )
@@ -1647,7 +1622,7 @@ class RAGService:
         if stores is not None and not self._rerank_consumes_images:
             survivors = kg_result.contexts.get("chunks", [])
             if survivors:
-                from dlightrag.core.retrieval.provenance import (
+                from dlightrag_rag.retrieval.provenance import (
                     hydrate_lightrag_chunk_provenance,
                 )
 
@@ -1660,7 +1635,10 @@ class RAGService:
         # --- Step 4: Canonicalize reference_id across all merged chunks ---
         # Required so fused chunks get stable doc-level IDs and become citable
         # as [ref-chunk_idx].
-        from dlightrag.core.retrieval import canonicalize_reference_ids, tag_context_workspace
+        from dlightrag_rag.retrieval.references import (
+            canonicalize_reference_ids,
+            tag_context_workspace,
+        )
 
         kg_result.contexts["chunks"] = canonicalize_reference_ids(
             kg_result.contexts.get("chunks", [])
@@ -1689,7 +1667,7 @@ class RAGService:
             return
 
         limit = chunk_top_k or top_k or len(chunks)
-        from dlightrag.core.retrieval.rerank import rerank_with_fallback
+        from dlightrag_rag.retrieval.rerank_fallback import rerank_with_fallback
 
         outcome = await rerank_with_fallback(
             query=query,
@@ -1824,7 +1802,7 @@ class RAGService:
     ) -> None:
         """Update (merge) document metadata."""
         self.config.require_writer("metadata update")
-        from dlightrag.core.retrieval.metadata_fields import normalize_user_metadata
+        from dlightrag_rag.retrieval.metadata_fields import normalize_user_metadata
 
         if self._metadata_index is None:
             raise RuntimeError("Metadata index not initialized")
@@ -2090,7 +2068,7 @@ class RAGService:
         source_uri: str,
         download_locator: str,
     ) -> tuple[SourceType, dict[str, Any]]:
-        from dlightrag.sourcing.uri import parse_remote_uri
+        from dlightrag_rag.sourcing.uri import parse_remote_uri
 
         stable_source_uri = validate_source_uri(source_uri)
         if not download_locator or "\x00" in download_locator:
@@ -2215,7 +2193,7 @@ class RAGService:
         """Unified file deletion — DB records and physical files."""
         self.config.require_writer("file deletion")
         self._ensure_initialized()
-        from dlightrag.core.ingestion.cleanup import (
+        from dlightrag_rag.ingestion.cleanup import (
             cascade_delete,
             collect_deletion_context,
             remove_deleted_files,

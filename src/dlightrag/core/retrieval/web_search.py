@@ -13,8 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-
-from dlightrag.sourcing.url import normalize_https_url_identity
+from dlightrag_rag.sourcing.url import normalize_https_url_identity
 
 logger = logging.getLogger(__name__)
 

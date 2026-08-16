@@ -11,6 +11,7 @@ from dlightrag_agent.tools import AgentTool, ToolResult
 from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag_ai.messages import AssistantTurn, ToolCall
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
+from dlightrag_rag.retrieval import RetrievalResult
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.citations import finalize_answer
@@ -23,8 +24,8 @@ from dlightrag.core.answer.errors import (
 )
 from dlightrag.core.answer.images import AnswerImageBudget
 from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
+from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.resources.models import ResourceManifestEntry, TextWindowBudget
-from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
 from dlightrag.core.tools import SearchInput, compose_research_tools
 from tests.unit.conftest import answer_image_policy, answer_model_profile
@@ -74,12 +75,12 @@ class _DrainedOrchestrator(AnswerOrchestrator):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(telemetry=NOOP_TELEMETRY, **kwargs)
 
-    async def answer(self, query: str, **kwargs: Any) -> RetrievalResult:
+    async def answer(self, query: str, **kwargs: Any) -> AnswerResult:
         contexts, stream = await self.answer_stream(query, **kwargs)
         parts = [chunk async for chunk in stream] if stream is not None else []
         text = getattr(stream, "answer", "") or "".join(parts)
         finalized = finalize_answer(text, contexts)
-        return RetrievalResult(
+        return AnswerResult(
             answer=finalized.answer,
             contexts=contexts,
             sources=finalized.sources,

@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from dlightrag.sourcing.source_contract import (
+from dlightrag_rag.sourcing.source_contract import (
     implicit_https_download_uri,
     local_source_uri,
     validate_download_uri,
@@ -153,6 +152,11 @@ def test_local_source_uri_is_workspace_relative_and_path_safe() -> None:
     assert local_source_uri("research", Path("reports/Q2 results.md")) == (
         "local://research/reports/Q2%20results.md"
     )
+
+
+def test_local_source_uri_requires_a_canonical_workspace() -> None:
+    with pytest.raises(ValueError, match="local source identity is invalid"):
+        local_source_uri("Project A", "report.pdf")
 
 
 @pytest.mark.parametrize(

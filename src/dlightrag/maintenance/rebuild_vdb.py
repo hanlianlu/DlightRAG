@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 from dlightrag_ai.embedding import create_embedding_model
+from dlightrag_rag.ingestion.engine import UnifiedIngestionEngine
 from dlightrag_rag.lightrag_models import build_lightrag_embedding
+from dlightrag_rag.lightrag_stores import LightRAGStores
 from lightrag.base import DocStatus
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 from lightrag.kg import STORAGE_ENV_REQUIREMENTS
@@ -17,13 +19,10 @@ from lightrag.namespace import NameSpace
 from lightrag.tools.rebuild_vdb import DEFAULT_BATCH_SIZE, RebuildTool
 from lightrag.utils import get_env_value
 
-from dlightrag.adapters.postgres._pool import pg_pool
-from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
-from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
-from dlightrag.core.lightrag_stores import LightRAGStores
-from dlightrag.core.retrieval.bm25 import rebuild_postgres_bm25
 from dlightrag.core.service import RAGService
+from dlightrag.maintenance.rebuild_bm25 import run_rebuild_bm25
 from dlightrag.model_settings import embedding_settings
 from dlightrag.observability import LangfuseTelemetry
 
@@ -138,7 +137,7 @@ class DlightRAGRebuildTool(RebuildTool):
 
         self.storage_names = self.resolve_storage_names()
         self.workspace = self.config.workspace
-        PGCorpusBackendFactory(self.config)
+        apply_lightrag_environment(self.config)
 
         print("\nChecking configuration...")
         for storage_name in set(self.storage_names.values()):
@@ -250,6 +249,7 @@ async def restore_sidecar_image_vectors(
         workspace=config.workspace,
         parser_rules=config.parser_rules,
         chunk_options={},
+        telemetry=LangfuseTelemetry(),
     )
 
     stats = {"processed_docs": 0, "skipped_docs": 0}
@@ -295,7 +295,6 @@ async def run_rebuild(
     tool = DlightRAGRebuildTool(resolved_config, embedding_func=embedding_func)
     tool.batch_size = batch_size
     exit_code = 0
-    domain_pool_bound = False
 
     from lightrag.kg.shared_storage import finalize_share_data, initialize_share_data
 
@@ -320,11 +319,9 @@ async def run_rebuild(
 
         if exit_code == 0 and target in {"chunks", "all"}:
             if getattr(resolved_config, "bm25_enabled", False):
-                pg_pool.bind(resolved_config)
-                domain_pool_bound = True
-                bm25_stats = await rebuild_postgres_bm25(
-                    resolved_config,
-                    pool=pg_pool,
+                bm25_stats = await run_rebuild_bm25(
+                    config=resolved_config,
+                    assume_yes=True,
                     batch_size=batch_size,
                 )
                 print(
@@ -335,7 +332,12 @@ async def run_rebuild(
 
             if restore_sidecar_alignment:
                 lightrag_surface = _lightrag_surface(tool)
-                stores = LightRAGStores(lightrag_surface)
+                from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
+
+                stores = LightRAGStores(
+                    lightrag_surface,
+                    chunk_store=PGCorpusChunkStore(lightrag_surface),
+                )
                 direct_enabled = await RAGService._resolve_direct_image_embedding_enabled(
                     multimodal_embedder,
                     startup_probe=resolved_embedding.startup_probe,
@@ -363,11 +365,7 @@ async def run_rebuild(
             finalize_share_data()
         except Exception:  # noqa: BLE001
             logger.warning("Failed to finalize LightRAG shared storage", exc_info=True)
-        try:
-            await multimodal_embedder.aclose()
-        finally:
-            if domain_pool_bound:
-                await pg_pool.close()
+        await multimodal_embedder.aclose()
     return exit_code
 
 

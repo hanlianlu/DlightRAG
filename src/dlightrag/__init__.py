@@ -17,7 +17,7 @@ __credits__ = ["hllyu"]
 
 from dlightrag.access_control import AccessAction, AccessControl, access_control_from_config
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
-from dlightrag.core.client_contracts import IngestDocument, IngestSpec, QueryImage
+from dlightrag.core.client_contracts import IngestSpec, QueryImage
 
 if TYPE_CHECKING:
     from dlightrag.core.answer.errors import (
@@ -28,7 +28,6 @@ if TYPE_CHECKING:
         AnswerImageError,
         classify_answer_error,
     )
-    from dlightrag.core.retrieval.protocols import RetrievalResult
     from dlightrag.core.servicemanager import RAGServiceManager
 
 _ANSWER_EXPORTS = frozenset(
@@ -44,7 +43,6 @@ _ANSWER_EXPORTS = frozenset(
 
 __all__ = [
     "DlightragConfig",
-    "IngestDocument",
     "IngestSpec",
     "QueryImage",
     "AccessAction",
@@ -52,7 +50,6 @@ __all__ = [
     "AccessControlConfig",
     "AccessControlRuleConfig",
     "RAGServiceManager",
-    "RetrievalResult",
     "AnswerImageError",
     "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
     "ANSWER_STREAM_FAILED",
@@ -66,10 +63,9 @@ __all__ = [
 
 def _lazy_imports():
     """Lazy imports for heavy modules — only loaded when accessed."""
-    from dlightrag.core.retrieval.protocols import RetrievalResult
     from dlightrag.core.servicemanager import RAGServiceManager
 
-    return RAGServiceManager, RetrievalResult
+    return RAGServiceManager
 
 
 def _lazy_answer_exports():
@@ -82,10 +78,6 @@ def _lazy_answer_exports():
 def __getattr__(name: str):
     if name in _ANSWER_EXPORTS:
         return _lazy_answer_exports()[name]
-    if name in ("RAGServiceManager", "RetrievalResult"):
-        RAGServiceManager, RetrievalResult = _lazy_imports()
-        return {
-            "RAGServiceManager": RAGServiceManager,
-            "RetrievalResult": RetrievalResult,
-        }[name]
+    if name == "RAGServiceManager":
+        return _lazy_imports()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -5,6 +5,10 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from dlightrag_rag.ports.ingest_jobs import IngestJobStore
+from dlightrag_rag.ports.metadata_index import MetadataIndexProtocol
+from dlightrag_rag.ports.retrieval import BM25Search, CorpusChunkStore, FilteredVectorSearch
+
 
 class CorpusSchemaError(RuntimeError):
     """The deployed corpus schema is incompatible with this software revision."""
@@ -23,7 +27,7 @@ class CorpusCoordination(Protocol):
 
 
 class CorpusMaintenanceStore(Protocol):
-    """Own PostgreSQL-independent workspace catalog maintenance operations."""
+    """Own storage-neutral workspace catalog maintenance operations."""
 
     async def initialize(self, *, validate_only: bool = False) -> None: ...
 
@@ -43,11 +47,30 @@ class CorpusMaintenanceStore(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceCorpusStores:
+    """Retrieval and ingestion stores attached to one LightRAG runtime."""
+
+    metadata_index: MetadataIndexProtocol
+    chunks: CorpusChunkStore
+    filtered_vectors: FilteredVectorSearch | None
+    bm25: BM25Search | None
+    bm25_languages: tuple[str, ...] = ()
+
+
+class CorpusRuntimeBinder(Protocol):
+    """Attach backend stores after the host has initialized LightRAG storage."""
+
+    async def bind(self, lightrag: Any) -> WorkspaceCorpusStores: ...
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceCorpusBackend:
     """Coherent backend capabilities bound to one workspace."""
 
     coordination: CorpusCoordination
     maintenance: CorpusMaintenanceStore
+    runtime: CorpusRuntimeBinder
+    ingest_jobs: IngestJobStore
 
 
 class CorpusBackendFactory(Protocol):
@@ -60,7 +83,9 @@ __all__ = [
     "CorpusBackendFactory",
     "CorpusCoordination",
     "CorpusMaintenanceStore",
+    "CorpusRuntimeBinder",
     "CorpusSchemaError",
     "CorpusUnavailableError",
     "WorkspaceCorpusBackend",
+    "WorkspaceCorpusStores",
 ]

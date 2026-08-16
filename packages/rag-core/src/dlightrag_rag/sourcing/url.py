@@ -14,8 +14,8 @@ from urllib.parse import unquote, urljoin, urlparse, urlsplit, urlunsplit
 
 import httpx
 
-from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
-from dlightrag.sourcing.source_contract import (
+from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag_rag.sourcing.source_contract import (
     implicit_https_download_uri,
     safe_source_filename,
     validate_download_uri,

@@ -4,14 +4,13 @@
 import json
 from typing import Any
 
-from dlightrag.adapters.postgres.ingest_jobs import (
-    PGIngestJobStore,
-)
-from dlightrag.core.ingest_job_coordinator import (
+from dlightrag_rag.ports import (
     JOB_LEASE_SECONDS,
     JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,
 )
+
+from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
 
 
 def _finished_status(row: dict[str, Any]) -> str:

@@ -2,8 +2,10 @@
 """Behavioral contract for storage-neutral corpus backend adapters."""
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
-from dlightrag_rag.ports import WorkspaceCorpusBackend
+from dlightrag_rag.ports import WorkspaceCorpusBackend, WorkspaceCorpusStores
 
 
 class _CoordinationFake:
@@ -50,11 +52,31 @@ class _MaintenanceFake:
         return None
 
 
+class _RuntimeFake:
+    def __init__(self, stores: WorkspaceCorpusStores) -> None:
+        self._stores = stores
+        self.bound: object | None = None
+
+    async def bind(self, lightrag: object) -> WorkspaceCorpusStores:
+        self.bound = lightrag
+        return self._stores
+
+
 async def test_coordination_contexts_bound_the_owned_operation() -> None:
     events: list[str] = []
+    runtime = _RuntimeFake(
+        WorkspaceCorpusStores(
+            metadata_index=AsyncMock(),
+            chunks=AsyncMock(),
+            filtered_vectors=None,
+            bm25=None,
+        )
+    )
     backend = WorkspaceCorpusBackend(
         coordination=_CoordinationFake(events),
         maintenance=_MaintenanceFake(),
+        runtime=runtime,
+        ingest_jobs=AsyncMock(),
     )
 
     async with backend.coordination.workspace_initialization():
@@ -70,6 +92,12 @@ async def test_coordination_contexts_bound_the_owned_operation() -> None:
         "recover",
         "recovery:exit",
     ]
+
+    lightrag = SimpleNamespace(workspace="research")
+    stores = await backend.runtime.bind(lightrag)
+    assert runtime.bound is lightrag
+    assert stores.metadata_index is not None
+    assert stores.chunks is not None
 
 
 async def test_maintenance_fake_uses_owner_facing_values() -> None:

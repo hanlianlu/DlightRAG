@@ -121,10 +121,11 @@ async def test_bm25_rebuild_provisions_indexes_then_relabels(
     )
 
     assert stats == {"processed_chunks": 3, "updated_chunks": 3}
-    assert events[:3] == ["factory", "prerequisites:enter", "prerequisites:exit"]
-    rebuild_event = cast(tuple[str, Any, dict[str, Any]], events[3])
+    assert events[:2] == ["factory", "prerequisites:enter"]
+    rebuild_event = cast(tuple[str, Any, dict[str, Any]], events[2])
     assert rebuild_event[0] == "rebuild"
     assert rebuild_event[1] is config
-    assert rebuild_event[2] == {"pool": fake_pool, "batch_size": 25}
+    assert rebuild_event[2] == {"batch_size": 25}
+    assert events[3] == "prerequisites:exit"
     fake_pool.bind.assert_called_once_with(config)
     fake_pool.close.assert_awaited_once()

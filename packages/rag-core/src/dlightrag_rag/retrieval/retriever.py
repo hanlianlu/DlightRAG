@@ -6,24 +6,23 @@ import logging
 from collections import Counter
 from typing import Any
 
-from dlightrag_rag.ports import MetadataIndexProtocol
+from dlightrag_rag.ports import (
+    BM25Search,
+    MetadataChunkStore,
+    MetadataIndexProtocol,
+    RetrievalBackend,
+)
 from dlightrag_rag.retrieval import (
     ContextRow,
     MetadataFilter,
     MetadataScope,
+    RetrievalResult,
     format_bm25_top,
     rrf_fuse,
 )
-
-from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-from dlightrag.core.retrieval.metadata_path import metadata_retrieve
-from dlightrag.core.retrieval.protocols import (
-    BM25Retriever,
-    MetadataChunkStore,
-    RetrievalBackend,
-    RetrievalResult,
-)
-from dlightrag.core.retrieval.visual import DirectVisualRetriever
+from dlightrag_rag.retrieval.filtering import metadata_filter_scope
+from dlightrag_rag.retrieval.metadata_path import metadata_retrieve
+from dlightrag_rag.retrieval.visual import DirectVisualRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ class UnifiedRetriever:
         self,
         *,
         backend: RetrievalBackend,
-        bm25: BM25Retriever | None,
+        bm25: BM25Search | None,
         metadata_index: MetadataIndexProtocol,
         stores: MetadataChunkStore,
         visual: DirectVisualRetriever | None = None,

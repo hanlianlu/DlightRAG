@@ -11,10 +11,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from dlightrag_agent.tools import AgentTool, ToolResult
+from dlightrag_rag.retrieval import RetrievalResult
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.core.memory.evidence import EvidenceLedger
-from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.web_search import (
     WebSearchResult,
     WebSearchUnavailable,

@@ -6,23 +6,22 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from lightrag.base import DocStatus
-from lightrag.parser.routing import FilenameParserHintError
-from lightrag.utils import compute_mdhash_id
-from lightrag.utils_pipeline import normalize_document_file_path
-from PIL import Image
-
-from dlightrag.core.document_embedding import (
+from dlightrag_rag.ingestion.document_embedding import (
     DocumentEmbeddingInput,
     DocumentEmbeddingTrace,
     DocumentEmbeddingVector,
 )
-from dlightrag.core.ingestion.engine import (
+from dlightrag_rag.ingestion.engine import (
     PreparedIngestFile,
     UnifiedIngestionEngine,
     _prepare_ingest_item,
     _raw_path_source_uri,
 )
+from lightrag.base import DocStatus
+from lightrag.parser.routing import FilenameParserHintError
+from lightrag.utils import compute_mdhash_id
+from lightrag.utils_pipeline import normalize_document_file_path
+from PIL import Image
 
 
 def _sha256(content: bytes) -> str:
@@ -354,8 +353,8 @@ def test_raw_path_preparation_uses_collision_safe_local_identity(tmp_path: Path)
     first.parent.mkdir()
     second.parent.mkdir()
 
-    first_item = _prepare_ingest_item(first, workspace="Finance Team")
-    second_item = _prepare_ingest_item(second, workspace="Finance Team")
+    first_item = _prepare_ingest_item(first, workspace="finance_team")
+    second_item = _prepare_ingest_item(second, workspace="finance_team")
 
     assert first_item.source_uri.startswith("local://finance_team/")
     assert second_item.source_uri.startswith("local://finance_team/")
@@ -1336,7 +1335,9 @@ async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
 
 
 async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypatch) -> None:
-    import dlightrag.core.ingestion.engine as engine_module
+    import asyncio
+
+    import dlightrag_rag.ingestion.engine as engine_module
 
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")
@@ -1352,7 +1353,7 @@ async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypat
         calls.append(func)
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(engine_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
 
     await engine.aingest_file(source, replace=False)
 

@@ -25,6 +25,7 @@ import pytest
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
+from dlightrag_rag.retrieval import RetrievalResult
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
@@ -40,7 +41,6 @@ from dlightrag.core.memory.evidence import EvidenceLedger
 from dlightrag.core.resources import registry as registry_module
 from dlightrag.core.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.core.resources.registry import ResourceRegistry
-from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import (
     RAGServiceManager,
     _fetched_bytes_sink,
@@ -235,7 +235,9 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
             fencing_epoch=claim.run.fencing_epoch,
             result={"answer": creation.run.run_id},
         )
-    async with store._pool.acquire() as conn:  # noqa: SLF001 - backdating is test-only setup
+    pool = store._operation_pool  # noqa: SLF001 - backdating is test-only setup
+    assert pool is not None
+    async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE dlightrag_answer_runs SET finished_at = NOW() - INTERVAL '31 days' "
             "WHERE run_id = $1",

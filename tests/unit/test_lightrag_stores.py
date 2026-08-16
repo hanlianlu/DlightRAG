@@ -5,8 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_rag.lightrag_stores import LightRAGStores
 
-from dlightrag.core.lightrag_stores import LightRAGStores
+from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
 
 
 class FakeLightRAG:
@@ -17,9 +18,13 @@ class FakeLightRAG:
         self.doc_status = object()
 
 
+def _stores(fake: FakeLightRAG) -> LightRAGStores:
+    return LightRAGStores(fake, chunk_store=AsyncMock())
+
+
 def test_lightrag_stores_validates_required_surfaces() -> None:
     fake = FakeLightRAG()
-    stores = LightRAGStores(fake)
+    stores = _stores(fake)
 
     assert stores.text_chunks is fake.text_chunks
     assert stores.full_docs is fake.full_docs
@@ -30,11 +35,11 @@ def test_lightrag_stores_reports_missing_surfaces() -> None:
         chunks_vdb = object()
 
     with pytest.raises(RuntimeError, match="missing"):
-        LightRAGStores(Broken())
+        LightRAGStores(Broken(), chunk_store=AsyncMock())
 
 
 async def test_overwrite_chunk_vectors_requires_matching_dimension() -> None:
-    stores = LightRAGStores(FakeLightRAG())
+    stores = PGCorpusChunkStore(FakeLightRAG())
 
     with pytest.raises(ValueError, match="vector dimension"):
         await stores.overwrite_chunk_vectors(
@@ -58,7 +63,7 @@ async def test_overwrite_chunk_vectors_updates_existing_rows_only() -> None:
     fake = FakeLightRAG()
     db = FakeDB()
     fake.chunks_vdb = SimpleNamespace(table_name="LIGHTRAG_DOC_CHUNKS", db=db, workspace="ws")
-    stores = LightRAGStores(fake)
+    stores = PGCorpusChunkStore(fake)
 
     await stores.overwrite_chunk_vectors(
         {"doc-1-mm-drawing-000": [0.1, 0.2, 0.3]},
@@ -88,14 +93,14 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
         async def executemany(self, sql, values) -> None:  # noqa: ANN001
             self.batches.append(list(values))
 
-    monkeypatch.setattr(LightRAGStores, "_VECTOR_WRITE_MAX_RECORDS", 1, raising=False)
-    monkeypatch.setattr(LightRAGStores, "_VECTOR_WRITE_MAX_BYTES", 16_000_000, raising=False)
+    monkeypatch.setattr(PGCorpusChunkStore, "_VECTOR_WRITE_MAX_RECORDS", 1)
+    monkeypatch.setattr(PGCorpusChunkStore, "_VECTOR_WRITE_MAX_BYTES", 16_000_000)
 
     fake = FakeLightRAG()
     db = FakeDB()
     fake.chunks_vdb = SimpleNamespace(table_name="LIGHTRAG_VDB", db=db, workspace="ws")
 
-    stores = LightRAGStores(fake)
+    stores = PGCorpusChunkStore(fake)
     await stores.overwrite_chunk_vectors(
         {
             "img-1": [0.1, 0.2, 0.3],
@@ -124,7 +129,7 @@ async def test_count_chunks_for_docs_counts_without_reading_ids() -> None:
     fake = FakeLightRAG()
     db = FakeTextChunksDB()
     fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
-    stores = LightRAGStores(fake)
+    stores = PGCorpusChunkStore(fake)
 
     result = await stores.count_chunks_for_docs(["doc-1", "doc-2"])
 
@@ -142,7 +147,7 @@ async def test_context_chunks_by_ids_formats_text_chunks() -> None:
         {"content": "alpha", "file_path": "/tmp/a.pdf", "full_doc_id": "doc-a"},
         {"content": "beta", "file_path": "/tmp/b.pdf"},
     ]
-    stores = LightRAGStores(fake)
+    stores = _stores(fake)
 
     result = await stores.context_chunks_by_ids(["c1", "c2"])
 
@@ -175,7 +180,7 @@ async def test_fetch_chunk_contents_reads_lightrag_doc_chunks() -> None:
     fake = FakeLightRAG()
     db = FakeTextChunksDB()
     fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
-    stores = LightRAGStores(fake)
+    stores = PGCorpusChunkStore(fake)
 
     result = await stores.fetch_chunk_contents(["chunk-a"])
 
@@ -201,7 +206,7 @@ async def test_update_chunk_bm25_languages_uses_batch_update() -> None:
     fake = FakeLightRAG()
     db = FakeTextChunksDB()
     fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
-    stores = LightRAGStores(fake)
+    stores = PGCorpusChunkStore(fake)
 
     await stores.update_chunk_bm25_languages({"chunk-a": "en", "chunk-b": "zh"})
 

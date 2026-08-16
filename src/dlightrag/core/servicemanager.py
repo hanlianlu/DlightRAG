@@ -50,15 +50,21 @@ from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.tool_model import ToolModel
 from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
-from dlightrag_rag.ports import CorpusMaintenanceStore, CorpusSchemaError
-from dlightrag_rag.retrieval import MetadataFilter
+from dlightrag_rag.contracts import SourceType, VisualAssetSize
+from dlightrag_rag.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag_rag.ports import (
+    JOB_STATES_WITH_RESULT,
+    CorpusMaintenanceStore,
+    CorpusSchemaError,
+)
+from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
+from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from PIL import Image
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
-from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
 from dlightrag.application import ApplicationHealth
-from dlightrag.contracts import VisualAssetSize
 from dlightrag.core.agent.orchestrator import (
     AnswerOrchestrator,
     research_history_input_measure,
@@ -95,15 +101,15 @@ from dlightrag.core.answer_runs.execution import (
     in_memory_attachment_loader,
 )
 from dlightrag.core.answer_runs.models import AgentRunState
-from dlightrag.core.answer_runs.results import restore_answer_result, store_answer_result
-from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec, SourceType
+from dlightrag.core.answer_runs.results import (
+    AnswerResult,
+    restore_answer_result,
+    store_answer_result,
+)
+from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
-from dlightrag.core.ingest_job_coordinator import (
-    JOB_STATES_WITH_RESULT,
-    IngestJobCoordinator,
-)
-from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.lightrag_lifecycle import defer_cancellation
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.principal import DEPLOYMENT_OWNER_ID
@@ -119,7 +125,6 @@ from dlightrag.core.resources.models import (
     ResourceRegistryError,
     TextWindowBudget,
 )
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
 from dlightrag.model_settings import (
     model_profile_for_role,
@@ -146,8 +151,6 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
-from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
-from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.utils import normalize_workspace
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
@@ -370,9 +373,8 @@ class RAGServiceManager:
         # Large document scans are DlightRAG product policy, not an AI package import side effect.
         Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
         self._config = config or get_config()
-        self._corpus_maintenance: CorpusMaintenanceStore = (
-            PGCorpusBackendFactory(self._config).create().maintenance
-        )
+        corpus_backend = PGCorpusBackendFactory(self._config).create()
+        self._corpus_maintenance: CorpusMaintenanceStore = corpus_backend.maintenance
         self._services: dict[str, RAGService] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -393,7 +395,7 @@ class RAGServiceManager:
         self._ingest_jobs = IngestJobCoordinator(
             self._get_ingest_service,
             input_root=self._config.input_dir_path,
-            store=PGIngestJobStore(),
+            store=corpus_backend.ingest_jobs,
         )
         self._retrieval_planners_by_profile: dict[ModelProfile, RetrievalPlanner] = {}
         self._planner_model: CompletionModel | None = None
@@ -1950,7 +1952,7 @@ class RAGServiceManager:
 
     async def _materialize_link_image(self, url: str) -> bytes | None:
         """Fetch a current-image link under SSRF revalidation; None if it fails."""
-        from dlightrag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
+        from dlightrag_rag.sourcing.url import afetch_public_https_bytes, avalidate_public_https_url
 
         try:
             await avalidate_public_https_url(url)
@@ -2360,7 +2362,7 @@ class RAGServiceManager:
         resources: list[ResourceInput] | None = None,
         idempotency_key: str | None = None,
         owner_id: str | None = None,
-    ) -> RetrievalResult:
+    ) -> AnswerResult:
         """Create one durable answer run and wait for its canonical result.
 
         Current-turn images and documents are supplied through ``resources``:

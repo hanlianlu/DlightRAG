@@ -51,8 +51,14 @@ def test_core_distribution_dependencies_follow_import_direction() -> None:
     assert agent == [f"dlightrag-ai=={version}", "pydantic>=2.11.0"]
     assert rag == [
         f"dlightrag-ai=={version}",
+        "aiobotocore>=3.9.0",
+        "azure-storage-blob>=12.28.0",
+        "botocore>=1.43.3",
+        "httpx>=0.28.0",
+        "lingua-language-detector>=2.2.0",
         "lightrag-hku>=1.5.6",
         "numpy>=2.3.0",
+        "pillow>=12.3.0",
         "pydantic>=2.11.0",
     ]
 
@@ -78,10 +84,12 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     assert re.fullmatch(r"langfuse>=4\.\d+(\.\d+)?", langfuse_dep)
 
 
-def test_language_detection_uses_lingua() -> None:
-    dependencies = _dependencies()
+def test_language_detection_dependency_is_owned_by_rag() -> None:
+    root_dependencies = _dependencies()
+    rag_dependencies = _dependencies(Path("packages/rag-core/pyproject.toml"))
 
-    assert any(dep.startswith("lingua-language-detector") for dep in dependencies)
+    assert any(dep.startswith("lingua-language-detector") for dep in rag_dependencies)
+    assert not any(dep.startswith("lingua-language-detector") for dep in root_dependencies)
 
 
 def test_postgres_init_uses_required_pg18_extensions() -> None:

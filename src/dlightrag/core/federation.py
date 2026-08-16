@@ -9,8 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from dlightrag_ai.concurrency import bounded_gather
 from dlightrag_ai.telemetry import safe_log_text
-
-from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag_rag.retrieval import RetrievalResult
 
 if TYPE_CHECKING:
     from dlightrag.core.service import RAGService
@@ -68,7 +67,7 @@ def merge_results(
 
     # Re-canonicalize reference_id under the federation namespace so
     # citations like [3-2] map to one chunk across the merged answer.
-    from dlightrag.core.retrieval import canonicalize_reference_ids
+    from dlightrag_rag.retrieval.references import canonicalize_reference_ids
 
     merged_chunks = canonicalize_reference_ids(merged_chunks, federated=True)
 
@@ -76,7 +75,6 @@ def merge_results(
     merged_relations = _round_robin_merge_key(results, workspaces, "relationships")
 
     return RetrievalResult(
-        answer=None,
         contexts={
             "chunks": merged_chunks,
             "entities": merged_entities,
@@ -150,7 +148,6 @@ async def federated_retrieve(
 
     if not workspaces:
         return RetrievalResult(
-            answer=None,
             contexts={"chunks": [], "entities": [], "relationships": []},
         )
 
@@ -158,7 +155,7 @@ async def federated_retrieve(
     if len(workspaces) == 1:
         svc = await get_service(workspaces[0])
         result = await svc.aretrieve(query=query, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs)
-        from dlightrag.core.retrieval import tag_context_workspace
+        from dlightrag_rag.retrieval.references import tag_context_workspace
 
         tag_context_workspace(result.contexts, workspaces[0])
         result.trace.setdefault("workspace", workspaces[0])

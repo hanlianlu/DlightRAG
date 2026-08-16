@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from dlightrag.core.ingestion.paths import UPLOADS_DIR_NAME
+from dlightrag_rag.ingestion.paths import UPLOADS_DIR_NAME
 
 CHUNK_SIZE = 1024 * 1024
 IGNORED_UPLOAD_FILENAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})

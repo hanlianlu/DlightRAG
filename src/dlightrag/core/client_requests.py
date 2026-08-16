@@ -6,7 +6,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-from dlightrag.core.client_contracts import IngestDocument, IngestSpec, dump_optional_list
+from dlightrag_rag.contracts import IngestDocument
+
+from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import metadata_filter_from_payload
 
 

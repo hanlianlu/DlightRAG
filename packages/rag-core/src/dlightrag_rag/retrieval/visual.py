@@ -12,8 +12,9 @@ from dlightrag_ai.media import (
     image_url_block,
     verify_web_image_bytes,
 )
-from dlightrag_rag.retrieval import ContextRow
 from PIL import Image
+
+from dlightrag_rag.retrieval import ContextRow
 
 logger = logging.getLogger(__name__)
 

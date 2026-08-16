@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from dlightrag_rag.sourcing.aws_s3 import S3CredentialsUnavailable
 
 from dlightrag.config import DlightragConfig
 from dlightrag.core.source_download import (
@@ -12,7 +13,6 @@ from dlightrag.core.source_download import (
     SourceDownloadService,
     SourceDownloadUnavailableError,
 )
-from dlightrag.sourcing.aws_s3 import S3CredentialsUnavailable
 
 
 def _service(

@@ -760,10 +760,8 @@ name = "dlightrag"
 version = "1.9.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aiobotocore" },
     { name = "aiofiles" },
     { name = "asyncpg" },
-    { name = "azure-storage-blob" },
     { name = "bcrypt" },
     { name = "bm25s" },
     { name = "charset-normalizer" },
@@ -777,11 +775,11 @@ dependencies = [
     { name = "langchain-text-splitters" },
     { name = "langfuse" },
     { name = "lightrag-hku" },
-    { name = "lingua-language-detector" },
     { name = "markdown-it-py", extra = ["plugins"] },
     { name = "markitdown", extra = ["docx", "pdf", "pptx", "xlsx"] },
     { name = "mcp" },
     { name = "nh3" },
+    { name = "numpy" },
     { name = "openpyxl" },
     { name = "pgvector" },
     { name = "pillow" },
@@ -818,10 +816,8 @@ eval = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiobotocore", specifier = ">=3.9.0" },
     { name = "aiofiles" },
     { name = "asyncpg", specifier = ">=0.31.0" },
-    { name = "azure-storage-blob", specifier = ">=12.28.0" },
     { name = "bcrypt" },
     { name = "bm25s", specifier = ">=0.3.10" },
     { name = "charset-normalizer", specifier = ">=3.4.0" },
@@ -835,11 +831,11 @@ requires-dist = [
     { name = "langchain-text-splitters" },
     { name = "langfuse", specifier = ">=4.14.3" },
     { name = "lightrag-hku", specifier = ">=1.5.6" },
-    { name = "lingua-language-detector", specifier = ">=2.2.0" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "markitdown", extras = ["docx", "pdf", "pptx", "xlsx"], specifier = ">=0.1.4" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "nh3", specifier = ">=0.2" },
+    { name = "numpy", specifier = ">=2.3.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "pillow", specifier = ">=12.3.0" },
@@ -934,17 +930,29 @@ name = "dlightrag-rag-core"
 version = "1.9.0"
 source = { editable = "packages/rag-core" }
 dependencies = [
+    { name = "aiobotocore" },
+    { name = "azure-storage-blob" },
+    { name = "botocore" },
     { name = "dlightrag-ai" },
+    { name = "httpx" },
     { name = "lightrag-hku" },
+    { name = "lingua-language-detector" },
     { name = "numpy" },
+    { name = "pillow" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "aiobotocore", specifier = ">=3.9.0" },
+    { name = "azure-storage-blob", specifier = ">=12.28.0" },
+    { name = "botocore", specifier = ">=1.43.3" },
     { name = "dlightrag-ai", editable = "packages/ai" },
+    { name = "httpx", specifier = ">=0.28.0" },
     { name = "lightrag-hku", specifier = ">=1.5.6" },
+    { name = "lingua-language-detector", specifier = ">=2.2.0" },
     { name = "numpy", specifier = ">=2.3.0" },
+    { name = "pillow", specifier = ">=12.3.0" },
     { name = "pydantic", specifier = ">=2.11.0" },
 ]
 

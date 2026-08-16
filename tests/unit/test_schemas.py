@@ -3,7 +3,7 @@
 
 from typing import Any, cast
 
-from dlightrag.models.schemas import Reference
+from dlightrag_rag.contracts import Reference
 
 # ---------------------------------------------------------------------------
 # Reference

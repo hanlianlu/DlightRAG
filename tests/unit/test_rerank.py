@@ -31,8 +31,7 @@ from dlightrag_rag.rerank import (
     _run_http_rerank,
     build_rerank_func,
 )
-
-from dlightrag.core.retrieval.rerank import rerank_with_fallback
+from dlightrag_rag.retrieval.rerank_fallback import rerank_with_fallback
 
 
 def _chunks() -> list[dict[str, Any]]:
@@ -154,7 +153,7 @@ async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
     async def _fail(**_kwargs: Any) -> Any:
         raise failure
 
-    with caplog.at_level(logging.WARNING, logger="dlightrag.core.retrieval.rerank"):
+    with caplog.at_level(logging.WARNING, logger="dlightrag_rag.retrieval.rerank_fallback"):
         outcome = await rerank_with_fallback(
             query="query",
             chunks=_chunks(),
@@ -166,7 +165,9 @@ async def test_rerank_with_fallback_returns_rrf_top_k_and_logs_failure_once(
     assert outcome.reranked is False
     assert outcome.error_type == "RuntimeError"
     records = [
-        record for record in caplog.records if record.name == "dlightrag.core.retrieval.rerank"
+        record
+        for record in caplog.records
+        if record.name == "dlightrag_rag.retrieval.rerank_fallback"
     ]
     assert len(records) == 1
     assert records[0].exc_info is not None

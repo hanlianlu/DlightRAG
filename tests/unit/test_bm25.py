@@ -3,21 +3,26 @@
 
 import logging
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dlightrag_rag.retrieval import MetadataScope
-
-from dlightrag.core.retrieval import bm25 as bm25_module
-from dlightrag.core.retrieval.bm25 import (
-    BM25_LANGUAGE_COLUMN,
+from dlightrag_rag.retrieval.bm25 import (
     BM25_PROFILE_FALLBACK,
-    BM25IndexOptions,
     BM25Profile,
-    PostgresBM25,
+    ProfiledBM25Search,
+    profiles_from_config,
+)
+from dlightrag_rag.retrieval.language import BM25LanguageClassifier
+
+from dlightrag.adapters.postgres._pool import PGPool
+from dlightrag.adapters.postgres.corpus_bm25 import (
+    BM25_LANGUAGE_COLUMN,
+    BM25IndexOptions,
+    PGBM25ProfileSearch,
     build_bm25_sql,
     create_postgres_bm25,
-    profiles_from_config,
     rebuild_postgres_bm25,
     required_postgres_extensions,
 )
@@ -25,6 +30,20 @@ from dlightrag.core.retrieval.bm25 import (
 
 def _scope(*doc_ids: str, chunk_count: int = 12) -> MetadataScope:
     return MetadataScope(doc_ids=frozenset(doc_ids), chunk_count=chunk_count)
+
+
+def _profiled_bm25(
+    searcher: Any,
+    *,
+    profiles: tuple[BM25Profile, ...] = (BM25_PROFILE_FALLBACK,),
+    top_k: int = 40,
+) -> ProfiledBM25Search:
+    return ProfiledBM25Search(
+        searcher,
+        workspace="default",
+        profiles=profiles,
+        top_k=top_k,
+    )
 
 
 def test_bm25_sql_filters_candidates() -> None:
@@ -131,7 +150,7 @@ def test_bm25_required_extensions_follow_profile_text_configs() -> None:
 async def test_create_postgres_bm25_returns_none_when_disabled() -> None:
     config = SimpleNamespace(bm25_enabled=False)
 
-    assert await create_postgres_bm25(config, pool=object()) is None
+    assert await create_postgres_bm25(config) is None
 
 
 @pytest.mark.parametrize("is_reader", [False, True])
@@ -139,12 +158,15 @@ async def test_create_postgres_bm25_provisions_for_service_role(
     monkeypatch: pytest.MonkeyPatch,
     is_reader: bool,
 ) -> None:
-    from dlightrag.core.retrieval import bm25 as module
+    from dlightrag.adapters.postgres import corpus_bm25 as module
 
-    instance = SimpleNamespace(ensure_indexes=AsyncMock(), verify_indexes=AsyncMock())
+    instance = SimpleNamespace(
+        ensure_indexes=AsyncMock(),
+        verify_indexes=AsyncMock(),
+        search_profile=AsyncMock(return_value=[]),
+    )
     constructor = MagicMock(return_value=instance)
-    monkeypatch.setattr(module, "PostgresBM25", constructor)
-    pool = object()
+    monkeypatch.setattr(module, "PGBM25ProfileSearch", constructor)
     profiles = (BM25_PROFILE_FALLBACK,)
     config = SimpleNamespace(
         bm25_enabled=True,
@@ -155,11 +177,12 @@ async def test_create_postgres_bm25_provisions_for_service_role(
         bm25_b=0.65,
     )
 
-    result = await create_postgres_bm25(config, pool=pool, profiles=profiles)
+    result = await create_postgres_bm25(config, profiles=profiles)
 
-    assert result is instance
+    assert isinstance(result, ProfiledBM25Search)
+    await result.search("query", scope=None)
+    instance.search_profile.assert_awaited_once()
     constructor.assert_called_once_with(
-        pool=pool,
         workspace="research",
         profiles=profiles,
     )
@@ -172,31 +195,30 @@ async def test_create_postgres_bm25_provisions_for_service_role(
 async def test_rebuild_postgres_bm25_provisions_then_relabels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.retrieval import bm25 as module
+    from dlightrag.adapters.postgres import corpus_bm25 as module
 
-    retriever = SimpleNamespace(
+    adapter = SimpleNamespace(
         relabel_chunk_languages=AsyncMock(return_value={"processed_chunks": 3, "updated_chunks": 3})
     )
-    create = AsyncMock(return_value=retriever)
-    monkeypatch.setattr(module, "create_postgres_bm25", create)
+    provision = AsyncMock(return_value=(adapter, (BM25_PROFILE_FALLBACK,)))
+    monkeypatch.setattr(module, "_provision_postgres_bm25", provision)
     config = SimpleNamespace(bm25_enabled=True, is_reader=False)
-    pool = object()
-
     stats = await rebuild_postgres_bm25(
         config,
-        pool=pool,
         batch_size=25,
     )
 
     assert stats == {"processed_chunks": 3, "updated_chunks": 3}
-    create.assert_awaited_once_with(config, pool=pool)
-    retriever.relabel_chunk_languages.assert_awaited_once_with(batch_size=25)
+    provision.assert_awaited_once_with(config)
+    assert adapter.relabel_chunk_languages.await_count == 1
+    assert callable(adapter.relabel_chunk_languages.await_args.args[0])
+    assert adapter.relabel_chunk_languages.await_args.kwargs == {"batch_size": 25}
 
 
 async def test_rebuild_postgres_bm25_skips_when_disabled() -> None:
     config = SimpleNamespace(bm25_enabled=False)
 
-    assert await rebuild_postgres_bm25(config, pool=object()) == {
+    assert await rebuild_postgres_bm25(config) == {
         "processed_chunks": 0,
         "updated_chunks": 0,
     }
@@ -206,12 +228,18 @@ async def test_rebuild_postgres_bm25_rejects_reader_role() -> None:
     config = SimpleNamespace(bm25_enabled=True, is_reader=True)
 
     with pytest.raises(RuntimeError, match="writer service role"):
-        await rebuild_postgres_bm25(config, pool=object())
+        await rebuild_postgres_bm25(config)
 
 
 def test_bm25_index_options_reject_unsafe_text_config() -> None:
     with pytest.raises(ValueError, match="unsafe BM25 text_config"):
-        BM25Profile(name="en", text_config="english'; DROP TABLE x; --")
+        BM25IndexOptions(
+            profile=BM25Profile(
+                name="en",
+                text_config="english'; DROP TABLE x; --",
+                languages=("en",),
+            )
+        ).create_index_sql()
 
 
 def test_bm25_index_options_match_real_pg_indexdef_format() -> None:
@@ -236,9 +264,11 @@ def test_bm25_index_options_keeps_simple_fallback_full_table() -> None:
 
 
 async def test_bm25_search_empty_candidate_set_short_circuits() -> None:
-    bm25 = PostgresBM25(pool=AsyncMock(), workspace="default", profiles=[BM25_PROFILE_FALLBACK])
+    searcher = SimpleNamespace(search_profile=AsyncMock())
+    bm25 = _profiled_bm25(searcher)
 
     assert await bm25.search("query", scope=MetadataScope(doc_ids=frozenset(), chunk_count=0)) == []
+    searcher.search_profile.assert_not_awaited()
 
 
 async def test_bm25_search_maps_rows() -> None:
@@ -254,14 +284,19 @@ async def test_bm25_search_maps_rows() -> None:
     ]
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
-    bm25 = PostgresBM25(
+    bm25 = PGBM25ProfileSearch(
         pool=pool,
         workspace="default",
-        top_k=3,
-        profiles=[BM25Profile(name="en", text_config="english", fallback=True)],
+        profiles=(BM25Profile(name="en", text_config="english", fallback=True),),
     )
 
-    rows = await bm25.search("hello", scope=_scope("doc-a"))
+    rows = await bm25.search_profile(
+        "hello",
+        profile_name="en",
+        language=None,
+        doc_ids=["doc-a"],
+        limit=3,
+    )
 
     args = conn.fetch.await_args.args
     assert args[1] == "hello"
@@ -280,6 +315,34 @@ async def test_bm25_search_maps_rows() -> None:
     ]
 
 
+async def test_bm25_search_uses_default_pool_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = AsyncMock()
+    conn.fetch.return_value = []
+
+    async def run(_self: PGPool, operation: Any) -> Any:
+        return await operation(conn)
+
+    monkeypatch.setattr(PGPool, "run", run)
+    bm25 = PGBM25ProfileSearch(
+        workspace="default",
+        profiles=(BM25_PROFILE_FALLBACK,),
+    )
+
+    assert (
+        await bm25.search_profile(
+            "hello",
+            profile_name="simple",
+            language=None,
+            doc_ids=None,
+            limit=3,
+        )
+        == []
+    )
+    conn.fetch.assert_awaited_once()
+
+
 async def test_bm25_relabels_existing_chunks_in_workspace_batches() -> None:
     conn = AsyncMock()
     conn.fetch.side_effect = [
@@ -291,18 +354,17 @@ async def test_bm25_relabels_existing_chunks_in_workspace_batches() -> None:
     ]
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
-    bm25 = PostgresBM25(
+    bm25 = PGBM25ProfileSearch(
         pool=pool,
         workspace="research",
-        profiles=[
+        profiles=(
             BM25Profile(name="en", text_config="english", languages=("en",)),
             BM25_PROFILE_FALLBACK,
-        ],
+        ),
     )
-    bm25._language_classifier = MagicMock()
-    bm25._language_classifier.detect.side_effect = ["en", "simple", "simple"]
+    classify = MagicMock(side_effect=["en", "simple", "simple"])
 
-    stats = await bm25.relabel_chunk_languages(batch_size=2)
+    stats = await bm25.relabel_chunk_languages(classify, batch_size=2)
 
     assert stats == {"processed_chunks": 3, "updated_chunks": 3}
     assert [call.args[1:] for call in conn.fetch.await_args_list] == [
@@ -318,33 +380,57 @@ async def test_bm25_relabels_existing_chunks_in_workspace_batches() -> None:
 
 
 async def test_bm25_relabel_rejects_non_positive_batch_size() -> None:
-    bm25 = PostgresBM25(
+    bm25 = PGBM25ProfileSearch(
         pool=AsyncMock(),
         workspace="default",
-        profiles=[BM25_PROFILE_FALLBACK],
+        profiles=(BM25_PROFILE_FALLBACK,),
     )
 
     with pytest.raises(ValueError, match="batch_size must be positive"):
-        await bm25.relabel_chunk_languages(batch_size=0)
+        await bm25.relabel_chunk_languages(lambda _text: "simple", batch_size=0)
+
+
+async def test_bm25_catalog_queries_use_shared_chunk_table_identity() -> None:
+    conn = AsyncMock()
+    conn.fetchval.return_value = 1
+    conn.fetch.return_value = []
+
+    await PGBM25ProfileSearch._verify_schema(conn)
+    await PGBM25ProfileSearch._drop_stale_indexes(conn, set())
+
+    assert conn.fetchval.await_args.args[1:] == (
+        "lightrag_doc_chunks",
+        BM25_LANGUAGE_COLUMN,
+    )
+    assert conn.fetch.await_args.args[1:] == (
+        "lightrag_doc_chunks",
+        "idx_lightrag_doc_chunks_bm25%",
+    )
 
 
 async def test_bm25_search_logs_profile_routing_and_results(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    conn = AsyncMock()
-    conn.fetch.return_value = [
-        {"id": "chunk-a", "content": "hello world", "file_path": "a.md", "score": 1.5}
-    ]
-    pool = MagicMock()
-    pool.acquire.return_value.__aenter__.return_value = conn
-    bm25 = PostgresBM25(
-        pool=pool,
-        workspace="default",
+    searcher = SimpleNamespace(
+        search_profile=AsyncMock(
+            return_value=[
+                {
+                    "chunk_id": "chunk-a",
+                    "content": "hello world",
+                    "file_path": "a.md",
+                    "bm25_profile": "en",
+                    "score": 1.5,
+                }
+            ]
+        )
+    )
+    bm25 = _profiled_bm25(
+        searcher,
         top_k=3,
-        profiles=[BM25Profile(name="en", text_config="english", fallback=True)],
+        profiles=(BM25Profile(name="en", text_config="english", fallback=True),),
     )
 
-    with caplog.at_level(logging.INFO, logger="dlightrag.core.retrieval.bm25"):
+    with caplog.at_level(logging.INFO, logger="dlightrag_rag.retrieval.bm25"):
         await bm25.search("hello", scope=_scope("doc-a"))
 
     assert "[BM25] search" in caplog.text
@@ -371,10 +457,10 @@ async def test_bm25_ensure_index_rebuilds_when_options_change() -> None:
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
     profile = BM25Profile(name="en", text_config="english", languages=("en",))
-    bm25 = PostgresBM25(
+    bm25 = PGBM25ProfileSearch(
         pool=pool,
         workspace="default",
-        profiles=[profile, BM25_PROFILE_FALLBACK],
+        profiles=(profile, BM25_PROFILE_FALLBACK),
     )
 
     await bm25.ensure_indexes(k1=1.4, b=0.65)
@@ -406,10 +492,10 @@ async def test_bm25_ensure_index_keeps_matching_index() -> None:
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
     profile = BM25Profile(name="en", text_config="english", languages=("en",))
-    bm25 = PostgresBM25(
+    bm25 = PGBM25ProfileSearch(
         pool=pool,
         workspace="default",
-        profiles=[profile, BM25_PROFILE_FALLBACK],
+        profiles=(profile, BM25_PROFILE_FALLBACK),
     )
 
     await bm25.ensure_indexes(k1=1.4, b=0.65)
@@ -432,7 +518,7 @@ async def test_bm25_ensure_index_verifies_qualified_text_config_by_schema() -> N
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
     profile = BM25Profile(name="zh", text_config="public.jiebacfg", fallback=True)
-    bm25 = PostgresBM25(pool=pool, workspace="default", profiles=[profile])
+    bm25 = PGBM25ProfileSearch(pool=pool, workspace="default", profiles=(profile,))
 
     await bm25.ensure_indexes()
 
@@ -446,111 +532,126 @@ async def test_bm25_ensure_index_verifies_qualified_text_config_by_schema() -> N
     ) in executed
 
 
-async def test_bm25_routes_chinese_query_to_jieba_profile_only() -> None:
-    conn = AsyncMock()
-    conn.fetch.side_effect = [
-        [{"id": "zh-hit", "content": "现金流", "file_path": "cn.md", "score": 2.0}],
-    ]
-    pool = MagicMock()
-    pool.acquire.return_value.__aenter__.return_value = conn
-    bm25 = PostgresBM25(
-        pool=pool,
-        workspace="default",
-        profiles=[
+async def test_bm25_routes_chinese_query_to_jieba_profile_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(BM25LanguageClassifier, "detect", lambda *_args: "zh")
+    searcher = SimpleNamespace(
+        search_profile=AsyncMock(
+            return_value=[
+                {
+                    "chunk_id": "zh-hit",
+                    "content": "现金流",
+                    "file_path": "cn.md",
+                    "bm25_profile": "zh",
+                    "score": 2.0,
+                }
+            ]
+        )
+    )
+    bm25 = _profiled_bm25(
+        searcher,
+        profiles=(
             BM25Profile(name="zh", text_config="public.jiebacfg", languages=("zh",)),
             BM25Profile(name="en", text_config="english", languages=("en",)),
             BM25_PROFILE_FALLBACK,
-        ],
+        ),
     )
 
     rows = await bm25.search("现金流", scope=None, top_k=5)
 
-    fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
-    assert "idx_lightrag_doc_chunks_bm25_zh" in fetched_sql[0]
-    assert "dlightrag_bm25_language = 'zh'" in fetched_sql[0]
-    assert len(conn.fetch.await_args_list) == 1
+    assert searcher.search_profile.await_count == 1
+    assert searcher.search_profile.await_args.kwargs == {
+        "profile_name": "zh",
+        "language": "zh",
+        "doc_ids": None,
+        "limit": 5,
+    }
     assert {row["chunk_id"] for row in rows} == {"zh-hit"}
 
 
-async def test_bm25_routes_configured_language_to_matching_profile_only() -> None:
-    conn = AsyncMock()
-    conn.fetch.side_effect = [
-        [{"id": "de-hit", "content": "Umsatz", "file_path": "de.md", "score": 2.0}],
-    ]
-    pool = MagicMock()
-    pool.acquire.return_value.__aenter__.return_value = conn
-    bm25 = PostgresBM25(
-        pool=pool,
-        workspace="default",
-        profiles=[
+def test_bm25_profile_rejects_unsafe_language_code() -> None:
+    with pytest.raises(ValueError, match="unsafe BM25 language code"):
+        BM25Profile(name="bad", text_config="simple", languages=("en';drop",))
+
+
+async def test_bm25_routes_configured_language_to_matching_profile_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(BM25LanguageClassifier, "detect", lambda *_args: "de")
+    searcher = SimpleNamespace(
+        search_profile=AsyncMock(
+            return_value=[{"chunk_id": "de-hit", "content": "Umsatz", "score": 2.0}]
+        )
+    )
+    bm25 = _profiled_bm25(
+        searcher,
+        profiles=(
             BM25Profile(name="de", text_config="german", languages=("de",)),
             BM25Profile(name="en", text_config="english", languages=("en",)),
             BM25_PROFILE_FALLBACK,
-        ],
+        ),
     )
 
     rows = await bm25.search("Wie hoch ist der Umsatz im letzten Quartal?", scope=None)
 
-    fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
-    assert "idx_lightrag_doc_chunks_bm25_de" in fetched_sql[0]
-    assert "dlightrag_bm25_language = 'de'" in fetched_sql[0]
-    assert len(conn.fetch.await_args_list) == 1
+    assert searcher.search_profile.await_count == 1
+    assert searcher.search_profile.await_args.kwargs["profile_name"] == "de"
+    assert searcher.search_profile.await_args.kwargs["language"] == "de"
     assert {row["chunk_id"] for row in rows} == {"de-hit"}
 
 
-async def test_bm25_routes_region_language_tag_to_profile_only() -> None:
-    conn = AsyncMock()
-    conn.fetch.side_effect = [
-        [{"id": "de-hit", "content": "Umsatz", "file_path": "de.md", "score": 2.0}],
-    ]
-    pool = MagicMock()
-    pool.acquire.return_value.__aenter__.return_value = conn
-    bm25 = PostgresBM25(
-        pool=pool,
-        workspace="default",
-        profiles=[
+async def test_bm25_routes_region_language_tag_to_profile_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(BM25LanguageClassifier, "detect", lambda *_args: "de")
+    searcher = SimpleNamespace(
+        search_profile=AsyncMock(
+            return_value=[{"chunk_id": "de-hit", "content": "Umsatz", "score": 2.0}]
+        )
+    )
+    bm25 = _profiled_bm25(
+        searcher,
+        profiles=(
             BM25Profile(name="de", text_config="german", languages=("de-DE",)),
             BM25Profile(name="en", text_config="english", languages=("en-US",)),
             BM25_PROFILE_FALLBACK,
-        ],
+        ),
     )
 
     rows = await bm25.search("Wie hoch ist der Umsatz im letzten Quartal?", scope=None)
 
-    fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
-    assert "idx_lightrag_doc_chunks_bm25_de" in fetched_sql[0]
-    assert len(conn.fetch.await_args_list) == 1
+    assert searcher.search_profile.await_count == 1
+    assert searcher.search_profile.await_args.kwargs["profile_name"] == "de"
+    assert searcher.search_profile.await_args.kwargs["language"] == "de"
     assert {row["chunk_id"] for row in rows} == {"de-hit"}
 
 
 async def test_bm25_routes_unknown_language_to_simple_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    conn = AsyncMock()
-    conn.fetch.side_effect = [
-        [{"id": "simple-hit", "content": "query", "file_path": "mix.md", "score": 1.0}],
-    ]
-    pool = MagicMock()
-    pool.acquire.return_value.__aenter__.return_value = conn
-    bm25 = PostgresBM25(
-        pool=pool,
-        workspace="default",
-        profiles=[
+    searcher = SimpleNamespace(
+        search_profile=AsyncMock(
+            return_value=[{"chunk_id": "simple-hit", "content": "query", "score": 1.0}]
+        )
+    )
+    bm25 = _profiled_bm25(
+        searcher,
+        profiles=(
             BM25Profile(name="de", text_config="german", languages=("de",)),
             BM25Profile(name="en", text_config="english", languages=("en",)),
             BM25_PROFILE_FALLBACK,
-        ],
+        ),
     )
     monkeypatch.setattr(
-        bm25_module.BM25LanguageClassifier,
+        BM25LanguageClassifier,
         "detect",
         lambda *_args, **_kwargs: "simple",
     )
 
     rows = await bm25.search("unsupported", scope=None)
 
-    fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
-    assert "idx_lightrag_doc_chunks_bm25_simple" in fetched_sql[0]
-    assert "dlightrag_bm25_language" not in fetched_sql[0]
-    assert len(conn.fetch.await_args_list) == 1
+    assert searcher.search_profile.await_count == 1
+    assert searcher.search_profile.await_args.kwargs["profile_name"] == "simple"
+    assert searcher.search_profile.await_args.kwargs["language"] is None
     assert {row["chunk_id"] for row in rows} == {"simple-hit"}

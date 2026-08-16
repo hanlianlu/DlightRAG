@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from dlightrag_rag.contracts import IngestDocument, SourceType
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Caller-supplied conversation history is stateless: the client owns persistence
@@ -82,9 +83,6 @@ class AnswerAttachmentLink(ClientContractModel):
         return value
 
 
-type SourceType = Literal["local", "azure_blob", "s3", "url"]
-
-
 class QueryRequestContract(ClientContractModel):
     """Shared transport-neutral fields for client query requests."""
 
@@ -110,20 +108,6 @@ class AnswerRequestContract(QueryRequestContract):
     attachments: list[AnswerAttachmentLink] | None = None
     semantic_highlights: bool = False
     history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
-
-
-class IngestDocument(ClientContractModel):
-    """One explicitly listed document in an ingest manifest."""
-
-    path: str | None = None
-    key: str | None = None
-    url: str | None = None
-    filename: str | None = None
-    source_uri: str | None = None
-    download_uri: str | None = None
-    title: str | None = None
-    author: str | None = None
-    metadata: dict[str, Any] | None = None
 
 
 class IngestSpec(ClientContractModel):
@@ -290,7 +274,6 @@ __all__ = [
     "AnswerAttachmentLink",
     "AnswerRequestContract",
     "ImageURL",
-    "IngestDocument",
     "IngestPayload",
     "IngestSpec",
     "MAX_BM25_QUERY_CHARS",
@@ -300,7 +283,6 @@ __all__ = [
     "QueryImage",
     "QueryRequestContract",
     "RetrieveRequestContract",
-    "SourceType",
     "conversation_history_as_dicts",
     "dump_optional_list",
     "model_dump_json_safe",

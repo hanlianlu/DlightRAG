@@ -13,7 +13,7 @@ from typing import Any
 from dlightrag_ai.media import detect_image_mime_type
 from lightrag.utils_pipeline import resolve_sidecar_uri
 
-from dlightrag.core.sidecar_provenance import (
+from dlightrag_rag.ingestion.sidecar_provenance import (
     BlockProvenance,
     block_ids_from_multimodal_item,
     block_ids_from_sidecar,

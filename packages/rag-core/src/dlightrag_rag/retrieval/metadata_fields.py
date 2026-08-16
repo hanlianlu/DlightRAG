@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Document metadata columns — single source of truth for the metadata table."""
+"""Storage-neutral document metadata names and normalization."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -11,21 +11,6 @@ from typing import Any
 
 class MetadataValidationError(ValueError):
     """Caller-supplied metadata was rejected, as distinct from an internal ValueError."""
-
-
-@dataclass(frozen=True)
-class MetadataFieldDef:
-    """Defines a metadata column in dlightrag_doc_metadata.
-
-    Attributes:
-        field_id: Column name in the metadata table.
-        pg_type: PostgreSQL column type (e.g. ``VARCHAR(512)``, ``JSONB DEFAULT '{}'``).
-        indexed: Whether the column carries an index for the canonical match.
-    """
-
-    field_id: str
-    pg_type: str
-    indexed: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,20 +87,17 @@ def extract_system_metadata(
     }
 
 
-METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
-    MetadataFieldDef("filename", "VARCHAR(512)", indexed=True),
-    MetadataFieldDef("filename_stem", "VARCHAR(512)", indexed=True),
-    MetadataFieldDef("source_uri", "TEXT"),
-    MetadataFieldDef("download_locator", "TEXT"),
-    MetadataFieldDef("file_extension", "VARCHAR(32)", indexed=True),
-    MetadataFieldDef("title", "TEXT", indexed=True),
-    MetadataFieldDef("author", "VARCHAR(255)", indexed=True),
-    # Naive on purpose: values are normalized to UTC before they are bound,
-    # so no session timezone can reinterpret them on the way back out.
-    MetadataFieldDef("creation_date", "TIMESTAMP", indexed=True),
-    MetadataFieldDef("ingested_at", "TIMESTAMPTZ DEFAULT NOW()"),
-    # Matched with LOWER(custom_metadata ->> key), which no index can serve.
-    MetadataFieldDef("custom_metadata", "JSONB DEFAULT '{}'"),
+METADATA_FIELD_IDS: tuple[str, ...] = (
+    "filename",
+    "filename_stem",
+    "source_uri",
+    "download_locator",
+    "file_extension",
+    "title",
+    "author",
+    "creation_date",
+    "ingested_at",
+    "custom_metadata",
 )
 
 
@@ -143,7 +125,5 @@ FILTER_FIELD_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 # the table declares outside the registry. Accepting one as user metadata would
 # store the value in JSONB where no filter ever reads it.
 _RESERVED_METADATA_KEYS: frozenset[str] = (
-    frozenset(FILTER_FIELD_COLUMNS)
-    | {f.field_id for f in METADATA_FIELDS}
-    | {"workspace", "doc_id"}
+    frozenset(FILTER_FIELD_COLUMNS) | set(METADATA_FIELD_IDS) | {"workspace", "doc_id"}
 ) - {_CALLER_SETTABLE_COLUMN}

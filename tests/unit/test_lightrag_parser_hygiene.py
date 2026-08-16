@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from dlightrag.core.ingestion.parser_hygiene import (
+from dlightrag_rag.ingestion.parser_hygiene import (
     apply_mineru_content_list_hygiene,
     filter_mineru_auxiliary_blocks,
     normalize_mineru_drawing_aliases,

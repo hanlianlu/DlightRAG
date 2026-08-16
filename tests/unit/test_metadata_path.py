@@ -4,8 +4,7 @@
 from unittest.mock import AsyncMock
 
 from dlightrag_rag.retrieval import MetadataFilter
-
-from dlightrag.core.retrieval.metadata_path import metadata_retrieve
+from dlightrag_rag.retrieval.metadata_path import metadata_retrieve
 
 
 async def test_metadata_retrieve_returns_doc_scope_without_expanding_chunks() -> None:

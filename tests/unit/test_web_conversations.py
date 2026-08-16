@@ -434,8 +434,11 @@ async def test_postgres_adapter_translates_shutdown_errors(shutdown_error: Excep
         async def __aexit__(self, *_exc: object) -> bool:
             return False
 
-    pool = SimpleNamespace(acquire=lambda: Acquire())
-    store = PGWebConversationStore(pool=pool)
+    class Pool:
+        def acquire(self) -> Acquire:
+            return Acquire()
+
+    store = PGWebConversationStore(pool=Pool())
 
     with pytest.raises(WebConversationUnavailableError):
         await store._run_read(AsyncMock())

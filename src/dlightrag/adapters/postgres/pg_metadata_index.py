@@ -3,10 +3,16 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from dlightrag_rag.ports import CorpusSchemaError
 from dlightrag_rag.retrieval import MetadataFilter
+from dlightrag_rag.retrieval.metadata_fields import (
+    FILTER_FIELD_COLUMNS,
+    METADATA_FIELD_IDS,
+    canonical_metadata_key,
+)
 
 from dlightrag.adapters.postgres._migrations import (
     Migration,
@@ -14,14 +20,45 @@ from dlightrag.adapters.postgres._migrations import (
     apply_migrations,
     verify_migrations,
 )
+from dlightrag.adapters.postgres._operations import PostgresOperationRunner
 from dlightrag.adapters.postgres.identifiers import pg_identifier
-from dlightrag.core.retrieval.metadata_fields import (
-    FILTER_FIELD_COLUMNS,
-    METADATA_FIELDS,
-    canonical_metadata_key,
-)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _PGMetadataColumn:
+    field_id: str
+    pg_type: str
+    indexed: bool = False
+
+
+_PG_FIELD_TYPES = {
+    "filename": "VARCHAR(512)",
+    "filename_stem": "VARCHAR(512)",
+    "source_uri": "TEXT",
+    "download_locator": "TEXT",
+    "file_extension": "VARCHAR(32)",
+    "title": "TEXT",
+    "author": "VARCHAR(255)",
+    # RAG normalizes values to naive UTC before binding.
+    "creation_date": "TIMESTAMP",
+    "ingested_at": "TIMESTAMPTZ DEFAULT NOW()",
+    "custom_metadata": "JSONB DEFAULT '{}'",
+}
+_PG_INDEXED_FIELDS = frozenset(
+    {"filename", "filename_stem", "file_extension", "title", "author", "creation_date"}
+)
+if set(_PG_FIELD_TYPES) != set(METADATA_FIELD_IDS):
+    raise RuntimeError("PostgreSQL metadata columns do not match the RAG metadata field registry")
+_PG_METADATA_COLUMNS = tuple(
+    _PGMetadataColumn(
+        field_id,
+        _PG_FIELD_TYPES[field_id],
+        indexed=field_id in _PG_INDEXED_FIELDS,
+    )
+    for field_id in METADATA_FIELD_IDS
+)
 
 
 def _build_create_table() -> str:
@@ -29,7 +66,7 @@ def _build_create_table() -> str:
         "workspace       VARCHAR(255) NOT NULL",
         "doc_id          VARCHAR(255) NOT NULL",
     ]
-    for f in METADATA_FIELDS:
+    for f in _PG_METADATA_COLUMNS:
         cols.append(f"    {f.field_id}    {f.pg_type}")
     cols.append("    PRIMARY KEY (workspace, doc_id)")
     return "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n" + ",\n".join(cols) + "\n)"
@@ -58,7 +95,7 @@ def _is_string_pg_type(pg_type: str) -> bool:
 
 
 def _build_schema_migrations() -> tuple[Migration, ...]:
-    """Add what METADATA_FIELDS declares; never remove what it no longer does.
+    """Add declared metadata columns; never remove what is no longer declared.
 
     Every statement is derived from the registry rather than recorded as history,
     so a fresh database and an existing one reach the same shape and the list
@@ -73,7 +110,7 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             (_CREATE_TABLE,),
         ),
     ]
-    for f in METADATA_FIELDS:
+    for f in _PG_METADATA_COLUMNS:
         migrations.append(
             Migration(
                 f"column_{f.field_id}",
@@ -94,7 +131,7 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
-    for f in METADATA_FIELDS:
+    for f in _PG_METADATA_COLUMNS:
         idx_clause = _index_clause(f.field_id, f.pg_type, f.indexed)
         if idx_clause is None:
             continue
@@ -119,17 +156,17 @@ _SCHEMA_MIGRATIONS = _build_schema_migrations()
 _SCHEMA_TABLES = (
     TableRequirement(
         name="dlightrag_doc_metadata",
-        columns=("workspace", "doc_id", *(f.field_id for f in METADATA_FIELDS)),
+        columns=("workspace", "doc_id", *METADATA_FIELD_IDS),
         primary_key=("workspace", "doc_id"),
         indexes=(
             "idx_dm_workspace_download_locator",
-            *(f"idx_dm_{f.field_id}" for f in METADATA_FIELDS if f.indexed),
+            *(f"idx_dm_{f.field_id}" for f in _PG_METADATA_COLUMNS if f.indexed),
         ),
     ),
 )
 
 _CUSTOM = "custom_metadata"
-_UPSERT_FIELD_IDS = tuple(f.field_id for f in METADATA_FIELDS if f.field_id != "ingested_at")
+_UPSERT_FIELD_IDS = tuple(field_id for field_id in METADATA_FIELD_IDS if field_id != "ingested_at")
 
 
 def _field_assignment(field_id: str, placeholder: str, table_qualified: str) -> str:
@@ -249,19 +286,15 @@ def _decoded_row(row: Any) -> dict[str, Any]:
     return decoded
 
 
-class PGMetadataIndex:
+class PGMetadataIndex(PostgresOperationRunner):
     """PostgreSQL-backed document metadata index.
 
     Stores system-extracted and user-defined metadata per document.
     """
 
     def __init__(self, workspace: str = "default") -> None:
+        super().__init__()
         self._workspace = workspace
-
-    async def _run(self, operation):
-        from dlightrag.adapters.postgres._pool import pg_pool
-
-        return await pg_pool.run(operation)
 
     async def initialize(self, *, validate_only: bool = False) -> None:
         """Create table and indexes, or validate them (reader)."""

@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 from dlightrag_rag.retrieval import MetadataFilter, MetadataScope
+from dlightrag_rag.retrieval.filtering import metadata_filter_scope
+from dlightrag_rag.retrieval.metadata_path import metadata_retrieve
 
 from dlightrag.config import set_config
-from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
     e2e_enabled,

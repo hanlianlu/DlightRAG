@@ -4,11 +4,10 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from dlightrag_rag.retrieval import ContextRow
+from dlightrag_rag.retrieval import ContextRow, RetrievalContexts
 
 from dlightrag.citations.utils import context_chunk_key, split_source_ids
 from dlightrag.core.answer.images import AnswerImageBudget
-from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 
 @dataclass

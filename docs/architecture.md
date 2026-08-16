@@ -189,14 +189,17 @@ implements the runtime store port. The old
 `core.answer_runs.coordinator` and `core.answer_runs.subscription` paths do not
 exist.
 
-`dlightrag-rag-core` owns `CorpusBackendFactory`, `CorpusCoordination`, and
-`CorpusMaintenanceStore`. The root PostgreSQL adapter implements those ports and
-hides environment translation, server/version/extension checks, advisory-lock
-lifetimes, reader attachment, catalog scans, workspace maintenance, and raw
-database exceptions. The current manager composes the adapter; the independently
-installable RAG package, Runtime, status routes, API, Web, and MCP never import
-it. Corpus and operational pools remain separate even when they use the same
-endpoint.
+`dlightrag-rag-core` owns the coherent corpus interface: `CorpusBackendFactory`,
+coordination and maintenance, durable ingest jobs, plus a runtime binder for
+metadata, chunk, filtered-vector, and BM25 stores. The root PostgreSQL adapter
+implements those ports and hides environment translation, server/version/
+extension checks, advisory-lock lifetimes, reader attachment, catalog scans,
+workspace maintenance, schema DDL, and SQL identifiers. Startup availability
+failures are translated to corpus errors; operation-specific failures retain
+their adapter context for the current product error policy.
+The current manager composes the adapter; the independently installable RAG
+package, Runtime, status routes, API, Web, and MCP never import it. Corpus and
+operational pools remain separate even when they use the same endpoint.
 
 ## Web Conversation Boundary
 
@@ -299,10 +302,10 @@ import higher ones.
 L9  api, mcp, web                                  interface adapters
 L8  core.servicemanager                            multi-workspace coordinator
 L7  core.{service, reset}                          per-workspace facade
-L6  core orchestration                             ingest, retrieve, answer, visual assets
-L5  LightRAG/store adapters                        patches, parser sidecar, BM25, filtered VDB
-L4  workspace cores and model adapters             AI execution; Agent tools; RAG/LightRAG adapters
-L3  PostgreSQL, sourcing, citations                product/domain implementations
+L6  core orchestration                             answer, current lifecycle, source/media projection
+L5  host and storage adapters                      PostgreSQL; LightRAG contract and lifecycle
+L4  workspace cores and model adapters             AI; Agent; RAG retrieval, ingestion, sourcing
+L3  product domain                                 access, requests, citations, conversations
 L2c application, runtime                           health and durable lifecycle contracts
 L2b model settings, schemas                        resolved foundation values
 L2a config, scope, protocols                       shared configuration and contracts

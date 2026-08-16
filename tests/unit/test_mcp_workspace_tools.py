@@ -9,13 +9,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_rag.retrieval import RetrievalResult
 from mcp import Client, MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.principal import owner_id_from_principal
-from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.scope import RequestScope, request_scope_context
 from dlightrag.mcp import server as mcp_server
 from dlightrag.runtime import AnswerRunRecord

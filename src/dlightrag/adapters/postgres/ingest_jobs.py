@@ -4,13 +4,15 @@
 import json
 from typing import Any
 
-from dlightrag.adapters.postgres._migrations import Migration, apply_migrations
-from dlightrag.core.ingest_job_coordinator import (
+from dlightrag_rag.ports import (
     JOB_ABANDONED_ERROR,
     JOB_ORPHAN_AFTER_SECONDS,
     JOB_RETENTION_SECONDS,
     IngestJobSchemaError,
 )
+
+from dlightrag.adapters.postgres._migrations import Migration, apply_migrations
+from dlightrag.adapters.postgres._operations import PostgresOperationRunner
 
 TABLE = "dlightrag_ingest_jobs"
 # Caps every bulk statement here, not just the pruning ones.
@@ -247,20 +249,8 @@ _SCHEMA_MIGRATIONS = (
 )
 
 
-class PGIngestJobStore:
+class PGIngestJobStore(PostgresOperationRunner):
     """Durable ingest job state backed by PostgreSQL."""
-
-    def __init__(self, *, pool: Any = None) -> None:
-        self._pool = pool
-
-    async def _run(self, operation):
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
-
-        from dlightrag.adapters.postgres._pool import pg_pool
-
-        return await pg_pool.run(operation)
 
     async def initialize(self) -> None:
         async def _operation(conn: Any) -> None:

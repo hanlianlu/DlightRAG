@@ -4,13 +4,14 @@
 from unittest.mock import AsyncMock
 
 from dlightrag_rag.retrieval import MetadataScope
-
-from dlightrag.core.retrieval.filtered_vdb import (
+from dlightrag_rag.retrieval.filtering import (
     FilteredChunkStore,
     FilteredVectorStorage,
     _active_filter,
     metadata_filter_scope,
 )
+
+from dlightrag.adapters.postgres.corpus_vectors import PGFilteredVectorSearch
 
 
 class _FakeDB:
@@ -51,6 +52,9 @@ class _FakePGVectorStorage:
         self.db = _FakeDB()
 
 
+_FakePGVectorStorage.__name__ = "PGVectorStorage"
+
+
 async def test_empty_scope_is_active_filter() -> None:
     empty = MetadataScope(doc_ids=frozenset(), chunk_count=0)
     async with metadata_filter_scope(empty):
@@ -74,7 +78,13 @@ async def test_filtered_query_uses_query_embedding_context() -> None:
         },
     )()
     embedding_func = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-    wrapper = FilteredVectorStorage(original=storage, embedding_func=embedding_func)
+    filtered_search = AsyncMock()
+    filtered_search.search.return_value = []
+    wrapper = FilteredVectorStorage(
+        original=storage,
+        embedding_func=embedding_func,
+        filtered_search=filtered_search,
+    )
 
     async with metadata_filter_scope(MetadataScope(doc_ids=frozenset({"doc-1"}), chunk_count=3)):
         await wrapper.query("question", top_k=5)
@@ -84,18 +94,11 @@ async def test_filtered_query_uses_query_embedding_context() -> None:
 
 async def test_large_candidate_pg_search_places_distance_filter_outside_cte() -> None:
     storage = _FakePGVectorStorage()
-    wrapper = __import__(
-        "dlightrag.core.retrieval.filtered_vdb",
-        fromlist=["FilteredVectorStorage"],
-    ).FilteredVectorStorage(
-        original=storage,
-        embedding_func=AsyncMock(),
-        exact_threshold=1,
-    )
+    search = PGFilteredVectorSearch(storage, exact_threshold=1)
 
-    await wrapper._pg_filtered_search(
+    await search.search(
         [0.1, 0.2, 0.3],
-        MetadataScope(doc_ids=frozenset({"doc-1", "doc-2"}), chunk_count=9_000),
+        scope=MetadataScope(doc_ids=frozenset({"doc-1", "doc-2"}), chunk_count=9_000),
         top_k=5,
     )
 

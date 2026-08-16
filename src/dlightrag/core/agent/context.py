@@ -6,6 +6,7 @@ from typing import Any
 
 from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.tokens import estimate_messages_tokens
+from dlightrag_rag.sourcing.source_contract import safe_source_filename
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.core.answer.errors import AnswerInputOverflowError
@@ -19,7 +20,6 @@ from dlightrag.prompts import (
     agent_control_prompt,
     answer_core,
 )
-from dlightrag.sourcing.source_contract import safe_source_filename
 
 
 class ContextAssembler:
