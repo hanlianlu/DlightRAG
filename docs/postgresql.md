@@ -138,8 +138,12 @@ ledger for domain schema changes. This applies to DlightRAG tables such as
 `dlightrag_doc_metadata` and `dlightrag_workspace_meta`; LightRAG-owned tables
 remain managed by LightRAG.
 
-DlightRAG ensures these idempotent DDL migrations on startup and records their
-versions in the ledger.
+DlightRAG ensures the current idempotent DDL baseline on writer startup and
+records its versions in the ledger; readers validate the same versions without
+issuing DDL. Because the project is pre-release, a ledger version not declared
+by the running revision is incompatible: both roles fail startup and require a
+full development-data reset rather than attempting an old-data migration. See
+[ADR 0001](adr/0001-reset-development-data-for-breaking-schema-changes.md).
 
 ## Durable Answer Run State
 
@@ -163,11 +167,9 @@ bytes; a blob is deleted only once no reference for that owner survives.
 Web conversation turns link to a run with `(principal_id, answer_run_id)` and
 `ON DELETE CASCADE`. The turn carries conversation order and the run link only:
 request content, answer text, sources, and uploaded bytes all live in the run, so
-nothing about one answer is stored twice. The `0004_answer_run_turns` migration
-is an intentional one-time reset — it deletes every existing Web conversation,
-drops the superseded duplicated-answer, image, and raw-attachment tables, and
-recreates turns as pure run links. There is no compatibility view, dual write, or
-backfill.
+nothing about one answer is stored twice. The baseline schema creates only this
+run-link representation; no duplicated-answer or Web-owned attachment tables
+exist.
 
 ### Retention
 
@@ -239,10 +241,10 @@ The dedicated DlightRAG pool avoids contention between LightRAG internals and
 metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
 and session-level PostgreSQL tuning.
 
-All concrete implementations live under `dlightrag.adapters.postgres`; the old
-`dlightrag.storage` package does not exist. RAG owns storage-neutral
-`CorpusBackendFactory`, `CorpusCoordination`, and `CorpusMaintenanceStore`
-interfaces. Their PostgreSQL implementations own version and extension checks,
+All concrete implementations live under `dlightrag.adapters.postgres`. RAG owns
+the storage-neutral `WorkspaceCorpusBackend` bundle, `CorpusCoordination`, and
+`CorpusMaintenanceStore` interfaces. Their PostgreSQL implementations own
+version and extension checks,
 initialization and pipeline-recovery advisory locks, read-only corpus attach,
 workspace catalog cleanup, and readiness probing without exposing asyncpg
 connections or exception classes to RAG, reset, Web, API, or MCP code.

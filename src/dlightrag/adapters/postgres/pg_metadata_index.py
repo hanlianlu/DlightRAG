@@ -97,11 +97,10 @@ def _is_string_pg_type(pg_type: str) -> bool:
 def _build_schema_migrations() -> tuple[Migration, ...]:
     """Add declared metadata columns; never remove what is no longer declared.
 
-    Every statement is derived from the registry rather than recorded as history,
-    so a fresh database and an existing one reach the same shape and the list
-    does not grow with each schema change. Indexes are derived, so they are
-    rebuilt in place. Columns hold data, so an undeclared one is left standing
-    for an operator to drop — a rollback must not be able to erase a column.
+    Every statement is derived from the registry rather than recorded as history.
+    Indexes are rebuilt in place. Columns are never dropped automatically, but a
+    registry change that leaves an undeclared ledger version requires a full
+    development-data reset before this revision can start.
     """
     migrations = [
         Migration(

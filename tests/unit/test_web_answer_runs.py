@@ -559,29 +559,12 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
     assert "principal_id" not in turn.model_dump_json()
 
 
-def test_a_retained_legacy_terminal_turn_does_not_require_execution_pins() -> None:
-    turn = project_conversation_turn(
-        linked_turn(
-            answer_run(
-                status="succeeded",
-                request={"query": "Legacy question", "workspaces": ["default"]},
-                result=stored_result(),
-            )
-        )
-    )
-
-    assert turn.user_text == "Legacy question"
-    assert turn.assistant_text == "Revenue increased [1]."
-
-
-async def test_retained_legacy_terminal_attachment_does_not_require_execution_pins() -> None:
+async def test_terminal_attachment_loads_artifact_from_public_run_fields() -> None:
     digest = "a" * 64
     run = answer_run(
         status="succeeded",
-        request={
-            "query": "Legacy attachment",
-            "workspaces": ["default"],
-            "attachments": [
+        request=run_request(
+            attachments=[
                 {
                     "digest": digest,
                     "filename": "notes.txt",
@@ -589,8 +572,8 @@ async def test_retained_legacy_terminal_attachment_does_not_require_execution_pi
                     "ordinal": 0,
                     "byte_size": 7,
                 }
-            ],
-        },
+            ]
+        ),
         result=stored_result(),
     )
     store = AsyncMock()

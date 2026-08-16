@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Integration tests for run-linked Web conversations on PostgreSQL 18.
 
-Exercises the real contract against a live database: the reset migration and its
+Exercises the real contract against a live database: the baseline schema and its
 foreign keys, the single transaction that creates a run, its uploaded bytes, and
 its conversation turn, owner-wide submission idempotency and its conflicts,
 concurrent replay, conversation deletion with ownership-safe artifact cleanup,

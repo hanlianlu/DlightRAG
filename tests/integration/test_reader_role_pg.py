@@ -449,31 +449,26 @@ async def test_reader_rejects_a_recorded_ledger_missing_a_required_object(
         await verify_pool.close()
 
 
-async def test_reader_tolerates_historical_objects_and_versions(database: str) -> None:
+async def test_reader_rejects_an_undeclared_migration_version(database: str) -> None:
     config = _config(database, service_role="writer")
     pool = await _pool(config, config.domain_pool_server_settings())
     try:
         async with pool.acquire() as conn:
             await _migrate_every_scope(conn)
             await conn.execute(
-                "CREATE INDEX idx_legacy_answer_runs_status ON dlightrag_answer_runs (status)"
-            )
-            await conn.execute(
-                "ALTER TABLE dlightrag_answer_runs ADD COLUMN legacy_note TEXT",
-            )
-            await conn.execute(
                 "INSERT INTO dlightrag_schema_migrations (scope, version, description) "
                 "VALUES ($1, $2, $3)",
                 ANSWER_RUN_MIGRATION_SCOPE,
                 "9999_from_a_newer_revision",
-                "historical",
+                "undeclared",
             )
 
-            await verify_migrations(
-                conn,
-                scope=ANSWER_RUN_MIGRATION_SCOPE,
-                migrations=ANSWER_RUN_MIGRATIONS,
-                tables=ANSWER_RUN_SCHEMA_TABLES,
-            )
+            with pytest.raises(CorpusSchemaError, match="undeclared versions"):
+                await verify_migrations(
+                    conn,
+                    scope=ANSWER_RUN_MIGRATION_SCOPE,
+                    migrations=ANSWER_RUN_MIGRATIONS,
+                    tables=ANSWER_RUN_SCHEMA_TABLES,
+                )
     finally:
         await pool.close()

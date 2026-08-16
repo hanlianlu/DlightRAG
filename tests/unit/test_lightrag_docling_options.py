@@ -1,8 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for forwarding the Docling request options LightRAG omits."""
 
+import sys
+from types import ModuleType
 from typing import Any
 
+import pytest
 from dlightrag_rag.ingestion.docling_options import apply_docling_request_options
 
 
@@ -63,6 +66,20 @@ def test_forwarded_options_join_the_bundle_cache_signature() -> None:
 
     assert FIXED_CONSTANTS["code_formula_preset"] == "granite_docling"
     assert FIXED_CONSTANTS["do_pdf_heading_hierarchy"] is True
+
+
+def test_active_docling_fails_closed_when_upstream_contract_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incompatible_client = ModuleType("lightrag.parser.external.docling.client")
+    monkeypatch.setitem(
+        sys.modules,
+        "lightrag.parser.external.docling.client",
+        incompatible_client,
+    )
+
+    with pytest.raises(ImportError):
+        apply_docling_request_options(code_formula_preset="granite_docling")
 
 
 def test_do_formula_enrichment_defaults_on_like_mineru() -> None:

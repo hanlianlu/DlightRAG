@@ -87,14 +87,7 @@ class WorkspaceCorpusBackend:
     ingest_jobs: IngestJobStore
 
 
-class CorpusBackendFactory(Protocol):
-    """Translate host settings once and create one workspace backend bundle."""
-
-    def create(self) -> WorkspaceCorpusBackend: ...
-
-
 __all__ = [
-    "CorpusBackendFactory",
     "CorpusCoordination",
     "CorpusMaintenanceStore",
     "CorpusRuntimeBinder",

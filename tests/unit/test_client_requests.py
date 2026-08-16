@@ -177,7 +177,7 @@ def test_answer_attachments_reject_local_and_base64_fields(model) -> None:
             model.model_validate({"query": "q", "attachments": [descriptor]})
 
 
-def test_public_source_contract_has_no_legacy_or_internal_names() -> None:
+def test_public_source_contract_exposes_only_public_locators() -> None:
     internal_fields = set(SourceReference.model_fields)
     public_fields = set(SourceReferencePayload.model_fields)
 

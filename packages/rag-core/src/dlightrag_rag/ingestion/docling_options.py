@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Forward the Docling request options LightRAG 1.5.5 never sends.
+"""Forward the Docling request options LightRAG never sends.
 
 LightRAG's Docling client builds a fixed multipart body, so any docling-serve
 option outside that body is unreachable no matter how the service is
@@ -42,14 +42,11 @@ def apply_docling_request_options(*, code_formula_preset: str | None = None) -> 
     Call only when Docling is the active parser. Idempotent; returns True when
     it installs.
     """
-    try:
-        from lightrag.parser.external.docling.client import (
-            FIXED_CONSTANTS,
-            DoclingRawClient,
-            _bool_form,
-        )
-    except Exception:  # pragma: no cover - defensive import guard
-        return False
+    from lightrag.parser.external.docling.client import (
+        FIXED_CONSTANTS,
+        DoclingRawClient,
+        _bool_form,
+    )
 
     original = DoclingRawClient._build_multipart_data
     if getattr(original, _PATCH_ATTR, False):

@@ -229,7 +229,7 @@ class TestCreate:
         }
         assert run_manager.created[0]["request"].query == "hello"
 
-    async def test_legacy_stream_field_is_rejected(
+    async def test_unknown_stream_field_is_rejected(
         self, client: AsyncClient, run_manager: _RunManager
     ) -> None:
         response = await client.post("/answer", json={"query": "hello", "stream": False})

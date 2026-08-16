@@ -62,26 +62,6 @@ CREATE TABLE IF NOT EXISTS web_conversations (
 )
 """
 
-_CREATE_LEGACY_TURNS = """
-CREATE TABLE IF NOT EXISTS web_conversation_turns (
-    turn_id UUID NOT NULL,
-    principal_id TEXT NOT NULL,
-    conversation_id UUID NOT NULL,
-    turn_number INTEGER NOT NULL,
-    submission_id UUID NOT NULL,
-    user_text TEXT NOT NULL,
-    assistant_text TEXT NOT NULL,
-    answer_sources JSONB NOT NULL DEFAULT '{}'::jsonb,
-    queried_workspaces JSONB NOT NULL DEFAULT '[]'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (principal_id, conversation_id, turn_id),
-    UNIQUE (principal_id, conversation_id, turn_number),
-    FOREIGN KEY (principal_id, conversation_id)
-      REFERENCES web_conversations (principal_id, conversation_id)
-      ON DELETE CASCADE
-)
-"""
-
 # The turn carries conversation order and the run link only. Request content,
 # answer text, sources, and uploaded bytes all live in the run it references, so
 # nothing about one answer is stored twice. Deleting the run deletes the turn:
@@ -127,38 +107,14 @@ _CREATE_TURN_INDEXES = (
     "ON web_conversation_turns (principal_id, answer_run_id)",
 )
 
-# Intentional one-time reset. Earlier schemas stored a second copy of each
-# answer (assistant text plus a source snapshot) and the raw uploaded bytes in a
-# Web-owned attachment table. Both are superseded by the durable run, so this
-# migration deletes every Web conversation, drops those tables, and recreates
-# turns as pure run links. There is no compatibility view, dual write, or
-# backfill: no committed turn may keep a payload the run no longer owns.
-_RESET_WEB_CONVERSATIONS = "DELETE FROM web_conversations"
-_DROP_ATTACHMENT_CHUNKS = "DROP TABLE IF EXISTS web_conversation_attachment_chunks"
-_DROP_IMAGES = "DROP TABLE IF EXISTS web_conversation_images"
-_DROP_ATTACHMENTS = "DROP TABLE IF EXISTS web_conversation_attachments"
-_DROP_TURNS = "DROP TABLE IF EXISTS web_conversation_turns"
-
 WEB_CONVERSATION_MIGRATIONS = (
     Migration(
         "0001_web_conversations",
-        "Create scoped Web conversations and turns",
+        "Create Web conversations linked to durable Answer runs",
         (
             _CREATE_CONVERSATIONS,
-            _CREATE_LEGACY_TURNS,
-            *_CREATE_CONVERSATION_INDEXES,
-        ),
-    ),
-    Migration(
-        "0004_answer_run_turns",
-        "Reset Web conversations and link every turn to its durable Answer run",
-        (
-            _RESET_WEB_CONVERSATIONS,
-            _DROP_ATTACHMENT_CHUNKS,
-            _DROP_IMAGES,
-            _DROP_ATTACHMENTS,
-            _DROP_TURNS,
             _CREATE_TURNS,
+            *_CREATE_CONVERSATION_INDEXES,
             *_CREATE_TURN_INDEXES,
         ),
     ),

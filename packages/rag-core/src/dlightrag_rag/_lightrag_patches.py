@@ -42,4 +42,4 @@ def apply(
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
     else:
-        logger.debug("LightRAG patches already covered upstream")
+        logger.debug("LightRAG patches already installed or covered upstream")

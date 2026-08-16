@@ -561,8 +561,8 @@ events and run-artifact references, and unreferenced artifact blobs are removed
 by the same ownership-safe cleanup path.
 
 Web conversations own no raw attachment table and no duplicated turn answer
-payload; both are read from the run. The reset migration establishes that shape
-with no compatibility view and no dual-write path.
+payload; both are read from the run. The baseline schema creates only that
+representation.
 
 ## Artifact Topology
 

@@ -51,9 +51,9 @@ class MetadataFilter(BaseModel):
     def _as_utc(cls, value: datetime | None) -> datetime | None:
         """Store one instant regardless of how the caller wrote it.
 
-        Offsets are accepted for compatibility and converted; a bare timestamp
-        is read as UTC rather than as the server's local time. The normalized
-        value is naive UTC so a storage session cannot reinterpret it.
+        Aware timestamps are converted to UTC; a bare timestamp is read as UTC
+        rather than as the server's local time. The normalized value is naive
+        UTC so a storage session cannot reinterpret it.
         """
         if value is None:
             return None

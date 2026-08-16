@@ -243,17 +243,29 @@ async def test_apply_migrations_rejects_gapped_current_ledger_before_running_mig
     assert conn.transaction_events == []
 
 
-async def test_apply_migrations_tolerates_historical_unknown_ledger_versions() -> None:
+@pytest.mark.parametrize("require_applied_prefix", [True, False])
+async def test_apply_migrations_rejects_undeclared_ledger_versions(
+    require_applied_prefix: bool,
+) -> None:
     conn = _Conn()
     conn.applied.update({("example", "0001"), ("example", "0999")})
     migrations = _example_migrations()
 
-    await apply_migrations(conn, scope="example", migrations=migrations)
+    with pytest.raises(
+        RuntimeError,
+        match=r"scope 'example'.*undeclared versions: 0999.*reset the development database",
+    ):
+        await apply_migrations(
+            conn,
+            scope="example",
+            migrations=migrations,
+            require_applied_prefix=require_applied_prefix,
+        )
 
     executed_sql = [query for query, _ in conn.executed]
     assert executed_sql.count("CREATE TABLE example (id TEXT)") == 0
-    assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 1
-    assert conn.applied == {("example", "0001"), ("example", "0002"), ("example", "0999")}
+    assert executed_sql.count("ALTER TABLE example ADD COLUMN name TEXT") == 0
+    assert conn.applied == {("example", "0001"), ("example", "0999")}
 
 
 async def test_apply_migrations_releases_lock_when_gap_validation_fails() -> None:
@@ -317,14 +329,14 @@ def _example_table() -> TableRequirement:
 
 
 def _example_catalog() -> dict[str, dict[str, Any]]:
-    """A migrated ``example`` table, plus historical objects nothing requires."""
+    """A migrated ``example`` table containing every required object."""
     return {
         "example": {
-            "columns": ["id", "name", "legacy_column"],
-            "indexes": ["example_name_idx", "example_legacy_idx"],
+            "columns": ["id", "name"],
+            "indexes": ["example_name_idx"],
             "unique_indexes": ["example_key_idx"],
-            "checks": ["example_name_check", "example_legacy_check"],
-            "keys": [("p", ["id"]), ("u", ["name"]), ("u", ["legacy_column"])],
+            "checks": ["example_name_check"],
+            "keys": [("p", ["id"]), ("u", ["name"])],
             "fks": [(["id"], "parent")],
         }
     }
@@ -343,13 +355,14 @@ async def test_verify_migrations_accepts_a_fully_applied_scope_without_any_ddl()
     assert conn.executed == []
 
 
-async def test_verify_migrations_tolerates_unknown_historical_versions() -> None:
+async def test_verify_migrations_rejects_undeclared_ledger_versions() -> None:
     conn = _Conn(row_shape="record", catalog=_example_catalog())
     conn.applied.update({("example", "0001"), ("example", "0002"), ("example", "0999")})
 
-    await verify_migrations(
-        conn, scope="example", migrations=_example_migrations(), tables=(_example_table(),)
-    )
+    with pytest.raises(RuntimeError, match=r"scope 'example'.*undeclared versions: 0999"):
+        await verify_migrations(
+            conn, scope="example", migrations=_example_migrations(), tables=(_example_table(),)
+        )
 
 
 async def test_verify_migrations_reports_every_missing_version() -> None:
@@ -429,14 +442,8 @@ async def test_verify_migrations_rejects_a_fully_recorded_ledger_missing_an_obje
     assert conn.executed == []
 
 
-async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
-    """The Web conversation reset migration only touches web_conversation* tables.
-
-    It deletes every Web conversation row, drops the superseded duplicated-answer
-    and raw-attachment tables, and recreates turns as pure durable-run links
-    under the existing ledger, without referencing workspace documents, LightRAG
-    tables, ingest jobs, or global migration tables.
-    """
+async def test_web_conversation_migration_creates_only_final_run_links() -> None:
+    """The baseline creates only final Web conversation and run-link state."""
     from dlightrag.adapters.postgres.web_conversations import WEB_CONVERSATION_MIGRATIONS
 
     conn = _Conn()
@@ -447,23 +454,11 @@ async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
     )
 
     ddl = [query for query, _ in conn.executed if "web_conversation" in query.lower()]
-    joined = "\n".join(ddl)
-    assert "DELETE FROM web_conversations" in joined
-    assert "DROP TABLE IF EXISTS web_conversation_attachment_chunks" in joined
-    assert "DROP TABLE IF EXISTS web_conversation_images" in joined
-    assert "DROP TABLE IF EXISTS web_conversation_attachments" in joined
-    # The raw attachment table is superseded by owner artifacts, so it is never
-    # recreated; turns are dropped and rebuilt as run links instead.
-    assert "CREATE TABLE IF NOT EXISTS web_conversation_attachments" not in joined
-    drop_index = next(
-        i for i, q in enumerate(ddl) if "DROP TABLE IF EXISTS web_conversation_turns" in q
-    )
     create_index = next(
         i
         for i, q in enumerate(ddl)
         if "CREATE TABLE IF NOT EXISTS web_conversation_turns" in q and "answer_run_id" in q
     )
-    assert drop_index < create_index
     assert "REFERENCES dlightrag_answer_runs (owner_id, run_id)" in ddl[create_index]
     assert "ON DELETE CASCADE" in ddl[create_index]
 
@@ -480,4 +475,4 @@ async def test_web_conversation_reset_migration_is_scoped_and_ordered() -> None:
         assert foreign not in executed_sql
     # Every applied version was recorded against the web_conversations scope only.
     assert {scope for scope, _ in conn.applied} == {"web_conversations"}
-    assert ("web_conversations", "0004_answer_run_turns") in conn.applied
+    assert conn.applied == {("web_conversations", "0001_web_conversations")}

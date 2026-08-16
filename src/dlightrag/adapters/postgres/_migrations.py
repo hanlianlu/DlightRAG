@@ -98,11 +98,9 @@ class ForeignKeyRequirement:
 class TableRequirement:
     """Schema objects one revision requires on one table.
 
-    Only declared objects are checked, so historical columns, indexes, and
-    constraints an older revision left behind stay acceptable. ``unique_indexes``
-    names the partial unique indexes that enforce an invariant no constraint can
-    express; the catalog must report them as unique, because a same-named index
-    rebuilt without uniqueness would silently retire that invariant.
+    ``unique_indexes`` names the partial unique indexes that enforce an invariant
+    no constraint can express; the catalog must report them as unique, because a
+    same-named index rebuilt without uniqueness would silently retire that invariant.
     """
 
     name: str
@@ -131,8 +129,9 @@ async def apply_migrations(
     init lock; this keeps ``apply_migrations`` safe on its own path too.
 
     ``require_applied_prefix`` keeps static migration scopes fail-fast by
-    default. Dynamic scopes that may insert idempotent declared versions later
-    can opt out and replay any missing versions in the current declared order.
+    default. Dynamic scopes can opt out and replay missing declared versions in
+    the current order. Both modes reject undeclared ledger versions and require
+    a development-data reset.
     """
     _validate_unique_versions(migrations)
     lock_key = advisory_lock_key("dlightrag_schema_migration", scope)
@@ -187,6 +186,13 @@ async def verify_migrations(
             "on a writer instance before starting a reader"
         )
     applied_versions = await _applied_versions_for_scope(conn, scope)
+    _validate_applied_state(
+        scope,
+        migrations,
+        applied_versions,
+        schema_error=schema_error,
+        require_applied_prefix=False,
+    )
     missing = [
         migration.version for migration in migrations if migration.version not in applied_versions
     ]
@@ -283,10 +289,17 @@ def _validate_applied_state(
     schema_error: type[RuntimeError],
     require_applied_prefix: bool,
 ) -> None:
+    declared_versions = [migration.version for migration in migrations]
+    undeclared_versions = sorted(applied_versions - set(declared_versions))
+    if undeclared_versions:
+        raise schema_error(
+            f"Schema migration scope '{scope}' contains undeclared versions: "
+            f"{', '.join(undeclared_versions)}; reset the development database "
+            "before starting this revision"
+        )
     if not require_applied_prefix:
         return
 
-    declared_versions = [migration.version for migration in migrations]
     applied_indices = [
         index for index, version in enumerate(declared_versions) if version in applied_versions
     ]

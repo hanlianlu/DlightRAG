@@ -2,7 +2,6 @@
 """Storage-neutral ports owned by the RAG package."""
 
 from dlightrag_rag.ports.corpus import (
-    CorpusBackendFactory,
     CorpusCoordination,
     CorpusMaintenanceStore,
     CorpusRuntimeBinder,
@@ -33,7 +32,6 @@ from dlightrag_rag.ports.retrieval import (
 )
 
 __all__ = [
-    "CorpusBackendFactory",
     "CorpusCoordination",
     "CorpusChunkStore",
     "CorpusMaintenanceStore",

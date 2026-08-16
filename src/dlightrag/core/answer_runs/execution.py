@@ -202,7 +202,7 @@ class AnswerRunRequest:
 
     @classmethod
     def from_request(cls, request: Mapping[str, Any]) -> AnswerRunRequest:
-        """Decode the stable public fields present in both legacy and resolved rows."""
+        """Project the public request fields without parsing execution metadata."""
         filters = request.get("filters")
         return cls(
             query=str(request.get("query") or ""),

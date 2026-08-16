@@ -2,7 +2,8 @@
 
 This page is for readers who need to understand DlightRAG's runtime boundaries.
 It owns the product architecture, the LightRAG/DlightRAG responsibility split,
-the storage topology, and the code-layering rule. Interface contracts live in
+the storage topology, and the code-layering rule. Canonical product terms live
+in [domain-language.md](domain-language.md); interface contracts live in
 [interfaces.md](interfaces.md); retrieval internals live in
 [retrieval-answer.md](retrieval-answer.md); PostgreSQL deployment details live
 in [postgresql.md](postgresql.md).
@@ -191,11 +192,9 @@ subscription, coordinator, fenced session, checkpoint failures, and caller-wait
 failures. It imports neither Answer policy nor PostgreSQL. The current Answer
 executor classifies product errors into `RunExecutionError` before they cross
 that boundary; `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore`
-implements the runtime store port. The old
-`core.answer_runs.coordinator` and `core.answer_runs.subscription` paths do not
-exist.
+implements the runtime store port.
 
-`dlightrag-rag-core` owns the coherent corpus interface: `CorpusBackendFactory`,
+`dlightrag-rag-core` owns the coherent `WorkspaceCorpusBackend` bundle:
 coordination and maintenance, durable ingest jobs, plus a runtime binder for
 metadata, chunk, filtered-vector, and BM25 stores. The root PostgreSQL adapter
 implements those ports and hides environment translation, server/version/

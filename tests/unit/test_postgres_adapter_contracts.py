@@ -32,10 +32,6 @@ def _python_files() -> list[Path]:
     return [path for root in _SOURCE_ROOTS for path in root.rglob("*.py")]
 
 
-def test_legacy_storage_package_is_removed() -> None:
-    assert not (_ROOT / "src/dlightrag/storage").exists()
-
-
 def test_asyncpg_is_private_to_the_postgres_adapter() -> None:
     offenders: list[Path] = []
     for path in _python_files():
