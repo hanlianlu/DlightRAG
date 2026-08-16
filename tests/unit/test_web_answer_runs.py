@@ -25,6 +25,7 @@ from dlightrag.web.conversation_models import (
     ConversationSubmissionConflict,
 )
 from dlightrag.web.conversations import WebConversationService, project_conversation_turn
+from dlightrag.web.routes import chat as chat_routes
 from tests.unit.conftest import prepare_test_answer_run_input
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
@@ -111,6 +112,26 @@ async def test_submission_passes_the_submission_id_as_the_run_key(
     assert kwargs["conversation_id"] == _CID
     assert kwargs["query"] == "What changed?"
     assert list(kwargs["workspaces"]) == ["default"]
+
+
+async def test_submission_canonicalizes_display_workspaces_before_access_and_service(
+    client: AsyncClient,
+    service: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enforce = AsyncMock()
+    monkeypatch.setattr(chat_routes, "enforce_web_access", enforce)
+
+    response = await client.post(
+        "/web/answer",
+        json={**_BODY, "workspaces": ["Finance Reports"]},
+    )
+
+    assert response.status_code == 202
+    enforce.assert_awaited_once()
+    assert enforce.await_args is not None
+    assert enforce.await_args.args[2] == "finance_reports"
+    assert service.start_answer.await_args.kwargs["workspaces"] == ["finance_reports"]
 
 
 async def test_replaying_a_submission_returns_the_authoritative_run(

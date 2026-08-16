@@ -17,8 +17,7 @@ from typing import Any, Protocol, TypeVar
 
 from dlightrag_ai.media import thumbnail_bytes
 
-from dlightrag.api.auth import UserContext
-from dlightrag.api.principal import owner_id_from_user
+from dlightrag.access import UserContext, owner_id_from_user
 from dlightrag.core.answer_runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,

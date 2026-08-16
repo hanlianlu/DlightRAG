@@ -1,11 +1,36 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Small authorization layer for DlightRAG resources."""
+"""Authorization policy for DlightRAG product resources."""
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Literal, Protocol
 
-from dlightrag.config import DlightragConfig
-from dlightrag.utils import normalize_workspace
+
+class Principal(Protocol):
+    """Authenticated facts required by authorization policy."""
+
+    @property
+    def auth_mode(self) -> str: ...
+
+    @property
+    def claims(self) -> Mapping[str, object]: ...
+
+
+type AccessSubject = Principal | None
+
+
+@dataclass(frozen=True, slots=True)
+class AccessRule:
+    claim: str
+    value: str
+    workspaces: tuple[str, ...]
+    actions: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AccessSettings:
+    mode: Literal["allow_all", "jwt_claims"] = "allow_all"
+    rules: tuple[AccessRule, ...] = ()
 
 
 class AccessAction:
@@ -24,9 +49,6 @@ class AccessAction:
     JOB_CANCEL = "job.cancel"
 
 
-# Named action bundles usable anywhere an action pattern is accepted (e.g. a
-# jwt_claims rule's ``actions``), so rules need not enumerate every action.
-# ``reader``, ``editor``, and ``admin`` are reserved names.
 _READER_ACTIONS: tuple[str, ...] = (
     AccessAction.WORKSPACE_QUERY,
     AccessAction.WORKSPACE_LIST_FILES,
@@ -54,25 +76,35 @@ class AccessDeniedError(PermissionError):
 
 
 class AccessControl(Protocol):
-    async def check(self, user: Any, action: str, *, workspace: str | None = None) -> None:
-        raise NotImplementedError
+    async def check(
+        self,
+        subject: AccessSubject,
+        action: str,
+        *,
+        workspace: str | None = None,
+    ) -> None: ...
 
     async def filter_workspaces(
         self,
-        user: Any,
+        subject: AccessSubject,
         action: str,
         workspaces: Sequence[str],
-    ) -> list[str]:
-        raise NotImplementedError
+    ) -> list[str]: ...
 
 
 class AllowAllAccessControl:
-    async def check(self, user: Any, action: str, *, workspace: str | None = None) -> None:
+    async def check(
+        self,
+        subject: AccessSubject,
+        action: str,
+        *,
+        workspace: str | None = None,
+    ) -> None:
         return None
 
     async def filter_workspaces(
         self,
-        user: Any,
+        subject: AccessSubject,
         action: str,
         workspaces: Sequence[str],
     ) -> list[str]:
@@ -80,45 +112,47 @@ class AllowAllAccessControl:
 
 
 class JwtClaimsAccessControl:
-    def __init__(self, config: DlightragConfig) -> None:
-        self._rules = tuple(config.access_control.rules)
+    def __init__(self, settings: AccessSettings) -> None:
+        self._rules = settings.rules
 
-    async def check(self, user: Any, action: str, *, workspace: str | None = None) -> None:
-        if self._allows(user, action, workspace):
+    async def check(
+        self,
+        subject: AccessSubject,
+        action: str,
+        *,
+        workspace: str | None = None,
+    ) -> None:
+        if self._allows(subject, action, workspace):
             return
         target = f" workspace={workspace}" if workspace else ""
         raise AccessDeniedError(f"Access denied for action={action}{target}")
 
     async def filter_workspaces(
         self,
-        user: Any,
+        subject: AccessSubject,
         action: str,
         workspaces: Sequence[str],
     ) -> list[str]:
-        return [workspace for workspace in workspaces if self._allows(user, action, workspace)]
+        return [workspace for workspace in workspaces if self._allows(subject, action, workspace)]
 
-    def _allows(self, user: Any, action: str, workspace: str | None) -> bool:
-        if getattr(user, "auth_mode", None) != "jwt":
+    def _allows(self, subject: AccessSubject, action: str, workspace: str | None) -> bool:
+        if subject is None or subject.auth_mode != "jwt":
             return False
-        claims = getattr(user, "claims", None)
-        if not isinstance(claims, Mapping):
-            return False
-        normalized_workspace = normalize_workspace(workspace) if workspace else None
         return any(
-            _claim_matches(claims, rule.claim, rule.value)
+            _claim_matches(subject.claims, rule.claim, rule.value)
             and _action_matches(rule.actions, action)
-            and _workspace_matches(rule.workspaces, normalized_workspace)
+            and _workspace_matches(rule.workspaces, workspace)
             for rule in self._rules
         )
 
 
-def access_control_from_config(config: DlightragConfig) -> AccessControl:
-    if config.access_control.mode == "jwt_claims":
-        return JwtClaimsAccessControl(config)
+def access_control_from_settings(settings: AccessSettings) -> AccessControl:
+    if settings.mode == "jwt_claims":
+        return JwtClaimsAccessControl(settings)
     return AllowAllAccessControl()
 
 
-def _claim_matches(claims: Mapping[str, Any], claim_name: str, expected: str) -> bool:
+def _claim_matches(claims: Mapping[str, object], claim_name: str, expected: str) -> bool:
     raw = claims.get(claim_name)
     if isinstance(raw, str):
         return raw == expected
@@ -143,15 +177,19 @@ def _pattern_allows_action(pattern: str, action: str) -> bool:
 
 
 def _workspace_matches(patterns: Sequence[str], workspace: str | None) -> bool:
-    return any(pattern == "*" or normalize_workspace(pattern) == workspace for pattern in patterns)
+    return any(pattern == "*" or pattern == workspace for pattern in patterns)
 
 
 __all__ = [
     "ACTION_PRESETS",
+    "AccessRule",
+    "AccessSettings",
     "AccessAction",
     "AccessControl",
     "AccessDeniedError",
+    "AccessSubject",
     "AllowAllAccessControl",
     "JwtClaimsAccessControl",
-    "access_control_from_config",
+    "Principal",
+    "access_control_from_settings",
 ]

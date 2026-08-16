@@ -15,8 +15,9 @@ from dlightrag_rag.retrieval import RetrievalResult
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
 
-from dlightrag.api import auth as auth_module
-from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
+from dlightrag.access import AuthenticationError, UserContext, authenticate_bearer_token
+from dlightrag.access import authentication as authentication_module
+from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
 from dlightrag.application import ApplicationHealth
 from dlightrag.citations.schemas import SourceReference
@@ -29,6 +30,7 @@ from dlightrag.config import (
 from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
+from dlightrag.model_settings import authentication_settings
 from dlightrag.runtime import AnswerRunRecord, RunCreation
 from tests.unit.conftest import prepare_test_answer_run_input
 
@@ -602,32 +604,45 @@ class TestJWTAuth:
 # ---------------------------------------------------------------------------
 
 
-class TestVerifyBearerToken:
-    """Unit tests for verify_bearer_token() — no FastAPI dependency needed."""
+class TestAuthenticateBearerToken:
+    """Behavioral tests for the transport-neutral Access authentication seam."""
+
+    @staticmethod
+    def authenticate(
+        token: str,
+        config: DlightragConfig,
+        *,
+        default_user_id: str = "anonymous",
+    ) -> UserContext:
+        return authenticate_bearer_token(
+            token,
+            authentication_settings(config),
+            default_user_id=default_user_id,
+        )
 
     def test_simple_valid_token(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
-        ctx = verify_bearer_token("secret-token", test_config)
+        ctx = self.authenticate("secret-token", test_config)
         assert ctx.user_id == "anonymous"
         assert ctx.auth_mode == "simple"
 
     def test_simple_invalid_token_raises_403(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
-        with pytest.raises(HTTPException, match="Invalid token"):
-            verify_bearer_token("wrong-token", test_config)
+        with pytest.raises(AuthenticationError, match="Invalid token"):
+            self.authenticate("wrong-token", test_config)
 
     def test_simple_empty_token_raises_403(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
-        with pytest.raises(HTTPException, match="Invalid token"):
-            verify_bearer_token("", test_config)
+        with pytest.raises(AuthenticationError, match="Invalid token"):
+            self.authenticate("", test_config)
 
     def test_simple_default_user_id(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
-        ctx = verify_bearer_token("secret-token", test_config, default_user_id="user-99")
+        ctx = self.authenticate("secret-token", test_config, default_user_id="user-99")
         assert ctx.user_id == "user-99"
 
     def test_jwt_valid_token(self, test_config: DlightragConfig) -> None:
@@ -640,7 +655,7 @@ class TestVerifyBearerToken:
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
         token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
-        ctx = verify_bearer_token(token, test_config)
+        ctx = self.authenticate(token, test_config)
         assert ctx.user_id == "user-42"
         assert ctx.auth_mode == "jwt"
 
@@ -670,9 +685,9 @@ class TestVerifyBearerToken:
                 assert raw_token == token
                 return SimpleNamespace(key=jwks_secret)
 
-        monkeypatch.setattr(auth_module, "_jwks_client", lambda _url: FakeJwksClient())
+        monkeypatch.setattr(authentication_module, "_jwks_client", lambda _url: FakeJwksClient())
 
-        ctx = verify_bearer_token(token, test_config)
+        ctx = self.authenticate(token, test_config)
 
         assert ctx.user_id == "user-42"
         assert ctx.claims["groups"] == ["finance-rag-readers"]
@@ -702,10 +717,10 @@ class TestVerifyBearerToken:
                 assert raw_token == token
                 return SimpleNamespace(key=jwks_secret)
 
-        monkeypatch.setattr(auth_module, "_jwks_client", lambda _url: FakeJwksClient())
+        monkeypatch.setattr(authentication_module, "_jwks_client", lambda _url: FakeJwksClient())
 
-        with pytest.raises(HTTPException, match="Invalid token"):
-            verify_bearer_token(token, test_config)
+        with pytest.raises(AuthenticationError, match="Invalid token"):
+            self.authenticate(token, test_config)
 
     def test_jwt_jwks_url_accepts_any_of_multiple_audiences(
         self,
@@ -732,9 +747,9 @@ class TestVerifyBearerToken:
                 assert raw_token == token
                 return SimpleNamespace(key=jwks_secret)
 
-        monkeypatch.setattr(auth_module, "_jwks_client", lambda _url: FakeJwksClient())
+        monkeypatch.setattr(authentication_module, "_jwks_client", lambda _url: FakeJwksClient())
 
-        ctx = verify_bearer_token(token, test_config)
+        ctx = self.authenticate(token, test_config)
 
         assert ctx.user_id == "user-42"
 
@@ -748,8 +763,8 @@ class TestVerifyBearerToken:
             "exp": datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1),
         }
         token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
-        with pytest.raises(HTTPException, match="Token expired"):
-            verify_bearer_token(token, test_config)
+        with pytest.raises(AuthenticationError, match="Token expired"):
+            self.authenticate(token, test_config)
 
     def test_jwt_missing_sub_claim_raises_401(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"
@@ -760,8 +775,8 @@ class TestVerifyBearerToken:
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
         token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
-        with pytest.raises(HTTPException, match="missing 'sub' claim"):
-            verify_bearer_token(token, test_config)
+        with pytest.raises(AuthenticationError, match="missing 'sub' claim"):
+            self.authenticate(token, test_config)
 
     def test_jwt_wrong_verification_key_raises_401(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"
@@ -774,8 +789,8 @@ class TestVerifyBearerToken:
             "wrong-secret-different-key-for-unit-tests",
             algorithm="HS256",
         )
-        with pytest.raises(HTTPException, match="Invalid token"):
-            verify_bearer_token(token, test_config)
+        with pytest.raises(AuthenticationError, match="Invalid token"):
+            self.authenticate(token, test_config)
 
 
 # ---------------------------------------------------------------------------
@@ -925,6 +940,35 @@ class TestIngestEndpoint:
         # Cancelling stops further work; it never unwinds what already landed.
         assert body["processed_items"] == 64
         mock_manager.acancel_ingest_job.assert_awaited_once_with("job-1")
+
+    async def test_ingest_job_routes_canonicalize_stored_workspace_before_access(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from dlightrag.api.routes import rag as rag_routes
+
+        app.state.manager = mock_manager
+        job = {
+            "job_id": "job-1",
+            "workspace": "Finance Reports",
+            "source_type": "s3",
+            "status": "running",
+        }
+        mock_manager.aget_ingest_job.return_value = job
+        mock_manager.acancel_ingest_job.return_value = job
+        enforce = AsyncMock()
+        monkeypatch.setattr(rag_routes, "enforce_access", enforce)
+
+        await client.get("/ingest/jobs/job-1")
+        await client.post("/ingest/jobs/job-1/cancel")
+
+        assert [call.kwargs["workspace"] for call in enforce.await_args_list] == [
+            "finance_reports",
+            "finance_reports",
+        ]
 
     async def test_cancel_unknown_ingest_job_is_404(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

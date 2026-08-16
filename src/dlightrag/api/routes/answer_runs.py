@@ -19,16 +19,15 @@ from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dlightrag.access_control import AccessAction
+from dlightrag.access import AccessAction, UserContext, owner_id_from_user
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor, sse_frame
-from dlightrag.api.auth import UserContext, get_current_user
+from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     ANSWER_REQUEST_PART_MAX_BYTES,
     AnswerRequest,
     AnswerRunDescriptor,
     AnswerRunStatusResponse,
 )
-from dlightrag.api.principal import owner_id_from_user
 from dlightrag.app_state import request_config
 from dlightrag.config import AnswerConfig
 from dlightrag.core.answer_runs.execution import (

@@ -11,7 +11,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.auth import UserContext, get_current_user
+from dlightrag.access import UserContext
+from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
 from dlightrag.runtime import (

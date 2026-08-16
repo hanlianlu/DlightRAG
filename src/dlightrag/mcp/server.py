@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from dlightrag_rag.contracts import SourceType
+from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
 from mcp import MCPError
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -25,9 +26,19 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp
 
 import dlightrag
-from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
+from dlightrag.access import (
+    AccessAction,
+    AccessDeniedError,
+    AccessGate,
+    NoQueryableWorkspacesError,
+    RequestScope,
+    WorkspaceRecord,
+    access_control_from_settings,
+    current_request_scope,
+    owner_id_from_principal,
+    request_scope_context,
+)
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.core import access as core_access
 from dlightrag.core.answer.capability import answer_image_capability_summary
 from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.core.answer_runs.results import project_answer_result
@@ -48,11 +59,6 @@ from dlightrag.core.client_requests import (
     managed_local_ingest_path,
     query_kwargs_from_payload,
 )
-from dlightrag.core.principal import owner_id_from_principal
-from dlightrag.core.request.workspaces import (
-    NoQueryableWorkspacesError,
-)
-from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.mcp.auth import DlightRAGTokenVerifier
 from dlightrag.mcp.contracts import (
@@ -67,6 +73,7 @@ from dlightrag.mcp.contracts import (
     ListFilesInput,
     RetrieveInput,
 )
+from dlightrag.model_settings import access_settings
 from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
 
 logger = logging.getLogger(__name__)
@@ -263,7 +270,7 @@ mcp_app = DlightRAGMCPServer(
 
 
 def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]:
-    from dlightrag.utils import normalize_workspace, validate_workspace_name
+    from dlightrag.utils import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     display_name = validate_workspace_name(args.display_name or label)
@@ -272,32 +279,24 @@ def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]
 
 async def _enforce_access(action: str, workspace: str | None = None) -> None:
     try:
-        await access_control_from_config(_get_config()).check(
-            current_request_scope(),
-            action,
-            workspace=workspace,
-        )
+        await _access_gate().check(action, workspace=workspace)
     except AccessDeniedError as exc:
         raise ValueError(str(exc)) from None
 
 
-async def _filter_workspace_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return await core_access.filter_workspace_records(
-        access_control_from_config(_get_config()),
+def _access_gate() -> AccessGate:
+    return AccessGate(
+        access_control_from_settings(access_settings(_get_config())),
         current_request_scope(),
-        AccessAction.WORKSPACE_QUERY,
-        records,
     )
+
+
+async def _filter_workspace_records(records: list[WorkspaceRecord]) -> list[WorkspaceRecord]:
+    return await _access_gate().filter_workspace_records(AccessAction.WORKSPACE_QUERY, records)
 
 
 async def _authorized_workspace_names(action: str, workspaces: list[str]) -> set[str]:
-    records = await core_access.filter_workspace_records(
-        access_control_from_config(_get_config()),
-        current_request_scope(),
-        action,
-        [{"workspace": workspace} for workspace in workspaces],
-    )
-    return core_access.workspace_names(records)
+    return await _access_gate().authorized_workspace_ids(action, workspaces)
 
 
 async def _resolve_authorized_query_workspaces(
@@ -308,12 +307,10 @@ async def _resolve_authorized_query_workspaces(
 ) -> list[str]:
     """Resolve MCP query targets after applying the current request ACL."""
     try:
-        return await core_access.resolve_authorized_query_workspaces(
-            access_control_from_config(_get_config()),
-            current_request_scope(),
+        return await _access_gate().resolve_query_workspaces(
             manager,
-            default_workspace=_get_config().workspace,
-            workspaces=workspaces,
+            default_workspace=normalize_workspace(_get_config().workspace),
+            workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )
     except NoQueryableWorkspacesError:
@@ -617,7 +614,7 @@ async def delete_workspace_tool(
 ) -> dict[str, Any]:
     args = DeleteWorkspaceInput.model_validate(locals())
     manager = await _ensure_manager()
-    from dlightrag.utils import normalize_workspace, validate_workspace_name
+    from dlightrag.utils import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     normalized_workspace = normalize_workspace(label)
@@ -777,8 +774,6 @@ async def ingest_tool(
     args = IngestInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
-    from dlightrag.utils import normalize_workspace
-
     workspace_name = normalize_workspace(workspace_name)
     await _enforce_access(AccessAction.WORKSPACE_INGEST, workspace_name)
     ingest_spec = ingest_spec_from_payload(args)
@@ -818,7 +813,8 @@ async def get_ingest_job_tool(
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
     workspace = result.get("workspace")
-    await _enforce_access(AccessAction.JOB_READ, str(workspace) if workspace else None)
+    workspace_id = normalize_workspace(str(workspace)) if workspace else None
+    await _enforce_access(AccessAction.JOB_READ, workspace_id)
     return result
 
 
@@ -841,7 +837,8 @@ async def cancel_ingest_job_tool(
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
     workspace = result.get("workspace")
-    await _enforce_access(AccessAction.JOB_CANCEL, str(workspace) if workspace else None)
+    workspace_id = normalize_workspace(str(workspace)) if workspace else None
+    await _enforce_access(AccessAction.JOB_CANCEL, workspace_id)
     cancelled = await manager.acancel_ingest_job(args.job_id)
     return cancelled if cancelled is not None else result
 
@@ -861,7 +858,7 @@ async def list_files_tool(
 ) -> dict[str, Any]:
     args = ListFilesInput.model_validate(locals())
     manager = await _ensure_manager()
-    workspace_name = args.workspace or _get_config().workspace
+    workspace_name = normalize_workspace(args.workspace or _get_config().workspace)
     await _enforce_access(AccessAction.WORKSPACE_LIST_FILES, workspace_name)
     files = await manager.alist_ingested_files(workspace_name)
     return {"files": files, "count": len(files), "workspace": workspace_name}
@@ -895,7 +892,7 @@ async def delete_files_tool(
 ) -> dict[str, Any]:
     args = DeleteFilesInput.model_validate(locals())
     manager = await _ensure_manager()
-    workspace_name = args.workspace or _get_config().workspace
+    workspace_name = normalize_workspace(args.workspace or _get_config().workspace)
     await _enforce_access(AccessAction.WORKSPACE_DELETE_FILES, workspace_name)
     results = await manager.adelete_files(
         workspace_name,

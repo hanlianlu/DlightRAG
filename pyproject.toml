@@ -194,6 +194,26 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "access-independence"
+name = "Access owns identity and authorization without product or transport dependencies"
+type = "forbidden"
+source_modules = ["dlightrag.access"]
+forbidden_modules = [
+    "dlightrag.adapters.postgres",
+    "dlightrag.api",
+    "dlightrag.config",
+    "dlightrag.core",
+    "dlightrag.mcp",
+    "dlightrag.model_settings",
+    "dlightrag.utils",
+    "dlightrag.web",
+    "dlightrag_rag",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
 id = "core-no-api-or-mcp"
 name = "Core modules do not directly import API or MCP transports"
 type = "forbidden"
@@ -206,7 +226,6 @@ id = "core-domain-no-web"
 name = "Core domain modules do not directly assemble Web"
 type = "forbidden"
 source_modules = [
-    "dlightrag.core.access",
     "dlightrag.core.agent",
     "dlightrag.core.answer",
     "dlightrag.core.answer_runs",
@@ -216,11 +235,9 @@ source_modules = [
     "dlightrag.core.client_payloads",
     "dlightrag.core.client_requests",
     "dlightrag.core.memory",
-    "dlightrag.core.principal",
     "dlightrag.core.request",
     "dlightrag.core.resources",
     "dlightrag.core.retrieval",
-    "dlightrag.core.scope",
     "dlightrag.core.tools",
 ]
 forbidden_modules = ["dlightrag.web"]

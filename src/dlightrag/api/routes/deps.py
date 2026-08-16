@@ -1,19 +1,25 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Common dependencies for API routes."""
 
-from typing import Any
+from collections.abc import Sequence
 
+from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
 from fastapi import HTTPException, Request
 
-from dlightrag.access_control import AccessDeniedError, access_control_from_config
+from dlightrag.access import (
+    AccessControl,
+    AccessDeniedError,
+    AccessGate,
+    AccessSubject,
+    NoQueryableWorkspacesError,
+    WorkspaceRecord,
+    WorkspaceSelectionConflictError,
+    access_control_from_settings,
+)
 from dlightrag.app_state import request_config
 from dlightrag.config import get_config
-from dlightrag.core import access as core_access
-from dlightrag.core.request.workspaces import (
-    NoQueryableWorkspacesError,
-    WorkspaceSelectionConflictError,
-)
 from dlightrag.core.servicemanager import RAGServiceManager
+from dlightrag.model_settings import access_settings
 
 
 def get_manager(request: Request) -> RAGServiceManager:
@@ -21,73 +27,65 @@ def get_manager(request: Request) -> RAGServiceManager:
 
 
 def resolve_workspace(ws: str | None, request: Request | None = None) -> str:
-    from dlightrag.utils import normalize_workspace
-
     workspace = request_config(request).workspace if request is not None else get_config().workspace
     return normalize_workspace(ws or workspace)
 
 
-def get_access_control(request: Request):
-    return getattr(request.app.state, "access_control", None) or access_control_from_config(
-        request_config(request)
+def get_access_control(request: Request) -> AccessControl:
+    return getattr(request.app.state, "access_control", None) or access_control_from_settings(
+        access_settings(request_config(request))
     )
+
+
+def get_access_gate(request: Request, subject: AccessSubject) -> AccessGate:
+    return AccessGate(get_access_control(request), subject)
 
 
 async def enforce_access(
     request: Request,
-    user: object,
+    user: AccessSubject,
     action: str,
     *,
     workspace: str | None = None,
 ) -> None:
     try:
-        await get_access_control(request).check(user, action, workspace=workspace)
+        await get_access_gate(request, user).check(action, workspace=workspace)
     except AccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from None
 
 
 async def filter_workspace_records(
     request: Request,
-    user: object,
+    user: AccessSubject,
     action: str,
-    records: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    return await core_access.filter_workspace_records(
-        get_access_control(request), user, action, records
-    )
+    records: Sequence[WorkspaceRecord],
+) -> list[WorkspaceRecord]:
+    return await get_access_gate(request, user).filter_workspace_records(action, records)
 
 
 async def authorized_workspaces(
     request: Request,
-    user: object,
+    user: AccessSubject,
     workspaces: list[str],
     action: str,
 ) -> set[str]:
     """Return the subset of workspaces this caller may use for one action."""
-    records = await filter_workspace_records(
-        request,
-        user,
-        action,
-        [{"workspace": workspace} for workspace in workspaces],
-    )
-    return core_access.workspace_names(records)
+    return await get_access_gate(request, user).authorized_workspace_ids(action, workspaces)
 
 
 async def resolve_authorized_query_workspaces(
     request: Request,
-    user: object,
+    user: AccessSubject,
     *,
     workspaces: list[str] | None,
     all_workspaces: bool,
 ) -> list[str]:
     """Resolve query targets after applying the caller's existing ACL."""
     try:
-        return await core_access.resolve_authorized_query_workspaces(
-            get_access_control(request),
-            user,
+        return await get_access_gate(request, user).resolve_query_workspaces(
             get_manager(request),
-            default_workspace=request_config(request).workspace,
-            workspaces=workspaces,
+            default_workspace=normalize_workspace(request_config(request).workspace),
+            workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )
     except NoQueryableWorkspacesError:

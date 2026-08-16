@@ -13,10 +13,9 @@ from dlightrag_rag.retrieval import RetrievalResult
 from mcp import Client, MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
+from dlightrag.access import RequestScope, owner_id_from_principal, request_scope_context
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.principal import owner_id_from_principal
-from dlightrag.core.scope import RequestScope, request_scope_context
 from dlightrag.mcp import server as mcp_server
 from dlightrag.runtime import AnswerRunRecord
 
@@ -869,3 +868,53 @@ async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
         file_paths=None,
         dry_run=True,
     )
+
+
+async def test_mcp_file_tools_canonicalize_display_workspace_before_access_and_manager(
+    mock_mcp_manager,
+) -> None:
+    mock_mcp_manager.alist_ingested_files.return_value = []
+    mock_mcp_manager.adelete_files.return_value = []
+
+    listed = await mcp_server.mcp_app.call_tool(
+        "list_files",
+        {"workspace": "Finance Reports"},
+    )
+    deleted = await mcp_server.mcp_app.call_tool(
+        "delete_files",
+        {"workspace": "Finance Reports", "filenames": ["report.pdf"]},
+    )
+
+    assert _tool_json(listed)["workspace"] == "finance_reports"
+    assert _tool_json(deleted)["workspace"] == "finance_reports"
+    mock_mcp_manager.alist_ingested_files.assert_awaited_once_with("finance_reports")
+    mock_mcp_manager.adelete_files.assert_awaited_once_with(
+        "finance_reports",
+        filenames=["report.pdf"],
+        file_paths=None,
+        dry_run=False,
+    )
+
+
+async def test_mcp_ingest_job_tools_canonicalize_stored_workspace_before_access(
+    mock_mcp_manager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = {
+        "job_id": "job-1",
+        "workspace": "Finance Reports",
+        "source_type": "s3",
+        "status": "running",
+    }
+    mock_mcp_manager.aget_ingest_job.return_value = job
+    mock_mcp_manager.acancel_ingest_job.return_value = job
+    enforce = AsyncMock()
+    monkeypatch.setattr(mcp_server, "_enforce_access", enforce)
+
+    await mcp_server.mcp_app.call_tool("get_ingest_job", {"job_id": "job-1"})
+    await mcp_server.mcp_app.call_tool("cancel_ingest_job", {"job_id": "job-1"})
+
+    assert [call.args[1] for call in enforce.await_args_list] == [
+        "finance_reports",
+        "finance_reports",
+    ]

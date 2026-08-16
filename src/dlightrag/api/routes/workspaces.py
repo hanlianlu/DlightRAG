@@ -3,17 +3,18 @@
 
 from typing import Any
 
+from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from dlightrag.access_control import AccessAction
-from dlightrag.api.auth import UserContext, get_current_user
+from dlightrag.access import AccessAction, UserContext
+from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     WorkspaceCreateRequest,
     WorkspaceCreateResponse,
     WorkspaceDeleteResponse,
     WorkspacesResponse,
 )
-from dlightrag.utils import normalize_workspace, validate_workspace_name
+from dlightrag.utils import validate_workspace_name
 
 from .deps import enforce_access, filter_workspace_records, get_manager
 

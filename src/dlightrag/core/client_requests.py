@@ -128,7 +128,7 @@ def managed_local_ingest_path(
     if source_type != "local" or not path:
         return path
 
-    from dlightrag.utils import normalize_workspace
+    from dlightrag_rag.workspaces import normalize_workspace
 
     root = (input_dir / normalize_workspace(workspace)).resolve()
     if "\0" in path or path.startswith(("~", "/", "\\")):

@@ -12,7 +12,7 @@ from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, Retrieval
 
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.source_builder import build_sources
-from dlightrag.core.access import can_project_workspace_visual
+from dlightrag.core.answer.projection import can_project_workspace_visual
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
 logger = logging.getLogger(__name__)

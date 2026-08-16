@@ -1,6 +1,7 @@
 """FastAPI dependency injection and Jinja2 environment for web routes."""
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,10 +12,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from dlightrag.access_control import AccessControl, AccessDeniedError, access_control_from_config
+from dlightrag.access import (
+    AccessControl,
+    AccessDeniedError,
+    AccessGate,
+    WorkspaceRecord,
+    access_control_from_settings,
+)
 from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
-from dlightrag.core import access as core_access
+from dlightrag.model_settings import access_settings
 from dlightrag.web.markdown import (
     inject_highlights,
     normalize_chunk_source,
@@ -268,7 +275,7 @@ def error_response(message: str, status_code: int = 400) -> HTMLResponse:
 
 def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) -> str:
     """Read current workspace from cookie, normalized to safe PG identifier."""
-    from dlightrag.utils import normalize_workspace
+    from dlightrag_rag.workspaces import normalize_workspace
 
     return normalize_workspace(dlightrag_workspace)
 
@@ -284,15 +291,21 @@ def get_web_conversation_service(request: Request) -> Any:
 
 
 def _web_access_control(request: Request) -> AccessControl:
-    return getattr(request.app.state, "access_control", None) or access_control_from_config(
-        request_config(request)
+    return getattr(request.app.state, "access_control", None) or access_control_from_settings(
+        access_settings(request_config(request))
+    )
+
+
+def get_web_access_gate(request: Request) -> AccessGate:
+    return AccessGate(
+        _web_access_control(request),
+        getattr(request.state, "user_context", None),
     )
 
 
 async def enforce_web_access(request: Request, action: str, workspace: str | None) -> None:
-    user = getattr(request.state, "user_context", None)
     try:
-        await _web_access_control(request).check(user, action, workspace=workspace)
+        await get_web_access_gate(request).check(action, workspace=workspace)
     except AccessDeniedError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from None
 
@@ -300,9 +313,6 @@ async def enforce_web_access(request: Request, action: str, workspace: str | Non
 async def filter_web_workspace_records(
     request: Request,
     action: str,
-    records: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    user = getattr(request.state, "user_context", None)
-    return await core_access.filter_workspace_records(
-        _web_access_control(request), user, action, records
-    )
+    records: Sequence[WorkspaceRecord],
+) -> list[WorkspaceRecord]:
+    return await get_web_access_gate(request).filter_workspace_records(action, records)

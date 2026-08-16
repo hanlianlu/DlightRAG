@@ -9,12 +9,13 @@ from dlightrag_rag.ingestion.uploads import (
     safe_upload_basename,
     write_upload_stream,
 )
+from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dlightrag.access_control import AccessAction
-from dlightrag.api.auth import UserContext, get_current_user
+from dlightrag.access import AccessAction, UserContext
+from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     IngestJobStatusResponse,
     IngestRequest,
@@ -100,11 +101,12 @@ async def get_ingest_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
     workspace = job.get("workspace")
+    workspace_id = normalize_workspace(str(workspace)) if workspace else None
     await enforce_access(
         request,
         user,
         AccessAction.JOB_READ,
-        workspace=str(workspace) if workspace else None,
+        workspace=workspace_id,
     )
     return job
 
@@ -121,11 +123,12 @@ async def cancel_ingest_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
     workspace = job.get("workspace")
+    workspace_id = normalize_workspace(str(workspace)) if workspace else None
     await enforce_access(
         request,
         user,
         AccessAction.JOB_CANCEL,
-        workspace=str(workspace) if workspace else None,
+        workspace=workspace_id,
     )
     cancelled = await manager.acancel_ingest_job(job_id)
     return cancelled if cancelled is not None else job

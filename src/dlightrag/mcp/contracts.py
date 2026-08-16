@@ -1,10 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Pydantic input contracts for DlightRAG MCP tools."""
 
-from typing import Any
+from typing import Any, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
+from dlightrag.access import validate_query_workspace_selection
 from dlightrag.core.client_contracts import (
     MAX_QUERY_IMAGES,
     AnswerAttachmentLink,
@@ -15,11 +16,23 @@ from dlightrag.core.client_contracts import (
     QueryImage,
     RetrieveRequestContract,
 )
-from dlightrag.core.request.workspaces import QueryWorkspaceSelection
 
 
 class MCPInput(ClientContractModel):
     pass
+
+
+class QueryWorkspaceSelection(ClientContractModel):
+    workspaces: list[str] | None = None
+    all_workspaces: bool = False
+
+    @model_validator(mode="after")
+    def _validate_workspace_selection(self) -> Self:
+        validate_query_workspace_selection(
+            all_workspaces=self.all_workspaces,
+            workspaces=self.workspaces,
+        )
+        return self
 
 
 class RetrieveInput(QueryWorkspaceSelection, RetrieveRequestContract):

@@ -4,12 +4,12 @@
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.core.request.workspaces import (
+from dlightrag.access import (
     NoQueryableWorkspacesError,
-    QueryWorkspaceSelection,
     WorkspaceSelectionConflictError,
     resolve_query_workspaces,
 )
+from dlightrag.api.models import QueryWorkspaceSelection
 
 
 def test_query_workspace_selection_defaults_to_default_scope() -> None:
@@ -17,7 +17,7 @@ def test_query_workspace_selection_defaults_to_default_scope() -> None:
 
     assert selection.all_workspaces is False
     assert selection.workspaces is None
-    assert resolve_query_workspaces(default_workspace="Default") == ["default"]
+    assert resolve_query_workspaces(default_workspace="default") == ["default"]
 
 
 @pytest.mark.parametrize("workspaces", [None, []])
@@ -34,7 +34,7 @@ def test_all_workspaces_accepts_omitted_or_empty_explicit_list(
         default_workspace="default",
         all_workspaces=True,
         workspaces=workspaces,
-        available_workspaces=["Research Notes", "default", "Research Notes"],
+        available_workspaces=["research_notes", "default", "research_notes"],
     ) == ["research_notes", "default"]
 
 
@@ -66,5 +66,5 @@ def test_all_workspaces_rejects_empty_available_set() -> None:
 def test_explicit_workspaces_are_normalized_and_stably_deduplicated() -> None:
     assert resolve_query_workspaces(
         default_workspace="default",
-        workspaces=["Research Notes", "default", "research_notes"],
+        workspaces=["research_notes", "default", "research_notes"],
     ) == ["research_notes", "default"]

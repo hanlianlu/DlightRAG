@@ -10,7 +10,7 @@ from dlightrag_rag.retrieval import RetrievalContexts
 from dlightrag.citations.parser import CITATION_PATTERN, DOC_CITATION_PATTERN
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.citations.utils import context_chunk_key
-from dlightrag.core.access import can_project_workspace_visual
+from dlightrag.core.answer.projection import can_project_workspace_visual
 
 
 def answer_images_from_sources(

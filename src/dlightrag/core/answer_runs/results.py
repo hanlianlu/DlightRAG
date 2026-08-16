@@ -22,8 +22,8 @@ from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.citations.utils import context_chunk_key
-from dlightrag.core.access import can_project_workspace_visual
 from dlightrag.core.answer.media import answer_blocks_from_markdown
+from dlightrag.core.answer.projection import can_project_workspace_visual
 from dlightrag.core.answer_runs.snapshots import dump_answer_snapshot, load_answer_snapshot
 from dlightrag.core.client_payloads import project_contexts_for_client, project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder

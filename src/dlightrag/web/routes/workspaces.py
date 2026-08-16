@@ -4,11 +4,11 @@
 import logging
 from typing import TYPE_CHECKING
 
+from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import JSONResponse
 
-from dlightrag.access_control import AccessAction
-from dlightrag.utils import normalize_workspace
+from dlightrag.access import AccessAction, WorkspaceRecord
 from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,
@@ -32,7 +32,9 @@ def _ordered_unique(workspaces: list[str]) -> list[str]:
 
 
 async def _visible_workspace_names(request: Request, manager: RAGServiceManager) -> list[str]:
-    records = [{"workspace": workspace} for workspace in await manager.alist_workspaces()]
+    records: list[WorkspaceRecord] = [
+        {"workspace": workspace} for workspace in await manager.alist_workspaces()
+    ]
     visible = await filter_web_workspace_records(request, AccessAction.WORKSPACE_QUERY, records)
     return [str(row["workspace"]) for row in visible]
 

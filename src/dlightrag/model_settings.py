@@ -18,13 +18,60 @@ from dlightrag_ai.settings import (
     RerankSettings,
 )
 from dlightrag_rag.settings import RagSettings
+from dlightrag_rag.workspaces import normalize_workspace
 
+from dlightrag.access import (
+    AccessRule,
+    AccessSettings,
+    AuthenticationSettings,
+)
 from dlightrag.config import (
     DlightragConfig,
     ModelCapacityOverrideConfig,
     ModelConfig,
     RerankConfig,
 )
+
+
+def access_settings(config: DlightragConfig) -> AccessSettings:
+    """Snapshot root authorization configuration into immutable Access settings."""
+    return AccessSettings(
+        mode=config.access_control.mode,
+        rules=tuple(
+            AccessRule(
+                claim=rule.claim,
+                value=rule.value,
+                workspaces=tuple(
+                    workspace if workspace == "*" else normalize_workspace(workspace)
+                    for workspace in rule.workspaces
+                ),
+                actions=tuple(rule.actions),
+            )
+            for rule in config.access_control.rules
+        ),
+    )
+
+
+def authentication_settings(
+    config: DlightragConfig,
+    *,
+    audience: str | None = None,
+) -> AuthenticationSettings:
+    """Snapshot root bearer configuration into immutable Access settings."""
+    configured_audience = audience if audience is not None else config.jwt_audience
+    if isinstance(configured_audience, list):
+        resolved_audience: str | tuple[str, ...] | None = tuple(configured_audience)
+    else:
+        resolved_audience = configured_audience
+    return AuthenticationSettings(
+        mode=config.auth_mode,
+        api_token=config.api_auth_token,
+        jwt_verification_key=config.jwt_verification_key,
+        jwt_jwks_url=config.jwt_jwks_url,
+        jwt_issuer=config.jwt_issuer,
+        jwt_audience=resolved_audience,
+        jwt_algorithm=config.jwt_algorithm,
+    )
 
 
 def _has_explicit_auth_setting(config: ModelConfig | RerankConfig) -> bool:

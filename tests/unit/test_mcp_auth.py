@@ -7,10 +7,10 @@ import jwt
 import pytest
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
 
-from dlightrag.api.auth import UserContext
+from dlightrag.access import UserContext, current_request_scope
 from dlightrag.config import DlightragConfig, set_config
-from dlightrag.core.scope import current_request_scope
 from dlightrag.mcp import auth as mcp_auth
 from dlightrag.mcp.server import DlightRAGRequestScopeMiddleware
 
@@ -29,8 +29,8 @@ async def test_mcp_access_token_preserves_identity_claims_and_scopes(
     }
     monkeypatch.setattr(
         mcp_auth,
-        "verify_bearer_token",
-        lambda token, cfg: UserContext(user_id="alice", auth_mode="jwt", claims=claims),
+        "authenticate_bearer_token",
+        lambda token, settings: UserContext(user_id="alice", auth_mode="jwt", claims=claims),
     )
     config = test_config.model_copy(update={"auth_mode": "jwt", "jwt_verification_key": "test-key"})
     set_config(config)
@@ -54,8 +54,38 @@ async def test_mcp_access_token_preserves_identity_claims_and_scopes(
         assert scope.auth_mode == "jwt"
         assert scope.claims == claims
 
+    previous = current_request_scope()
     try:
         await DlightRAGRequestScopeMiddleware()(object(), capture_scope)  # type: ignore[arg-type]
+        assert current_request_scope() == previous
+    finally:
+        auth_context_var.reset(auth_token)
+
+
+async def test_mcp_request_scope_restores_prior_scope_when_handler_fails(
+    test_config: DlightragConfig,
+) -> None:
+    set_config(
+        test_config.model_copy(update={"auth_mode": "jwt", "jwt_verification_key": "test-key"})
+    )
+    token = AccessToken(
+        token="signed-token",
+        client_id="client",
+        scopes=[],
+        subject="alice",
+        claims={"sub": "alice"},
+    )
+    auth_token = auth_context_var.set(AuthenticatedUser(token))
+    prior = current_request_scope()
+
+    async def fail(ctx: Any) -> None:
+        assert current_request_scope().user_id == "alice"
+        raise RuntimeError("boom")
+
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            await DlightRAGRequestScopeMiddleware()(object(), fail)  # type: ignore[arg-type]
+        assert current_request_scope() == prior
     finally:
         auth_context_var.reset(auth_token)
 

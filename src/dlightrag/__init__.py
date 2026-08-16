@@ -15,8 +15,7 @@ except Exception:
 __maintainer__ = "HanlianLyu"
 __credits__ = ["hllyu"]
 
-from dlightrag.access_control import AccessAction, AccessControl, access_control_from_config
-from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
+from dlightrag.config import DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec, QueryImage
 
 if TYPE_CHECKING:
@@ -45,10 +44,6 @@ __all__ = [
     "DlightragConfig",
     "IngestSpec",
     "QueryImage",
-    "AccessAction",
-    "AccessControl",
-    "AccessControlConfig",
-    "AccessControlRuleConfig",
     "RAGServiceManager",
     "AnswerImageError",
     "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
@@ -57,7 +52,6 @@ __all__ = [
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "classify_answer_error",
     "__version__",
-    "access_control_from_config",
 ]
 
 

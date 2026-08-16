@@ -884,6 +884,8 @@ def _wheel_installation_members(path: Path) -> tuple[str, str, dict[str, bytes]]
 
 
 def _smoke_root_interfaces() -> None:
+    import dlightrag
+    from dlightrag.access import DEPLOYMENT_OWNER_ID
     from dlightrag.config import DlightragConfig, RuntimeConfig
     from dlightrag.model_settings import rag_settings
     from dlightrag.runtime import answer_run_request_fingerprint
@@ -894,6 +896,10 @@ def _smoke_root_interfaces() -> None:
         rag_pipeline_max_async=5,
     )
     settings = rag_settings(config)
+    if len(DEPLOYMENT_OWNER_ID) != 64:
+        raise ValueError("installed Access package did not expose a SHA-256 owner id")
+    if dlightrag.DlightragConfig is not DlightragConfig:
+        raise ValueError("installed root package did not expose its config owner")
     if config.max_async != 2:
         raise ValueError("installed root config did not preserve AI concurrency")
     if config.runtime.answer_worker_concurrency != 3:

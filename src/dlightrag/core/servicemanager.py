@@ -66,8 +66,19 @@ from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, Retrieval
 from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from dlightrag_rag.workspace_rag import WorkspaceRag
+from dlightrag_rag.workspaces import (
+    normalize_workspace,
+    normalize_workspace_ids,
+    require_canonical_workspace_id,
+)
 from PIL import Image
 
+from dlightrag.access import (
+    DEPLOYMENT_OWNER_ID,
+    WorkspaceRecord,
+    resolve_query_workspaces,
+    validate_query_workspace_selection,
+)
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
 from dlightrag.application import ApplicationHealth
@@ -115,14 +126,8 @@ from dlightrag.core.answer_runs.results import (
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.principal import DEPLOYMENT_OWNER_ID
 from dlightrag.core.request.images import prepare_query_images
 from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
-from dlightrag.core.request.workspaces import (
-    normalize_query_workspaces,
-    resolve_query_workspaces,
-    validate_query_workspace_selection,
-)
 from dlightrag.core.resources.models import (
     ResourceManifestEntry,
     ResourceRegistryError,
@@ -154,7 +159,6 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
-from dlightrag.utils import normalize_workspace
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
 logger = logging.getLogger(__name__)
@@ -684,7 +688,7 @@ class RAGServiceManager:
         Normalizes the workspace name to a safe PG identifier (lowercase,
         alphanumeric + underscore only) before lookup or creation.
         """
-        from dlightrag.utils import normalize_workspace
+        from dlightrag_rag.workspaces import normalize_workspace
 
         workspace = normalize_workspace(workspace)
 
@@ -1382,7 +1386,7 @@ class RAGServiceManager:
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         """Fetch a metadata schema for the requested workspace set."""
-        normalized = tuple(normalize_query_workspaces(workspaces or ())) or (
+        normalized = tuple(normalize_workspace_ids(workspaces or ())) or (
             normalize_workspace(self._config.workspace),
         )
         ws_key = tuple(sorted(normalized))
@@ -1458,9 +1462,7 @@ class RAGServiceManager:
         per-workspace lock lets it join an initialization already running here
         instead of starting after planning or a control turn finishes.
         """
-        cold = [
-            ws for ws in normalize_query_workspaces(workspaces or ()) if ws not in self._services
-        ]
+        cold = [ws for ws in normalize_workspace_ids(workspaces or ()) if ws not in self._services]
         if not cold:
             return
         task = asyncio.create_task(self._warm_query_services(cold))
@@ -1481,7 +1483,7 @@ class RAGServiceManager:
         workspaces: list[str] | tuple[str, ...] | None,
     ) -> None:
         """Initialize only the services selected for an imminent query."""
-        selected = tuple(normalize_query_workspaces(workspaces or ())) or (
+        selected = tuple(normalize_workspace_ids(workspaces or ())) or (
             normalize_workspace(self._config.workspace),
         )
         semaphore = asyncio.Semaphore(_QUERY_WORKSPACE_MAX_CONCURRENCY)
@@ -1532,11 +1534,17 @@ class RAGServiceManager:
             workspace=workspace,
             workspaces=workspaces,
         )
-        available = await self.alist_workspaces() if all_workspaces else None
+        available = (
+            normalize_workspace_ids(await self.alist_workspaces()) if all_workspaces else None
+        )
         resolved = resolve_query_workspaces(
-            default_workspace=self._config.workspace,
-            workspace=workspace,
-            workspaces=workspaces,
+            default_workspace=normalize_workspace(self._config.workspace),
+            workspace=normalize_workspace(workspace) if workspace else None,
+            workspaces=(
+                [normalize_workspace(item) for item in workspaces]
+                if workspaces is not None
+                else None
+            ),
             all_workspaces=all_workspaces,
             available_workspaces=available,
         )
@@ -2735,9 +2743,9 @@ class RAGServiceManager:
         records = await self.alist_workspace_records()
         return [row["workspace"] for row in records]
 
-    async def alist_workspace_records(self) -> list[dict[str, Any]]:
+    async def alist_workspace_records(self) -> list[WorkspaceRecord]:
         """Return registered workspace records for UI/API adapters."""
-        default_record = {
+        default_record: WorkspaceRecord = {
             "workspace": normalize_workspace(self._config.workspace),
             "display_name": self._config.workspace,
             "embedding_model": self._config.embedding.model,
@@ -2757,11 +2765,11 @@ class RAGServiceManager:
         return [default_record]
 
     @staticmethod
-    def _serialize_workspace_record(row: dict[str, Any]) -> dict[str, Any]:
+    def _serialize_workspace_record(row: dict[str, Any]) -> WorkspaceRecord:
         """Return a JSON-safe workspace record."""
         raw_workspace = str(row.get("workspace") or "")
         return {
-            "workspace": raw_workspace,
+            "workspace": require_canonical_workspace_id(raw_workspace),
             "display_name": str(row.get("display_name") or raw_workspace),
             "embedding_model": str(row.get("embedding_model") or ""),
             "created_at": _iso_or_none(row.get("created_at")),

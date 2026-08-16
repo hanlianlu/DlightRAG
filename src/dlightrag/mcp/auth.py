@@ -1,11 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """MCP OAuth resource-server integration over DlightRAG authentication."""
 
-from fastapi import HTTPException
 from mcp.server.auth.provider import AccessToken
 
-from dlightrag.api.auth import verify_bearer_token
+from dlightrag.access import AuthenticationError, authenticate_bearer_token
 from dlightrag.config import DlightragConfig
+from dlightrag.model_settings import authentication_settings
 
 
 def _token_scopes(claims: dict[str, object]) -> list[str]:
@@ -22,14 +22,14 @@ class DlightRAGTokenVerifier:
     """MCP TokenVerifier backed by DlightRAG's configured JWT verifier."""
 
     def __init__(self, config: DlightragConfig, *, resource: str | None = None) -> None:
-        self._config = config.model_copy(update={"jwt_audience": resource}) if resource else config
+        self._settings = authentication_settings(config, audience=resource)
         self._resource = resource
 
     async def verify_token(self, token: str) -> AccessToken | None:
         try:
-            user = verify_bearer_token(token, self._config)
-        except HTTPException as exc:
-            if exc.status_code == 401:
+            user = authenticate_bearer_token(token, self._settings)
+        except AuthenticationError as exc:
+            if exc.kind != "verifier_misconfigured":
                 return None
             raise
 

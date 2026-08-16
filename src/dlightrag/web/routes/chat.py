@@ -7,15 +7,13 @@ from dataclasses import replace
 from functools import partial
 from typing import Any
 
+from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from dlightrag.access_control import AccessAction
+from dlightrag.access import AccessAction, WorkspaceRecord, owner_id_from_user
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
-from dlightrag.api.principal import owner_id_from_user
-from dlightrag.core.access import workspace_names
 from dlightrag.runtime import IdempotencyKeyConflict
-from dlightrag.utils import normalize_workspace
 from dlightrag.web.answer_events import browser_frame
 from dlightrag.web.attachment_models import (
     SUPPORTED_DOCUMENT_EXTENSIONS,
@@ -32,6 +30,7 @@ from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,
     get_manager,
+    get_web_access_gate,
     get_web_conversation_service,
     get_workspace,
     templates,
@@ -48,6 +47,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
 
     manager = get_manager(request)
     await manager._maybe_reprobe_answer_image_capability()
+    workspaces: list[WorkspaceRecord]
     try:
         workspaces = await manager.alist_workspace_records()
     except Exception:
@@ -64,7 +64,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
         workspaces,
     )
 
-    authorized = [normalize_workspace(str(row["workspace"])) for row in workspaces]
+    authorized = [row["workspace"] for row in workspaces]
     known = set(authorized)
     active_raw = request.cookies.get("dlightrag_workspace_ids", "")
     active = [normalize_workspace(item.strip()) for item in active_raw.split(",") if item.strip()]
@@ -135,7 +135,7 @@ async def start_answer_run(
     if not query:
         raise HTTPException(status_code=422, detail="A question is required")
 
-    target_workspaces = body.workspaces or [workspace]
+    target_workspaces = normalize_workspace_ids(body.workspaces or [workspace])
     for ws in target_workspaces:
         await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
 
@@ -260,11 +260,15 @@ async def _projection_workspaces(
     request: Request, run_request: Mapping[str, Any]
 ) -> tuple[set[str], set[str]]:
     """Authorize this reader's source downloads and visuals for one run."""
-    workspaces = [{"workspace": str(value)} for value in run_request.get("workspaces") or ()]
-    downloadable = await filter_web_workspace_records(
-        request, AccessAction.WORKSPACE_DOWNLOAD_SOURCE, list(workspaces)
+    workspace_ids = [str(value) for value in run_request.get("workspaces") or ()]
+    gate = get_web_access_gate(request)
+    return (
+        await gate.authorized_workspace_ids(
+            AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+            workspace_ids,
+        ),
+        await gate.authorized_workspace_ids(
+            AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+            workspace_ids,
+        ),
     )
-    visual = await filter_web_workspace_records(
-        request, AccessAction.WORKSPACE_READ_VISUAL_ASSET, list(workspaces)
-    )
-    return workspace_names(downloadable), workspace_names(visual)

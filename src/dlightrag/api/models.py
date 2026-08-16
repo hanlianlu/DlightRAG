@@ -2,10 +2,11 @@
 """Request and response models for the DlightRAG REST API."""
 
 import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
+from dlightrag.access import validate_query_workspace_selection
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.contracts import ServiceRole
 from dlightrag.core.client_contracts import (
@@ -16,7 +17,6 @@ from dlightrag.core.client_contracts import (
     IngestPayload,
     RetrieveRequestContract,
 )
-from dlightrag.core.request.workspaces import QueryWorkspaceSelection
 from dlightrag.runtime import AnswerRunPhase, AnswerRunStatus
 
 # Maximum UTF-8 history payload plus query/workspace/JSON framing. Shared by the
@@ -26,6 +26,21 @@ ANSWER_REQUEST_PART_MAX_BYTES = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS
 # ═══════════════════════════════════════════════════════════════════
 # Request Models
 # ═══════════════════════════════════════════════════════════════════
+
+
+class QueryWorkspaceSelection(ClientContractModel):
+    """REST/MCP query workspace selector."""
+
+    workspaces: list[str] | None = None
+    all_workspaces: bool = False
+
+    @model_validator(mode="after")
+    def _validate_workspace_selection(self) -> Self:
+        validate_query_workspace_selection(
+            all_workspaces=self.all_workspaces,
+            workspaces=self.workspaces,
+        )
+        return self
 
 
 class MetadataFilterRequest(ClientContractModel):

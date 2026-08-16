@@ -22,10 +22,10 @@ from dlightrag_rag.ingestion.engine import PreparedIngestFile, UnifiedIngestionE
 from dlightrag_rag.ingestion.paths import iter_ingestable_files, stage_input_file
 from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag_rag.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
+from dlightrag_rag.workspaces import normalize_workspace
 
 from dlightrag.config import DlightragConfig
 from dlightrag.model_settings import rag_settings
-from dlightrag.utils import normalize_workspace
 
 
 def _service(

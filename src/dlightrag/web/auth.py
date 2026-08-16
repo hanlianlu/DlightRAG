@@ -11,9 +11,14 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from dlightrag.api.auth import UserContext, verify_bearer_token
+from dlightrag.access import (
+    AuthenticationError,
+    UserContext,
+    authenticate_bearer_token,
+)
 from dlightrag.app_state import request_config
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.model_settings import authentication_settings
 from dlightrag.web.deps import templates
 
 WEB_AUTH_COOKIE = "dlightrag_web_auth"
@@ -22,6 +27,23 @@ _WEB_COOKIE_PATH = "/web"
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 router = APIRouter()
+
+
+def _authenticate_bearer(
+    raw_token: str,
+    config: DlightragConfig,
+    *,
+    default_user_id: str = "anonymous",
+) -> UserContext:
+    try:
+        return authenticate_bearer_token(
+            raw_token,
+            authentication_settings(config),
+            default_user_id=default_user_id,
+        )
+    except AuthenticationError as exc:
+        status_code = 500 if exc.kind == "verifier_misconfigured" else 401
+        raise HTTPException(status_code=status_code, detail=str(exc)) from None
 
 
 def _safe_next_path(value: str | None) -> str:
@@ -175,7 +197,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                     _clear_auth_cookie(response)
                     return response
                 return _browser_missing_auth_response(request)
-            request.state.user_context = verify_bearer_token(
+            request.state.user_context = _authenticate_bearer(
                 raw_token,
                 cfg,
                 default_user_id=request.headers.get("X-User-Id", "anonymous"),
@@ -221,7 +243,7 @@ async def login(
     if cfg.auth_mode == "none":
         return RedirectResponse(target, status_code=303)
     try:
-        verify_bearer_token(token, cfg)
+        _authenticate_bearer(token, cfg)
     except HTTPException as exc:
         return templates.TemplateResponse(
             request,

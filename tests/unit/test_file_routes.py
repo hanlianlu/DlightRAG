@@ -16,7 +16,7 @@ from dlightrag_rag.source_download import (
 )
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.access_control import AccessDeniedError
+from dlightrag.access import AccessDeniedError
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
 

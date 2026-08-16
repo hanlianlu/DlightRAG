@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 
-from dlightrag.access_control import ACTION_PRESETS, AccessAction
+from dlightrag.access import ACTION_PRESETS, AccessAction
 
 
 def _coordinator() -> IngestJobCoordinator:
