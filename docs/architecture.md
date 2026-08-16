@@ -21,7 +21,7 @@ Clients
        -> dlightrag.runtime RunCoordinator
             neutral lifecycle records, store port, leases, events, checkpoints
             -> PGAnswerRunStore adapter
-  -> RAGService
+     -> WorkspaceRag
        one workspace runtime, ingest, retrieve, answer, reset
   -> LightRAG main
        parser routing, staged ingest, chunks, doc status, KG, vectors
@@ -301,7 +301,7 @@ import higher ones.
 ```text
 L9  api, mcp, web                                  interface adapters
 L8  core.servicemanager                            multi-workspace coordinator
-L7  core.{service, reset}                          per-workspace facade
+L7  dlightrag_rag.WorkspaceRag                     per-workspace corpus capability
 L6  core orchestration                             answer, current lifecycle, source/media projection
 L5  host and storage adapters                      PostgreSQL; LightRAG contract and lifecycle
 L4  workspace cores and model adapters             AI; Agent; RAG retrieval, ingestion, sourcing

@@ -51,7 +51,10 @@ def test_pg18_harness_validates_preloaded_libraries() -> None:
 
 
 async def test_pg18_fake_model_factories_match_service_initialization(monkeypatch) -> None:
-    from dlightrag.core import service as service_module
+    import importlib
+    from typing import Any, cast
+
+    service_module = cast(Any, importlib.import_module("dlightrag_rag.workspace_rag"))
 
     embedder = install_fake_model_functions(monkeypatch, dim=8)
     config: Any = object()

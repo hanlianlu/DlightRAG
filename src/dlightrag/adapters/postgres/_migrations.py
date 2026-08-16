@@ -127,7 +127,7 @@ async def apply_migrations(
 
     A per-scope session advisory lock serializes concurrent callers (e.g. app
     replicas first-touching a lazily-initialized store), so they cannot race on
-    the same ``IF NOT EXISTS`` DDL. RAGService startup already holds a broader
+    the same ``IF NOT EXISTS`` DDL. WorkspaceRag startup already holds a broader
     init lock; this keeps ``apply_migrations`` safe on its own path too.
 
     ``require_applied_prefix`` keeps static migration scopes fail-fast by

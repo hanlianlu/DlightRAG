@@ -140,7 +140,7 @@ async def create_workspace(
     if ws in existing:
         return _error(f"Workspace '{name}' already exists", status_code=409)
 
-    # Initialize workspace (creates the RAGService)
+    # Initialize workspace (creates the WorkspaceRag)
     try:
         await manager.acreate_workspace(ws, display_name=name)
     except Exception:

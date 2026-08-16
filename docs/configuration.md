@@ -29,7 +29,7 @@ Keep these in normal `config.yaml`:
 - PostgreSQL endpoint, process role, and workspace identity: `workspace`,
   `service_role`, `postgres_*`
 - high-level concurrency raised above upstream defaults: `max_async`,
-  `embedding_func_max_async`, `embedding_batch_num`
+  `rag_pipeline_max_async`, `embedding_func_max_async`, `embedding_batch_num`
 - retrieval/answer controls: `top_k`, `chunk_top_k`, `bm25_enabled`, `direct_visual_top_k`,
   `answer.*`
 - auth and observability mode switches when they are not secret
@@ -628,8 +628,10 @@ notes.
 
 ## Ingestion Concurrency And Queues
 
-`config.yaml` keeps only the concurrency knobs raised above LightRAG's upstream
-defaults (`max_async`, `embedding_func_max_async`, `embedding_batch_num`). The
+`config.yaml` keeps only the high-level process and RAG concurrency knobs
+(`max_async`, `rag_pipeline_max_async`, `embedding_func_max_async`,
+`embedding_batch_num`). `rag_pipeline_max_async` bounds LightRAG pipeline LLM
+work independently from the current Answer/model-call process limit. The
 per-stage worker counts below already match LightRAG's defaults, so they are
 omitted from `config.yaml` and follow DlightRAG's code defaults; set them
 explicitly (in `config.yaml` or via `DLIGHTRAG_*` env) only when a deployment

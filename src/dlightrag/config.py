@@ -18,7 +18,7 @@ import re
 import ssl
 import warnings
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
+from typing import Annotated, Any, ClassVar, Literal, Self
 from urllib.parse import urlencode, urlsplit
 
 from dlightrag_ai.contracts import AsymmetricMode, ChatProvider, InputModality
@@ -80,17 +80,6 @@ MinerULocalBackend = Literal[
     "vlm-engine",
     "hybrid-engine",
 ]
-
-
-class LightRAGPipelineKwargs(TypedDict):
-    max_parallel_insert: int
-    max_parallel_parse_native: int
-    max_parallel_parse_mineru: int
-    max_parallel_parse_docling: int
-    max_parallel_analyze: int
-    queue_size_parse: int
-    queue_size_analyze: int
-    queue_size_insert: int
 
 
 # Auto-derived from the typed sidecar models below.
@@ -953,6 +942,11 @@ class DlightragConfig(BaseSettings):
 
     # Concurrency (product-tier; also surfaced in config.yaml).
     max_async: int = Field(default=16, ge=1)
+    rag_pipeline_max_async: int = Field(
+        default=16,
+        ge=1,
+        description="LightRAG corpus-pipeline LLM concurrency per workspace.",
+    )
     embedding_func_max_async: int = Field(default=16, ge=1)
     embedding_batch_num: int = Field(
         default=64,
@@ -1486,24 +1480,6 @@ class DlightragConfig(BaseSettings):
         """Return LightRAG's POSTGRES_SERVER_SETTINGS query-string format."""
         return urlencode(self.lightrag_pool_server_settings())
 
-    def lightrag_pipeline_kwargs(self) -> LightRAGPipelineKwargs:
-        """Return LightRAG staged ingestion pipeline controls.
-
-        These are constructor kwargs, not raw upstream env vars, so DlightRAG
-        owns one typed product config surface while still using LightRAG's
-        native pipeline.
-        """
-        return {
-            "max_parallel_insert": self.max_parallel_insert,
-            "max_parallel_parse_native": self.max_parallel_parse_native,
-            "max_parallel_parse_mineru": self.max_parallel_parse_mineru,
-            "max_parallel_parse_docling": self.max_parallel_parse_docling,
-            "max_parallel_analyze": self.max_parallel_analyze,
-            "queue_size_parse": self.queue_size_parse,
-            "queue_size_analyze": self.queue_size_analyze,
-            "queue_size_insert": self.queue_size_insert,
-        }
-
     @property
     def parser_rules(self) -> str:
         """Return the internal LightRAG wildcard for the configured sidecar."""
@@ -1628,7 +1604,7 @@ def get_config() -> DlightragConfig:
     """Get global dlightrag configuration (singleton).
 
     For standalone use (MCP/API server). When used as a library,
-    construct DlightragConfig directly and pass it to RAGService.
+    construct DlightragConfig directly and pass it to WorkspaceRag.
     """
     global _config
     if _config is None:

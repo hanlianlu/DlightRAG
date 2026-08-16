@@ -27,13 +27,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from dlightrag_rag.source_download import SourceDownloadTarget
+
     from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.config import DlightragConfig
     from dlightrag.core.request.images import QueryImageDescriber
     from dlightrag.core.resources import ResourceInput, ResourceRegistry
     from dlightrag.core.retrieval.web_search import ExaSearch
-    from dlightrag.core.source_download import SourceDownloadTarget
 
 from dlightrag_agent.tools import AgentTool
 from dlightrag_ai.capacity import (
@@ -51,7 +52,10 @@ from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.tool_model import ToolModel
 from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
 from dlightrag_rag.contracts import SourceType, VisualAssetSize
+from dlightrag_rag.federation import federated_retrieve
+from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 from dlightrag_rag.ingestion.paths import is_explicit_upload_batch_dir
+from dlightrag_rag.lifecycle import defer_cancellation
 from dlightrag_rag.ports import (
     JOB_STATES_WITH_RESULT,
     CorpusMaintenanceStore,
@@ -60,6 +64,7 @@ from dlightrag_rag.ports import (
 from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
 from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag_rag.sourcing.source_contract import safe_source_filename
+from dlightrag_rag.workspace_rag import WorkspaceRag
 from PIL import Image
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
@@ -108,9 +113,6 @@ from dlightrag.core.answer_runs.results import (
 )
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
-from dlightrag.core.federation import federated_retrieve
-from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
-from dlightrag.core.lightrag_lifecycle import defer_cancellation
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.principal import DEPLOYMENT_OWNER_ID
 from dlightrag.core.request.images import prepare_query_images
@@ -125,10 +127,10 @@ from dlightrag.core.resources.models import (
     ResourceRegistryError,
     TextWindowBudget,
 )
-from dlightrag.core.service import RAGService
 from dlightrag.model_settings import (
     model_profile_for_role,
     model_settings_for_role,
+    rag_settings,
     rerank_scoring_model_settings,
 )
 from dlightrag.observability import LangfuseTelemetry
@@ -363,7 +365,7 @@ def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[s
 class RAGServiceManager:
     """Multi-workspace RAG coordinator.
 
-    Manages a pool of RAGService instances (one per workspace).
+    Manages a pool of WorkspaceRag instances (one per workspace).
     Routes read operations to single workspace or federation.
     """
 
@@ -375,7 +377,7 @@ class RAGServiceManager:
         self._config = config or get_config()
         corpus_backend = PGCorpusBackendFactory(self._config).create()
         self._corpus_maintenance: CorpusMaintenanceStore = corpus_backend.maintenance
-        self._services: dict[str, RAGService] = {}
+        self._services: dict[str, WorkspaceRag] = {}
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         self._health = ApplicationHealth(
@@ -667,12 +669,12 @@ class RAGServiceManager:
             return f"{msg}. Check API keys or database credentials."
         return msg
 
-    async def _get_ingest_service(self, workspace: str) -> RAGService:
+    async def _get_ingest_service(self, workspace: str) -> WorkspaceRag:
         # Resolved through self so the coordinator sees the current service lookup.
         return await self._get_service(workspace)
 
-    async def _get_service(self, workspace: str) -> RAGService:
-        """Get or create a RAGService for a specific workspace. Async-safe.
+    async def _get_service(self, workspace: str) -> WorkspaceRag:
+        """Get or create a WorkspaceRag for a specific workspace. Async-safe.
 
         Normalizes the workspace name to a safe PG identifier (lowercase,
         alphanumeric + underscore only) before lookup or creation.
@@ -706,17 +708,19 @@ class RAGServiceManager:
 
             try:
                 ws_config = self._config.model_copy(update={"workspace": workspace})
-                svc = await RAGService.acreate(
-                    config=ws_config,
+                svc = await WorkspaceRag.acreate(
+                    workspace_id=workspace,
+                    settings=rag_settings(ws_config),
+                    backend=PGCorpusBackendFactory(ws_config).create(),
+                    telemetry=LangfuseTelemetry(),
                     rerank_supports_vision=self._rerank_supports_vision,
-                    corpus_backend_factory=PGCorpusBackendFactory(ws_config),
                 )
                 self._services[workspace] = svc
 
                 # Clear backoff on success
                 self._backoff.pop(workspace, None)
 
-                logger.info("Created RAGService for workspace '%s'", safe_log_text(workspace))
+                logger.info("Created WorkspaceRag for workspace '%s'", safe_log_text(workspace))
                 return svc
             except CorpusSchemaError:
                 # Terminal: no backoff or retry can repair an absent schema, and
@@ -729,7 +733,7 @@ class RAGServiceManager:
                 new_interval = min(prev_interval * 2, _MAX_RETRY_INTERVAL)
                 self._backoff[workspace] = (time.time(), new_interval)
                 logger.error(
-                    "RAGService creation failed for '%s': %s. Retry in %ss",
+                    "WorkspaceRag creation failed for '%s': %s. Retry in %ss",
                     safe_log_text(workspace),
                     safe_log_text(error_msg),
                     new_interval,
@@ -950,7 +954,7 @@ class RAGServiceManager:
         self._config.require_writer("ingestion")
         kwargs = ingest_kwargs_from_payload(request)
         return await self._ingest_jobs.start_job(
-            workspace,
+            normalize_workspace(workspace),
             request.source_type,
             cleanup_paths=_cleanup_paths_for_local_ingest(
                 source_type=request.source_type,
@@ -1026,15 +1030,16 @@ class RAGServiceManager:
         document_id: str,
     ) -> SourceDownloadTarget:
         """Prepare a source download without warming a workspace model service."""
+        from dlightrag_rag.source_download import SourceDownloadService
+
         from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
-        from dlightrag.core.source_download import SourceDownloadService
 
         workspace_id = normalize_workspace(workspace)
         index = PGMetadataIndex(workspace=workspace_id)
         service = SourceDownloadService(
-            config=self._config,
+            settings=rag_settings(self._config),
             metadata_index=index,
-            workspace=workspace_id,
+            workspace_id=workspace_id,
         )
         return await service.prepare(document_id)
 
@@ -1116,22 +1121,17 @@ class RAGServiceManager:
         """
         self._config.require_writer("workspace reset")
         if workspace is not None:
-            requested_workspace = workspace
             target_workspace = normalize_workspace(workspace)
             known = await self.alist_workspaces()
             if target_workspace not in known and target_workspace not in self._services:
                 cancelled_jobs = (
                     0 if dry_run else await self._ingest_jobs.cancel_for_workspace(target_workspace)
                 )
-                from dlightrag.core.reset import areset_orphaned_workspace
+                from dlightrag_rag.reset import areset_orphaned_workspace
 
                 result = await areset_orphaned_workspace(
-                    requested_workspace,
-                    maintenance=PGCorpusBackendFactory(
-                        self._config.model_copy(update={"workspace": target_workspace})
-                    )
-                    .create()
-                    .maintenance,
+                    target_workspace,
+                    maintenance=self._corpus_maintenance,
                     keep_files=keep_files,
                     dry_run=dry_run,
                     input_dir=str(self._config.input_dir_path),
@@ -2797,7 +2797,7 @@ class RAGServiceManager:
         }
 
     async def aclose(self) -> None:
-        """Close all managed RAGService instances."""
+        """Close all managed WorkspaceRag instances."""
         from dlightrag.observability import shutdown_tracing
 
         self._health.mark_closed()

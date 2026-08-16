@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for RAGService facade (core/service.py)."""
+"""Tests for the one-workspace RAG capability."""
 
 import asyncio
 import logging
@@ -11,32 +11,58 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from dlightrag_rag.ingestion.document_embedding import RobustDocumentEmbedder
+from dlightrag_ai.telemetry import NoopTelemetry
+from dlightrag_rag.ingestion.document_embedding import (
+    RobustDocumentEmbedder,
+    build_document_embedder,
+    resolve_direct_image_embedding_enabled,
+)
 from dlightrag_rag.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
+from dlightrag_rag.ingestion.paths import iter_ingestable_files, stage_input_file
 from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
-from lightrag.constants import DEFAULT_COSINE_THRESHOLD
+from dlightrag_rag.workspace_rag import RemoteIngestWindowProgress, WorkspaceRag
 
 from dlightrag.config import DlightragConfig
-from dlightrag.core.service import RAGService, RemoteIngestWindowProgress
+from dlightrag.model_settings import rag_settings
+from dlightrag.utils import normalize_workspace
 
 
 def _service(
     config: DlightragConfig,
     *,
-    corpus_backend_factory: Any | None = None,
-) -> RAGService:
-    return RAGService(
-        config=config,
-        corpus_backend_factory=cast(
+    backend: Any | None = None,
+) -> WorkspaceRag:
+    workspace_id = normalize_workspace(config.workspace)
+    return WorkspaceRag(
+        workspace_id=workspace_id,
+        settings=rag_settings(config),
+        backend=cast(
             Any,
-            corpus_backend_factory if corpus_backend_factory is not None else MagicMock(),
+            backend if backend is not None else _backend(workspace_id, read_only=config.is_reader),
         ),
+        telemetry=NoopTelemetry(),
+    )
+
+
+def _runtime_lightrag() -> SimpleNamespace:
+    return SimpleNamespace(
+        workspace="default",
+        chunks_vdb=SimpleNamespace(),
+        text_chunks=object(),
+        full_docs=object(),
+        doc_status=object(),
+        initialize_storages=AsyncMock(),
+        finalize_storages=AsyncMock(),
+        aquery_data=AsyncMock(),
+        apipeline_enqueue_documents=AsyncMock(),
+        apipeline_process_enqueue_documents=AsyncMock(),
     )
 
 
 def _runtime_binder() -> SimpleNamespace:
     return SimpleNamespace(
-        bind=AsyncMock(
+        create=MagicMock(return_value=_runtime_lightrag()),
+        attach=AsyncMock(
             return_value=SimpleNamespace(
                 metadata_index=object(),
                 chunks=object(),
@@ -44,8 +70,30 @@ def _runtime_binder() -> SimpleNamespace:
                 bm25=object(),
                 bm25_languages=(),
             )
-        )
+        ),
     )
+
+
+def _backend(workspace_id: str, *, read_only: bool) -> SimpleNamespace:
+    return SimpleNamespace(
+        workspace_id=workspace_id,
+        read_only=read_only,
+        coordination=SimpleNamespace(
+            workspace_initialization=lambda: _CoordinationContext(),
+            pipeline_recovery=lambda: _CoordinationContext(),
+        ),
+        maintenance=AsyncMock(),
+        runtime=_runtime_binder(),
+        ingest_jobs=AsyncMock(),
+    )
+
+
+class _CoordinationContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
 
 
 class _FakeChatModels:
@@ -59,14 +107,14 @@ class _FakeChatModels:
 
 
 # ---------------------------------------------------------------------------
-# TestRAGServiceAingest
+# TestWorkspaceRagAingest
 # ---------------------------------------------------------------------------
 
 
-class TestRAGServiceAingest:
+class TestWorkspaceRagAingest:
     """Test ingestion logic -- replace defaults, azure lifecycle."""
 
-    def _make_initialized_service(self, config: DlightragConfig) -> tuple[RAGService, MagicMock]:
+    def _make_initialized_service(self, config: DlightragConfig) -> tuple[WorkspaceRag, MagicMock]:
         service = _service(config)
         service._initialized = True
         ingestion = MagicMock()
@@ -82,16 +130,17 @@ class TestRAGServiceAingest:
         test_config: DlightragConfig,
     ) -> None:
         config = test_config.model_copy(update={"workspace": "test-fallback-ws"})
-        service = _service(config)
         maintenance = MagicMock()
         maintenance.register_workspace = AsyncMock()
-        cast(Any, service)._corpus_backend = SimpleNamespace(maintenance=maintenance)
+        backend = _backend("test_fallback_ws", read_only=False)
+        backend.maintenance = maintenance
+        service = _service(config, backend=backend)
 
         await service._upsert_workspace_meta()
 
         maintenance.register_workspace.assert_awaited_once_with(
             workspace="test_fallback_ws",
-            display_name="test-fallback-ws",
+            display_name="test_fallback_ws",
             embedding_model=config.embedding.model,
         )
 
@@ -107,13 +156,21 @@ class TestRAGServiceAingest:
     ) -> None:
         initialize = AsyncMock(side_effect=RuntimeError("initialization failed"))
         close = AsyncMock()
-        monkeypatch.setattr(RAGService, "initialize", initialize)
-        monkeypatch.setattr(RAGService, "aclose", close)
+        monkeypatch.setattr(WorkspaceRag, "initialize", initialize)
+        monkeypatch.setattr(WorkspaceRag, "aclose", close)
 
         with pytest.raises(RuntimeError, match="initialization failed"):
-            await RAGService.acreate(
-                config=test_config,
-                corpus_backend_factory=cast(Any, MagicMock()),
+            await WorkspaceRag.acreate(
+                workspace_id=normalize_workspace(test_config.workspace),
+                settings=rag_settings(test_config),
+                backend=cast(
+                    Any,
+                    _backend(
+                        normalize_workspace(test_config.workspace),
+                        read_only=test_config.is_reader,
+                    ),
+                ),
+                telemetry=NoopTelemetry(),
             )
 
         close.assert_awaited_once()
@@ -191,11 +248,11 @@ class TestRAGServiceAingest:
 
 
 # ---------------------------------------------------------------------------
-# TestRAGServiceClose
+# TestWorkspaceRagClose
 # ---------------------------------------------------------------------------
 
 
-class TestRAGServiceClose:
+class TestWorkspaceRagClose:
     """Test cleanup logic."""
 
     async def test_close_defers_cancellation_until_all_resources_are_closed(
@@ -258,7 +315,7 @@ class TestRAGServiceClose:
         service._lightrag = lightrag
 
         with patch(
-            "dlightrag.core.service.shutdown_lightrag_worker_pools",
+            "dlightrag_rag.workspace_rag.shutdown_lightrag_worker_pools",
             new_callable=AsyncMock,
             return_value=3,
         ) as shutdown:
@@ -278,8 +335,9 @@ class TestRAGServiceClose:
                 await allow_lock.wait()
                 yield
 
-        service = _service(test_config)
-        cast(Any, service)._corpus_backend = SimpleNamespace(coordination=FakeCoordination())
+        backend = _backend(normalize_workspace(test_config.workspace), read_only=False)
+        backend.coordination = FakeCoordination()
+        service = _service(test_config, backend=backend)
         service._lightrag = MagicMock()
         service._lightrag.apipeline_process_enqueue_documents = AsyncMock()
 
@@ -294,14 +352,14 @@ class TestRAGServiceClose:
 
 
 # ---------------------------------------------------------------------------
-# TestRAGServiceRetrieve
+# TestWorkspaceRagRetrieve
 # ---------------------------------------------------------------------------
 
 
-class TestRAGServiceRetrieve:
+class TestWorkspaceRagRetrieve:
     """Test aretrieve delegation to RetrievalEngine."""
 
-    def _make_retrieval_service(self, config: DlightragConfig) -> tuple[RAGService, MagicMock]:
+    def _make_retrieval_service(self, config: DlightragConfig) -> tuple[WorkspaceRag, MagicMock]:
         from dlightrag_rag.retrieval import RetrievalResult
 
         service = _service(config)
@@ -532,11 +590,11 @@ class TestRAGServiceRetrieve:
 
 
 # ---------------------------------------------------------------------------
-# TestRAGServiceFileManagement
+# TestWorkspaceRagFileManagement
 # ---------------------------------------------------------------------------
 
 
-class TestRAGServiceFileManagement:
+class TestWorkspaceRagFileManagement:
     """Test alist_ingested_files and adelete_files delegation."""
 
     async def test_alist_not_initialized_raises(self, test_config):
@@ -584,36 +642,6 @@ class TestRAGServiceFileManagement:
 
 
 # ---------------------------------------------------------------------------
-# TestBuildVectorDbKwargs
-# ---------------------------------------------------------------------------
-
-
-class TestBuildVectorDbKwargs:
-    """Test _build_vector_db_kwargs passthrough."""
-
-    def test_default_uses_lightrag_cosine_threshold(self, test_config: DlightragConfig) -> None:
-        result = RAGService._build_vector_db_kwargs(test_config)
-        assert result == {"cosine_better_than_threshold": DEFAULT_COSINE_THRESHOLD}
-
-    def test_passthrough_merges_kwargs(self, test_config: DlightragConfig) -> None:
-        test_config.vector_db_kwargs = {
-            "index_type": "HNSW_SQ",
-            "sq_type": "SQ8",
-            "hnsw_m": 32,
-        }
-        result = RAGService._build_vector_db_kwargs(test_config)
-        assert result["cosine_better_than_threshold"] == DEFAULT_COSINE_THRESHOLD
-        assert result["index_type"] == "HNSW_SQ"
-        assert result["sq_type"] == "SQ8"
-        assert result["hnsw_m"] == 32
-
-    def test_passthrough_overrides_default(self, test_config: DlightragConfig) -> None:
-        test_config.vector_db_kwargs = {"cosine_better_than_threshold": 0.5}
-        result = RAGService._build_vector_db_kwargs(test_config)
-        assert result["cosine_better_than_threshold"] == 0.5
-
-
-# ---------------------------------------------------------------------------
 # TestBuildAddonParams
 # ---------------------------------------------------------------------------
 
@@ -624,7 +652,7 @@ class TestBuildAddonParams:
     def test_uses_lightrag_15_entity_guidance(self, test_config: DlightragConfig) -> None:
         test_config.kg_entity_types = ["Product", "Technology", "Organization"]
 
-        result = RAGService._build_addon_params(test_config)
+        result = rag_settings(test_config).addon_params()
 
         assert result["language"] == "English"
         assert "entity_types" not in result
@@ -639,7 +667,7 @@ class TestBuildAddonParams:
         test_config.extraction.entity_type_prompt_file = "domain-entities.yaml"
         test_config.kg_entity_types = []
 
-        result = RAGService._build_addon_params(test_config)
+        result = rag_settings(test_config).addon_params()
 
         assert result == {
             "language": "Chinese",
@@ -656,8 +684,8 @@ class TestBuildRetrievalBackend:
         test_config.max_relation_tokens = 222
         test_config.max_total_tokens = 333
 
-        backend = RAGService._build_retrieval_backend(
-            test_config,
+        backend = WorkspaceRag._build_retrieval_backend(
+            rag_settings(test_config),
             lightrag=MagicMock(),
             stores=MagicMock(),
         )
@@ -675,7 +703,7 @@ class TestDirectImageEmbeddingCapability:
         embedder.supports_images = False
         embedder.probe_image_embedding = AsyncMock()
 
-        enabled = await RAGService._resolve_direct_image_embedding_enabled(
+        enabled = await resolve_direct_image_embedding_enabled(
             embedder,
             startup_probe=True,
             require_image_support=False,
@@ -689,7 +717,7 @@ class TestDirectImageEmbeddingCapability:
         embedder.supports_images = True
         embedder.probe_image_embedding = AsyncMock(side_effect=RuntimeError("image rejected"))
 
-        enabled = await RAGService._resolve_direct_image_embedding_enabled(
+        enabled = await resolve_direct_image_embedding_enabled(
             embedder,
             startup_probe=True,
             require_image_support=False,
@@ -707,7 +735,7 @@ class TestDirectImageEmbeddingCapability:
             ValueError,
             match="input_modality='multimodal'.*does not support image inputs",
         ):
-            await RAGService._resolve_direct_image_embedding_enabled(
+            await resolve_direct_image_embedding_enabled(
                 embedder,
                 startup_probe=True,
                 require_image_support=True,
@@ -724,7 +752,7 @@ class TestDirectImageEmbeddingCapability:
             ValueError,
             match="input_modality='multimodal'.*startup probe failed",
         ):
-            await RAGService._resolve_direct_image_embedding_enabled(
+            await resolve_direct_image_embedding_enabled(
                 embedder,
                 startup_probe=True,
                 require_image_support=True,
@@ -735,7 +763,7 @@ class TestDirectImageEmbeddingCapability:
         embedder.supports_images = True
         embedder.probe_image_embedding = AsyncMock()
 
-        enabled = await RAGService._resolve_direct_image_embedding_enabled(
+        enabled = await resolve_direct_image_embedding_enabled(
             embedder,
             startup_probe=False,
             require_image_support=True,
@@ -758,8 +786,8 @@ class TestDirectImageEmbeddingCapability:
             "dlightrag_rag.ingestion.document_embedding.RobustDocumentEmbedder",
             return_value=expected,
         ) as constructor:
-            result = RAGService._build_document_embedder(
-                test_config,
+            result = build_document_embedder(
+                rag_settings(test_config),
                 embedder,
                 image_enabled=True,
             )
@@ -776,12 +804,12 @@ class TestDirectImageEmbeddingCapability:
 
 
 # ---------------------------------------------------------------------------
-# TestRAGServiceLightRAGMainPath
+# TestWorkspaceRagLightRAGMainPath
 # ---------------------------------------------------------------------------
 
 
-class TestRAGServiceLightRAGMainPath:
-    """Test LightRAG-main path behavior in RAGService."""
+class TestWorkspaceRagLightRAGMainPath:
+    """Test LightRAG-main path behavior in WorkspaceRag."""
 
     async def test_initialize_syncs_and_validates_parser_config(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
@@ -813,7 +841,7 @@ class TestRAGServiceLightRAGMainPath:
         from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
 
         factory = PGCorpusBackendFactory(test_config)
-        service = _service(test_config, corpus_backend_factory=factory)
+        service = _service(test_config, backend=factory.create())
         monkeypatch.setattr(service, "_do_initialize_unified", AsyncMock())
 
         factory.create()
@@ -827,10 +855,9 @@ class TestRAGServiceLightRAGMainPath:
             "patches",
         ]
 
-    async def test_writer_initialization_ignores_reader_attach_contract_drift(
+    async def test_writer_initialization_uses_provider_guard_and_backend_attach(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        service = _service(test_config)
         call_order: list[str] = []
         resume_pipeline = AsyncMock()
 
@@ -839,235 +866,180 @@ class TestRAGServiceLightRAGMainPath:
             async def pipeline_recovery(self):
                 yield
 
-        cast(Any, service)._corpus_backend = SimpleNamespace(
-            coordination=FakeCoordination(),
-            runtime=_runtime_binder(),
-        )
+        runtime = _runtime_binder()
+        runtime.create.return_value.apipeline_process_enqueue_documents = resume_pipeline
+        backend = _backend(normalize_workspace(test_config.workspace), read_only=False)
+        backend.coordination = FakeCoordination()
+        backend.runtime = runtime
+        service = _service(test_config, backend=backend)
 
         class FakeGuard:
             def __init__(self, _lightrag: object) -> None:
                 pass
 
-            def verify_read_only_attach_contract(self) -> None:
-                raise RuntimeError("reader attach drift")
-
-            async def verify_all(self) -> None:
-                call_order.append("verify_all")
-
-        class FakeLightRAG:
-            def __init__(self, **kwargs: object) -> None:
-                self.workspace = kwargs["workspace"]
-                self.chunks_vdb = SimpleNamespace(
-                    db=SimpleNamespace(pool=object()),
-                    embedding_func=None,
-                    table_name="LIGHTRAG_DOC_CHUNKS",
-                    ensure_doc_scope_index=AsyncMock(),
-                )
-                self.initialize_storages = AsyncMock()
-                self.apipeline_process_enqueue_documents = resume_pipeline
-                self.text_chunks = object()
-                self.full_docs = object()
-                self.doc_status = object()
+            def verify(self) -> None:
+                call_order.append("provider_verify")
 
         monkeypatch.setattr(
-            "dlightrag.core.service.LightRagChatModels",
+            "dlightrag_rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag.core.service.build_rerank_func", lambda *_a, **_k: None)
+        monkeypatch.setattr("dlightrag_rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag.core.service.create_embedding_model",
+            "dlightrag_rag.workspace_rag.create_embedding_model",
             lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag.core.service.build_lightrag_embedding", lambda *_args: object()
+            "dlightrag_rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
-            RAGService,
-            "_resolve_direct_image_embedding_enabled",
+            "dlightrag_rag.workspace_rag.resolve_direct_image_embedding_enabled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            RAGService, "_build_document_embedder", lambda self, *args, **kwargs: object()
+            "dlightrag_rag.workspace_rag.build_document_embedder",
+            lambda *args, **kwargs: object(),
         )
         monkeypatch.setattr(
-            RAGService, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
+            WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr(
-            "dlightrag.core.service.attach_lightrag_storages_read_only",
-            AsyncMock(side_effect=AssertionError("writer path must not attach read-only storages")),
-        )
-        monkeypatch.setattr("dlightrag.core.service.LightRAGContractGuard", FakeGuard)
+        monkeypatch.setattr("dlightrag_rag.workspace_rag.LightRAGContractGuard", FakeGuard)
 
         with (
-            patch("lightrag.LightRAG", FakeLightRAG),
-            patch("dlightrag.core.service.rerank_consumes_images", return_value=False),
+            patch("dlightrag_rag.workspace_rag.rerank_consumes_images", return_value=False),
             patch(
                 "dlightrag_rag.retrieval.filtering.FilteredVectorStorage",
                 side_effect=lambda **kwargs: kwargs["original"],
             ),
             patch("dlightrag_rag.lightrag_stores.LightRAGStores", return_value=object()),
-            patch("dlightrag.core.visual_assets.ThumbnailCache", return_value=object()),
-            patch("dlightrag.core.visual_assets.VisualAssetResolver", return_value=object()),
+            patch("dlightrag_rag.visual_assets.ThumbnailCache", return_value=object()),
+            patch("dlightrag_rag.visual_assets.VisualAssetResolver", return_value=object()),
             patch("dlightrag_rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             await service._do_initialize_unified()
             await asyncio.sleep(0)
 
-        assert call_order == ["verify_all"]
+        assert call_order == ["provider_verify"]
         # The KG legs resolve chunks through text_chunks, so a document scope
         # only reaches them while this wrapper is installed.
         assert type(service._lightrag.text_chunks).__name__ == "FilteredChunkStore"
         resume_pipeline.assert_awaited_once_with()
 
-    async def test_reader_initialization_raises_on_reader_attach_contract_drift(
+    async def test_backend_attach_failure_aborts_initialization(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         reader_config = test_config.model_copy(update={"service_role": "reader"})
         service = _service(reader_config)
+        cast(Any, service.backend.runtime.attach).side_effect = RuntimeError("reader attach drift")
 
         class FakeGuard:
             def __init__(self, _lightrag: object) -> None:
                 pass
 
-            def verify_read_only_attach_contract(self) -> None:
-                raise RuntimeError("reader attach drift")
-
-            async def verify_all(self) -> None:
-                raise AssertionError("verify_all should not run after reader precheck failure")
-
-        class FakeLightRAG:
-            def __init__(self, **kwargs: object) -> None:
-                self.workspace = kwargs["workspace"]
-                self.chunks_vdb = SimpleNamespace(
-                    db=SimpleNamespace(pool=object()),
-                    embedding_func=None,
-                    table_name="LIGHTRAG_DOC_CHUNKS",
-                    ensure_doc_scope_index=AsyncMock(),
-                )
-                self.text_chunks = object()
-                self.full_docs = object()
-                self.doc_status = object()
+            def verify(self) -> None:
+                return None
 
         monkeypatch.setattr(
-            "dlightrag.core.service.LightRagChatModels",
+            "dlightrag_rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag.core.service.build_rerank_func", lambda *_a, **_k: None)
+        monkeypatch.setattr("dlightrag_rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag.core.service.create_embedding_model",
+            "dlightrag_rag.workspace_rag.create_embedding_model",
             lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag.core.service.build_lightrag_embedding", lambda *_args: object()
+            "dlightrag_rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
-            RAGService,
-            "_resolve_direct_image_embedding_enabled",
+            "dlightrag_rag.workspace_rag.resolve_direct_image_embedding_enabled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            RAGService, "_build_document_embedder", lambda self, *args, **kwargs: object()
+            "dlightrag_rag.workspace_rag.build_document_embedder",
+            lambda *args, **kwargs: object(),
         )
         monkeypatch.setattr(
-            RAGService, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
+            WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr(
-            "dlightrag.core.service.attach_lightrag_storages_read_only",
-            AsyncMock(side_effect=AssertionError("attach should not run after precheck failure")),
-        )
-        monkeypatch.setattr("dlightrag.core.service.LightRAGContractGuard", FakeGuard)
+        monkeypatch.setattr("dlightrag_rag.workspace_rag.LightRAGContractGuard", FakeGuard)
 
         with (
-            patch("lightrag.LightRAG", FakeLightRAG),
-            patch("dlightrag.core.service.rerank_consumes_images", return_value=False),
+            patch("dlightrag_rag.workspace_rag.rerank_consumes_images", return_value=False),
             patch("dlightrag_rag.lightrag_stores.LightRAGStores", return_value=object()),
-            patch("dlightrag.core.visual_assets.ThumbnailCache", return_value=object()),
-            patch("dlightrag.core.visual_assets.VisualAssetResolver", return_value=object()),
+            patch("dlightrag_rag.visual_assets.ThumbnailCache", return_value=object()),
+            patch("dlightrag_rag.visual_assets.VisualAssetResolver", return_value=object()),
             patch("dlightrag_rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             with pytest.raises(RuntimeError, match="reader attach drift"):
                 await service._do_initialize_unified()
 
-    async def test_reader_initialization_checks_attach_contract_before_adapter(
+    async def test_provider_contract_runs_before_backend_attach(
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         reader_config = test_config.model_copy(update={"service_role": "reader"})
-        service = _service(reader_config)
-        cast(Any, service)._corpus_backend = SimpleNamespace(runtime=_runtime_binder())
+        runtime = _runtime_binder()
+        backend = _backend(normalize_workspace(reader_config.workspace), read_only=True)
+        backend.runtime = runtime
+        service = _service(reader_config, backend=backend)
         call_order: list[object] = []
 
         class FakeGuard:
             def __init__(self, _lightrag: object) -> None:
                 pass
 
-            def verify_read_only_attach_contract(self) -> None:
+            def verify(self) -> None:
                 call_order.append("precheck")
 
-            async def verify_all(self) -> None:
-                call_order.append("verify_all")
+        attached_stores = runtime.attach.return_value
 
-        class FakeLightRAG:
-            def __init__(self, **kwargs: object) -> None:
-                self.workspace = kwargs["workspace"]
-                self.chunks_vdb = SimpleNamespace(
-                    db=SimpleNamespace(pool=object()),
-                    embedding_func=None,
-                    table_name="LIGHTRAG_DOC_CHUNKS",
-                    ensure_doc_scope_index=AsyncMock(),
-                )
-                self.text_chunks = object()
-                self.full_docs = object()
-                self.doc_status = object()
-
-        async def _fake_attach(lightrag: object, *, config: object) -> None:
-            assert config is reader_config
+        async def _fake_attach(lightrag: object) -> object:
+            assert lightrag is runtime.create.return_value
             assert "precheck" in call_order
             call_order.append("attach")
+            return attached_stores
+
+        runtime.attach.side_effect = _fake_attach
 
         monkeypatch.setattr(
-            "dlightrag.core.service.LightRagChatModels",
+            "dlightrag_rag.workspace_rag.LightRagChatModels",
             _FakeChatModels,
         )
-        monkeypatch.setattr("dlightrag.core.service.build_rerank_func", lambda *_a, **_k: None)
+        monkeypatch.setattr("dlightrag_rag.workspace_rag.build_rerank_func", lambda *_a, **_k: None)
         monkeypatch.setattr(
-            "dlightrag.core.service.create_embedding_model",
+            "dlightrag_rag.workspace_rag.create_embedding_model",
             lambda *_args, **_kwargs: object(),
         )
         monkeypatch.setattr(
-            "dlightrag.core.service.build_lightrag_embedding", lambda *_args: object()
+            "dlightrag_rag.workspace_rag.build_lightrag_embedding", lambda *_args: object()
         )
         monkeypatch.setattr(
-            RAGService,
-            "_resolve_direct_image_embedding_enabled",
+            "dlightrag_rag.workspace_rag.resolve_direct_image_embedding_enabled",
             AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
-            RAGService, "_build_document_embedder", lambda self, *args, **kwargs: object()
+            "dlightrag_rag.workspace_rag.build_document_embedder",
+            lambda *args, **kwargs: object(),
         )
         monkeypatch.setattr(
-            RAGService, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
+            WorkspaceRag, "_build_retrieval_backend", lambda self, *args, **kwargs: object()
         )
-        monkeypatch.setattr(
-            "dlightrag.core.service.attach_lightrag_storages_read_only",
-            AsyncMock(side_effect=_fake_attach),
-        )
-        monkeypatch.setattr("dlightrag.core.service.LightRAGContractGuard", FakeGuard)
+        monkeypatch.setattr("dlightrag_rag.workspace_rag.LightRAGContractGuard", FakeGuard)
 
         with (
-            patch("lightrag.LightRAG", FakeLightRAG),
-            patch("dlightrag.core.service.rerank_consumes_images", return_value=False),
+            patch("dlightrag_rag.workspace_rag.rerank_consumes_images", return_value=False),
             patch(
                 "dlightrag_rag.retrieval.filtering.FilteredVectorStorage",
                 side_effect=lambda **kwargs: kwargs["original"],
             ),
             patch("dlightrag_rag.lightrag_stores.LightRAGStores", return_value=object()),
-            patch("dlightrag.core.visual_assets.ThumbnailCache", return_value=object()),
-            patch("dlightrag.core.visual_assets.VisualAssetResolver", return_value=object()),
+            patch("dlightrag_rag.visual_assets.ThumbnailCache", return_value=object()),
+            patch("dlightrag_rag.visual_assets.VisualAssetResolver", return_value=object()),
             patch("dlightrag_rag.retrieval.retriever.UnifiedRetriever", return_value=object()),
         ):
             await service._do_initialize_unified()
 
-        assert call_order == ["precheck", "attach", "verify_all"]
+        assert call_order == ["precheck", "attach"]
 
     async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:
         """Downloads one blob into an ephemeral parser item and stores remote metadata."""
@@ -1248,7 +1220,7 @@ class TestRAGServiceLightRAGMainPath:
         self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Recovered remote jobs resume from the next unfinished source window."""
-        monkeypatch.setattr("dlightrag.core.service._REMOTE_INGEST_BATCH_SIZE", 2)
+        monkeypatch.setattr("dlightrag_rag.workspace_rag._REMOTE_INGEST_BATCH_SIZE", 2)
 
         class StreamingS3Source:
             def __init__(self) -> None:
@@ -1623,7 +1595,7 @@ class TestRAGServiceLightRAGMainPath:
         service._initialized = True
         service._ingestion_engine = MagicMock()
 
-        with caplog.at_level(logging.INFO, logger="dlightrag.core.service"):
+        with caplog.at_level(logging.INFO, logger="dlightrag_rag.workspace_rag"):
             result = await service.aingest_source(
                 BynderSource(),
                 source_type="bynder",
@@ -2003,7 +1975,7 @@ class TestRAGServiceLightRAGMainPath:
             urls=["https://api.bynder.com/docs/getting-started"],
             filename="getting-started.html",
             max_download_bytes=test_config.url_ingest_max_bytes,
-            allow_private_hosts=["*.corp.example"],
+            allow_private_hosts=("*.corp.example",),
         )
         assert result["status"] == "success"
         await_args = service._ingestion_engine.aingest_files.await_args
@@ -2209,8 +2181,6 @@ class TestRAGServiceLightRAGMainPath:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import dlightrag.core.service as service_module
-
         docs_dir = tmp_path / "docs"
         docs_dir.mkdir()
         (docs_dir / "a.pdf").write_bytes(b"a")
@@ -2221,7 +2191,7 @@ class TestRAGServiceLightRAGMainPath:
             calls.append(func)
             return func(*args, **kwargs)
 
-        monkeypatch.setattr(service_module.asyncio, "to_thread", fake_to_thread)
+        monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
         service = _service(test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
@@ -2232,8 +2202,8 @@ class TestRAGServiceLightRAGMainPath:
 
         await service.aingest(source_type="local", path=str(docs_dir))
 
-        assert service_module.iter_ingestable_files in calls
-        assert calls.count(service_module.stage_input_file) == 2
+        assert iter_ingestable_files in calls
+        assert calls.count(stage_input_file) == 2
 
     async def test_aingest_explicit_upload_batch_directory_is_ingestable(
         self, test_config: DlightragConfig, tmp_path: Path

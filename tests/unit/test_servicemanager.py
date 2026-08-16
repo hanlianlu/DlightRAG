@@ -517,18 +517,19 @@ class TestDirectLLMSemaphore:
 
 
 class TestGetService:
-    """Test workspace-keyed RAGService creation and caching."""
+    """Test workspace-keyed WorkspaceRag creation and caching."""
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_creates_service_for_workspace(self, mock_create, test_cfg) -> None:
         mock_create.return_value = AsyncMock()
         manager = RAGServiceManager(config=test_cfg)
         svc = await manager._get_service("project-a")
         assert svc is mock_create.return_value
         call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["config"].workspace == "project_a"  # normalized
+        assert call_kwargs["workspace_id"] == "project_a"
+        assert call_kwargs["settings"].embedding.model == test_cfg.embedding.model
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_caches_per_workspace(self, mock_create, test_cfg) -> None:
         mock_create.return_value = AsyncMock()
         manager = RAGServiceManager(config=test_cfg)
@@ -537,7 +538,7 @@ class TestGetService:
         assert svc1 is svc2
         assert mock_create.await_count == 1
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_different_workspaces_different_services(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = [AsyncMock(), AsyncMock()]
         manager = RAGServiceManager(config=test_cfg)
@@ -546,7 +547,7 @@ class TestGetService:
         assert svc1 is not svc2
         assert mock_create.await_count == 2
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_concurrent_creates_once(self, mock_create, test_cfg) -> None:
         mock_service = AsyncMock()
 
@@ -586,7 +587,7 @@ class TestWorkspaceCreation:
             embedding_model=cfg.embedding.model,
         )
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_create_workspace_registers_workspace_meta(self, mock_create, test_cfg) -> None:
         svc = AsyncMock()
         mock_create.return_value = svc
@@ -600,7 +601,7 @@ class TestWorkspaceCreation:
 class TestBackoff:
     """Test exponential backoff on service creation failure."""
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_failure_sets_error_state(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("DB down")
         manager = RAGServiceManager(config=test_cfg)
@@ -609,7 +610,7 @@ class TestBackoff:
         assert not manager.health.is_ready
         assert "ws_a" in manager._backoff
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_backoff_blocks_retry(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("fail")
         manager = RAGServiceManager(config=test_cfg)
@@ -619,7 +620,7 @@ class TestBackoff:
             await manager._get_service("ws_a")
         assert mock_create.await_count == 1
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_retry_succeeds_after_backoff(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("fail")
         manager = RAGServiceManager(config=test_cfg)
@@ -633,7 +634,7 @@ class TestBackoff:
         svc = await manager._get_service("ws_a")
         assert svc is mock_create.return_value
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_success_resets_error_state(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("fail")
         manager = RAGServiceManager(config=test_cfg)
@@ -647,12 +648,12 @@ class TestBackoff:
         await manager._get_service("ws_a")
         assert "ws_a" not in manager._backoff
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_per_workspace_backoff_isolation(self, mock_create, test_cfg) -> None:
         """Workspace A in backoff does not block workspace B."""
 
         async def fail_only_a(**kwargs):
-            if kwargs["config"].workspace == "ws_a":
+            if kwargs["workspace_id"] == "ws_a":
                 raise RuntimeError("ws_a is down")
             return AsyncMock()
 
@@ -666,7 +667,7 @@ class TestBackoff:
         assert "ws_a" in manager._backoff
         assert "ws_b" not in manager._backoff
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_backoff_clears_on_success(self, mock_create, test_cfg) -> None:
         """Backoff entry for a workspace is removed after a successful creation."""
         mock_create.side_effect = RuntimeError("fail")
@@ -693,7 +694,7 @@ class TestRouting:
 
         monkeypatch.setattr(RAGServiceManager, "_plan_retrieval", _fake)
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aretrieve_single_workspace(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.aretrieve.return_value = MagicMock()
@@ -703,7 +704,7 @@ class TestRouting:
         mock_svc.aretrieve.assert_awaited_once()
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aretrieve_multi_workspace_federates(
         self, mock_create, mock_fed, test_cfg
     ) -> None:
@@ -767,7 +768,7 @@ class TestRouting:
                 pass
         manager.alist_workspaces.assert_not_awaited()
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aretrieve_default_workspace(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.aretrieve.return_value = MagicMock()
@@ -775,12 +776,12 @@ class TestRouting:
         manager = RAGServiceManager(config=test_cfg)
         await manager.aretrieve("query")
         call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["config"].workspace == test_cfg.workspace
+        assert call_kwargs["workspace_id"] == test_cfg.workspace
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
         assert retrieve_kwargs["top_k"] == test_cfg.top_k
         assert retrieve_kwargs["chunk_top_k"] == test_cfg.chunk_top_k
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aretrieve_keeps_explicit_retrieval_limits(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.aretrieve.return_value = MagicMock()
@@ -791,7 +792,7 @@ class TestRouting:
         assert retrieve_kwargs["top_k"] == 9
         assert retrieve_kwargs["chunk_top_k"] == 4
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aretrieve_forwards_bm25_query(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.aretrieve.return_value = MagicMock()
@@ -862,7 +863,7 @@ class TestRouting:
         assert service.aretrieve.await_args.kwargs["filter_source"] == "explicit"
         assert service.aretrieve.await_args.kwargs["bm25_query"] == "caller terms"
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aretrieve_threads_query_images_to_backend(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.aretrieve.return_value = MagicMock()
@@ -873,7 +874,7 @@ class TestRouting:
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
         assert retrieve_kwargs["query_image_blocks"] == blocks
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aretrieve_rejects_images_beyond_the_public_contract(
         self, mock_create, test_cfg
     ) -> None:
@@ -902,7 +903,7 @@ class TestRouting:
         assert descriptions == ["Image 1: chart"]
         describer.describe.assert_awaited_once_with(current)
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aanswer_calls_aretrieve_then_engine(self, mock_create, test_cfg) -> None:
         """A durable run routes through aretrieve() then generate_stream()."""
         mock_svc = AsyncMock()
@@ -1001,7 +1002,7 @@ class TestAnswerViaEngine:
             }
         ]
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aanswer_calls_retrieve_then_engine(
         self, mock_create, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1074,7 +1075,7 @@ class TestAnswerViaEngine:
             }
         ]
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aanswer_derives_candidate_and_context_limits(
         self, mock_create, test_cfg
     ) -> None:
@@ -1110,7 +1111,7 @@ class TestAnswerViaEngine:
         )
         assert result.answer == "a"
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aanswer_uses_chunk_top_k_as_candidate_override(
         self, mock_create, test_cfg
     ) -> None:
@@ -1181,7 +1182,7 @@ class TestAnswerViaEngine:
         assert generate_call.args[0] == "follow up"
         assert generate_call.kwargs["conversation_history"].messages == history
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aanswer_semantic_highlights_are_opt_in(
         self, mock_create, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1262,7 +1263,7 @@ class TestAnswerViaEngine:
         highlight_model.aclose.assert_awaited_once()
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aanswer_multi_workspace_uses_federated_retrieve(
         self, mock_create, mock_fed_retrieve, test_cfg
     ) -> None:
@@ -1424,7 +1425,7 @@ class TestAnswerViaEngine:
 class TestDelegation:
     """Test write-operation delegation."""
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aingest_uses_job_runner_and_returns_result(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.aingest.return_value = {"doc_id": "d1", "status": "ok"}
@@ -1448,7 +1449,7 @@ class TestDelegation:
         assert row["processed_items"] == 1
         assert row["result"] == {"doc_id": "d1", "status": "ok"}
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_s3_region_reaches_service_ingest(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.aingest.return_value = {"processed": 1, "errors": []}
@@ -1468,7 +1469,7 @@ class TestDelegation:
 
         assert mock_svc.aingest.await_args.kwargs["s3_region"] == "eu-north-1"
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_aingest_source_delegates_directly_to_service(
         self, mock_create, test_cfg
     ) -> None:
@@ -1501,7 +1502,7 @@ class TestDelegation:
         assert mock_svc.aingest_source.await_args.kwargs["retain_source_file"] is True
         assert manager._ingest_jobs._tasks == {}
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_list_ingested_files_delegates(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.alist_ingested_files.return_value = [{"doc": "d1"}]
@@ -1531,7 +1532,9 @@ class TestDelegation:
         manager._get_service.assert_not_awaited()
 
     async def test_source_download_does_not_initialize_cold_workspace(self, test_cfg) -> None:
-        from dlightrag.core.source_download import RedirectDownloadTarget
+        from dlightrag_rag.source_download import RedirectDownloadTarget
+
+        from dlightrag.model_settings import rag_settings
 
         manager = RAGServiceManager(config=test_cfg)
         manager._get_service = AsyncMock(  # type: ignore[method-assign]
@@ -1548,7 +1551,7 @@ class TestDelegation:
                 return_value=metadata_index,
             ) as index_type,
             patch(
-                "dlightrag.core.source_download.SourceDownloadService",
+                "dlightrag_rag.source_download.SourceDownloadService",
                 return_value=service,
             ) as service_type,
         ):
@@ -1557,9 +1560,9 @@ class TestDelegation:
         assert result is target
         index_type.assert_called_once_with(workspace="finance_team")
         service_type.assert_called_once_with(
-            config=test_cfg,
+            settings=rag_settings(test_cfg),
             metadata_index=metadata_index,
-            workspace="finance_team",
+            workspace_id="finance_team",
         )
         service.prepare.assert_awaited_once_with("doc-1")
         manager._get_service.assert_not_awaited()
@@ -1588,7 +1591,7 @@ class TestDelegation:
         }
         svc.aget_pipeline_status.assert_awaited_once()
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_delete_files_delegates(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.adelete_files.return_value = [{"status": "deleted"}]
@@ -2038,7 +2041,7 @@ class TestDegradedMode:
         ):
             monkeypatch.setattr(RAGServiceManager, name, AsyncMock())
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_create_sets_ready_on_success(self, mock_create, test_cfg) -> None:
         mock_create.return_value = AsyncMock()
         manager = await RAGServiceManager.acreate(config=test_cfg)
@@ -2047,7 +2050,7 @@ class TestDegradedMode:
         # Warnings may include "Workspace registry unavailable" in tests
         # without a running PostgreSQL — that's expected and non-fatal.
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_create_eagerly_initializes_retrieval_planner(
         self, mock_create, test_cfg
     ) -> None:
@@ -2226,7 +2229,7 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
 
         assert resolved == {item.role: item.profile for item in pinned}
 
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_create_sets_degraded_on_failure(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("DB down")
         manager = await RAGServiceManager.acreate(config=test_cfg)
@@ -2263,7 +2266,7 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
 
 
 class TestActionableErrors:
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_connection_refused_gets_hint(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = ConnectionRefusedError("Connection refused")
         manager = RAGServiceManager(config=test_cfg)
@@ -2282,7 +2285,7 @@ class TestActionableErrors:
 
 
 class TestRequestTimeout:
-    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_retrieve_timeout(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
 

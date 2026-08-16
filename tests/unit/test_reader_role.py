@@ -153,10 +153,12 @@ _SERVICE_WRITE_CALLS = [
 
 @pytest.mark.parametrize(("method", "args", "kwargs"), _SERVICE_WRITE_CALLS)
 async def test_service_write_guards_reject_reader(method, args, kwargs) -> None:
-    from dlightrag.core.service import RAGService
+    from dlightrag_rag.workspace_rag import WorkspaceRag
 
-    service = object.__new__(RAGService)
-    service.config = _config(service_role="reader")
+    from dlightrag.model_settings import rag_settings
+
+    service = object.__new__(WorkspaceRag)
+    service.settings = rag_settings(_config(service_role="reader"))
     with pytest.raises(PermissionError):
         await getattr(service, method)(*args, **kwargs)
 
@@ -419,7 +421,7 @@ def _patch_manager_startup(
 ) -> None:
     """Neutralize every startup step the schema tests do not exercise.
 
-    ``RAGService.acreate`` is patched instead of ``_get_service`` so the real
+    ``WorkspaceRag.acreate`` is patched instead of ``_get_service`` so the real
     workspace warm-up path, including its error conversion, still runs.
     """
     import dlightrag.core.servicemanager as servicemanager_module
@@ -437,7 +439,7 @@ def _patch_manager_startup(
         lambda self, model_profile=None: None,
     )
     monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", AsyncMock())
-    monkeypatch.setattr(servicemanager_module.RAGService, "acreate", AsyncMock())
+    monkeypatch.setattr(servicemanager_module.WorkspaceRag, "acreate", AsyncMock())
     if stub_answer_store:
         monkeypatch.setattr(RAGServiceManager, "_initialize_answer_run_store", AsyncMock())
 
@@ -525,7 +527,9 @@ async def test_service_creation_propagates_a_schema_failure_without_backoff(
     from dlightrag.core.servicemanager import RAGServiceManager
 
     failure = CorpusSchemaError("doc_metadata is missing versions: column_title")
-    monkeypatch.setattr(servicemanager_module.RAGService, "acreate", AsyncMock(side_effect=failure))
+    monkeypatch.setattr(
+        servicemanager_module.WorkspaceRag, "acreate", AsyncMock(side_effect=failure)
+    )
     manager = RAGServiceManager(config=_config(service_role="reader"))
 
     with pytest.raises(CorpusSchemaError) as excinfo:
@@ -547,7 +551,9 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
 
     _patch_manager_startup(monkeypatch)
     failure = CorpusSchemaError("doc_metadata is missing versions: column_title")
-    monkeypatch.setattr(servicemanager_module.RAGService, "acreate", AsyncMock(side_effect=failure))
+    monkeypatch.setattr(
+        servicemanager_module.WorkspaceRag, "acreate", AsyncMock(side_effect=failure)
+    )
     recovery = AsyncMock()
     monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", recovery)
     closed: list[Any] = []

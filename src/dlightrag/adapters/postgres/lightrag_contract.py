@@ -7,8 +7,8 @@ LightRAG text_chunks/chunks_vdb/doc_status). This guard validates all
 coupling assumptions once at startup and fails fast with a complete error
 report if anything has drifted between LightRAG releases.
 
-Called once in RAGService init after LightRAG.initialize_storages() and
-before chunks_vdb is wrapped by FilteredVectorStorage.
+Called by the PostgreSQL corpus adapter after storage attachment and before
+chunks_vdb is wrapped by the storage-neutral filtering layer.
 """
 
 import logging
@@ -32,7 +32,7 @@ READ_ONLY_STORAGE_ATTRS = (
 )
 
 
-class LightRAGContractGuard:
+class PGLightRAGContractGuard:
     """Validates LightRAG internal API assumptions at startup.
 
     Collects all errors before raising, producing one report instead of
@@ -226,3 +226,6 @@ class LightRAGContractGuard:
                 signature, expected, required_kinds
             ):
                 errors.append(f"{name} signature changed: expected prefix {expected}, got {params}")
+
+
+__all__ = ["PGLightRAGContractGuard", "READ_ONLY_STORAGE_ATTRS"]

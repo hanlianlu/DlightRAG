@@ -17,6 +17,7 @@ from dlightrag_ai.settings import (
     ModelSettings,
     RerankSettings,
 )
+from dlightrag_rag.settings import RagSettings
 
 from dlightrag.config import (
     DlightragConfig,
@@ -169,6 +170,56 @@ def rerank_settings(config: DlightragConfig) -> RerankSettings:
     )
 
 
+def rag_settings(config: DlightragConfig) -> RagSettings:
+    """Snapshot root product configuration into immutable RAG settings."""
+    docling = config.parser_sidecars.docling
+    return RagSettings(
+        model_roles=model_role_settings(config),
+        embedding=embedding_settings(config),
+        rerank=rerank_settings(config),
+        rerank_scoring_model=rerank_scoring_model_settings(config),
+        read_only=config.is_reader,
+        input_root=config.input_dir_path,
+        parser_rules=config.parser_rules,
+        docling_active=docling is not None,
+        docling_code_formula_preset=docling.code_formula_preset if docling else None,
+        parser_min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
+        chunk_options=config.parser.chunk_options,
+        extraction_language=config.extraction.language,
+        entity_type_prompt_file=config.extraction.entity_type_prompt_file,
+        entity_extraction_use_json=config.extraction.use_json,
+        chunk_p_token_size=config.chunk_p_token_size,
+        kg_entity_types=tuple(config.kg_entity_types),
+        kg_chunk_pick_method=config.kg_chunk_pick_method,
+        max_entity_tokens=config.max_entity_tokens,
+        max_relation_tokens=config.max_relation_tokens,
+        max_total_tokens=config.max_total_tokens,
+        direct_visual_top_k=config.direct_visual_top_k,
+        rrf_k=config.rrf_k,
+        thumb_cache_size=config.visual_assets.thumb_cache_size,
+        thumb_max_px=config.visual_assets.thumb_max_px,
+        ingestion_replace_default=config.ingestion_replace_default,
+        retain_remote_source_files=config.retain_remote_source_files,
+        url_ingest_max_bytes=config.url_ingest_max_bytes,
+        url_ingest_private_host_allowlist=tuple(config.url_ingest_private_host_allowlist),
+        blob_connection_string=config.blob_connection_string,
+        azure_sas_expiry=config.azure_sas_expiry,
+        s3_presign_expiry=config.s3_presign_expiry,
+        s3_region=config.s3_region,
+        rag_pipeline_max_async=config.rag_pipeline_max_async,
+        embedding_func_max_async=config.embedding_func_max_async,
+        embedding_batch_num=config.embedding_batch_num,
+        max_parallel_insert=config.max_parallel_insert,
+        max_parallel_parse_native=config.max_parallel_parse_native,
+        max_parallel_parse_mineru=config.max_parallel_parse_mineru,
+        max_parallel_parse_docling=config.max_parallel_parse_docling,
+        max_parallel_analyze=config.max_parallel_analyze,
+        queue_size_parse=config.queue_size_parse,
+        queue_size_analyze=config.queue_size_analyze,
+        queue_size_insert=config.queue_size_insert,
+    )
+
+
 __all__ = [
     "embedding_settings",
     "model_profile_for_role",
@@ -176,6 +227,7 @@ __all__ = [
     "model_role_settings",
     "model_settings_for_role",
     "model_settings_from_config",
+    "rag_settings",
     "rerank_settings",
     "rerank_scoring_model_settings",
 ]

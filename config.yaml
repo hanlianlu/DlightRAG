@@ -165,7 +165,8 @@ workspace: default
 ## See docs/configuration.md to tune them. Raise it only after provider rate limits 
 ## and PostgreSQL capacity are understood.
 
-max_async: 16                 # LightRAG default 4
+max_async: 16                 # current Answer/model-call process concurrency
+rag_pipeline_max_async: 16    # LightRAG workspace pipeline LLM concurrency
 embedding_func_max_async: 16  # LightRAG default 8
 embedding_batch_num: 64       # texts per embedding request (provider cap varies: Voyage<=1000, OpenAI<=2048)
 

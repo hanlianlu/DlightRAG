@@ -1,9 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Workspace reset/cleanup logic extracted from RAGService.
-
-All functions receive the service instance (or specific attributes) as
-parameters to avoid circular imports. The public API remains
-``service.areset()`` -- these are implementation helpers.
+"""Workspace reset and orphan cleanup for one WorkspaceRag.
 
 5-phase cleanup:
 0. Cancel pending tasks
@@ -19,10 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag_ai.telemetry import safe_log_text
-from dlightrag_rag.ports import CorpusMaintenanceStore
 
-from dlightrag.core.lightrag_lifecycle import shutdown_lightrag_worker_pools
-from dlightrag.utils import normalize_workspace
+from dlightrag_rag.lifecycle import shutdown_lightrag_worker_pools
+from dlightrag_rag.ports import CorpusMaintenanceStore, MetadataIndexProtocol
+from dlightrag_rag.workspaces import require_canonical_workspace_id
 
 logger = logging.getLogger(__name__)
 
@@ -31,30 +27,25 @@ logger = logging.getLogger(__name__)
 
 
 async def areset(
-    service: Any,
     *,
+    workspace_id: str,
+    input_root: Path,
+    lightrag: Any,
+    metadata_index: MetadataIndexProtocol | None,
     maintenance: CorpusMaintenanceStore,
     keep_files: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Completely remove a workspace -- all data, graph schemas, and files.
-
-    6-phase cleanup:
-    0. Cancel pending tasks
-    1. Drop LightRAG storages (dynamic discovery)
-    2. Drop DlightRAG domain stores (registry)
-    3. Orphan PG table scan (safety net)
-    4. Remove filesystem artifacts
+    """Run the module's five-phase cleanup for one workspace.
 
     Args:
-        service: The RAGService whose workspace to reset.
         keep_files: If True, skip Phase 4 (filesystem cleanup).
         dry_run: If True, collect stats without executing any mutations.
 
     Returns:
         Stats dict with per-phase counts and any errors.
     """
-    workspace = service.config.workspace
+    workspace = require_canonical_workspace_id(workspace_id)
     errors: list[str] = []
     stats: dict[str, Any] = {
         "workspace": workspace,
@@ -68,14 +59,14 @@ async def areset(
 
     # Phase 0: Cancel pending tasks (worker pools, background tasks)
     try:
-        cancelled = await _cancel_pending_tasks(service, dry_run=dry_run)
+        cancelled = await shutdown_lightrag_worker_pools(lightrag, dry_run=dry_run)
         stats["pending_tasks_cancelled"] = cancelled
     except Exception as exc:
         errors.append(f"Phase 0 (cancel tasks): {exc}")
         logger.warning("areset Phase 0 failed: %s", exc)
 
     # Phase 1: LightRAG storages -- dynamic discovery
-    lr = service.lightrag  # property handles both modes
+    lr = lightrag
     if lr is not None:
         for attr in vars(lr):
             storage = getattr(lr, attr, None)
@@ -102,7 +93,6 @@ async def areset(
                 logger.warning("areset Phase 1 failed for %s: %s", attr, exc)
 
     # Phase 2: DlightRAG domain stores
-    metadata_index = getattr(service, "_metadata_index", None)
     if metadata_index is not None:
         try:
             if not dry_run:
@@ -133,7 +123,7 @@ async def areset(
     # and must never be wiped per-workspace.
     if not keep_files:
         try:
-            input_ws_dir = _workspace_input_dir(service.config.input_dir_path, workspace)
+            input_ws_dir = _workspace_input_dir(input_root, workspace)
             if input_ws_dir is not None and input_ws_dir.is_dir():
                 file_count = sum(1 for _ in input_ws_dir.rglob("*") if _.is_file())
                 if not dry_run:
@@ -143,9 +133,6 @@ async def areset(
             errors.append(f"Phase 4 (filesystem): {exc}")
             logger.warning("areset Phase 4 failed: %s", safe_log_text(exc))
 
-    # A dry run is a preview: never invalidate the live runtime.
-    if not dry_run:
-        service._initialized = False
     logger.info(
         "areset complete for workspace=%s: %s",
         safe_log_text(workspace),
@@ -158,10 +145,8 @@ async def areset(
 
 
 def _workspace_input_dir(input_root: Path, workspace: str) -> Path | None:
-    """Return the direct input_dir child for a normalized workspace."""
-    workspace_id = normalize_workspace(workspace)
-    if not workspace_id:
-        raise ValueError("workspace name normalizes to empty")
+    """Return the direct input-root child for a canonical workspace."""
+    workspace_id = require_canonical_workspace_id(workspace)
 
     root = input_root.resolve()
     if not root.exists():
@@ -177,14 +162,6 @@ def _workspace_input_dir(input_root: Path, workspace: str) -> Path | None:
     return None
 
 
-async def _cancel_pending_tasks(service: Any, *, dry_run: bool) -> int:
-    """Phase 0: Cancel pending async tasks (worker pools, etc.).
-
-    Returns count of cancelled items.
-    """
-    return await shutdown_lightrag_worker_pools(service.lightrag, dry_run=dry_run)
-
-
 # -- Orphaned workspace cleanup ------------------------------------------------
 
 
@@ -196,17 +173,16 @@ async def areset_orphaned_workspace(
     dry_run: bool = False,
     input_dir: str | None = None,
 ) -> dict[str, Any]:
-    """Clean up orphaned workspace artifacts without a RAGService instance.
+    """Clean up orphaned workspace artifacts without a WorkspaceRag instance.
 
     For workspaces that no longer exist in ``dlightrag_workspace_meta`` but
     have leftover PG table rows or filesystem artifacts. This is a
     best-effort direct PG cleanup.
     """
-    original_workspace = workspace
-    workspace = normalize_workspace(workspace)
+    workspace = require_canonical_workspace_id(workspace)
     errors: list[str] = []
     stats: dict[str, Any] = {
-        "workspace": original_workspace,
+        "workspace": workspace,
         "orphan_tables_cleaned": 0,
         "local_files_removed": 0,
         "errors": errors,

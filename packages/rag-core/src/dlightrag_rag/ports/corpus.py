@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from dlightrag_rag.ports.ingest_jobs import IngestJobStore
 from dlightrag_rag.ports.metadata_index import MetadataIndexProtocol
 from dlightrag_rag.ports.retrieval import BM25Search, CorpusChunkStore, FilteredVectorSearch
+from dlightrag_rag.settings import RagSettings
 
 
 class CorpusSchemaError(RuntimeError):
@@ -57,16 +58,29 @@ class WorkspaceCorpusStores:
     bm25_languages: tuple[str, ...] = ()
 
 
-class CorpusRuntimeBinder(Protocol):
-    """Attach backend stores after the host has initialized LightRAG storage."""
+@dataclass(frozen=True, slots=True)
+class CorpusRuntimeModels:
+    """Model callbacks required to construct one LightRAG runtime."""
 
-    async def bind(self, lightrag: Any) -> WorkspaceCorpusStores: ...
+    default_llm_func: Any
+    embedding_func: Any
+    role_llm_configs: Any
+
+
+class CorpusRuntimeBinder(Protocol):
+    """Construct and attach one backend-specific LightRAG runtime."""
+
+    def create(self, *, models: CorpusRuntimeModels, settings: RagSettings) -> Any: ...
+
+    async def attach(self, lightrag: Any) -> WorkspaceCorpusStores: ...
 
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceCorpusBackend:
     """Coherent backend capabilities bound to one workspace."""
 
+    workspace_id: str
+    read_only: bool
     coordination: CorpusCoordination
     maintenance: CorpusMaintenanceStore
     runtime: CorpusRuntimeBinder
@@ -84,6 +98,7 @@ __all__ = [
     "CorpusCoordination",
     "CorpusMaintenanceStore",
     "CorpusRuntimeBinder",
+    "CorpusRuntimeModels",
     "CorpusSchemaError",
     "CorpusUnavailableError",
     "WorkspaceCorpusBackend",

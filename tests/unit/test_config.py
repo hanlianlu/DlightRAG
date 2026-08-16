@@ -701,16 +701,6 @@ def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
     assert os.environ["POSTGRES_VECTOR_INDEX_TYPE"] == "HNSW_HALFVEC"
     assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "16"
     assert cfg.domain_pool_server_settings() == {"hnsw.ef_search": "256"}
-    assert cfg.lightrag_pipeline_kwargs() == {
-        "max_parallel_insert": 3,
-        "max_parallel_parse_native": 5,
-        "max_parallel_parse_mineru": 2,
-        "max_parallel_parse_docling": 2,
-        "max_parallel_analyze": 5,
-        "queue_size_parse": 20,
-        "queue_size_analyze": 100,
-        "queue_size_insert": 4,
-    }
 
 
 def test_bm25_defaults_cover_supported_language_profiles() -> None:

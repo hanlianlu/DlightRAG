@@ -21,7 +21,7 @@
         <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;workspace routing, stateless answers&lt;br&gt;service lifecycle, ingest jobs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="382" y="160" width="244" height="64" as="geometry"/>
         </mxCell>
-        <mxCell id="service" value="&lt;b&gt;RAGService&lt;/b&gt;&lt;br&gt;per-workspace runtime facade" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
+        <mxCell id="service" value="&lt;b&gt;WorkspaceRag&lt;/b&gt;&lt;br&gt;per-workspace corpus capability" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
           <mxGeometry x="704" y="160" width="244" height="64" as="geometry"/>
         </mxCell>
         <mxCell id="models" value="&lt;b&gt;Model Adapters&lt;/b&gt;&lt;br&gt;LLM, VLM, embedding&lt;br&gt;rerank roles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">

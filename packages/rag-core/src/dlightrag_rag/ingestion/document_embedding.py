@@ -8,13 +8,15 @@ import math
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 from dlightrag_ai.concurrency import bounded_map
 from dlightrag_ai.embedding import MultimodalEmbedder
 from dlightrag_ai.media import flatten_image_to_rgb
 from dlightrag_ai.telemetry import safe_log_text
 from PIL import Image
+
+from dlightrag_rag.settings import RagSettings
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ DOCUMENT_EMBEDDING_FALLBACK_REASONS: tuple[DocumentEmbeddingFallbackReason, ...]
 _IMAGE_OPEN_CLEANUP_TIMEOUT_SECONDS = 0.1
 # Decoded images are uncompressed, so cap their parallel memory footprint below provider capacity.
 _MAX_IMAGE_DECODE_CONCURRENCY = 4
+_DOCUMENT_EMBEDDING_BATCH_SIZE = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,6 +393,60 @@ def _close_images(images: list[Image.Image]) -> None:
         image.close()
 
 
+def build_document_embedder(
+    settings: RagSettings,
+    embedder: MultimodalEmbedder,
+    *,
+    image_enabled: bool,
+) -> RobustDocumentEmbedder:
+    """Build the shared document embedder from immutable RAG settings."""
+    return RobustDocumentEmbedder(
+        embedder=embedder,
+        image_enabled=image_enabled,
+        dimension=settings.embedding.dim,
+        min_image_pixel=settings.parser_min_image_pixel,
+        batch_size=_DOCUMENT_EMBEDDING_BATCH_SIZE,
+        max_concurrency=settings.embedding_func_max_async,
+    )
+
+
+async def resolve_direct_image_embedding_enabled(
+    embedder: Any,
+    *,
+    startup_probe: bool,
+    require_image_support: bool,
+) -> bool:
+    """Return whether direct visual embedding paths are safe to use."""
+    if not getattr(embedder, "supports_images", False):
+        if require_image_support:
+            raise ValueError(
+                "embedding.input_modality='multimodal' cannot be honored because "
+                f"{embedder.__class__.__name__} does not support image inputs"
+            )
+        logger.info(
+            "Image embedding disabled: %s does not support image inputs",
+            embedder.__class__.__name__,
+        )
+        return False
+    if not startup_probe:
+        return True
+    try:
+        await embedder.probe_image_embedding()
+    except Exception as exc:  # noqa: BLE001
+        if require_image_support:
+            raise ValueError(
+                "embedding.input_modality='multimodal' requires working image embeddings, "
+                "but the startup probe failed"
+            ) from exc
+        logger.warning(
+            "Image embedding probe failed; using LightRAG semantic visual path only",
+            exc_info=True,
+        )
+        return False
+    logger.info("Image embedding probe passed — direct-visual leg enabled")
+    return True
+
+
 def _close_image_task_result(task: asyncio.Task[Image.Image | None | BaseException]) -> None:
     if task.cancelled():
         return
@@ -407,4 +464,6 @@ __all__ = [
     "DocumentEmbeddingTrace",
     "DocumentEmbeddingVector",
     "RobustDocumentEmbedder",
+    "build_document_embedder",
+    "resolve_direct_image_embedding_enabled",
 ]

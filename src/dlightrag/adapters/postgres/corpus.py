@@ -11,11 +11,14 @@ from typing import Any
 
 import asyncpg
 from dlightrag_rag.ports import (
+    CorpusRuntimeModels,
     CorpusUnavailableError,
     WorkspaceCorpusBackend,
     WorkspaceCorpusStores,
 )
 from dlightrag_rag.retrieval.bm25 import profile_languages, profiles_from_config
+from dlightrag_rag.settings import RagSettings
+from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 
 from dlightrag.adapters.postgres._errors import is_postgres_unavailable
 from dlightrag.adapters.postgres._locks import advisory_lock_key
@@ -32,7 +35,11 @@ from dlightrag.adapters.postgres.corpus_bm25 import (
 from dlightrag.adapters.postgres.corpus_chunks import PGCorpusChunkStore
 from dlightrag.adapters.postgres.corpus_vectors import PGFilteredVectorSearch
 from dlightrag.adapters.postgres.ingest_jobs import PGIngestJobStore
-from dlightrag.adapters.postgres.lightrag_readonly import verify_reader_corpus_session
+from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
+from dlightrag.adapters.postgres.lightrag_readonly import (
+    attach_lightrag_storages_read_only,
+    verify_reader_corpus_session,
+)
 from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 from dlightrag.adapters.postgres.workspaces import PGWorkspaceRegistry
 from dlightrag.config import DlightragConfig
@@ -273,8 +280,49 @@ class PGCorpusRuntimeBinder:
     def __init__(self, config: DlightragConfig) -> None:
         self._config = config
 
-    async def bind(self, lightrag: Any) -> WorkspaceCorpusStores:
+    def create(self, *, models: CorpusRuntimeModels, settings: RagSettings) -> Any:
+        """Construct LightRAG after the factory translated backend environment."""
+        from lightrag import LightRAG
+
         config = self._config
+        vector_kwargs: dict[str, Any] = {
+            "cosine_better_than_threshold": DEFAULT_COSINE_THRESHOLD,
+            **config.vector_db_kwargs,
+        }
+        return LightRAG(
+            working_dir=str(config.working_dir_path),
+            llm_model_func=models.default_llm_func,
+            embedding_func=models.embedding_func,
+            workspace=config.workspace,
+            default_llm_timeout=int(settings.model_roles.default.timeout),
+            default_embedding_timeout=int(settings.embedding.timeout),
+            **settings.lightrag_pipeline_kwargs(),
+            llm_model_max_async=settings.rag_pipeline_max_async,
+            embedding_func_max_async=settings.embedding_func_max_async,
+            embedding_batch_num=settings.embedding_batch_num,
+            vector_storage=config.vector_storage,
+            graph_storage=config.graph_storage,
+            kv_storage=config.kv_storage,
+            doc_status_storage=config.doc_status_storage,
+            vector_db_storage_cls_kwargs=vector_kwargs,
+            role_llm_configs=models.role_llm_configs,
+            kg_chunk_pick_method=settings.kg_chunk_pick_method,
+            entity_extraction_use_json=settings.entity_extraction_use_json,
+            addon_params=settings.addon_params(),
+            enable_llm_cache=not settings.read_only,
+            enable_llm_cache_for_entity_extract=not settings.read_only,
+        )
+
+    async def attach(self, lightrag: Any) -> WorkspaceCorpusStores:
+        config = self._config
+        guard = PGLightRAGContractGuard(lightrag)
+        if config.is_reader:
+            guard.verify_read_only_attach_contract()
+            await attach_lightrag_storages_read_only(lightrag, config=config)
+        else:
+            await lightrag.initialize_storages()
+        await guard.verify_all()
+
         metadata_index = PGMetadataIndex(workspace=config.workspace)
         await metadata_index.initialize(validate_only=config.is_reader)
 
@@ -332,6 +380,8 @@ class PGCorpusBackendFactory:
                 )
             connection_kwargs = self._config.pg_connection_kwargs()
             self._backend = WorkspaceCorpusBackend(
+                workspace_id=self._config.workspace,
+                read_only=self._config.is_reader,
                 coordination=PGCorpusCoordination(
                     connection_kwargs=connection_kwargs,
                     workspace=self._config.workspace,

@@ -124,7 +124,7 @@ def mock_config_no_auth_override(test_config: DlightragConfig):
 
 @pytest.fixture
 def mock_service():
-    """Create a mock RAGService."""
+    """Create a mock WorkspaceRag."""
     service = AsyncMock()
     service.aingest = AsyncMock(return_value={"status": "success", "processed": 1})
     service.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))

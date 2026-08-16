@@ -16,8 +16,8 @@ from dlightrag_rag.retrieval.metadata_fields import (
 )
 
 
-def _writer_config() -> Any:
-    return SimpleNamespace(require_writer=lambda _operation: None)
+def _writer_settings() -> Any:
+    return SimpleNamespace(read_only=False)
 
 
 class TestMetadataFields:
@@ -89,10 +89,10 @@ def test_non_string_values_survive_untouched() -> None:
 async def test_metadata_update_stores_without_reindexing() -> None:
     from unittest.mock import AsyncMock
 
-    from dlightrag.core.service import RAGService
+    from dlightrag_rag.workspace_rag import WorkspaceRag
 
-    service = object.__new__(RAGService)
-    service.config = _writer_config()
+    service = object.__new__(WorkspaceRag)
+    service.settings = _writer_settings()
     service._metadata_index = AsyncMock()
     service._lightrag = AsyncMock()
 
@@ -106,10 +106,10 @@ async def test_metadata_update_stores_without_reindexing() -> None:
 async def test_metadata_update_reports_an_unknown_document() -> None:
     from unittest.mock import AsyncMock
 
-    from dlightrag.core.service import RAGService
+    from dlightrag_rag.workspace_rag import WorkspaceRag
 
-    service = object.__new__(RAGService)
-    service.config = _writer_config()
+    service = object.__new__(WorkspaceRag)
+    service.settings = _writer_settings()
     service._metadata_index = AsyncMock()
     service._metadata_index.merge_custom_metadata.return_value = False
 

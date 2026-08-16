@@ -1,11 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Per-workspace LightRAG service facade for ingestion and retrieval.
-
-DlightRAG owns one LightRAG instance per workspace and adds PostgreSQL
-metadata, direct visual embedding, and retrieval orchestration around it.
-PostgreSQL advisory locks coordinate first-time storage initialization across
-concurrent workers.
-"""
+"""One-workspace storage-neutral RAG capability."""
 
 import asyncio
 import logging
@@ -18,8 +12,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from dlightrag_ai.embedding import MultimodalEmbedder, create_embedding_model
+from dlightrag_ai.telemetry import Telemetry
+from lightrag.constants import PARSED_DIR_NAME
+
 from dlightrag_rag.contracts import IngestDocument, SourceType, VisualAssetSize
-from dlightrag_rag.ingestion.engine import PreparedIngestFile
+from dlightrag_rag.ingestion.document_embedding import (
+    build_document_embedder,
+    resolve_direct_image_embedding_enabled,
+)
+from dlightrag_rag.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
 from dlightrag_rag.ingestion.paths import (
     iter_ingestable_files,
     remote_ingest_batch_root,
@@ -29,13 +30,17 @@ from dlightrag_rag.ingestion.paths import (
     staged_input_path,
     workspace_input_root,
 )
+from dlightrag_rag.lifecycle import defer_cancellation, shutdown_lightrag_worker_pools
+from dlightrag_rag.lightrag_contract import LightRAGContractGuard
 from dlightrag_rag.lightrag_models import LightRagChatModels, build_lightrag_embedding
 from dlightrag_rag.ports import (
-    CorpusBackendFactory,
+    CorpusRuntimeModels,
     MetadataIndexProtocol,
     WorkspaceCorpusBackend,
 )
 from dlightrag_rag.rerank import build_rerank_func, rerank_consumes_images
+from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag_rag.settings import RagSettings
 from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag_rag.sourcing.source_contract import (
     SourceDownloadContractError,
@@ -44,32 +49,16 @@ from dlightrag_rag.sourcing.source_contract import (
     validate_download_uri,
     validate_source_uri,
 )
-from lightrag.constants import (
-    DEFAULT_COSINE_THRESHOLD,
-    PARSED_DIR_NAME,
-)
-
-from dlightrag.config import DlightragConfig, get_config
-from dlightrag.core.lightrag_lifecycle import defer_cancellation, shutdown_lightrag_worker_pools
-from dlightrag.model_settings import (
-    embedding_settings,
-    model_role_settings,
-    rerank_scoring_model_settings,
-    rerank_settings,
-)
-from dlightrag.observability import LangfuseTelemetry
-from dlightrag.utils import normalize_workspace
+from dlightrag_rag.visual_assets import ThumbnailCache, VisualAssetResolver
+from dlightrag_rag.workspaces import require_canonical_workspace_id
 
 if TYPE_CHECKING:
     from dlightrag_rag.ingestion.document_embedding import RobustDocumentEmbedder
-    from dlightrag_rag.ingestion.engine import UnifiedIngestionEngine
     from dlightrag_rag.lightrag_stores import LightRAGStores
     from dlightrag_rag.ports import BM25Search, RetrievalBackend
     from dlightrag_rag.retrieval.lightrag_backend import LightRAGMixBackend
     from dlightrag_rag.retrieval.provenance import ProvenanceCache
     from dlightrag_rag.retrieval.retriever import UnifiedRetriever
-
-    from dlightrag.core.visual_assets import VisualAssetResolver
 
 logger = logging.getLogger(__name__)
 
@@ -176,61 +165,39 @@ def _log_download_locator_outcome(*, outcome: str, locator_kind: str, source_fil
     )
 
 
-from dlightrag_rag.retrieval import (  # noqa: E402
-    MetadataFilter,
-    RetrievalResult,
-)
-
-from dlightrag.adapters.postgres.lightrag_readonly import (  # noqa: E402
-    attach_lightrag_storages_read_only,
-)
-from dlightrag.core.contract_guard import LightRAGContractGuard  # noqa: E402
-
 # Identity and storage plumbing: never part of a caller-facing answer or payload.
 _INTERNAL_FIELDS = frozenset({"workspace", "doc_id", "download_locator"})
 
 
-class RAGService:
-    """High-level RAG service facade.
-
-    Responsibilities:
-    - Expose simple API for agents and external modules
-    - Coordinate ingestion and retrieval pipelines
-    - Manage RAG instances and configuration
+class WorkspaceRag:
+    """Own one canonical workspace's retrieval and ingestion lifecycle.
 
     Usage:
-        # Production: use async factory method
-        rag = await RAGService.acreate(
-            config=my_config,
-            enable_vlm=True,
-            corpus_backend_factory=backend_factory,
-        )
-
-        # With callbacks:
-        rag = await RAGService.acreate(
-            config=my_config,
-            cancel_checker=my_cancel_fn,
-            corpus_backend_factory=backend_factory,
+        rag = await WorkspaceRag.acreate(
+            workspace_id="research",
+            settings=settings,
+            backend=backend,
+            telemetry=telemetry,
         )
     """
 
     @classmethod
     async def acreate(
         cls,
-        config: DlightragConfig | None = None,
-        enable_vlm: bool = True,
-        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-        rerank_supports_vision: bool | None = None,
         *,
-        corpus_backend_factory: CorpusBackendFactory,
-    ) -> RAGService:
-        """Async factory method - creates and initializes RAGService."""
+        workspace_id: str,
+        settings: RagSettings,
+        backend: WorkspaceCorpusBackend,
+        telemetry: Telemetry,
+        rerank_supports_vision: bool | None = None,
+    ) -> WorkspaceRag:
+        """Create and initialize one workspace capability."""
         instance = cls(
-            config=config,
-            enable_vlm=enable_vlm,
-            cancel_checker=cancel_checker,
+            workspace_id=workspace_id,
+            settings=settings,
+            backend=backend,
+            telemetry=telemetry,
             rerank_supports_vision=rerank_supports_vision,
-            corpus_backend_factory=corpus_backend_factory,
         )
         try:
             await instance.initialize()
@@ -238,29 +205,33 @@ class RAGService:
             try:
                 await instance.aclose()
             except BaseException:  # noqa: BLE001 - preserve the initialization failure
-                logger.warning("Failed to close partially initialized RAG service", exc_info=True)
+                logger.warning("Failed to close partially initialized WorkspaceRag", exc_info=True)
             raise
         return instance
 
     def __init__(
         self,
-        config: DlightragConfig | None = None,
-        enable_vlm: bool = True,
-        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-        rerank_supports_vision: bool | None = None,
         *,
-        corpus_backend_factory: CorpusBackendFactory,
+        workspace_id: str,
+        settings: RagSettings,
+        backend: WorkspaceCorpusBackend,
+        telemetry: Telemetry,
+        rerank_supports_vision: bool | None = None,
     ) -> None:
-        """Store configuration only. Use RAGService.acreate() for full initialization."""
-        self.config = config or get_config()
-        self.enable_vlm = enable_vlm
+        """Store immutable settings and collaborators without side effects."""
+        self.workspace_id = require_canonical_workspace_id(workspace_id)
+        if backend.workspace_id != self.workspace_id:
+            raise ValueError(
+                f"backend workspace {backend.workspace_id!r} does not match {self.workspace_id!r}"
+            )
+        if backend.read_only != settings.read_only:
+            raise ValueError("backend reader role does not match RagSettings")
+        self.settings = settings
+        self.telemetry = telemetry
         self._initialized: bool = False
         self._pipeline_recovery_task: asyncio.Task[None] | None = None
-        self._corpus_backend_factory = corpus_backend_factory
-        self._corpus_backend: WorkspaceCorpusBackend | None = None
+        self._corpus_backend: WorkspaceCorpusBackend = backend
 
-        # Callbacks for decoupled integration
-        self._cancel_checker = cancel_checker
         self._rerank_supports_vision = rerank_supports_vision
         self._rerank_consumes_images: bool = True
 
@@ -289,130 +260,33 @@ class RAGService:
         return self._lightrag
 
     @property
-    def robust_document_embedder(self) -> RobustDocumentEmbedder:
-        """Return the initialized document embedder without transferring ownership."""
-        if self._document_embedder is None:
-            raise RuntimeError("RAGService document embedder is not initialized")
-        return self._document_embedder
+    def backend(self) -> WorkspaceCorpusBackend:
+        """Return the coherent backend bundle bound to this workspace."""
+        return self._corpus_backend
 
-    @property
-    def direct_image_embedding_enabled(self) -> bool:
-        """Return the probed image-embedding capability for this service."""
-        return self._direct_image_embedding_enabled
-
-    @property
-    def rerank_func(self) -> Any:
-        """Return the service-owned reranker callable, if configured."""
-        return self._rerank_func
-
-    @staticmethod
-    def _build_vector_db_kwargs(config: DlightragConfig) -> dict[str, Any]:
-        """Build vector_db_storage_cls_kwargs from config.vector_db_kwargs passthrough."""
-        kwargs: dict[str, Any] = {
-            "cosine_better_than_threshold": DEFAULT_COSINE_THRESHOLD,
-        }
-        kwargs.update(config.vector_db_kwargs)
-        return kwargs
-
-    @staticmethod
-    async def _resolve_direct_image_embedding_enabled(
-        embedder: Any,
-        *,
-        startup_probe: bool,
-        require_image_support: bool,
-    ) -> bool:
-        """Return whether DlightRAG image embedding paths are safe to use.
-
-        One capability drives both DlightRAG image paths -- the image->image
-        direct-visual query leg and the fused visual-chunk vector overwrite.
-        Every image-capable provider is a unified multimodal model that fuses
-        text+image, so ``supports_images`` plus the live probe is the only gate.
-        The probe calls only the embedding provider with an in-memory 1x1 image;
-        it does not touch LightRAG storage, PostgreSQL, or local files.
-        """
-        if not getattr(embedder, "supports_images", False):
-            if require_image_support:
-                raise ValueError(
-                    "embedding.input_modality='multimodal' cannot be honored because "
-                    f"{embedder.__class__.__name__} does not support image inputs"
-                )
-            logger.info(
-                "Image embedding disabled: %s does not support image inputs",
-                embedder.__class__.__name__,
+    def _require_writer(self, operation: str) -> None:
+        if self.settings.read_only:
+            raise PermissionError(
+                f"{operation} is not available on a reader instance; "
+                "route corpus writes to a writer instance."
             )
-            return False
-        if not startup_probe:
-            return True
-        try:
-            await embedder.probe_image_embedding()
-        except Exception as exc:  # noqa: BLE001
-            if require_image_support:
-                raise ValueError(
-                    "embedding.input_modality='multimodal' requires working image embeddings, "
-                    "but the startup probe failed"
-                ) from exc
-            logger.warning(
-                "Image embedding probe failed; using LightRAG semantic visual path only",
-                exc_info=True,
-            )
-            return False
-        logger.info("Image embedding probe passed — direct-visual leg enabled")
-        return True
-
-    @staticmethod
-    def _build_document_embedder(
-        config: DlightragConfig,
-        embedder: MultimodalEmbedder,
-        *,
-        image_enabled: bool,
-    ) -> RobustDocumentEmbedder:
-        from dlightrag_rag.ingestion.document_embedding import RobustDocumentEmbedder
-
-        return RobustDocumentEmbedder(
-            embedder=embedder,
-            image_enabled=image_enabled,
-            dimension=config.embedding.dim,
-            min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
-            batch_size=8,
-            max_concurrency=config.embedding_func_max_async,
-        )
-
-    @staticmethod
-    def _build_addon_params(config: DlightragConfig) -> dict[str, Any]:
-        """Build LightRAG 1.5+ addon_params from the active config."""
-        params: dict[str, Any] = {
-            "language": config.extraction.language,
-            "chunker": {
-                "paragraph_semantic": {
-                    "chunk_token_size": config.chunk_p_token_size,
-                }
-            },
-        }
-        if config.extraction.entity_type_prompt_file:
-            params["entity_type_prompt_file"] = config.extraction.entity_type_prompt_file
-        if config.kg_entity_types:
-            params["entity_types_guidance"] = (
-                "Prioritize domain entities in these categories: "
-                f"{', '.join(config.kg_entity_types)}."
-            )
-        return params
 
     @staticmethod
     def _build_retrieval_backend(
-        config: DlightragConfig,
+        settings: RagSettings,
         *,
         lightrag: Any,
         stores: Any,
     ) -> LightRAGMixBackend:
-        """Build the LightRAG retrieval backend from typed DlightRAG config."""
+        """Build the LightRAG retrieval backend from immutable RAG settings."""
         from dlightrag_rag.retrieval.lightrag_backend import LightRAGMixBackend
 
         return LightRAGMixBackend(
             lightrag=lightrag,
             stores=stores,
-            max_entity_tokens=config.max_entity_tokens,
-            max_relation_tokens=config.max_relation_tokens,
-            max_total_tokens=config.max_total_tokens,
+            max_entity_tokens=settings.max_entity_tokens,
+            max_relation_tokens=settings.max_relation_tokens,
+            max_total_tokens=settings.max_total_tokens,
         )
 
     async def initialize(self) -> None:
@@ -420,55 +294,50 @@ class RAGService:
         if self._initialized:
             return
 
-        backend = self._corpus_backend_factory.create()
-        self._corpus_backend = backend
-        async with backend.coordination.workspace_initialization():
+        async with self.backend.coordination.workspace_initialization():
             await self._do_initialize()
 
         self._initialized = True
-        logger.debug("RAGService initialized")
+        logger.debug("WorkspaceRag initialized")
 
     async def _do_initialize(self) -> None:
         """Create one LightRAG-backed unified pipeline."""
-        from dlightrag_rag._lightrag_patches import apply as apply_lightrag_patches
         from lightrag.parser.routing import validate_parser_routing_config
 
-        validate_parser_routing_config(self.config.parser_rules)
-        docling = self.config.parser_sidecars.docling
+        from dlightrag_rag._lightrag_patches import apply as apply_lightrag_patches
+
+        validate_parser_routing_config(self.settings.parser_rules)
         apply_lightrag_patches(
-            docling_active=docling is not None,
-            docling_code_formula_preset=docling.code_formula_preset if docling else None,
+            docling_active=self.settings.docling_active,
+            docling_code_formula_preset=self.settings.docling_code_formula_preset,
         )
         await self._do_initialize_unified()
 
     async def _do_initialize_unified(self) -> None:
         """Initialize the direct LightRAG multimodal runtime.
 
-        Creates LightRAG directly and wires DlightRAG's retrieval/metadata
-        orchestration around LightRAG's PostgreSQL stores.
+        Wires storage-neutral retrieval and ingestion around the backend runtime.
         """
-        from lightrag import LightRAG
-
-        config = self.config
+        settings = self.settings
         logger.info("Initializing unified representational RAG mode...")
 
         # Build one service-owned model bundle for LightRAG's default and role calls.
         chat_models = await LightRagChatModels.acreate(
-            model_role_settings(config),
-            telemetry=LangfuseTelemetry(),
+            settings.model_roles,
+            telemetry=self.telemetry,
         )
         self._chat_models = chat_models
         default_func_lr = chat_models.default_func
-        resolved_rerank = rerank_settings(config)
+        resolved_rerank = settings.rerank
         rerank_func = build_rerank_func(
             resolved_rerank,
             scoring_settings=(
-                rerank_scoring_model_settings(config)
+                settings.rerank_scoring_model
                 if resolved_rerank.enabled and resolved_rerank.strategy == "chat_llm_reranker"
                 else None
             ),
             supports_vision=self._rerank_supports_vision,
-            telemetry=LangfuseTelemetry(),
+            telemetry=self.telemetry,
         )
         self._rerank_func = rerank_func
         self._rerank_consumes_images = rerank_consumes_images(
@@ -479,71 +348,40 @@ class RAGService:
         if role_overrides is not None:
             logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
 
-        resolved_embedding = embedding_settings(config)
+        resolved_embedding = settings.embedding
         multimodal_embedder = create_embedding_model(
             resolved_embedding,
-            telemetry=LangfuseTelemetry(),
+            telemetry=self.telemetry,
         )
         self._multimodal_embedder = multimodal_embedder
         embedding_func = build_lightrag_embedding(resolved_embedding, multimodal_embedder)
-        self._direct_image_embedding_enabled = await self._resolve_direct_image_embedding_enabled(
+        self._direct_image_embedding_enabled = await resolve_direct_image_embedding_enabled(
             multimodal_embedder,
             startup_probe=resolved_embedding.startup_probe,
             require_image_support=resolved_embedding.input_modality == "multimodal",
         )
-        document_embedder = self._build_document_embedder(
-            config,
+        document_embedder = build_document_embedder(
+            settings,
             multimodal_embedder,
             image_enabled=self._direct_image_embedding_enabled,
         )
         self._document_embedder = document_embedder
 
-        # Vision probe lives in RAGServiceManager._probe_rerank_image_capability()
-        # — it runs once at server startup, not per workspace.
-
-        # LightRAG configuration.
-        # Do NOT pass rerank_model_func — we handle reranking ourselves
-        lightrag = LightRAG(
-            working_dir=str(config.working_dir_path),
-            llm_model_func=default_func_lr,
-            embedding_func=embedding_func,
-            workspace=config.workspace,
-            default_llm_timeout=int(config.llm.default.timeout),
-            default_embedding_timeout=config.embedding_request_timeout,
-            **config.lightrag_pipeline_kwargs(),
-            llm_model_max_async=config.max_async,
-            embedding_func_max_async=config.embedding_func_max_async,
-            embedding_batch_num=config.embedding_batch_num,
-            vector_storage=config.vector_storage,
-            graph_storage=config.graph_storage,
-            kv_storage=config.kv_storage,
-            doc_status_storage=config.doc_status_storage,
-            vector_db_storage_cls_kwargs=self._build_vector_db_kwargs(config),
-            role_llm_configs=role_overrides,
-            kg_chunk_pick_method=config.kg_chunk_pick_method,
-            entity_extraction_use_json=config.extraction.use_json,
-            addon_params=self._build_addon_params(config),
-            # Reader processes never write the LightRAG LLM response cache.
-            enable_llm_cache=not config.is_reader,
-            enable_llm_cache_for_entity_extract=not config.is_reader,
+        lightrag = self.backend.runtime.create(
+            models=CorpusRuntimeModels(
+                default_llm_func=default_func_lr,
+                embedding_func=embedding_func,
+                role_llm_configs=role_overrides,
+            ),
+            settings=settings,
         )
         self._lightrag = lightrag
-        contract_guard = LightRAGContractGuard(lightrag)
-        if config.is_reader:
-            contract_guard.verify_read_only_attach_contract()
-            await attach_lightrag_storages_read_only(lightrag, config=config)
-        else:
-            await lightrag.initialize_storages()
+        LightRAGContractGuard(lightrag).verify()
+        corpus_stores = await self.backend.runtime.attach(lightrag)
         logger.info(
             "LightRAG storages %s",
-            "attached (read-only)" if config.is_reader else "initialized",
+            "attached (read-only)" if settings.read_only else "initialized",
         )
-
-        # Verify the private LightRAG surface before binding backend adapters.
-        if lightrag.chunks_vdb is not None:
-            await contract_guard.verify_all()
-
-        corpus_stores = await self._require_corpus_backend().runtime.bind(lightrag)
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
@@ -575,21 +413,18 @@ class RAGService:
             chunk_store=corpus_stores.chunks,
         )
 
-        from dlightrag.core.visual_assets import ThumbnailCache, VisualAssetResolver
-
         self._visual_asset_resolver = VisualAssetResolver(
             stores=self._lightrag_stores,
-            thumb_cache=ThumbnailCache(max_size=config.visual_assets.thumb_cache_size),
+            thumb_cache=ThumbnailCache(max_size=settings.thumb_cache_size),
         )
 
         self._backend = self._build_retrieval_backend(
-            config,
+            settings,
             lightrag=lightrag,
             stores=self._lightrag_stores,
         )
 
         self._metadata_index = corpus_stores.metadata_index
-        from dlightrag_rag.ingestion.engine import UnifiedIngestionEngine
         from dlightrag_rag.retrieval.language import BM25LanguageClassifier
 
         bm25_language_classifier = (
@@ -599,17 +434,17 @@ class RAGService:
         )
         self._ingestion_engine = (
             None
-            if config.is_reader
+            if settings.read_only
             else UnifiedIngestionEngine(
                 lightrag=lightrag,
                 stores=self._lightrag_stores,
                 metadata_index=self._metadata_index,
                 document_embedder=document_embedder,
-                workspace=config.workspace,
-                parser_rules=config.parser_rules,
-                chunk_options=config.parser.chunk_options,
+                workspace=self.workspace_id,
+                parser_rules=settings.parser_rules,
+                chunk_options=dict(settings.chunk_options),
                 bm25_language_classifier=bm25_language_classifier,
-                telemetry=LangfuseTelemetry(),
+                telemetry=self.telemetry,
             )
         )
 
@@ -625,29 +460,26 @@ class RAGService:
                 DirectVisualRetriever(
                     embedder=multimodal_embedder,
                     stores=self._lightrag_stores,
-                    top_k=config.direct_visual_top_k,
+                    top_k=settings.direct_visual_top_k,
                 )
                 if self._direct_image_embedding_enabled
                 else None
             ),
             metadata_index=self._metadata_index,
             stores=self._lightrag_stores,
-            rrf_k=config.rrf_k,
+            rrf_k=settings.rrf_k,
         )
 
         logger.info("LightRAG main runtime path ready")
 
-        if not config.is_reader:
+        if not settings.read_only:
             self._pipeline_recovery_task = asyncio.create_task(self._resume_lightrag_pipeline())
 
     async def _resume_lightrag_pipeline(self) -> None:
         """Run LightRAG's native sweep for pending and interrupted documents."""
-        from dlightrag.observability import trace_observation
-
         try:
-            backend = self._require_corpus_backend()
-            async with backend.coordination.pipeline_recovery():
-                async with trace_observation(
+            async with self.backend.coordination.pipeline_recovery():
+                async with self.telemetry.observe(
                     "ingest_pipeline",
                     as_type="chain",
                     metadata={"trigger": "startup_recovery"},
@@ -657,17 +489,11 @@ class RAGService:
         except Exception:
             logger.warning("LightRAG startup pipeline recovery failed", exc_info=True)
 
-    def _require_corpus_backend(self) -> WorkspaceCorpusBackend:
-        backend = self._corpus_backend
-        if backend is None:
-            raise RuntimeError("RAGService corpus backend is not initialized")
-        return backend
-
     def _ensure_initialized(self) -> None:
         """Raise error if not initialized."""
         if not self._initialized:
             raise RuntimeError(
-                "RAGService not initialized. Use 'await RAGService.acreate()' instead."
+                "WorkspaceRag not initialized. Use 'await WorkspaceRag.acreate()' instead."
             )
 
     # -- Graph verification ----------------------------------------------------
@@ -736,17 +562,23 @@ class RAGService:
     ) -> dict[str, Any]:
         """Completely remove this workspace -- all data, graph schemas, and files.
 
-        Delegates to the dedicated 6-phase reset module (``dlightrag.core.reset``).
+        Delegates to the dedicated five-phase RAG reset module.
         """
-        self.config.require_writer("workspace reset")
-        from dlightrag.core.reset import areset
+        self._require_writer("workspace reset")
+        from dlightrag_rag.reset import areset
 
-        return await areset(
-            self,
-            maintenance=self._require_corpus_backend().maintenance,
+        result = await areset(
+            workspace_id=self.workspace_id,
+            input_root=self.settings.input_root,
+            lightrag=self.lightrag,
+            metadata_index=self._metadata_index,
+            maintenance=self.backend.maintenance,
             keep_files=keep_files,
             dry_run=dry_run,
         )
+        if not dry_run:
+            self._initialized = False
+        return result
 
     async def _shutdown_worker_pools(self) -> None:
         """Shutdown LightRAG priority-queue worker pools."""
@@ -754,11 +586,11 @@ class RAGService:
 
     async def _upsert_workspace_meta(self, *, display_name: str | None = None) -> None:
         """Persist this workspace in DlightRAG's PostgreSQL registry."""
-        self.config.require_writer("workspace registration")
-        await self._require_corpus_backend().maintenance.register_workspace(
-            workspace=normalize_workspace(self.config.workspace),
-            display_name=display_name or self.config.workspace,
-            embedding_model=self.config.embedding.model,
+        self._require_writer("workspace registration")
+        await self.backend.maintenance.register_workspace(
+            workspace=self.workspace_id,
+            display_name=display_name or self.workspace_id,
+            embedding_model=self.settings.embedding.model,
         )
 
     async def aregister_workspace(self, *, display_name: str | None = None) -> None:
@@ -770,7 +602,7 @@ class RAGService:
 
     def _resolve_replace(self, explicit: Any) -> bool:
         if explicit is None:
-            return self.config.ingestion_replace_default
+            return self.settings.ingestion_replace_default
         return bool(explicit)
 
     async def _purge_existing_for_replace(
@@ -860,7 +692,7 @@ class RAGService:
             relative_to=source_root,
         )
         source_uri = local_source_uri(
-            self.config.workspace,
+            self.workspace_id,
             file_path.relative_to(self._workspace_input_root()),
         )
         result = await self._ingestion_engine.aingest_file(
@@ -915,7 +747,7 @@ class RAGService:
             PreparedIngestFile(
                 parser_path=staged,
                 source_uri=local_source_uri(
-                    self.config.workspace,
+                    self.workspace_id,
                     staged.relative_to(self._workspace_input_root()),
                 ),
                 download_locator=str(staged),
@@ -970,7 +802,7 @@ class RAGService:
                     parser_path=staged,
                     source_uri=document.source_uri
                     or local_source_uri(
-                        self.config.workspace,
+                        self.workspace_id,
                         staged.relative_to(self._workspace_input_root()),
                     ),
                     download_locator=str(staged),
@@ -993,7 +825,7 @@ class RAGService:
         return result
 
     def _workspace_input_root(self) -> Path:
-        return workspace_input_root(self.config.input_dir_path, self.config.workspace)
+        return workspace_input_root(self.settings.input_root, self.workspace_id)
 
     def _local_manifest_relative_root(self, file_path: Path) -> Path | None:
         input_root = self._workspace_input_root()
@@ -1063,7 +895,7 @@ class RAGService:
         errors: list[str] = []
         saw_documents = False
         retain_source_files = (
-            self.config.retain_remote_source_files
+            self.settings.retain_remote_source_files
             if retain_source_file is None
             else bool(retain_source_file)
         )
@@ -1292,7 +1124,7 @@ class RAGService:
         destination path DlightRAG provides. DlightRAG handles temporary parser
         files, metadata provenance, replace semantics, and cleanup.
         """
-        self.config.require_writer("ingestion")
+        self._require_writer("ingestion")
         self._ensure_initialized()
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
@@ -1341,8 +1173,8 @@ class RAGService:
                     _source_document_from_manifest(document, key=cast(str, document.url))
                     for document in documents
                 ],
-                max_download_bytes=self.config.url_ingest_max_bytes,
-                allow_private_hosts=self.config.url_ingest_private_host_allowlist,
+                max_download_bytes=self.settings.url_ingest_max_bytes,
+                allow_private_hosts=self.settings.url_ingest_private_host_allowlist,
             )
             result = await self.aingest_source(
                 source,
@@ -1382,8 +1214,8 @@ class RAGService:
             source_kwargs["download_uris"] = kwargs["download_uris"]
         source = URLDataSource(
             **source_kwargs,
-            max_download_bytes=self.config.url_ingest_max_bytes,
-            allow_private_hosts=self.config.url_ingest_private_host_allowlist,
+            max_download_bytes=self.settings.url_ingest_max_bytes,
+            allow_private_hosts=self.settings.url_ingest_private_host_allowlist,
         )
         result = await self.aingest_source(
             source,
@@ -1457,7 +1289,7 @@ class RAGService:
             from dlightrag_rag.sourcing.azure_blob import AzureBlobDataSource
 
             source = AzureBlobDataSource(
-                connection_string=self.config.blob_connection_string,
+                connection_string=self.settings.blob_connection_string,
                 container_name=container_name,
             )
         blob_path = kwargs.get("blob_path")
@@ -1479,7 +1311,7 @@ class RAGService:
             from dlightrag_rag.sourcing.aws_s3 import S3DataSource
 
             source = S3DataSource(
-                bucket=str(bucket), region=kwargs.get("s3_region") or self.config.s3_region
+                bucket=str(bucket), region=kwargs.get("s3_region") or self.settings.s3_region
             )
         # The MCP contract accepts either name for the single-object case.
         key = kwargs.get("s3_key") or kwargs.get("blob_path")
@@ -1507,7 +1339,7 @@ class RAGService:
                 s3: bucket, key, prefix, replace
                 url: url or urls, optional filename, replace
         """
-        self.config.require_writer("ingestion")
+        self._require_writer("ingestion")
         self._ensure_initialized()
         replace = self._resolve_replace(kwargs.pop("replace", None))
 
@@ -1643,8 +1475,8 @@ class RAGService:
         kg_result.contexts["chunks"] = canonicalize_reference_ids(
             kg_result.contexts.get("chunks", [])
         )
-        tag_context_workspace(kg_result.contexts, self.config.workspace)
-        kg_result.trace["workspace"] = self.config.workspace
+        tag_context_workspace(kg_result.contexts, self.workspace_id)
+        kg_result.trace["workspace"] = self.workspace_id
 
         return kg_result
 
@@ -1661,8 +1493,8 @@ class RAGService:
         if not chunks:
             logger.info(
                 "[Rerank] skipped: strategy=%s enabled=%s chunks=0 reason=no_chunks",
-                self.config.rerank.strategy,
-                self.config.rerank.enabled,
+                self.settings.rerank.strategy,
+                self.settings.rerank.enabled,
             )
             return
 
@@ -1680,8 +1512,8 @@ class RAGService:
         if self._rerank_func is None:
             logger.info(
                 "[Rerank] skipped: strategy=%s enabled=%s chunks=%d limit=%d reason=no_function",
-                self.config.rerank.strategy,
-                self.config.rerank.enabled,
+                self.settings.rerank.strategy,
+                self.settings.rerank.enabled,
                 len(chunks),
                 limit,
             )
@@ -1692,8 +1524,8 @@ class RAGService:
         top_score = outcome.chunks[0].get("rerank_score") if outcome.chunks else None
         logger.info(
             "[Rerank] strategy=%s model=%s input_chunks=%d limit=%d output_chunks=%d top_score=%s",
-            self.config.rerank.strategy,
-            self.config.rerank.model,
+            self.settings.rerank.strategy,
+            self.settings.rerank.model,
             len(chunks),
             limit,
             result.trace["reranked_chunk_count"],
@@ -1710,7 +1542,7 @@ class RAGService:
         if size == "thumb":
             return await self._visual_asset_resolver.resolve_thumbnail(
                 chunk_id,
-                max_px=self.config.visual_assets.thumb_max_px,
+                max_px=self.settings.thumb_max_px,
             )
         if size == "full":
             return await self._visual_asset_resolver.resolve(chunk_id)
@@ -1801,7 +1633,7 @@ class RAGService:
         data: dict[str, Any],
     ) -> None:
         """Update (merge) document metadata."""
-        self.config.require_writer("metadata update")
+        self._require_writer("metadata update")
         from dlightrag_rag.retrieval.metadata_fields import normalize_user_metadata
 
         if self._metadata_index is None:
@@ -1914,7 +1746,7 @@ class RAGService:
 
     async def aretry_failed_docs(self) -> dict[str, Any]:
         """Re-ingest every FAILED document from its durable metadata contract."""
-        self.config.require_writer("failed-document retry")
+        self._require_writer("failed-document retry")
 
         failed = await self.alist_failed_docs()
         if not failed:
@@ -2191,7 +2023,7 @@ class RAGService:
         dry_run: bool = False,
     ) -> list[dict[str, Any]]:
         """Unified file deletion — DB records and physical files."""
-        self.config.require_writer("file deletion")
+        self._require_writer("file deletion")
         self._ensure_initialized()
         from dlightrag_rag.ingestion.cleanup import (
             cascade_delete,
@@ -2236,7 +2068,7 @@ class RAGService:
                 # Remove physical files after successful DB cleanup.
                 remove_deleted_files(
                     ctx.file_paths,
-                    str(self.config.input_dir_path / self.config.workspace),
+                    str(self.settings.input_root / self.workspace_id),
                 )
 
             results.append({"identifier": identifier, "status": status, **stats})
@@ -2249,7 +2081,7 @@ class RAGService:
         if self._lightrag is None:
             return {"busy": False, "latest_message": "No LightRAG instance"}
 
-        ns = await get_namespace_data("pipeline_status", workspace=self.config.workspace)
+        ns = await get_namespace_data("pipeline_status", workspace=self.workspace_id)
         return {
             "busy": bool(ns.get("busy", False)),
             "job_name": ns.get("job_name", ""),
@@ -2314,4 +2146,4 @@ def _remove_remote_parser_sources(items: list[PreparedIngestFile]) -> None:
                 logger.debug("Failed to remove remote parser source: %s", candidate, exc_info=True)
 
 
-__all__ = ["RAGService"]
+__all__ = ["WorkspaceRag"]

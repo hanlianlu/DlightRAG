@@ -5,8 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from dlightrag_rag.lightrag_contract import LightRAGContractGuard
 
-from dlightrag.core.contract_guard import LightRAGContractGuard
+from dlightrag.adapters.postgres.lightrag_contract import PGLightRAGContractGuard
 
 
 def _fake_lightrag(*, graph_storage: object | None = None) -> SimpleNamespace:
@@ -30,7 +31,7 @@ def _fake_lightrag(*, graph_storage: object | None = None) -> SimpleNamespace:
     )
 
 
-def _stub_runtime_checks(monkeypatch: pytest.MonkeyPatch, guard: LightRAGContractGuard) -> None:
+def _stub_runtime_checks(monkeypatch: pytest.MonkeyPatch, guard: PGLightRAGContractGuard) -> None:
     monkeypatch.setattr(guard, "_check_chunks_table_schema", AsyncMock())
     monkeypatch.setattr(guard, "_check_bm25_table", AsyncMock())
 
@@ -40,7 +41,7 @@ async def test_verify_all_excludes_reader_attach_contract(
 ) -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
-    guard = LightRAGContractGuard(_fake_lightrag())
+    guard = PGLightRAGContractGuard(_fake_lightrag())
     _stub_runtime_checks(monkeypatch, guard)
 
     fake_manager = SimpleNamespace(
@@ -57,7 +58,7 @@ async def test_verify_all_excludes_reader_attach_contract(
 def test_verify_read_only_attach_contract_reports_missing_client_manager_attach_surfaces() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
-    guard = LightRAGContractGuard(_fake_lightrag())
+    guard = PGLightRAGContractGuard(_fake_lightrag())
 
     fake_manager = SimpleNamespace(
         get_config=lambda *, vector_storage=None: {"database": "db"},
@@ -74,7 +75,7 @@ def test_verify_read_only_attach_contract_reports_missing_client_manager_attach_
 def test_verify_read_only_attach_contract_rejects_positional_only_keyword_arg() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
-    guard = LightRAGContractGuard(_fake_lightrag())
+    guard = PGLightRAGContractGuard(_fake_lightrag())
 
     class FakeClientManager:
         _lock = object()
@@ -100,7 +101,7 @@ def test_verify_read_only_attach_contract_rejects_positional_only_keyword_arg() 
 def test_verify_read_only_attach_contract_allows_appended_optional_keyword_params() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
-    guard = LightRAGContractGuard(_fake_lightrag())
+    guard = PGLightRAGContractGuard(_fake_lightrag())
 
     class FakeClientManager:
         _lock = object()
@@ -131,7 +132,7 @@ def test_verify_read_only_attach_contract_allows_appended_optional_keyword_param
 def test_verify_read_only_attach_contract_rejects_changed_required_signature_prefix() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
-    guard = LightRAGContractGuard(_fake_lightrag())
+    guard = PGLightRAGContractGuard(_fake_lightrag())
 
     class FakeClientManager:
         _lock = object()
@@ -157,7 +158,7 @@ def test_verify_read_only_attach_contract_rejects_changed_required_signature_pre
 def test_verify_read_only_attach_contract_rejects_appended_required_signature_params() -> None:
     import lightrag.kg.postgres_impl as postgres_impl
 
-    guard = LightRAGContractGuard(_fake_lightrag())
+    guard = PGLightRAGContractGuard(_fake_lightrag())
 
     class FakeClientManager:
         _lock = object()
@@ -178,3 +179,15 @@ def test_verify_read_only_attach_contract_rejects_appended_required_signature_pa
     with patch.object(postgres_impl, "ClientManager", FakeClientManager):
         with pytest.raises(RuntimeError, match="ClientManager.get_config signature changed"):
             guard.verify_read_only_attach_contract()
+
+
+def test_provider_neutral_guard_reports_public_runtime_drift() -> None:
+    runtime = _fake_lightrag()
+    runtime.initialize_storages = AsyncMock()
+    runtime.finalize_storages = AsyncMock()
+    runtime.aquery_data = AsyncMock()
+    runtime.apipeline_enqueue_documents = AsyncMock()
+    runtime.apipeline_process_enqueue_documents = None
+
+    with pytest.raises(RuntimeError, match="apipeline_process_enqueue_documents"):
+        LightRAGContractGuard(runtime).verify()

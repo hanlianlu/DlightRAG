@@ -5,8 +5,9 @@ import asyncio
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
+
 from dlightrag.application import ApplicationHealth
-from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 
@@ -35,6 +36,9 @@ def _make_manager() -> RAGServiceManager:
     manager._backoff = {}
     manager._answer_synthesizers_by_profile = {}
     manager._retrieval_planners_by_profile = {}
+    manager._corpus_maintenance = AsyncMock()
+    manager._corpus_maintenance.clean_orphan_rows.return_value = 0
+    manager._corpus_maintenance.delete_workspace_record.return_value = False
     manager._ingest_jobs = IngestJobCoordinator(
         lambda workspace: manager._get_service(workspace),
         input_root=config.input_dir_path,
@@ -201,7 +205,7 @@ class TestManagerAresetNonexistentWorkspace:
 
         assert "does_not_exist" in result["workspaces"]
         ws_result = result["workspaces"]["does_not_exist"]
-        assert ws_result["workspace"] == "does-not-exist"
+        assert ws_result["workspace"] == "does_not_exist"
         assert "orphan_tables_cleaned" in ws_result
         assert "local_files_removed" in ws_result
         assert ws_result["ingest_jobs_cancelled"] == 0

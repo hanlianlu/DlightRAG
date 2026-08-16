@@ -57,7 +57,10 @@ class _RuntimeFake:
         self._stores = stores
         self.bound: object | None = None
 
-    async def bind(self, lightrag: object) -> WorkspaceCorpusStores:
+    def create(self, *, models: object, settings: object) -> object:
+        return SimpleNamespace(models=models, settings=settings)
+
+    async def attach(self, lightrag: object) -> WorkspaceCorpusStores:
         self.bound = lightrag
         return self._stores
 
@@ -73,6 +76,8 @@ async def test_coordination_contexts_bound_the_owned_operation() -> None:
         )
     )
     backend = WorkspaceCorpusBackend(
+        workspace_id="research",
+        read_only=False,
         coordination=_CoordinationFake(events),
         maintenance=_MaintenanceFake(),
         runtime=runtime,
@@ -94,7 +99,7 @@ async def test_coordination_contexts_bound_the_owned_operation() -> None:
     ]
 
     lightrag = SimpleNamespace(workspace="research")
-    stores = await backend.runtime.bind(lightrag)
+    stores = await backend.runtime.attach(lightrag)
     assert runtime.bound is lightrag
     assert stores.metadata_index is not None
     assert stores.chunks is not None

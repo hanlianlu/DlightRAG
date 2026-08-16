@@ -2,7 +2,7 @@
 """URI parsing helpers for ingestion sources.
 
 Centralises the ``scheme://...`` parsing that was previously duplicated
-between ``RAGService.aretry_failed_docs`` and the file-serving routes,
+between ``WorkspaceRag.aretry_failed_docs`` and the file-serving routes,
 so that adding a new source scheme is a single-edit change.
 """
 
@@ -15,7 +15,7 @@ def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
     """Split a stored ``file_path`` into ``(source_type, ingest_kwargs)``.
 
     Used by retry / re-ingest paths that need to dispatch a stored doc
-    URI back through ``RAGService.aingest(source_type, **kwargs)``.
+    URI back through ``WorkspaceRag.aingest(source_type, **kwargs)``.
 
     >>> parse_remote_uri("/var/data/foo.pdf")
     ('local', {'path': '/var/data/foo.pdf'})

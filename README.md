@@ -19,10 +19,10 @@ Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 Clients
   -> REST / Web / MCP / SDK adapters
   -> RAGServiceManager (composition)
-       -> RAGService -> LightRAG main -> corpus storage
+      -> WorkspaceRag -> LightRAG main -> corpus storage
       -> dlightrag.runtime RunCoordinator -> Answer executor + root PG adapter
       -> dlightrag-rag-core corpus ports -> root PG corpus adapter
-       -> ApplicationHealth -> liveness/readiness projection
+      -> ApplicationHealth -> liveness/readiness projection
   -> PostgreSQL 18 storage ecosystem
 ```
 

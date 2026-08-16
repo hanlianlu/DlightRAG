@@ -3,7 +3,7 @@
 """CLI for dlightrag — ingestion runs locally, queries go through the REST API.
 
 Usage:
-    # Local ingestion (runs directly via RAGService, no API server needed)
+    # Local ingestion (runs directly via WorkspaceRag, no API server needed)
     uv run scripts/cli.py ingest ./docs
     uv run scripts/cli.py ingest ./docs --replace
     uv run scripts/cli.py ingest ./docs --workspace project-a
@@ -240,8 +240,12 @@ def _render_answer_for_terminal(data: dict[str, Any]) -> str:
 
 
 async def _run_ingest(args: argparse.Namespace) -> None:
+    from dlightrag_rag.workspace_rag import WorkspaceRag
+
     from dlightrag.config import get_config
-    from dlightrag.core.service import RAGService
+    from dlightrag.model_settings import rag_settings
+    from dlightrag.observability import LangfuseTelemetry
+    from dlightrag.utils import normalize_workspace
 
     source = args.source_type
     kwargs = ingest_kwargs_from_payload(args)
@@ -258,16 +262,18 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         print(f"Ingesting S3: bucket={args.bucket}, {target} (replace={args.replace})")
 
     config = get_config()
-    workspace = args.workspace or config.workspace
+    workspace = normalize_workspace(args.workspace or config.workspace)
     if args.workspace:
         config = config.model_copy(update={"workspace": workspace})
     print(f"Workspace: {workspace}\n")
 
     from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
 
-    service = await RAGService.acreate(
-        config=config,
-        corpus_backend_factory=PGCorpusBackendFactory(config),
+    service = await WorkspaceRag.acreate(
+        workspace_id=workspace,
+        settings=rag_settings(config),
+        backend=PGCorpusBackendFactory(config).create(),
+        telemetry=LangfuseTelemetry(),
     )
     try:
         result = await service.aingest(source_type=source, **kwargs)

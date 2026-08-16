@@ -5,19 +5,28 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
 from dlightrag_ai.concurrency import bounded_gather
 from dlightrag_ai.telemetry import safe_log_text
-from dlightrag_rag.retrieval import RetrievalResult
 
-if TYPE_CHECKING:
-    from dlightrag.core.service import RAGService
+from dlightrag_rag.retrieval import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
 # Type alias for RBAC hook: given requested workspaces, return accessible subset
 WorkspaceFilter = Callable[[list[str]], Awaitable[list[str]]]
+
+
+class WorkspaceRetriever(Protocol):
+    async def aretrieve(
+        self,
+        query: str,
+        *,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        **kwargs: Any,
+    ) -> RetrievalResult: ...
 
 
 def merge_results(
@@ -116,7 +125,7 @@ def _round_robin_merge_key(
 async def federated_retrieve(
     query: str,
     workspaces: list[str],
-    get_service: Callable[[str], Awaitable[RAGService]],
+    get_service: Callable[[str], Awaitable[WorkspaceRetriever]],
     *,
     top_k: int | None = None,
     chunk_top_k: int | None = None,
@@ -130,7 +139,7 @@ async def federated_retrieve(
     Args:
         query: The search query.
         workspaces: List of workspace names to search.
-        get_service: Async callable that returns a RAGService for a workspace name.
+        get_service: Async callable that returns a WorkspaceRag for a workspace id.
         top_k: Per-workspace top_k for vector search.
         chunk_top_k: Final merged chunk count limit.
         max_concurrency: Maximum concurrent workspace queries (default 8).
@@ -140,7 +149,7 @@ async def federated_retrieve(
             backend cannot block the federation. ``None`` disables the cap.
         workspace_filter: Optional RBAC filter — given requested workspaces,
             returns the accessible subset.
-        **kwargs: Additional kwargs passed to each RAGService.aretrieve().
+        **kwargs: Additional kwargs passed to each WorkspaceRag.aretrieve().
     """
     # Apply RBAC filter if provided
     if workspace_filter is not None:

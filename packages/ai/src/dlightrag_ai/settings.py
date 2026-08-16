@@ -21,18 +21,21 @@ type RerankStrategy = Literal[
 ]
 
 
-def _freeze(value: Any) -> Any:
+def freeze_settings_value(value: Any) -> Any:
+    """Recursively freeze collection-valued immutable settings."""
     if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+        return MappingProxyType(
+            {str(key): freeze_settings_value(item) for key, item in value.items()}
+        )
     if isinstance(value, list | tuple):
-        return tuple(_freeze(item) for item in value)
+        return tuple(freeze_settings_value(item) for item in value)
     if isinstance(value, set | frozenset):
-        return frozenset(_freeze(item) for item in value)
+        return frozenset(freeze_settings_value(item) for item in value)
     return value
 
 
 def _frozen_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    return MappingProxyType({key: freeze_settings_value(item) for key, item in value.items()})
 
 
 def _thaw(value: Any) -> Any:
@@ -134,4 +137,5 @@ __all__ = [
     "ModelSettings",
     "RerankSettings",
     "RerankStrategy",
+    "freeze_settings_value",
 ]

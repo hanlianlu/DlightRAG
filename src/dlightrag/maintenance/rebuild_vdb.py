@@ -9,9 +9,15 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 from dlightrag_ai.embedding import create_embedding_model
+from dlightrag_ai.telemetry import Telemetry
+from dlightrag_rag.ingestion.document_embedding import (
+    build_document_embedder,
+    resolve_direct_image_embedding_enabled,
+)
 from dlightrag_rag.ingestion.engine import UnifiedIngestionEngine
 from dlightrag_rag.lightrag_models import build_lightrag_embedding
 from dlightrag_rag.lightrag_stores import LightRAGStores
+from dlightrag_rag.settings import RagSettings
 from lightrag.base import DocStatus
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 from lightrag.kg import STORAGE_ENV_REQUIREMENTS
@@ -21,9 +27,8 @@ from lightrag.utils import get_env_value
 
 from dlightrag.adapters.postgres.corpus import apply_lightrag_environment
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
-from dlightrag.core.service import RAGService
 from dlightrag.maintenance.rebuild_bm25 import run_rebuild_bm25
-from dlightrag.model_settings import embedding_settings
+from dlightrag.model_settings import embedding_settings, rag_settings
 from dlightrag.observability import LangfuseTelemetry
 
 logger = logging.getLogger(__name__)
@@ -229,15 +234,17 @@ class DlightRAGRebuildTool(RebuildTool):
 
 async def restore_sidecar_image_vectors(
     *,
-    config: DlightragConfig,
+    workspace_id: str,
+    settings: RagSettings,
     lightrag: Any,
     stores: Any,
     multimodal_embedder: Any,
+    telemetry: Telemetry,
 ) -> dict[str, int]:
     """Restore DlightRAG direct image vectors after a chunks VDB rebuild."""
     processed = await lightrag.doc_status.get_docs_by_status(DocStatus.PROCESSED)
-    document_embedder = RAGService._build_document_embedder(
-        config,
+    document_embedder = build_document_embedder(
+        settings,
         multimodal_embedder,
         image_enabled=True,
     )
@@ -246,10 +253,10 @@ async def restore_sidecar_image_vectors(
         stores=stores,
         metadata_index=None,
         document_embedder=document_embedder,
-        workspace=config.workspace,
-        parser_rules=config.parser_rules,
+        workspace=workspace_id,
+        parser_rules=settings.parser_rules,
         chunk_options={},
-        telemetry=LangfuseTelemetry(),
+        telemetry=telemetry,
     )
 
     stats = {"processed_docs": 0, "skipped_docs": 0}
@@ -338,17 +345,19 @@ async def run_rebuild(
                     lightrag_surface,
                     chunk_store=PGCorpusChunkStore(lightrag_surface),
                 )
-                direct_enabled = await RAGService._resolve_direct_image_embedding_enabled(
+                direct_enabled = await resolve_direct_image_embedding_enabled(
                     multimodal_embedder,
                     startup_probe=resolved_embedding.startup_probe,
                     require_image_support=resolved_embedding.input_modality == "multimodal",
                 )
                 if direct_enabled:
                     stats = await restore_sidecar_image_vectors(
-                        config=resolved_config,
+                        workspace_id=resolved_config.workspace,
+                        settings=rag_settings(resolved_config),
                         lightrag=lightrag_surface,
                         stores=stores,
                         multimodal_embedder=multimodal_embedder,
+                        telemetry=LangfuseTelemetry(),
                     )
                     print(
                         "Sidecar fused visual-vector alignment: "

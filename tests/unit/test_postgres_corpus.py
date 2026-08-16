@@ -104,17 +104,35 @@ async def test_runtime_binder_composes_workspace_stores(
     chunk_constructor = MagicMock(return_value=chunks)
     vector_constructor = MagicMock(return_value=vectors)
     create_bm25 = AsyncMock(return_value=bm25)
+    guard = SimpleNamespace(
+        verify_read_only_attach_contract=MagicMock(),
+        verify_all=AsyncMock(),
+    )
+    guard_constructor = MagicMock(return_value=guard)
+    attach_read_only = AsyncMock()
     monkeypatch.setattr(corpus_module, "PGMetadataIndex", metadata_constructor)
     monkeypatch.setattr(corpus_module, "PGCorpusChunkStore", chunk_constructor)
     monkeypatch.setattr(corpus_module, "PGFilteredVectorSearch", vector_constructor)
     monkeypatch.setattr(corpus_module, "profiles_from_config", MagicMock(return_value=profiles))
     monkeypatch.setattr(corpus_module, "create_postgres_bm25", create_bm25)
+    monkeypatch.setattr(corpus_module, "PGLightRAGContractGuard", guard_constructor)
+    monkeypatch.setattr(corpus_module, "attach_lightrag_storages_read_only", attach_read_only)
     chunks_vdb = object()
-    lightrag = SimpleNamespace(chunks_vdb=chunks_vdb)
+    lightrag = SimpleNamespace(chunks_vdb=chunks_vdb, initialize_storages=AsyncMock())
 
-    stores = await PGCorpusRuntimeBinder(config).bind(lightrag)
+    stores = await PGCorpusRuntimeBinder(config).attach(lightrag)
 
     metadata_constructor.assert_called_once_with(workspace=config.workspace)
+    guard_constructor.assert_called_once_with(lightrag)
+    guard.verify_all.assert_awaited_once_with()
+    if is_reader:
+        guard.verify_read_only_attach_contract.assert_called_once_with()
+        attach_read_only.assert_awaited_once_with(lightrag, config=config)
+        lightrag.initialize_storages.assert_not_awaited()
+    else:
+        guard.verify_read_only_attach_contract.assert_not_called()
+        attach_read_only.assert_not_awaited()
+        lightrag.initialize_storages.assert_awaited_once_with()
     metadata.initialize.assert_awaited_once_with(validate_only=is_reader)
     chunk_constructor.assert_called_once_with(lightrag)
     vector_constructor.assert_called_once_with(
@@ -131,3 +149,17 @@ async def test_runtime_binder_composes_workspace_stores(
     assert stores.filtered_vectors is vectors
     assert stores.bm25 is bm25
     assert stores.bm25_languages == ("en",)
+
+
+async def test_runtime_binder_rejects_missing_postgres_chunk_backend(
+    test_config: DlightragConfig,
+) -> None:
+    lightrag = SimpleNamespace(
+        chunks_vdb=None,
+        initialize_storages=AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="chunks_vdb missing"):
+        await PGCorpusRuntimeBinder(test_config).attach(lightrag)
+
+    lightrag.initialize_storages.assert_awaited_once_with()

@@ -7,9 +7,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 
 from dlightrag.access_control import ACTION_PRESETS, AccessAction
-from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 
 
 def _coordinator() -> IngestJobCoordinator:
@@ -85,9 +85,8 @@ async def test_cancelling_parks_docs_that_a_startup_sweep_would_otherwise_resume
     """LightRAG resets PARSING/ANALYZING/PROCESSING to PENDING and re-runs them."""
     from dataclasses import dataclass, field
 
+    from dlightrag_rag.workspace_rag import WorkspaceRag
     from lightrag.base import DocStatus
-
-    from dlightrag.core.service import RAGService
 
     @dataclass
     class _Doc:
@@ -108,7 +107,7 @@ async def test_cancelling_parks_docs_that_a_startup_sweep_would_otherwise_resume
         async def docs_by_status(self, status: Any) -> dict[str, Any]:
             return {"doc-1": _Doc()} if status is DocStatus.PARSING else {}
 
-    service = cast(Any, RAGService.__new__(RAGService))
+    service = cast(Any, WorkspaceRag.__new__(WorkspaceRag))
     service._lightrag_stores = _Stores()
     service._ensure_initialized = lambda: None
 
@@ -120,9 +119,8 @@ async def test_cancelling_parks_docs_that_a_startup_sweep_would_otherwise_resume
 
 
 async def test_terminal_docs_are_left_alone() -> None:
+    from dlightrag_rag.workspace_rag import WorkspaceRag
     from lightrag.base import DocStatus
-
-    from dlightrag.core.service import RAGService
 
     class _Stores:
         doc_status = None
@@ -131,7 +129,7 @@ async def test_terminal_docs_are_left_alone() -> None:
             assert status not in (DocStatus.PROCESSED, DocStatus.FAILED)
             return {}
 
-    service = cast(Any, RAGService.__new__(RAGService))
+    service = cast(Any, WorkspaceRag.__new__(WorkspaceRag))
     service._lightrag_stores = _Stores()
     service._ensure_initialized = lambda: None
 
@@ -140,7 +138,6 @@ async def test_terminal_docs_are_left_alone() -> None:
 
 async def test_the_sweeper_runs_at_startup_and_then_on_a_schedule(monkeypatch) -> None:
     """It replaces the one-shot startup prune, so the first pass must not wait."""
-    import dlightrag.core.ingest_job_coordinator as coordinator_module
 
     slept: list[float] = []
 
@@ -149,7 +146,7 @@ async def test_the_sweeper_runs_at_startup_and_then_on_a_schedule(monkeypatch) -
         if len(slept) == 2:
             raise asyncio.CancelledError
 
-    monkeypatch.setattr(coordinator_module.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
 
     class _Store:
         def __init__(self) -> None:
@@ -164,11 +161,12 @@ async def test_the_sweeper_runs_at_startup_and_then_on_a_schedule(monkeypatch) -
         await _coordinator()._sweep_jobs(cast(Any, store))
 
     assert store.passes == 2
-    assert slept == [coordinator_module._JOB_SWEEP_SECONDS] * 2
+    from dlightrag_rag.ports import JOB_ORPHAN_AFTER_SECONDS
+
+    assert slept == [JOB_ORPHAN_AFTER_SECONDS // 2] * 2
 
 
 async def test_a_failing_sweep_does_not_stop_the_schedule(monkeypatch) -> None:
-    import dlightrag.core.ingest_job_coordinator as coordinator_module
 
     calls: list[int] = []
 
@@ -176,7 +174,7 @@ async def test_a_failing_sweep_does_not_stop_the_schedule(monkeypatch) -> None:
         if len(calls) == 2:
             raise asyncio.CancelledError
 
-    monkeypatch.setattr(coordinator_module.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
 
     class _Store:
         async def prune(self) -> dict[str, int]:

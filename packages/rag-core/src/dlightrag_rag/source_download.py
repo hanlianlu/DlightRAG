@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dlightrag_rag.ingestion.paths import lightrag_archived_source_path
 from dlightrag_rag.ports import MetadataIndexProtocol
+from dlightrag_rag.settings import RagSettings
 from dlightrag_rag.sourcing.aws_s3 import (
     S3CredentialsUnavailable,
     S3PresignError,
@@ -14,9 +15,7 @@ from dlightrag_rag.sourcing.aws_s3 import (
 )
 from dlightrag_rag.sourcing.azure_blob import generate_azure_sas_url
 from dlightrag_rag.sourcing.source_contract import validate_download_uri
-
-from dlightrag.config import DlightragConfig
-from dlightrag.utils import normalize_workspace
+from dlightrag_rag.workspaces import require_canonical_workspace_id
 
 
 class SourceDownloadError(RuntimeError):
@@ -60,13 +59,13 @@ class SourceDownloadService:
     def __init__(
         self,
         *,
-        config: DlightragConfig,
+        settings: RagSettings,
         metadata_index: MetadataIndexProtocol,
-        workspace: str,
+        workspace_id: str,
     ) -> None:
-        self._config = config
+        self._settings = settings
         self._metadata_index = metadata_index
-        self._workspace = normalize_workspace(workspace)
+        self._workspace = require_canonical_workspace_id(workspace_id)
 
     async def prepare(self, document_id: str) -> SourceDownloadTarget:
         """Prepare the exact metadata document without exposing its locator."""
@@ -98,7 +97,7 @@ class SourceDownloadService:
         if not path.is_absolute():
             raise SourceDownloadInvalidError("Source download metadata is invalid")
 
-        workspace_root = (self._config.input_dir_path / self._workspace).resolve(strict=False)
+        workspace_root = (self._settings.input_root / self._workspace).resolve(strict=False)
         try:
             resolved = path.resolve(strict=False)
             resolved.relative_to(workspace_root)
@@ -114,7 +113,7 @@ class SourceDownloadService:
                 raise SourceDownloadNotFoundError("Source not found")
             resolved = archived
             repaired = str(resolved)
-            if not self._config.is_reader:
+            if not self._settings.read_only:
                 await self._metadata_index.upsert(
                     document_id,
                     {"download_locator": repaired, "file_path": repaired},
@@ -136,13 +135,13 @@ class SourceDownloadService:
         if canonical.startswith("https://"):
             return RedirectDownloadTarget(url=canonical)
         if canonical.startswith("azure://"):
-            if not self._config.blob_connection_string:
+            if not self._settings.blob_connection_string:
                 raise SourceDownloadUnavailableError("Azure blob storage not configured")
             try:
                 url = generate_azure_sas_url(
-                    connection_string=self._config.blob_connection_string,
+                    connection_string=self._settings.blob_connection_string,
                     raw_path=canonical,
-                    expiry_seconds=self._config.azure_sas_expiry,
+                    expiry_seconds=self._settings.azure_sas_expiry,
                 )
             except ValueError as exc:
                 raise SourceDownloadUnavailableError("Azure blob download signing failed") from exc
@@ -151,8 +150,8 @@ class SourceDownloadService:
             try:
                 url = await generate_s3_presigned_url(
                     raw_path=canonical,
-                    expiry_seconds=self._config.s3_presign_expiry,
-                    region=self._config.s3_region,
+                    expiry_seconds=self._settings.s3_presign_expiry,
+                    region=self._settings.s3_region,
                 )
             except S3CredentialsUnavailable as exc:
                 raise SourceDownloadUnavailableError("S3 credentials not configured") from exc

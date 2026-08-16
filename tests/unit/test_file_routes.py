@@ -7,18 +7,18 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
-from dlightrag.access_control import AccessDeniedError
-from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
-from dlightrag.core.source_download import (
+from dlightrag_rag.source_download import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
     SourceDownloadNotFoundError,
     SourceDownloadUnavailableError,
 )
+from httpx import ASGITransport, AsyncClient
+
+from dlightrag.access_control import AccessDeniedError
+from dlightrag.api.server import create_app
+from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
 
 
 def _embedding_config() -> EmbeddingConfig:

@@ -235,7 +235,7 @@ class TestWebAuth:
     async def test_simple_login_cookie_downloads_source_without_bearer(
         self, test_config: DlightragConfig, mock_manager
     ) -> None:
-        from dlightrag.core.source_download import LocalDownloadTarget
+        from dlightrag_rag.source_download import LocalDownloadTarget
 
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"

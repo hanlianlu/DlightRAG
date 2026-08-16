@@ -2,10 +2,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from dlightrag_rag.sourcing.aws_s3 import S3CredentialsUnavailable
-
-from dlightrag.config import DlightragConfig
-from dlightrag.core.source_download import (
+from dlightrag_rag.source_download import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
@@ -13,6 +10,10 @@ from dlightrag.core.source_download import (
     SourceDownloadService,
     SourceDownloadUnavailableError,
 )
+from dlightrag_rag.sourcing.aws_s3 import S3CredentialsUnavailable
+
+from dlightrag.config import DlightragConfig
+from dlightrag.model_settings import rag_settings
 
 
 def _service(
@@ -22,9 +23,9 @@ def _service(
     workspace: str = "default",
 ) -> SourceDownloadService:
     return SourceDownloadService(
-        config=test_config,
+        settings=rag_settings(test_config),
         metadata_index=metadata_index,
-        workspace=workspace,
+        workspace_id=workspace,
     )
 
 
@@ -124,7 +125,7 @@ async def test_azure_locator_returns_signed_redirect(test_config) -> None:
     metadata_index.get.return_value = {"download_locator": "azure://container/report.pdf"}
 
     with patch(
-        "dlightrag.core.source_download.generate_azure_sas_url",
+        "dlightrag_rag.source_download.generate_azure_sas_url",
         return_value="https://acct.blob.core.windows.net/container/report.pdf?sig=x",
     ) as signer:
         target = await _service(test_config, metadata_index).prepare("doc-report")
@@ -144,7 +145,7 @@ async def test_s3_locator_returns_signed_redirect(test_config) -> None:
     metadata_index.get.return_value = {"download_locator": "s3://bucket/report.pdf"}
 
     with patch(
-        "dlightrag.core.source_download.generate_s3_presigned_url",
+        "dlightrag_rag.source_download.generate_s3_presigned_url",
         new_callable=AsyncMock,
         return_value="https://bucket.s3.example/report.pdf?sig=x",
     ) as signer:
@@ -164,7 +165,7 @@ async def test_s3_credentials_failure_is_unavailable(test_config) -> None:
 
     with (
         patch(
-            "dlightrag.core.source_download.generate_s3_presigned_url",
+            "dlightrag_rag.source_download.generate_s3_presigned_url",
             new_callable=AsyncMock,
             side_effect=S3CredentialsUnavailable("secret provider detail"),
         ),

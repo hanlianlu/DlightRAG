@@ -32,7 +32,7 @@ from lightrag.lightrag import StoragesStatus
 from pgvector.asyncpg import register_vector
 
 from dlightrag.adapters.postgres.identifiers import pg_qualified_identifier
-from dlightrag.core.contract_guard import READ_ONLY_STORAGE_ATTRS
+from dlightrag.adapters.postgres.lightrag_contract import READ_ONLY_STORAGE_ATTRS
 
 logger = logging.getLogger(__name__)
 

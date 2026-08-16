@@ -6,6 +6,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dlightrag_ai.telemetry import NoopTelemetry
 
 
 def test_parser_defaults_to_check_only() -> None:
@@ -116,9 +117,18 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
         {"sidecar_location": "file:///tmp/doc-2.parsed"},
     ]
     embedder = object()
+    settings = cast(
+        Any,
+        SimpleNamespace(
+            embedding=SimpleNamespace(dim=8),
+            parser_min_image_pixel=80,
+            embedding_func_max_async=4,
+            parser_rules="*:mineru-iteP",
+        ),
+    )
     document_embedder = MagicMock()
     build_document_embedder = MagicMock(return_value=document_embedder)
-    monkeypatch.setattr(module.RAGService, "_build_document_embedder", build_document_embedder)
+    monkeypatch.setattr(module, "build_document_embedder", build_document_embedder)
     calls: list[dict[str, object]] = []
 
     async def fake_overwrite(self, **kwargs) -> None:
@@ -132,14 +142,16 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
     )
 
     stats = await module.restore_sidecar_image_vectors(
-        config=cast(Any, config),
+        workspace_id=config.workspace,
+        settings=settings,
         lightrag=lightrag,
         stores=stores,
         multimodal_embedder=embedder,
+        telemetry=NoopTelemetry(),
     )
 
     assert stats == {"processed_docs": 1, "skipped_docs": 1}
-    build_document_embedder.assert_called_once_with(config, embedder, image_enabled=True)
+    build_document_embedder.assert_called_once_with(settings, embedder, image_enabled=True)
     assert calls == [
         {
             "doc_id": "doc-1",
@@ -253,7 +265,7 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     resolve_mock = AsyncMock()
     restore_mock = AsyncMock()
     rebuild_mock = AsyncMock()
-    monkeypatch.setattr(module.RAGService, "_resolve_direct_image_embedding_enabled", resolve_mock)
+    monkeypatch.setattr(module, "resolve_direct_image_embedding_enabled", resolve_mock)
     monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore_mock)
     monkeypatch.setattr(module, "run_rebuild_bm25", rebuild_mock)
 
@@ -298,8 +310,8 @@ async def test_chunks_rebuild_delegates_bm25_before_embedder_close_fails(
     rebuild_bm25 = AsyncMock(return_value={"processed_chunks": 0, "updated_chunks": 0})
     monkeypatch.setattr(module, "run_rebuild_bm25", rebuild_bm25)
     monkeypatch.setattr(
-        module.RAGService,
-        "_resolve_direct_image_embedding_enabled",
+        module,
+        "resolve_direct_image_embedding_enabled",
         AsyncMock(return_value=False),
     )
 

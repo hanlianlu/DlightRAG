@@ -111,11 +111,10 @@ execute concurrently. It is not a token, context, image, storage, or PostgreSQL
 budget. A process reserves a local slot before it claims a row, so a worker
 never owns a lease while waiting for local capacity.
 
-`max_async` retains its existing dual role: it also remains LightRAG's
-`llm_model_max_async`. One deployment setting therefore bounds both concurrent
-Answer runs and LightRAG LLM calls. Operators choosing a small value are
-choosing durable queueing rather than capacity rejection; no second Answer-run
-concurrency setting is introduced.
+`max_async` remains the current process limit shared by Answer execution and
+root-composed model calls. LightRAG corpus processing is independent and uses
+`rag_pipeline_max_async`; lowering that RAG setting cannot reduce durable Answer
+worker admission. Task 8 separates the remaining Answer/model-call ownership.
 
 The creating process wakes its worker after committing the run. A worker with a
 free slot claims the oldest eligible row with `FOR UPDATE SKIP LOCKED`, ordering

@@ -1,12 +1,21 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for RAGService.areset() — 6-phase workspace reset via dlightrag.core.reset."""
+"""Tests for workspace reset through the RAG-owned reset module."""
 
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from dlightrag.core.service import RAGService
+from dlightrag_ai.settings import (
+    EmbeddingSettings,
+    ModelRoleSettings,
+    ModelSettings,
+    RerankSettings,
+)
+from dlightrag_ai.telemetry import NoopTelemetry
+from dlightrag_rag.ports import WorkspaceCorpusBackend
+from dlightrag_rag.settings import RagSettings
+from dlightrag_rag.workspace_rag import WorkspaceRag
 
 _FAKE_STORAGE_ATTRS = ("full_docs", "chunks_vdb", "doc_status")
 
@@ -21,25 +30,50 @@ class _FakeLightRAG:
     pass
 
 
-def _make_service(*, workspace: str = "test_ws") -> RAGService:
-    """Create a RAGService with mocked config and storages."""
-    config = MagicMock()
-    config.kv_storage = "PGKVStorage"
-    config.workspace = workspace
-    config.working_dir = f"/tmp/dlightrag-test/{workspace}"
-    config.input_dir_path = Path(f"/tmp/dlightrag-test/{workspace}/inputs")
-
-    service = RAGService.__new__(RAGService)
-    service.config = config
-    service._initialized = True
-    service._backend = None
-    service._cancel_checker = None
-    service.enable_vlm = False
-    service._table_schema = None
+def _make_service(*, workspace: str = "test_ws") -> WorkspaceRag:
+    """Create a WorkspaceRag through its final constructor."""
+    model = ModelSettings(provider="openai", model="gpt-5.4-mini", api_key="test")
+    settings = RagSettings(
+        model_roles=ModelRoleSettings(default=model),
+        embedding=EmbeddingSettings(
+            provider="openai_compatible",
+            model="text-embedding-3-small",
+            api_key="test",
+            startup_probe=False,
+        ),
+        rerank=RerankSettings(enabled=False),
+        rerank_scoring_model=model,
+        rag_pipeline_max_async=2,
+        embedding_func_max_async=2,
+        embedding_batch_num=2,
+        max_parallel_insert=1,
+        max_parallel_parse_native=1,
+        max_parallel_parse_mineru=1,
+        max_parallel_parse_docling=1,
+        max_parallel_analyze=1,
+        queue_size_parse=1,
+        queue_size_analyze=1,
+        queue_size_insert=1,
+        input_root=Path("/tmp/dlightrag-test/inputs"),
+    )
     maintenance = MagicMock()
     maintenance.clean_orphan_rows = AsyncMock(return_value=0)
     maintenance.delete_workspace_record = AsyncMock(return_value=True)
-    cast(Any, service)._corpus_backend = SimpleNamespace(maintenance=maintenance)
+    backend = WorkspaceCorpusBackend(
+        workspace_id=workspace,
+        read_only=False,
+        coordination=AsyncMock(),
+        maintenance=maintenance,
+        runtime=AsyncMock(),
+        ingest_jobs=AsyncMock(),
+    )
+    service = WorkspaceRag(
+        workspace_id=workspace,
+        settings=settings,
+        backend=backend,
+        telemetry=NoopTelemetry(),
+    )
+    service._initialized = True
 
     # Create fake LightRAG storages (dynamic-discovery friendly)
     lightrag = _FakeLightRAG()
@@ -63,7 +97,7 @@ class TestAresetPhase0:
     async def test_cancels_worker_pools(self) -> None:
         service = _make_service()
         with patch(
-            "dlightrag.core.reset.shutdown_lightrag_worker_pools",
+            "dlightrag_rag.reset.shutdown_lightrag_worker_pools",
             new_callable=AsyncMock,
             return_value=2,
         ) as shutdown:
@@ -168,9 +202,11 @@ class TestAresetPhase4:
 
     async def test_removes_local_files(self, tmp_path: Path) -> None:
         service = _make_service()
-        service.config.working_dir = str(tmp_path)
-        cast(Any, service.config).input_dir_path = tmp_path / "inputs"
-        ws_dir = tmp_path / "inputs" / service.config.workspace
+        service.settings = cast(
+            Any,
+            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+        )
+        ws_dir = tmp_path / "inputs" / service.workspace_id
 
         # Workspace-scoped files under input_dir/<workspace>/
         ws_dir.mkdir(parents=True)
@@ -189,8 +225,10 @@ class TestAresetPhase4:
         import sqlite3
 
         service = _make_service()
-        service.config.working_dir = str(tmp_path)
-        cast(Any, service.config).input_dir_path = tmp_path / "inputs"
+        service.settings = cast(
+            Any,
+            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+        )
 
         db_path = tmp_path / "shared_state.db"
         conn = sqlite3.connect(str(db_path))
@@ -205,8 +243,11 @@ class TestAresetPhase4:
         assert (tmp_path / "shared_config.json").exists()
 
     async def test_workspace_path_input_cannot_escape_input_root(self, tmp_path: Path) -> None:
-        service = _make_service(workspace="../outside")
-        cast(Any, service.config).input_dir_path = tmp_path / "inputs"
+        service = _make_service(workspace="___outside")
+        service.settings = cast(
+            Any,
+            SimpleNamespace(input_root=tmp_path / "inputs", read_only=False),
+        )
 
         outside = tmp_path / "outside"
         outside.mkdir()

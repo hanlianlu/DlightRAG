@@ -64,8 +64,8 @@
   <text class="small" text-anchor="middle" x="504" y="216">service lifecycle, ingest jobs</text>
 
   <rect class="box box-indigo" x="704" y="160" width="244" height="64"/>
-  <text class="label" text-anchor="middle" x="826" y="188">RAGService</text>
-  <text class="small" text-anchor="middle" x="826" y="207">per-workspace runtime facade</text>
+  <text class="label" text-anchor="middle" x="826" y="188">WorkspaceRag</text>
+  <text class="small" text-anchor="middle" x="826" y="207">per-workspace corpus capability</text>
 
   <rect class="box box-pink" x="1016" y="160" width="168" height="64"/>
   <text class="label" text-anchor="middle" x="1100" y="184">Model Adapters</text>

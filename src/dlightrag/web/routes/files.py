@@ -14,13 +14,7 @@ from dlightrag_rag.ingestion.uploads import (
     upload_batch_dir,
     write_upload_stream,
 )
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-
-from dlightrag.access_control import AccessAction
-from dlightrag.app_state import request_config
-from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.source_download import (
+from dlightrag_rag.source_download import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
@@ -28,6 +22,12 @@ from dlightrag.core.source_download import (
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
 )
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+
+from dlightrag.access_control import AccessAction
+from dlightrag.app_state import request_config
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,

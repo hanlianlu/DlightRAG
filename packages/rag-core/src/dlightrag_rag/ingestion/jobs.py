@@ -8,9 +8,10 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, Protocol, cast
 
 from dlightrag_ai.telemetry import safe_log_text
+
 from dlightrag_rag.contracts import SourceType
 from dlightrag_rag.ports import (
     JOB_HEARTBEAT_SECONDS,
@@ -18,11 +19,7 @@ from dlightrag_rag.ports import (
     JOB_ORPHAN_AFTER_SECONDS,
     IngestJobStore,
 )
-
-from dlightrag.utils import normalize_workspace
-
-if TYPE_CHECKING:
-    from dlightrag.core.service import RAGService
+from dlightrag_rag.workspaces import require_canonical_workspace_id
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +33,20 @@ _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 _JOB_SWEEP_SECONDS = JOB_ORPHAN_AFTER_SECONDS // 2
 
 
+class WorkspaceIngestor(Protocol):
+    async def afail_unfinished_docs(self, *, reason: str) -> int: ...
+
+    async def aregister_workspace(self) -> None: ...
+
+    async def aingest(self, *, source_type: SourceType, **kwargs: Any) -> dict[str, Any]: ...
+
+
 class IngestJobCoordinator:
     """Manage durable ingest jobs, recovery, and in-process task lifecycle."""
 
     def __init__(
         self,
-        get_service: Callable[[str], Awaitable[RAGService]],
+        get_service: Callable[[str], Awaitable[WorkspaceIngestor]],
         *,
         input_root: Path,
         store: IngestJobStore,
@@ -111,7 +116,11 @@ class IngestJobCoordinator:
 
         raw_request = row.get("request")
         request: dict[str, Any] = raw_request if isinstance(raw_request, dict) else {}
-        workspace = normalize_workspace(str(row.get("workspace") or request.get("workspace") or ""))
+        raw_workspace = str(row.get("workspace") or request.get("workspace") or "")
+        try:
+            workspace = require_canonical_workspace_id(raw_workspace)
+        except ValueError:
+            workspace = ""
         source_type = str(row.get("source_type") or request.get("source_type") or "")
         raw_kwargs = request.get("kwargs")
         kwargs: dict[str, Any] = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
@@ -175,11 +184,12 @@ class IngestJobCoordinator:
 
     async def cancel_job(self, job_id: str, *, workspace: str) -> bool:
         """Stop one running job. False when it is not ours or already finished."""
-        if self._workspaces.get(job_id) != normalize_workspace(workspace):
+        if self._workspaces.get(job_id) != require_canonical_workspace_id(workspace):
             return False
         return await self._cancel(job_id)
 
     async def cancel_for_workspace(self, workspace: str) -> int:
+        workspace = require_canonical_workspace_id(workspace)
         job_ids = [
             job_id
             for job_id, job_workspace in self._workspaces.items()
@@ -223,9 +233,7 @@ class IngestJobCoordinator:
         cleanup_paths: str | Path | Sequence[str | Path] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        workspace_id = normalize_workspace(workspace)
-        if not workspace_id:
-            raise ValueError("workspace cannot be empty")
+        workspace_id = require_canonical_workspace_id(workspace)
 
         job_id = uuid.uuid7().hex
         store = await self.get_store()
@@ -281,7 +289,7 @@ class IngestJobCoordinator:
 
     def has_active_workspace_job(self, workspace: str) -> bool:
         """Return whether an in-process ingest task exists for *workspace*."""
-        workspace_id = normalize_workspace(workspace)
+        workspace_id = require_canonical_workspace_id(workspace)
         for job_id, task in self._tasks.items():
             if self._workspaces.get(job_id) == workspace_id and not task.done():
                 return True

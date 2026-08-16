@@ -3,7 +3,7 @@
 """Reset dlightrag RAG storage — drops all storage backends and local files.
 
 Thin CLI wrapper around RAGServiceManager.areset(). All reset logic
-lives in RAGService.areset() (6-phase reset).
+lives in WorkspaceRag.areset() (five-phase reset).
 
 Usage:
     uv run scripts/reset.py                      # reset default workspace (with confirmation)
