@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 from dlightrag_rag.contracts import IngestDocument, SourceType
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from dlightrag.answer.resources.images import MAX_QUERY_IMAGES as _MAX_QUERY_IMAGES
+
 # Caller-supplied conversation history is stateless: the client owns persistence
 # and re-sends prior turns each request; DlightRAG never stores them. The message
 # ceiling bounds request size (~50 prior turns); the planner independently
@@ -15,7 +17,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 MAX_HISTORY_MESSAGES = 100
 MAX_HISTORY_CONTENT_CHARS = 16000
 MAX_BM25_QUERY_CHARS = 1024
-MAX_QUERY_IMAGES = 3
 
 
 class ClientContractModel(BaseModel):
@@ -95,7 +96,7 @@ class RetrieveRequestContract(QueryRequestContract):
     """Shared transport-neutral contract for retrieve requests."""
 
     bm25_query: str | None = Field(default=None, max_length=MAX_BM25_QUERY_CHARS)
-    query_images: list[QueryImage] | None = Field(default=None, max_length=MAX_QUERY_IMAGES)
+    query_images: list[QueryImage] | None = Field(default=None, max_length=_MAX_QUERY_IMAGES)
 
 
 class AnswerRequestContract(QueryRequestContract):
@@ -279,7 +280,6 @@ __all__ = [
     "MAX_BM25_QUERY_CHARS",
     "MAX_HISTORY_CONTENT_CHARS",
     "MAX_HISTORY_MESSAGES",
-    "MAX_QUERY_IMAGES",
     "QueryImage",
     "QueryRequestContract",
     "RetrieveRequestContract",

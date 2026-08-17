@@ -6,8 +6,8 @@ from typing import Any, Self
 from pydantic import Field, model_validator
 
 from dlightrag.access import validate_query_workspace_selection
+from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.core.client_contracts import (
-    MAX_QUERY_IMAGES,
     AnswerAttachmentLink,
     AnswerRequestContract,
     ClientContractModel,

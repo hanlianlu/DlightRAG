@@ -16,15 +16,12 @@ __maintainer__ = "HanlianLyu"
 __credits__ = ["hllyu"]
 
 from dlightrag.config import DlightragConfig
-from dlightrag.core.client_contracts import IngestSpec, QueryImage
 
 if TYPE_CHECKING:
     from dlightrag.core.servicemanager import RAGServiceManager
 
 __all__ = [
     "DlightragConfig",
-    "IngestSpec",
-    "QueryImage",
     "RAGServiceManager",
     "__version__",
 ]

@@ -583,7 +583,7 @@ async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -
     manager = RAGServiceManager(config=_role_config())
     manager._capabilities.narrow_role_image_profile("vlm", "supported")
 
-    _registry, tools = manager._build_resource_context(
+    _registry, tools = manager._answer_resources.build_resource_context(
         [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
         text_window_budget=TextWindowBudget(tokens=1_000),
         vlm_profile=manager._capabilities.model_profile("vlm"),
@@ -599,7 +599,7 @@ async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_imag
     manager = RAGServiceManager(config=_role_config())
     manager._capabilities.narrow_role_image_profile("vlm", "unsupported")
 
-    _registry, tools = manager._build_resource_context(
+    _registry, tools = manager._answer_resources.build_resource_context(
         [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
         text_window_budget=TextWindowBudget(tokens=1_000),
         vlm_profile=dataclasses.replace(
@@ -609,28 +609,6 @@ async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_imag
     )
 
     assert [tool.name for tool in tools] == ["read_resource"]
-
-
-async def test_query_image_description_follows_vlm_capability() -> None:
-    manager = RAGServiceManager(config=_role_config())
-    manager._capabilities.narrow_role_image_profile("vlm", "supported")
-    manager._vlm_func = lambda **_kwargs: None
-
-    describer = manager._query_image_describer()
-
-    assert describer._max_images > 0
-    assert describer._image_policy.max_images > 0
-
-
-async def test_query_image_description_is_disabled_without_vlm_image_support() -> None:
-    manager = RAGServiceManager(config=_role_config())
-    manager._capabilities.narrow_role_image_profile("vlm", "unknown")
-    manager._vlm_func = lambda **_kwargs: None
-
-    describer = manager._query_image_describer()
-
-    assert describer._max_images == 0
-    assert await describer.describe([{"type": "image_url", "image_url": {"url": "data:x"}}]) == []
 
 
 async def test_zero_configured_ceiling_disables_answer_images_without_a_model_call(

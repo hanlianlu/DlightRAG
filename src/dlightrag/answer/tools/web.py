@@ -102,6 +102,27 @@ class ExaSearch:
             operation="contents",
         )
 
+    async def contents_text(self, url: str) -> str | None:
+        """Fold one known URL's usable passages into deterministic fallback text."""
+        try:
+            result = await self.contents(url)
+        except WebSearchUnavailable:
+            return None
+        logger.info("Exa Contents fallback completed; cost_dollars=%.6f", result.cost_dollars)
+        title: str | None = None
+        passages: list[str] = []
+        for hit in result.hits:
+            text = hit.text.strip()
+            if not text:
+                continue
+            if title is None and hit.title and hit.title != hit.url:
+                title = hit.title.strip() or None
+            passages.append(text)
+        if not passages:
+            return None
+        body = "\n\n".join(passages)
+        return f"{title}\n\n{body}" if title else body
+
     async def _request(
         self,
         endpoint: str,

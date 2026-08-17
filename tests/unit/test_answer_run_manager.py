@@ -1,8 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Manager-owned durable Answer run creation, execution, status, and cancellation."""
+"""Durable Answer acceptance, runtime composition, and executor behavior."""
 
 import asyncio
 import base64
+import io
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast
@@ -11,33 +12,28 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
-from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
 from dlightrag_rag.retrieval import RetrievalResult
+from PIL import Image
 
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.streaming import AnswerStream
-from dlightrag.answer.errors import CurrentDocumentParseError
-from dlightrag.answer.resources.models import TextWindowBudget
+from dlightrag.answer.executor import AnswerExecutor, OrchestratorRun
+from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AttachmentReference,
     PinnedModelProfile,
 )
 from dlightrag.answer.synthesizer import AnswerSynthesizer
+from dlightrag.config import DlightragConfig, RuntimeConfig
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.servicemanager import (
-    RAGServiceManager,
-    RAGServiceUnavailableError,
-    _ManagerAnswerExecutor,
-    _OrchestratorRun,
-)
-from dlightrag.health import ApplicationHealth
+from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
+from dlightrag.model_settings import answer_executor_settings
 from dlightrag.runtime import (
     ClaimedRun,
     PendingArtifact,
     RunCheckpoint,
-    RunExecutionError,
     RunSession,
     artifact_digest,
 )
@@ -45,17 +41,21 @@ from dlightrag.runtime import (
 _OWNER = "owner-alpha"
 _VISUAL_BYTES = b"\x89PNG\r\n\x1a\nfake-corpus-visual"
 _VISUAL_B64 = base64.b64encode(_VISUAL_BYTES).decode("ascii")
-_TEST_PIN = PinnedModelProfile(
-    role="query",
-    fingerprint=ModelFingerprint("openai", "test-model", None),
-    profile=ModelProfile(context_window_tokens=1_000_000),
+_TEST_PROFILE = ModelProfile(context_window_tokens=1_000_000)
+_TEST_PINS = tuple(
+    PinnedModelProfile(
+        role=role,
+        fingerprint=ModelFingerprint("openai", f"test-{role}-model", None),
+        profile=_TEST_PROFILE,
+    )
+    for role in ("extract", "keyword", "query", "vlm")
 )
 
 
 def _run_input(query: str = "why", **kwargs: Any) -> AnswerRunInput:
     return AnswerRunInput(
         query=query,
-        pinned_models=(_TEST_PIN,),
+        pinned_models=_TEST_PINS,
         context_policy_revision="m1-v1",
         model_catalog_revision="2026-08-14",
         idempotency_fingerprint="public-request-hash",
@@ -143,18 +143,11 @@ class _Session:
 
 
 def _manager(store: _RecordingStore) -> RAGServiceManager:
-    config = MagicMock()
-    config.runtime.answer_worker_concurrency = 2
-    manager = RAGServiceManager.__new__(RAGServiceManager)
-    manager._config = config
-    manager._health = ApplicationHealth(readiness_probe=None)
+    manager = RAGServiceManager(
+        config=DlightragConfig(runtime=RuntimeConfig(answer_worker_concurrency=2))
+    )
     manager._answer_run_store = cast(Any, store)
     manager._answer_coordinator = None
-    manager._answer_store_lock = asyncio.Lock()
-    manager._answer_runtime_lock = asyncio.Lock()
-    manager._validate_pinned_model_profiles = MagicMock(  # type: ignore[method-assign]
-        side_effect=lambda request: {item.role: item.profile for item in request.pinned_models}
-    )
     return manager
 
 
@@ -164,77 +157,18 @@ def _bare_manager() -> RAGServiceManager:
     return manager
 
 
-async def test_manager_executor_scopes_child_model_calls_by_run() -> None:
-    scheduler = ModelScheduler(max_concurrency=1)
-    first_started = asyncio.Event()
-    second_queued = asyncio.Event()
-    release_first = asyncio.Event()
-    order: list[str] = []
-
-    async def operation(label: str, *, block: bool = False) -> str:
-        order.append(label)
-        if block:
-            first_started.set()
-            await release_first.wait()
-        return label
-
-    class Manager:
-        async def _execute_answer_run(self, session: Any) -> Mapping[str, Any]:
-            if session.run_id == "run-a":
-                first = asyncio.create_task(scheduler.run(lambda: operation("a1", block=True)))
-                await first_started.wait()
-                second = asyncio.create_task(scheduler.run(lambda: operation("a2")))
-                await asyncio.sleep(0)
-                second_queued.set()
-                await asyncio.gather(first, second)
-                return {"run": "a"}
-            await scheduler.run(lambda: operation("b1"))
-            return {"run": "b"}
-
-    executor = _ManagerAnswerExecutor(cast(RAGServiceManager, Manager()))
-    run_a = asyncio.create_task(
-        executor.execute(cast(RunSession, MagicMock(owner_id="owner", run_id="run-a")))
+def _executor(manager: RAGServiceManager, store: _RecordingStore) -> AnswerExecutor:
+    return AnswerExecutor(
+        store=cast(Any, store),
+        pool=manager._workspace_pool,
+        planner_for=manager._get_retrieval_planner,
+        schema_for=AsyncMock(return_value={}),
+        models=manager._answer_models,
+        capabilities=manager._capabilities,
+        resources=manager._answer_resources,
+        settings=answer_executor_settings(manager.config),
+        telemetry=NOOP_TELEMETRY,
     )
-    await second_queued.wait()
-    run_b = asyncio.create_task(
-        executor.execute(cast(RunSession, MagicMock(owner_id="owner", run_id="run-b")))
-    )
-    await asyncio.sleep(0)
-    release_first.set()
-
-    assert await asyncio.gather(run_a, run_b) == [{"run": "a"}, {"run": "b"}]
-    assert order == ["a1", "b1", "a2"]
-
-
-async def test_manager_executor_classifies_actionable_answer_errors() -> None:
-    manager = MagicMock()
-    manager._execute_answer_run = AsyncMock(side_effect=CurrentDocumentParseError("report.pdf"))
-    executor = _ManagerAnswerExecutor(cast(RAGServiceManager, manager))
-
-    with pytest.raises(RunExecutionError) as raised:
-        await executor.execute(cast(RunSession, MagicMock()))
-
-    assert raised.value.kind == "CURRENT_DOCUMENT_PARSE_FAILED"
-    assert "report.pdf" in raised.value.public_message
-
-
-async def test_manager_executor_classifies_unknown_errors_without_leaking_text(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    manager = MagicMock()
-    manager._execute_answer_run = AsyncMock(
-        side_effect=RuntimeError("postgres://user:secret@host/db")
-    )
-    executor = _ManagerAnswerExecutor(cast(RAGServiceManager, manager))
-    session = MagicMock(run_id="run-correlated")
-
-    with pytest.raises(RunExecutionError) as raised:
-        await executor.execute(cast(RunSession, session))
-
-    assert raised.value.kind == "ANSWER_STREAM_FAILED"
-    assert raised.value.public_message == "Answer run failed."
-    assert "Answer run run-correlated execution failed" in caplog.text
-    assert "postgres://user:secret@host/db" in caplog.text
 
 
 def _install_store_class(
@@ -385,6 +319,67 @@ class TestRunCreation:
         finally:
             await _close_runtime(manager)
 
+    async def test_url_image_bytes_are_persisted_with_the_accepted_input(self) -> None:
+        from dlightrag.answer.capability import AnswerImageCapability
+
+        store = _RecordingStore()
+        manager = _manager(store)
+        manager._capabilities._answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=3,
+            effective_max_images=3,
+            provider="test",
+            base_url=None,
+            model="vision-model",
+            failure_kind=None,
+        )
+        buffer = io.BytesIO()
+        Image.new("RGB", (2, 2), "white").save(buffer, format="PNG")
+        image_bytes = buffer.getvalue()
+        manager._answer_resources.materialize_link_image = AsyncMock(  # type: ignore[method-assign]
+            return_value=image_bytes
+        )
+
+        async def prepare(
+            request: Any,
+            *,
+            resources: Any,
+            idempotency_fingerprint: str,
+        ) -> AnswerRunInput:
+            del resources
+            return AnswerRunInput(
+                query=request.query,
+                workspaces=request.workspaces,
+                links=request.links,
+                attachments=request.attachments,
+                pinned_models=_TEST_PINS,
+                context_policy_revision="m1-v1",
+                model_catalog_revision="test",
+                idempotency_fingerprint=idempotency_fingerprint,
+            )
+
+        manager.aprepare_answer_run_input = AsyncMock(side_effect=prepare)  # type: ignore[method-assign]
+
+        await manager.acreate_answer_run(
+            "inspect",
+            workspace="default",
+            resources=[
+                ResourceInput(
+                    filename="chart.png",
+                    url="https://example.com/chart.png",
+                    declared_mime="image/png",
+                )
+            ],
+            owner_id=_OWNER,
+        )
+        await _close_runtime(manager)
+
+        created = store.created[0]
+        assert created["request"]["links"] == []
+        assert created["request"]["attachments"][0]["mime_type"] == "image/png"
+        assert created["artifacts"][0].content == image_bytes
+        assert created["references"][0].digest == artifact_digest(image_bytes)
+
 
 class TestRuntimeStartup:
     """Concurrent callers share one store, one coordinator, and one task pair."""
@@ -499,6 +494,7 @@ class TestRunExecution:
     async def test_executes_immutable_input_and_returns_the_canonical_result(self) -> None:
         store = _RecordingStore()
         manager = _manager(store)
+        executor = _executor(manager, store)
         orchestrator = AnswerOrchestrator(
             synthesizer=cast(AnswerSynthesizer, _Synthesizer()),
             retrieve_knowledge_base=_retrieve,
@@ -508,19 +504,19 @@ class TestRunExecution:
         )
         prepared: list[Any] = []
 
-        async def _prepare(**kwargs: Any) -> _OrchestratorRun:
+        async def _prepare(**kwargs: Any) -> OrchestratorRun:
             prepared.append(kwargs)
-            return _OrchestratorRun(
+            return OrchestratorRun(
                 orchestrator=orchestrator,
                 image_descriptions=[],
                 query_images=None,
                 history=PriorTurns(),
                 current_image_count=0,
-                ws_list=["default"],
+                workspaces=["default"],
                 registry=None,
             )
 
-        manager._prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
+        executor.prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
         persisted_history = (
             {"role": "user", "content": "persisted question"},
             {"role": "assistant", "content": "persisted answer"},
@@ -531,7 +527,7 @@ class TestRunExecution:
         ).as_request()
         session = _Session(request=request, checkpoint=None)
 
-        result = await manager._execute_answer_run(cast(RunSession, session))
+        result = await executor.execute(cast(RunSession, session))
 
         assert session.tokens == ["hello world"]
         assert session.phases == ["planning", "searching", "generating"]
@@ -540,12 +536,15 @@ class TestRunExecution:
         assert "sources" in result and "contexts" in result
         kwargs = prepared[0]
         assert kwargs["projected_history"].messages == list(persisted_history)
-        assert kwargs["model_profiles"] == {"query": _TEST_PIN.profile}
+        assert kwargs["model_profiles"] == {
+            role: _TEST_PROFILE for role in ("extract", "keyword", "query", "vlm")
+        }
         assert kwargs["workspaces"] == ["default"]
 
     async def test_attachments_are_replayed_as_lazy_readers_over_stored_bytes(self) -> None:
         store = _RecordingStore()
         manager = _manager(store)
+        executor = _executor(manager, store)
         request = _run_input(
             attachments=(
                 AttachmentReference(
@@ -557,9 +556,7 @@ class TestRunExecution:
             ),
         )
 
-        resources = await manager._answer_run_resources(
-            request, owner_id=_OWNER, store=cast(Any, store)
-        )
+        resources = await executor._answer_run_resources(request, owner_id=_OWNER)
 
         assert resources is not None
         assert resources[0].filename == "a.txt"
@@ -572,6 +569,7 @@ class TestRunExecution:
     ) -> None:
         store = _RecordingStore()
         manager = _manager(store)
+        executor = _executor(manager, store)
         request = _run_input(
             attachments=(
                 AttachmentReference(
@@ -583,9 +581,7 @@ class TestRunExecution:
             ),
         )
 
-        resources = await manager._answer_run_resources(
-            request, owner_id=_OWNER, store=cast(Any, store)
-        )
+        resources = await executor._answer_run_resources(request, owner_id=_OWNER)
 
         assert resources is not None
         # A lazy reader would arrive after current-image admission has run.
@@ -595,6 +591,7 @@ class TestRunExecution:
     async def test_octet_stream_image_bytes_stay_lazy_during_execution(self) -> None:
         store = _RecordingStore()
         manager = _manager(store)
+        executor = _executor(manager, store)
         request = _run_input(
             attachments=(
                 AttachmentReference(
@@ -606,9 +603,7 @@ class TestRunExecution:
             ),
         )
 
-        resources = await manager._answer_run_resources(
-            request, owner_id=_OWNER, store=cast(Any, store)
-        )
+        resources = await executor._answer_run_resources(request, owner_id=_OWNER)
 
         assert resources is not None
         assert resources[0].content is None
@@ -618,6 +613,7 @@ class TestRunExecution:
     async def test_the_canonical_result_holds_no_raw_context_payloads(self) -> None:
         store = _RecordingStore()
         manager = _manager(store)
+        executor = _executor(manager, store)
         orchestrator = AnswerOrchestrator(
             synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
             retrieve_knowledge_base=_retrieve_visual,
@@ -626,21 +622,21 @@ class TestRunExecution:
             text_window_budget=TextWindowBudget(tokens=850_000),
         )
 
-        async def _prepare(**kwargs: Any) -> _OrchestratorRun:
-            return _OrchestratorRun(
+        async def _prepare(**kwargs: Any) -> OrchestratorRun:
+            return OrchestratorRun(
                 orchestrator=orchestrator,
                 image_descriptions=[],
                 query_images=None,
                 history=PriorTurns(),
                 current_image_count=0,
-                ws_list=["default"],
+                workspaces=["default"],
                 registry=None,
             )
 
-        manager._prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
+        executor.prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
         request = _run_input(workspaces=("default",)).as_request()
 
-        result = await manager._execute_answer_run(
+        result = await executor.execute(
             cast(RunSession, _Session(request=request, checkpoint=None))
         )
 

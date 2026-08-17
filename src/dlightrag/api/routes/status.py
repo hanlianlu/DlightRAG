@@ -11,29 +11,33 @@ from typing import Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from dlightrag.app_state import request_config
 from dlightrag.contracts import ServiceRole
-from dlightrag.core.client_contracts import ClientContractModel
 from dlightrag.health import ApplicationHealth
 
 router = APIRouter()
 
 
-class HealthStorageResponse(ClientContractModel):
+class _StatusModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+
+class HealthStorageResponse(_StatusModel):
     vector: str
     graph: str
     kv: str
 
 
-class AnswerImageCapabilityResponse(ClientContractModel):
+class AnswerImageCapabilityResponse(_StatusModel):
     status: str
     effective_max_images: int
     configured_ceiling: int
     model: str | None = None
 
 
-class HealthResponse(ClientContractModel):
+class HealthResponse(_StatusModel):
     status: Literal["healthy", "degraded"]
     rag_initialized: bool
     service_role: ServiceRole
@@ -44,7 +48,7 @@ class HealthResponse(ClientContractModel):
     answer_image_capability: AnswerImageCapabilityResponse | None = None
 
 
-class ReadinessResponse(ClientContractModel):
+class ReadinessResponse(_StatusModel):
     status: Literal["ready", "not_ready"]
     service_role: ServiceRole
     detail: str | None = None

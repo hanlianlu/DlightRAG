@@ -63,8 +63,8 @@ _CURSOR_TOKEN_BYTES = 18
 _CURSOR_PLACEHOLDER = "x" * 24
 
 # A request-local, provider-neutral fallback that returns already-usable text for
-# a public URL, or ``None`` when it cannot. The manager composition root adapts
-# Exa Contents to this shape; the registry never imports any web-search provider.
+# a public URL, or ``None`` when it cannot. Exa owns its adapter; the registry
+# never imports any web-search provider.
 UrlTextFallback = Callable[[str], Awaitable[str | None]]
 
 

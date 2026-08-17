@@ -29,7 +29,13 @@ from dlightrag.answer.capabilities import (
     AnswerCapabilitySettings,
     AnswerImagePolicySettings,
 )
+from dlightrag.answer.executor import (
+    AnswerExecutorSettings,
+    AnswerResourceSettings,
+)
 from dlightrag.answer.highlights import SemanticHighlightSettings
+from dlightrag.answer.model_runtime import AnswerModelRuntimeSettings
+from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
 from dlightrag.config import (
     DlightragConfig,
     ModelCapacityOverrideConfig,
@@ -109,6 +115,38 @@ def semantic_highlight_settings(config: DlightragConfig) -> SemanticHighlightSet
         batch_size=highlights.batch_size,
         max_input_chars=highlights.max_input_chars,
         cache_size=highlights.cache_size,
+    )
+
+
+def answer_model_runtime_settings(config: DlightragConfig) -> AnswerModelRuntimeSettings:
+    """Snapshot Answer model roles and Web-search configuration."""
+    return AnswerModelRuntimeSettings(
+        model_roles=model_role_settings(config),
+        web_search_api_key=config.web_search.api_key,
+        query_image_limit=MAX_QUERY_IMAGES,
+    )
+
+
+def answer_resource_settings(config: DlightragConfig) -> AnswerResourceSettings:
+    """Snapshot Answer attachment and current-image resource limits."""
+    answer = config.answer
+    return AnswerResourceSettings(
+        max_attachments=answer.max_attachments,
+        max_attachment_bytes=answer.max_attachment_bytes,
+        max_total_attachment_bytes=answer.max_total_attachment_bytes,
+        image_max_bytes=answer.image_max_bytes,
+        image_max_pixels=answer.image_max_pixels,
+    )
+
+
+def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
+    """Snapshot durable Answer execution policy."""
+    return AnswerExecutorSettings(
+        default_top_k=config.top_k,
+        default_chunk_top_k=config.chunk_top_k,
+        retrieval_timeout=config.request_timeout,
+        max_agent_turns=config.max_agent_turns,
+        semantic_highlights=semantic_highlight_settings(config),
     )
 
 

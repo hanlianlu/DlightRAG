@@ -12,6 +12,7 @@ from dlightrag_ai.media import image_url_block
 from dlightrag.answer.images import AnswerImagePolicy
 
 logger = logging.getLogger(__name__)
+MAX_QUERY_IMAGES = 3
 
 
 class QueryImageDescriber:
@@ -22,7 +23,7 @@ class QueryImageDescriber:
         *,
         vlm_func: Callable[..., Any] | None,
         image_policy: AnswerImagePolicy,
-        max_images: int = 3,
+        max_images: int = MAX_QUERY_IMAGES,
     ) -> None:
         self._vlm_func = vlm_func
         self._image_policy = image_policy
@@ -97,6 +98,7 @@ async def prepare_query_images(
 
 
 __all__ = [
+    "MAX_QUERY_IMAGES",
     "QueryImageDescriber",
     "prepare_query_images",
 ]

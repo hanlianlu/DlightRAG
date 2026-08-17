@@ -161,10 +161,13 @@ async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
 
 
 async def test_answer_output_follows_the_same_privacy_switch_as_the_query() -> None:
-    from dlightrag.core.servicemanager import answer_trace_output
+    from dlightrag.answer.executor import answer_trace_output
 
     langfuse_state.install_client(langfuse_state.current_client(), trace_sensitive=True)
-    assert answer_trace_output("the answer", [], {})["answer"] == "the answer"
+    assert (
+        answer_trace_output("the answer", [], {}, capture_sensitive_data=True)["answer"]
+        == "the answer"
+    )
 
     langfuse_state.install_client(langfuse_state.current_client(), trace_sensitive=False)
     assert "answer" not in answer_trace_output("the answer", [], {})

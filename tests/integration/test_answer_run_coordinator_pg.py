@@ -32,6 +32,7 @@ from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.evidence import EvidenceLedger
+from dlightrag.answer.executor import AnswerExecutor, OrchestratorRun, _fetched_bytes_sink
 from dlightrag.answer.resources import registry as registry_module
 from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.answer.resources.registry import ResourceRegistry
@@ -40,13 +41,11 @@ from dlightrag.answer.runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import ExactCallCache
+from dlightrag.config import DlightragConfig, RuntimeConfig
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
-from dlightrag.core.servicemanager import (
-    RAGServiceManager,
-    _fetched_bytes_sink,
-    _OrchestratorRun,
-)
+from dlightrag.core.servicemanager import RAGServiceManager
+from dlightrag.model_settings import answer_executor_settings
 from dlightrag.runtime import (
     DurableWrites,
     RunCoordinator,
@@ -83,12 +82,13 @@ def _answer_run_input() -> AnswerRunInput:
     return AnswerRunInput(
         query="why",
         workspaces=("default",),
-        pinned_models=(
+        pinned_models=tuple(
             PinnedModelProfile(
-                role="query",
-                fingerprint=ModelFingerprint("openai", "test-model", None),
+                role=role,
+                fingerprint=ModelFingerprint("openai", f"test-{role}-model", None),
                 profile=ModelProfile(context_window_tokens=1_000_000),
-            ),
+            )
+            for role in ("extract", "keyword", "query", "vlm")
         ),
         context_policy_revision="m1-v1",
         model_catalog_revision="2026-08-14",
@@ -483,7 +483,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     monkeypatch.setattr(registry_module, "avalidate_public_https_url", _validate)
     monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _fetch_original)
 
-    registry = ResourceRegistry(fetched_bytes_sink=_fetched_bytes_sink(session, store))
+    registry = ResourceRegistry(fetched_bytes_sink=_fetched_bytes_sink(session))
     resource_id = registry.register_discovered_link("https://example.com/a.html")
     assert resource_id is not None
     original = await registry.materialize(resource_id)
@@ -529,9 +529,7 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     monkeypatch.setattr(registry_module, "avalidate_public_https_url", _dead)
     monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _dead)
 
-    resumed_registry = ResourceRegistry(
-        fetched_bytes_sink=_fetched_bytes_sink(resumed_session, store)
-    )
+    resumed_registry = ResourceRegistry(fetched_bytes_sink=_fetched_bytes_sink(resumed_session))
     resumed = AgentRunState(
         evidence=EvidenceLedger(),
         episode=_episode(),
@@ -631,19 +629,12 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
 
 
 def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
-    """The manager surface a durable run needs, bound to the throwaway database."""
-    from dlightrag.health import ApplicationHealth
-
-    config = MagicMock()
-    config.runtime.answer_worker_concurrency = 1
-    manager = RAGServiceManager.__new__(RAGServiceManager)
-    manager._config = config
-    manager._health = ApplicationHealth(readiness_probe=None)
+    """Compose a descriptor owner and final executor over the throwaway database."""
+    manager = RAGServiceManager(
+        config=DlightragConfig(runtime=RuntimeConfig(answer_worker_concurrency=1))
+    )
     manager._answer_run_store = store
     manager._answer_coordinator = None
-    manager._answer_store_lock = asyncio.Lock()
-    manager._answer_runtime_lock = asyncio.Lock()
-    manager._validate_pinned_model_profiles = MagicMock()  # type: ignore[method-assign]
     orchestrator = AnswerOrchestrator(
         synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
         retrieve_knowledge_base=_retrieve_visual,
@@ -652,18 +643,31 @@ def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
         text_window_budget=TextWindowBudget(tokens=850_000),
     )
 
-    async def _prepare(**kwargs: Any) -> _OrchestratorRun:
-        return _OrchestratorRun(
+    executor = AnswerExecutor(
+        store=store,
+        pool=manager._workspace_pool,
+        planner_for=manager._get_retrieval_planner,
+        schema_for=MagicMock(),
+        models=manager._answer_models,
+        capabilities=manager._capabilities,
+        resources=manager._answer_resources,
+        settings=answer_executor_settings(manager.config),
+        telemetry=NOOP_TELEMETRY,
+    )
+
+    async def _prepare(**kwargs: Any) -> OrchestratorRun:
+        return OrchestratorRun(
             orchestrator=orchestrator,
             image_descriptions=[],
             query_images=None,
             history=PriorTurns(),
             current_image_count=0,
-            ws_list=["default"],
+            workspaces=["default"],
             registry=None,
         )
 
-    manager._prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
+    executor.prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
+    manager._answer_executor = executor
     return manager
 
 
