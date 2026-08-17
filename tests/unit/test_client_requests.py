@@ -12,15 +12,15 @@ from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     ConversationMessage,
-    IngestSpec,
     conversation_history_as_dicts,
 )
-from dlightrag.core.client_requests import (
-    ingest_kwargs_from_payload,
-    ingest_spec_from_payload,
-    query_kwargs_from_payload,
-)
+from dlightrag.core.client_requests import query_kwargs_from_payload
 from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
+from dlightrag.services.corpora import (
+    IngestSpec,
+    ingest_kwargs_from_spec,
+    ingest_spec_from_payload,
+)
 
 
 def test_per_interface_current_image_admission() -> None:
@@ -250,7 +250,7 @@ def test_url_ingest_projects_download_uri_fields() -> None:
         ],
     )
 
-    kwargs = ingest_kwargs_from_payload(spec)
+    kwargs = ingest_kwargs_from_spec(spec)
 
     assert kwargs["download_uris"] == [
         "https://cdn.example.com/a.pdf",
@@ -259,12 +259,14 @@ def test_url_ingest_projects_download_uri_fields() -> None:
 
 
 def test_url_ingest_preserves_explicit_empty_download_uri_for_canonical_validation() -> None:
-    kwargs = ingest_kwargs_from_payload(
-        {
-            "source_type": "url",
-            "url": "https://fetch.example.com/a.pdf",
-            "download_uri": "",
-        }
+    kwargs = ingest_kwargs_from_spec(
+        ingest_spec_from_payload(
+            {
+                "source_type": "url",
+                "url": "https://fetch.example.com/a.pdf",
+                "download_uri": "",
+            }
+        )
     )
 
     assert kwargs["download_uri"] == ""
@@ -310,7 +312,7 @@ def test_url_manifest_projects_per_document_download_uri() -> None:
         ],
     )
 
-    assert ingest_kwargs_from_payload(spec)["documents"] == [
+    assert ingest_kwargs_from_spec(spec)["documents"] == [
         {
             "url": "https://fetch.example.com/download?sig=secret",
             "source_uri": "cms://asset/a",

@@ -13,10 +13,10 @@ from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerRequestContract,
     ClientContractModel,
-    IngestPayload,
     RetrieveRequestContract,
 )
 from dlightrag.runtime import AnswerRunPhase, AnswerRunStatus
+from dlightrag.services.corpora import IngestSpec
 
 # Maximum UTF-8 history payload plus query/workspace/JSON framing. Shared by the
 # REST multipart parser and its receive-layer body cap.
@@ -54,8 +54,8 @@ class MetadataFilterRequest(ClientContractModel):
     custom: dict[str, Any] | None = None
 
 
-class IngestRequest(IngestPayload):
-    pass
+class IngestRequest(IngestSpec):
+    workspace: str | None = None
 
 
 class RetrieveRequest(QueryWorkspaceSelection, RetrieveRequestContract):

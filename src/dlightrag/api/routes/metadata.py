@@ -41,7 +41,7 @@ async def search_metadata(
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
-    document_ids = await manager.asearch_metadata(ws, validated)
+    document_ids = await manager.corpora.search_metadata(ws, validated)
     return {"document_ids": document_ids, "count": len(document_ids), "workspace": ws}
 
 
@@ -56,7 +56,7 @@ async def get_metadata(
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
-    data = await manager.aget_metadata(ws, doc_id)
+    data = await manager.corpora.get_metadata(ws, doc_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
     return {"doc_id": doc_id, "metadata": data}
@@ -78,7 +78,7 @@ async def update_metadata(
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_UPDATE_METADATA, workspace=ws)
     try:
-        await manager.aupdate_metadata(ws, doc_id, body.metadata)
+        await manager.corpora.update_metadata(ws, doc_id, body.metadata)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found") from None
     return {"status": "success", "doc_id": doc_id}

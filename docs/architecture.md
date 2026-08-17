@@ -252,8 +252,8 @@ DlightRAG uses one PostgreSQL endpoint per service process. A writer process (th
 default) serves REST, Web, MCP, and SDK operations and owns schema migrations.
 A `reader` process is **corpus-read-only, not process-read-only**: it may create
 and execute answer runs and write DlightRAG operational state (runs, events,
-artifacts, Web conversations), while `require_writer()` still rejects ingestion,
-workspace creation/reset, metadata mutation, retry, and deletion. Both roles
+artifacts, Web conversations), while `CorpusAdmin` rejects ingestion, workspace
+creation/reset, metadata mutation, retry, and deletion. Both roles
 therefore use the same primary endpoint; DlightRAG makes no physical-standby or
 read-endpoint promise.
 

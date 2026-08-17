@@ -1380,20 +1380,6 @@ class DlightragConfig(BaseSettings):
         """Total byte cap for one multi-file Web upload request."""
         return self.max_upload_size_mb * 1024 * 1024
 
-    def require_writer(self, operation: str) -> None:
-        """Reject a corpus-mutating operation on a reader process.
-
-        Fail-closed guard shared by every corpus-write facade (REST/MCP/SDK) so a
-        reader rejects ingestion, workspace, and metadata mutation at the boundary
-        instead of erroring deep inside a read-only corpus transaction. It does not
-        restrict DlightRAG operational state, which readers own.
-        """
-        if self.is_reader:
-            raise PermissionError(
-                f"{operation} is not available on a reader instance; "
-                "route corpus writes to a writer instance."
-            )
-
     def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
         """Return asyncpg's ssl argument matching LightRAG's SSL mode semantics."""
         if self.postgres_ssl_mode is None:

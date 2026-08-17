@@ -26,9 +26,10 @@ from dlightrag.api.models import (
     UploadIngestJobResponse,
 )
 from dlightrag.app_state import request_config
-from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.client_payloads import metadata_filter_from_payload
-from dlightrag.core.client_requests import (
+from dlightrag.services.corpora import (
+    CorpusResetResult,
+    IngestSpec,
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
@@ -85,7 +86,7 @@ async def ingest(
         )
         ingest_spec = ingest_spec.model_copy(update={"path": path, "documents": documents})
 
-    job = await manager.astart_ingest_job(ws, ingest_spec)
+    job = await manager.corpora.start_ingest_job(ws, ingest_spec)
     return _job_response(job)
 
 
@@ -97,7 +98,7 @@ async def get_ingest_job(
 ) -> dict[str, Any]:
     """Return durable ingest job status."""
     manager = get_manager(request)
-    job = await manager.aget_ingest_job(job_id)
+    job = await manager.corpora.get_ingest_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
     workspace = job.get("workspace")
@@ -119,7 +120,7 @@ async def cancel_ingest_job(
 ) -> dict[str, Any]:
     """Stop a running ingest job, keeping whatever it already ingested."""
     manager = get_manager(request)
-    job = await manager.aget_ingest_job(job_id)
+    job = await manager.corpora.get_ingest_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
     workspace = job.get("workspace")
@@ -130,7 +131,7 @@ async def cancel_ingest_job(
         AccessAction.JOB_CANCEL,
         workspace=workspace_id,
     )
-    cancelled = await manager.acancel_ingest_job(job_id)
+    cancelled = await manager.corpora.cancel_ingest_job(job_id)
     return cancelled if cancelled is not None else job
 
 
@@ -284,7 +285,7 @@ async def ingest_blob(
     if meta_dict is not None:
         kwargs["metadata"] = meta_dict
 
-    job = await manager.astart_ingest_job(ws, IngestSpec(**kwargs))
+    job = await manager.corpora.start_ingest_job(ws, IngestSpec(**kwargs))
     job["uploaded_file"] = str(target_path)
     job["filename"] = safe_name
     return _job_response(job)
@@ -293,13 +294,13 @@ async def ingest_blob(
 @router.post("/reset", response_model=ResetResponse)
 async def reset_workspace(
     body: ResetRequest, request: Request, user: UserContext = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> CorpusResetResult:
     """Reset all RAG data for a workspace."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_RESET, workspace=ws)
-    return await manager.areset(
-        workspace=ws,
+    return await manager.corpora.reset(
+        workspace_ids=(ws,),
         keep_files=body.keep_files,
         dry_run=body.dry_run,
     )

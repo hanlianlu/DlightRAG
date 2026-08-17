@@ -69,7 +69,7 @@ async def test_local_markdown_download_is_attachment(
     source = tmp_working_dir / "inputs" / "default" / "notes.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("# Notes", encoding="utf-8")
-    manager.aprepare_source_download.return_value = LocalDownloadTarget(
+    manager.corpora.prepare_source_download.return_value = LocalDownloadTarget(
         path=source.resolve(),
         media_type="text/markdown",
         filename="notes.md",
@@ -84,14 +84,16 @@ async def test_local_markdown_download_is_attachment(
     assert response.content == b"# Notes"
     assert response.headers["content-type"].startswith("text/markdown")
     assert 'attachment; filename="notes.md"' in response.headers["content-disposition"]
-    manager.aprepare_source_download.assert_awaited_once_with("default", "doc-notes")
+    manager.corpora.prepare_source_download.assert_awaited_once_with("default", "doc-notes")
 
 
 async def test_document_download_normalizes_workspace(
     route_client: tuple[AsyncClient, AsyncMock],
 ) -> None:
     client, manager = route_client
-    manager.aprepare_source_download.side_effect = SourceDownloadNotFoundError("Source not found")
+    manager.corpora.prepare_source_download.side_effect = SourceDownloadNotFoundError(
+        "Source not found"
+    )
 
     response = await client.get(
         "/files/raw/doc-report",
@@ -99,14 +101,14 @@ async def test_document_download_normalizes_workspace(
     )
 
     assert response.status_code == 404
-    manager.aprepare_source_download.assert_awaited_once_with("finance_team", "doc-report")
+    manager.corpora.prepare_source_download.assert_awaited_once_with("finance_team", "doc-report")
 
 
 async def test_remote_download_redirects_to_prepared_target(
     route_client: tuple[AsyncClient, AsyncMock],
 ) -> None:
     client, manager = route_client
-    manager.aprepare_source_download.return_value = RedirectDownloadTarget(
+    manager.corpora.prepare_source_download.return_value = RedirectDownloadTarget(
         url="https://cdn.example.com/report.pdf?signature=ephemeral"
     )
 
@@ -135,7 +137,7 @@ async def test_source_download_maps_core_errors(
     status_code: int,
 ) -> None:
     client, manager = route_client
-    manager.aprepare_source_download.side_effect = error
+    manager.corpora.prepare_source_download.side_effect = error
 
     response = await client.get("/files/raw/doc-report")
 
@@ -184,7 +186,7 @@ async def test_download_authorization_precedes_metadata_lookup(
             )
 
     assert response.status_code == 403
-    manager.aprepare_source_download.assert_not_awaited()
+    manager.corpora.prepare_source_download.assert_not_awaited()
     record = next(
         record
         for record in caplog.records

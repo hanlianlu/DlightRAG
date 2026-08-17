@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from dlightrag.services.corpora import ingest_kwargs_from_spec, ingest_spec_from_payload
+
 # Load scripts/cli.py as a module (it's a script, not a package)
 _cli_path = Path(__file__).resolve().parents[2] / "scripts" / "cli.py"
 _spec = importlib.util.spec_from_file_location("cli", _cli_path)
@@ -17,7 +19,6 @@ _spec.loader.exec_module(_cli)
 build_parser = _cli.build_parser
 _build_answer_payload = _cli._build_answer_payload
 _apply_query_options = _cli._apply_query_options
-ingest_kwargs_from_payload = _cli.ingest_kwargs_from_payload
 _validate_ingest_args = _cli._validate_ingest_args
 cmd_answer = _cli.cmd_answer
 
@@ -207,7 +208,7 @@ def test_ingest_kwargs_support_document_metadata_options() -> None:
         ]
     )
 
-    assert ingest_kwargs_from_payload(args) == {
+    assert ingest_kwargs_from_spec(ingest_spec_from_payload(args)) == {
         "path": "./docs/report.pdf",
         "replace": False,
         "title": "Quarterly Report",
@@ -231,7 +232,7 @@ def test_ingest_kwargs_support_s3_region_and_retention() -> None:
         ]
     )
 
-    assert ingest_kwargs_from_payload(args) == {
+    assert ingest_kwargs_from_spec(ingest_spec_from_payload(args)) == {
         "bucket": "bucket",
         "s3_key": "docs/report.pdf",
         "s3_region": "eu-north-1",
@@ -254,7 +255,7 @@ def test_ingest_kwargs_support_url_source() -> None:
         ]
     )
 
-    assert ingest_kwargs_from_payload(args) == {
+    assert ingest_kwargs_from_spec(ingest_spec_from_payload(args)) == {
         "url": "https://cdn.example.com/download?id=asset-1",
         "filename": "asset.pdf",
         "source_uri": "bynder://asset/asset-1",
@@ -278,7 +279,7 @@ def test_ingest_kwargs_support_url_download_uris() -> None:
 
     _validate_ingest_args(args)
 
-    assert ingest_kwargs_from_payload(args) == {
+    assert ingest_kwargs_from_spec(ingest_spec_from_payload(args)) == {
         "urls": [
             "https://fetch.example.com/a.pdf",
             "https://fetch.example.com/b.pdf",

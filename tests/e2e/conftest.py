@@ -494,16 +494,15 @@ def e2e_base_url(
             )
         )
     )
-    manager.alist_workspaces.return_value = MOCK_WORKSPACE_LIST
-    manager.alist_workspace_records.return_value = MOCK_WORKSPACES
-    manager.alist_ingested_files.return_value = []
-    manager.aget_pipeline_status.return_value = {"busy": False, "pending_enqueues": 0}
-    manager.aget_file_panel_snapshot.return_value = {
+    manager.corpora.list_workspaces.return_value = MOCK_WORKSPACE_LIST
+    manager.corpora.alist_workspace_records.return_value = MOCK_WORKSPACES
+    manager.corpora.list_ingested_files.return_value = []
+    manager.corpora.get_pipeline_status.return_value = {"busy": False, "pending_enqueues": 0}
+    manager.corpora.file_panel_snapshot.return_value = {
         "files": [],
         "pipeline_status": {"busy": False, "pending_enqueues": 0},
     }
-    manager.aingest.return_value = {"job_id": "e2e-test-job", "file_count": 1}
-    manager.adelete_files.return_value = {"deleted_count": 0}
+    manager.corpora.delete_files.return_value = {"deleted_count": 0}
     manager.create_web_conversation_service = MagicMock(return_value=e2e_conversation_service)
 
     port = _free_port()

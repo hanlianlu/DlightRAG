@@ -32,8 +32,8 @@ class URLDataSource(AsyncDataSource):
     """Download public HTTPS documents by URL.
 
     This adapter is intentionally small: it supports signed/public URLs for
-    REST/MCP ingestion. Connectors that need auth headers or custom pagination
-    should implement ``AsyncDataSource`` and use the SDK ``aingest_source`` API.
+    REST/MCP ingestion. Sources that need auth headers or custom pagination must
+    stage content through a supported local, Azure Blob, or S3 source.
     """
 
     def __init__(

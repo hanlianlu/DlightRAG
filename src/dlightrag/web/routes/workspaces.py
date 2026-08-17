@@ -33,7 +33,7 @@ def _ordered_unique(workspaces: list[str]) -> list[str]:
 
 async def _visible_workspace_names(request: Request, manager: RAGServiceManager) -> list[str]:
     records: list[WorkspaceRecord] = [
-        {"workspace": workspace} for workspace in await manager.alist_workspaces()
+        {"workspace": workspace} for workspace in await manager.corpora.list_workspaces()
     ]
     visible = await filter_web_workspace_records(request, AccessAction.WORKSPACE_QUERY, records)
     return [str(row["workspace"]) for row in visible]
@@ -138,13 +138,13 @@ async def create_workspace(
     await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
 
     # Duplicate check
-    existing = await manager.alist_workspaces()
+    existing = await manager.corpora.list_workspaces()
     if ws in existing:
         return _error(f"Workspace '{name}' already exists", status_code=409)
 
     # Initialize workspace (creates the WorkspaceRag)
     try:
-        await manager.acreate_workspace(ws, display_name=name)
+        await manager.corpora.create_workspace(ws, display_name=name)
     except Exception:
         logger.exception("Workspace creation failed")
         return _error(
@@ -184,7 +184,7 @@ async def delete_workspace(
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
 
     try:
-        await manager.areset(workspace=ws)
+        await manager.corpora.reset(workspace_ids=(ws,))
     except Exception:
         logger.exception("Workspace deletion failed")
         return _error(

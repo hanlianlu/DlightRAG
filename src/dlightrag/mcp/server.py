@@ -52,9 +52,6 @@ from dlightrag.core.client_contracts import (
     conversation_history_as_dicts,
 )
 from dlightrag.core.client_requests import (
-    ingest_spec_from_payload,
-    managed_local_ingest_documents,
-    managed_local_ingest_path,
     query_kwargs_from_payload,
 )
 from dlightrag.core.servicemanager import RAGServiceManager
@@ -73,6 +70,11 @@ from dlightrag.mcp.contracts import (
 )
 from dlightrag.model_settings import access_settings
 from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
+from dlightrag.services.corpora import (
+    ingest_spec_from_payload,
+    managed_local_ingest_documents,
+    managed_local_ingest_path,
+)
 from dlightrag.services.retrieval import (
     RetrievalTimeoutError,
     RetrieveProjection,
@@ -322,7 +324,7 @@ async def _resolve_authorized_query_workspaces(
     """Resolve MCP query targets after applying the current request ACL."""
     try:
         return await _access_gate().resolve_query_workspaces(
-            manager,
+            manager.corpora,
             default_workspace=normalize_workspace(_get_config().workspace),
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
@@ -562,7 +564,7 @@ async def cancel_answer_run_tool(
 )
 async def list_workspaces_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
-    records = await manager.alist_workspace_records()
+    records = await manager.corpora.alist_workspace_records()
     records = await _filter_workspace_records(records)
     return {
         "workspaces": [row["workspace"] for row in records],
@@ -613,10 +615,13 @@ async def create_workspace_tool(
     manager = await _ensure_manager()
     normalized_workspace, normalized_display_name = _normalize_workspace_argument(args)
     await _enforce_access(AccessAction.WORKSPACE_CREATE, normalized_workspace)
-    existing = await manager.alist_workspaces()
+    existing = await manager.corpora.list_workspaces()
     if normalized_workspace in existing:
         raise ValueError(f"Workspace '{normalized_display_name}' already exists")
-    await manager.acreate_workspace(normalized_workspace, display_name=normalized_display_name)
+    await manager.corpora.create_workspace(
+        normalized_workspace,
+        display_name=normalized_display_name,
+    )
     return {
         "workspace": normalized_workspace,
         "display_name": normalized_display_name,
@@ -651,8 +656,8 @@ async def delete_workspace_tool(
     label = validate_workspace_name(args.workspace)
     normalized_workspace = normalize_workspace(label)
     await _enforce_access(AccessAction.WORKSPACE_DELETE, normalized_workspace)
-    result = await manager.areset(
-        workspace=label,
+    result = await manager.corpora.reset(
+        workspace_ids=(normalized_workspace,),
         keep_files=args.keep_files,
         dry_run=args.dry_run,
     )
@@ -823,7 +828,7 @@ async def ingest_tool(
             workspace=workspace_name,
         )
         ingest_spec = ingest_spec.model_copy(update={"path": path, "documents": managed_documents})
-    return await manager.astart_ingest_job(workspace_name, ingest_spec)
+    return await manager.corpora.start_ingest_job(workspace_name, ingest_spec)
 
 
 @mcp_app.tool(
@@ -841,7 +846,7 @@ async def get_ingest_job_tool(
     manager = await _ensure_manager()
     if not args.job_id:
         raise ValueError("job_id is required")
-    result = await manager.aget_ingest_job(args.job_id)
+    result = await manager.corpora.get_ingest_job(args.job_id)
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
     workspace = result.get("workspace")
@@ -865,13 +870,13 @@ async def cancel_ingest_job_tool(
     manager = await _ensure_manager()
     if not args.job_id:
         raise ValueError("job_id is required")
-    result = await manager.aget_ingest_job(args.job_id)
+    result = await manager.corpora.get_ingest_job(args.job_id)
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
     workspace = result.get("workspace")
     workspace_id = normalize_workspace(str(workspace)) if workspace else None
     await _enforce_access(AccessAction.JOB_CANCEL, workspace_id)
-    cancelled = await manager.acancel_ingest_job(args.job_id)
+    cancelled = await manager.corpora.cancel_ingest_job(args.job_id)
     return cancelled if cancelled is not None else result
 
 
@@ -892,7 +897,7 @@ async def list_files_tool(
     manager = await _ensure_manager()
     workspace_name = normalize_workspace(args.workspace or _get_config().workspace)
     await _enforce_access(AccessAction.WORKSPACE_LIST_FILES, workspace_name)
-    files = await manager.alist_ingested_files(workspace_name)
+    files = await manager.corpora.list_ingested_files(workspace_name)
     return {"files": files, "count": len(files), "workspace": workspace_name}
 
 
@@ -926,7 +931,7 @@ async def delete_files_tool(
     manager = await _ensure_manager()
     workspace_name = normalize_workspace(args.workspace or _get_config().workspace)
     await _enforce_access(AccessAction.WORKSPACE_DELETE_FILES, workspace_name)
-    results = await manager.adelete_files(
+    results = await manager.corpora.delete_files(
         workspace_name,
         filenames=args.filenames,
         file_paths=args.file_paths,

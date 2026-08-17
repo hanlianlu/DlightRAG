@@ -25,7 +25,7 @@ async def image(
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_VISUAL_ASSET, workspace=ws)
-    asset = await manager.aget_visual_asset(ws, chunk_id, size=size)
+    asset = await manager.corpora.get_visual_asset(ws, chunk_id, size=size)
     if asset is None:
         raise HTTPException(status_code=404, detail="Image not found")
     return Response(

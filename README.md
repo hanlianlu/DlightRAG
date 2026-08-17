@@ -293,8 +293,9 @@ uv add dlightrag
 import asyncio
 import os
 
-from dlightrag import IngestSpec, RAGServiceManager
+from dlightrag import RAGServiceManager
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
+from dlightrag.services.corpora import IngestSpec
 
 
 async def main() -> None:
@@ -320,7 +321,7 @@ async def main() -> None:
     )
     manager = await RAGServiceManager.acreate(config)
     try:
-        await manager.aingest(
+        await manager.corpora.ingest(
             workspace,
             IngestSpec(source_type="local", path="./docs"),
         )

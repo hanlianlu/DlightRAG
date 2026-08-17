@@ -12,14 +12,14 @@ from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 from dlightrag.access import ACTION_PRESETS, AccessAction
 
 
-def _coordinator() -> IngestJobCoordinator:
+def _coordinator(store: Any | None = None) -> IngestJobCoordinator:
     async def _unused(workspace: str):  # pragma: no cover - never awaited here
         raise AssertionError("service lookup is not part of cancellation")
 
     return IngestJobCoordinator(
         _unused,
         input_root=Path("/tmp/dlightrag-test"),
-        store=AsyncMock(),
+        store=cast(Any, store if store is not None else AsyncMock()),
     )
 
 
@@ -71,6 +71,57 @@ async def test_cancel_for_workspace_leaves_other_workspaces_running() -> None:
     assert not coordinator._tasks["job-3"].done()
 
     await coordinator.cancel_for_workspace("beta")
+
+
+async def test_reset_result_deletes_durable_workspace_jobs() -> None:
+    store = AsyncMock()
+    store.delete_for_workspace.return_value = 3
+    coordinator = _coordinator(store)
+    coordinator._store_started = True
+    result: dict[str, Any] = {"errors": []}
+
+    await coordinator.attach_reset_result(
+        workspace="finance",
+        result=result,
+        dry_run=False,
+    )
+
+    store.delete_for_workspace.assert_awaited_once_with("finance")
+    assert result["ingest_jobs_deleted"] == 3
+
+
+async def test_reset_dry_run_does_not_open_the_durable_job_store() -> None:
+    store = AsyncMock()
+    coordinator = _coordinator(store)
+    result: dict[str, Any] = {}
+
+    await coordinator.attach_reset_result(
+        workspace="finance",
+        result=result,
+        dry_run=True,
+    )
+
+    store.initialize.assert_not_awaited()
+    store.delete_for_workspace.assert_not_awaited()
+    assert result["ingest_jobs_deleted"] == 0
+
+
+async def test_reset_job_deletion_failure_is_recorded_without_hiding_reset_result() -> None:
+    store = AsyncMock()
+    store.delete_for_workspace.side_effect = RuntimeError("database down")
+    coordinator = _coordinator(store)
+    coordinator._store_started = True
+    result: dict[str, Any] = {"workspace": "finance", "errors": []}
+
+    await coordinator.attach_reset_result(
+        workspace="finance",
+        result=result,
+        dry_run=False,
+    )
+
+    assert result["workspace"] == "finance"
+    assert result["ingest_jobs_deleted"] == 0
+    assert result["errors"] == ["ingest_jobs: database down"]
 
 
 def test_anyone_who_may_ingest_may_also_stop_their_own_job() -> None:

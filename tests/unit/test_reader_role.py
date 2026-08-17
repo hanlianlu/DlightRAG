@@ -51,13 +51,6 @@ class TestServiceRoleConfig:
         with pytest.raises(ValidationError):
             _config(service_role="replica")
 
-    def test_require_writer_allows_writer(self) -> None:
-        _config().require_writer("ingest")  # no raise
-
-    def test_require_writer_rejects_reader(self) -> None:
-        with pytest.raises(PermissionError):
-            _config(service_role="reader").require_writer("ingest")
-
 
 class TestReaderPoolSessionModes:
     """A reader is corpus-read-only: only the LightRAG pool runs read-only sessions."""
@@ -118,26 +111,6 @@ class TestPgPoolBinding:
         pool.bind(_config())
         await pool.close()
         pool.bind(_config(service_role="reader"))  # rebinding after close is allowed
-
-
-_MANAGER_WRITE_CALLS = [
-    ("astart_ingest_job", ("ws", None), {}),
-    ("aget_ingest_job", ("job-1",), {}),
-    ("ajoin_ingest_job", ("job-1",), {}),
-    ("acancel_ingest_job", ("job-1",), {}),
-    ("acreate_workspace", ("ws",), {}),
-    ("areset", (), {}),
-]
-
-
-@pytest.mark.parametrize(("method", "args", "kwargs"), _MANAGER_WRITE_CALLS)
-async def test_manager_write_guards_reject_reader(method, args, kwargs) -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-
-    manager = object.__new__(RAGServiceManager)
-    manager._config = _config(service_role="reader")
-    with pytest.raises(PermissionError):
-        await getattr(manager, method)(*args, **kwargs)
 
 
 _SERVICE_WRITE_CALLS = [
@@ -380,42 +353,6 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
     assert conn.executed == []
 
 
-async def test_reader_workspace_registry_schema_failure_stops_startup() -> None:
-    from dlightrag_rag.ports import CorpusSchemaError
-
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.health import ApplicationHealth
-
-    manager = object.__new__(RAGServiceManager)
-    manager._config = _config(service_role="reader")
-    manager._health = ApplicationHealth(readiness_probe=None)
-
-    with pytest.raises(CorpusSchemaError):
-        await _initialize_registry(manager, CorpusSchemaError("workspace_registry"))
-
-    assert manager.health.warnings == ()
-
-
-async def test_transient_workspace_registry_failure_only_warns() -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.health import ApplicationHealth
-
-    manager = object.__new__(RAGServiceManager)
-    manager._config = _config()
-    manager._health = ApplicationHealth(readiness_probe=None)
-
-    await _initialize_registry(manager, RuntimeError("transient"))
-
-    assert manager.health.warnings == ("Workspace registry unavailable",)
-
-
-async def _initialize_registry(manager: Any, failure: Exception) -> None:
-    maintenance = AsyncMock()
-    maintenance.initialize.side_effect = failure
-    manager._corpus_maintenance = maintenance
-    await manager._initialize_workspace_registry()
-
-
 def _patch_manager_startup(
     monkeypatch: pytest.MonkeyPatch, *, stub_answer_store: bool = True
 ) -> None:
@@ -429,18 +366,19 @@ def _patch_manager_startup(
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.services.corpora import CorpusAdmin
     from dlightrag.services.retrieval import RetrievalPlannerRuntime
 
     monkeypatch.setattr(observability, "init_tracing", lambda _config: None)
     monkeypatch.setattr(pg_pool, "bind", lambda _config: None)
-    monkeypatch.setattr(RAGServiceManager, "_initialize_workspace_registry", AsyncMock())
+    monkeypatch.setattr(CorpusAdmin, "initialize", AsyncMock())
     monkeypatch.setattr(AnswerCapabilityCoordinator, "probe_all", AsyncMock())
     monkeypatch.setattr(
         RetrievalPlannerRuntime,
         "planner_for",
         lambda self, model_profile=None: None,
     )
-    monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", AsyncMock())
+    monkeypatch.setattr(CorpusAdmin, "start_recovery", AsyncMock())
     monkeypatch.setattr(servicemanager_module.WorkspaceRag, "acreate", AsyncMock())
     if stub_answer_store:
         monkeypatch.setattr(RAGServiceManager, "_initialize_answer_run_store", AsyncMock())
@@ -490,9 +428,7 @@ class _WebSchemaRecorder:
         type(self).calls.append(validate_only)
 
 
-@pytest.mark.parametrize(
-    "failing_step", ["_initialize_workspace_registry", "_initialize_answer_run_store"]
-)
+@pytest.mark.parametrize("failing_step", ["corpus", "answer_run"])
 async def test_reader_startup_never_degrades_past_a_schema_failure(
     failing_step: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -500,15 +436,16 @@ async def test_reader_startup_never_degrades_past_a_schema_failure(
     from dlightrag_rag.ports import CorpusSchemaError
 
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.services.corpora import CorpusAdmin
 
     _patch_manager_startup(monkeypatch)
     recovery = AsyncMock()
-    monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", recovery)
-    monkeypatch.setattr(
-        RAGServiceManager,
-        failing_step,
-        AsyncMock(side_effect=CorpusSchemaError("doc_metadata is missing versions")),
-    )
+    monkeypatch.setattr(CorpusAdmin, "start_recovery", recovery)
+    failure = AsyncMock(side_effect=CorpusSchemaError("doc_metadata is missing versions"))
+    if failing_step == "corpus":
+        monkeypatch.setattr(CorpusAdmin, "initialize", failure)
+    else:
+        monkeypatch.setattr(RAGServiceManager, "_initialize_answer_run_store", failure)
     closed = AsyncMock()
     monkeypatch.setattr(RAGServiceManager, "aclose", closed)
 
@@ -527,6 +464,7 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
 
     import dlightrag.core.servicemanager as servicemanager_module
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.services.corpora import CorpusAdmin
 
     _patch_manager_startup(monkeypatch)
     failure = CorpusSchemaError("doc_metadata is missing versions: column_title")
@@ -534,7 +472,7 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
         servicemanager_module.WorkspaceRag, "acreate", AsyncMock(side_effect=failure)
     )
     recovery = AsyncMock()
-    monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", recovery)
+    monkeypatch.setattr(CorpusAdmin, "start_recovery", recovery)
     closed: list[Any] = []
 
     async def _aclose(self: Any) -> None:
@@ -663,36 +601,6 @@ async def test_reader_serves_web_routes() -> None:
     assert "/web/answer" in set(app.openapi()["paths"])
     assert app.state.web_enabled is True
     assert not hasattr(app.state, "web_conversation_service")
-
-
-async def test_reader_does_not_recover_ingest_jobs() -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.health import ApplicationHealth
-
-    manager = object.__new__(RAGServiceManager)
-    manager._config = _config(service_role="reader")
-    manager._health = ApplicationHealth(readiness_probe=None)
-    recovery = AsyncMock()
-    manager._ingest_jobs = cast(Any, SimpleNamespace(start_recovery=recovery))
-
-    await manager._start_ingest_job_recovery()
-
-    recovery.assert_not_awaited()
-
-
-async def test_writer_recovers_ingest_jobs() -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.health import ApplicationHealth
-
-    manager = object.__new__(RAGServiceManager)
-    manager._config = _config()
-    manager._health = ApplicationHealth(readiness_probe=None)
-    recovery = AsyncMock()
-    manager._ingest_jobs = cast(Any, SimpleNamespace(start_recovery=recovery))
-
-    await manager._start_ingest_job_recovery()
-
-    recovery.assert_awaited_once_with()
 
 
 class TestReadOnlyAdapter:

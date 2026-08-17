@@ -318,6 +318,26 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "corpus-admin-independence"
+name = "Corpus administration must remain composition and adapter neutral"
+type = "forbidden"
+source_modules = ["dlightrag.services.corpora"]
+forbidden_modules = [
+    "dlightrag.application",
+    "dlightrag.adapters",
+    "dlightrag.answer",
+    "dlightrag.model_settings",
+    "dlightrag.api",
+    "dlightrag.config",
+    "dlightrag.core",
+    "dlightrag.mcp",
+    "dlightrag.web",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
 id = "application-health-independence"
 name = "Application health must remain composition and adapter neutral"
 type = "forbidden"

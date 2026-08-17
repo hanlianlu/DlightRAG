@@ -5,21 +5,14 @@ import asyncio
 import logging
 from collections.abc import (
     AsyncGenerator,
-    AsyncIterable,
-    Callable,
-    Iterable,
     Mapping,
     Sequence,
 )
 from contextlib import aclosing
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from dlightrag_rag.source_download import SourceDownloadTarget
-
-    from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.answer.resources import ResourceInput
     from dlightrag.config import DlightragConfig
@@ -36,14 +29,10 @@ from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.vision import ModelImageCapabilities
-from dlightrag_rag.contracts import SourceType, VisualAssetSize
 from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
-from dlightrag_rag.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag_rag.lifecycle import defer_cancellation
 from dlightrag_rag.pool import WorkspacePool
 from dlightrag_rag.ports import (
-    JOB_STATES_WITH_RESULT,
-    CorpusMaintenanceStore,
     CorpusSchemaError,
     WorkspaceCorpusBackend,
 )
@@ -52,24 +41,24 @@ from dlightrag_rag.retrieval import (
     RetrievalResult,
 )
 from dlightrag_rag.settings import RagSettings
-from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag_rag.source_download import SourceDownloadService
 from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from dlightrag_rag.workspace_rag import WorkspaceRag
 from dlightrag_rag.workspaces import (
     normalize_workspace,
     normalize_workspace_ids,
-    require_canonical_workspace_id,
 )
 from PIL import Image
 
 from dlightrag.access import (
     DEPLOYMENT_OWNER_ID,
-    WorkspaceRecord,
     resolve_query_workspaces,
     validate_query_workspace_selection,
 )
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
+from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
+from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
 from dlightrag.adapters.retrieval import (
     AnswerQueryImagePreparer,
     AnswerRetrievalProjector,
@@ -112,8 +101,6 @@ from dlightrag.answer.runs.results import (
     restore_answer_result,
 )
 from dlightrag.answer.synthesizer import AnswerSynthesizer
-from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import (
@@ -121,6 +108,7 @@ from dlightrag.model_settings import (
     answer_executor_settings,
     answer_model_runtime_settings,
     answer_resource_settings,
+    corpus_admin_settings,
     model_profile_for_role,
     model_settings_for_role,
     rag_settings,
@@ -142,6 +130,7 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
+from dlightrag.services.corpora import CorpusAdmin
 from dlightrag.services.retrieval import RetrievalPlannerRuntime, RetrievalService
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
@@ -160,23 +149,8 @@ class _AcceptanceProjection:
     pinned_models: tuple[PinnedModelProfile, ...]
 
 
-def _iso_or_none(value: Any) -> str | None:
-    if value is None:
-        return None
-    isoformat = getattr(value, "isoformat", None)
-    if callable(isoformat):
-        return str(isoformat())
-    return str(value)
-
-
 def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value is not None}
-
-
-def _cleanup_paths_for_local_ingest(*, source_type: SourceType, path: str | None) -> list[str]:
-    if source_type != "local" or not path:
-        return []
-    return [path] if is_explicit_upload_batch_dir(Path(path)) else []
 
 
 class RAGServiceUnavailableError(Exception):
@@ -201,7 +175,6 @@ class RAGServiceManager:
         Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
         self._config = config or get_config()
         corpus_backend = PGCorpusBackendFactory(self._config).create()
-        self._corpus_maintenance: CorpusMaintenanceStore = corpus_backend.maintenance
 
         self._health = ApplicationHealth(
             readiness_probe=PGReadinessProbe(self._config),
@@ -215,12 +188,24 @@ class RAGServiceManager:
             build=self._build_workspace,
         )
 
-        self._ingest_jobs = IngestJobCoordinator(
+        ingest_jobs = IngestJobCoordinator(
             lambda workspace: self._workspace_pool.acquire(workspace),
             input_root=self._config.input_dir_path,
             store=corpus_backend.ingest_jobs,
         )
-        self._file_panel_store: PGFilePanelStore | None = None
+        source_download_settings = rag_settings(self._config)
+        self.corpora = CorpusAdmin(
+            settings=corpus_admin_settings(self._config),
+            pool=self._workspace_pool,
+            maintenance=corpus_backend.maintenance,
+            ingest_jobs=ingest_jobs,
+            file_panel=PGFilePanelStore(),
+            source_download_for=lambda workspace: SourceDownloadService(
+                settings=source_download_settings,
+                metadata_index=PGMetadataIndex(workspace=workspace),
+                workspace_id=workspace,
+            ),
+        )
         # Image capability is role-specific but cached per resolved model config,
         # so roles that share one model share one probe.
         self._capabilities = AnswerCapabilityCoordinator(
@@ -308,7 +293,13 @@ class RAGServiceManager:
         try:
             await manager._initialize_answer_run_store()
             await manager._validate_active_answer_run_compatibility()
-            await manager._initialize_workspace_registry()
+            try:
+                await manager.corpora.initialize()
+            except CorpusSchemaError:
+                raise
+            except Exception as exc:
+                manager._health.add_warning("Workspace registry unavailable")
+                logger.warning("Workspace registry initialization failed: %s", exc)
 
             # Bind the retrieval-planner LLM during startup; this does not make a model call.
             manager.retrieval.planner_for()
@@ -340,7 +331,11 @@ class RAGServiceManager:
             await manager.aclose()
             raise
 
-        await manager._start_ingest_job_recovery()
+        try:
+            await manager.corpora.start_recovery()
+        except Exception:
+            manager._health.add_warning("Ingest job recovery unavailable")
+            logger.warning("Ingest job recovery initialization failed", exc_info=True)
         await manager._start_answer_runtime()
         if default_ready:
             manager._health.mark_ready()
@@ -349,22 +344,6 @@ class RAGServiceManager:
             manager._health.mark_degraded(f"Default workspace init failed: {detail}")
             logger.error("RAG service started in degraded mode: %s", detail)
         return manager
-
-    async def _initialize_workspace_registry(self) -> None:
-        """Migrate the durable workspace registry, or validate it on a reader."""
-        try:
-            await self._corpus_maintenance.initialize(validate_only=self._config.is_reader)
-            if not self._config.is_reader:
-                await self._corpus_maintenance.register_workspace(
-                    workspace=normalize_workspace(self._config.workspace),
-                    display_name=self._config.workspace,
-                    embedding_model=self._config.embedding.model,
-                )
-        except CorpusSchemaError:
-            raise
-        except Exception as exc:
-            self._health.add_warning("Workspace registry unavailable")
-            logger.warning("Workspace registry initialization failed: %s", exc)
 
     async def _initialize_answer_run_store(self) -> None:
         """Migrate the durable operational schema, or validate it on a reader.
@@ -504,322 +483,6 @@ class RAGServiceManager:
             raise RuntimeError(self._actionable_error(exc)) from exc
         logger.info("Created WorkspaceRag for workspace '%s'", safe_log_text(workspace_id))
         return runtime
-
-    # --- Write operations (single workspace) ---
-
-    async def aingest(
-        self,
-        workspace: str,
-        request: IngestSpec,
-    ) -> dict[str, Any]:
-        """Start an ingest job, wait according to config, and return the result if ready."""
-        job = await self.astart_ingest_job(workspace, request)
-        row = await self.ajoin_ingest_job(job["job_id"], timeout=self._config.ingest_timeout)
-        if row is None:
-            raise RAGServiceUnavailableError(detail=f"Ingest job disappeared: {job['job_id']}")
-        status = str(row.get("status") or "")
-        if status in JOB_STATES_WITH_RESULT:
-            result = row.get("result")
-            return result if isinstance(result, dict) else {}
-        if status == "failed":
-            raw_errors = row.get("errors")
-            errors = raw_errors if isinstance(raw_errors, list) else []
-            detail = "; ".join(str(error) for error in errors) or "Ingest job failed"
-            raise RAGServiceUnavailableError(detail=detail)
-        return row
-
-    async def aingest_source(
-        self,
-        workspace: str,
-        source: AsyncDataSource,
-        *,
-        source_type: str = "source",
-        documents: Iterable[SourceDocument] | AsyncIterable[SourceDocument] | None = None,
-        prefix: str | None = None,
-        source_uri_for_key: Callable[[str], str] | None = None,
-        download_uri_for_key: Callable[[str], str | None] | None = None,
-        replace: bool | None = None,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        retain_source_file: bool | None = None,
-    ) -> dict[str, Any]:
-        """Ingest from an in-memory SDK data source without durable job recovery."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        await svc.aregister_workspace()
-        return await svc.aingest_source(
-            source,
-            source_type=source_type,
-            documents=documents,
-            prefix=prefix,
-            source_uri_for_key=source_uri_for_key,
-            download_uri_for_key=download_uri_for_key,
-            replace=replace,
-            title=title,
-            author=author,
-            metadata=metadata,
-            retain_source_file=retain_source_file,
-        )
-
-    async def _start_ingest_job_recovery(self) -> None:
-        # Recovery resumes corpus writes, so it stays with the writer role.
-        if self._config.is_reader:
-            return
-        try:
-            await self._ingest_jobs.start_recovery()
-        except Exception:
-            self._health.add_warning("Ingest job recovery unavailable")
-            logger.warning("Ingest job recovery initialization failed", exc_info=True)
-
-    async def astart_ingest_job(
-        self,
-        workspace: str,
-        request: IngestSpec,
-    ) -> dict[str, Any]:
-        """Start a background ingest job and return its durable job row."""
-        self._config.require_writer("ingestion")
-        kwargs = ingest_kwargs_from_payload(request)
-        return await self._ingest_jobs.start_job(
-            normalize_workspace(workspace),
-            request.source_type,
-            cleanup_paths=_cleanup_paths_for_local_ingest(
-                source_type=request.source_type,
-                path=request.path,
-            ),
-            **kwargs,
-        )
-
-    async def ajoin_ingest_job(
-        self,
-        job_id: str,
-        *,
-        timeout: float | None = None,
-    ) -> dict[str, Any] | None:
-        """Wait for an in-process ingest job without cancelling it on timeout."""
-        self._config.require_writer("ingest job access")
-        return await self._ingest_jobs.await_job(job_id, timeout=timeout)
-
-    async def aget_ingest_job(self, job_id: str) -> dict[str, Any] | None:
-        self._config.require_writer("ingest job access")
-        return await self._ingest_jobs.get_job(job_id)
-
-    async def acancel_ingest_job(self, job_id: str) -> dict[str, Any] | None:
-        """Stop a running ingest job, keeping whatever it already ingested."""
-        self._config.require_writer("ingest job cancellation")
-        job = await self._ingest_jobs.get_job(job_id)
-        if job is None:
-            return None
-        await self._ingest_jobs.cancel_job(job_id, workspace=str(job.get("workspace", "")))
-        return await self._ingest_jobs.get_job(job_id)
-
-    def _get_file_panel_store(self) -> PGFilePanelStore:
-        if self._file_panel_store is None:
-            from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
-
-            self._file_panel_store = PGFilePanelStore()
-        return self._file_panel_store
-
-    async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
-        """Initialize a workspace through the public manager API."""
-        self._config.require_writer("workspace creation")
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        await svc.aregister_workspace(display_name=display_name)
-
-    async def aget_file_panel_snapshot(self, workspace: str) -> dict[str, Any]:
-        """Return files-panel data without warming a cold RAG service."""
-        workspace_id = normalize_workspace(workspace)
-        files = await self._get_file_panel_store().list_processed_files(workspace_id)
-
-        loaded_status = await self._workspace_pool.get_pipeline_status(workspace_id)
-        if loaded_status is not None:
-            pipeline_status = loaded_status
-        elif self._ingest_jobs.has_active_workspace_job(workspace_id):
-            pipeline_status = {
-                "busy": True,
-                "pending_enqueues": 0,
-                "latest_message": "Starting ingest...",
-            }
-        else:
-            pipeline_status = {
-                "busy": False,
-                "pending_enqueues": 0,
-                "latest_message": "",
-            }
-
-        return {
-            "files": files,
-            "pipeline_status": pipeline_status,
-        }
-
-    async def aprepare_source_download(
-        self,
-        workspace: str,
-        document_id: str,
-    ) -> SourceDownloadTarget:
-        """Prepare a source download without warming a workspace model service."""
-        from dlightrag_rag.source_download import SourceDownloadService
-
-        from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
-
-        workspace_id = normalize_workspace(workspace)
-        index = PGMetadataIndex(workspace=workspace_id)
-        service = SourceDownloadService(
-            settings=rag_settings(self._config),
-            metadata_index=index,
-            workspace_id=workspace_id,
-        )
-        return await service.prepare(document_id)
-
-    async def alist_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
-        """List ingested files in a specific workspace."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.alist_ingested_files()
-
-    async def aget_pipeline_status(self, workspace: str) -> dict[str, Any]:
-        """Return pipeline progress for a workspace."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.aget_pipeline_status()
-
-    async def adelete_files(
-        self,
-        workspace: str,
-        *,
-        file_paths: list[str] | None = None,
-        filenames: list[str] | None = None,
-        dry_run: bool = False,
-    ) -> list[dict[str, Any]]:
-        """Delete files from a specific workspace."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.adelete_files(
-            file_paths=file_paths,
-            filenames=filenames,
-            dry_run=dry_run,
-        )
-
-    async def alist_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
-        """List FAILED documents in a specific workspace."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.alist_failed_docs()
-
-    async def aget_visual_asset(
-        self, workspace: str, chunk_id: str, *, size: VisualAssetSize = "full"
-    ) -> Any:
-        """Resolve a visual chunk asset for browser/API image routes."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.aget_visual_asset(chunk_id, size=size)
-
-    async def aretry_failed_docs(self, workspace: str) -> dict[str, Any]:
-        """Retry all FAILED documents in a specific workspace via re-ingest."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.aretry_failed_docs()
-
-    async def aget_metadata(self, workspace: str, doc_id: str) -> dict[str, Any]:
-        """Get document metadata by ID."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.aget_metadata(doc_id)
-
-    async def aupdate_metadata(
-        self,
-        workspace: str,
-        doc_id: str,
-        data: dict[str, Any],
-    ) -> None:
-        """Update (merge) document metadata."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        await svc.aupdate_metadata(doc_id, data)
-
-    async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
-        """Search metadata by filters, return matching doc_ids."""
-        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
-        return await svc.asearch_metadata(filters)
-
-    async def areset(
-        self,
-        *,
-        workspace: str | None = None,
-        keep_files: bool = False,
-        dry_run: bool = False,
-    ) -> dict[str, Any]:
-        """Reset one or all workspaces.
-
-        Drops all storage backends, clears DlightRAG indexes, and optionally
-        removes local files. After reset, the service is closed and evicted
-        from cache.
-        """
-        self._config.require_writer("workspace reset")
-        if workspace is not None:
-            target_workspace = normalize_workspace(workspace)
-            known = await self.alist_workspaces()
-            if target_workspace not in known and not await self._workspace_pool.is_loaded(
-                target_workspace
-            ):
-                cancelled_jobs = (
-                    0 if dry_run else await self._ingest_jobs.cancel_for_workspace(target_workspace)
-                )
-                from dlightrag_rag.reset import areset_orphaned_workspace
-
-                result = await areset_orphaned_workspace(
-                    target_workspace,
-                    maintenance=self._corpus_maintenance,
-                    keep_files=keep_files,
-                    dry_run=dry_run,
-                    input_dir=str(self._config.input_dir_path),
-                )
-                await self._ingest_jobs.attach_reset_result(
-                    workspace=target_workspace,
-                    result=result,
-                    dry_run=dry_run,
-                )
-                result["ingest_jobs_cancelled"] = cancelled_jobs
-                return {
-                    "workspaces": {target_workspace: result},
-                    "total_errors": len(result.get("errors", [])),
-                }
-            workspaces = [target_workspace]
-        else:
-            workspaces = await self.alist_workspaces()
-
-        results: dict[str, Any] = {}
-        total_errors = 0
-
-        for ws in workspaces:
-            cancelled_jobs = 0 if dry_run else await self._ingest_jobs.cancel_for_workspace(ws)
-            try:
-                svc = await self._workspace_pool.acquire(ws)
-                ws_result = await svc.areset(keep_files=keep_files, dry_run=dry_run)
-                ws_result["ingest_jobs_cancelled"] = cancelled_jobs
-                await self._ingest_jobs.attach_reset_result(
-                    workspace=ws,
-                    result=ws_result,
-                    dry_run=dry_run,
-                )
-                results[ws] = ws_result
-                total_errors += len(ws_result.get("errors", []))
-            except Exception as exc:
-                results[ws] = {
-                    "error": "workspace reset failed",
-                    "ingest_jobs_cancelled": cancelled_jobs,
-                }
-                total_errors += 1
-                logger.warning(
-                    "Failed to reset workspace '%s': %s",
-                    safe_log_text(ws),
-                    safe_log_text(exc),
-                )
-
-            # Close and evict from cache even after reset errors, but never for a
-            # dry run -- a preview must not tear down the live workspace runtime.
-            if not dry_run:
-                try:
-                    await self._workspace_pool.evict(ws)
-                except Exception:
-                    logger.warning(
-                        "Failed to close service for '%s'",
-                        safe_log_text(ws),
-                        exc_info=True,
-                    )
-
-        return {"workspaces": results, "total_errors": total_errors}
 
     # --- Durable answer runs ---
 
@@ -1159,7 +822,9 @@ class RAGServiceManager:
             workspaces=workspaces,
         )
         available = (
-            normalize_workspace_ids(await self.alist_workspaces()) if all_workspaces else None
+            normalize_workspace_ids(await self.corpora.list_workspaces())
+            if all_workspaces
+            else None
         )
         ws_list = resolve_query_workspaces(
             default_workspace=normalize_workspace(self._config.workspace),
@@ -1368,53 +1033,13 @@ class RAGServiceManager:
             for role in MODEL_ROLE_NAMES
         )
 
-    # --- Management ---
-
-    async def alist_workspaces(self) -> list[str]:
-        """Discover available workspaces."""
-        records = await self.alist_workspace_records()
-        return [row["workspace"] for row in records]
-
-    async def alist_workspace_records(self) -> list[WorkspaceRecord]:
-        """Return registered workspace records for UI/API adapters."""
-        default_record: WorkspaceRecord = {
-            "workspace": normalize_workspace(self._config.workspace),
-            "display_name": self._config.workspace,
-            "embedding_model": self._config.embedding.model,
-            "created_at": None,
-            "updated_at": None,
-        }
-        try:
-            rows = await self._corpus_maintenance.list_workspace_records()
-            if rows:
-                records = [self._serialize_workspace_record(row) for row in rows]
-                if all(row["workspace"] != default_record["workspace"] for row in records):
-                    records.append(default_record)
-                return records
-        except Exception as exc:
-            logger.warning("Failed to list workspaces from registry: %s", exc)
-
-        return [default_record]
-
-    @staticmethod
-    def _serialize_workspace_record(row: dict[str, Any]) -> WorkspaceRecord:
-        """Return a JSON-safe workspace record."""
-        raw_workspace = str(row.get("workspace") or "")
-        return {
-            "workspace": require_canonical_workspace_id(raw_workspace),
-            "display_name": str(row.get("display_name") or raw_workspace),
-            "embedding_model": str(row.get("embedding_model") or ""),
-            "created_at": _iso_or_none(row.get("created_at")),
-            "updated_at": _iso_or_none(row.get("updated_at")),
-        }
-
     async def aclose(self) -> None:
         """Close all managed WorkspaceRag instances."""
         from dlightrag.observability import shutdown_tracing
 
         self._health.mark_closed()
         cancellation: asyncio.CancelledError | None = None
-        await self._ingest_jobs.close()
+        await self.corpora.aclose()
         if self._answer_coordinator is not None:
             coordinator, self._answer_coordinator = self._answer_coordinator, None
             try:

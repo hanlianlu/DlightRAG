@@ -1176,11 +1176,11 @@ def run_change_settings(console, prompter: Prompter, info: PlatformInfo) -> None
 def _wipe_data(console, *, runner=_default_runner) -> None:
     console.print("Erasing ingested data… · 正在清除已导入数据…")
     try:
-        runner(["uv", "run", "scripts/reset.py", "--all", "-y"])
+        runner(["uv", "run", "scripts/reset_workspace.py", "--all", "-y"])
     except Exception as exc:
         console.print(
             f"[yellow]Couldn't erase data automatically ({exc}); "
-            f"run `uv run scripts/reset.py --all` yourself.[/yellow]"
+            f"run `uv run scripts/reset_workspace.py --all` yourself.[/yellow]"
         )
 
 

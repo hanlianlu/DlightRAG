@@ -532,11 +532,10 @@ local file or redirects through a supported provider locator. Azure uses
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
 REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only, does not
 follow redirects to private hosts, and caps each download with
-`url_ingest_max_bytes`. SaaS APIs that require auth headers should be wrapped by
-an SDK `AsyncDataSource` connector and ingested with
-`RAGServiceManager.aingest_source()`. `source_uri`/`source_uris` set stable
-identity; they do not substitute for the durable locator required by a
-non-retained signed fetch.
+`url_ingest_max_bytes`. SaaS APIs that require auth headers must stage content
+through a supported local, Azure Blob, or S3 source, or expose a public HTTPS
+fetch URL. `source_uri`/`source_uris` set stable identity; they do not substitute
+for the durable locator required by a non-retained signed fetch.
 Set `url_ingest_private_host_allowlist` only for trusted enterprise hosts that
 must be fetched by REST/MCP URL ingest. Entries are host/IP patterns such as
 `docs.corp.example`, `*.corp.example`, or `10.0.0.5`.
@@ -1023,7 +1022,7 @@ workspace/folder uploads. It also supplies the tighter receive-layer cap for
 cap. `max_upload_size_mb` is the general receive-layer cap for multipart uploads
 and the per-request total cap for multi-file Web workspace uploads. Answer routes
 use their tighter answer attachment policy instead. `ingest_timeout` limits how
-long the SDK convenience method `RAGServiceManager.aingest()` waits for its
+long the in-process `CorpusAdmin.ingest()` convenience method waits for its
 durable job. When it expires, the job keeps running and the method returns its
 current row instead of cancelling it. REST, Web, and MCP start jobs immediately
 and are not governed by this wait setting.

@@ -51,8 +51,9 @@ def mock_manager():
             failure_kind=None,
         )
     )
-    manager.alist_workspaces = AsyncMock(return_value=["default", "test_ws"])
-    manager.alist_workspace_records = AsyncMock(
+    corpora = SimpleNamespace()
+    corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
+    corpora.alist_workspace_records = AsyncMock(
         return_value=[
             {
                 "workspace": "default",
@@ -66,21 +67,25 @@ def mock_manager():
             },
         ]
     )
-    manager.alist_ingested_files = AsyncMock(
+    corpora.list_ingested_files = AsyncMock(
         return_value=[{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}]
     )
-    manager.aget_pipeline_status = AsyncMock(
+    corpora.get_pipeline_status = AsyncMock(
         return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
     )
-    manager.aget_file_panel_snapshot = AsyncMock(
+    corpora.file_panel_snapshot = AsyncMock(
         return_value={
             "files": [{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}],
             "pipeline_status": {"busy": False, "pending_enqueues": 0, "latest_message": ""},
         }
     )
-    manager.adelete_files = AsyncMock(return_value=[])
-    manager.aingest = AsyncMock()
-    manager.astart_ingest_job = AsyncMock(return_value={"job_id": "job-1", "status": "queued"})
+    corpora.delete_files = AsyncMock(return_value=[])
+    corpora.start_ingest_job = AsyncMock(return_value={"job_id": "job-1", "status": "queued"})
+    corpora.prepare_source_download = AsyncMock()
+    corpora.get_visual_asset = AsyncMock()
+    corpora.create_workspace = AsyncMock()
+    corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
+    manager.corpora = corpora
     return manager
 
 
@@ -148,7 +153,7 @@ async def test_vendored_assets_allow_revalidation_caching(client):
 
 def _configure_web_manager(manager, cfg: DlightragConfig):
     manager.config = cfg
-    manager.aget_pipeline_status = AsyncMock(
+    manager.corpora.get_pipeline_status = AsyncMock(
         return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
     )
     return manager
@@ -245,7 +250,7 @@ class TestWebAuth:
         source = test_config.input_dir_path / "default" / "notes.md"
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("downloadable notes", encoding="utf-8")
-        mock_manager.aprepare_source_download.return_value = LocalDownloadTarget(
+        mock_manager.corpora.prepare_source_download.return_value = LocalDownloadTarget(
             path=source.resolve(),
             media_type="text/markdown",
             filename="notes.md",
@@ -268,7 +273,9 @@ class TestWebAuth:
         assert response.status_code == 200
         assert response.content == b"downloadable notes"
         assert rest_response.status_code == 401
-        mock_manager.aprepare_source_download.assert_awaited_once_with("default", "doc-notes")
+        mock_manager.corpora.prepare_source_download.assert_awaited_once_with(
+            "default", "doc-notes"
+        )
 
     async def test_login_redirect_rejects_external_next(
         self, test_config: DlightragConfig, mock_manager
@@ -536,7 +543,7 @@ class TestWebFiles:
     async def test_file_list_derives_display_name_from_path(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.aget_file_panel_snapshot = AsyncMock(
+        mock_manager.corpora.file_panel_snapshot = AsyncMock(
             return_value={
                 "files": [
                     {"doc_id": "d1", "file_path": "/tmp/reports/q4.pdf", "status": "processed"}
@@ -554,8 +561,8 @@ class TestWebFiles:
     async def test_file_list_uses_file_panel_snapshot_for_cold_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default", "cold_ws"])
-        mock_manager.aget_file_panel_snapshot = AsyncMock(
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default", "cold_ws"])
+        mock_manager.corpora.file_panel_snapshot = AsyncMock(
             return_value={
                 "files": [
                     {"doc_id": "d1", "file_path": "/tmp/cold/report.pdf", "status": "processed"}
@@ -563,76 +570,78 @@ class TestWebFiles:
                 "pipeline_status": {"busy": False, "pending_enqueues": 0},
             }
         )
-        mock_manager.alist_ingested_files = AsyncMock(return_value=[])
-        mock_manager.aget_pipeline_status = AsyncMock(return_value={"busy": False})
+        mock_manager.corpora.list_ingested_files = AsyncMock(return_value=[])
+        mock_manager.corpora.get_pipeline_status = AsyncMock(return_value={"busy": False})
 
         resp = await client.get("/web/files", params={"workspace": "cold-ws"})
 
         assert resp.status_code == 200
         assert ">report.pdf</span>" in resp.text
-        mock_manager.aget_file_panel_snapshot.assert_awaited_once_with("cold_ws")
-        mock_manager.alist_ingested_files.assert_not_awaited()
-        mock_manager.aget_pipeline_status.assert_not_awaited()
+        mock_manager.corpora.file_panel_snapshot.assert_awaited_once_with("cold_ws")
+        mock_manager.corpora.list_ingested_files.assert_not_awaited()
+        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.aget_file_panel_snapshot.assert_not_awaited()
-        mock_manager.alist_ingested_files.assert_not_awaited()
-        mock_manager.aget_pipeline_status.assert_not_awaited()
+        mock_manager.corpora.file_panel_snapshot.assert_not_awaited()
+        mock_manager.corpora.list_ingested_files.assert_not_awaited()
+        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace_even_with_registered_cookie(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default", "test_ws"])
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
         client.cookies.set("dlightrag_workspace", "test_ws")
 
         resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.aget_file_panel_snapshot.assert_not_awaited()
-        mock_manager.alist_ingested_files.assert_not_awaited()
-        mock_manager.aget_pipeline_status.assert_not_awaited()
+        mock_manager.corpora.file_panel_snapshot.assert_not_awaited()
+        mock_manager.corpora.list_ingested_files.assert_not_awaited()
+        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_canonicalizes_requested_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default", "test_fallback_ws"])
+        mock_manager.corpora.list_workspaces = AsyncMock(
+            return_value=["default", "test_fallback_ws"]
+        )
 
         resp = await client.get("/web/files", params={"workspace": "test-fallback-ws"})
 
         assert resp.status_code == 200
-        mock_manager.aget_file_panel_snapshot.assert_awaited_once_with("test_fallback_ws")
+        mock_manager.corpora.file_panel_snapshot.assert_awaited_once_with("test_fallback_ws")
 
     async def test_file_list_rejects_stale_workspace_without_default(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["other_ws"])
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["other_ws"])
 
         resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.aget_file_panel_snapshot.assert_not_awaited()
-        mock_manager.alist_ingested_files.assert_not_awaited()
+        mock_manager.corpora.file_panel_snapshot.assert_not_awaited()
+        mock_manager.corpora.list_ingested_files.assert_not_awaited()
 
     async def test_ingest_status_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.get("/web/ingest-status", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.aget_pipeline_status.assert_not_awaited()
+        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_ingest_status_done_preserves_panel_content_container(
         self, client: AsyncClient, test_config: DlightragConfig
@@ -652,9 +661,8 @@ class TestWebFiles:
         )
 
         assert resp.status_code == 200
-        mock_manager.aingest.assert_not_awaited()
-        mock_manager.astart_ingest_job.assert_awaited_once()
-        call = mock_manager.astart_ingest_job.await_args
+        mock_manager.corpora.start_ingest_job.assert_awaited_once()
+        call = mock_manager.corpora.start_ingest_job.await_args
         assert call.args[0] == "default"
         ingest_spec = call.args[1]
         assert ingest_spec.source_type == "local"
@@ -665,7 +673,7 @@ class TestWebFiles:
     async def test_upload_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
             "/web/files/upload",
@@ -675,8 +683,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.aingest.assert_not_awaited()
-        mock_manager.astart_ingest_job.assert_not_awaited()
+        mock_manager.corpora.start_ingest_job.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "filename",
@@ -703,12 +710,12 @@ class TestWebFiles:
             params={"file_path": "/tmp/test.pdf"},
         )
         assert resp.status_code == 200
-        mock_manager.adelete_files.assert_awaited_once()
+        mock_manager.corpora.delete_files.assert_awaited_once()
 
     async def test_delete_files_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.request(
             "DELETE",
@@ -718,7 +725,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.adelete_files.assert_not_awaited()
+        mock_manager.corpora.delete_files.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -732,10 +739,10 @@ class TestWebWorkspaceCreate:
     async def test_create_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.acreate_workspace = AsyncMock()
+        mock_manager.corpora.create_workspace = AsyncMock()
         # First call (duplicate check): workspace does not exist yet
         # Second call (post-create list): includes the new workspace
-        mock_manager.alist_workspaces = AsyncMock(
+        mock_manager.corpora.list_workspaces = AsyncMock(
             side_effect=[["default", "test_ws"], ["default", "test_ws", "new_workspace"]]
         )
         resp = await client.post(
@@ -751,7 +758,7 @@ class TestWebWorkspaceCreate:
         assert any(
             cookie.startswith("dlightrag_workspace_ids=new_workspace;") for cookie in set_cookies
         )
-        mock_manager.acreate_workspace.assert_awaited_once_with(
+        mock_manager.corpora.create_workspace.assert_awaited_once_with(
             "new_workspace",
             display_name="new workspace",
         )
@@ -793,8 +800,8 @@ class TestWebWorkspaceDelete:
     async def test_delete_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.areset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
         resp = await client.post(
             "/web/workspaces/delete",
             data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
@@ -802,13 +809,13 @@ class TestWebWorkspaceDelete:
         assert resp.status_code == 200
         assert resp.json() == {"workspace": "test_ws", "next_workspace": "default"}
         assert "dlightrag_workspace=default" in resp.headers["set-cookie"]
-        mock_manager.areset.assert_awaited_once_with(workspace="test_ws")
+        mock_manager.corpora.reset.assert_awaited_once_with(workspace_ids=("test_ws",))
 
     async def test_delete_default_workspace_selects_first_remaining_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.areset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
-        mock_manager.alist_workspaces = AsyncMock(return_value=["research"])
+        mock_manager.corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["research"])
 
         resp = await client.post(
             "/web/workspaces/delete",
@@ -824,8 +831,8 @@ class TestWebWorkspaceDelete:
     async def test_delete_hyphen_workspace_emits_canonical_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.areset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
-        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
+        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
             "/web/workspaces/delete",
@@ -834,7 +841,7 @@ class TestWebWorkspaceDelete:
 
         assert resp.status_code == 200
         assert resp.json() == {"workspace": "test_fallback_ws", "next_workspace": "default"}
-        mock_manager.areset.assert_awaited_once_with(workspace="test_fallback_ws")
+        mock_manager.corpora.reset.assert_awaited_once_with(workspace_ids=("test_fallback_ws",))
 
     @pytest.mark.parametrize(
         ("workspace_name", "confirm_name"),

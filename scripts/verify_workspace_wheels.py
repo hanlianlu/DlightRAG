@@ -916,6 +916,7 @@ def _smoke_root_interfaces() -> None:
     from dlightrag.model_settings import rag_settings
     from dlightrag.runtime import answer_run_request_fingerprint
     from dlightrag.sdk import AnswerRunClient
+    from dlightrag.services.corpora import CorpusAdmin, CorpusAdminSettings, IngestSpec
     from dlightrag.services.retrieval import (
         ProjectedRetrieval,
         RetrievalService,
@@ -1004,6 +1005,56 @@ def _smoke_root_interfaces() -> None:
         if not service.closed:
             raise ValueError("installed Retrieval service did not close")
 
+    async def corpus_smoke():
+        runtime = SimpleNamespace(aregister_workspace=lambda **_kwargs: None)
+
+        async def acquire(_workspace):
+            return runtime
+
+        async def list_workspace_records():
+            return [
+                {
+                    "workspace": "installed",
+                    "display_name": "Installed",
+                    "embedding_model": "embed-model",
+                }
+            ]
+
+        async def start_job(workspace, source_type, **kwargs):
+            return {
+                "job_id": "installed-job",
+                "workspace": workspace,
+                "source_type": source_type,
+                "request": kwargs,
+            }
+
+        pool = SimpleNamespace(acquire=acquire)
+        maintenance = SimpleNamespace(list_workspace_records=list_workspace_records)
+        jobs = SimpleNamespace(start_job=start_job)
+        service = CorpusAdmin(
+            settings=CorpusAdminSettings(
+                default_workspace_id="default",
+                default_display_name="Default",
+                default_embedding_model="embed-model",
+                input_root=Path(tempfile.gettempdir()) / "installed-corpus",
+                ingest_timeout_seconds=5,
+                read_only=False,
+            ),
+            pool=cast(Any, pool),
+            maintenance=cast(Any, maintenance),
+            ingest_jobs=cast(Any, jobs),
+            file_panel=cast(Any, SimpleNamespace()),
+            source_download_for=cast(Any, lambda _workspace: SimpleNamespace()),
+        )
+        if await service.list_workspaces() != ["installed", "default"]:
+            raise ValueError("installed CorpusAdmin did not expose its workspace catalog")
+        job = await service.start_ingest_job(
+            "installed",
+            IngestSpec(source_type="s3", bucket="installed-bucket", prefix="docs/"),
+        )
+        if job["request"]["bucket"] != "installed-bucket":
+            raise ValueError("installed CorpusAdmin did not project its ingest contract")
+
     config = DlightragConfig(
         max_async=2,
         runtime=RuntimeConfig(answer_worker_concurrency=3),
@@ -1028,6 +1079,7 @@ def _smoke_root_interfaces() -> None:
     if len(fingerprint) != 64:
         raise ValueError("installed Runtime did not produce a SHA-256 request fingerprint")
     asyncio.run(retrieval_smoke())
+    asyncio.run(corpus_smoke())
 
 
 def verify_installed(dist_dir: Path) -> None:

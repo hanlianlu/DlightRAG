@@ -16,6 +16,7 @@ otherwise.
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import asyncpg
@@ -97,6 +98,13 @@ class _StoreBackedManager:
     def __init__(self, store: PGAnswerRunStore, config: DlightragConfig) -> None:
         self._store = store
         self.config = config
+        self.corpora = SimpleNamespace(
+            alist_workspace_records=self._alist_workspace_records,
+        )
+
+    @staticmethod
+    async def _alist_workspace_records() -> list[dict[str, str]]:
+        return [{"workspace": "default"}]
 
     async def aprepare_answer_run_input(
         self,

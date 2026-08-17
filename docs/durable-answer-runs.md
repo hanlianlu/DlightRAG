@@ -263,7 +263,7 @@ including runs, events, artifacts, and Web conversations.
 
 Reader safeguards remain at the corpus boundary:
 
-- `require_writer()` continues to reject ingestion, workspace creation/reset,
+- `CorpusAdmin` rejects ingestion, workspace creation/reset,
   metadata mutation, failed-document retry, and deletion;
 - the LightRAG PostgreSQL pool continues to use read-only sessions and the
   no-DDL attach path;
@@ -282,7 +282,7 @@ Concretely:
 - writer startup owns schema migrations; reader startup validates that the
   current domain and LightRAG schemas already exist without issuing DDL;
 - readiness permits Answer and Web operational writes on a reader and still
-  rejects corpus-mutating operations through `require_writer()`;
+  rejects corpus-mutating operations at its writer boundary;
 - Web is enabled for readers.
 
 A reader with a missing or incompatible schema fails startup with a diagnostic

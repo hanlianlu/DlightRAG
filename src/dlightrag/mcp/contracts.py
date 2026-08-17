@@ -12,10 +12,10 @@ from dlightrag.core.client_contracts import (
     AnswerRequestContract,
     ClientContractModel,
     ConversationMessage,
-    IngestPayload,
     QueryImage,
     RetrieveRequestContract,
 )
+from dlightrag.services.corpora import IngestSpec
 
 
 class MCPInput(ClientContractModel):
@@ -57,8 +57,8 @@ class AnswerRunInput(MCPInput):
     run_id: str = Field(min_length=1, max_length=64)
 
 
-class IngestInput(IngestPayload):
-    pass
+class IngestInput(IngestSpec):
+    workspace: str | None = None
 
 
 class IngestJobStatusInput(MCPInput):

@@ -5,8 +5,7 @@ from collections.abc import Sequence
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from dlightrag_rag.contracts import IngestDocument, SourceType
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dlightrag.answer.resources.images import MAX_QUERY_IMAGES as _MAX_QUERY_IMAGES
 
@@ -111,145 +110,6 @@ class AnswerRequestContract(QueryRequestContract):
     history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
 
 
-class IngestSpec(ClientContractModel):
-    """Transport-neutral ingest source specification shared by SDK, REST, and MCP."""
-
-    source_type: SourceType
-    path: str | None = None
-    container_name: str | None = None
-    blob_path: str | None = None
-    prefix: str | None = None
-    bucket: str | None = None
-    s3_region: str | None = None
-    s3_key: str | None = None
-    url: str | None = None
-    urls: list[str] | None = None
-    filename: str | None = None
-    source_uri: str | None = None
-    source_uris: list[str] | None = None
-    download_uri: str | None = None
-    download_uris: list[str] | None = None
-    documents: list[IngestDocument] | None = None
-    retain_source_file: bool | None = None
-    replace: bool | None = None
-    title: str | None = None
-    author: str | None = None
-    metadata: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def _validate_source_fields(self) -> IngestSpec:
-        self._validate_download_fields()
-        if self.source_type == "local":
-            if self.documents is not None:
-                if self.path:
-                    raise ValueError("'path' and 'documents' are mutually exclusive")
-                _require_document_field(self.documents, "path", source_type=self.source_type)
-                return self
-            if not self.path:
-                raise ValueError("'path' is required for local ingestion")
-        elif self.source_type == "azure_blob":
-            if not self.container_name:
-                raise ValueError("'container_name' is required for azure_blob")
-            if self.documents is not None:
-                if self.blob_path or self.prefix is not None:
-                    raise ValueError("'blob_path'/'prefix' and 'documents' are mutually exclusive")
-                _require_document_field(self.documents, "key", source_type=self.source_type)
-                return self
-            if self.blob_path and self.prefix is not None:
-                raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
-        elif self.source_type == "s3":
-            if not self.bucket:
-                raise ValueError("'bucket' is required for s3")
-            if self.documents is not None:
-                if self.s3_key or self.prefix is not None:
-                    raise ValueError("'s3_key'/'prefix' and 'documents' are mutually exclusive")
-                _require_document_field(self.documents, "key", source_type=self.source_type)
-                return self
-            if self.s3_key and self.prefix is not None:
-                raise ValueError("'s3_key' and 'prefix' are mutually exclusive")
-        elif self.source_type == "url":
-            if self.documents is not None:
-                if any(
-                    value is not None
-                    for value in (
-                        self.url,
-                        self.urls,
-                        self.filename,
-                        self.source_uri,
-                        self.source_uris,
-                    )
-                ):
-                    raise ValueError(
-                        "'url'/'urls'/'filename'/'source_uri' and 'documents' are mutually exclusive"
-                    )
-                _require_document_field(self.documents, "url", source_type=self.source_type)
-                return self
-            url_count = _url_count(self.url, self.urls)
-            if url_count == 0:
-                raise ValueError("'url' or 'urls' is required for url ingestion")
-            if self.url and self.urls is not None:
-                raise ValueError("'url' and 'urls' are mutually exclusive")
-            if self.filename and url_count != 1:
-                raise ValueError("'filename' can only be used with a single url")
-            if self.source_uri and self.source_uris is not None:
-                raise ValueError("'source_uri' and 'source_uris' are mutually exclusive")
-            if self.source_uri and url_count != 1:
-                raise ValueError("'source_uri' can only be used with a single url")
-            if self.source_uris is not None and len(self.source_uris) != url_count:
-                raise ValueError("'source_uris' must match the number of urls")
-        return self
-
-    def _validate_download_fields(self) -> None:
-        top_level_present = self.download_uri is not None or self.download_uris is not None
-        document_values = [
-            document.download_uri
-            for document in self.documents or []
-            if document.download_uri is not None
-        ]
-        if self.source_type != "url":
-            if top_level_present or document_values:
-                raise ValueError("download_uri fields are only valid for URL ingestion")
-            return
-        if self.documents is not None:
-            if top_level_present:
-                raise ValueError(
-                    "'download_uri'/'download_uris' and 'documents' are mutually exclusive"
-                )
-            return
-
-        url_count = int(self.url is not None) + len(self.urls or [])
-        if self.download_uri is not None and self.download_uris is not None:
-            raise ValueError("'download_uri' and 'download_uris' are mutually exclusive")
-        if self.download_uri is not None and url_count != 1:
-            raise ValueError("'download_uri' can only be used with a single url")
-        if self.download_uris is not None and len(self.download_uris) != url_count:
-            raise ValueError("'download_uris' must match the number of urls")
-
-
-class IngestPayload(IngestSpec):
-    """Transport ingest request; workspace routes the request, not the source spec."""
-
-    workspace: str | None = None
-
-
-def _url_count(url: str | None, urls: list[str] | None) -> int:
-    if url:
-        return 1
-    return len(urls or [])
-
-
-def _require_document_field(
-    documents: list[IngestDocument], field_name: Literal["path", "key", "url"], *, source_type: str
-) -> None:
-    if not documents:
-        raise ValueError("'documents' must contain at least one document")
-    for index, document in enumerate(documents):
-        if not getattr(document, field_name):
-            raise ValueError(
-                f"'documents[{index}].{field_name}' is required for {source_type} ingestion"
-            )
-
-
 def model_dump_json_safe(value: Any) -> Any:
     """Return plain JSON-ready data from Pydantic models and containers."""
     if isinstance(value, BaseModel):
@@ -275,8 +135,6 @@ __all__ = [
     "AnswerAttachmentLink",
     "AnswerRequestContract",
     "ImageURL",
-    "IngestPayload",
-    "IngestSpec",
     "MAX_BM25_QUERY_CHARS",
     "MAX_HISTORY_CONTENT_CHARS",
     "MAX_HISTORY_MESSAGES",

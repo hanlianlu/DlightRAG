@@ -83,7 +83,7 @@ async def resolve_authorized_query_workspaces(
     """Resolve query targets after applying the caller's existing ACL."""
     try:
         return await get_access_gate(request, user).resolve_query_workspaces(
-            get_manager(request),
+            get_manager(request).corpora,
             default_workspace=normalize_workspace(request_config(request).workspace),
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,

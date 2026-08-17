@@ -45,8 +45,6 @@ import httpx
 from pydantic import ValidationError
 
 from dlightrag.core.client_requests import (
-    ingest_kwargs_from_payload,
-    ingest_spec_from_payload,
     query_image_blocks_from_urls,
 )
 from dlightrag.sdk import (
@@ -56,6 +54,7 @@ from dlightrag.sdk import (
     AnswerRunFailedError,
 )
 from dlightrag.sdk import http as sdk_http
+from dlightrag.services.corpora import ingest_kwargs_from_spec, ingest_spec_from_payload
 
 
 def _print_json(data: Any) -> None:
@@ -208,7 +207,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
     from dlightrag.observability import LangfuseTelemetry
 
     source = args.source_type
-    kwargs = ingest_kwargs_from_payload(args)
+    kwargs = ingest_kwargs_from_spec(ingest_spec_from_payload(args))
 
     if source == "local":
         print(f"Ingesting: {args.path} (replace={args.replace})")

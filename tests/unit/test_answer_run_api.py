@@ -4,6 +4,7 @@
 import datetime
 import json
 from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -72,6 +73,9 @@ class _RunManager:
 
     def __init__(self, config: DlightragConfig) -> None:
         self.config = config
+        self.corpora = SimpleNamespace(
+            alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}])
+        )
         self.created: list[dict[str, Any]] = []
         self.cancelled: list[str] = []
         self.subscriptions: list[dict[str, Any]] = []

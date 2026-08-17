@@ -58,7 +58,9 @@ async def conversation_client(conversation_service: AsyncMock):
     application.state.web_conversation_service = conversation_service
     application.state.manager = AsyncMock()
     application.state.manager.answer_capabilities = answer_capability_view()
-    application.state.manager.alist_workspace_records.return_value = [{"workspace": "default"}]
+    application.state.manager.corpora.alist_workspace_records.return_value = [
+        {"workspace": "default"}
+    ]
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client

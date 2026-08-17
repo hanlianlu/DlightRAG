@@ -1305,6 +1305,14 @@ def test_home_reset_with_wipe(wiz, monkeypatch):
     assert events == ["wipe", "start"]
 
 
+def test_wipe_data_invokes_the_workspace_reset_command(wiz):
+    calls: list[list[str]] = []
+
+    wiz._wipe_data(_NullConsole(), runner=lambda args: calls.append(args))
+
+    assert calls == [["uv", "run", "scripts/reset_workspace.py", "--all", "-y"]]
+
+
 def test_home_reset_declined_returns_to_menu(wiz, monkeypatch):
     monkeypatch.setattr(wiz, "run_first_time_setup", lambda console, p, info, **k: None)
     monkeypatch.setattr(wiz, "_bring_up_stack", lambda console: 0)

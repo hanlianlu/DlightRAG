@@ -42,6 +42,7 @@ from dlightrag.config import (
     ModelConfig,
     RerankConfig,
 )
+from dlightrag.services.corpora import CorpusAdminSettings
 from dlightrag.services.retrieval import RetrievalSettings
 
 
@@ -157,6 +158,18 @@ def retrieval_settings(config: DlightragConfig) -> RetrievalSettings:
         default_chunk_top_k=config.chunk_top_k,
         timeout_seconds=config.retrieval_timeout,
         query_image_limit=MAX_QUERY_IMAGES,
+    )
+
+
+def corpus_admin_settings(config: DlightragConfig) -> CorpusAdminSettings:
+    """Snapshot root corpus administration policy into immutable settings."""
+    return CorpusAdminSettings(
+        default_workspace_id=normalize_workspace(config.workspace),
+        default_display_name=config.workspace,
+        default_embedding_model=config.embedding.model,
+        input_root=config.input_dir_path,
+        ingest_timeout_seconds=config.ingest_timeout,
+        read_only=config.is_reader,
     )
 
 

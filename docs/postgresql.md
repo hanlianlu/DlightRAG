@@ -266,7 +266,7 @@ A reader:
 - keeps the LightRAG LLM response cache disabled and skips ingest-job recovery;
   and
 - still rejects ingestion, workspace creation/reset, metadata mutation,
-  failed-document retry, and deletion through `require_writer()` (HTTP 403).
+  failed-document retry, and deletion through `CorpusAdmin` (HTTP 403).
 
 DlightRAG makes no physical-standby or read-endpoint promise: both roles use the
 same primary endpoint. Read-replica routing would need a separate corpus endpoint

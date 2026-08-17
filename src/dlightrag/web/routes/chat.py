@@ -49,7 +49,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     capabilities = await manager.answer_capabilities.read()
     workspaces: list[WorkspaceRecord]
     try:
-        workspaces = await manager.alist_workspace_records()
+        workspaces = await manager.corpora.alist_workspace_records()
     except Exception:
         workspaces = [
             {

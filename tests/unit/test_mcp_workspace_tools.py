@@ -14,9 +14,9 @@ from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextC
 
 from dlightrag.access import RequestScope, owner_id_from_principal, request_scope_context
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
-from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.mcp import server as mcp_server
 from dlightrag.runtime import AnswerRunRecord
+from dlightrag.services.corpora import IngestSpec
 from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
 from tests.unit.conftest import answer_capability_view
 
@@ -43,10 +43,18 @@ def _tool_json(result: CallToolResult | InputRequiredResult) -> Any:
 @pytest.fixture
 def mock_mcp_manager(monkeypatch):
     manager = AsyncMock()
-    manager.alist_workspaces = AsyncMock(return_value=["default"])
-    manager.alist_workspace_records = AsyncMock(return_value=[{"workspace": "default"}])
-    manager.acreate_workspace = AsyncMock()
-    manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
+    manager.corpora = SimpleNamespace(
+        list_workspaces=AsyncMock(return_value=["default"]),
+        alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}]),
+        create_workspace=AsyncMock(),
+        reset=AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0}),
+        ingest=AsyncMock(),
+        start_ingest_job=AsyncMock(),
+        get_ingest_job=AsyncMock(),
+        cancel_ingest_job=AsyncMock(),
+        list_ingested_files=AsyncMock(return_value=[]),
+        delete_files=AsyncMock(return_value=[]),
+    )
     manager.retrieval = SimpleNamespace(
         retrieve=AsyncMock(
             return_value=ServiceResponse(
@@ -65,8 +73,6 @@ def mock_mcp_manager(monkeypatch):
     manager.acancel_answer_run = AsyncMock(
         return_value=SimpleNamespace(outcome="cancelled", run=_run_record(status="cancelled"))
     )
-    manager.aingest = AsyncMock()
-    manager.astart_ingest_job = AsyncMock()
     manager.config.answer.max_attachments = 6
     monkeypatch.setattr(mcp_server, "_ensure_manager", AsyncMock(return_value=manager))
     return manager
@@ -172,7 +178,7 @@ async def test_get_capabilities_reports_answer_image_capability(
 
 
 async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_manager: AsyncMock) -> None:
-    mock_mcp_manager.aget_ingest_job = AsyncMock(
+    mock_mcp_manager.corpora.get_ingest_job = AsyncMock(
         return_value={"job_id": "job-1", "status": "running"}
     )
 
@@ -187,7 +193,7 @@ async def test_mcp_v2_client_lists_and_calls_tools(mock_mcp_manager: AsyncMock) 
 
 
 async def test_mcp_internal_errors_do_not_leak_details(mock_mcp_manager: AsyncMock) -> None:
-    mock_mcp_manager.alist_workspace_records.side_effect = RuntimeError("database-secret")
+    mock_mcp_manager.corpora.alist_workspace_records.side_effect = RuntimeError("database-secret")
 
     result = await mcp_server.mcp_app.call_tool("list_workspaces", {})
 
@@ -417,7 +423,7 @@ async def test_mcp_query_permission_does_not_imply_visual_asset_permission(
 
 
 async def test_mcp_retrieve_all_workspaces_uses_visible_records(mock_mcp_manager) -> None:
-    mock_mcp_manager.alist_workspace_records.return_value = [
+    mock_mcp_manager.corpora.alist_workspace_records.return_value = [
         {"workspace": "default"},
         {"workspace": "research_notes"},
     ]
@@ -463,7 +469,7 @@ async def test_mcp_all_workspaces_is_relative_to_query_authorization(
             )
         ],
     )
-    mock_mcp_manager.alist_workspace_records.return_value = [
+    mock_mcp_manager.corpora.alist_workspace_records.return_value = [
         {"workspace": workspace} for workspace in registered
     ]
     mock_mcp_manager.retrieval.retrieve.return_value = ServiceResponse(
@@ -502,7 +508,6 @@ async def test_mcp_rejects_unknown_argument_without_echoing_the_url(mock_mcp_man
     assert "Error:" in _tool_text(result)
     # A rejected call must not replay the caller's signed URL back to the model.
     assert "signature=secret" not in _tool_text(result)
-    mock_mcp_manager.aingest.assert_not_awaited()
 
 
 async def test_mcp_rejects_mutually_exclusive_s3_key_and_prefix(mock_mcp_manager) -> None:
@@ -513,10 +518,9 @@ async def test_mcp_rejects_mutually_exclusive_s3_key_and_prefix(mock_mcp_manager
 
     assert "Error:" in _tool_text(result)
     assert "mutually exclusive" in _tool_text(result)
-    mock_mcp_manager.aingest.assert_not_awaited()
 
 
-async def test_mcp_create_workspace_uses_manager_registry(mock_mcp_manager) -> None:
+async def test_mcp_create_workspace_uses_corpus_catalog(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "create_workspace",
         {"workspace": "New Workspace", "display_name": "New Workspace"},
@@ -528,7 +532,7 @@ async def test_mcp_create_workspace_uses_manager_registry(mock_mcp_manager) -> N
         "display_name": "New Workspace",
         "created": True,
     }
-    mock_mcp_manager.acreate_workspace.assert_awaited_once_with(
+    mock_mcp_manager.corpora.create_workspace.assert_awaited_once_with(
         "new_workspace",
         display_name="New Workspace",
     )
@@ -543,8 +547,8 @@ async def test_mcp_delete_workspace_resets_workspace(mock_mcp_manager) -> None:
     body = _tool_json(result)
     assert body["workspace"] == "old_workspace"
     assert body["deleted"] is False
-    mock_mcp_manager.areset.assert_awaited_once_with(
-        workspace="Old Workspace",
+    mock_mcp_manager.corpora.reset.assert_awaited_once_with(
+        workspace_ids=("old_workspace",),
         keep_files=True,
         dry_run=True,
     )
@@ -557,8 +561,7 @@ async def test_mcp_rejects_local_path_outside_input_dir(mock_mcp_manager) -> Non
     )
 
     assert "relative to input_dir" in _tool_text(result)
-    mock_mcp_manager.astart_ingest_job.assert_not_awaited()
-    mock_mcp_manager.aingest.assert_not_awaited()
+    mock_mcp_manager.corpora.start_ingest_job.assert_not_awaited()
 
 
 async def test_mcp_rejects_local_path_traversal(mock_mcp_manager) -> None:
@@ -572,12 +575,11 @@ async def test_mcp_rejects_local_path_traversal(mock_mcp_manager) -> None:
     )
 
     assert "relative to input_dir" in _tool_text(result)
-    mock_mcp_manager.astart_ingest_job.assert_not_awaited()
-    mock_mcp_manager.aingest.assert_not_awaited()
+    mock_mcp_manager.corpora.start_ingest_job.assert_not_awaited()
 
 
 async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) -> None:
-    mock_mcp_manager.astart_ingest_job = AsyncMock(
+    mock_mcp_manager.corpora.start_ingest_job = AsyncMock(
         return_value={
             "job_id": "job-1",
             "workspace": "default",
@@ -602,15 +604,14 @@ async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) 
         "source_type": "s3",
         "status": "queued",
     }
-    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+    mock_mcp_manager.corpora.start_ingest_job.assert_awaited_once_with(
         "default",
         IngestSpec(source_type="s3", bucket="bucket", prefix="docs/"),
     )
-    mock_mcp_manager.aingest.assert_not_awaited()
 
 
-async def test_mcp_get_ingest_job_reads_manager_job(mock_mcp_manager) -> None:
-    mock_mcp_manager.aget_ingest_job = AsyncMock(
+async def test_mcp_get_ingest_job_reads_corpus_job(mock_mcp_manager) -> None:
+    mock_mcp_manager.corpora.get_ingest_job = AsyncMock(
         return_value={
             "job_id": "job-1",
             "status": "running",
@@ -625,7 +626,7 @@ async def test_mcp_get_ingest_job_reads_manager_job(mock_mcp_manager) -> None:
         "status": "running",
         "processed_items": 64,
     }
-    mock_mcp_manager.aget_ingest_job.assert_awaited_once_with("job-1")
+    mock_mcp_manager.corpora.get_ingest_job.assert_awaited_once_with("job-1")
 
 
 async def test_mcp_answer_returns_a_descriptor_without_waiting(
@@ -862,7 +863,7 @@ async def test_mcp_answer_rejects_top_level_local_fields(mock_mcp_manager) -> No
 
 
 async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
-    mock_mcp_manager.adelete_files = AsyncMock(return_value=[{"status": "would_delete"}])
+    mock_mcp_manager.corpora.delete_files = AsyncMock(return_value=[{"status": "would_delete"}])
 
     result = await mcp_server.mcp_app.call_tool(
         "delete_files",
@@ -870,7 +871,7 @@ async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
     )
 
     assert _tool_json(result)["results"] == [{"status": "would_delete"}]
-    mock_mcp_manager.adelete_files.assert_awaited_once_with(
+    mock_mcp_manager.corpora.delete_files.assert_awaited_once_with(
         "default",
         filenames=["report.pdf"],
         file_paths=None,
@@ -881,8 +882,8 @@ async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
 async def test_mcp_file_tools_canonicalize_display_workspace_before_access_and_manager(
     mock_mcp_manager,
 ) -> None:
-    mock_mcp_manager.alist_ingested_files.return_value = []
-    mock_mcp_manager.adelete_files.return_value = []
+    mock_mcp_manager.corpora.list_ingested_files.return_value = []
+    mock_mcp_manager.corpora.delete_files.return_value = []
 
     listed = await mcp_server.mcp_app.call_tool(
         "list_files",
@@ -895,8 +896,8 @@ async def test_mcp_file_tools_canonicalize_display_workspace_before_access_and_m
 
     assert _tool_json(listed)["workspace"] == "finance_reports"
     assert _tool_json(deleted)["workspace"] == "finance_reports"
-    mock_mcp_manager.alist_ingested_files.assert_awaited_once_with("finance_reports")
-    mock_mcp_manager.adelete_files.assert_awaited_once_with(
+    mock_mcp_manager.corpora.list_ingested_files.assert_awaited_once_with("finance_reports")
+    mock_mcp_manager.corpora.delete_files.assert_awaited_once_with(
         "finance_reports",
         filenames=["report.pdf"],
         file_paths=None,
@@ -914,8 +915,8 @@ async def test_mcp_ingest_job_tools_canonicalize_stored_workspace_before_access(
         "source_type": "s3",
         "status": "running",
     }
-    mock_mcp_manager.aget_ingest_job.return_value = job
-    mock_mcp_manager.acancel_ingest_job.return_value = job
+    mock_mcp_manager.corpora.get_ingest_job.return_value = job
+    mock_mcp_manager.corpora.cancel_ingest_job.return_value = job
     enforce = AsyncMock()
     monkeypatch.setattr(mcp_server, "_enforce_access", enforce)
 

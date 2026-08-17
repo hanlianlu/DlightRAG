@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from dlightrag.access import AccessAction
 from dlightrag.app_state import request_config
-from dlightrag.core.client_contracts import IngestSpec
+from dlightrag.services.corpora import IngestSpec
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,
@@ -67,7 +67,7 @@ async def download_source(
         raise
 
     try:
-        target = await get_manager(request).aprepare_source_download(
+        target = await get_manager(request).corpora.prepare_source_download(
             safe_workspace,
             document_id,
         )
@@ -114,7 +114,7 @@ async def _resolve_registered_workspace(
     try:
         known = {
             normalized
-            for item in await manager.alist_workspaces()
+            for item in await manager.corpora.list_workspaces()
             if (normalized := normalize_workspace(item))
         }
     except Exception:
@@ -132,7 +132,7 @@ async def _workspace_is_registered(request: Request, workspace: str) -> bool:
     try:
         known = {
             normalized
-            for item in await manager.alist_workspaces()
+            for item in await manager.corpora.list_workspaces()
             if (normalized := normalize_workspace(item))
         }
     except Exception:
@@ -187,7 +187,7 @@ async def _file_list_response(request: Request, workspace: str):
     manager = get_manager(request)
     status: dict[str, Any] = {}
     try:
-        snapshot = await manager.aget_file_panel_snapshot(workspace)
+        snapshot = await manager.corpora.file_panel_snapshot(workspace)
         files = _file_view_models(list(snapshot.get("files") or []))
         status = dict(snapshot.get("pipeline_status") or {})
     except Exception:
@@ -247,7 +247,7 @@ async def upload_files(
     # mechanism picks up new enqueues automatically after the current batch.
     already_busy = False
     try:
-        ps = await manager.aget_pipeline_status(selected_workspace)
+        ps = await manager.corpora.get_pipeline_status(selected_workspace)
         already_busy = bool(ps.get("busy"))
     except Exception:
         logger.debug(
@@ -301,7 +301,7 @@ async def upload_files(
         return error_response("Upload failed. Please try again.", status_code=500)
 
     try:
-        await manager.astart_ingest_job(
+        await manager.corpora.start_ingest_job(
             selected_workspace,
             IngestSpec(source_type="local", path=str(upload_dir)),
         )
@@ -356,7 +356,7 @@ async def ingest_status(
     manager = get_manager(request)
 
     try:
-        ps = await manager.aget_pipeline_status(selected_workspace)
+        ps = await manager.corpora.get_pipeline_status(selected_workspace)
     except Exception:
         ps = {"busy": False, "latest_message": "Status unavailable"}
 
@@ -398,7 +398,7 @@ async def delete_files(
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE_FILES, selected_workspace)
 
     try:
-        await manager.adelete_files(selected_workspace, file_paths=file_paths)
+        await manager.corpora.delete_files(selected_workspace, file_paths=file_paths)
     except Exception:
         logger.exception("Delete failed")
         return error_response("Delete failed. Please try again.", status_code=500)

@@ -83,7 +83,7 @@ async def conversation_history(
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> ConversationHistory:
-    records = await get_manager(request).alist_workspace_records()
+    records = await get_manager(request).corpora.alist_workspace_records()
     gate = get_web_access_gate(request)
     downloadable = await gate.filter_workspace_records(
         AccessAction.WORKSPACE_DOWNLOAD_SOURCE,

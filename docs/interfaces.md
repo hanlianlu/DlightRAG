@@ -10,7 +10,7 @@ configuration fields live in [configuration.md](configuration.md).
 
 | Interface | Primary use | Ingestion behavior |
 |---|---|---|
-| Python SDK | In-process applications and custom connectors | Foreground via `aingest`; background via `astart_ingest_job` |
+| Python SDK | In-process applications | Foreground via `corpora.ingest`; background via `corpora.start_ingest_job` |
 | REST API | Web clients, services, and remote callers | Durable ingest jobs |
 | MCP Server | Agent tools over stdio or streamable HTTP | Durable ingest jobs |
 | Web UI | Browser upload and chat | Durable ingest jobs behind the Files panel |
@@ -56,7 +56,7 @@ Once configured, the SDK runtime is a small create-once / call / close lifecycle
 ```python
 manager = await RAGServiceManager.acreate(config)  # start: warms the default workspace
 # per request:
-await manager.aingest(...)
+await manager.corpora.ingest(...)
 await manager.retrieval.retrieve(RetrieveRequest(...))
 await manager.aanswer(...)  # or aanswer_stream(...)
 await manager.aclose()  # stop
@@ -71,50 +71,19 @@ provider overrides from any configuration source above.
 ### Python SDK
 
 ```python
-from collections.abc import AsyncIterator
-from pathlib import Path
-
-from dlightrag import DlightragConfig, IngestSpec, RAGServiceManager
-from dlightrag_rag.sourcing import AsyncDataSource, SourceDocument
-
-
-class BynderSource(AsyncDataSource):
-    """Adapter around your own Bynder client; not a built-in DlightRAG connector."""
-
-    def __init__(self, bynder_client) -> None:
-        self.bynder_client = bynder_client
-
-    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[SourceDocument]:
-        async for asset in self.bynder_client.iter_assets(prefix=prefix):
-            key = f"{asset['id']}/{asset['filename']}"
-            yield SourceDocument(
-                key=key,
-                source_uri=f"bynder://assets/{asset['id']}",
-                download_uri=f"https://cdn.example.com/assets/{asset['id']}.pdf",
-                display_filename=asset["filename"],
-                title=asset.get("title"),
-                metadata={
-                    "asset_id": asset["id"],
-                    "collection": asset.get("collection"),
-                },
-            )
-
-    async def amaterialize_document(self, document: SourceDocument, destination: Path) -> None:
-        # User-owned client method. Stream or write bytes to the supplied path.
-        asset_id = document.key.split("/", 1)[0]
-        await self.bynder_client.download_asset_to_file(
-            asset_id,
-            destination,
-        )
-
+from dlightrag import DlightragConfig, RAGServiceManager
+from dlightrag.services.corpora import IngestSpec
 
 manager = await RAGServiceManager.acreate(DlightragConfig())
 try:
     # Local files or directory
-    result = await manager.aingest("default", IngestSpec(source_type="local", path="./docs"))
+    result = await manager.corpora.ingest(
+        "default",
+        IngestSpec(source_type="local", path="./docs"),
+    )
 
     # Azure Blob Storage
-    result = await manager.aingest(
+    result = await manager.corpora.ingest(
         "default",
         IngestSpec(
             source_type="azure_blob",
@@ -124,7 +93,7 @@ try:
     )
 
     # AWS S3
-    result = await manager.aingest(
+    result = await manager.corpora.ingest(
         "default",
         IngestSpec(
             source_type="s3",
@@ -134,36 +103,19 @@ try:
         ),
     )
 
-    # Custom SDK connector; useful for Bynder/SaaS clients that handle auth
-    # and write document bytes into DlightRAG's parser staging path.
-    result = await manager.aingest_source(
-        "default",
-        BynderSource(bynder_client),
-        source_type="bynder",
-        metadata={"source_system": "bynder"},
-    )
-
     # Explicit non-blocking ingest
-    job = await manager.astart_ingest_job(
+    job = await manager.corpora.start_ingest_job(
         "default",
         IngestSpec(source_type="s3", bucket="my-bucket", prefix="docs/"),
     )
-    status = await manager.aget_ingest_job(job["job_id"])
+    status = await manager.corpora.get_ingest_job(job["job_id"])
 finally:
     await manager.aclose()
 ```
 
-DlightRAG calls `aiter_documents()` to discover `SourceDocument` descriptors and
-`amaterialize_document(document, destination)` to write each document into parser
-staging without loading the whole object into memory. Ingest-call `metadata` is
-the batch default; `SourceDocument.metadata` overlays it for that document.
-`SourceDocument.source_uri` is stable identity. For a non-retained connector,
-`SourceDocument.download_uri` is the durable original-byte locator. A connector
-that keeps this mapping outside its descriptors may omit the field and pass a
-`download_uri_for_key` callback to `aingest_source()` instead. Per-document
-`SourceDocument.download_uri` takes precedence over that callback. If retention
-is disabled and neither is available, that document is rejected before
-`amaterialize_document()` runs; DlightRAG never silently retains it.
+  `CorpusAdmin` accepts local, Azure Blob, S3, and public HTTPS sources. SaaS APIs
+  that require custom authorization or pagination must stage their content through
+  one of those supported sources before ingestion.
 
 ### REST API
 
@@ -196,8 +148,8 @@ All ingest operations are represented internally as jobs. REST returns `202 Acce
 with the job object; MCP `ingest` returns the same job object as a tool result.
 Poll `GET /ingest/jobs/{job_id}` or call MCP `get_ingest_job` for progress and
 the final result. `source_type="url"` is intentionally limited to public or signed HTTPS
-URLs; authenticated SaaS APIs should fetch through a caller-owned SDK
-`AsyncDataSource` connector and use `aingest_source()`. S3 credentials are read
+URLs; authenticated SaaS APIs must stage content through a supported local,
+Azure Blob, or S3 source. S3 credentials are read
 from the standard AWS credential chain (environment, shared config, or IAM
 role); ingest payloads do not carry access keys.
 
@@ -373,7 +325,7 @@ containing the same single-file or staged batch response shown above. At most
 200 error messages are retained per job; `failed_items` remains
 the authoritative failed-item count and `errors_truncated` reports whether
 additional messages were omitted. REST, Web, and MCP start the job immediately and do not wait on
-`ingest_timeout`. The SDK convenience method `RAGServiceManager.aingest()` starts
+`ingest_timeout`. The in-process `CorpusAdmin.ingest()` convenience method starts
 the same durable job, waits up to `ingest_timeout`, and returns either the
 completed result or the still-running job row without cancelling it.
 
