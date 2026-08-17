@@ -17,7 +17,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -26,16 +26,15 @@ if TYPE_CHECKING:
 
     from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
+    from dlightrag.answer.resources import ResourceInput, ResourceRegistry
+    from dlightrag.answer.resources.images import QueryImageDescriber
+    from dlightrag.answer.tools.web import ExaSearch
     from dlightrag.config import DlightragConfig
-    from dlightrag.core.request.images import QueryImageDescriber
-    from dlightrag.core.resources import ResourceInput, ResourceRegistry
-    from dlightrag.core.retrieval.web_search import ExaSearch
 
 from dlightrag_agent.tools import AgentTool
 from dlightrag_ai.capacity import (
     CONTEXT_POLICY,
     CONTEXT_POLICY_REVISION,
-    ModelCapabilityError,
     ModelProfile,
 )
 from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
@@ -46,7 +45,7 @@ from dlightrag_ai.scheduler import ModelScheduler, model_call_scope
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.tool_model import ToolModel
-from dlightrag_ai.vision import ImageCapabilityStatus, ImageProbeOutcome, ModelImageCapabilities
+from dlightrag_ai.vision import ModelImageCapabilities
 from dlightrag_rag.contracts import SourceType, VisualAssetSize
 from dlightrag_rag.federation import federated_retrieve
 from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
@@ -85,17 +84,20 @@ from dlightrag.access import (
 )
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
-from dlightrag.core.agent.orchestrator import (
+from dlightrag.answer.agent.orchestrator import (
     AnswerOrchestrator,
     research_history_input_measure,
 )
-from dlightrag.core.answer.capability import (
-    AnswerImageCapability,
-    answer_image_capability_summary,
-    check_answer_image_capability,
-    derive_effective_max_images,
+from dlightrag.answer.capabilities import (
+    AnswerCapabilityCoordinator,
+    AnswerCapabilityView,
+    RequestModelContext,
 )
-from dlightrag.core.answer.errors import (
+from dlightrag.answer.capability import (
+    AnswerImageCapability,
+    check_answer_image_capability,
+)
+from dlightrag.answer.errors import (
     AnswerInputError,
     AnswerInputOverflowError,
     AnswerModelCapabilityError,
@@ -104,14 +106,19 @@ from dlightrag.core.answer.errors import (
     InvalidToolConfigurationError,
     classify_answer_error,
 )
-from dlightrag.core.answer.history import (
+from dlightrag.answer.history import (
     HistoryProjectionOverflowError,
     HistoryProjectionTarget,
     project_history,
 )
-from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
-from dlightrag.core.answer.synthesizer import AnswerSynthesizer
-from dlightrag.core.answer_runs.execution import (
+from dlightrag.answer.images import AnswerImageBudget
+from dlightrag.answer.resources.images import prepare_query_images
+from dlightrag.answer.resources.models import (
+    ResourceManifestEntry,
+    ResourceRegistryError,
+    TextWindowBudget,
+)
+from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
     AttachmentReference,
@@ -120,27 +127,24 @@ from dlightrag.core.answer_runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.core.answer_runs.models import AgentRunState
-from dlightrag.core.answer_runs.results import (
+from dlightrag.answer.runs.models import AgentRunState
+from dlightrag.answer.runs.results import (
     AnswerResult,
     restore_answer_result,
     store_answer_result,
 )
+from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.request.images import prepare_query_images
-from dlightrag.core.resources.models import (
-    ResourceManifestEntry,
-    ResourceRegistryError,
-    TextWindowBudget,
-)
 from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import (
+    answer_capability_settings,
     model_profile_for_role,
     model_settings_for_role,
     rag_settings,
     rerank_scoring_model_settings,
+    semantic_highlight_settings,
 )
 from dlightrag.observability import LangfuseTelemetry
 from dlightrag.runtime import (
@@ -196,7 +200,7 @@ class _AcceptanceProjection:
 
 @dataclass(frozen=True, slots=True)
 class _ResolvedAnswerResources:
-    models: _RequestModelContext
+    models: RequestModelContext
     web_search: ExaSearch | None
     registry: ResourceRegistry | None
     resource_tools: list[AgentTool]
@@ -208,13 +212,6 @@ class _ResolvedAnswerResources:
     query_images: list[dict[str, Any]] | None
 
 
-@dataclass(frozen=True, slots=True)
-class _RequestModelContext:
-    extract: ModelProfile
-    query: ModelProfile
-    vlm: ModelProfile
-
-
 def _exa_contents_text(web_search: ExaSearch) -> Callable[[str], Awaitable[str | None]]:
     """Adapt Exa Contents to the registry's provider-neutral URL text fallback.
 
@@ -223,7 +220,7 @@ def _exa_contents_text(web_search: ExaSearch) -> Callable[[str], Awaitable[str |
     information. A parked or unreachable provider yields ``None`` so the caller
     keeps the original direct-extraction error rather than fabricating evidence.
     """
-    from dlightrag.core.retrieval.web_search import WebSearchUnavailable
+    from dlightrag.answer.tools.web import WebSearchUnavailable
 
     async def _fallback(url: str) -> str | None:
         try:
@@ -391,7 +388,6 @@ class RAGServiceManager:
         )
 
         self._model_scheduler = ModelScheduler(max_concurrency=self._config.max_async)
-        self._rerank_supports_vision: bool | None = None
         self._workspace_pool = WorkspacePool(
             settings_for=self._workspace_settings,
             backend_for=self._workspace_backend,
@@ -400,8 +396,6 @@ class RAGServiceManager:
 
         self._answer_synthesizers_by_profile: dict[ModelProfile, AnswerSynthesizer] = {}
         self._answer_model: CompletionModel | None = None
-        self._declared_model_profiles: dict[ModelRole, ModelProfile] = {}
-        self._model_profiles: dict[ModelRole, ModelProfile] = {}
         self._ingest_jobs = IngestJobCoordinator(
             lambda workspace: self._workspace_pool.acquire(workspace),
             input_root=self._config.input_dir_path,
@@ -418,12 +412,18 @@ class RAGServiceManager:
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         # Image capability is role-specific but cached per resolved model config,
         # so roles that share one model share one probe.
-        self._image_capabilities = ModelImageCapabilities(
-            scheduler=self._model_scheduler,
-            telemetry=LangfuseTelemetry(),
+        self._capabilities = AnswerCapabilityCoordinator(
+            settings=answer_capability_settings(self._config),
+            profile_for_role=lambda role: model_profile_for_role(self._config, role),
+            model_settings_for_role=lambda role: model_settings_for_role(self._config, role),
+            rerank_model_settings=lambda: rerank_scoring_model_settings(self._config),
+            image_capabilities=ModelImageCapabilities(
+                scheduler=self._model_scheduler,
+                telemetry=LangfuseTelemetry(),
+            ),
+            on_answer_capability=self._health.set_answer_image_capability,
         )
-        self._answer_image_capability: AnswerImageCapability | None = None
-        self._vlm_image_status: ImageCapabilityStatus = "unknown"
+        self.answer_capabilities = AnswerCapabilityView(self._capabilities)
         self._answer_run_store: PGAnswerRunStore | None = None
         self._web_conversation_store: PGWebConversationStore | None = None
         self._answer_coordinator: RunCoordinator | None = None
@@ -447,8 +447,8 @@ class RAGServiceManager:
         from dlightrag.observability import init_tracing
 
         manager = cls(config=config)
-        manager._resolve_model_profiles()
-        manager._validate_startup_model_capabilities()
+        manager._capabilities.resolve_profiles()
+        manager._capabilities.validate_startup()
         init_tracing(manager._config)
 
         # Bind the process-wide domain pool to this service config so the
@@ -470,7 +470,7 @@ class RAGServiceManager:
             manager._get_retrieval_planner()
 
             # ── Vision probes (once at startup, not per workspace) ─────────
-            await manager._probe_role_image_capabilities()
+            await manager._capabilities.probe_all()
 
             try:
                 await manager._workspace_pool.acquire(default_ws)
@@ -492,6 +492,9 @@ class RAGServiceManager:
             # Schema/run incompatibility needs operator action; never degrade into it.
             await manager.aclose()
             raise
+        except Exception:
+            await manager.aclose()
+            raise
 
         await manager._start_ingest_job_recovery()
         await manager._start_answer_runtime()
@@ -502,59 +505,6 @@ class RAGServiceManager:
             manager._health.mark_degraded(f"Default workspace init failed: {detail}")
             logger.error("RAG service started in degraded mode: %s", detail)
         return manager
-
-    def _resolve_model_profiles(self) -> None:
-        """Snapshot every reachable role before startup opens external state."""
-        self._declared_model_profiles = {
-            role: model_profile_for_role(self._config, role) for role in MODEL_ROLE_NAMES
-        }
-        self._model_profiles = dict(self._declared_model_profiles)
-
-    def _declared_model_profile(self, role: ModelRole) -> ModelProfile:
-        profile = self._declared_model_profiles.get(role)
-        if profile is None:
-            profile = model_profile_for_role(self._config, role)
-            self._declared_model_profiles[role] = profile
-            self._model_profiles.setdefault(role, profile)
-        return profile
-
-    def _model_profile(self, role: ModelRole) -> ModelProfile:
-        profile = self._model_profiles.get(role)
-        if profile is None:
-            profile = self._declared_model_profile(role)
-            self._model_profiles[role] = profile
-        return profile
-
-    def _request_model_context(
-        self,
-        pinned: Mapping[ModelRole, ModelProfile] | None,
-    ) -> _RequestModelContext:
-        if pinned is not None:
-            return _RequestModelContext(
-                extract=pinned["extract"],
-                query=pinned["query"],
-                vlm=pinned["vlm"],
-            )
-        return _RequestModelContext(
-            extract=self._model_profile("extract"),
-            query=self._model_profile("query"),
-            vlm=self._model_profile("vlm"),
-        )
-
-    def _narrow_role_image_profile(
-        self,
-        role: ModelRole,
-        status: ImageCapabilityStatus,
-    ) -> None:
-        declared = self._declared_model_profile(role)
-        self._model_profiles[role] = replace(
-            declared,
-            supports_images=declared.supports_images and status == "supported",
-        )
-
-    def _validate_startup_model_capabilities(self) -> None:
-        if self._config.web_search.api_key and not self._model_profile("query").supports_tools:
-            raise ModelCapabilityError(role="query", capability="tool calling")
 
     async def _initialize_workspace_registry(self) -> None:
         """Migrate the durable workspace registry, or validate it on a reader."""
@@ -702,7 +652,7 @@ class RAGServiceManager:
                 backend=backend,
                 scheduler=self._model_scheduler,
                 telemetry=LangfuseTelemetry(),
-                rerank_supports_vision=self._rerank_supports_vision,
+                rerank_supports_vision=self._capabilities.rerank_supports_vision,
             )
         except CorpusSchemaError:
             raise
@@ -776,145 +726,6 @@ class RAGServiceManager:
         except Exception:
             self._health.add_warning("Ingest job recovery unavailable")
             logger.warning("Ingest job recovery initialization failed", exc_info=True)
-
-    @property
-    def answer_image_capability(self) -> AnswerImageCapability | None:
-        """Query-role answer-model image capability, discovered at startup."""
-        return self._answer_image_capability
-
-    async def _probe_role_image_capabilities(self) -> None:
-        """Resolve the answer, VLM, and rerank image capabilities once at startup."""
-        await self._probe_answer_image_capability()
-        await self._probe_vlm_image_capability()
-        await self._probe_rerank_image_capability()
-        answer = self._answer_image_capability
-        logger.info(
-            "Image capability by role: answer=%s (ceiling=%s, effective=%s) vlm=%s rerank=%s",
-            answer.status if answer is not None else "unknown",
-            answer.configured_ceiling if answer is not None else 0,
-            answer.effective_max_images if answer is not None else 0,
-            self._vlm_image_status,
-            "not probed" if self._rerank_supports_vision is None else self._rerank_supports_vision,
-        )
-
-    async def _probe_answer_image_capability(self) -> None:
-        """Discover the query-role answer model's image capability once at startup."""
-        if self._answer_image_capability is not None:
-            return
-        self._cache_answer_image_capability(await self._discover_answer_image_capability())
-
-    def _cache_answer_image_capability(self, capability: AnswerImageCapability) -> None:
-        self._answer_image_capability = capability
-        self._health.set_answer_image_capability(answer_image_capability_summary(capability))
-        self._narrow_role_image_profile("query", capability.status)
-
-    async def _maybe_reprobe_answer_image_capability(self) -> None:
-        """Lazily re-probe when the cached answer capability is ``unknown``.
-
-        ``supported``/``unsupported`` are terminal and never re-probed. An
-        ``unknown`` verdict (a transient startup probe failure) is retried on
-        demand -- when an image request actually needs it -- and the shared probe
-        cache bounds that retry to one model call per cooldown window, so a
-        genuinely-unreachable model is never hammered.
-        """
-        capability = self._answer_image_capability
-        if capability is not None and capability.status != "unknown":
-            return
-        self._cache_answer_image_capability(await self._discover_answer_image_capability())
-
-    async def _confirmed_live_answer_image_context(
-        self,
-        _models: _RequestModelContext,
-    ) -> tuple[_RequestModelContext, AnswerImageCapability | None]:
-        """Refresh and return one internally consistent live image context."""
-        await self._maybe_reprobe_answer_image_capability()
-        refreshed = self._request_model_context(None)
-        return refreshed, self._answer_image_capability
-
-    async def _pinned_answer_image_context(
-        self,
-        models: _RequestModelContext,
-    ) -> tuple[_RequestModelContext, AnswerImageCapability]:
-        """Project the already accepted query capability without a live probe."""
-        return models, self._answer_image_capability_from_profile(models.query)
-
-    async def _discover_answer_image_capability(self) -> AnswerImageCapability:
-        """Probe ``model_settings_for_role(config, "query")`` and build a capability.
-
-        Probes the model the AnswerSynthesizer actually uses -- not ``llm.default``.
-        A non-positive deployment ceiling disables answer images without any model
-        call, and without recording that config choice against a model another
-        role may share. Best-effort otherwise: failures degrade to ``unknown``.
-        """
-        ceiling = int(self._config.answer.max_images)
-        cfg = model_settings_for_role(self._config, "query")
-        if ceiling <= 0:
-            outcome = ImageProbeOutcome(status="unsupported", failure_kind="config_disabled")
-        elif not self._declared_model_profile("query").supports_images:
-            outcome = ImageProbeOutcome(
-                status="unsupported",
-                failure_kind="profile_declared_unsupported",
-            )
-        else:
-            outcome = await self._image_capabilities.resolve(cfg)
-        return AnswerImageCapability(
-            status=outcome.status,
-            configured_ceiling=ceiling,
-            effective_max_images=derive_effective_max_images(outcome.status, ceiling),
-            provider=cfg.provider,
-            base_url=cfg.base_url,
-            model=cfg.model,
-            failure_kind=outcome.failure_kind,
-        )
-
-    async def _probe_vlm_image_capability(self) -> None:
-        """Resolve the VLM role's own image capability.
-
-        The VLM role drives query-image description and ``inspect_resource``; it
-        may resolve to a different model than the answer role, so a text-only
-        answer model must not withdraw visual inspection (or the reverse). A
-        non-positive deployment ceiling leaves no image slot for any role, so it
-        settles the role without spending a model call.
-        """
-        if int(self._config.answer.max_images) <= 0:
-            self._vlm_image_status = "unsupported"
-            self._narrow_role_image_profile("vlm", self._vlm_image_status)
-            return
-        if not self._declared_model_profile("vlm").supports_images:
-            self._vlm_image_status = "unsupported"
-            self._narrow_role_image_profile("vlm", self._vlm_image_status)
-            return
-        outcome = await self._image_capabilities.resolve(
-            model_settings_for_role(self._config, "vlm")
-        )
-        self._vlm_image_status = outcome.status
-        self._narrow_role_image_profile("vlm", self._vlm_image_status)
-
-    async def _maybe_reprobe_vlm_image_capability(self) -> None:
-        """Lazily re-probe the VLM role while its capability is still ``unknown``."""
-        if self._vlm_image_status != "unknown":
-            return
-        await self._probe_vlm_image_capability()
-
-    async def _probe_rerank_image_capability(self) -> None:
-        """Resolve the rerank scoring model's image capability once at startup.
-
-        Only the ``chat_llm_reranker`` strategy sends image blocks to a scoring
-        model, so probing is skipped entirely for other strategies (and when
-        reranking is disabled). Stored on this manager instance so SDK callers can
-        run multiple managers with different model configs in one process.
-        """
-        if self._rerank_supports_vision is not None:
-            return
-        if not (
-            self._config.rerank.enabled and self._config.rerank.strategy == "chat_llm_reranker"
-        ):
-            return  # no rerank model consumes image input; nothing to probe
-
-        outcome = await self._image_capabilities.resolve(
-            rerank_scoring_model_settings(self._config)
-        )
-        self._rerank_supports_vision = {"supported": True, "unsupported": False}.get(outcome.status)
 
     async def astart_ingest_job(
         self,
@@ -1177,7 +988,7 @@ class RAGServiceManager:
             return cached
         synthesizer = AnswerSynthesizer(
             model_func=None,
-            image_policy=self._answer_image_policy(model_profile),
+            image_policy=self._capabilities.answer_image_policy(model_profile),
             model_profile=model_profile,
             context_policy=CONTEXT_POLICY,
         )
@@ -1190,54 +1001,6 @@ class RAGServiceManager:
         synthesizer.model_func = self._answer_model
         self._answer_synthesizers_by_profile[model_profile] = synthesizer
         return synthesizer
-
-    def _answer_image_policy(
-        self,
-        profile: ModelProfile,
-    ) -> AnswerImagePolicy:
-        """Compose the Answer transport policy for the answer model's own capability."""
-        return self._image_policy(
-            int(self._config.answer.max_images) if profile.supports_images else 0
-        )
-
-    def _answer_image_capability_from_profile(
-        self,
-        profile: ModelProfile,
-    ) -> AnswerImageCapability:
-        settings = model_settings_for_role(self._config, "query")
-        ceiling = int(self._config.answer.max_images)
-        status: ImageCapabilityStatus = "supported" if profile.supports_images else "unsupported"
-        return AnswerImageCapability(
-            status=status,
-            configured_ceiling=ceiling,
-            effective_max_images=derive_effective_max_images(status, ceiling),
-            provider=settings.provider,
-            base_url=settings.base_url,
-            model=settings.model,
-            failure_kind=None if profile.supports_images else "pinned_profile_unsupported",
-        )
-
-    def _vlm_image_policy(
-        self,
-        profile: ModelProfile,
-    ) -> AnswerImagePolicy:
-        """Compose the same transport policy for the VLM role's own capability."""
-        return self._image_policy(
-            int(self._config.answer.max_images) if profile.supports_images else 0
-        )
-
-    def _image_policy(self, max_images: int) -> AnswerImagePolicy:
-        answer = self._config.answer
-        return AnswerImagePolicy(
-            max_images=max_images,
-            max_total_bytes=answer.image_max_total_bytes,
-            max_bytes_per_image=answer.image_max_bytes,
-            max_pixels=answer.image_max_pixels,
-            max_px=answer.image_max_px,
-            min_px=answer.image_min_px,
-            quality=answer.image_quality,
-            min_quality=answer.image_min_quality,
-        )
 
     @staticmethod
     async def _budget_agent_images(
@@ -1274,7 +1037,7 @@ class RAGServiceManager:
         """Return the manager-owned RetrievalPlanner, creating it when needed."""
         if self._health.is_closed:
             raise RAGServiceUnavailableError("RAG service manager is closed")
-        profile = model_profile or self._model_profile("extract")
+        profile = model_profile or self._capabilities.model_profile("extract")
         if cached := self._retrieval_planners_by_profile.get(profile):
             return cached
         if self._planner_model is None:
@@ -1299,7 +1062,7 @@ class RAGServiceManager:
         if not key:
             return None
         if self._web_search is None:
-            from dlightrag.core.retrieval.web_search import ExaSearch
+            from dlightrag.answer.tools.web import ExaSearch
 
             self._web_search = ExaSearch(key)
         return self._web_search
@@ -1323,13 +1086,13 @@ class RAGServiceManager:
         so it is composed per request instead of cached: a lazy re-probe that
         settles ``unknown`` then takes effect immediately.
         """
-        from dlightrag.core.request.images import QueryImageDescriber
+        from dlightrag.answer.resources.images import QueryImageDescriber
 
-        profile = self._model_profile("vlm")
+        profile = self._capabilities.model_profile("vlm")
         return QueryImageDescriber(
             vlm_func=self._get_or_create_vlm_func(),
             max_images=MAX_QUERY_IMAGES if profile.supports_images else 0,
-            image_policy=self._vlm_image_policy(profile),
+            image_policy=self._capabilities.vlm_image_policy(profile),
         )
 
     def _get_or_create_vlm_func(self) -> Callable[..., Any]:
@@ -1561,7 +1324,7 @@ class RAGServiceManager:
                     descriptions = image_descriptions
                     if descriptions is None:
                         if current_images:
-                            await self._maybe_reprobe_vlm_image_capability()
+                            await self._capabilities.refresh_vlm()
                         descriptions = await prepare_query_images(
                             query_images=current_images,
                             describer=self._query_image_describer(),
@@ -1616,11 +1379,11 @@ class RAGServiceManager:
         self,
         resources: list[ResourceInput] | None,
         *,
-        models: _RequestModelContext,
+        models: RequestModelContext,
         text_window_budget: TextWindowBudget,
         confirm_image_context: Callable[
-            [_RequestModelContext],
-            Awaitable[tuple[_RequestModelContext, AnswerImageCapability | None]],
+            [RequestModelContext],
+            Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
         ],
         fetched_bytes_sink: Callable[[Any], Awaitable[None]] | None = None,
     ) -> _ResolvedAnswerResources:
@@ -1671,7 +1434,7 @@ class RAGServiceManager:
             image_budget: AnswerImageBudget | None = None
             query_images: list[dict[str, Any]] | None = current_images or None
             if research:
-                image_budget = self._answer_image_policy(models.query).new_budget()
+                image_budget = self._capabilities.answer_image_policy(models.query).new_budget()
                 query_images = (
                     await self._budget_agent_images(
                         current_images,
@@ -1714,7 +1477,7 @@ class RAGServiceManager:
     ) -> _OrchestratorRun:
         """Build execution collaborators from one immutable accepted run input."""
         history = projected_history
-        models = self._request_model_context(model_profiles)
+        models = self._capabilities.request_model_context(model_profiles)
         query_profile = models.query
         extract_profile = models.extract
         ws_list = await self._open_query_workspaces(
@@ -1728,7 +1491,7 @@ class RAGServiceManager:
             resources,
             models=models,
             text_window_budget=text_window_budget,
-            confirm_image_context=self._pinned_answer_image_context,
+            confirm_image_context=self._capabilities.pinned_answer_context,
             fetched_bytes_sink=fetched_bytes_sink,
         )
         try:
@@ -1811,7 +1574,7 @@ class RAGServiceManager:
         """
         if not resources:
             return [], [], []
-        from dlightrag.core.resources import ResourceInput
+        from dlightrag.answer.resources import ResourceInput
 
         max_pixels = self._config.answer.image_max_pixels
         images: list[dict[str, Any]] = []
@@ -1889,9 +1652,9 @@ class RAGServiceManager:
         """
         if not resources and web_search is None:
             return None, []
-        from dlightrag.core.resources import ResourceRegistry
-        from dlightrag.core.resources.visual import ResourceInspector
-        from dlightrag.core.tools.resources import build_resource_tools
+        from dlightrag.answer.resources import ResourceRegistry
+        from dlightrag.answer.resources.visual import ResourceInspector
+        from dlightrag.answer.tools.resources import build_resource_tools
 
         answer = self._config.answer
         registry = ResourceRegistry(
@@ -1910,7 +1673,7 @@ class RAGServiceManager:
         # Visual inspection is a VLM-role capability: a text-only answer model
         # must not withdraw it, and a zero effective ceiling leaves no image slot,
         # so an inspector built on that policy could only ever fail.
-        vlm_policy = self._vlm_image_policy(vlm_profile)
+        vlm_policy = self._capabilities.vlm_image_policy(vlm_profile)
         visual_supported = vlm_profile.supports_images and vlm_policy.max_images > 0
         inspector: ResourceInspector | None = None
         if visual_supported:
@@ -2063,22 +1826,22 @@ class RAGServiceManager:
 
     async def _execute_answer_run(self, session: RunSession) -> Mapping[str, Any]:
         """Execute one claimed run from its immutable input and last checkpoint."""
-        from dlightrag.citations.finalization import finalize_answer
-        from dlightrag.citations.streaming import aclose_answer_stream
-        from dlightrag.core.answer.media import (
+        from dlightrag.answer.citations.finalization import finalize_answer
+        from dlightrag.answer.citations.streaming import aclose_answer_stream
+        from dlightrag.answer.media import (
             answer_images_from_sources,
         )
-        from dlightrag.core.answer_runs.checkpoints import (
+        from dlightrag.answer.runs.checkpoints import (
             encode_checkpoint_state,
             restore_agent_state,
         )
-        from dlightrag.core.answer_runs.execution import (
+        from dlightrag.answer.runs.execution import (
             AnswerRunInput as _Input,
         )
-        from dlightrag.core.answer_runs.execution import (
+        from dlightrag.answer.runs.execution import (
             SessionBoundaries,
         )
-        from dlightrag.core.client_payloads import project_contexts_for_client
+        from dlightrag.answer.sources import project_contexts_for_client
         from dlightrag.observability import trace_observation
 
         store = await self._get_answer_run_store()
@@ -2161,13 +1924,24 @@ class RAGServiceManager:
                 answer_text = getattr(stream, "answer", "") or "".join(answer_parts)
                 finalized = finalize_answer(answer_text, contexts)
                 if request.semantic_highlights:
-                    from dlightrag.core.answer.highlights import enrich_semantic_highlights
+                    from dlightrag.answer.highlights import enrich_semantic_highlights
+
+                    def _highlight_model():
+                        telemetry = LangfuseTelemetry()
+                        return (
+                            CompletionModel(
+                                model_settings_for_role(self._config, "keyword"),
+                                scheduler=self._model_scheduler,
+                                telemetry=telemetry,
+                            ),
+                            telemetry,
+                        )
 
                     finalized.sources = await enrich_semantic_highlights(
                         finalized.sources,
                         answer_text=finalized.answer,
-                        config=self._config,
-                        scheduler=self._model_scheduler,
+                        settings=semantic_highlight_settings(self._config),
+                        model_factory=_highlight_model,
                     )
                 trace = dict(getattr(stream, "trace", None) or {})
                 trace["query_image_description_count"] = len(run.image_descriptions)
@@ -2482,22 +2256,20 @@ class RAGServiceManager:
         resources: list[ResourceInput] | None,
     ) -> _AcceptanceProjection:
         """Resolve the exact shared-history envelopes without building the run rig."""
-        from dlightrag.core.memory.evidence import EvidenceLedger
-        from dlightrag.core.tools import compose_research_tools
+        from dlightrag.answer.evidence import EvidenceLedger
+        from dlightrag.answer.tools import compose_research_tools
 
         if resources:
-            await self._maybe_reprobe_vlm_image_capability()
-        model_profiles: dict[ModelRole, ModelProfile] = {
-            role: self._model_profile(role) for role in MODEL_ROLE_NAMES
-        }
-        models = self._request_model_context(model_profiles)
+            await self._capabilities.refresh_vlm()
+        model_profiles = self._capabilities.current_profiles()
+        models = self._capabilities.request_model_context(model_profiles)
         planner = self._get_retrieval_planner(models.extract)
         text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(models.query))
         resolved = await self._resolve_answer_resources(
             resources,
             models=models,
             text_window_budget=text_window_budget,
-            confirm_image_context=self._confirmed_live_answer_image_context,
+            confirm_image_context=self._capabilities.confirmed_live_answer_context,
         )
         try:
             ws_list = await self._open_query_workspaces(
@@ -2573,7 +2345,7 @@ class RAGServiceManager:
                 )
             else:
                 synthesizer = AnswerSynthesizer(
-                    image_policy=self._answer_image_policy(models.query),
+                    image_policy=self._capabilities.answer_image_policy(models.query),
                     model_profile=models.query,
                     context_policy=CONTEXT_POLICY,
                     model_func=None,

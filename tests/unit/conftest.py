@@ -8,6 +8,8 @@ breaks CI. Tests that mean to exercise a YAML config build their own file.
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from dlightrag_ai.capacity import ModelProfile
@@ -15,14 +17,16 @@ from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
 
 from dlightrag import config as config_module
-from dlightrag.config import DlightragConfig
-from dlightrag.core.answer.images import AnswerImagePolicy
-from dlightrag.core.answer_runs.execution import (
+from dlightrag.answer.capabilities import AnswerCapabilities
+from dlightrag.answer.capability import AnswerImageCapability
+from dlightrag.answer.images import AnswerImagePolicy
+from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
     PinnedModelProfile,
 )
-from dlightrag.core.resources.models import ResourceInput
+from dlightrag.config import DlightragConfig
 
 _REPO_CONFIG_YAML = Path(__file__).resolve().parents[2] / "config.yaml"
 # Bound before the fixture patches the name, otherwise the wrapper recurses.
@@ -63,6 +67,14 @@ def answer_model_profile(**overrides: int | bool | None) -> ModelProfile:
         "supports_reasoning": True,
     }
     return ModelProfile(**(fields | overrides))  # type: ignore[arg-type]
+
+
+def answer_capability_view(
+    answer: AnswerImageCapability | None = None,
+) -> SimpleNamespace:
+    """Read-only capability-view double for transport tests."""
+    snapshot = AnswerCapabilities(answer=answer, vlm_status="unknown")
+    return SimpleNamespace(read=AsyncMock(return_value=snapshot))
 
 
 async def prepare_test_answer_run_input(

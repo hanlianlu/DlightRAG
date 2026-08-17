@@ -18,18 +18,18 @@ from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
 
-from dlightrag.core.resources.converters import (
+from dlightrag.answer.resources.converters import (
     ConvertedResource,
     ResourceConversionError,
     UnsafeArchiveError,
     convert_resource,
     is_convertible,
 )
-from dlightrag.core.resources.converters import (
+from dlightrag.answer.resources.converters import (
     _validate_archive_sizes as validate_archive_sizes,
 )
-from dlightrag.core.resources.models import ResourceInput
-from dlightrag.core.resources.registry import ResourceRegistry
+from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.answer.resources.registry import ResourceRegistry
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "resources"
 

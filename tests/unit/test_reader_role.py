@@ -427,12 +427,13 @@ def _patch_manager_startup(
     import dlightrag.core.servicemanager as servicemanager_module
     import dlightrag.observability as observability
     from dlightrag.adapters.postgres._pool import pg_pool
+    from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
     from dlightrag.core.servicemanager import RAGServiceManager
 
     monkeypatch.setattr(observability, "init_tracing", lambda _config: None)
     monkeypatch.setattr(pg_pool, "bind", lambda _config: None)
     monkeypatch.setattr(RAGServiceManager, "_initialize_workspace_registry", AsyncMock())
-    monkeypatch.setattr(RAGServiceManager, "_probe_role_image_capabilities", AsyncMock())
+    monkeypatch.setattr(AnswerCapabilityCoordinator, "probe_all", AsyncMock())
     monkeypatch.setattr(
         RAGServiceManager,
         "_get_retrieval_planner",

@@ -1,4 +1,4 @@
-from dlightrag.citations.indexer import CitationIndexer, build_citation_index
+from dlightrag.answer.citations.indexer import CitationIndexer, build_citation_index
 
 
 def test_build_index_basic():

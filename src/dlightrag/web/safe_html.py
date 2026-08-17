@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import nh3
 
-from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.answer.citations.schemas import SourceReferencePayload
 from dlightrag.web.deps import render_partial
 
 _ALLOWED_TAGS = {

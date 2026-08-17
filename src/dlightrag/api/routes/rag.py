@@ -15,6 +15,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dlightrag.access import AccessAction, UserContext
+from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     IngestJobStatusResponse,
@@ -34,7 +35,6 @@ from dlightrag.core.client_requests import (
     managed_local_ingest_documents,
     managed_local_ingest_path,
 )
-from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
 from .deps import (
     authorized_workspaces,

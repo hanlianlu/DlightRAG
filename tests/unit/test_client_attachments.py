@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.core.client_attachments import (
     AnswerAttachment,
     answer_link_resources,
     resource_inputs_from_attachments,
 )
 from dlightrag.core.client_contracts import AnswerAttachmentLink
-from dlightrag.core.resources.models import ResourceInput
 
 
 def test_from_path_reads_bytes_and_hides_caller_path(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ from dlightrag_ai.media import (
 )
 from PIL import Image
 
-from dlightrag.core.answer.images import AnswerImageBudget, AnswerImagePolicy
+from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="

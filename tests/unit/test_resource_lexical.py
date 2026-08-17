@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dlightrag.core.resources.lexical import (
+from dlightrag.answer.resources.lexical import (
     bm25_rank,
     mixed_script_terms,
 )

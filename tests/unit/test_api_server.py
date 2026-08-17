@@ -18,16 +18,16 @@ from httpx import ASGITransport, AsyncClient, Response
 
 from dlightrag.access import AuthenticationError, UserContext, authenticate_bearer_token
 from dlightrag.access import authentication as authentication_module
+from dlightrag.answer.citations.schemas import SourceReference
+from dlightrag.answer.runs.results import AnswerResult
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
-from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import (
     AccessControlConfig,
     AccessControlRuleConfig,
     DlightragConfig,
     set_config,
 )
-from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
 from dlightrag.health import ApplicationHealth
@@ -190,9 +190,9 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
     manager.acreate_workspace = AsyncMock()
     manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
     manager.get_error_info = lambda: {"last_error": None, "timestamp": None, "retry_after": 30.0}
-    from dlightrag.core.answer.capability import AnswerImageCapability
+    from dlightrag.answer.capability import AnswerImageCapability
 
-    manager.answer_image_capability = AnswerImageCapability(
+    answer_image_capability = AnswerImageCapability(
         status="supported",
         configured_ceiling=8,
         effective_max_images=8,
@@ -202,14 +202,14 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
         failure_kind=None,
     )
     from dlightrag.adapters.postgres.corpus import PGReadinessProbe
-    from dlightrag.core.answer.capability import answer_image_capability_summary
+    from dlightrag.answer.capability import answer_image_capability_summary
 
     manager.health = ApplicationHealth(
         readiness_probe=PGReadinessProbe(test_config),
     )
     manager.health.mark_ready()
     manager.health.set_answer_image_capability(
-        answer_image_capability_summary(manager.answer_image_capability)
+        answer_image_capability_summary(answer_image_capability)
     )
     _api_app.state.health = manager.health
     manager.close = AsyncMock()

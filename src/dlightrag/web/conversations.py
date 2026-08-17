@@ -18,16 +18,16 @@ from typing import Any, Protocol, TypeVar
 from dlightrag_ai.media import thumbnail_bytes
 
 from dlightrag.access import UserContext, owner_id_from_user
-from dlightrag.core.answer_runs.execution import (
+from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
     AttachmentReference,
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.core.answer_runs.results import project_answer_result
-from dlightrag.core.resources.models import ResourceInput
-from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
+from dlightrag.answer.runs.results import project_answer_result
+from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.runtime import (
     AnswerRunRecord,
     PendingArtifact,

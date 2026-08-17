@@ -4,13 +4,13 @@ import logging
 
 import pytest
 
-from dlightrag.citations.highlight import (
+from dlightrag.answer.citations.highlight import (
     HighlightExtractor,
     HighlightPhrases,
     extract_all_citing_sentences,
     extract_highlights_for_sources,
 )
-from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReference
 
 
 def _report_source(chunks: list[ChunkSnippet]) -> SourceReference:
@@ -131,8 +131,8 @@ class TestHighlightExtractor:
     @pytest.mark.asyncio
     async def test_doc_level_citation_triggers_highlights(self, mock_llm):
         """Doc-level [n] citations should trigger highlights for all chunks of that source."""
-        from dlightrag.citations.highlight import extract_highlights_for_sources
-        from dlightrag.citations.schemas import ChunkSnippet
+        from dlightrag.answer.citations.highlight import extract_highlights_for_sources
+        from dlightrag.answer.citations.schemas import ChunkSnippet
 
         sources = [
             _report_source(
@@ -158,8 +158,8 @@ class TestHighlightExtractor:
         mock_llm,
         caplog: pytest.LogCaptureFixture,
     ):
-        from dlightrag.citations.highlight import extract_highlights_for_sources
-        from dlightrag.citations.schemas import ChunkSnippet
+        from dlightrag.answer.citations.highlight import extract_highlights_for_sources
+        from dlightrag.answer.citations.schemas import ChunkSnippet
 
         sources = [
             _report_source(
@@ -174,7 +174,7 @@ class TestHighlightExtractor:
         ]
         answer_text = "The market growth was impressive [1]."
 
-        with caplog.at_level(logging.INFO, logger="dlightrag.citations.highlight"):
+        with caplog.at_level(logging.INFO, logger="dlightrag.answer.citations.highlight"):
             await extract_highlights_for_sources(sources, answer_text, mock_llm)
 
         assert "[Highlight] complete:" in caplog.text

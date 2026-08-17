@@ -14,20 +14,20 @@ from dlightrag_ai.telemetry import NOOP_TELEMETRY
 from dlightrag_rag.retrieval import RetrievalResult
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from dlightrag.citations import finalize_answer
-from dlightrag.core.agent.orchestrator import AnswerOrchestrator
-from dlightrag.core.answer.errors import (
+from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
+from dlightrag.answer.citations import finalize_answer
+from dlightrag.answer.errors import (
     INVALID_TOOL_CONFIGURATION,
     AnswerInputError,
     AnswerInputOverflowError,
     InvalidToolConfigurationError,
 )
-from dlightrag.core.answer.images import AnswerImageBudget
-from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
-from dlightrag.core.answer_runs.results import AnswerResult
-from dlightrag.core.resources.models import ResourceManifestEntry, TextWindowBudget
-from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
-from dlightrag.core.tools import SearchInput, compose_research_tools
+from dlightrag.answer.images import AnswerImageBudget
+from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowBudget
+from dlightrag.answer.runs.results import AnswerResult
+from dlightrag.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
+from dlightrag.answer.tools import SearchInput, compose_research_tools
+from dlightrag.answer.tools.web import WebSearchHit, WebSearchResult
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
@@ -97,7 +97,7 @@ def _call(*, query: str, source: str, call_id: str = "search") -> ToolCall:
 
 
 async def test_cancelled_waiter_does_not_cancel_shared_tool_operation() -> None:
-    from dlightrag.core.tools import ExactCallCache
+    from dlightrag.answer.tools import ExactCallCache
 
     cache = ExactCallCache()
     started = asyncio.Event()
@@ -131,7 +131,7 @@ async def test_cancelled_waiter_does_not_cancel_shared_tool_operation() -> None:
 
 
 async def test_tool_call_cache_close_cancels_and_joins_operations() -> None:
-    from dlightrag.core.tools import ExactCallCache
+    from dlightrag.answer.tools import ExactCallCache
 
     cache = ExactCallCache()
     started = asyncio.Event()
@@ -823,9 +823,9 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
 
 
 async def test_every_model_visible_tool_field_describes_itself() -> None:
-    from dlightrag.core.memory.evidence import EvidenceLedger
-    from dlightrag.core.resources.models import TextWindowBudget
-    from dlightrag.core.tools.resources import build_resource_tools
+    from dlightrag.answer.evidence import EvidenceLedger
+    from dlightrag.answer.resources.models import TextWindowBudget
+    from dlightrag.answer.tools.resources import build_resource_tools
 
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()

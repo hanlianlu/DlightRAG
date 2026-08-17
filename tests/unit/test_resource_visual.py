@@ -14,9 +14,9 @@ from docx import Document
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image
 
-from dlightrag.core.resources.models import ResourceInput
-from dlightrag.core.resources.registry import ResourceRegistry
-from dlightrag.core.resources.visual import (
+from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.answer.resources.registry import ResourceRegistry
+from dlightrag.answer.resources.visual import (
     ResourceInspectionError,
     ResourceInspector,
 )

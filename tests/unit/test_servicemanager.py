@@ -26,22 +26,22 @@ from dlightrag_rag.retrieval import (
 from dlightrag_rag.sourcing.base import SourceDocument
 from PIL import Image
 
+from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
+from dlightrag.answer.resources.images import prepare_query_images
+from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
+from dlightrag.answer.runs.execution import AnswerRunInput, AnswerRunRequest
+from dlightrag.answer.runs.results import AnswerResult
 from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
     LLMConfig,
     ModelCapacityOverrideConfig,
     ModelConfig,
-    RerankConfig,
     WebSearchConfig,
     set_config,
 )
-from dlightrag.core.answer_runs.execution import AnswerRunInput, AnswerRunRequest
-from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.request.images import prepare_query_images
-from dlightrag.core.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from tests.unit.conftest import answer_model_profile
 
@@ -119,9 +119,9 @@ def _install_answer_synthesizer(
     synthesizer: Any,
     profile: ModelProfile | None = None,
 ) -> None:
-    manager._answer_synthesizers_by_profile[profile or manager._model_profile("query")] = (
-        synthesizer
-    )
+    manager._answer_synthesizers_by_profile[
+        profile or manager._capabilities.model_profile("query")
+    ] = synthesizer
 
 
 def _install_retrieval_planner(
@@ -129,7 +129,9 @@ def _install_retrieval_planner(
     planner: RetrievalPlanner,
     profile: ModelProfile | None = None,
 ) -> None:
-    manager._retrieval_planners_by_profile[profile or manager._model_profile("extract")] = planner
+    manager._retrieval_planners_by_profile[
+        profile or manager._capabilities.model_profile("extract")
+    ] = planner
 
 
 def _install_workspace_runtime(
@@ -187,7 +189,7 @@ class _MemoryArtifactStore:
 
 async def _durable_answer(manager: Any, query: str, **kwargs: Any) -> AnswerResult:
     """Execute one durable answer run in process and restore its canonical result."""
-    from dlightrag.core.answer_runs.results import restore_answer_result
+    from dlightrag.answer.runs.results import restore_answer_result
     from dlightrag.runtime import artifact_digest
 
     resources = kwargs.pop("resources", None)
@@ -694,7 +696,7 @@ class TestRouting:
     async def test_aretrieve_rejects_images_beyond_the_public_contract(
         self, mock_create, test_cfg
     ) -> None:
-        from dlightrag.core.answer.errors import CurrentImagePayloadError
+        from dlightrag.answer.errors import CurrentImagePayloadError
 
         manager = RAGServiceManager(config=test_cfg)
 
@@ -1032,7 +1034,7 @@ class TestAnswerViaEngine:
         highlight_model = AsyncMock(side_effect=llm_func)
         highlight_model.aclose = AsyncMock()
         monkeypatch.setattr(
-            "dlightrag.core.answer.highlights.CompletionModel",
+            "dlightrag.core.servicemanager.CompletionModel",
             MagicMock(return_value=highlight_model),
         )
         trace_calls: list[dict[str, Any]] = []
@@ -1146,7 +1148,7 @@ class TestAnswerViaEngine:
             "dlightrag.core.servicemanager.CompletionModel",
             return_value=MagicMock(),
         ):
-            profile = manager._model_profile("query")
+            profile = manager._capabilities.model_profile("query")
             engine = manager._get_answer_synthesizer(profile)
             assert engine is not None
             # Second call returns same instance
@@ -1164,7 +1166,7 @@ class TestAnswerViaEngine:
             patch("dlightrag.core.servicemanager.CompletionModel") as completion,
             pytest.raises(RuntimeError, match="synthesizer failed"),
         ):
-            manager._get_answer_synthesizer(manager._model_profile("query"))
+            manager._get_answer_synthesizer(manager._capabilities.model_profile("query"))
 
         completion.assert_not_called()
 
@@ -1179,7 +1181,7 @@ class TestAnswerViaEngine:
             "dlightrag.core.servicemanager.CompletionModel",
             return_value=MagicMock(),
         ):
-            engine = manager._get_answer_synthesizer(manager._model_profile("query"))
+            engine = manager._get_answer_synthesizer(manager._capabilities.model_profile("query"))
 
         policy = engine._image_policy
         assert policy.max_pixels == 123
@@ -1203,7 +1205,7 @@ class TestAnswerViaEngine:
             "dlightrag.core.servicemanager.CompletionModel",
             return_value=MagicMock(),
         ):
-            live_query = manager._model_profile("query")
+            live_query = manager._capabilities.model_profile("query")
             live_synthesizer = manager._get_answer_synthesizer(live_query)
             live_planner = manager._get_retrieval_planner()
             pinned_synthesizer = manager._get_answer_synthesizer(pinned_query)
@@ -1765,80 +1767,6 @@ class TestIngestJobs:
         assert (staged_dir / "report.pdf").exists()
 
 
-async def test_vision_probe_result_is_manager_scoped(
-    monkeypatch: pytest.MonkeyPatch,
-    test_cfg: DlightragConfig,
-) -> None:
-    model_kwargs = {"reasoning_effort": "none"}
-    test_cfg = test_cfg.model_copy(
-        update={
-            "llm": LLMConfig(
-                default=ModelConfig(
-                    model="gpt-5.4-mini",
-                    api_key="test",
-                    model_kwargs=model_kwargs,
-                )
-            ),
-            "rerank": RerankConfig(strategy="chat_llm_reranker"),
-        }
-    )
-    from dlightrag_ai.vision import ImageProbeOutcome
-
-    first = RAGServiceManager(config=test_cfg)
-    first._rerank_supports_vision = False
-    second = RAGServiceManager(config=test_cfg)
-    provider = SimpleNamespace(aclose=AsyncMock())
-    probe = AsyncMock(return_value=ImageProbeOutcome(status="supported"))
-
-    monkeypatch.setattr("dlightrag_ai.vision.get_provider", MagicMock(return_value=provider))
-    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", probe)
-
-    await second._probe_rerank_image_capability()
-
-    assert first._rerank_supports_vision is False
-    assert second._rerank_supports_vision is True
-    probe.assert_awaited_once_with(provider, model="gpt-5.4-mini", model_kwargs=model_kwargs)
-
-
-async def test_rerank_vision_probe_does_not_borrow_default_key(
-    monkeypatch: pytest.MonkeyPatch,
-    test_cfg: DlightragConfig,
-) -> None:
-    from dlightrag_ai.vision import ImageProbeOutcome
-
-    config = test_cfg.model_copy(
-        update={
-            "llm": LLMConfig(default=ModelConfig(model="default-model", api_key="default-key")),
-            "rerank": RerankConfig(
-                strategy="chat_llm_reranker",
-                provider="openai",
-                model="local-reranker",
-                api_key=None,
-                base_url="http://host.docker.internal:9999/v1",
-            ),
-        }
-    )
-    manager = RAGServiceManager(config=config)
-    provider = SimpleNamespace(aclose=AsyncMock())
-    provider_factory = MagicMock(return_value=provider)
-
-    monkeypatch.setattr("dlightrag_ai.vision.get_provider", provider_factory)
-    monkeypatch.setattr(
-        "dlightrag_ai.vision.probe_image_capability",
-        AsyncMock(return_value=ImageProbeOutcome(status="supported")),
-    )
-
-    await manager._probe_rerank_image_capability()
-
-    provider_factory.assert_called_once_with(
-        "openai",
-        api_key=None,
-        base_url="http://host.docker.internal:9999/v1",
-        timeout=240.0,
-        max_retries=3,
-    )
-
-
 class TestDegradedMode:
     @pytest.fixture(autouse=True)
     def _isolate_workspace_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1852,12 +1780,9 @@ class TestDegradedMode:
             "_initialize_workspace_registry",
             fake_initialize_workspace_registry,
         )
-        for name in (
-            "_start_ingest_job_recovery",
-            "_probe_role_image_capabilities",
-            "_initialize_answer_run_store",
-        ):
+        for name in ("_start_ingest_job_recovery", "_initialize_answer_run_store"):
             monkeypatch.setattr(RAGServiceManager, name, AsyncMock())
+        monkeypatch.setattr(AnswerCapabilityCoordinator, "probe_all", AsyncMock())
 
     @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_create_sets_ready_on_success(self, mock_create, test_cfg) -> None:
@@ -1877,6 +1802,22 @@ class TestDegradedMode:
         manager = await RAGServiceManager.acreate(config=test_cfg)
 
         assert manager._retrieval_planners_by_profile
+
+    async def test_create_closes_after_capability_probe_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        probe_all = AsyncMock(side_effect=RuntimeError("probe failed"))
+        close = AsyncMock()
+        monkeypatch.setattr(AnswerCapabilityCoordinator, "probe_all", probe_all)
+        monkeypatch.setattr(RAGServiceManager, "aclose", close)
+
+        with pytest.raises(RuntimeError, match="probe failed"):
+            await RAGServiceManager.acreate(config=test_cfg)
+
+        probe_all.assert_awaited_once()
+        close.assert_awaited_once()
 
     @pytest.mark.parametrize("role", ["extract", "keyword", "query", "vlm"])
     async def test_startup_resolves_every_reachable_model_profile(
@@ -1986,9 +1927,9 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
         test_cfg: DlightragConfig,
     ) -> None:
         seed = RAGServiceManager(config=test_cfg)
-        seed._resolve_model_profiles()
+        seed._capabilities.resolve_profiles()
         profiles: dict[ModelRole, ModelProfile] = {
-            role: seed._model_profile(role) for role in MODEL_ROLE_NAMES
+            role: seed._capabilities.model_profile(role) for role in MODEL_ROLE_NAMES
         }
         request = AnswerRunInput(
             query="accepted",
@@ -2030,9 +1971,9 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
         test_cfg: DlightragConfig,
     ) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        manager._resolve_model_profiles()
+        manager._capabilities.resolve_profiles()
         profiles: dict[ModelRole, ModelProfile] = {
-            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+            role: manager._capabilities.model_profile(role) for role in MODEL_ROLE_NAMES
         }
         pinned = manager._pin_model_profiles(profiles)
         request = AnswerRunInput(
@@ -2042,7 +1983,7 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
             model_catalog_revision="older-catalog",
             idempotency_fingerprint="public-input",
         )
-        manager._model_profiles["query"] = ModelProfile(context_window_tokens=10_000)
+        manager._capabilities._profiles["query"] = ModelProfile(context_window_tokens=10_000)
 
         resolved = manager._validate_pinned_model_profiles(request)
 
@@ -2130,11 +2071,11 @@ class TestRequestTimeout:
 
 
 async def test_unsupported_image_link_is_rejected_before_materialization(test_cfg) -> None:
-    from dlightrag.core.answer.capability import AnswerImageCapability
-    from dlightrag.core.answer.errors import AnswerImageError
+    from dlightrag.answer.capability import AnswerImageCapability
+    from dlightrag.answer.errors import AnswerImageError
 
     manager = RAGServiceManager(config=test_cfg)
-    manager._answer_image_capability = AnswerImageCapability(
+    manager._capabilities._answer_image_capability = AnswerImageCapability(
         status="unsupported",
         configured_ceiling=2,
         effective_max_images=0,
@@ -2212,7 +2153,7 @@ class TestClose:
         for component in (answer_model, planner_model, vlm_model, tool_model, web_search):
             component.aclose.assert_awaited_once()
         with pytest.raises(RAGServiceUnavailableError):
-            manager._get_answer_synthesizer(manager._model_profile("query"))
+            manager._get_answer_synthesizer(manager._capabilities.model_profile("query"))
         with pytest.raises(RAGServiceUnavailableError):
             manager._get_retrieval_planner()
         with pytest.raises(RAGServiceUnavailableError):
@@ -2433,7 +2374,7 @@ class TestExaContentsFallback:
     """Manager composition root adapts Exa Contents into the registry fallback."""
 
     async def test_contents_passages_become_one_deterministic_text(self) -> None:
-        from dlightrag.core.retrieval.web_search import (
+        from dlightrag.answer.tools.web import (
             ExaSearch,
             WebSearchHit,
             WebSearchResult,
@@ -2467,7 +2408,7 @@ class TestExaContentsFallback:
         assert "The Page" in text
 
     async def test_contents_unavailable_yields_no_text(self) -> None:
-        from dlightrag.core.retrieval.web_search import ExaSearch, WebSearchUnavailable
+        from dlightrag.answer.tools.web import ExaSearch, WebSearchUnavailable
         from dlightrag.core.servicemanager import _exa_contents_text
 
         class _FakeExa:
@@ -2487,7 +2428,7 @@ class TestExaContentsFallback:
             resources,
             text_window_budget=_text_window_budget(),
             web_search=manager._get_web_search(),
-            vlm_profile=manager._model_profile("vlm"),
+            vlm_profile=manager._capabilities.model_profile("vlm"),
         )
         assert registry is not None
         assert registry._url_text_fallback is not None
@@ -2497,7 +2438,7 @@ class TestExaContentsFallback:
             resources,
             text_window_budget=_text_window_budget(),
             web_search=None,
-            vlm_profile=plain._model_profile("vlm"),
+            vlm_profile=plain._capabilities.model_profile("vlm"),
         )
         assert registry2 is not None
         assert registry2._url_text_fallback is None
@@ -2505,7 +2446,7 @@ class TestExaContentsFallback:
 
 class TestAgenticAnswerCapability:
     def test_private_host_resource_link_is_an_answer_input_error(self, test_cfg) -> None:
-        from dlightrag.core.answer.errors import AnswerResourceAdmissionError
+        from dlightrag.answer.errors import AnswerResourceAdmissionError
 
         manager = RAGServiceManager(config=test_cfg)
 
@@ -2514,7 +2455,7 @@ class TestAgenticAnswerCapability:
                 [ResourceInput(url="https://127.0.0.1/private.pdf")],
                 text_window_budget=_text_window_budget(),
                 web_search=None,
-                vlm_profile=manager._model_profile("vlm"),
+                vlm_profile=manager._capabilities.model_profile("vlm"),
             )
 
     async def test_without_exa_fast_path_never_builds_a_tool_model(
@@ -2539,7 +2480,7 @@ class TestAgenticAnswerCapability:
         self,
         test_cfg: DlightragConfig,
     ) -> None:
-        from dlightrag.core.answer.errors import AnswerModelCapabilityError
+        from dlightrag.answer.errors import AnswerModelCapabilityError
 
         profile = test_cfg.model_capacity_overrides[0].model_copy(update={"supports_tools": False})
         cfg = test_cfg.model_copy(update={"model_capacity_overrides": [profile]})
@@ -2591,10 +2532,10 @@ class TestAgenticAnswerCapability:
     async def test_describer_and_inspector_share_one_closed_vlm_callable(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from dlightrag.core.answer.capability import AnswerImageCapability
+        from dlightrag.answer.capability import AnswerImageCapability
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_image_capability = AnswerImageCapability(
+        manager._capabilities._answer_image_capability = AnswerImageCapability(
             status="supported",
             configured_ceiling=2,
             effective_max_images=2,
@@ -2603,20 +2544,20 @@ class TestAgenticAnswerCapability:
             model="vision-test",
             failure_kind=None,
         )
-        manager._vlm_image_status = "supported"
+        manager._capabilities._vlm_image_status = "supported"
         model = AsyncMock()
         model.aclose = AsyncMock()
         model_factory = MagicMock(return_value=model)
         inspector = MagicMock()
         monkeypatch.setattr("dlightrag.core.servicemanager.CompletionModel", model_factory)
-        monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
+        monkeypatch.setattr("dlightrag.answer.resources.visual.ResourceInspector", inspector)
 
         describer = manager._query_image_describer()
         registry, _tools = manager._build_resource_context(
             [ResourceInput(content=b"payload")],
             text_window_budget=_text_window_budget(),
             web_search=None,
-            vlm_profile=manager._model_profile("vlm"),
+            vlm_profile=manager._capabilities.model_profile("vlm"),
         )
         await manager.aclose()
 
@@ -2656,12 +2597,12 @@ class TestAgenticAnswerCapability:
     async def test_agent_image_budgeting_runs_off_event_loop(self, test_cfg) -> None:
         from dlightrag_ai.media import image_bytes_to_data_uri
 
-        from dlightrag.core.answer.capability import AnswerImageCapability
+        from dlightrag.answer.capability import AnswerImageCapability
 
         loop_thread = threading.get_ident()
         budget_threads: list[int] = []
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_image_capability = AnswerImageCapability(
+        manager._capabilities._answer_image_capability = AnswerImageCapability(
             status="supported",
             configured_ceiling=2,
             effective_max_images=2,
@@ -2670,7 +2611,9 @@ class TestAgenticAnswerCapability:
             model="vision-test",
             failure_kind=None,
         )
-        budget = manager._answer_image_policy(manager._model_profile("query")).new_budget()
+        budget = manager._capabilities.answer_image_policy(
+            manager._capabilities.model_profile("query")
+        ).new_budget()
         add_user_image = budget.add_user_image
 
         def capture_budget(value, *, label):
@@ -2713,10 +2656,10 @@ class TestAgenticAnswerCapability:
     async def test_image_attachment_without_exa_keeps_agentic_inspection(
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from dlightrag.core.answer.capability import AnswerImageCapability
+        from dlightrag.answer.capability import AnswerImageCapability
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_image_capability = AnswerImageCapability(
+        manager._capabilities._answer_image_capability = AnswerImageCapability(
             status="supported",
             configured_ceiling=2,
             effective_max_images=2,
@@ -2725,14 +2668,14 @@ class TestAgenticAnswerCapability:
             model="vision-test",
             failure_kind=None,
         )
-        manager._vlm_image_status = "supported"
+        manager._capabilities._vlm_image_status = "supported"
         _install_answer_synthesizer(manager, MagicMock())
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.CompletionModel",
             MagicMock(return_value=AsyncMock(return_value="visual evidence")),
         )
         inspector = MagicMock()
-        monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
+        monkeypatch.setattr("dlightrag.answer.resources.visual.ResourceInspector", inspector)
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
@@ -2773,19 +2716,19 @@ class TestAgenticAnswerCapability:
     ) -> None:
         test_cfg.answer.max_images = 0
         manager = RAGServiceManager(config=test_cfg)
-        manager._vlm_image_status = "supported"
+        manager._capabilities._vlm_image_status = "supported"
         monkeypatch.setattr(
             "dlightrag.core.servicemanager.CompletionModel",
             MagicMock(return_value=AsyncMock(return_value="visual evidence")),
         )
         inspector = MagicMock()
-        monkeypatch.setattr("dlightrag.core.resources.visual.ResourceInspector", inspector)
+        monkeypatch.setattr("dlightrag.answer.resources.visual.ResourceInspector", inspector)
 
         registry, tools = manager._build_resource_context(
             [ResourceInput(filename="chart.png", content=_png_bytes(), declared_mime="image/png")],
             text_window_budget=_text_window_budget(),
             web_search=None,
-            vlm_profile=manager._model_profile("vlm"),
+            vlm_profile=manager._capabilities.model_profile("vlm"),
         )
 
         # A zero ceiling means no image block can ever be sent, so an inspector
@@ -2829,7 +2772,7 @@ class TestAgenticAnswerCapability:
             "dlightrag.core.servicemanager.AnswerOrchestrator", _CapturingOrchestrator
         )
         profiles: dict[ModelRole, ModelProfile] = {
-            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+            role: manager._capabilities.model_profile(role) for role in MODEL_ROLE_NAMES
         }
 
         await manager._prepare_orchestrated_run(
@@ -2868,7 +2811,7 @@ class TestAgenticAnswerCapability:
             ]
         )
         profiles: dict[ModelRole, ModelProfile] = {
-            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+            role: manager._capabilities.model_profile(role) for role in MODEL_ROLE_NAMES
         }
 
         run = await manager._prepare_orchestrated_run(
@@ -2953,7 +2896,7 @@ class TestAgenticAnswerCapability:
             side_effect=RAGServiceUnavailableError("manager closed")
         )
         profiles: dict[ModelRole, ModelProfile] = {
-            role: manager._model_profile(role) for role in MODEL_ROLE_NAMES
+            role: manager._capabilities.model_profile(role) for role in MODEL_ROLE_NAMES
         }
 
         with pytest.raises(RAGServiceUnavailableError, match="manager closed"):
@@ -2988,7 +2931,7 @@ class TestAgenticAnswerCapability:
 
         async def project_then_narrow(*args: Any, **kwargs: Any):
             projection = await project(*args, **kwargs)
-            manager._model_profiles["query"] = ModelProfile(
+            manager._capabilities._profiles["query"] = ModelProfile(
                 context_window_tokens=10_000,
                 supports_images=False,
             )
@@ -3009,7 +2952,7 @@ class TestAgenticAnswerCapability:
     async def test_agentic_kb_tool_plans_the_agent_query_lazily(self, test_cfg) -> None:
         from dlightrag_ai.messages import AssistantTurn, ToolCall
 
-        from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+        from dlightrag.answer.synthesizer import AnswerSynthesizer
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
@@ -3040,7 +2983,7 @@ class TestAgenticAnswerCapability:
         _install_answer_synthesizer(
             manager,
             AnswerSynthesizer(
-                image_policy=manager._answer_image_policy(answer_model_profile()),
+                image_policy=manager._capabilities.answer_image_policy(answer_model_profile()),
                 model_profile=answer_model_profile(),
                 model_func=None,
             ),
@@ -3069,11 +3012,11 @@ class TestAgenticAnswerCapability:
     async def test_agentic_kb_searches_describe_current_images_once(self, test_cfg) -> None:
         from dlightrag_ai.messages import AssistantTurn, ToolCall
 
-        from dlightrag.core.answer.capability import AnswerImageCapability
-        from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+        from dlightrag.answer.capability import AnswerImageCapability
+        from dlightrag.answer.synthesizer import AnswerSynthesizer
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._answer_image_capability = AnswerImageCapability(
+        manager._capabilities._answer_image_capability = AnswerImageCapability(
             status="supported",
             configured_ceiling=2,
             effective_max_images=2,
@@ -3139,7 +3082,7 @@ class TestAgenticAnswerCapability:
         _install_answer_synthesizer(
             manager,
             AnswerSynthesizer(
-                image_policy=manager._answer_image_policy(answer_model_profile()),
+                image_policy=manager._capabilities.answer_image_policy(answer_model_profile()),
                 model_profile=answer_model_profile(),
                 model_func=None,
             ),
@@ -3168,8 +3111,8 @@ class TestAgenticAnswerCapability:
     async def test_agentic_answer_plans_once_and_runs_both_evidence_sources(self, test_cfg) -> None:
         from dlightrag_ai.messages import AssistantTurn, ToolCall
 
-        from dlightrag.core.answer.synthesizer import AnswerSynthesizer
-        from dlightrag.core.retrieval.web_search import WebSearchHit, WebSearchResult
+        from dlightrag.answer.synthesizer import AnswerSynthesizer
+        from dlightrag.answer.tools.web import WebSearchHit, WebSearchResult
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
@@ -3242,7 +3185,7 @@ class TestAgenticAnswerCapability:
         _install_answer_synthesizer(
             manager,
             AnswerSynthesizer(
-                image_policy=manager._answer_image_policy(answer_model_profile()),
+                image_policy=manager._capabilities.answer_image_policy(answer_model_profile()),
                 model_profile=answer_model_profile(),
                 model_func=None,
             ),

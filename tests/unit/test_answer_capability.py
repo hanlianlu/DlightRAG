@@ -5,7 +5,7 @@ import asyncio
 import base64
 import dataclasses
 import io
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dlightrag_ai.scheduler import ModelScheduler
@@ -17,6 +17,15 @@ from dlightrag_ai.vision import (
 )
 from PIL import Image
 
+from dlightrag.answer.capabilities import (
+    AnswerCapabilities,
+    AnswerCapabilityCoordinator,
+    AnswerCapabilityView,
+)
+from dlightrag.answer.capability import (
+    AnswerImageCapability,
+    derive_effective_max_images,
+)
 from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
@@ -25,12 +34,13 @@ from dlightrag.config import (
     ModelCapacityOverrideConfig,
     ModelConfig,
 )
-from dlightrag.core.answer.capability import (
-    AnswerImageCapability,
-    derive_effective_max_images,
-)
 from dlightrag.core.servicemanager import RAGServiceManager
-from dlightrag.model_settings import model_settings_for_role
+from dlightrag.model_settings import (
+    answer_capability_settings,
+    model_profile_for_role,
+    model_settings_for_role,
+    rerank_scoring_model_settings,
+)
 
 
 @pytest.mark.parametrize(
@@ -62,6 +72,43 @@ def test_capability_snapshot_is_frozen() -> None:
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         cap.effective_max_images = 0  # type: ignore[misc]
+
+
+def _coordinator(
+    config: DlightragConfig,
+    *,
+    image_capabilities: ModelImageCapabilities | None = None,
+) -> tuple[AnswerCapabilityCoordinator, list[dict[str, object]]]:
+    health_updates: list[dict[str, object]] = []
+    coordinator = AnswerCapabilityCoordinator(
+        settings=answer_capability_settings(config),
+        profile_for_role=lambda role: model_profile_for_role(config, role),
+        model_settings_for_role=lambda role: model_settings_for_role(config, role),
+        rerank_model_settings=lambda: rerank_scoring_model_settings(config),
+        image_capabilities=image_capabilities
+        or ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1)),
+        on_answer_capability=health_updates.append,
+    )
+    return coordinator, health_updates
+
+
+def _stub_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    *statuses: ImageCapabilityStatus,
+) -> tuple[ModelImageCapabilities, AsyncMock]:
+    capabilities = ModelImageCapabilities(scheduler=ModelScheduler(max_concurrency=1))
+    resolve = AsyncMock(side_effect=[ImageProbeOutcome(status=status) for status in statuses])
+    monkeypatch.setattr(capabilities, "resolve", resolve)
+    return capabilities, resolve
+
+
+def test_public_capability_snapshot_is_frozen() -> None:
+    coordinator, _health_updates = _coordinator(_reprobe_config())
+    snapshot = coordinator.snapshot
+
+    assert isinstance(snapshot, AnswerCapabilities)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        snapshot.vlm_status = "supported"  # type: ignore[misc]
 
 
 async def test_capability_probe_targets_resolved_query_role_without_borrowing_key(
@@ -96,7 +143,7 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
             startup_probe=False,
         ),
     )
-    manager = RAGServiceManager(config=config)
+    coordinator, health_updates = _coordinator(config)
     probed: dict[str, object] = {}
 
     async def fake_probe(provider, *, model, model_kwargs=None):
@@ -114,16 +161,17 @@ async def test_capability_probe_targets_resolved_query_role_without_borrowing_ke
     monkeypatch.setattr("dlightrag_ai.vision.get_provider", fake_get_provider)
     monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", fake_probe)
 
-    await manager._probe_answer_image_capability()
+    await coordinator.probe_answer()
 
-    cap = manager.answer_image_capability
-    ceiling = int(manager._config.answer.max_images)
-    query_cfg = model_settings_for_role(manager._config, "query")
+    cap = coordinator.answer_image_capability
+    ceiling = int(config.answer.max_images)
+    query_cfg = model_settings_for_role(config, "query")
     assert isinstance(cap, AnswerImageCapability)
     assert cap.status == "supported"
     assert cap.effective_max_images == ceiling
     assert probed["model"] == query_cfg.model
     assert probed["api_key"] is None
+    assert health_updates[-1]["status"] == "supported"
 
 
 def _reprobe_config() -> DlightragConfig:
@@ -149,67 +197,53 @@ def _reprobe_config() -> DlightragConfig:
     )
 
 
-def _capability(status: ImageCapabilityStatus, effective: int) -> AnswerImageCapability:
-    return AnswerImageCapability(
-        status=status,
-        configured_ceiling=8,
-        effective_max_images=effective,
-        provider="p",
-        base_url=None,
-        model="m",
-        failure_kind=None,
-    )
-
-
 async def test_unknown_capability_lazily_reprobes_to_supported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = RAGServiceManager(config=_reprobe_config())
-    manager._answer_image_capability = _capability("unknown", 0)
-    calls = 0
+    image_capabilities, resolve = _stub_capabilities(
+        monkeypatch,
+        "unknown",
+        "supported",
+    )
+    coordinator, _health_updates = _coordinator(
+        _reprobe_config(), image_capabilities=image_capabilities
+    )
+    view = AnswerCapabilityView(coordinator)
 
-    async def fake_discover() -> AnswerImageCapability:
-        nonlocal calls
-        calls += 1
-        return _capability("supported", 8)
+    await coordinator.probe_answer()
+    snapshot = await view.read()
 
-    monkeypatch.setattr(manager, "_discover_answer_image_capability", fake_discover)
-
-    await manager._maybe_reprobe_answer_image_capability()
-
-    cap = manager.answer_image_capability
-    assert calls == 1
+    cap = snapshot.answer
+    assert resolve.await_count == 2
     assert cap is not None and cap.status == "supported"
-    assert cap.effective_max_images == 8
+    assert cap.effective_max_images == _reprobe_config().answer.max_images
 
 
 async def test_confirmed_image_context_refreshes_the_query_profile_after_reprobe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = RAGServiceManager(config=_reprobe_config())
-    manager._resolve_model_profiles()
-    declared = manager._declared_model_profile("query")
-    manager._model_profiles["query"] = dataclasses.replace(declared, supports_images=False)
-    manager._answer_image_capability = _capability("unknown", 0)
-    before = manager._request_model_context(None)
+    image_capabilities, _resolve = _stub_capabilities(
+        monkeypatch,
+        "unknown",
+        "supported",
+    )
+    coordinator, _health_updates = _coordinator(
+        _reprobe_config(), image_capabilities=image_capabilities
+    )
+    await coordinator.probe_answer()
+    before = coordinator.request_model_context(None)
 
-    async def reprobe() -> None:
-        manager._model_profiles["query"] = declared
-        manager._answer_image_capability = _capability("supported", 8)
-
-    monkeypatch.setattr(manager, "_maybe_reprobe_answer_image_capability", reprobe)
-
-    after, capability = await manager._confirmed_live_answer_image_context(before)
+    after, capability = await coordinator.confirmed_live_answer_context(before)
 
     assert before.query.supports_images is False
     assert after.query.supports_images is True
     assert capability is not None and capability.status == "supported"
 
 
-async def test_reprobe_updates_cached_synthesizer_image_budget(
+async def test_reprobe_updates_synthesizer_image_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.answer.synthesizer import AnswerSynthesizer
+    from dlightrag.answer.synthesizer import AnswerSynthesizer
 
     buffer = io.BytesIO()
     Image.new("RGB", (2, 2), "white").save(buffer, format="PNG")
@@ -225,25 +259,28 @@ async def test_reprobe_updates_cached_synthesizer_image_budget(
         "entities": [],
         "relationships": [],
     }
-    manager = RAGServiceManager(config=_reprobe_config())
-    manager._answer_image_capability = _capability("unknown", 0)
-    manager._narrow_role_image_profile("query", "unknown")
-    old_profile = manager._model_profile("query")
+    image_capabilities, _resolve = _stub_capabilities(
+        monkeypatch,
+        "unknown",
+        "supported",
+    )
+    coordinator, _health_updates = _coordinator(
+        _reprobe_config(), image_capabilities=image_capabilities
+    )
+    await coordinator.probe_answer()
+    old_profile = coordinator.model_profile("query")
     synthesizer = AnswerSynthesizer(
-        image_policy=manager._answer_image_policy(old_profile),
+        image_policy=coordinator.answer_image_policy(old_profile),
         model_profile=old_profile,
     )
-    manager._answer_synthesizers_by_profile[old_profile] = synthesizer
-
-    async def fake_discover() -> AnswerImageCapability:
-        return _capability("supported", 8)
-
-    monkeypatch.setattr(manager, "_discover_answer_image_capability", fake_discover)
 
     before = synthesizer._prepare_prompt_context("question", contexts)
-    await manager._maybe_reprobe_answer_image_capability()
-    manager._answer_model = AsyncMock()
-    refreshed = manager._get_answer_synthesizer(manager._model_profile("query"))
+    await coordinator.refresh_answer()
+    refreshed_profile = coordinator.model_profile("query")
+    refreshed = AnswerSynthesizer(
+        image_policy=coordinator.answer_image_policy(refreshed_profile),
+        model_profile=refreshed_profile,
+    )
     after = refreshed._prepare_prompt_context("question", contexts)
 
     assert before.trace["answer_context_images_sent"] == 0
@@ -252,32 +289,29 @@ async def test_reprobe_updates_cached_synthesizer_image_budget(
 
 
 @pytest.mark.parametrize(
-    ("status", "effective"),
+    "status",
     [
-        pytest.param("supported", 8, id="supported_is_terminal_no_reprobe"),
-        pytest.param("unsupported", 0, id="unsupported_is_terminal_no_reprobe"),
+        pytest.param("supported", id="supported_is_terminal_no_reprobe"),
+        pytest.param("unsupported", id="unsupported_is_terminal_no_reprobe"),
     ],
 )
 async def test_terminal_status_is_terminal_no_reprobe(
     monkeypatch: pytest.MonkeyPatch,
     status: ImageCapabilityStatus,
-    effective: int,
 ) -> None:
-    manager = RAGServiceManager(config=_reprobe_config())
-    manager._answer_image_capability = _capability(status, effective)
-    calls = 0
+    image_capabilities, resolve = _stub_capabilities(
+        monkeypatch,
+        status,
+        "unknown" if status == "supported" else "supported",
+    )
+    coordinator, _health_updates = _coordinator(
+        _reprobe_config(), image_capabilities=image_capabilities
+    )
+    await coordinator.probe_answer()
+    await coordinator.refresh_answer()
 
-    async def fake_discover() -> AnswerImageCapability:
-        nonlocal calls
-        calls += 1
-        return _capability("unknown" if status == "supported" else "supported", 0)
-
-    monkeypatch.setattr(manager, "_discover_answer_image_capability", fake_discover)
-
-    await manager._maybe_reprobe_answer_image_capability()
-
-    cap = manager.answer_image_capability
-    assert calls == 0
+    cap = coordinator.answer_image_capability
+    assert resolve.await_count == 1
     assert cap is not None and cap.status == status
 
 
@@ -287,11 +321,10 @@ async def test_reprobe_respects_cooldown_when_still_unknown(
     # The cooldown lives in the shared probe cache, so a manager re-probe only
     # reaches a model call when that model's own cooldown has elapsed.
     probed = _probed_models(monkeypatch, "unknown")
-    manager = RAGServiceManager(config=_reprobe_config())
-    manager._answer_image_capability = _capability("unknown", 0)
+    coordinator, _health_updates = _coordinator(_reprobe_config())
 
-    await manager._maybe_reprobe_answer_image_capability()
-    await manager._maybe_reprobe_answer_image_capability()
+    await coordinator.probe_answer()
+    await coordinator.refresh_answer()
 
     assert len(probed) == 1
 
@@ -544,36 +577,33 @@ def _role_config(**roles: ModelConfig) -> DlightragConfig:
 
 
 async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -> None:
-    from dlightrag.core.resources import ResourceInput
-    from dlightrag.core.resources.models import TextWindowBudget
+    from dlightrag.answer.resources import ResourceInput
+    from dlightrag.answer.resources.models import TextWindowBudget
 
     manager = RAGServiceManager(config=_role_config())
-    manager._answer_image_capability = _capability("unsupported", 0)
-    manager._vlm_image_status = "supported"
-    manager._narrow_role_image_profile("vlm", "supported")
+    manager._capabilities.narrow_role_image_profile("vlm", "supported")
 
     _registry, tools = manager._build_resource_context(
         [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
         text_window_budget=TextWindowBudget(tokens=1_000),
-        vlm_profile=manager._model_profile("vlm"),
+        vlm_profile=manager._capabilities.model_profile("vlm"),
     )
 
     assert [tool.name for tool in tools] == ["read_resource", "inspect_resource"]
 
 
 async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_images() -> None:
-    from dlightrag.core.resources import ResourceInput
-    from dlightrag.core.resources.models import TextWindowBudget
+    from dlightrag.answer.resources import ResourceInput
+    from dlightrag.answer.resources.models import TextWindowBudget
 
     manager = RAGServiceManager(config=_role_config())
-    manager._answer_image_capability = _capability("supported", 8)
-    manager._vlm_image_status = "unsupported"
+    manager._capabilities.narrow_role_image_profile("vlm", "unsupported")
 
     _registry, tools = manager._build_resource_context(
         [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
         text_window_budget=TextWindowBudget(tokens=1_000),
         vlm_profile=dataclasses.replace(
-            manager._model_profile("vlm"),
+            manager._capabilities.model_profile("vlm"),
             supports_images=False,
         ),
     )
@@ -583,8 +613,7 @@ async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_imag
 
 async def test_query_image_description_follows_vlm_capability() -> None:
     manager = RAGServiceManager(config=_role_config())
-    manager._answer_image_capability = _capability("unsupported", 0)
-    manager._vlm_image_status = "supported"
+    manager._capabilities.narrow_role_image_profile("vlm", "supported")
     manager._vlm_func = lambda **_kwargs: None
 
     describer = manager._query_image_describer()
@@ -595,9 +624,7 @@ async def test_query_image_description_follows_vlm_capability() -> None:
 
 async def test_query_image_description_is_disabled_without_vlm_image_support() -> None:
     manager = RAGServiceManager(config=_role_config())
-    manager._answer_image_capability = _capability("supported", 8)
-    manager._vlm_image_status = "unknown"
-    manager._narrow_role_image_profile("vlm", "unknown")
+    manager._capabilities.narrow_role_image_profile("vlm", "unknown")
     manager._vlm_func = lambda **_kwargs: None
 
     describer = manager._query_image_describer()
@@ -612,11 +639,13 @@ async def test_zero_configured_ceiling_disables_answer_images_without_a_model_ca
     probed = _probed_models(monkeypatch, "supported")
     config = _role_config()
     config.answer.max_images = 0
-    manager = RAGServiceManager(config=config)
+    coordinator, _health_updates = _coordinator(config)
 
-    capability = await manager._discover_answer_image_capability()
+    await coordinator.probe_answer()
+    capability = coordinator.answer_image_capability
 
     assert probed == []
+    assert capability is not None
     assert capability.status == "unsupported"
     assert capability.failure_kind == "config_disabled"
     assert capability.effective_max_images == 0
@@ -633,17 +662,16 @@ async def test_live_probe_cannot_widen_profile_declared_image_support(
             startup_probe=False,
         ),
     )
-    manager = RAGServiceManager(config=config)
-    resolve = AsyncMock(return_value=ImageProbeOutcome(status="supported"))
-    monkeypatch.setattr(manager._image_capabilities, "resolve", resolve)
+    image_capabilities, resolve = _stub_capabilities(monkeypatch, "supported")
+    coordinator, _health_updates = _coordinator(config, image_capabilities=image_capabilities)
 
-    await manager._probe_answer_image_capability()
+    await coordinator.probe_answer()
 
-    capability = manager.answer_image_capability
+    capability = coordinator.answer_image_capability
     assert capability is not None
     assert capability.status == "unsupported"
     assert capability.failure_kind == "profile_declared_unsupported"
-    assert manager._model_profile("query").supports_images is False
+    assert coordinator.model_profile("query").supports_images is False
     resolve.assert_not_awaited()
 
 
@@ -654,12 +682,12 @@ async def test_zero_configured_ceiling_settles_the_vlm_role_without_a_model_call
     probed = _probed_models(monkeypatch, "supported")
     config = _role_config()
     config.answer.max_images = 0
-    manager = RAGServiceManager(config=config)
+    coordinator, _health_updates = _coordinator(config)
 
-    await manager._probe_vlm_image_capability()
+    await coordinator.probe_vlm()
 
     assert probed == []
-    assert manager._vlm_image_status == "unsupported"
+    assert coordinator.snapshot.vlm_status == "unsupported"
 
 
 async def test_rerank_capability_is_probed_from_the_rerank_scoring_model(
@@ -667,18 +695,30 @@ async def test_rerank_capability_is_probed_from_the_rerank_scoring_model(
 ) -> None:
     from dlightrag.config import RerankConfig
 
-    probed = _probed_models(monkeypatch, "unsupported")
     config = _role_config()
     config.rerank = RerankConfig(
         enabled=True,
         strategy="chat_llm_reranker",
         provider="openai",
         model="rerank-scorer",
-        api_key="rerank-key",
+        api_key=None,
+        base_url="http://host.docker.internal:9999/v1",
     )
-    manager = RAGServiceManager(config=config)
+    provider = type("Provider", (), {"aclose": AsyncMock()})()
+    provider_factory = MagicMock(return_value=provider)
+    probe = AsyncMock(return_value=ImageProbeOutcome(status="unsupported"))
+    monkeypatch.setattr("dlightrag_ai.vision.get_provider", provider_factory)
+    monkeypatch.setattr("dlightrag_ai.vision.probe_image_capability", probe)
+    coordinator, _health_updates = _coordinator(config)
 
-    await manager._probe_rerank_image_capability()
+    await coordinator.probe_rerank()
 
-    assert probed == ["rerank-scorer"]
-    assert manager._rerank_supports_vision is False
+    provider_factory.assert_called_once_with(
+        "openai",
+        api_key=None,
+        base_url="http://host.docker.internal:9999/v1",
+        timeout=240.0,
+        max_retries=3,
+    )
+    probe.assert_awaited_once_with(provider, model="rerank-scorer", model_kwargs=None)
+    assert coordinator.rerank_supports_vision is False

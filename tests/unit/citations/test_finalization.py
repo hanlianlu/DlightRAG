@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 class TestFinalizeAnswer:
     def test_compact_attachment_reference_preserves_durable_identity(self) -> None:
-        from dlightrag.citations.finalization import finalize_answer
+        from dlightrag.answer.citations.finalization import finalize_answer
 
         attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
         result = finalize_answer(
@@ -37,7 +37,7 @@ class TestFinalizeAnswer:
         assert source.source_uri == f"web-attachment://{attachment_id}"
 
     def test_doc_level_attachment_reference_cites_all_attachment_chunks(self) -> None:
-        from dlightrag.citations.finalization import finalize_answer
+        from dlightrag.answer.citations.finalization import finalize_answer
 
         attachment_id = "98ec1e3a-1187-454b-8929-743bd5bc7d4b"
         reference_id = "att-1"
@@ -63,7 +63,7 @@ class TestFinalizeAnswer:
         assert result.cited_chunks == {reference_id: ["att-chunk-1", "att-chunk-2"]}
 
     def test_cleans_answer_and_builds_cited_sources_from_raw_contexts(self) -> None:
-        from dlightrag.citations.finalization import finalize_answer
+        from dlightrag.answer.citations.finalization import finalize_answer
 
         full_contexts = {
             "chunks": [
@@ -96,7 +96,7 @@ class TestFinalizeAnswer:
         assert result.sources[0].chunks[0].thumbnail_url == "/images/default/c1?size=thumb"
 
     def test_keeps_uncited_answer_when_contexts_are_empty(self) -> None:
-        from dlightrag.citations.finalization import finalize_answer
+        from dlightrag.answer.citations.finalization import finalize_answer
 
         result = finalize_answer("Plain answer with no retrieved chunks.", {"chunks": []})
 
@@ -109,8 +109,8 @@ class TestFinalizeAnswer:
         self,
         monkeypatch,
     ) -> None:
-        from dlightrag.citations.finalization import finalize_answer, flatten_context_chunks
-        from dlightrag.citations.indexer import CitationIndexer
+        from dlightrag.answer.citations.finalization import finalize_answer, flatten_context_chunks
+        from dlightrag.answer.citations.indexer import CitationIndexer
 
         contexts = {
             "chunks": [
@@ -152,8 +152,8 @@ class TestFinalizeAnswer:
         assert inject_calls == 1
 
     def test_reuses_one_citation_index_for_sources_and_validation(self, monkeypatch) -> None:
-        from dlightrag.citations import indexer as indexer_module
-        from dlightrag.citations.finalization import finalize_answer
+        from dlightrag.answer.citations import indexer as indexer_module
+        from dlightrag.answer.citations.finalization import finalize_answer
 
         calls = 0
         original = indexer_module.CitationIndexer.build_index

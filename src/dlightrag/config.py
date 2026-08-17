@@ -1229,15 +1229,6 @@ class DlightragConfig(BaseSettings):
             "keeps finding new evidence, and answers from what it has instead of failing."
         ),
     )
-    answer_stream_idle_timeout: float = Field(
-        default=180.0,
-        gt=0,
-        description=(
-            "Max seconds to wait for the next streamed answer token. Guards against "
-            "a stalled upstream LLM holding a streaming request (and its pooled "
-            "connection) open indefinitely."
-        ),
-    )
     # ===== Observability =====
     langfuse_public_key: str | None = Field(default=None)
     langfuse_secret_key: str | None = Field(default=None)

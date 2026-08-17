@@ -32,13 +32,14 @@ from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS
 from dlightrag_ai.settings import MODEL_ROLE_NAMES
 from playwright.sync_api import Browser, Page, sync_playwright
 
-from dlightrag.api.server import create_app
-from dlightrag.core.answer.capability import AnswerImageCapability
-from dlightrag.core.answer_runs.execution import (
+from dlightrag.answer.capabilities import AnswerCapabilities
+from dlightrag.answer.capability import AnswerImageCapability
+from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AttachmentReference,
     PinnedModelProfile,
 )
+from dlightrag.api.server import create_app
 from dlightrag.runtime import AnswerRunEvent, AnswerRunRecord
 from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary, LinkedTurn
 from dlightrag.web.conversations import WebAnswerSubmission, project_conversation_turn
@@ -435,7 +436,6 @@ def e2e_base_url(
     manager.config = SimpleNamespace(
         workspace="default",
         input_dir_path=Path("."),
-        answer_stream_idle_timeout=120.0,
         citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
         embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
         answer=SimpleNamespace(
@@ -477,7 +477,7 @@ def e2e_base_url(
         return _iterate()
 
     manager.asubscribe_answer_run.side_effect = _events
-    manager.answer_image_capability = AnswerImageCapability(
+    answer_image_capability = AnswerImageCapability(
         status="supported",
         configured_ceiling=3,
         effective_max_images=3,
@@ -485,6 +485,14 @@ def e2e_base_url(
         base_url=None,
         model="test-model",
         failure_kind=None,
+    )
+    manager.answer_capabilities = SimpleNamespace(
+        read=AsyncMock(
+            return_value=AnswerCapabilities(
+                answer=answer_image_capability,
+                vlm_status="unknown",
+            )
+        )
     )
     manager.alist_workspaces.return_value = MOCK_WORKSPACE_LIST
     manager.alist_workspace_records.return_value = MOCK_WORKSPACES

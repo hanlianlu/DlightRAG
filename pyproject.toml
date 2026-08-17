@@ -178,11 +178,10 @@ id = "no-transport-internals"
 name = "Internal packages must not import from transport layers"
 type = "forbidden"
 source_modules = [
+    "dlightrag.answer",
     "dlightrag.config",
     "dlightrag.model_settings",
     "dlightrag.utils",
-    "dlightrag.prompts",
-    "dlightrag.citations",
     "dlightrag.health",
     "dlightrag.observability",
     "dlightrag.maintenance",
@@ -191,6 +190,29 @@ forbidden_modules = [
     "dlightrag.web",
     "dlightrag.api",
     "dlightrag.mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "answer-independence"
+name = "Answer owns product policy without access, service, adapter, or transport dependencies"
+type = "forbidden"
+source_modules = ["dlightrag.answer"]
+forbidden_modules = [
+    "dlightrag.access",
+    "dlightrag.adapters.postgres",
+    "dlightrag.api",
+    "dlightrag.core.client_attachments",
+    "dlightrag.core.client_contracts",
+    "dlightrag.core.client_execution",
+    "dlightrag.core.client_payloads",
+    "dlightrag.core.client_requests",
+    "dlightrag.core.servicemanager",
+    "dlightrag.mcp",
+    "dlightrag.services",
+    "dlightrag.web",
+    "asyncpg",
+    "fastapi",
+    "mcp",
 ]
 
 [[tool.importlinter.contracts]]
@@ -243,19 +265,12 @@ id = "core-domain-no-web"
 name = "Core domain modules do not directly assemble Web"
 type = "forbidden"
 source_modules = [
-    "dlightrag.core.agent",
-    "dlightrag.core.answer",
-    "dlightrag.core.answer_runs",
     "dlightrag.core.client_attachments",
     "dlightrag.core.client_contracts",
     "dlightrag.core.client_execution",
     "dlightrag.core.client_payloads",
     "dlightrag.core.client_requests",
     "dlightrag.core.memory",
-    "dlightrag.core.request",
-    "dlightrag.core.resources",
-    "dlightrag.core.retrieval",
-    "dlightrag.core.tools",
 ]
 forbidden_modules = ["dlightrag.web"]
 allow_indirect_imports = true
@@ -307,7 +322,7 @@ name = "Status routes consume application health, not implementations"
 type = "forbidden"
 source_modules = ["dlightrag.api.routes.status"]
 forbidden_modules = [
-    "dlightrag.core.answer",
+    "dlightrag.answer",
     "dlightrag.core.servicemanager",
     "dlightrag.adapters.postgres",
 ]
@@ -319,14 +334,13 @@ type = "forbidden"
 source_modules = [
     "dlightrag.config",
     "dlightrag.utils",
-    "dlightrag.prompts",
 ]
 forbidden_modules = [
     "dlightrag.model_settings",
     "dlightrag.core",
     "dlightrag.adapters.postgres",
     "dlightrag.observability",
-    "dlightrag.citations",
+    "dlightrag.answer",
 ]
 
 [[tool.importlinter.contracts]]
@@ -349,23 +363,23 @@ layers = [
     "dlightrag.model_settings",
     "dlightrag.config",
     "dlightrag.observability",
-    "dlightrag.prompts | dlightrag.utils",
+    "dlightrag.utils",
 ]
 
 [[tool.importlinter.contracts]]
 id = "resources-below-tools"
 name = "The resource domain must not import the tool package"
 type = "forbidden"
-source_modules = ["dlightrag.core.resources"]
-forbidden_modules = ["dlightrag.core.tools"]
+source_modules = ["dlightrag.answer.resources"]
+forbidden_modules = ["dlightrag.answer.tools"]
 
 [[tool.importlinter.contracts]]
 id = "tools-below-agent"
 name = "Tools are composed per run, never by importing the orchestrator"
 type = "forbidden"
-source_modules = ["dlightrag.core.tools"]
+source_modules = ["dlightrag.answer.tools"]
 forbidden_modules = [
-    "dlightrag.core.agent",
-    "dlightrag.core.answer_runs",
+    "dlightrag.answer.agent",
+    "dlightrag.answer.runs",
     "dlightrag.maintenance",
 ]

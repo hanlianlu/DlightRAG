@@ -26,7 +26,7 @@ from dlightrag.web.conversation_models import (
 )
 from dlightrag.web.conversations import WebConversationService, project_conversation_turn
 from dlightrag.web.routes import chat as chat_routes
-from tests.unit.conftest import prepare_test_answer_run_input
+from tests.unit.conftest import answer_capability_view, prepare_test_answer_run_input
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
     SUBMISSION_ID,
@@ -58,7 +58,7 @@ def service() -> AsyncMock:
 @pytest.fixture
 def manager() -> AsyncMock:
     created = AsyncMock()
-    created.answer_image_capability = None
+    created.answer_capabilities = answer_capability_view()
     created.alist_workspace_records.return_value = [{"workspace": "default"}]
     return created
 

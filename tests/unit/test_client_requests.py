@@ -5,8 +5,8 @@ import pytest
 from dlightrag_rag.contracts import IngestDocument
 from pydantic import ValidationError
 
+from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
-from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,

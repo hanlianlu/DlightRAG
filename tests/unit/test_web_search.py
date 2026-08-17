@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 
-from dlightrag.core.retrieval.web_search import (
+from dlightrag.answer.tools.web import (
     ExaSearch,
     WebSearchHit,
     WebSearchUnavailable,
@@ -144,7 +144,7 @@ async def test_an_empty_balance_stops_the_next_search_before_it_leaves_the_proce
 @pytest.mark.asyncio
 async def test_a_parked_search_tries_again_once_the_wait_is_over(monkeypatch) -> None:
     now = 0.0
-    monkeypatch.setattr("dlightrag.core.retrieval.web_search.time.monotonic", lambda: now)
+    monkeypatch.setattr("dlightrag.answer.tools.web.time.monotonic", lambda: now)
     replies = [httpx.Response(402, json={}), httpx.Response(200, json={"results": [_PAGE]})]
     search = ExaSearch("k", client=_client(lambda _request: replies.pop(0)))
 
@@ -275,7 +275,7 @@ def test_an_empty_passage_never_becomes_a_source() -> None:
 
 
 def test_a_web_passage_survives_the_citation_builder_as_a_real_source() -> None:
-    from dlightrag.citations.source_builder import build_sources_from_chunks
+    from dlightrag.answer.citations.source_builder import build_sources_from_chunks
 
     rows = web_context_rows(
         [_hit("https://a/x", "one", title="A page"), _hit("https://a/x", "two", title="A page")]

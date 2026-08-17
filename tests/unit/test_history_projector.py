@@ -4,7 +4,7 @@
 import pytest
 from dlightrag_ai.capacity import ModelProfile
 
-from dlightrag.core.answer.history import (
+from dlightrag.answer.history import (
     HistoryProjectionOverflowError,
     HistoryProjectionTarget,
     project_history,

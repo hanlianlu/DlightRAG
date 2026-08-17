@@ -38,10 +38,10 @@ from dlightrag.access import (
     owner_id_from_principal,
     request_scope_context,
 )
+from dlightrag.answer.capability import answer_image_capability_summary
+from dlightrag.answer.errors import AnswerInputError, InvalidToolConfigurationError
+from dlightrag.answer.runs.results import project_answer_result
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.core.answer.capability import answer_image_capability_summary
-from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
-from dlightrag.core.answer_runs.results import project_answer_result
 from dlightrag.core.client_attachments import answer_link_resources
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_MESSAGES,
@@ -552,8 +552,9 @@ async def list_workspaces_tool() -> dict[str, Any]:
 )
 async def get_capabilities_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
+    capabilities = await manager.answer_capabilities.read()
     return {
-        "answer_image_capability": answer_image_capability_summary(manager.answer_image_capability),
+        "answer_image_capability": answer_image_capability_summary(capabilities.answer),
     }
 
 

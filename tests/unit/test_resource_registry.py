@@ -9,13 +9,13 @@ import socket
 
 import pytest
 
-from dlightrag.core.resources.models import (
+from dlightrag.answer.resources.models import (
     ResourceAdmissionError,
     ResourceCursorError,
     ResourceInput,
     ResourceNotFoundError,
 )
-from dlightrag.core.resources.registry import ResourceRegistry as _ResourceRegistry
+from dlightrag.answer.resources.registry import ResourceRegistry as _ResourceRegistry
 
 
 class ResourceRegistry(_ResourceRegistry):
@@ -282,7 +282,7 @@ async def test_read_uses_checkpointed_bytes_without_live_dns_validation(
         raise AssertionError("checkpointed bytes must not re-enter the network gate")
 
     monkeypatch.setattr(
-        "dlightrag.core.resources.registry.avalidate_public_https_url",
+        "dlightrag.answer.resources.registry.avalidate_public_https_url",
         reject_validation,
     )
     registry = ResourceRegistry()
@@ -357,7 +357,7 @@ async def test_cursor_pages_do_not_rebuild_whole_resource_windows(
 ) -> None:
     import threading
 
-    from dlightrag.core.resources import registry as registry_module
+    from dlightrag.answer.resources import registry as registry_module
 
     input_lengths: list[int] = []
     span_threads: list[int] = []
@@ -711,7 +711,7 @@ async def test_invalid_private_url_never_calls_fallback(
 async def test_fallback_empty_preserves_direct_error_and_caches_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.resources.models import ResourceDecodeError
+    from dlightrag.answer.resources.models import ResourceDecodeError
 
     monkeypatch.setattr("dlightrag_rag.sourcing.url.socket.getaddrinfo", _public_getaddrinfo)
     fallback = _CountingFallback(None)
@@ -903,7 +903,7 @@ async def test_text_decode_windowing_and_focus_ranking_run_off_the_event_loop(
 ) -> None:
     import threading
 
-    from dlightrag.core.resources import registry as registry_module
+    from dlightrag.answer.resources import registry as registry_module
 
     loop_thread = threading.get_ident()
     worker_threads: list[int] = []

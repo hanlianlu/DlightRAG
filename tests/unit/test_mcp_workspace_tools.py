@@ -18,6 +18,7 @@ from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, Dligh
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.mcp import server as mcp_server
 from dlightrag.runtime import AnswerRunRecord
+from tests.unit.conftest import answer_capability_view
 
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
@@ -138,16 +139,18 @@ def _stored_result() -> dict[str, Any]:
 async def test_get_capabilities_reports_answer_image_capability(
     mock_mcp_manager: AsyncMock,
 ) -> None:
-    from dlightrag.core.answer.capability import AnswerImageCapability
+    from dlightrag.answer.capability import AnswerImageCapability
 
-    mock_mcp_manager.answer_image_capability = AnswerImageCapability(
-        status="supported",
-        configured_ceiling=8,
-        effective_max_images=6,
-        provider="test",
-        base_url=None,
-        model="test-model",
-        failure_kind=None,
+    mock_mcp_manager.answer_capabilities = answer_capability_view(
+        AnswerImageCapability(
+            status="supported",
+            configured_ceiling=8,
+            effective_max_images=6,
+            provider="test",
+            base_url=None,
+            model="test-model",
+            failure_kind=None,
+        )
     )
 
     result = await mcp_server.mcp_app.call_tool("get_capabilities", {})
@@ -766,7 +769,7 @@ async def test_mcp_cancel_reports_the_pending_request(mock_mcp_manager: AsyncMoc
 async def test_mcp_answer_preserves_answer_input_error_kind(
     mock_mcp_manager: AsyncMock,
 ) -> None:
-    from dlightrag.core.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
+    from dlightrag.answer.errors import ANSWER_INPUT_OVERFLOW, AnswerInputOverflowError
 
     mock_mcp_manager.acreate_answer_run.side_effect = AnswerInputOverflowError(
         "The answer input is too large."
@@ -783,7 +786,7 @@ async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
     mock_mcp_manager: AsyncMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from dlightrag.core.answer.errors import (
+    from dlightrag.answer.errors import (
         INVALID_TOOL_CONFIGURATION,
         InvalidToolConfigurationError,
     )

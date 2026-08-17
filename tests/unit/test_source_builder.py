@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from dlightrag.citations.schemas import SourceReference
-from dlightrag.citations.source_builder import (
+from dlightrag.answer.citations.schemas import SourceReference
+from dlightrag.answer.citations.source_builder import (
     SourceBuildInvariantError,
     build_sources,
     build_sources_from_chunks,

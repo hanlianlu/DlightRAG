@@ -73,7 +73,7 @@ assert artifact_digest(b"bytes")
 for forbidden in (
     "asyncpg",
     "dlightrag.storage",
-    "dlightrag.core.answer",
+    "dlightrag.answer",
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",

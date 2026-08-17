@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from dlightrag.core.answer.capability import (
+from dlightrag.answer.capability import (
     AnswerImageCapability,
     check_answer_image_capability,
 )

@@ -12,9 +12,9 @@ from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_rag.retrieval import RetrievalContexts
 
-from dlightrag.citations.streaming import AnswerStream
-from dlightrag.core.answer.errors import AnswerInputOverflowError
-from dlightrag.core.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
+from dlightrag.answer.citations.streaming import AnswerStream
+from dlightrag.answer.errors import AnswerInputOverflowError
+from dlightrag.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from dlightrag.core.memory.conversation import PriorTurns
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
@@ -142,7 +142,7 @@ class TestAnswerSynthesizerPolicy:
 
     @pytest.mark.asyncio
     async def test_evidence_is_prepared_off_the_event_loop(self, monkeypatch) -> None:
-        import dlightrag.core.answer.synthesizer as answer_module
+        import dlightrag.answer.synthesizer as answer_module
 
         calls = []
 
@@ -264,7 +264,7 @@ class TestAnswerSynthesizerStream:
 
         _ctx, token_iter = await synth.generate_stream("test", _text_contexts())
 
-        from dlightrag.citations.streaming import AnswerStream
+        from dlightrag.answer.citations.streaming import AnswerStream
 
         assert isinstance(token_iter, AnswerStream)
 
@@ -392,7 +392,7 @@ class TestAnswerSynthesizerStream:
 
         _, token_iter = await synth.generate_stream("query", _text_contexts())
 
-        from dlightrag.citations.streaming import AnswerStream
+        from dlightrag.answer.citations.streaming import AnswerStream
 
         messages = model_func.call_args.kwargs["messages"]
         assert messages[0]["role"] == "system"
@@ -453,7 +453,7 @@ class TestAnswerSynthesizerCapacity:
         assert contexts["chunks"][0]["content"] == original_content
 
     def test_pinned_history_is_not_locally_trimmed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import dlightrag.core.answer.synthesizer as answer_module
+        import dlightrag.answer.synthesizer as answer_module
 
         monkeypatch.setattr(answer_module, "answer_core", lambda: "SYS")
 
@@ -541,7 +541,7 @@ class TestAnswerSynthesizerHelpers:
         )
 
     def test_format_kg_context_includes_doc_level_tags(self) -> None:
-        from dlightrag.citations.indexer import CitationIndexer
+        from dlightrag.answer.citations.indexer import CitationIndexer
 
         contexts: RetrievalContexts = {
             "chunks": [
@@ -592,7 +592,7 @@ class TestAnswerSynthesizerHelpers:
 
 class TestBuildExcerptBlocks:
     def test_groups_chunks_by_document(self) -> None:
-        from dlightrag.citations.indexer import CitationIndexer
+        from dlightrag.answer.citations.indexer import CitationIndexer
 
         contexts = _multi_doc_contexts()
         indexer = CitationIndexer()

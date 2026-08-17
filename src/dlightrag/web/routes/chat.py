@@ -46,7 +46,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     """Main page."""
 
     manager = get_manager(request)
-    await manager._maybe_reprobe_answer_image_capability()
+    capabilities = await manager.answer_capabilities.read()
     workspaces: list[WorkspaceRecord]
     try:
         workspaces = await manager.alist_workspace_records()
@@ -76,7 +76,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     if primary not in known:
         primary = "default" if "default" in known else (authorized[0] if authorized else "")
 
-    capability = manager.answer_image_capability
+    capability = capabilities.answer
     if capability is None:
         capability_status = "unknown"
         effective_current_upload_limit = 0
@@ -121,15 +121,14 @@ async def start_answer_run(
     manager = get_manager(request)
     cfg = manager.config
     # Enforce the probed answer capability at admission (pre-acceptance 4xx).
-    if "multipart/form-data" in request.headers.get("content-type", "").lower():
-        await manager._maybe_reprobe_answer_image_capability()
+    capability = (await manager.answer_capabilities.read()).answer
     body = await parse_web_answer_request(
         request,
         max_attachments=cfg.answer.max_attachments,
         max_attachment_bytes=cfg.answer.max_attachment_bytes,
         max_total_attachment_bytes=cfg.answer.max_total_attachment_bytes,
         image_max_pixels=cfg.answer.image_max_pixels,
-        answer_image_capability=manager.answer_image_capability,
+        answer_image_capability=capability,
     )
     query = body.query.strip()
     if not query:

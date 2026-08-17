@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 
-from dlightrag.core.answer.capability import AnswerImageCapability
+from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.web.attachment_requests import parse_web_answer_request
 
 _IMAGE_MAX_BYTES = 15 * 1024 * 1024

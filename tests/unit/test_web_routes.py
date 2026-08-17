@@ -14,10 +14,11 @@ import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.answer.capability import AnswerImageCapability
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
-from dlightrag.core.answer.capability import AnswerImageCapability
 from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
+from tests.unit.conftest import answer_capability_view
 
 if TYPE_CHECKING:
     from dlightrag.core.servicemanager import RAGServiceManager
@@ -39,14 +40,16 @@ SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
 def mock_manager():
     """Create a mock RAGServiceManager for web route tests."""
     manager = AsyncMock()
-    manager.answer_image_capability = AnswerImageCapability(
-        status="supported",
-        configured_ceiling=8,
-        effective_max_images=8,
-        provider="test",
-        base_url=None,
-        model="test-model",
-        failure_kind=None,
+    manager.answer_capabilities = answer_capability_view(
+        AnswerImageCapability(
+            status="supported",
+            configured_ceiling=8,
+            effective_max_images=8,
+            provider="test",
+            base_url=None,
+            model="test-model",
+            failure_kind=None,
+        )
     )
     manager.alist_workspaces = AsyncMock(return_value=["default", "test_ws"])
     manager.alist_workspace_records = AsyncMock(
@@ -441,14 +444,16 @@ class TestWebIndex:
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
         web_app.state.manager.config = test_config
-        web_app.state.manager.answer_image_capability = AnswerImageCapability(
-            status="supported",
-            configured_ceiling=8,
-            effective_max_images=2,
-            provider="test",
-            base_url=None,
-            model="test-model",
-            failure_kind=None,
+        web_app.state.manager.answer_capabilities = answer_capability_view(
+            AnswerImageCapability(
+                status="supported",
+                configured_ceiling=8,
+                effective_max_images=2,
+                provider="test",
+                base_url=None,
+                model="test-model",
+                failure_kind=None,
+            )
         )
 
         resp = await client.get("/web/")
@@ -461,18 +466,8 @@ class TestWebIndex:
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
         web_app.state.manager.config = test_config
-        web_app.state.manager.answer_image_capability = AnswerImageCapability(
-            status="unknown",
-            configured_ceiling=8,
-            effective_max_images=0,
-            provider="test",
-            base_url=None,
-            model="test-model",
-            failure_kind="timeout",
-        )
-
-        async def recover_capability() -> None:
-            web_app.state.manager.answer_image_capability = AnswerImageCapability(
+        web_app.state.manager.answer_capabilities = answer_capability_view(
+            AnswerImageCapability(
                 status="supported",
                 configured_ceiling=8,
                 effective_max_images=2,
@@ -481,9 +476,6 @@ class TestWebIndex:
                 model="test-model",
                 failure_kind=None,
             )
-
-        web_app.state.manager._maybe_reprobe_answer_image_capability = AsyncMock(
-            side_effect=recover_capability
         )
 
         resp = await client.get("/web/")
@@ -491,7 +483,7 @@ class TestWebIndex:
         assert resp.status_code == 200
         assert 'data-attachment-image-capability="supported"' in resp.text
         assert 'data-attachment-image-limit="2"' in resp.text
-        web_app.state.manager._maybe_reprobe_answer_image_capability.assert_awaited_once()
+        web_app.state.manager.answer_capabilities.read.assert_awaited_once()
 
     async def test_chat_template_projects_document_attachment_limits(
         self, client: AsyncClient

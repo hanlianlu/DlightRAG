@@ -7,12 +7,12 @@ import pytest
 from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag_ai.tokens import estimate_messages_tokens
 
-from dlightrag.core.agent.context import ContextAssembler
-from dlightrag.core.answer.errors import AnswerInputOverflowError
+from dlightrag.answer.agent.context import ContextAssembler
+from dlightrag.answer.errors import AnswerInputOverflowError
+from dlightrag.answer.evidence import EvidenceLedger
+from dlightrag.answer.prompts import CONTROL_TURN_INSTRUCTION
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode
-from dlightrag.core.memory.evidence import EvidenceLedger
-from dlightrag.prompts import CONTROL_TURN_INSTRUCTION
 
 _WINDOW = 80_000
 _RETAINED_TAIL = 13_600
@@ -204,7 +204,7 @@ async def test_research_turn_packing_runs_off_the_event_loop(
 ) -> None:
     import threading
 
-    from dlightrag.core.agent import context as context_module
+    from dlightrag.answer.agent import context as context_module
 
     loop_thread = threading.get_ident()
     estimator_threads: list[int] = []

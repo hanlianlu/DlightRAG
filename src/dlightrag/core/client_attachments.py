@@ -14,8 +14,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.core.client_contracts import AnswerAttachmentLink
-from dlightrag.core.resources.models import ResourceInput
 
 _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 

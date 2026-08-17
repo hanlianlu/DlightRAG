@@ -7,8 +7,7 @@ from typing import Any, Literal, Self
 from pydantic import ConfigDict, Field, model_validator
 
 from dlightrag.access import validate_query_workspace_selection
-from dlightrag.citations.schemas import SourceReferencePayload
-from dlightrag.contracts import ServiceRole
+from dlightrag.answer.citations.schemas import SourceReferencePayload
 from dlightrag.core.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,
@@ -236,38 +235,6 @@ class MetadataUpdateResponse(ClientContractModel):
 class ResetResponse(ClientContractModel):
     workspaces: dict[str, Any]
     total_errors: int
-
-
-class HealthStorageResponse(ClientContractModel):
-    vector: str
-    graph: str
-    kv: str
-
-
-class AnswerImageCapabilityResponse(ClientContractModel):
-    """Query-role answer-model image capability, discovered at startup."""
-
-    status: str  # "supported" | "unsupported" | "unknown"
-    effective_max_images: int
-    configured_ceiling: int
-    model: str | None = None
-
-
-class HealthResponse(ClientContractModel):
-    status: Literal["healthy", "degraded"]
-    rag_initialized: bool
-    service_role: ServiceRole
-    crafted_by: str
-    maintained_by: str
-    storage: HealthStorageResponse
-    warnings: list[str] | None = None
-    answer_image_capability: AnswerImageCapabilityResponse | None = None
-
-
-class ReadinessResponse(ClientContractModel):
-    status: Literal["ready", "not_ready"]
-    service_role: ServiceRole
-    detail: str | None = None
 
 
 class ErrorDetail(ClientContractModel):

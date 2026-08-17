@@ -13,16 +13,16 @@ from dlightrag_ai.tokens import estimate_tokens
 from PIL import Image
 from pydantic import ValidationError
 
-from dlightrag.core.resources.models import (
+from dlightrag.answer.resources.models import (
     EXTRACTION_TEXT,
     ResourceInput,
     ResourceReadResult,
     ResourceRegistryError,
     TextWindowBudget,
 )
-from dlightrag.core.resources.registry import ResourceRegistry
-from dlightrag.core.resources.visual import ResourceInspectionError, ResourceInspector
-from dlightrag.core.tools.resources import build_resource_tools as _build_resource_tools
+from dlightrag.answer.resources.registry import ResourceRegistry
+from dlightrag.answer.resources.visual import ResourceInspectionError, ResourceInspector
+from dlightrag.answer.tools.resources import build_resource_tools as _build_resource_tools
 from tests.unit.conftest import answer_image_policy
 
 

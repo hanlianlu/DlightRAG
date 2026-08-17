@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from dlightrag.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.api.middleware import (
     RequestBodyLimitMiddleware,
     RequestIdMiddleware,
@@ -26,7 +27,6 @@ from dlightrag.api.middleware import (
 from dlightrag.api.models import ANSWER_REQUEST_PART_MAX_BYTES, ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
-from dlightrag.core.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.core.client_contracts import MAX_QUERY_IMAGES
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.runtime import RunSchemaError

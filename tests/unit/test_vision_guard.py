@@ -4,11 +4,11 @@
 import pytest
 from dlightrag_ai.vision import ImageCapabilityStatus
 
-from dlightrag.core.answer.capability import (
+from dlightrag.answer.capability import (
     AnswerImageCapability,
     check_answer_image_capability,
 )
-from dlightrag.core.answer.errors import (
+from dlightrag.answer.errors import (
     ANSWER_IMAGE_CAPABILITY_UNKNOWN,
     CURRENT_IMAGES_UNSUPPORTED,
     AnswerImageError,

@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from tests.unit.conftest import answer_capability_view
+
 
 @pytest.fixture()
 def app(test_config):
@@ -40,8 +42,7 @@ def app(test_config):
     )
     real_app.state.manager = mock_manager
 
-    mock_manager.answer_image_capability = None
-    mock_manager._maybe_reprobe_answer_image_capability = AsyncMock()
+    mock_manager.answer_capabilities = answer_capability_view()
 
     return real_app
 

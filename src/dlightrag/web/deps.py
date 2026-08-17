@@ -19,8 +19,8 @@ from dlightrag.access import (
     WorkspaceRecord,
     access_control_from_settings,
 )
+from dlightrag.answer.citations.parser import CITATION_PATTERN
 from dlightrag.app_state import request_config
-from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.model_settings import access_settings
 from dlightrag.web.markdown import (
     inject_highlights,
@@ -157,7 +157,7 @@ def _citation_badges(text: str) -> Markup:
     Source data is rendered separately in the hidden source panel; the answer
     body should only contain validated inline citation markers.
     """
-    from dlightrag.citations.parser import DOC_CITATION_PATTERN
+    from dlightrag.answer.citations.parser import DOC_CITATION_PATTERN
 
     # Render Markdown to HTML (replaces Markup.escape)
     html = render_markdown(str(text))

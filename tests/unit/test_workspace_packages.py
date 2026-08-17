@@ -254,12 +254,26 @@ def test_workspace_wheel_verifier_fails_closed_without_external_rule(tmp_path: P
 def test_workspace_wheel_verifier_scopes_root_import_contracts(tmp_path: Path) -> None:
     _write_workspace_artifacts(
         tmp_path,
-        root_source="from dlightrag.core.answer.errors import AnswerImageError\n",
+        root_source="from dlightrag.answer.errors import AnswerImageError\n",
     )
 
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_workspace_wheel_verifier_rejects_answer_import_of_manager(tmp_path: Path) -> None:
+    _write_workspace_artifacts(
+        tmp_path,
+        root_additional_sources={
+            "answer/example.py": "from dlightrag.core.servicemanager import RAGServiceManager\n"
+        },
+    )
+
+    completed = _verify_wheels(tmp_path)
+
+    assert completed.returncode == 1
+    assert "forbidden import dlightrag.core.servicemanager" in completed.stderr
 
 
 @pytest.mark.parametrize(

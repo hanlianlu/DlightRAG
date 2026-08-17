@@ -13,17 +13,17 @@ from typing import Any
 import pytest
 from dlightrag_agent.tools import ToolResult
 
-from dlightrag.core.answer_runs.checkpoints import (
+from dlightrag.answer.evidence import EvidenceLedger
+from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.answer.resources.registry import ResourceRegistry, ResourceStateMismatchError
+from dlightrag.answer.runs.checkpoints import (
     decode_checkpoint_state,
     encode_checkpoint_state,
     restore_agent_state,
 )
-from dlightrag.core.answer_runs.models import AgentRunState
+from dlightrag.answer.runs.models import AgentRunState
+from dlightrag.answer.tools import ExactCallCache
 from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
-from dlightrag.core.memory.evidence import EvidenceLedger
-from dlightrag.core.resources.models import ResourceInput
-from dlightrag.core.resources.registry import ResourceRegistry, ResourceStateMismatchError
-from dlightrag.core.tools import ExactCallCache
 from dlightrag.runtime import (
     CHECKPOINT_SCHEMA_VERSION,
     MAX_CHECKPOINT_BYTES,
@@ -513,7 +513,7 @@ class TestFetchedResourceRestore:
     async def test_restored_fetched_bytes_are_read_without_touching_the_network(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from dlightrag.core.resources import registry as registry_module
+        from dlightrag.answer.resources import registry as registry_module
 
         state = _empty_state()
         registry = _registry(state)

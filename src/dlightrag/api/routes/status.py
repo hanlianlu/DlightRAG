@@ -7,15 +7,47 @@ PostgreSQL, so an unauthenticated poll loop cannot turn it into database load.
 the database/corpus probe; this transport imports no storage implementation.
 """
 
+from typing import Literal
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from dlightrag.api.models import HealthResponse, ReadinessResponse
 from dlightrag.app_state import request_config
 from dlightrag.contracts import ServiceRole
+from dlightrag.core.client_contracts import ClientContractModel
 from dlightrag.health import ApplicationHealth
 
 router = APIRouter()
+
+
+class HealthStorageResponse(ClientContractModel):
+    vector: str
+    graph: str
+    kv: str
+
+
+class AnswerImageCapabilityResponse(ClientContractModel):
+    status: str
+    effective_max_images: int
+    configured_ceiling: int
+    model: str | None = None
+
+
+class HealthResponse(ClientContractModel):
+    status: Literal["healthy", "degraded"]
+    rag_initialized: bool
+    service_role: ServiceRole
+    crafted_by: str
+    maintained_by: str
+    storage: HealthStorageResponse
+    warnings: list[str] | None = None
+    answer_image_capability: AnswerImageCapabilityResponse | None = None
+
+
+class ReadinessResponse(ClientContractModel):
+    status: Literal["ready", "not_ready"]
+    service_role: ServiceRole
+    detail: str | None = None
 
 
 def _application_health(request: Request) -> ApplicationHealth:

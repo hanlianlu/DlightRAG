@@ -25,6 +25,11 @@ from dlightrag.access import (
     AccessSettings,
     AuthenticationSettings,
 )
+from dlightrag.answer.capabilities import (
+    AnswerCapabilitySettings,
+    AnswerImagePolicySettings,
+)
+from dlightrag.answer.highlights import SemanticHighlightSettings
 from dlightrag.config import (
     DlightragConfig,
     ModelCapacityOverrideConfig,
@@ -71,6 +76,39 @@ def authentication_settings(
         jwt_issuer=config.jwt_issuer,
         jwt_audience=resolved_audience,
         jwt_algorithm=config.jwt_algorithm,
+    )
+
+
+def answer_capability_settings(config: DlightragConfig) -> AnswerCapabilitySettings:
+    """Snapshot root Answer capability and image policy configuration."""
+    answer = config.answer
+    return AnswerCapabilitySettings(
+        images=AnswerImagePolicySettings(
+            max_images=int(answer.max_images),
+            max_total_bytes=answer.image_max_total_bytes,
+            max_bytes_per_image=answer.image_max_bytes,
+            max_pixels=answer.image_max_pixels,
+            max_px=answer.image_max_px,
+            min_px=answer.image_min_px,
+            quality=answer.image_quality,
+            min_quality=answer.image_min_quality,
+        ),
+        web_search_enabled=bool(config.web_search.api_key),
+        rerank_enabled=config.rerank.enabled,
+        rerank_strategy=config.rerank.strategy,
+    )
+
+
+def semantic_highlight_settings(config: DlightragConfig) -> SemanticHighlightSettings:
+    """Snapshot root semantic highlight configuration into Answer settings."""
+    highlights = config.citations.highlights
+    return SemanticHighlightSettings(
+        enabled=highlights.enabled,
+        timeout=highlights.timeout,
+        max_concurrency=highlights.max_concurrency,
+        batch_size=highlights.batch_size,
+        max_input_chars=highlights.max_input_chars,
+        cache_size=highlights.cache_size,
     )
 
 

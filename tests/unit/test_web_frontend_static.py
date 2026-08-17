@@ -200,7 +200,7 @@ def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> No
 
 
 def test_source_panel_requires_download_for_every_authorized_source() -> None:
-    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.answer.citations.schemas import SourceReferencePayload
     from dlightrag.web.deps import templates
 
     source = SourceReferencePayload(
@@ -222,7 +222,7 @@ def test_source_panel_requires_download_for_every_authorized_source() -> None:
 
 
 def test_source_panel_hides_download_without_caller_permission() -> None:
-    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.answer.citations.schemas import SourceReferencePayload
     from dlightrag.web.deps import templates
 
     source = SourceReferencePayload(
@@ -248,7 +248,7 @@ def test_source_panel_hides_download_without_caller_permission() -> None:
 def test_source_panel_links_public_web_provenance_without_download_permission(
     source_uri: str,
 ) -> None:
-    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.answer.citations.schemas import SourceReferencePayload
     from dlightrag.web.safe_html import safe_answer_done
 
     source = SourceReferencePayload(
@@ -269,7 +269,7 @@ def test_source_panel_links_public_web_provenance_without_download_permission(
 
 
 def test_source_panel_does_not_link_non_public_provenance() -> None:
-    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.answer.citations.schemas import SourceReferencePayload
     from dlightrag.web.safe_html import safe_answer_done
 
     sources = [
@@ -285,7 +285,7 @@ def test_source_panel_does_not_link_non_public_provenance() -> None:
 
 
 def test_source_templates_use_the_public_source_contract() -> None:
-    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.answer.citations.schemas import SourceReferencePayload
     from dlightrag.web.safe_html import safe_answer_done
 
     partials = ROOT / "src/dlightrag/web/templates/partials"
@@ -302,7 +302,7 @@ def test_source_templates_use_the_public_source_contract() -> None:
 
 
 def test_sanitized_source_download_preserves_accessible_name() -> None:
-    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.answer.citations.schemas import SourceReferencePayload
     from dlightrag.web.safe_html import safe_answer_done
 
     source = SourceReferencePayload(
@@ -320,7 +320,7 @@ def test_sanitized_source_download_preserves_accessible_name() -> None:
 
 
 def test_source_titles_fall_back_without_legacy_paths() -> None:
-    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.answer.citations.schemas import SourceReferencePayload
     from dlightrag.web.deps import templates
 
     source = SourceReferencePayload(

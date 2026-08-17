@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
-from tests.unit.conftest import prepare_test_answer_run_input
+from tests.unit.conftest import answer_capability_view, prepare_test_answer_run_input
 from tests.unit.web.answer_run_fixtures import web_answer_submission
 
 _CID = "00000000-0000-0000-0000-000000000001"
@@ -57,6 +57,7 @@ async def conversation_client(conversation_service: AsyncMock):
     application = create_app(include_web_app=True)
     application.state.web_conversation_service = conversation_service
     application.state.manager = AsyncMock()
+    application.state.manager.answer_capabilities = answer_capability_view()
     application.state.manager.alist_workspace_records.return_value = [{"workspace": "default"}]
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -72,7 +73,8 @@ async def cookie_conversation_client(
     test_config.api_auth_token = "secret-token"
     application = create_app(include_web_app=True)
     application.state.web_conversation_service = conversation_service
-    application.state.manager = AsyncMock(config=test_config, answer_image_capability=None)
+    application.state.manager = AsyncMock(config=test_config)
+    application.state.manager.answer_capabilities = answer_capability_view()
     transport = ASGITransport(app=application)
     async with AsyncClient(
         transport=transport,

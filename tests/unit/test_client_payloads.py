@@ -6,7 +6,7 @@ import logging
 import pytest
 from dlightrag_rag.retrieval import RetrievalResult
 
-from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReference
 
 
 def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceReference:
@@ -24,8 +24,7 @@ def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceRefer
 def test_project_source_payloads_resolves_and_hides_raw_locator(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from dlightrag.core.client_payloads import project_source_payloads
-    from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
+    from dlightrag.answer.sources import SourceDownloadLinkBuilder, project_source_payloads
 
     source = SourceReference(
         id="1",
@@ -35,7 +34,7 @@ def test_project_source_payloads_resolves_and_hides_raw_locator(
         download_locator="s3://bucket/report.pdf",
     )
 
-    with caplog.at_level(logging.INFO, logger="dlightrag.core.client_payloads"):
+    with caplog.at_level(logging.INFO, logger="dlightrag.answer.sources"):
         projected = project_source_payloads([source], resolver=SourceDownloadLinkBuilder())[0]
 
     assert projected.download_url == "/files/raw/doc-report?workspace=finance"
@@ -56,11 +55,11 @@ def test_project_source_payloads_resolves_and_hides_raw_locator(
 def test_project_source_payloads_rejects_invalid_locator_without_logging_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from dlightrag.core.client_payloads import (
+    from dlightrag.answer.sources import (
         SourceDownloadInvariantError,
+        SourceDownloadLinkBuilder,
         project_source_payloads,
     )
-    from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
     source = SourceReference(
         id="unsafe\nsource",
@@ -71,7 +70,7 @@ def test_project_source_payloads_rejects_invalid_locator_without_logging_it(
     )
 
     with (
-        caplog.at_level(logging.INFO, logger="dlightrag.core.client_payloads"),
+        caplog.at_level(logging.INFO, logger="dlightrag.answer.sources"),
         pytest.raises(SourceDownloadInvariantError, match=r"unsafe\\nsource"),
     ):
         project_source_payloads([source], resolver=SourceDownloadLinkBuilder())
@@ -87,8 +86,7 @@ def test_project_source_payloads_rejects_invalid_locator_without_logging_it(
 
 
 def test_project_source_payloads_omits_link_without_download_permission() -> None:
-    from dlightrag.core.client_payloads import project_source_payloads
-    from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
+    from dlightrag.answer.sources import SourceDownloadLinkBuilder, project_source_payloads
 
     source = SourceReference(
         id="1",
@@ -108,7 +106,7 @@ def test_project_source_payloads_omits_link_without_download_permission() -> Non
 
 
 def test_public_context_projection_strips_internal_source_metadata() -> None:
-    from dlightrag.core.client_payloads import project_contexts_for_client
+    from dlightrag.answer.sources import project_contexts_for_client
 
     contexts = {
         "chunks": [
@@ -177,7 +175,7 @@ def test_retrieval_payload_hides_composer_cache_and_vector_fields() -> None:
 
 
 def test_project_contexts_for_client_strips_inline_images_and_adds_image_urls() -> None:
-    from dlightrag.core.client_payloads import project_contexts_for_client
+    from dlightrag.answer.sources import project_contexts_for_client
 
     contexts = {
         "chunks": [
@@ -225,8 +223,55 @@ def test_project_contexts_for_client_strips_inline_images_and_adds_image_urls() 
     assert "image_data" in contexts["chunks"][0]
 
 
+@pytest.mark.parametrize("workspace", ["__attachment__", "__web_search__"])
+def test_request_owned_visuals_do_not_require_corpus_acl(workspace: str) -> None:
+    from dlightrag.answer.sources import project_contexts_for_client
+
+    public = project_contexts_for_client(
+        {
+            "chunks": [
+                {
+                    "chunk_id": "visual-1",
+                    "content": "Request evidence",
+                    "image_data": "base64-payload",
+                    "_workspace": workspace,
+                }
+            ]
+        },
+        visual_workspaces=set(),
+    )
+
+    assert public["chunks"][0]["image_url"].startswith(f"/images/{workspace}/")
+
+
+def test_real_double_underscore_workspace_visuals_still_require_acl() -> None:
+    from dlightrag.answer.sources import project_contexts_for_client
+
+    public = project_contexts_for_client(
+        {
+            "chunks": [
+                {
+                    "chunk_id": "visual-1",
+                    "content": "Corpus evidence",
+                    "image_data": "base64-payload",
+                    "image_url": "/images/__private/visual-1?size=full",
+                    "thumbnail_url": "/images/__private/visual-1?size=thumb",
+                    "image_mime_type": "image/png",
+                    "_workspace": "__private",
+                }
+            ]
+        },
+        visual_workspaces=set(),
+    )
+
+    chunk = public["chunks"][0]
+    assert "image_url" not in chunk
+    assert "thumbnail_url" not in chunk
+    assert "image_mime_type" not in chunk
+
+
 def test_project_contexts_for_client_accepts_lightrag_id_alias() -> None:
-    from dlightrag.core.client_payloads import project_contexts_for_client
+    from dlightrag.answer.sources import project_contexts_for_client
 
     public = project_contexts_for_client({"chunks": [{"id": "c1", "content": "Evidence"}]})
 
@@ -236,7 +281,7 @@ def test_project_contexts_for_client_accepts_lightrag_id_alias() -> None:
 
 
 def test_project_contexts_for_client_adds_visual_chunk_urls_without_inline_image_data() -> None:
-    from dlightrag.core.client_payloads import project_contexts_for_client
+    from dlightrag.answer.sources import project_contexts_for_client
 
     public = project_contexts_for_client(
         {
@@ -265,7 +310,7 @@ def test_project_contexts_for_client_adds_visual_chunk_urls_without_inline_image
 
 
 def test_project_contexts_for_client_skips_chunks_without_public_id() -> None:
-    from dlightrag.core.client_payloads import project_contexts_for_client
+    from dlightrag.answer.sources import project_contexts_for_client
 
     public = project_contexts_for_client({"chunks": [{"content": "orphan"}]})
 
@@ -273,7 +318,7 @@ def test_project_contexts_for_client_skips_chunks_without_public_id() -> None:
 
 
 def test_answer_helpers_derive_visual_images_and_blocks() -> None:
-    from dlightrag.core.answer.media import (
+    from dlightrag.answer.media import (
         answer_blocks_from_markdown,
         answer_images_from_sources,
     )
