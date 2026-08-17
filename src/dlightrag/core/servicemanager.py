@@ -1,16 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""RAGServiceManager — unified multi-workspace RAG coordinator.
-
-Absorbs pool.py workspace management and federation routing into a single
-entry point. All API/MCP consumers depend on this class only.
-"""
+"""Temporary composition coordinator pending final application-service extraction."""
 
 import asyncio
 import base64
 import inspect
 import logging
 import time
-from collections import defaultdict
 from collections.abc import (
     AsyncGenerator,
     AsyncIterable,
@@ -57,12 +52,15 @@ from dlightrag_rag.federation import federated_retrieve
 from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 from dlightrag_rag.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag_rag.lifecycle import defer_cancellation
+from dlightrag_rag.pool import WorkspacePool
 from dlightrag_rag.ports import (
     JOB_STATES_WITH_RESULT,
     CorpusMaintenanceStore,
     CorpusSchemaError,
+    WorkspaceCorpusBackend,
 )
 from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
+from dlightrag_rag.settings import RagSettings
 from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from dlightrag_rag.workspace_rag import WorkspaceRag
@@ -162,8 +160,7 @@ from dlightrag.runtime import (
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
 logger = logging.getLogger(__name__)
-_MAX_RETRY_INTERVAL: float = 300.0
-_QUERY_WORKSPACE_MAX_CONCURRENCY = 8
+_WORKSPACE_FANOUT_MAX_CONCURRENCY = 8
 _SCHEMA_CACHE_MAX_ENTRIES = 128
 
 
@@ -350,7 +347,7 @@ def _fetched_bytes_sink(
 
 
 class RAGServiceUnavailableError(Exception):
-    """Raised when the RAG service is not ready."""
+    """Raised when a temporary manager-owned service is unavailable."""
 
     def __init__(self, detail: str | None = None) -> None:
         self.detail = detail or "RAG service is not available"
@@ -383,25 +380,25 @@ class RAGServiceManager:
         self._config = config or get_config()
         corpus_backend = PGCorpusBackendFactory(self._config).create()
         self._corpus_maintenance: CorpusMaintenanceStore = corpus_backend.maintenance
-        self._services: dict[str, WorkspaceRag] = {}
-        self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         self._health = ApplicationHealth(
             readiness_probe=PGReadinessProbe(self._config),
         )
 
-        # Per-workspace backoff: workspace -> (last_error_ts, retry_interval)
-        self._backoff: dict[str, tuple[float, float]] = {}
-
-        # In-flight workspace initializations started when a request resolves its scope.
-        self._warmups: set[asyncio.Task[None]] = set()
+        self._model_scheduler = ModelScheduler(max_concurrency=self._config.max_async)
+        self._rerank_supports_vision: bool | None = None
+        self._workspace_pool = WorkspacePool(
+            settings_for=self._workspace_settings,
+            backend_for=self._workspace_backend,
+            build=self._build_workspace,
+        )
 
         self._answer_synthesizers_by_profile: dict[ModelProfile, AnswerSynthesizer] = {}
         self._answer_model: CompletionModel | None = None
         self._declared_model_profiles: dict[ModelRole, ModelProfile] = {}
         self._model_profiles: dict[ModelRole, ModelProfile] = {}
         self._ingest_jobs = IngestJobCoordinator(
-            self._get_ingest_service,
+            lambda workspace: self._workspace_pool.acquire(workspace),
             input_root=self._config.input_dir_path,
             store=corpus_backend.ingest_jobs,
         )
@@ -416,12 +413,10 @@ class RAGServiceManager:
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         # Image capability is role-specific but cached per resolved model config,
         # so roles that share one model share one probe.
-        self._model_scheduler = ModelScheduler(max_concurrency=self._config.max_async)
         self._image_capabilities = ModelImageCapabilities(
             scheduler=self._model_scheduler,
             telemetry=LangfuseTelemetry(),
         )
-        self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
         self._vlm_image_status: ImageCapabilityStatus = "unknown"
         self._answer_run_store: PGAnswerRunStore | None = None
@@ -460,6 +455,7 @@ class RAGServiceManager:
 
         default_ws = normalize_workspace(manager._config.workspace)
         default_err: Exception | None = None
+        default_ready = False
         try:
             await manager._initialize_answer_run_store()
             await manager._validate_active_answer_run_compatibility()
@@ -472,7 +468,8 @@ class RAGServiceManager:
             await manager._probe_role_image_capabilities()
 
             try:
-                await manager._get_service(default_ws)
+                await manager._workspace_pool.acquire(default_ws)
+                default_ready = True
                 logger.info("Warmed up default workspace service '%s'", default_ws)
             except CorpusSchemaError:
                 raise
@@ -493,7 +490,7 @@ class RAGServiceManager:
 
         await manager._start_ingest_job_recovery()
         await manager._start_answer_runtime()
-        if default_ws in manager._services:
+        if default_ready:
             manager._health.mark_ready()
         else:
             detail = getattr(default_err, "detail", str(default_err)) if default_err else "unknown"
@@ -678,77 +675,36 @@ class RAGServiceManager:
             return f"{msg}. Check API keys or database credentials."
         return msg
 
-    async def _get_ingest_service(self, workspace: str) -> WorkspaceRag:
-        # Resolved through self so the coordinator sees the current service lookup.
-        return await self._get_service(workspace)
+    def _workspace_config(self, workspace_id: str) -> DlightragConfig:
+        return self._config.model_copy(update={"workspace": workspace_id})
 
-    async def _get_service(self, workspace: str) -> WorkspaceRag:
-        """Get or create a WorkspaceRag for a specific workspace. Async-safe.
+    def _workspace_settings(self, workspace_id: str) -> RagSettings:
+        return rag_settings(self._workspace_config(workspace_id))
 
-        Normalizes the workspace name to a safe PG identifier (lowercase,
-        alphanumeric + underscore only) before lookup or creation.
-        """
-        from dlightrag_rag.workspaces import normalize_workspace
+    def _workspace_backend(self, workspace_id: str) -> WorkspaceCorpusBackend:
+        return PGCorpusBackendFactory(self._workspace_config(workspace_id)).create()
 
-        workspace = normalize_workspace(workspace)
-
-        if workspace in self._services:
-            return self._services[workspace]
-
-        # Check per-workspace backoff
-        if workspace in self._backoff:
-            last_ts, interval = self._backoff[workspace]
-            if time.time() - last_ts < interval:
-                raise RAGServiceUnavailableError(
-                    detail=f"Workspace '{workspace}' in backoff (retry in {interval:.0f}s)"
-                )
-
-        async with self._locks[workspace]:
-            # Double-check after acquiring lock
-            if workspace in self._services:
-                return self._services[workspace]
-
-            if workspace in self._backoff:
-                last_ts, interval = self._backoff[workspace]
-                if time.time() - last_ts < interval:
-                    raise RAGServiceUnavailableError(
-                        detail=f"Workspace '{workspace}' in backoff (retry in {interval:.0f}s)"
-                    )
-
-            try:
-                ws_config = self._config.model_copy(update={"workspace": workspace})
-                svc = await WorkspaceRag.acreate(
-                    workspace_id=workspace,
-                    settings=rag_settings(ws_config),
-                    backend=PGCorpusBackendFactory(ws_config).create(),
-                    scheduler=self._model_scheduler,
-                    telemetry=LangfuseTelemetry(),
-                    rerank_supports_vision=self._rerank_supports_vision,
-                )
-                self._services[workspace] = svc
-
-                # Clear backoff on success
-                self._backoff.pop(workspace, None)
-
-                logger.info("Created WorkspaceRag for workspace '%s'", safe_log_text(workspace))
-                return svc
-            except CorpusSchemaError:
-                # Terminal: no backoff or retry can repair an absent schema, and
-                # startup must see the exact failure, not a generic unavailable.
-                raise
-            except Exception as e:
-                error_msg = self._actionable_error(e)
-                # Per-workspace exponential backoff
-                _, prev_interval = self._backoff.get(workspace, (0, 7.5))
-                new_interval = min(prev_interval * 2, _MAX_RETRY_INTERVAL)
-                self._backoff[workspace] = (time.time(), new_interval)
-                logger.error(
-                    "WorkspaceRag creation failed for '%s': %s. Retry in %ss",
-                    safe_log_text(workspace),
-                    safe_log_text(error_msg),
-                    new_interval,
-                )
-                raise RAGServiceUnavailableError(detail=error_msg) from e
+    async def _build_workspace(
+        self,
+        workspace_id: str,
+        settings: RagSettings,
+        backend: WorkspaceCorpusBackend,
+    ) -> WorkspaceRag:
+        try:
+            runtime = await WorkspaceRag.acreate(
+                workspace_id=workspace_id,
+                settings=settings,
+                backend=backend,
+                scheduler=self._model_scheduler,
+                telemetry=LangfuseTelemetry(),
+                rerank_supports_vision=self._rerank_supports_vision,
+            )
+        except CorpusSchemaError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(self._actionable_error(exc)) from exc
+        logger.info("Created WorkspaceRag for workspace '%s'", safe_log_text(workspace_id))
+        return runtime
 
     # --- Write operations (single workspace) ---
 
@@ -790,7 +746,7 @@ class RAGServiceManager:
         retain_source_file: bool | None = None,
     ) -> dict[str, Any]:
         """Ingest from an in-memory SDK data source without durable job recovery."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         await svc.aregister_workspace()
         return await svc.aingest_source(
             source,
@@ -1006,7 +962,7 @@ class RAGServiceManager:
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
         self._config.require_writer("workspace creation")
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         await svc.aregister_workspace(display_name=display_name)
 
     async def aget_file_panel_snapshot(self, workspace: str) -> dict[str, Any]:
@@ -1014,8 +970,9 @@ class RAGServiceManager:
         workspace_id = normalize_workspace(workspace)
         files = await self._get_file_panel_store().list_processed_files(workspace_id)
 
-        if workspace_id in self._services:
-            pipeline_status = await self._services[workspace_id].aget_pipeline_status()
+        loaded_status = await self._workspace_pool.get_pipeline_status(workspace_id)
+        if loaded_status is not None:
+            pipeline_status = loaded_status
         elif self._ingest_jobs.has_active_workspace_job(workspace_id):
             pipeline_status = {
                 "busy": True,
@@ -1055,12 +1012,12 @@ class RAGServiceManager:
 
     async def alist_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
         """List ingested files in a specific workspace."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.alist_ingested_files()
 
     async def aget_pipeline_status(self, workspace: str) -> dict[str, Any]:
         """Return pipeline progress for a workspace."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.aget_pipeline_status()
 
     async def adelete_files(
@@ -1072,7 +1029,7 @@ class RAGServiceManager:
         dry_run: bool = False,
     ) -> list[dict[str, Any]]:
         """Delete files from a specific workspace."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.adelete_files(
             file_paths=file_paths,
             filenames=filenames,
@@ -1081,24 +1038,24 @@ class RAGServiceManager:
 
     async def alist_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
         """List FAILED documents in a specific workspace."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.alist_failed_docs()
 
     async def aget_visual_asset(
         self, workspace: str, chunk_id: str, *, size: VisualAssetSize = "full"
     ) -> Any:
         """Resolve a visual chunk asset for browser/API image routes."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.aget_visual_asset(chunk_id, size=size)
 
     async def aretry_failed_docs(self, workspace: str) -> dict[str, Any]:
         """Retry all FAILED documents in a specific workspace via re-ingest."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.aretry_failed_docs()
 
     async def aget_metadata(self, workspace: str, doc_id: str) -> dict[str, Any]:
         """Get document metadata by ID."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.aget_metadata(doc_id)
 
     async def aupdate_metadata(
@@ -1108,12 +1065,12 @@ class RAGServiceManager:
         data: dict[str, Any],
     ) -> None:
         """Update (merge) document metadata."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         await svc.aupdate_metadata(doc_id, data)
 
     async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
-        svc = await self._get_service(workspace)
+        svc = await self._workspace_pool.acquire(normalize_workspace(workspace))
         return await svc.asearch_metadata(filters)
 
     async def areset(
@@ -1133,7 +1090,9 @@ class RAGServiceManager:
         if workspace is not None:
             target_workspace = normalize_workspace(workspace)
             known = await self.alist_workspaces()
-            if target_workspace not in known and target_workspace not in self._services:
+            if target_workspace not in known and not await self._workspace_pool.is_loaded(
+                target_workspace
+            ):
                 cancelled_jobs = (
                     0 if dry_run else await self._ingest_jobs.cancel_for_workspace(target_workspace)
                 )
@@ -1166,7 +1125,7 @@ class RAGServiceManager:
         for ws in workspaces:
             cancelled_jobs = 0 if dry_run else await self._ingest_jobs.cancel_for_workspace(ws)
             try:
-                svc = await self._get_service(ws)
+                svc = await self._workspace_pool.acquire(ws)
                 ws_result = await svc.areset(keep_files=keep_files, dry_run=dry_run)
                 ws_result["ingest_jobs_cancelled"] = cancelled_jobs
                 await self._ingest_jobs.attach_reset_result(
@@ -1190,16 +1149,15 @@ class RAGServiceManager:
 
             # Close and evict from cache even after reset errors, but never for a
             # dry run -- a preview must not tear down the live workspace runtime.
-            if not dry_run and ws in self._services:
+            if not dry_run:
                 try:
-                    await self._services[ws].aclose()
+                    await self._workspace_pool.evict(ws)
                 except Exception:
                     logger.warning(
                         "Failed to close service for '%s'",
                         safe_log_text(ws),
                         exc_info=True,
                     )
-                del self._services[ws]
 
         return {"workspaces": results, "total_errors": total_errors}
 
@@ -1455,51 +1413,13 @@ class RAGServiceManager:
             )
             return plan
 
-    def _start_query_service_warmup(self, workspaces: list[str] | tuple[str, ...]) -> None:
-        """Initialize a request's cold workspaces now.
-
-        Retrieval reaches the same services through ``_get_service``, whose
-        per-workspace lock lets it join an initialization already running here
-        instead of starting after planning or a control turn finishes.
-        """
-        cold = [ws for ws in normalize_workspace_ids(workspaces or ()) if ws not in self._services]
-        if not cold:
-            return
-        task = asyncio.create_task(self._warm_query_services(cold))
-        self._warmups.add(task)
-        task.add_done_callback(self._finish_query_service_warmup)
-
-    def _finish_query_service_warmup(self, task: asyncio.Task[None]) -> None:
-        self._warmups.discard(task)
+    @staticmethod
+    def _observe_workspace_warmup(task: asyncio.Task[None]) -> None:
         if task.cancelled():
             return
         error = task.exception()
         if error is not None:
-            # Retrieval raises the same failure to the caller; this only observes it.
             logger.debug("Workspace warm-up failed", exc_info=error)
-
-    async def _warm_query_services(
-        self,
-        workspaces: list[str] | tuple[str, ...] | None,
-    ) -> None:
-        """Initialize only the services selected for an imminent query."""
-        selected = tuple(normalize_workspace_ids(workspaces or ())) or (
-            normalize_workspace(self._config.workspace),
-        )
-        semaphore = asyncio.Semaphore(_QUERY_WORKSPACE_MAX_CONCURRENCY)
-
-        async def _warm(workspace: str) -> None:
-            async with semaphore:
-                await self._get_service(workspace)
-
-        tasks = [asyncio.create_task(_warm(workspace)) for workspace in selected]
-        try:
-            await asyncio.gather(*tasks)
-        except BaseException:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
 
     async def _open_query_workspaces(
         self,
@@ -1518,7 +1438,8 @@ class RAGServiceManager:
             workspaces=workspaces,
             all_workspaces=all_workspaces,
         )
-        self._start_query_service_warmup(resolved)
+        warmup = asyncio.create_task(self._workspace_pool.warm(resolved))
+        warmup.add_done_callback(self._observe_workspace_warmup)
         return resolved
 
     async def _resolve_query_workspace_scope(
@@ -1661,14 +1582,14 @@ class RAGServiceManager:
                     if effective_bm25_query is not None:
                         kwargs["bm25_query"] = effective_bm25_query
                     if len(workspaces) == 1:
-                        svc = await self._get_service(workspaces[0])
+                        svc = await self._workspace_pool.acquire(workspaces[0])
                         result = await svc.aretrieve(effective_query, **kwargs)
                     else:
                         result = await federated_retrieve(
                             effective_query,
                             workspaces,
-                            self._get_service,
-                            max_concurrency=_QUERY_WORKSPACE_MAX_CONCURRENCY,
+                            self._workspace_pool.acquire,
+                            max_concurrency=_WORKSPACE_FANOUT_MAX_CONCURRENCY,
                             **kwargs,
                         )
                     result.image_descriptions = descriptions
@@ -2792,10 +2713,12 @@ class RAGServiceManager:
             except Exception:
                 logger.warning("Failed to close the durable answer coordinator", exc_info=True)
 
-        for warmup in list(self._warmups):
-            warmup.cancel()
-        if self._warmups:
-            await asyncio.gather(*self._warmups, return_exceptions=True)
+        try:
+            await self._workspace_pool.aclose()
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+        except Exception:
+            logger.warning("Failed to close workspace pool", exc_info=True)
 
         async with self._vlm_func_lock:
             self._vlm_func = None
@@ -2827,15 +2750,6 @@ class RAGServiceManager:
             except Exception:
                 logger.warning("Failed to close manager component", exc_info=True)
 
-        for ws, svc in self._services.items():
-            try:
-                await svc.aclose()
-            except asyncio.CancelledError as exc:
-                cancellation = defer_cancellation(cancellation, exc)
-            except Exception:
-                logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
-        self._services.clear()
-
         from dlightrag.adapters.postgres._pool import pg_pool
 
         try:
@@ -2857,7 +2771,7 @@ def _positive_int_or_none(value: Any) -> int | None:
 
 
 __all__ = [
-    "RAGServiceManager",
     "RAGServiceUnavailableError",
+    "RAGServiceManager",
     "answer_trace_output",
 ]

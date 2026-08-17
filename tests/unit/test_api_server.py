@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import jwt
 import pytest
+from dlightrag_rag.pool import WorkspaceUnavailableError
 from dlightrag_rag.retrieval import RetrievalResult
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
@@ -1035,7 +1036,7 @@ class TestIngestEndpoint:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         mock_manager.astart_ingest_job = AsyncMock(
-            side_effect=RAGServiceUnavailableError("RAG not ready")
+            side_effect=WorkspaceUnavailableError("RAG not ready")
         )
         app.state.manager = mock_manager
         resp = await client.post(

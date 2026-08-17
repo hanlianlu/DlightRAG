@@ -16,6 +16,7 @@ import pytest
 from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION, ModelCapabilityError, ModelProfile
 from dlightrag_ai.catalog import MODEL_CATALOG_REVISION, UnknownModelProfileError
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
+from dlightrag_rag.pool import WorkspaceUnavailableError
 from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
 from dlightrag_rag.sourcing.base import SourceDocument
 from PIL import Image
@@ -125,6 +126,15 @@ def _install_retrieval_planner(
     profile: ModelProfile | None = None,
 ) -> None:
     manager._retrieval_planners_by_profile[profile or manager._model_profile("extract")] = planner
+
+
+def _install_workspace_runtime(
+    manager: RAGServiceManager,
+    runtime: Any,
+) -> AsyncMock:
+    acquire = AsyncMock(return_value=runtime)
+    manager._workspace_pool.acquire = acquire  # type: ignore[method-assign]
+    return acquire
 
 
 class _MemoryRunSession:
@@ -267,22 +277,28 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
 async def test_request_scope_starts_workspace_warmup_before_planning(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     warm_started = asyncio.Event()
+    warm_finished = asyncio.Event()
     release_warm = asyncio.Event()
     plan_started = asyncio.Event()
     service = AsyncMock()
     service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
 
-    async def get_service(_workspace: str) -> AsyncMock:
+    async def warm(_workspaces: list[str]) -> None:
         warm_started.set()
-        await release_warm.wait()
-        return service
+        try:
+            await release_warm.wait()
+        finally:
+            warm_finished.set()
 
     async def plan_query(*_args: object, **_kwargs: object) -> RetrievalPlan:
         await warm_started.wait()
         plan_started.set()
         return RetrievalPlan(standalone_query="planned")
 
-    manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
+    manager._workspace_pool.warm = AsyncMock(side_effect=warm)  # type: ignore[method-assign]
+    manager._workspace_pool.acquire = AsyncMock(  # type: ignore[method-assign]
+        return_value=service
+    )
     describer = AsyncMock()
     describer.describe.return_value = []
     manager._query_image_describer = MagicMock(  # type: ignore[method-assign]
@@ -295,62 +311,12 @@ async def test_request_scope_starts_workspace_warmup_before_planning(test_cfg) -
     task = asyncio.create_task(manager.aretrieve("query", workspace="reports"))
     try:
         await plan_started.wait()
-        assert not task.done()
     finally:
         release_warm.set()
 
     await task
-    await asyncio.gather(*manager._warmups, return_exceptions=True)
-
-
-async def test_warmup_skips_workspaces_that_already_have_a_service(test_cfg) -> None:
-    manager = RAGServiceManager(config=test_cfg)
-    manager._services["reports"] = cast(Any, AsyncMock())
-    manager._get_service = AsyncMock()  # type: ignore[method-assign]
-
-    manager._start_query_service_warmup(["reports"])
-
-    assert manager._warmups == set()
-    manager._get_service.assert_not_awaited()
-
-
-async def test_warmup_failure_is_observed_instead_of_escaping_the_task(test_cfg) -> None:
-    manager = RAGServiceManager(config=test_cfg)
-    manager._get_service = AsyncMock(  # type: ignore[method-assign]
-        side_effect=RuntimeError("workspace failed")
-    )
-
-    manager._start_query_service_warmup(["reports"])
-    task = next(iter(manager._warmups))
-    await asyncio.gather(task, return_exceptions=True)
-
-    assert manager._warmups == set()
-    assert isinstance(task.exception(), RuntimeError)
-
-
-async def test_query_workspace_warmup_cancels_siblings_on_failure(test_cfg) -> None:
-    manager = RAGServiceManager(config=test_cfg)
-    sibling_started = asyncio.Event()
-    sibling_cancelled = asyncio.Event()
-    expected = RuntimeError("workspace failed")
-
-    async def get_service(workspace: str) -> None:
-        if workspace == "failed":
-            await sibling_started.wait()
-            raise expected
-        sibling_started.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            sibling_cancelled.set()
-
-    manager._get_service = AsyncMock(side_effect=get_service)  # type: ignore[method-assign]
-
-    with pytest.raises(RuntimeError) as raised:
-        await manager._warm_query_services(["failed", "sibling"])
-
-    assert raised.value is expected
-    assert sibling_cancelled.is_set()
+    await asyncio.wait_for(warm_finished.wait(), timeout=1)
+    manager._workspace_pool.warm.assert_awaited_once_with(["reports"])
 
 
 async def test_private_generation_helper_hands_prepared_history_to_engine(test_cfg) -> None:
@@ -494,56 +460,6 @@ class _InMemoryIngestJobStore:
         return before - len(self.rows)
 
 
-class TestGetService:
-    """Test workspace-keyed WorkspaceRag creation and caching."""
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_creates_service_for_workspace(self, mock_create, test_cfg) -> None:
-        mock_create.return_value = AsyncMock()
-        manager = RAGServiceManager(config=test_cfg)
-        svc = await manager._get_service("project-a")
-        assert svc is mock_create.return_value
-        call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["workspace_id"] == "project_a"
-        assert call_kwargs["settings"].embedding.model == test_cfg.embedding.model
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_caches_per_workspace(self, mock_create, test_cfg) -> None:
-        mock_create.return_value = AsyncMock()
-        manager = RAGServiceManager(config=test_cfg)
-        svc1 = await manager._get_service("ws_1")
-        svc2 = await manager._get_service("ws_1")
-        assert svc1 is svc2
-        assert mock_create.await_count == 1
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_different_workspaces_different_services(self, mock_create, test_cfg) -> None:
-        mock_create.side_effect = [AsyncMock(), AsyncMock()]
-        manager = RAGServiceManager(config=test_cfg)
-        svc1 = await manager._get_service("ws_a")
-        svc2 = await manager._get_service("ws_b")
-        assert svc1 is not svc2
-        assert mock_create.await_count == 2
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_concurrent_creates_once(self, mock_create, test_cfg) -> None:
-        mock_service = AsyncMock()
-
-        async def slow_create(**kwargs):
-            await asyncio.sleep(0.05)
-            return mock_service
-
-        mock_create.side_effect = slow_create
-        manager = RAGServiceManager(config=test_cfg)
-        results = await asyncio.gather(
-            manager._get_service("ws-x"),
-            manager._get_service("ws-x"),
-            manager._get_service("ws-x"),
-        )
-        assert mock_create.await_count == 1
-        assert all(r is mock_service for r in results)
-
-
 class TestWorkspaceCreation:
     """Test workspace creation registers discoverable workspace metadata."""
 
@@ -574,92 +490,6 @@ class TestWorkspaceCreation:
         await manager.acreate_workspace("new workspace")
 
         svc.aregister_workspace.assert_awaited_once()
-
-
-class TestBackoff:
-    """Test exponential backoff on service creation failure."""
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_failure_sets_error_state(self, mock_create, test_cfg) -> None:
-        mock_create.side_effect = RuntimeError("DB down")
-        manager = RAGServiceManager(config=test_cfg)
-        with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws_a")
-        assert not manager.health.is_ready
-        assert "ws_a" in manager._backoff
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_backoff_blocks_retry(self, mock_create, test_cfg) -> None:
-        mock_create.side_effect = RuntimeError("fail")
-        manager = RAGServiceManager(config=test_cfg)
-        with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws_a")
-        with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws_a")
-        assert mock_create.await_count == 1
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_retry_succeeds_after_backoff(self, mock_create, test_cfg) -> None:
-        mock_create.side_effect = RuntimeError("fail")
-        manager = RAGServiceManager(config=test_cfg)
-        with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws_a")
-        # Expire the backoff by backdating the timestamp
-        ts, interval = manager._backoff["ws_a"]
-        manager._backoff["ws_a"] = (ts - interval - 1, interval)
-        mock_create.side_effect = None
-        mock_create.return_value = AsyncMock()
-        svc = await manager._get_service("ws_a")
-        assert svc is mock_create.return_value
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_success_resets_error_state(self, mock_create, test_cfg) -> None:
-        mock_create.side_effect = RuntimeError("fail")
-        manager = RAGServiceManager(config=test_cfg)
-        with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws_a")
-        # Expire the backoff by backdating the timestamp
-        ts, interval = manager._backoff["ws_a"]
-        manager._backoff["ws_a"] = (ts - interval - 1, interval)
-        mock_create.side_effect = None
-        mock_create.return_value = AsyncMock()
-        await manager._get_service("ws_a")
-        assert "ws_a" not in manager._backoff
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_per_workspace_backoff_isolation(self, mock_create, test_cfg) -> None:
-        """Workspace A in backoff does not block workspace B."""
-
-        async def fail_only_a(**kwargs):
-            if kwargs["workspace_id"] == "ws_a":
-                raise RuntimeError("ws_a is down")
-            return AsyncMock()
-
-        mock_create.side_effect = fail_only_a
-        manager = RAGServiceManager(config=test_cfg)
-        with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws_a")
-        # ws_a is now in backoff; ws_b should still succeed
-        svc_b = await manager._get_service("ws_b")
-        assert svc_b is not None
-        assert "ws_a" in manager._backoff
-        assert "ws_b" not in manager._backoff
-
-    @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
-    async def test_backoff_clears_on_success(self, mock_create, test_cfg) -> None:
-        """Backoff entry for a workspace is removed after a successful creation."""
-        mock_create.side_effect = RuntimeError("fail")
-        manager = RAGServiceManager(config=test_cfg)
-        with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws_a")
-        assert "ws_a" in manager._backoff
-        # Expire backoff and let next attempt succeed
-        ts, interval = manager._backoff["ws_a"]
-        manager._backoff["ws_a"] = (ts - interval - 1, interval)
-        mock_create.side_effect = None
-        mock_create.return_value = AsyncMock()
-        await manager._get_service("ws_a")
-        assert "ws_a" not in manager._backoff
 
 
 class TestRouting:
@@ -792,7 +622,9 @@ class TestRouting:
         service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
         manager = RAGServiceManager(config=test_cfg)
         manager._plan_retrieval = AsyncMock(return_value=plan)  # type: ignore[method-assign]
-        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+        manager._workspace_pool.acquire = AsyncMock(  # type: ignore[method-assign]
+            return_value=service
+        )
 
         await manager._retrieve(
             "report",
@@ -823,7 +655,9 @@ class TestRouting:
         service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
         manager = RAGServiceManager(config=test_cfg)
         manager._plan_retrieval = AsyncMock(return_value=plan)  # type: ignore[method-assign]
-        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+        manager._workspace_pool.acquire = AsyncMock(  # type: ignore[method-assign]
+            return_value=service
+        )
 
         await manager._retrieve(
             "report",
@@ -921,13 +755,12 @@ class TestAnswerViaEngine:
             AsyncMock(return_value={"columns": [], "custom_keys": []}),
         )
 
-        async def warm_query_services(*_args: object, **_kwargs: object) -> None:
+        async def warm_workspaces(*_args: object, **_kwargs: object) -> None:
             return None
 
         monkeypatch.setattr(
-            RAGServiceManager,
-            "_warm_query_services",
-            warm_query_services,
+            "dlightrag_rag.pool.WorkspacePool.warm",
+            warm_workspaces,
         )
 
     async def test_retrieval_planning_emits_nested_observation(
@@ -1134,7 +967,9 @@ class TestAnswerViaEngine:
         )
         service = AsyncMock()
         service.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
-        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+        manager._workspace_pool.acquire = AsyncMock(  # type: ignore[method-assign]
+            return_value=service
+        )
         mock_engine = _synthesizer_mock()
         mock_engine.generate_stream.return_value = ({"chunks": []}, _AttrStream(["a"]))
         mock_engine.history_input_measure = MagicMock(
@@ -1496,7 +1331,7 @@ class TestDelegation:
         ]
         manager = RAGServiceManager(config=test_cfg)
         manager._get_file_panel_store = MagicMock(return_value=store)  # type: ignore[method-assign]
-        manager._get_service = AsyncMock(  # type: ignore[method-assign]
+        manager._workspace_pool.acquire = AsyncMock(  # type: ignore[method-assign]
             side_effect=AssertionError("files panel snapshot must not initialize services")
         )
 
@@ -1507,7 +1342,7 @@ class TestDelegation:
             "pipeline_status": {"busy": False, "pending_enqueues": 0, "latest_message": ""},
         }
         store.list_processed_files.assert_awaited_once_with("ws_a")
-        manager._get_service.assert_not_awaited()
+        manager._workspace_pool.acquire.assert_not_awaited()
 
     async def test_source_download_does_not_initialize_cold_workspace(self, test_cfg) -> None:
         from dlightrag_rag.source_download import RedirectDownloadTarget
@@ -1515,7 +1350,7 @@ class TestDelegation:
         from dlightrag.model_settings import rag_settings
 
         manager = RAGServiceManager(config=test_cfg)
-        manager._get_service = AsyncMock(  # type: ignore[method-assign]
+        manager._workspace_pool.acquire = AsyncMock(  # type: ignore[method-assign]
             side_effect=AssertionError("source download must not initialize services")
         )
         metadata_index = AsyncMock()
@@ -1543,22 +1378,23 @@ class TestDelegation:
             workspace_id="finance_team",
         )
         service.prepare.assert_awaited_once_with("doc-1")
-        manager._get_service.assert_not_awaited()
+        manager._workspace_pool.acquire.assert_not_awaited()
 
     async def test_file_panel_snapshot_reads_pipeline_status_for_warm_workspace(
         self, test_cfg
     ) -> None:
         store = AsyncMock()
         store.list_processed_files.return_value = []
-        svc = AsyncMock()
-        svc.aget_pipeline_status.return_value = {
+        status = {
             "busy": True,
             "pending_enqueues": 1,
             "latest_message": "Indexing",
         }
         manager = RAGServiceManager(config=test_cfg)
         manager._get_file_panel_store = MagicMock(return_value=store)  # type: ignore[method-assign]
-        manager._services["ws_a"] = svc
+        manager._workspace_pool.get_pipeline_status = AsyncMock(  # type: ignore[method-assign]
+            return_value=status
+        )
 
         result = await manager.aget_file_panel_snapshot("Ws-A")
 
@@ -1567,7 +1403,7 @@ class TestDelegation:
             "pending_enqueues": 1,
             "latest_message": "Indexing",
         }
-        svc.aget_pipeline_status.assert_awaited_once()
+        manager._workspace_pool.get_pipeline_status.assert_awaited_once_with("ws_a")
 
     @patch("dlightrag.core.servicemanager.WorkspaceRag.acreate", new_callable=AsyncMock)
     async def test_delete_files_delegates(self, mock_create, test_cfg) -> None:
@@ -1612,7 +1448,7 @@ class TestIngestJobs:
         manager._ingest_jobs._store = store
         svc = AsyncMock()
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         assert manager._ingest_jobs.schedule_recovered_job(row, store) is True
         task = manager._ingest_jobs._tasks["job-1"]
@@ -1657,7 +1493,7 @@ class TestIngestJobs:
         manager._ingest_jobs._store = store
         svc = AsyncMock()
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         assert manager._ingest_jobs.schedule_recovered_job(row, store) is True
         await asyncio.wait_for(manager._ingest_jobs._tasks["job-1"], timeout=1.0)
@@ -1694,12 +1530,12 @@ class TestIngestJobs:
         manager._ingest_jobs._store = store
         svc = AsyncMock()
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        acquire = _install_workspace_runtime(manager, svc)
 
         assert manager._ingest_jobs.schedule_recovered_job(row, store) is True
         await asyncio.wait_for(manager._ingest_jobs._tasks["job-1"], timeout=1.0)
 
-        manager._get_service.assert_not_awaited()
+        acquire.assert_not_awaited()
         svc.aingest.assert_not_awaited()
 
     async def test_astart_ingest_job_records_progress_and_result(self, test_cfg) -> None:
@@ -1722,7 +1558,7 @@ class TestIngestJobs:
 
         svc = AsyncMock()
         svc.aingest = AsyncMock(side_effect=fake_ingest)
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         job = await manager.astart_ingest_job(
             "Project A",
@@ -1756,7 +1592,7 @@ class TestIngestJobs:
         (staged_dir / "report.pdf").write_text("pdf", encoding="utf-8")
         svc = AsyncMock()
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         job = await manager.astart_ingest_job(
             "Project A",
@@ -1782,7 +1618,7 @@ class TestIngestJobs:
         source_file.write_text("pdf", encoding="utf-8")
         svc = AsyncMock()
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         job = await manager.astart_ingest_job(
             "Project A",
@@ -1825,7 +1661,7 @@ class TestIngestJobs:
         manager._ingest_jobs._store = store
         svc = AsyncMock()
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         assert manager._ingest_jobs.schedule_recovered_job(row, store) is True
         await asyncio.wait_for(manager._ingest_jobs._tasks["job-1"], timeout=1.0)
@@ -1848,7 +1684,7 @@ class TestIngestJobs:
 
         svc = AsyncMock()
         svc.aingest = AsyncMock(side_effect=fake_ingest)
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         result = await manager.aingest(
             "default",
@@ -1880,7 +1716,7 @@ class TestIngestJobs:
 
         svc = AsyncMock()
         svc.aingest = AsyncMock(side_effect=fake_ingest)
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         job = await manager.astart_ingest_job(
             "default",
@@ -1911,7 +1747,7 @@ class TestIngestJobs:
 
         svc = AsyncMock()
         svc.aingest = AsyncMock(side_effect=fake_ingest)
-        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, svc)
 
         await manager.astart_ingest_job(
             "default",
@@ -2068,7 +1904,7 @@ async def test_keyed_sdk_replay_bypasses_resolved_input_preparation(test_cfg) ->
     manager.aprepare_answer_run_input = AsyncMock(  # type: ignore[method-assign]
         side_effect=AssertionError("replay must not prepare model input")
     )
-    manager._start_query_service_warmup = MagicMock(  # type: ignore[method-assign]
+    manager._workspace_pool.warm = AsyncMock(  # type: ignore[method-assign]
         side_effect=AssertionError("replay must not warm workspaces")
     )
 
@@ -2082,6 +1918,7 @@ async def test_keyed_sdk_replay_bypasses_resolved_input_preparation(test_cfg) ->
     assert creation.replayed is True
     assert creation.run is existing
     manager.aprepare_answer_run_input.assert_not_awaited()  # type: ignore[attr-defined]
+    manager._workspace_pool.warm.assert_not_awaited()
 
 
 async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(test_cfg) -> None:
@@ -2224,17 +2061,18 @@ async def test_sdk_acceptance_rebuilds_current_attachments_from_durable_mime(tes
         async def fake_initialize_workspace_registry(self):  # noqa: ANN001, ANN202
             return None
 
-        async def fake_get_service(self, workspace: str):  # noqa: ANN001, ANN202
-            created.append(workspace)
-            self._services[workspace] = workspace
-            return workspace
+        async def fake_build_workspace(  # noqa: ANN001, ANN202
+            self, workspace_id: str, settings, backend
+        ):
+            created.append(workspace_id)
+            return AsyncMock()
 
         monkeypatch.setattr(
             RAGServiceManager,
             "_initialize_workspace_registry",
             fake_initialize_workspace_registry,
         )
-        monkeypatch.setattr(RAGServiceManager, "_get_service", fake_get_service)
+        monkeypatch.setattr(RAGServiceManager, "_build_workspace", fake_build_workspace)
         monkeypatch.setattr("dlightrag.observability.init_tracing", lambda config: None)
 
         manager = await RAGServiceManager.acreate(config=cfg)
@@ -2248,8 +2086,8 @@ class TestActionableErrors:
     async def test_connection_refused_gets_hint(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = ConnectionRefusedError("Connection refused")
         manager = RAGServiceManager(config=test_cfg)
-        with pytest.raises(RAGServiceUnavailableError, match="Check.*DLIGHTRAG_POSTGRES"):
-            await manager._get_service("ws_a")
+        with pytest.raises(WorkspaceUnavailableError, match="Check.*DLIGHTRAG_POSTGRES"):
+            await manager._workspace_pool.acquire("ws_a")
 
     def test_actionable_error_default(self) -> None:
         exc = ValueError("something broke")
@@ -2325,16 +2163,14 @@ async def test_unsupported_image_link_is_rejected_before_materialization(test_cf
 class TestClose:
     """Test cleanup."""
 
-    async def test_close_all_services(self, test_cfg) -> None:
+    async def test_close_delegates_workspace_shutdown_to_pool(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        svc_a = AsyncMock()
-        svc_b = AsyncMock()
-        manager._services = {"a": svc_a, "b": svc_b}
+        manager._workspace_pool.aclose = AsyncMock()  # type: ignore[method-assign]
         manager.health.mark_ready()
+
         await manager.aclose()
-        svc_a.aclose.assert_awaited_once()
-        svc_b.aclose.assert_awaited_once()
-        assert manager._services == {}
+
+        manager._workspace_pool.aclose.assert_awaited_once()
         assert not manager.health.is_ready
 
     async def test_close_prevents_recreating_vlm_provider(
@@ -2513,7 +2349,9 @@ class TestPlannerSchemaScope:
         self, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         manager = RAGServiceManager(config=test_cfg)
-        manager._get_service = AsyncMock(side_effect=AssertionError("must not warm services"))
+        manager._workspace_pool.acquire = AsyncMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("must not warm services")
+        )
         get_field_schema = AsyncMock(
             return_value={"columns": [], "custom_keys": ["department", "jurisdiction"]}
         )
@@ -2526,7 +2364,7 @@ class TestPlannerSchemaScope:
 
         assert schema["custom_keys"] == ["department", "jurisdiction"]
         get_field_schema.assert_awaited_once_with(workspaces=("legal", "reports"))
-        manager._get_service.assert_not_awaited()
+        manager._workspace_pool.acquire.assert_not_awaited()
         assert ("legal", "reports") in manager._schema_cache
 
     async def test_schema_cache_key_ignores_workspace_order(
@@ -2960,7 +2798,7 @@ class TestAgenticAnswerCapability:
         )
         service = AsyncMock()
         service.aretrieve.return_value = RetrievalResult()
-        manager._get_service = AsyncMock(return_value=service)  # type: ignore[method-assign]
+        _install_workspace_runtime(manager, service)
         _install_retrieval_planner(
             manager,
             RetrievalPlanner(
@@ -3086,10 +2924,10 @@ class TestAgenticAnswerCapability:
             return_value=SimpleNamespace(registry=registry)
         )
         manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
-            side_effect=RAGServiceUnavailableError("database unavailable")
+            side_effect=WorkspaceUnavailableError("database unavailable")
         )
 
-        with pytest.raises(RAGServiceUnavailableError, match="database unavailable"):
+        with pytest.raises(WorkspaceUnavailableError, match="database unavailable"):
             await manager._project_answer_run_acceptance(
                 AnswerRunRequest(query="question", workspaces=("alpha",)),
                 resources=None,
@@ -3175,7 +3013,6 @@ class TestAgenticAnswerCapability:
             return_value=["alpha"]
         )
         manager._retrieve = AsyncMock(return_value=RetrievalResult())  # type: ignore[method-assign]
-        manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
         manager._web_search = AsyncMock()
         model = AsyncMock(
             side_effect=[
@@ -3332,7 +3169,6 @@ class TestAgenticAnswerCapability:
 
         cfg = test_cfg.model_copy(update={"web_search": WebSearchConfig(api_key="k")})
         manager = RAGServiceManager(config=cfg)
-        manager._warm_query_services = AsyncMock()  # type: ignore[method-assign]
         manager._open_query_workspaces = AsyncMock(  # type: ignore[method-assign]
             return_value=["alpha"]
         )

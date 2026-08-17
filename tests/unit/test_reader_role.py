@@ -421,8 +421,8 @@ def _patch_manager_startup(
 ) -> None:
     """Neutralize every startup step the schema tests do not exercise.
 
-    ``WorkspaceRag.acreate`` is patched instead of ``_get_service`` so the real
-    workspace warm-up path, including its error conversion, still runs.
+    ``WorkspaceRag.acreate`` is patched so the real WorkspacePool warm-up path,
+    including its error conversion, still runs.
     """
     import dlightrag.core.servicemanager as servicemanager_module
     import dlightrag.observability as observability
@@ -517,33 +517,10 @@ async def test_reader_startup_never_degrades_past_a_schema_failure(
     recovery.assert_not_awaited()
 
 
-async def test_service_creation_propagates_a_schema_failure_without_backoff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``_get_service`` must not turn a terminal schema failure into a retryable one."""
-    from dlightrag_rag.ports import CorpusSchemaError
-
-    import dlightrag.core.servicemanager as servicemanager_module
-    from dlightrag.core.servicemanager import RAGServiceManager
-
-    failure = CorpusSchemaError("doc_metadata is missing versions: column_title")
-    monkeypatch.setattr(
-        servicemanager_module.WorkspaceRag, "acreate", AsyncMock(side_effect=failure)
-    )
-    manager = RAGServiceManager(config=_config(service_role="reader"))
-
-    with pytest.raises(CorpusSchemaError) as excinfo:
-        await manager._get_service("default")
-
-    assert excinfo.value is failure
-    assert manager._backoff == {}
-    assert manager._services == {}
-
-
 async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_creation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The real ``_get_service`` conversion path must stay transparent at startup."""
+    """WorkspacePool schema failures stay transparent at reader startup."""
     from dlightrag_rag.ports import CorpusSchemaError
 
     import dlightrag.core.servicemanager as servicemanager_module
@@ -568,7 +545,6 @@ async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_
 
     assert excinfo.value is failure
     assert len(closed) == 1
-    assert closed[0]._backoff == {}
     recovery.assert_not_awaited()
 
 

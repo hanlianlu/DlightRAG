@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from dlightrag_rag.pool import WorkspaceUnavailableError
 from dlightrag_rag.ports import CorpusSchemaError, IngestJobSchemaError
 from dlightrag_rag.retrieval.metadata_fields import MetadataValidationError
 from fastapi import FastAPI, HTTPException, Request
@@ -163,9 +164,10 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         return JSONResponse(status_code=status, content=body.model_dump())
 
     @application.exception_handler(RAGServiceUnavailableError)
+    @application.exception_handler(WorkspaceUnavailableError)
     async def rag_unavailable_handler(
         request: Request,  # noqa: ARG001
-        exc: RAGServiceUnavailableError,
+        exc: RAGServiceUnavailableError | WorkspaceUnavailableError,
     ) -> JSONResponse:
         body = ErrorDetail(detail=exc.detail, error_type="unavailable")
         return JSONResponse(status_code=503, content=body.model_dump())
