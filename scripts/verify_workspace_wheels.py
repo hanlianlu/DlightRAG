@@ -197,9 +197,10 @@ import pkgutil
 import tempfile
 from pathlib import Path
 import dlightrag_rag
+from dlightrag_ai.capacity import ModelProfile
 from dlightrag_rag.ingestion.uploads import write_upload_stream
 from dlightrag_rag.retrieval.language import BM25LanguageClassifier
-from dlightrag_rag.retrieval import MetadataFilter, rrf_fuse
+from dlightrag_rag.retrieval import MetadataFilter, RetrievalPlanner, rrf_fuse
 
 for module in pkgutil.walk_packages(dlightrag_rag.__path__, prefix='dlightrag_rag.'):
     importlib.import_module(module.name)
@@ -225,7 +226,25 @@ async def upload_smoke():
         assert written == 20
         assert destination.read_bytes() == b'installed RAG upload'
 
+async def planner_model(**_kwargs):
+    return '{"standalone_query":"ignored","bm25_query":"installed terms","filters":{"author":"Ada"},"filter_confidence":"high"}'
+
+async def planner_smoke():
+    planner = RetrievalPlanner(
+        llm_func=planner_model,
+        model_profile=ModelProfile(
+            context_window_tokens=16_000,
+            max_input_tokens=12_000,
+            max_output_tokens=512,
+        ),
+    )
+    plan = await planner.plan('installed planner')
+    assert plan.standalone_query == 'installed planner'
+    assert plan.bm25_query == 'installed terms'
+    assert plan.metadata_filter.author == 'Ada'
+
 asyncio.run(upload_smoke())
+asyncio.run(planner_smoke())
 """
     + _ABSENT_HELPER
     + """

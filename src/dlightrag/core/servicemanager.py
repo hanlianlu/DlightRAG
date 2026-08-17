@@ -59,7 +59,13 @@ from dlightrag_rag.ports import (
     CorpusSchemaError,
     WorkspaceCorpusBackend,
 )
-from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
+from dlightrag_rag.retrieval import (
+    MetadataFilter,
+    RetrievalContexts,
+    RetrievalPlan,
+    RetrievalPlanner,
+    RetrievalResult,
+)
 from dlightrag_rag.settings import RagSettings
 from dlightrag_rag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag_rag.sourcing.source_contract import safe_source_filename
@@ -124,7 +130,6 @@ from dlightrag.core.client_contracts import MAX_QUERY_IMAGES, IngestSpec
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
-from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.core.resources.models import (
     ResourceManifestEntry,
     ResourceRegistryError,
@@ -1399,7 +1404,7 @@ class RAGServiceManager:
             schema = await self._get_schema(workspaces)
             plan = await effective_planner.plan(
                 query,
-                conversation_history=text_history,
+                conversation_history=text_history.messages if text_history is not None else None,
                 schema=schema,
                 current_image_descriptions=current_image_descriptions,
                 preserve_query=preserve_query,

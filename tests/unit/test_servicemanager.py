@@ -17,7 +17,12 @@ from dlightrag_ai.capacity import CONTEXT_POLICY_REVISION, ModelCapabilityError,
 from dlightrag_ai.catalog import MODEL_CATALOG_REVISION, UnknownModelProfileError
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_rag.pool import WorkspaceUnavailableError
-from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
+from dlightrag_rag.retrieval import (
+    MetadataFilter,
+    RetrievalPlan,
+    RetrievalPlanner,
+    RetrievalResult,
+)
 from dlightrag_rag.sourcing.base import SourceDocument
 from PIL import Image
 
@@ -36,7 +41,6 @@ from dlightrag.core.answer_runs.results import AnswerResult
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.request.images import prepare_query_images
-from dlightrag.core.request.retrieval_planner import RetrievalPlan, RetrievalPlanner
 from dlightrag.core.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from tests.unit.conftest import answer_model_profile
@@ -271,7 +275,7 @@ async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg
         workspaces=["default"],
     )
 
-    assert planner.plan.await_args.kwargs["conversation_history"] is history
+    assert planner.plan.await_args.kwargs["conversation_history"] == history.messages
 
 
 async def test_request_scope_starts_workspace_warmup_before_planning(test_cfg) -> None:

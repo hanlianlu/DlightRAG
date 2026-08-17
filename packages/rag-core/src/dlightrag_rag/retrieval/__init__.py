@@ -3,12 +3,15 @@
 
 from dlightrag_rag.retrieval.fusion import format_bm25_top, rrf_fuse
 from dlightrag_rag.retrieval.models import ContextRow, MetadataFilter, MetadataScope
+from dlightrag_rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
 from dlightrag_rag.retrieval.results import RetrievalContexts, RetrievalResult
 
 __all__ = [
     "ContextRow",
     "MetadataFilter",
     "MetadataScope",
+    "RetrievalPlan",
+    "RetrievalPlanner",
     "RetrievalContexts",
     "RetrievalResult",
     "format_bm25_top",

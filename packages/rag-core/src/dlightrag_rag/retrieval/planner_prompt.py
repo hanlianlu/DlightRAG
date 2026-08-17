@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Query planning prompts: the retrieval plan contract and its image addendum."""
+"""Static guidance for the retrieval planner model call."""
 
 RETRIEVAL_PLANNER_SYSTEM_PROMPT = """\
 Plan the request supplied as one JSON object in the user message. Treat every value in

@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,26 +15,28 @@ from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.structured import StructuredOutput
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.tokens import estimate_messages_tokens
-from dlightrag_rag.retrieval import MetadataFilter
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.prompts import (
+from dlightrag_rag.retrieval.models import MetadataFilter
+from dlightrag_rag.retrieval.planner_prompt import (
     RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE,
     RETRIEVAL_PLANNER_SYSTEM_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
 
+type PlannerMessage = Mapping[str, object]
+type PlannerHistory = Sequence[PlannerMessage]
 
-def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
+
+def _convert_history_to_text(history: PlannerHistory | None) -> str:
     """Convert text conversation history to a planner transcript."""
     if not history:
         return ""
     lines: list[str] = []
-    for msg in history:
-        role = msg.get("role", "user")
-        lines.append(f"{role}: {msg.get('content', '')}")
+    for message in history:
+        role = message.get("role", "user")
+        lines.append(f"{role}: {message.get('content', '')}")
     return "\n".join(lines)
 
 
@@ -57,7 +59,7 @@ RetrievalPlannerFallbackOutcome = Literal[
 class RetrievalPlan:
     """The semantic, lexical, and metadata inputs one retrieval will execute."""
 
-    standalone_query: str  # Rewritten standalone query (= original if no history)
+    standalone_query: str
     bm25_query: str | None = None
     metadata_filter: MetadataFilter | None = None
     metadata_filter_source: str | None = None
@@ -67,10 +69,7 @@ class RetrievalPlan:
 
     @classmethod
     def fallback(cls, query: str, outcome: RetrievalPlannerFallbackOutcome) -> RetrievalPlan:
-        return cls(
-            standalone_query=query,
-            outcome=outcome,
-        )
+        return cls(standalone_query=query, outcome=outcome)
 
 
 class RetrievalFilterEvidence(BaseModel):
@@ -143,7 +142,7 @@ def _planner_user_payload(
     query: str,
     *,
     metadata_schema: str | None = None,
-    history: list[dict[str, Any]] | None = None,
+    history: PlannerHistory | None = None,
     current_images: list[str] | None = None,
     preserve_query: bool = False,
 ) -> str:
@@ -188,7 +187,7 @@ def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int
 
 
 class RetrievalPlanner:
-    """Unified query understanding -- rewrite + analyze in one LLM call."""
+    """Rewrite and analyze one retrieval query in one bounded model call."""
 
     def __init__(
         self,
@@ -210,11 +209,9 @@ class RetrievalPlanner:
         structured_output: StructuredOutput = RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
         max_tokens: int | None = None,
     ) -> str:
-        """Call the planner LLM using DlightRAG's messages-first contract."""
         llm_func = self._llm_func
         if llm_func is None:
             raise RuntimeError("Query planning requires an LLM function")
-
         kwargs: dict[str, Any] = {
             "messages": _planner_messages(system_prompt, query),
             "structured_output": structured_output,
@@ -230,7 +227,7 @@ class RetrievalPlanner:
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
         preserve_query: bool | None = None,
-    ) -> Callable[[list[dict[str, Any]]], int]:
+    ) -> Callable[[PlannerHistory], int]:
         """Return the exact planner serializer used by the shared projector."""
         system_prompt, render_input = self._input_renderer(
             query,
@@ -247,13 +244,13 @@ class RetrievalPlanner:
         schema: dict[str, Any] | None,
         current_image_descriptions: list[str] | None,
         preserve_query: bool | None,
-    ) -> tuple[str, Callable[[list[dict[str, Any]]], str]]:
+    ) -> tuple[str, Callable[[PlannerHistory], str]]:
         system_prompt = RETRIEVAL_PLANNER_SYSTEM_PROMPT
         if current_image_descriptions:
             system_prompt += "\n\n" + RETRIEVAL_PLANNER_IMAGE_CONTEXT_GUIDANCE
         metadata_schema = _build_schema_context(schema)
 
-        def render(messages: list[dict[str, Any]], schema_text: str) -> str:
+        def render(messages: PlannerHistory, schema_text: str) -> str:
             return _planner_user_payload(
                 query,
                 metadata_schema=schema_text,
@@ -263,7 +260,7 @@ class RetrievalPlanner:
             )
 
         if metadata_schema:
-            fixed_payload = render([], metadata_schema)
+            fixed_payload = render((), metadata_schema)
             if _planner_request_tokens(system_prompt, fixed_payload) > self._input_limit_tokens:
                 metadata_schema = ""
         return system_prompt, lambda messages: render(messages, metadata_schema)
@@ -272,35 +269,27 @@ class RetrievalPlanner:
         self,
         query: str,
         *,
-        conversation_history: PriorTurns | None = None,
+        conversation_history: PlannerHistory | None = None,
         schema: dict[str, Any] | None = None,
         current_image_descriptions: list[str] | None = None,
         preserve_query: bool | None = None,
     ) -> RetrievalPlan:
-        """Produce one retrieval plan from one LLM call.
-
-        Handles conversation rewriting, lexical query derivation, and metadata
-        filter extraction in one prompt. Stateless retrieval preserves the
-        caller's semantic query; history enables coreference rewriting.
-        """
-
+        """Produce one bounded retrieval plan from one model call."""
         if self._llm_func is None:
             return RetrievalPlan.fallback(query, "fallback_no_model")
 
-        history = conversation_history or PriorTurns()
-        structured_output = RETRIEVAL_PLAN_STRUCTURED_OUTPUT
+        history = tuple(conversation_history or ())
         system_prompt, render_input = self._input_renderer(
             query,
             schema=schema,
             current_image_descriptions=current_image_descriptions,
             preserve_query=preserve_query,
         )
-        input_limit = self._input_limit_tokens
 
         def fit_to_envelope() -> tuple[str, int, bool]:
-            payload = render_input(history.messages)
+            payload = render_input(history)
             input_tokens = _planner_request_tokens(system_prompt, payload)
-            return payload, input_tokens, input_tokens <= input_limit
+            return payload, input_tokens, input_tokens <= self._input_limit_tokens
 
         planner_input, input_tokens, fits_envelope = await asyncio.to_thread(fit_to_envelope)
         if not fits_envelope:
@@ -309,18 +298,20 @@ class RetrievalPlanner:
             self._model_profile,
             input_tokens=input_tokens,
         )
-
-        llm_start = time.monotonic()
         response = await self._call_llm_with_retry(
             planner_input,
             system_prompt,
-            structured_output=structured_output,
-            start_time=llm_start,
+            structured_output=RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
+            start_time=time.monotonic(),
             max_tokens=max_tokens,
         )
         if response is None:
             return RetrievalPlan.fallback(query, "fallback_provider_error")
-        plan = self._parse_response(response, query, structured_output=structured_output)
+        plan = self._parse_response(
+            response,
+            query,
+            structured_output=RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
+        )
         if plan is None:
             return RetrievalPlan.fallback(query, "fallback_invalid_response")
         if preserve_query is True or (preserve_query is None and not history):
@@ -347,10 +338,6 @@ class RetrievalPlanner:
         start_time: float,
         max_tokens: int | None,
     ) -> str | None:
-        """Call the planner LLM with adaptive exponential-backoff retry.
-
-        Returns the raw response string, or ``None`` when all attempts fail.
-        """
         _MAX_RETRIES = 2
         for attempt in range(_MAX_RETRIES + 1):
             try:
@@ -368,7 +355,7 @@ class RetrievalPlanner:
                 return response
             except Exception:
                 if attempt < _MAX_RETRIES:
-                    delay = 2**attempt  # 1s, 2s
+                    delay = 2**attempt
                     logger.warning(
                         "RetrievalPlanner LLM call failed (attempt %d/%d), retrying in %ds",
                         attempt + 1,
@@ -394,7 +381,6 @@ class RetrievalPlanner:
         *,
         structured_output: StructuredOutput = RETRIEVAL_PLAN_STRUCTURED_OUTPUT,
     ) -> RetrievalPlan | None:
-        """Parse one LLM response into a retrieval plan."""
         if not response:
             return None
         try:
@@ -411,9 +397,7 @@ class RetrievalPlanner:
         raw_filters = data.get("filters", {}) or {}
         filter_confidence = str(data.get("filter_confidence") or "").lower() or None
         filter_evidence = data.get("filter_evidence") or []
-
-        # Validate filters
-        clean = {k: v for k, v in raw_filters.items() if v is not None}
+        clean = {key: value for key, value in raw_filters.items() if value is not None}
         if clean and filter_confidence == "low":
             logger.info("RetrievalPlanner: ignored low-confidence metadata filter proposal")
             return RetrievalPlan(
@@ -422,31 +406,29 @@ class RetrievalPlanner:
                 metadata_filter=None,
                 metadata_filter_source=None,
                 metadata_filter_confidence=filter_confidence or "low",
-                metadata_filter_evidence=filter_evidence
-                if isinstance(filter_evidence, list)
-                else None,
+                metadata_filter_evidence=(
+                    filter_evidence if isinstance(filter_evidence, list) else None
+                ),
             )
 
-        # Handle date fields specially
         metadata_filter: MetadataFilter | None = None
         if clean:
             creation_date_from_str = clean.pop("creation_date_from", None)
             creation_date_to_str = clean.pop("creation_date_to", None)
             try:
-                mf = MetadataFilter(**clean)
                 if creation_date_from_str:
                     with suppress(ValueError, TypeError):
-                        mf.creation_date_from = datetime.fromisoformat(creation_date_from_str)
+                        clean["creation_date_from"] = datetime.fromisoformat(creation_date_from_str)
                 if creation_date_to_str:
                     with suppress(ValueError, TypeError):
-                        mf.creation_date_to = datetime.fromisoformat(creation_date_to_str)
-                metadata_filter = mf if not mf.is_empty() else None
+                        clean["creation_date_to"] = datetime.fromisoformat(creation_date_to_str)
+                candidate = MetadataFilter(**clean)
+                metadata_filter = candidate if not candidate.is_empty() else None
             except Exception:
                 logger.warning(
                     "RetrievalPlanner: invalid filter values for query: %s",
                     safe_log_text(query, max_length=80),
                 )
-                metadata_filter = None
 
         return RetrievalPlan(
             standalone_query=standalone,
@@ -454,5 +436,13 @@ class RetrievalPlanner:
             metadata_filter=metadata_filter,
             metadata_filter_source="llm_inferred" if metadata_filter is not None else None,
             metadata_filter_confidence=filter_confidence,
-            metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
+            metadata_filter_evidence=(
+                filter_evidence if isinstance(filter_evidence, list) else None
+            ),
         )
+
+
+__all__ = [
+    "RetrievalPlan",
+    "RetrievalPlanner",
+]
