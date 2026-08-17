@@ -903,12 +903,106 @@ def _wheel_installation_members(path: Path) -> tuple[str, str, dict[str, bytes]]
 
 
 def _smoke_root_interfaces() -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from dlightrag_ai.telemetry import NoopTelemetry
+    from dlightrag_rag.retrieval import RetrievalResult
+
     import dlightrag
     from dlightrag.access import DEPLOYMENT_OWNER_ID
     from dlightrag.config import DlightragConfig, RuntimeConfig
     from dlightrag.model_settings import rag_settings
     from dlightrag.runtime import answer_run_request_fingerprint
     from dlightrag.sdk import AnswerRunClient
+    from dlightrag.services.retrieval import (
+        ProjectedRetrieval,
+        RetrievalService,
+        RetrievalSettings,
+        RetrieveProjection,
+        RetrieveRequest,
+    )
+
+    class Planner:
+        async def plan(self, query, **_kwargs):
+            return SimpleNamespace(
+                standalone_query=query,
+                metadata_filter=None,
+                metadata_filter_source=None,
+                bm25_query=None,
+                outcome="planned",
+            )
+
+    class Planners:
+        def __init__(self):
+            self.planner = Planner()
+
+        def planner_for(self, _model_profile=None):
+            return self.planner
+
+        async def aclose(self):
+            return None
+
+    class Pool:
+        def __init__(self):
+            self.query = None
+            self.kwargs = None
+
+        async def warm(self, _workspaces):
+            return None
+
+        async def acquire(self, _workspace):
+            return self
+
+        async def aretrieve(self, query, **kwargs):
+            self.query = query
+            self.kwargs = kwargs
+            return RetrievalResult(contexts={"chunks": [{"chunk_id": "installed"}]})
+
+    class Projector:
+        def project(self, result, _projection):
+            return ProjectedRetrieval(contexts=result.contexts, sources=())
+
+    async def empty_schema(_workspaces):
+        return {}
+
+    async def no_images(_images):
+        return []
+
+    async def retrieval_smoke():
+        pool = Pool()
+        service = RetrievalService(
+            pool=cast(Any, pool),
+            planners=cast(Any, Planners()),
+            schema_lookup=empty_schema,
+            image_preparer=no_images,
+            projector=cast(Any, Projector()),
+            settings=RetrievalSettings(
+                default_top_k=8,
+                default_chunk_top_k=5,
+                timeout_seconds=5,
+                query_image_limit=4,
+            ),
+            telemetry=NoopTelemetry(),
+        )
+        response = await service.retrieve(
+            RetrieveRequest(
+                query="installed retrieval",
+                workspaces=("default",),
+                projection=RetrieveProjection(
+                    downloadable_workspaces=frozenset(),
+                    visual_workspaces=frozenset(),
+                ),
+            )
+        )
+        if response.contexts["chunks"][0]["chunk_id"] != "installed":
+            raise ValueError("installed Retrieval service did not project RAG contexts")
+        if pool.query != "installed retrieval" or pool.kwargs is None or pool.kwargs["top_k"] != 8:
+            raise ValueError("installed Retrieval service did not apply request defaults")
+        await service.aclose()
+        if not service.closed:
+            raise ValueError("installed Retrieval service did not close")
 
     config = DlightragConfig(
         max_async=2,
@@ -933,6 +1027,7 @@ def _smoke_root_interfaces() -> None:
     )
     if len(fingerprint) != 64:
         raise ValueError("installed Runtime did not produce a SHA-256 request fingerprint")
+    asyncio.run(retrieval_smoke())
 
 
 def verify_installed(dist_dir: Path) -> None:

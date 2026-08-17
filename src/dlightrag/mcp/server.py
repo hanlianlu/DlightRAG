@@ -13,6 +13,8 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from dlightrag_rag.contracts import SourceType
+from dlightrag_rag.pool import WorkspaceUnavailableError
+from dlightrag_rag.retrieval import MetadataFilter
 from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
 from mcp import MCPError
 from mcp.server import MCPServer
@@ -49,10 +51,6 @@ from dlightrag.core.client_contracts import (
     QueryImage,
     conversation_history_as_dicts,
 )
-from dlightrag.core.client_execution import execute_retrieve
-from dlightrag.core.client_payloads import (
-    retrieval_payload,
-)
 from dlightrag.core.client_requests import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
@@ -75,6 +73,13 @@ from dlightrag.mcp.contracts import (
 )
 from dlightrag.model_settings import access_settings
 from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
+from dlightrag.services.retrieval import (
+    RetrievalTimeoutError,
+    RetrieveProjection,
+)
+from dlightrag.services.retrieval import (
+    RetrieveRequest as ServiceRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,12 +162,21 @@ class DlightRAGMCPServer(MCPServer):
             # inspect __cause__ as well. Server misconfiguration is a server failure;
             # user-facing validation/authorization messages are surfaced as rejections;
             # unexpected internals hide behind a generic message.
-            surfaced = (ValueError, PermissionError, InvalidToolConfigurationError)
+            surfaced = (
+                ValueError,
+                PermissionError,
+                InvalidToolConfigurationError,
+                RetrievalTimeoutError,
+                WorkspaceUnavailableError,
+            )
             inner = exc if isinstance(exc, surfaced) else exc.__cause__
             if isinstance(inner, InvalidToolConfigurationError):
                 logger.exception("MCP tool '%s' failed: %s", name, inner)
                 text = f"Error [{inner.error_kind}]: {inner.public_message}"
-            elif isinstance(inner, ValueError | PermissionError):
+            elif isinstance(
+                inner,
+                ValueError | PermissionError | RetrievalTimeoutError | WorkspaceUnavailableError,
+            ):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)
                 text = (
                     f"Error [{inner.error_kind}]: {inner.public_message}"
@@ -371,16 +385,33 @@ async def retrieve_tool(
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
-    result = await execute_retrieve(
-        manager=manager,
-        payload=args,
-        resolved_workspaces=resolved_workspaces,
-    )
     visual_workspaces = await _authorized_workspace_names(
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
         resolved_workspaces,
     )
-    return retrieval_payload(result, visual_workspaces=visual_workspaces)
+    result = await manager.retrieval.retrieve(
+        ServiceRequest(
+            query=args.query,
+            workspaces=tuple(resolved_workspaces),
+            top_k=args.top_k,
+            chunk_top_k=args.chunk_top_k,
+            bm25_query=args.bm25_query,
+            filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
+            query_images=tuple(
+                image.model_dump(exclude_none=True) for image in args.query_images or ()
+            ),
+            projection=RetrieveProjection(
+                downloadable_workspaces=frozenset(),
+                visual_workspaces=frozenset(visual_workspaces),
+            ),
+        )
+    )
+    return {
+        "contexts": result.contexts,
+        "sources": list(result.sources),
+        "trace": dict(result.trace),
+        "image_descriptions": list(result.image_descriptions),
+    }
 
 
 @mcp_app.tool(

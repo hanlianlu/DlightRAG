@@ -8,13 +8,13 @@ def test_client_timeout_reads_only_dlightrag_client_timeout(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("DLIGHTRAG_CLIENT_TIMEOUT", "17")
-    monkeypatch.setenv("DLIGHTRAG_REQUEST_TIMEOUT", "999")
+    monkeypatch.setenv("DLIGHTRAG_RETRIEVAL_TIMEOUT", "999")
 
     assert client_timeout() == 17.0
 
 
-def test_client_timeout_ignores_server_request_timeout(monkeypatch) -> None:
+def test_client_timeout_ignores_server_retrieval_timeout(monkeypatch) -> None:
     monkeypatch.delenv("DLIGHTRAG_CLIENT_TIMEOUT", raising=False)
-    monkeypatch.setenv("DLIGHTRAG_REQUEST_TIMEOUT", "999")
+    monkeypatch.setenv("DLIGHTRAG_RETRIEVAL_TIMEOUT", "999")
 
     assert client_timeout() == 120.0

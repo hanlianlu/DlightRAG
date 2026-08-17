@@ -7,11 +7,29 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, call, patch
 
 import pytest
-from dlightrag_rag.lifecycle import shutdown_lightrag_worker_pools
+from dlightrag_rag.lifecycle import await_shared_cleanup, shutdown_lightrag_worker_pools
 
 
 def _shutdown_target() -> SimpleNamespace:
     return SimpleNamespace(shutdown=lambda *, graceful=True: None)
+
+
+async def test_shared_cleanup_preserves_caller_cancellation_over_cleanup_failure() -> None:
+    release = asyncio.Event()
+
+    async def fail_cleanup() -> None:
+        await release.wait()
+        raise RuntimeError("cleanup failed")
+
+    cleanup = asyncio.create_task(fail_cleanup())
+    caller = asyncio.create_task(await_shared_cleanup(cleanup))
+    await asyncio.sleep(0)
+    caller.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
 
 
 class TestShutdownLightRagWorkerPools:

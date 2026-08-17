@@ -23,6 +23,23 @@ def defer_cancellation(
     return first if first is not None else current
 
 
+async def await_shared_cleanup[T](task: asyncio.Task[T]) -> T:
+    """Join one shared cleanup task while preserving caller cancellation priority."""
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+        except BaseException:
+            break
+    if cancellation is not None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.warning("Cleanup failed while the caller was cancelled", exc_info=error)
+        raise cancellation
+    return task.result()
+
+
 def _unwrap_worker_pool(value: Any) -> Any:
     return getattr(value, "func", value)
 

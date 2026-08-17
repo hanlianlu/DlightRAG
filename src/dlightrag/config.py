@@ -1215,10 +1215,10 @@ class DlightragConfig(BaseSettings):
         ge=0,
         description="Seconds to wait for synchronous ingest calls. None waits until completion; timeouts return the running job instead of cancelling ingest.",
     )
-    request_timeout: int = Field(
+    retrieval_timeout: int = Field(
         default=300,
         gt=0,
-        description="Timeout in seconds for retrieve/answer/query operations.",
+        description="Timeout in seconds for one caller-awaited inline retrieval.",
     )
     max_agent_turns: int = Field(
         default=50,

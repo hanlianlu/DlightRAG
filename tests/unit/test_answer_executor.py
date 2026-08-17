@@ -43,15 +43,13 @@ def _executor() -> AnswerExecutor:
     return AnswerExecutor(
         store=MagicMock(),
         pool=MagicMock(),
-        planner_for=MagicMock(),
-        schema_for=AsyncMock(return_value={}),
+        retrieve=AsyncMock(),
         models=MagicMock(),
         capabilities=MagicMock(),
         resources=MagicMock(),
         settings=AnswerExecutorSettings(
             default_top_k=10,
             default_chunk_top_k=20,
-            retrieval_timeout=30.0,
             max_agent_turns=8,
             semantic_highlights=SemanticHighlightSettings(
                 enabled=True,

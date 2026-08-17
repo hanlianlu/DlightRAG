@@ -161,8 +161,7 @@ def _executor(manager: RAGServiceManager, store: _RecordingStore) -> AnswerExecu
     return AnswerExecutor(
         store=cast(Any, store),
         pool=manager._workspace_pool,
-        planner_for=manager._get_retrieval_planner,
-        schema_for=AsyncMock(return_value={}),
+        retrieve=manager.retrieval.retrieve_result,
         models=manager._answer_models,
         capabilities=manager._capabilities,
         resources=manager._answer_resources,

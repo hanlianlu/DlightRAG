@@ -4,14 +4,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
-
-from dlightrag.answer.citations.source_builder import build_sources
-from dlightrag.answer.sources import (
-    SourceDownloadLinkBuilder,
-    project_contexts_for_client,
-    project_source_payloads,
-)
+from dlightrag_rag.retrieval import MetadataFilter
 
 
 def metadata_filter_from_payload(payload: Any | None) -> MetadataFilter | None:
@@ -29,39 +22,6 @@ def metadata_filter_from_payload(payload: Any | None) -> MetadataFilter | None:
     return MetadataFilter(**data)
 
 
-def retrieval_payload(
-    result: RetrievalResult,
-    *,
-    source_link_builder: SourceDownloadLinkBuilder | None = None,
-    downloadable_workspaces: set[str] | None = None,
-    visual_workspaces: set[str] | None = None,
-    image_url_prefix: str | None = "/images",
-) -> dict[str, Any]:
-    """Project retrieval results into a client-safe response dictionary."""
-    sources = build_sources(
-        result.contexts,
-        image_url_prefix=image_url_prefix,
-    )
-    source_payloads = project_source_payloads(
-        sources,
-        resolver=source_link_builder,
-        downloadable_workspaces=downloadable_workspaces,
-        visual_workspaces=visual_workspaces,
-    )
-    contexts = project_contexts_for_client(
-        result.contexts,
-        image_url_prefix=image_url_prefix,
-        visual_workspaces=visual_workspaces,
-    )
-    return {
-        "contexts": contexts,
-        "sources": [source.model_dump() for source in source_payloads],
-        "trace": result.trace,
-        "image_descriptions": result.image_descriptions,
-    }
-
-
 __all__ = [
     "metadata_filter_from_payload",
-    "retrieval_payload",
 ]

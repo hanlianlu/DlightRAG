@@ -429,14 +429,15 @@ def _patch_manager_startup(
     from dlightrag.adapters.postgres._pool import pg_pool
     from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
     from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.services.retrieval import RetrievalPlannerRuntime
 
     monkeypatch.setattr(observability, "init_tracing", lambda _config: None)
     monkeypatch.setattr(pg_pool, "bind", lambda _config: None)
     monkeypatch.setattr(RAGServiceManager, "_initialize_workspace_registry", AsyncMock())
     monkeypatch.setattr(AnswerCapabilityCoordinator, "probe_all", AsyncMock())
     monkeypatch.setattr(
-        RAGServiceManager,
-        "_get_retrieval_planner",
+        RetrievalPlannerRuntime,
+        "planner_for",
         lambda self, model_profile=None: None,
     )
     monkeypatch.setattr(RAGServiceManager, "_start_ingest_job_recovery", AsyncMock())

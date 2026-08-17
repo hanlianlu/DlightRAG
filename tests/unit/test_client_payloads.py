@@ -132,8 +132,9 @@ def test_public_context_projection_strips_internal_source_metadata() -> None:
     assert projected["chunks"][0]["file_path"] == "report.pdf"
 
 
-def test_retrieval_payload_hides_composer_cache_and_vector_fields() -> None:
-    from dlightrag.core.client_payloads import retrieval_payload
+def test_retrieval_projector_hides_composer_cache_and_vector_fields() -> None:
+    from dlightrag.adapters.retrieval import AnswerRetrievalProjector
+    from dlightrag.services.retrieval import RetrieveProjection
 
     private_fields = {
         "_cache_key",
@@ -167,7 +168,18 @@ def test_retrieval_payload_hides_composer_cache_and_vector_fields() -> None:
         }
     )
 
-    payload = retrieval_payload(result, image_url_prefix=None)
+    projected = AnswerRetrievalProjector().project(
+        result,
+        RetrieveProjection(
+            downloadable_workspaces=frozenset(),
+            visual_workspaces=frozenset(),
+            image_url_prefix=None,
+        ),
+    )
+    payload = {
+        "contexts": projected.contexts,
+        "sources": list(projected.sources),
+    }
 
     assert private_fields.isdisjoint(payload["contexts"]["chunks"][0])
     assert private_fields.isdisjoint(payload["sources"][0])

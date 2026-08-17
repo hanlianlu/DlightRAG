@@ -56,7 +56,9 @@ Once configured, the SDK runtime is a small create-once / call / close lifecycle
 ```python
 manager = await RAGServiceManager.acreate(config)  # start: warms the default workspace
 # per request:
-await manager.aingest(...)  # or aretrieve(...) / aanswer(...) / aanswer_stream(...)
+await manager.aingest(...)
+await manager.retrieval.retrieve(RetrieveRequest(...))
+await manager.aanswer(...)  # or aanswer_stream(...)
 await manager.aclose()  # stop
 ```
 
@@ -592,14 +594,23 @@ ingestion.
 
 ```python
 # Retrieve: contexts only, no LLM answer
-result = await manager.aretrieve(query="What are the key findings?")
-result.answer  # None
-result.contexts  # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
+from dlightrag.services.retrieval import RetrieveRequest
 
-# Query every registered workspace from the trusted in-process SDK
-all_contexts = await manager.aretrieve(
+result = await manager.retrieval.retrieve(
+  RetrieveRequest(
     query="What are the key findings?",
-    all_workspaces=True,
+    workspaces=("default",),
+  )
+)
+result.contexts  # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
+result.sources  # client-safe source projections
+
+# Query a concrete, already-authorized workspace set
+all_contexts = await manager.retrieval.retrieve(
+  RetrieveRequest(
+    query="What are the key findings?",
+    workspaces=("finance", "legal"),
+  )
 )
 
 # Answer: contexts + LLM-generated answer

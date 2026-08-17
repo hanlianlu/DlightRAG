@@ -42,6 +42,7 @@ from dlightrag.config import (
     ModelConfig,
     RerankConfig,
 )
+from dlightrag.services.retrieval import RetrievalSettings
 
 
 def access_settings(config: DlightragConfig) -> AccessSettings:
@@ -144,9 +145,18 @@ def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
     return AnswerExecutorSettings(
         default_top_k=config.top_k,
         default_chunk_top_k=config.chunk_top_k,
-        retrieval_timeout=config.request_timeout,
         max_agent_turns=config.max_agent_turns,
         semantic_highlights=semantic_highlight_settings(config),
+    )
+
+
+def retrieval_settings(config: DlightragConfig) -> RetrievalSettings:
+    """Snapshot caller-awaited Retrieval policy."""
+    return RetrievalSettings(
+        default_top_k=config.top_k,
+        default_chunk_top_k=config.chunk_top_k,
+        timeout_seconds=config.retrieval_timeout,
+        query_image_limit=MAX_QUERY_IMAGES,
     )
 
 

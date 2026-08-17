@@ -8,7 +8,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
-from dlightrag_rag.lifecycle import defer_cancellation
+from dlightrag_rag.lifecycle import await_shared_cleanup, defer_cancellation
 from dlightrag_rag.ports import CorpusSchemaError, WorkspaceCorpusBackend
 from dlightrag_rag.settings import RagSettings
 from dlightrag_rag.workspace_rag import WorkspaceRag
@@ -126,7 +126,7 @@ class WorkspacePool:
             return runtime
 
     async def warm(self, workspace_ids: Sequence[str]) -> None:
-        """Warm canonical workspaces with bounded, sibling-safe concurrency."""
+        """Warm canonical workspaces in a dedicated caller-owned task."""
         current = asyncio.current_task()
         if current is not None:
             self._warmups.add(current)
@@ -171,15 +171,7 @@ class WorkspacePool:
             close_task = asyncio.create_task(self._close_resources())
             self._close_task = close_task
 
-        cancellation: asyncio.CancelledError | None = None
-        while not close_task.done():
-            try:
-                await asyncio.shield(close_task)
-            except asyncio.CancelledError as exc:
-                cancellation = defer_cancellation(cancellation, exc)
-        resource_cancellation = close_task.result()
-        if cancellation is not None:
-            raise cancellation
+        resource_cancellation = await await_shared_cleanup(close_task)
         if resource_cancellation is not None:
             raise resource_cancellation
 

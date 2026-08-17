@@ -9,7 +9,6 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
-from dlightrag_rag.retrieval import RetrievalResult
 from mcp import Client, MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult, InputRequiredResult, TextContent
 
@@ -18,6 +17,7 @@ from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, Dligh
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.mcp import server as mcp_server
 from dlightrag.runtime import AnswerRunRecord
+from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
 from tests.unit.conftest import answer_capability_view
 
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
@@ -47,7 +47,16 @@ def mock_mcp_manager(monkeypatch):
     manager.alist_workspace_records = AsyncMock(return_value=[{"workspace": "default"}])
     manager.acreate_workspace = AsyncMock()
     manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
-    manager.aretrieve = AsyncMock()
+    manager.retrieval = SimpleNamespace(
+        retrieve=AsyncMock(
+            return_value=ServiceResponse(
+                contexts={"chunks": [], "entities": [], "relationships": []},
+                sources=(),
+                trace={},
+                image_descriptions=(),
+            )
+        )
+    )
     manager.aanswer = AsyncMock()
     manager.acreate_answer_run = AsyncMock(
         return_value=SimpleNamespace(run=_run_record(), replayed=False)
@@ -266,7 +275,7 @@ async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_manager)
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "payload", "manager_method", "error_fragment"),
+    ("tool_name", "payload", "error_fragment"),
     [
         (
             "retrieve",
@@ -274,13 +283,11 @@ async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_manager)
                 "query": "x",
                 "query_images": [_IMAGE_BLOCK, _IMAGE_BLOCK, _IMAGE_BLOCK, _IMAGE_BLOCK],
             },
-            "aretrieve",
             "query_images",
         ),
         (
             "retrieve",
             {"query": "x", "query_images": ["data:image/png;base64,abc"]},
-            "aretrieve",
             "valid dictionary",
         ),
     ],
@@ -289,7 +296,6 @@ async def test_mcp_rejects_invalid_query_image_payloads(
     mock_mcp_manager,
     tool_name: str,
     payload: dict[str, Any],
-    manager_method: str,
     error_fragment: str,
 ) -> None:
     result = await mcp_server.mcp_app.call_tool(
@@ -299,35 +305,29 @@ async def test_mcp_rejects_invalid_query_image_payloads(
 
     assert "Error:" in _tool_text(result)
     assert error_fragment in _tool_text(result)
-    getattr(mock_mcp_manager, manager_method).assert_not_awaited()
+    mock_mcp_manager.retrieval.retrieve.assert_not_awaited()
 
 
 async def test_mcp_retrieve_forwards_chunk_top_k(mock_mcp_manager) -> None:
-    mock_mcp_manager.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
-
     await mcp_server.mcp_app.call_tool(
         "retrieve",
         {"query": "x", "top_k": 8, "chunk_top_k": 5},
     )
 
-    await_args = mock_mcp_manager.aretrieve.await_args
+    await_args = mock_mcp_manager.retrieval.retrieve.await_args
     assert await_args is not None
-    call_kwargs = await_args.kwargs
-    assert call_kwargs["top_k"] == 8
-    assert call_kwargs["chunk_top_k"] == 5
+    request = await_args.args[0]
+    assert request.top_k == 8
+    assert request.chunk_top_k == 5
 
 
-async def test_mcp_retrieve_uses_shared_executor(
-    mock_mcp_manager: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    execute = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
-    monkeypatch.setattr(mcp_server, "execute_retrieve", execute)
-
+async def test_mcp_retrieve_uses_service_contract(mock_mcp_manager: AsyncMock) -> None:
     result = await mcp_server.mcp_app.call_tool("retrieve", {"query": "x"})
 
     assert _tool_json(result)["contexts"] == {"chunks": [], "entities": [], "relationships": []}
-    execute.assert_awaited_once()
-    mock_mcp_manager.aretrieve.assert_not_awaited()
+    request = mock_mcp_manager.retrieval.retrieve.await_args.args[0]
+    assert request.workspaces == ("default",)
+    assert request.projection.include_download_links is False
 
 
 async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
@@ -361,7 +361,7 @@ async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
         )
 
     assert "Access denied" in _tool_text(result)
-    mock_mcp_manager.aretrieve.assert_not_awaited()
+    mock_mcp_manager.retrieval.retrieve.assert_not_awaited()
 
 
 async def test_mcp_query_permission_does_not_imply_visual_asset_permission(
@@ -379,7 +379,7 @@ async def test_mcp_query_permission_does_not_imply_visual_asset_permission(
             )
         ],
     )
-    mock_mcp_manager.aretrieve.return_value = RetrievalResult(
+    mock_mcp_manager.retrieval.retrieve.return_value = ServiceResponse(
         contexts={
             "chunks": [
                 {
@@ -395,7 +395,10 @@ async def test_mcp_query_permission_does_not_imply_visual_asset_permission(
                     },
                 }
             ]
-        }
+        },
+        sources=(),
+        trace={},
+        image_descriptions=(),
     )
 
     with request_scope_context(
@@ -418,17 +421,13 @@ async def test_mcp_retrieve_all_workspaces_uses_visible_records(mock_mcp_manager
         {"workspace": "default"},
         {"workspace": "research_notes"},
     ]
-    mock_mcp_manager.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
-
     await mcp_server.mcp_app.call_tool(
         "retrieve",
         {"query": "x", "all_workspaces": True},
     )
 
-    assert mock_mcp_manager.aretrieve.await_args.kwargs["workspaces"] == [
-        "default",
-        "research_notes",
-    ]
+    request = mock_mcp_manager.retrieval.retrieve.await_args.args[0]
+    assert request.workspaces == ("default", "research_notes")
 
 
 async def test_mcp_all_workspaces_rejects_empty_authorized_set(
@@ -467,7 +466,12 @@ async def test_mcp_all_workspaces_is_relative_to_query_authorization(
     mock_mcp_manager.alist_workspace_records.return_value = [
         {"workspace": workspace} for workspace in registered
     ]
-    mock_mcp_manager.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
+    mock_mcp_manager.retrieval.retrieve.return_value = ServiceResponse(
+        contexts={"chunks": [], "entities": [], "relationships": []},
+        sources=(),
+        trace={},
+        image_descriptions=(),
+    )
 
     with request_scope_context(
         RequestScope(
@@ -481,7 +485,8 @@ async def test_mcp_all_workspaces_is_relative_to_query_authorization(
             {"query": "x", "all_workspaces": True},
         )
 
-    assert mock_mcp_manager.aretrieve.await_args.kwargs["workspaces"] == allowed
+    request = mock_mcp_manager.retrieval.retrieve.await_args.args[0]
+    assert request.workspaces == tuple(allowed)
 
 
 async def test_mcp_rejects_unknown_argument_without_echoing_the_url(mock_mcp_manager) -> None:

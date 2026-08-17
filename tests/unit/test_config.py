@@ -1353,7 +1353,7 @@ def test_lightrag_parser_env_follows_active_sidecar(
         {"embedding_request_timeout": 0},
         {"max_upload_bytes": 0},
         {"max_upload_size_mb": 0},
-        {"request_timeout": 0},
+        {"retrieval_timeout": 0},
         {"ingest_timeout": -1},
         {"parser_sidecars": {"vlm": {"max_image_bytes": 0}}},
         {"parser_sidecars": {"vlm": {"surrounding_leading_max_tokens": -1}}},
@@ -1372,6 +1372,14 @@ def test_config_parsing_rejects_invalid_numeric_bounds(kwargs: dict[str, Any]) -
             ),
             **kwargs,
         )
+
+
+def test_retrieval_timeout_reads_server_specific_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DLIGHTRAG_RETRIEVAL_TIMEOUT", "17")
+
+    assert _default_test_config().retrieval_timeout == 17
 
 
 def test_dotenv_rejects_unknown_dlightrag_keys(

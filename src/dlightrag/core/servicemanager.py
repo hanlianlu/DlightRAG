@@ -3,7 +3,6 @@
 
 import asyncio
 import logging
-import time
 from collections.abc import (
     AsyncGenerator,
     AsyncIterable,
@@ -31,7 +30,6 @@ from dlightrag_ai.capacity import (
     ModelProfile,
 )
 from dlightrag_ai.catalog import MODEL_CATALOG_REVISION
-from dlightrag_ai.completion import CompletionModel
 from dlightrag_ai.fingerprints import model_fingerprint
 from dlightrag_ai.media import MAX_DECODE_IMAGE_PIXELS
 from dlightrag_ai.scheduler import ModelScheduler
@@ -39,7 +37,6 @@ from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_ai.vision import ModelImageCapabilities
 from dlightrag_rag.contracts import SourceType, VisualAssetSize
-from dlightrag_rag.federation import federated_retrieve
 from dlightrag_rag.ingestion.jobs import IngestJobCoordinator
 from dlightrag_rag.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag_rag.lifecycle import defer_cancellation
@@ -52,9 +49,6 @@ from dlightrag_rag.ports import (
 )
 from dlightrag_rag.retrieval import (
     MetadataFilter,
-    RetrievalContexts,
-    RetrievalPlan,
-    RetrievalPlanner,
     RetrievalResult,
 )
 from dlightrag_rag.settings import RagSettings
@@ -76,6 +70,11 @@ from dlightrag.access import (
 )
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
+from dlightrag.adapters.retrieval import (
+    AnswerQueryImagePreparer,
+    AnswerRetrievalProjector,
+    PGWorkspaceSchemaLookup,
+)
 from dlightrag.answer.agent.orchestrator import (
     research_history_input_measure,
 )
@@ -83,10 +82,7 @@ from dlightrag.answer.capabilities import (
     AnswerCapabilityCoordinator,
     AnswerCapabilityView,
 )
-from dlightrag.answer.errors import (
-    AnswerInputOverflowError,
-    CurrentImagePayloadError,
-)
+from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.executor import (
     AnswerExecutor,
     AnswerResourceResolver,
@@ -98,7 +94,7 @@ from dlightrag.answer.history import (
     project_history,
 )
 from dlightrag.answer.model_runtime import AnswerModelRuntime
-from dlightrag.answer.resources.images import MAX_QUERY_IMAGES, prepare_query_images
+from dlightrag.answer.resources.images import prepare_query_images
 from dlightrag.answer.resources.models import (
     TextWindowBudget,
 )
@@ -129,6 +125,7 @@ from dlightrag.model_settings import (
     model_settings_for_role,
     rag_settings,
     rerank_scoring_model_settings,
+    retrieval_settings,
 )
 from dlightrag.observability import LangfuseTelemetry
 from dlightrag.runtime import (
@@ -145,11 +142,10 @@ from dlightrag.runtime import (
     answer_run_request_fingerprint,
     artifact_digest,
 )
+from dlightrag.services.retrieval import RetrievalPlannerRuntime, RetrievalService
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
 logger = logging.getLogger(__name__)
-_WORKSPACE_FANOUT_MAX_CONCURRENCY = 8
-_SCHEMA_CACHE_MAX_ENTRIES = 128
 
 
 def _attachment_bytes(resources: list[ResourceInput] | None) -> list[bytes]:
@@ -171,19 +167,6 @@ def _iso_or_none(value: Any) -> str | None:
     if callable(isoformat):
         return str(isoformat())
     return str(value)
-
-
-def _context_count(contexts: RetrievalContexts, key: str) -> int:
-    items = contexts.get(key, [])
-    return len(items) if isinstance(items, list) else 0
-
-
-def _context_output(contexts: RetrievalContexts) -> dict[str, int]:
-    return {
-        "context_chunk_count": _context_count(contexts, "chunks"),
-        "entity_count": _context_count(contexts, "entities"),
-        "relationship_count": _context_count(contexts, "relationships"),
-    }
 
 
 def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
@@ -237,10 +220,7 @@ class RAGServiceManager:
             input_root=self._config.input_dir_path,
             store=corpus_backend.ingest_jobs,
         )
-        self._retrieval_planners_by_profile: dict[ModelProfile, RetrievalPlanner] = {}
-        self._planner_model: CompletionModel | None = None
         self._file_panel_store: PGFilePanelStore | None = None
-        self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         # Image capability is role-specific but cached per resolved model config,
         # so roles that share one model share one probe.
         self._capabilities = AnswerCapabilityCoordinator(
@@ -266,6 +246,25 @@ class RAGServiceManager:
             settings=answer_resource_settings(self._config),
             models=self._answer_models,
             capabilities=self._capabilities,
+        )
+        self.retrieval = RetrievalService(
+            pool=self._workspace_pool,
+            planners=RetrievalPlannerRuntime(
+                model_settings=model_settings_for_role(self._config, "extract"),
+                default_profile=lambda: self._capabilities.model_profile("extract"),
+                scheduler=self._model_scheduler,
+                telemetry=self._telemetry,
+            ),
+            schema_lookup=PGWorkspaceSchemaLookup(
+                default_workspace=normalize_workspace(self._config.workspace)
+            ),
+            image_preparer=AnswerQueryImagePreparer(
+                capabilities=self._capabilities,
+                models=self._answer_models,
+            ),
+            projector=AnswerRetrievalProjector(),
+            settings=retrieval_settings(self._config),
+            telemetry=self._telemetry,
         )
         self.answer_capabilities = AnswerCapabilityView(self._capabilities)
         self._answer_run_store: PGAnswerRunStore | None = None
@@ -312,7 +311,7 @@ class RAGServiceManager:
             await manager._initialize_workspace_registry()
 
             # Bind the retrieval-planner LLM during startup; this does not make a model call.
-            manager._get_retrieval_planner()
+            manager.retrieval.planner_for()
 
             # ── Vision probes (once at startup, not per workspace) ─────────
             await manager._capabilities.probe_all()
@@ -822,298 +821,6 @@ class RAGServiceManager:
 
         return {"workspaces": results, "total_errors": total_errors}
 
-    def _get_retrieval_planner(
-        self,
-        model_profile: ModelProfile | None = None,
-    ) -> RetrievalPlanner:
-        """Return the manager-owned RetrievalPlanner, creating it when needed."""
-        if self._health.is_closed:
-            raise RAGServiceUnavailableError("RAG service manager is closed")
-        profile = model_profile or self._capabilities.model_profile("extract")
-        if cached := self._retrieval_planners_by_profile.get(profile):
-            return cached
-        if self._planner_model is None:
-            self._planner_model = CompletionModel(
-                model_settings_for_role(self._config, "extract"),
-                scheduler=self._model_scheduler,
-                telemetry=LangfuseTelemetry(),
-            )
-        planner = RetrievalPlanner(
-            llm_func=self._planner_model,
-            model_profile=profile,
-            context_policy=CONTEXT_POLICY,
-        )
-        self._retrieval_planners_by_profile[profile] = planner
-        return planner
-
-    async def _get_schema(
-        self,
-        workspaces: list[str] | tuple[str, ...] | None = None,
-    ) -> dict[str, Any]:
-        """Fetch a metadata schema for the requested workspace set."""
-        normalized = tuple(normalize_workspace_ids(workspaces or ())) or (
-            normalize_workspace(self._config.workspace),
-        )
-        ws_key = tuple(sorted(normalized))
-        now = time.monotonic()
-        cached = self._schema_cache.get(ws_key)
-        if cached is not None and now - cached[0] < 300.0:
-            return cached[1]
-
-        from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
-
-        try:
-            schema = await PGMetadataIndex(
-                workspace=normalize_workspace(self._config.workspace)
-            ).get_field_schema(workspaces=ws_key)
-        except Exception:
-            logger.debug("Schema lookup failed for workspaces %s", ws_key, exc_info=True)
-            # Never cache a failed lookup. Prefer the last-known-good entry
-            # even when stale, and otherwise retry on the next request.
-            return cached[1] if cached is not None else {}
-        if (
-            ws_key not in self._schema_cache
-            and len(self._schema_cache) >= _SCHEMA_CACHE_MAX_ENTRIES
-        ):
-            oldest = min(self._schema_cache, key=lambda key: self._schema_cache[key][0])
-            self._schema_cache.pop(oldest, None)
-        self._schema_cache[ws_key] = (now, schema)
-        return schema
-
-    async def _plan_retrieval(
-        self,
-        query: str,
-        *,
-        text_history: PriorTurns | None,
-        planner: RetrievalPlanner | None = None,
-        current_image_descriptions: list[str] | None = None,
-        workspaces: list[str] | tuple[str, ...] | None = None,
-        preserve_query: bool | None = None,
-    ) -> RetrievalPlan:
-        """Plan one retrieval query inside the canonical retrieval operation."""
-        effective_planner = planner or self._get_retrieval_planner()
-        from dlightrag.observability import trace_observation
-
-        async with trace_observation(
-            "retrieval_planning",
-            as_type="chain",
-            input={"query": query},
-            metadata={
-                "workspaces": list(workspaces or []),
-                "history_messages": len(text_history or PriorTurns()),
-            },
-        ) as trace:
-            schema = await self._get_schema(workspaces)
-            plan = await effective_planner.plan(
-                query,
-                conversation_history=text_history.messages if text_history is not None else None,
-                schema=schema,
-                current_image_descriptions=current_image_descriptions,
-                preserve_query=preserve_query,
-            )
-            trace.update(
-                output={
-                    "standalone_query": plan.standalone_query,
-                    "has_metadata_filter": plan.metadata_filter is not None,
-                    "planning_outcome": plan.outcome,
-                }
-            )
-            return plan
-
-    @staticmethod
-    def _observe_workspace_warmup(task: asyncio.Task[None]) -> None:
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            logger.debug("Workspace warm-up failed", exc_info=error)
-
-    async def _open_query_workspaces(
-        self,
-        *,
-        workspace: str | None,
-        workspaces: list[str] | None,
-        all_workspaces: bool,
-    ) -> list[str]:
-        """Resolve a request's workspace scope and start initializing the cold ones.
-
-        Nothing can warm earlier than this: ``all_workspaces`` is a flag, not a
-        list, so which services to open is unknown until the registry answers.
-        """
-        resolved = await self._resolve_query_workspace_scope(
-            workspace=workspace,
-            workspaces=workspaces,
-            all_workspaces=all_workspaces,
-        )
-        warmup = asyncio.create_task(self._workspace_pool.warm(resolved))
-        warmup.add_done_callback(self._observe_workspace_warmup)
-        return resolved
-
-    async def _resolve_query_workspace_scope(
-        self,
-        *,
-        workspace: str | None,
-        workspaces: list[str] | None,
-        all_workspaces: bool,
-    ) -> list[str]:
-        """Resolve the stable public workspace set without starting services."""
-        validate_query_workspace_selection(
-            all_workspaces=all_workspaces,
-            workspace=workspace,
-            workspaces=workspaces,
-        )
-        available = (
-            normalize_workspace_ids(await self.alist_workspaces()) if all_workspaces else None
-        )
-        resolved = resolve_query_workspaces(
-            default_workspace=normalize_workspace(self._config.workspace),
-            workspace=normalize_workspace(workspace) if workspace else None,
-            workspaces=(
-                [normalize_workspace(item) for item in workspaces]
-                if workspaces is not None
-                else None
-            ),
-            all_workspaces=all_workspaces,
-            available_workspaces=available,
-        )
-        return resolved
-
-    # --- Read operations (single or federated) ---
-
-    async def aretrieve(
-        self,
-        query: str,
-        *,
-        workspace: str | None = None,
-        workspaces: list[str] | None = None,
-        all_workspaces: bool = False,
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        bm25_query: str | None = None,
-        filters: MetadataFilter | None = None,
-        query_images: list[dict[str, Any]] | None = None,
-    ) -> RetrievalResult:
-        """Retrieve from one or more workspaces (federated if multiple).
-
-        ``query_images`` are current-request images. VLM descriptions inform
-        query planning, and verified image blocks are embedded only when optional
-        direct visual retrieval is active. Public retrieval is stateless: it
-        accepts neither history nor Web attachment documents.
-        """
-        current_images = list(query_images or [])
-        if len(current_images) > MAX_QUERY_IMAGES:
-            raise CurrentImagePayloadError(f"at most {MAX_QUERY_IMAGES} current images are allowed")
-        ws_list = await self._open_query_workspaces(
-            workspace=workspace,
-            workspaces=workspaces,
-            all_workspaces=all_workspaces,
-        )
-        return await self._retrieve(
-            query,
-            workspaces=ws_list,
-            history=None,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            bm25_query=bm25_query,
-            filters=filters,
-            query_images=current_images,
-            image_descriptions=None,
-        )
-
-    async def _retrieve(
-        self,
-        query: str,
-        *,
-        workspaces: list[str],
-        history: PriorTurns | None,
-        top_k: int | None,
-        chunk_top_k: int | None,
-        bm25_query: str | None,
-        filters: MetadataFilter | None,
-        query_images: list[dict[str, Any]] | None,
-        image_descriptions: list[str] | None,
-        preserve_query: bool | None = None,
-        planner: RetrievalPlanner | None = None,
-    ) -> RetrievalResult:
-        """Plan and execute one retrieval over already-resolved workspaces."""
-        requested_top_k = _positive_int_or_none(top_k)
-        requested_chunk_top_k = _positive_int_or_none(chunk_top_k)
-        current_images = list(query_images or [])
-        kwargs: dict[str, Any] = {
-            "top_k": requested_top_k or self._config.top_k,
-            "chunk_top_k": requested_chunk_top_k or self._config.chunk_top_k,
-        }
-        if current_images:
-            kwargs["query_image_blocks"] = current_images
-        from dlightrag.observability import trace_observation
-
-        try:
-            async with asyncio.timeout(self._config.request_timeout):
-                async with trace_observation(
-                    "retrieve",
-                    as_type="retriever",
-                    input={"query": query},
-                    metadata={
-                        "workspaces": workspaces,
-                        "top_k": kwargs["top_k"],
-                        "chunk_top_k": kwargs["chunk_top_k"],
-                        "has_filters": filters is not None,
-                    },
-                ) as trace:
-                    descriptions = image_descriptions
-                    if descriptions is None:
-                        if current_images:
-                            await self._capabilities.refresh_vlm()
-                        descriptions = await prepare_query_images(
-                            query_images=current_images,
-                            describer=self._answer_models.query_image_describer(),
-                        )
-                    plan = await self._plan_retrieval(
-                        query,
-                        text_history=history,
-                        planner=planner,
-                        current_image_descriptions=descriptions or None,
-                        workspaces=workspaces,
-                        preserve_query=preserve_query,
-                    )
-                    effective_query = plan.standalone_query
-                    effective_filters = filters if filters is not None else plan.metadata_filter
-                    filter_source = (
-                        "explicit" if filters is not None else plan.metadata_filter_source
-                    )
-                    effective_bm25_query = (bm25_query or "").strip() or plan.bm25_query
-                    if effective_filters is not None:
-                        kwargs["filters"] = effective_filters
-                    if filter_source is not None:
-                        kwargs["filter_source"] = filter_source
-                    if effective_bm25_query is not None:
-                        kwargs["bm25_query"] = effective_bm25_query
-                    if len(workspaces) == 1:
-                        svc = await self._workspace_pool.acquire(workspaces[0])
-                        result = await svc.aretrieve(effective_query, **kwargs)
-                    else:
-                        result = await federated_retrieve(
-                            effective_query,
-                            workspaces,
-                            self._workspace_pool.acquire,
-                            max_concurrency=_WORKSPACE_FANOUT_MAX_CONCURRENCY,
-                            **kwargs,
-                        )
-                    result.image_descriptions = descriptions
-                    result.trace["query_image_description_count"] = len(descriptions)
-                    trace.update(
-                        output={
-                            **_context_output(result.contexts),
-                            "standalone_query": effective_query,
-                            "query_image_description_count": len(descriptions),
-                        }
-                    )
-                    return result
-        except TimeoutError as e:
-            raise RAGServiceUnavailableError(
-                detail=f"Request timed out after {self._config.request_timeout}s"
-            ) from e
-
     # --- Durable answer runs ---
 
     async def _get_answer_run_store(self) -> PGAnswerRunStore:
@@ -1152,8 +859,7 @@ class RAGServiceManager:
                 executor = AnswerExecutor(
                     store=store,
                     pool=self._workspace_pool,
-                    planner_for=self._get_retrieval_planner,
-                    schema_for=self._get_schema,
+                    retrieve=self.retrieval.retrieve_result,
                     models=self._answer_models,
                     capabilities=self._capabilities,
                     resources=self._answer_resources,
@@ -1447,10 +1153,20 @@ class RAGServiceManager:
         resources: list[ResourceInput] | None,
     ) -> AnswerRunRequest:
         """Normalize one in-process public request without resolved model input."""
-        ws_list = await self._resolve_query_workspace_scope(
+        validate_query_workspace_selection(
+            all_workspaces=all_workspaces,
             workspace=workspace,
             workspaces=workspaces,
+        )
+        available = (
+            normalize_workspace_ids(await self.alist_workspaces()) if all_workspaces else None
+        )
+        ws_list = resolve_query_workspaces(
+            default_workspace=normalize_workspace(self._config.workspace),
+            workspace=normalize_workspace(workspace) if workspace else None,
+            workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
+            available_workspaces=available,
         )
         links: list[LinkReference] = []
         attachments: list[AttachmentReference] = []
@@ -1502,7 +1218,7 @@ class RAGServiceManager:
             await self._capabilities.refresh_vlm()
         model_profiles = self._capabilities.current_profiles()
         models = self._capabilities.request_model_context(model_profiles)
-        planner = self._get_retrieval_planner(models.extract)
+        planner = self.retrieval.planner_for(models.extract)
         text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(models.query))
         resolved = await self._answer_resources.resolve(
             resources,
@@ -1511,11 +1227,8 @@ class RAGServiceManager:
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
         )
         try:
-            ws_list = await self._open_query_workspaces(
-                workspace=None,
-                workspaces=list(request.workspaces),
-                all_workspaces=False,
-            )
+            ws_list = list(request.workspaces)
+            self.retrieval.warm(ws_list)
             models = resolved.models
             model_profiles["extract"] = models.extract
             model_profiles["query"] = models.query
@@ -1528,7 +1241,7 @@ class RAGServiceManager:
                 if resolved.current_images
                 else ()
             )
-            schema = await self._get_schema(ws_list)
+            schema = await self.retrieval.schema_for(ws_list)
             targets = [
                 HistoryProjectionTarget(
                     "planner",
@@ -1712,6 +1425,13 @@ class RAGServiceManager:
                 logger.warning("Failed to close the durable answer coordinator", exc_info=True)
 
         try:
+            await self.retrieval.aclose()
+        except asyncio.CancelledError as exc:
+            cancellation = defer_cancellation(cancellation, exc)
+        except Exception:
+            logger.warning("Failed to close Retrieval service", exc_info=True)
+
+        try:
             await self._workspace_pool.aclose()
         except asyncio.CancelledError as exc:
             cancellation = defer_cancellation(cancellation, exc)
@@ -1725,17 +1445,6 @@ class RAGServiceManager:
         except Exception:
             logger.warning("Failed to close Answer model runtime", exc_info=True)
 
-        planner_model, self._planner_model = self._planner_model, None
-        self._retrieval_planners_by_profile.clear()
-
-        if planner_model is not None:
-            try:
-                await planner_model.aclose()
-            except asyncio.CancelledError as exc:
-                cancellation = defer_cancellation(cancellation, exc)
-            except Exception:
-                logger.warning("Failed to close retrieval planner model", exc_info=True)
-
         from dlightrag.adapters.postgres._pool import pg_pool
 
         try:
@@ -1745,15 +1454,6 @@ class RAGServiceManager:
         shutdown_tracing()
         if cancellation is not None:
             raise cancellation
-
-
-def _positive_int_or_none(value: Any) -> int | None:
-    if value is None:
-        return None
-    result = int(value)
-    if result < 1:
-        raise ValueError("top-k limits must be positive integers")
-    return result
 
 
 __all__ = [

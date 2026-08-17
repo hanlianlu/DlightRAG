@@ -30,6 +30,7 @@ from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.runtime import RunSchemaError
+from dlightrag.services.retrieval import RetrievalTimeoutError
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
 if TYPE_CHECKING:
@@ -171,6 +172,14 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
     ) -> JSONResponse:
         body = ErrorDetail(detail=exc.detail, error_type="unavailable")
         return JSONResponse(status_code=503, content=body.model_dump())
+
+    @application.exception_handler(RetrievalTimeoutError)
+    async def retrieval_timeout_handler(
+        request: Request,  # noqa: ARG001
+        exc: RetrievalTimeoutError,
+    ) -> JSONResponse:
+        body = ErrorDetail(detail=str(exc), error_type="unavailable")
+        return JSONResponse(status_code=504, content=body.model_dump())
 
     @application.exception_handler(PermissionError)
     async def permission_error_handler(

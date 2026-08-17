@@ -6,20 +6,18 @@ import base64
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Protocol
 
 from dlightrag_agent.tools import AgentTool
 from dlightrag_ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag_ai.scheduler import model_call_scope
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import Telemetry, safe_log_text
-from dlightrag_rag.federation import federated_retrieve
 from dlightrag_rag.lifecycle import defer_cancellation
 from dlightrag_rag.pool import WorkspacePool
 from dlightrag_rag.retrieval import (
     MetadataFilter,
     RetrievalContexts,
-    RetrievalPlanner,
     RetrievalResult,
 )
 from dlightrag_rag.sourcing.source_contract import safe_source_filename
@@ -81,11 +79,24 @@ from dlightrag.runtime import (
 )
 
 logger = logging.getLogger(__name__)
-_WORKSPACE_FANOUT_MAX_CONCURRENCY = 8
 
 
-type SchemaLookup = Callable[[list[str] | tuple[str, ...]], Awaitable[dict[str, Any]]]
-type PlannerFactory = Callable[[ModelProfile], RetrievalPlanner]
+class RawRetrieval(Protocol):
+    async def __call__(
+        self,
+        query: str,
+        *,
+        workspaces: Sequence[str],
+        conversation_history: Sequence[Mapping[str, object]] | None = None,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        bm25_query: str | None = None,
+        filters: MetadataFilter | None = None,
+        query_images: Sequence[Mapping[str, Any]] = (),
+        image_descriptions: Sequence[str] = (),
+        preserve_query: bool | None = None,
+        model_profile: ModelProfile | None = None,
+    ) -> RetrievalResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +112,6 @@ class AnswerResourceSettings:
 class AnswerExecutorSettings:
     default_top_k: int
     default_chunk_top_k: int
-    retrieval_timeout: float
     max_agent_turns: int
     semantic_highlights: SemanticHighlightSettings
 
@@ -135,10 +145,6 @@ class ResolvedAnswerResources:
 
 class IncompatibleAnswerRunError(RuntimeError):
     """An accepted run cannot execute under this binary's Answer contract."""
-
-
-class AnswerRetrievalTimeoutError(RuntimeError):
-    """One internal Answer retrieval exceeded its configured bound."""
 
 
 class AnswerResourceResolver:
@@ -446,8 +452,7 @@ class AnswerExecutor:
         *,
         store: ArtifactReader,
         pool: WorkspacePool,
-        planner_for: PlannerFactory,
-        schema_for: SchemaLookup,
+        retrieve: RawRetrieval,
         models: AnswerModelRuntime,
         capabilities: AnswerCapabilityCoordinator,
         resources: AnswerResourceResolver,
@@ -456,8 +461,7 @@ class AnswerExecutor:
     ) -> None:
         self._store = store
         self._pool = pool
-        self._planner_for = planner_for
-        self._schema_for = schema_for
+        self._retrieve_result = retrieve
         self._models = models
         self._capabilities = capabilities
         self._resources = resources
@@ -622,7 +626,6 @@ class AnswerExecutor:
             raise ValueError("an Answer run requires at least one workspace")
         warmup = asyncio.create_task(self._pool.warm(workspaces))
         warmup.add_done_callback(_observe_workspace_warmup)
-        planner = self._planner_for(models.extract)
         text_window_budget = TextWindowBudget(CONTEXT_POLICY.hard_input_limit(query_profile))
         resolved = await self._resources.resolve(
             resources,
@@ -637,17 +640,17 @@ class AnswerExecutor:
             image_descriptions = list(pinned_image_descriptions)
 
             async def retrieve_knowledge_base(search_query: str) -> RetrievalResult:
-                return await self._retrieve(
+                return await self._retrieve_result(
                     search_query,
                     workspaces=workspaces,
-                    history=history,
+                    conversation_history=history.messages,
                     top_k=top_k,
                     chunk_top_k=chunk_top_k,
                     filters=filters,
                     query_images=resolved.current_images,
                     image_descriptions=image_descriptions,
                     preserve_query=True if resolved.research else None,
-                    planner=planner,
+                    model_profile=models.extract,
                 )
 
             model_func: Callable[..., Any] | None = None
@@ -692,121 +695,6 @@ class AnswerExecutor:
             if resolved.registry is not None:
                 await resolved.registry.aclose()
             raise
-
-    async def _retrieve(
-        self,
-        query: str,
-        *,
-        workspaces: list[str],
-        history: PriorTurns,
-        top_k: int | None,
-        chunk_top_k: int | None,
-        filters: MetadataFilter | None,
-        query_images: list[dict[str, Any]],
-        image_descriptions: list[str],
-        preserve_query: bool | None,
-        planner: RetrievalPlanner,
-    ) -> RetrievalResult:
-        kwargs: dict[str, Any] = {
-            "top_k": _positive_int_or_none(top_k) or self._settings.default_top_k,
-            "chunk_top_k": (
-                _positive_int_or_none(chunk_top_k) or self._settings.default_chunk_top_k
-            ),
-        }
-        if query_images:
-            kwargs["query_image_blocks"] = query_images
-        try:
-            async with asyncio.timeout(self._settings.retrieval_timeout):
-                async with self._telemetry.observe(
-                    "retrieve",
-                    as_type="retriever",
-                    input={"query": query},
-                    metadata={
-                        "workspaces": workspaces,
-                        "top_k": kwargs["top_k"],
-                        "chunk_top_k": kwargs["chunk_top_k"],
-                        "has_filters": filters is not None,
-                    },
-                ) as trace:
-                    plan = await self._plan_retrieval(
-                        query,
-                        history=history,
-                        planner=planner,
-                        image_descriptions=image_descriptions,
-                        workspaces=workspaces,
-                        preserve_query=preserve_query,
-                    )
-                    effective_filters = filters if filters is not None else plan.metadata_filter
-                    filter_source = (
-                        "explicit" if filters is not None else plan.metadata_filter_source
-                    )
-                    if effective_filters is not None:
-                        kwargs["filters"] = effective_filters
-                    if filter_source is not None:
-                        kwargs["filter_source"] = filter_source
-                    if plan.bm25_query is not None:
-                        kwargs["bm25_query"] = plan.bm25_query
-                    if len(workspaces) == 1:
-                        runtime = await self._pool.acquire(workspaces[0])
-                        result = await runtime.aretrieve(plan.standalone_query, **kwargs)
-                    else:
-                        result = await federated_retrieve(
-                            plan.standalone_query,
-                            workspaces,
-                            self._pool.acquire,
-                            max_concurrency=_WORKSPACE_FANOUT_MAX_CONCURRENCY,
-                            **kwargs,
-                        )
-                    result.image_descriptions = image_descriptions
-                    result.trace["query_image_description_count"] = len(image_descriptions)
-                    trace.update(
-                        output={
-                            **_context_output(result.contexts),
-                            "standalone_query": plan.standalone_query,
-                            "query_image_description_count": len(image_descriptions),
-                        }
-                    )
-                    return result
-        except TimeoutError as exc:
-            raise AnswerRetrievalTimeoutError(
-                f"Retrieval timed out after {self._settings.retrieval_timeout}s"
-            ) from exc
-
-    async def _plan_retrieval(
-        self,
-        query: str,
-        *,
-        history: PriorTurns,
-        planner: RetrievalPlanner,
-        image_descriptions: list[str],
-        workspaces: list[str],
-        preserve_query: bool | None,
-    ):
-        async with self._telemetry.observe(
-            "retrieval_planning",
-            as_type="chain",
-            input={"query": query},
-            metadata={
-                "workspaces": workspaces,
-                "history_messages": len(history),
-            },
-        ) as trace:
-            schema = await self._schema_for(workspaces)
-            plan = await planner.plan(
-                query,
-                conversation_history=history.messages,
-                schema=schema,
-                current_image_descriptions=image_descriptions or None,
-                preserve_query=preserve_query,
-            )
-            trace.update(
-                output={
-                    "standalone_query": plan.standalone_query,
-                    "has_metadata_filter": plan.metadata_filter is not None,
-                    "planning_outcome": plan.outcome,
-                }
-            )
-            return plan
 
     async def _answer_run_resources(
         self,
@@ -929,26 +817,9 @@ def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[s
     return mime, image_bytes_to_data_uri(data, fallback_mime=mime)
 
 
-def _positive_int_or_none(value: Any) -> int | None:
-    if value is None:
-        return None
-    result = int(value)
-    if result < 1:
-        raise ValueError("top-k limits must be positive integers")
-    return result
-
-
 def _context_count(contexts: RetrievalContexts, key: str) -> int:
     items = contexts.get(key, [])
     return len(items) if isinstance(items, list) else 0
-
-
-def _context_output(contexts: RetrievalContexts) -> dict[str, int]:
-    return {
-        "context_chunk_count": _context_count(contexts, "chunks"),
-        "entity_count": _context_count(contexts, "entities"),
-        "relationship_count": _context_count(contexts, "relationships"),
-    }
 
 
 def answer_trace_output(

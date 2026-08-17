@@ -203,7 +203,6 @@ forbidden_modules = [
     "dlightrag.api",
     "dlightrag.core.client_attachments",
     "dlightrag.core.client_contracts",
-    "dlightrag.core.client_execution",
     "dlightrag.core.client_payloads",
     "dlightrag.core.client_requests",
     "dlightrag.core.servicemanager",
@@ -267,13 +266,32 @@ type = "forbidden"
 source_modules = [
     "dlightrag.core.client_attachments",
     "dlightrag.core.client_contracts",
-    "dlightrag.core.client_execution",
     "dlightrag.core.client_payloads",
     "dlightrag.core.client_requests",
     "dlightrag.core.memory",
 ]
 forbidden_modules = ["dlightrag.web"]
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+id = "retrieval-service-independence"
+name = "Retrieval service owns inline retrieval without product or adapter dependencies"
+type = "forbidden"
+source_modules = ["dlightrag.services.retrieval"]
+forbidden_modules = [
+    "dlightrag.access",
+    "dlightrag.adapters",
+    "dlightrag.answer",
+    "dlightrag.api",
+    "dlightrag.config",
+    "dlightrag.core",
+    "dlightrag.mcp",
+    "dlightrag.model_settings",
+    "dlightrag.web",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
 
 [[tool.importlinter.contracts]]
 id = "postgres-adapter-owner-direction"

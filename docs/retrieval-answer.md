@@ -74,15 +74,16 @@ startup error.
 
 ## Query Pipeline
 
-This pipeline is always used by `/retrieve` and by the Answer fast path. In the
-research path it runs lazily only when the agent selects
-`search_knowledge_base`. The agent's tool query remains the semantic search
-query; `RetrievalPlanner` is an internal retrieval node that contributes BM25
-terms, metadata filters, and current-image retrieval context without rewriting
-that query. Attachment resources are not planner inputs.
+This pipeline is used by `/retrieve`. Durable Answer execution reuses the same
+planner and workspace-set schema provider but owns its retrieval call and has no
+inline request timeout. In the research path retrieval runs lazily only when the
+agent selects `search_knowledge_base`. The agent's tool query remains the
+semantic search query; `RetrievalPlanner` is an internal retrieval node that
+contributes BM25 terms, metadata filters, and current-image retrieval context
+without rewriting that query. Attachment resources are not planner inputs.
 
 ```text
-RAGServiceManager._retrieve(query, history, query_images, filters)
+RetrievalService.retrieve(RetrieveRequest(...))
   |
   |-- RetrievalPlanner
   |     built-in metadata fields plus custom_metadata keys

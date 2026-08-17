@@ -18,7 +18,6 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
-from unittest.mock import MagicMock
 
 import asyncpg
 import pytest
@@ -646,8 +645,7 @@ def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
     executor = AnswerExecutor(
         store=store,
         pool=manager._workspace_pool,
-        planner_for=manager._get_retrieval_planner,
-        schema_for=MagicMock(),
+        retrieve=manager.retrieval.retrieve_result,
         models=manager._answer_models,
         capabilities=manager._capabilities,
         resources=manager._answer_resources,

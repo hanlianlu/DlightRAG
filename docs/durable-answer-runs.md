@@ -152,8 +152,8 @@ indeterminate checkpoint-commit procedure below is the only zero-row retry
 exception. Blocking CPU work remains cancellation-cooperative at its existing
 result-commit boundary; the stale worker cannot persist that result.
 
-A durable Answer run has no wall-clock execution deadline. `request_timeout`
-bounds non-durable Retrieve and Query operations and does not wrap Answer
+A durable Answer run has no wall-clock execution deadline. `retrieval_timeout`
+bounds one caller-awaited inline Retrieval operation and does not wrap Answer
 execution. Each external LLM, embedding, rerank, URL-fetch, resource, and
 parser-sidecar call keeps its own provider, request, or stream-idle timeout, so
 one stalled awaited call cannot hold a slot forever. A run releases its slot on

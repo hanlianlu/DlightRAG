@@ -15,7 +15,6 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dlightrag.access import AccessAction, UserContext
-from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.models import (
     IngestJobStatusResponse,
@@ -28,13 +27,14 @@ from dlightrag.api.models import (
 )
 from dlightrag.app_state import request_config
 from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.client_execution import execute_retrieve
-from dlightrag.core.client_payloads import retrieval_payload
+from dlightrag.core.client_payloads import metadata_filter_from_payload
 from dlightrag.core.client_requests import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
     managed_local_ingest_path,
 )
+from dlightrag.services.retrieval import RetrieveProjection
+from dlightrag.services.retrieval import RetrieveRequest as ServiceRequest
 
 from .deps import (
     authorized_workspaces,
@@ -158,18 +158,30 @@ async def retrieve(
         resolved_workspaces,
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
     )
-    result = await execute_retrieve(
-        manager=manager,
-        payload=body,
-        resolved_workspaces=resolved_workspaces,
+    result = await manager.retrieval.retrieve(
+        ServiceRequest(
+            query=body.query,
+            workspaces=tuple(resolved_workspaces),
+            top_k=body.top_k,
+            chunk_top_k=body.chunk_top_k,
+            bm25_query=body.bm25_query,
+            filters=metadata_filter_from_payload(body.filters),
+            query_images=tuple(
+                image.model_dump(exclude_none=True) for image in body.query_images or ()
+            ),
+            projection=RetrieveProjection(
+                downloadable_workspaces=frozenset(downloadable_workspaces),
+                visual_workspaces=frozenset(visual_workspaces),
+                include_download_links=True,
+            ),
+        )
     )
-    link_builder = SourceDownloadLinkBuilder()
-    return retrieval_payload(
-        result,
-        source_link_builder=link_builder,
-        downloadable_workspaces=downloadable_workspaces,
-        visual_workspaces=visual_workspaces,
-    )
+    return {
+        "contexts": result.contexts,
+        "sources": list(result.sources),
+        "trace": dict(result.trace),
+        "image_descriptions": list(result.image_descriptions),
+    }
 
 
 _ALLOWED_INGEST_PARTS = {"file", "workspace", "title", "author", "metadata"}

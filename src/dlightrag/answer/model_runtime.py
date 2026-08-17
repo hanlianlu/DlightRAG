@@ -13,7 +13,7 @@ from dlightrag_ai.scheduler import ModelScheduler
 from dlightrag_ai.settings import ModelRoleSettings
 from dlightrag_ai.telemetry import Telemetry
 from dlightrag_ai.tool_model import ToolModel
-from dlightrag_rag.lifecycle import defer_cancellation
+from dlightrag_rag.lifecycle import await_shared_cleanup
 
 from dlightrag.answer.images import AnswerImagePolicy
 from dlightrag.answer.resources.images import QueryImageDescriber
@@ -138,15 +138,7 @@ class AnswerModelRuntime:
                 name="answer-model-runtime-close",
             )
             self._close_task = close_task
-        cancellation: asyncio.CancelledError | None = None
-        while not close_task.done():
-            try:
-                await asyncio.shield(close_task)
-            except asyncio.CancelledError as exc:
-                cancellation = defer_cancellation(cancellation, exc)
-        resource_cancellation = close_task.result()
-        if cancellation is not None:
-            raise cancellation
+        resource_cancellation = await await_shared_cleanup(close_task)
         if resource_cancellation is not None:
             raise resource_cancellation
 

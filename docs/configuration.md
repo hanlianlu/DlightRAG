@@ -906,7 +906,8 @@ The Python SDK and CLI resolve their HTTP target from `DLIGHTRAG_API_URL` and an
 optional bearer from `DLIGHTRAG_API_TOKEN` (or the deployment-only
 `DLIGHTRAG_API_AUTH_TOKEN`). `DLIGHTRAG_CLIENT_TIMEOUT` bounds one caller-owned
 HTTP request and defaults to 120 seconds. It is independent of the server's
-inline retrieval timeout; `DLIGHTRAG_REQUEST_TIMEOUT` is not a client setting.
+inline retrieval timeout, configured separately as
+`DLIGHTRAG_RETRIEVAL_TIMEOUT`.
 
 ## MCP Streamable HTTP
 
@@ -986,7 +987,7 @@ extraction for every interface.
 max_upload_bytes: 104857600
 max_upload_size_mb: 512
 ingest_timeout:
-request_timeout: 300
+retrieval_timeout: 300
 max_agent_turns: 50
 ```
 

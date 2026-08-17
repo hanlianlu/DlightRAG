@@ -33,6 +33,8 @@ from dlightrag.core.servicemanager import RAGServiceUnavailableError
 from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import authentication_settings
 from dlightrag.runtime import AnswerRunRecord, RunCreation
+from dlightrag.services.retrieval import RetrievalTimeoutError
+from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
 from tests.unit.conftest import prepare_test_answer_run_input
 
 # ---------------------------------------------------------------------------
@@ -166,7 +168,16 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
             "lease_expires_at": "2026-08-05T00:00:00+00:00",
         }
     )
-    manager.aretrieve = mock_service.aretrieve
+    manager.retrieval = SimpleNamespace(
+        retrieve=AsyncMock(
+            return_value=ServiceResponse(
+                contexts={"chunks": [], "entities": [], "relationships": []},
+                sources=(),
+                trace={},
+                image_descriptions=(),
+            )
+        )
+    )
     manager.aanswer = mock_service.aanswer
     manager.astart_answer_run = AsyncMock(
         return_value=RunCreation(run=_queued_run_record(), replayed=False)
@@ -487,7 +498,7 @@ class TestJWTAuth:
         )
 
         assert resp.status_code == 403
-        mock_manager.aretrieve.assert_not_awaited()
+        mock_manager.retrieval.retrieve.assert_not_awaited()
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_jwt_claims_access_control_allows_mapped_workspace(
@@ -525,7 +536,7 @@ class TestJWTAuth:
         )
 
         assert resp.status_code == 200
-        mock_manager.aretrieve.assert_awaited_once()
+        mock_manager.retrieval.retrieve.assert_awaited_once()
 
     @pytest.mark.usefixtures("_patch_manager")
     @pytest.mark.parametrize(
@@ -1064,13 +1075,50 @@ class TestRetrieveEndpoint:
         assert "answer" not in body
         assert "contexts" in body
         assert "sources" in body
-        assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] is None
+        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        assert request.chunk_top_k is None
+
+    async def test_retrieve_timeout_is_504(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.retrieval.retrieve.side_effect = RetrievalTimeoutError("timed out")
+        app.state.manager = mock_manager
+
+        response = await client.post("/retrieve", json={"query": "slow"})
+
+        assert response.status_code == 504
+
+    async def test_retrieve_closed_service_is_503(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.retrieval.retrieve.side_effect = WorkspaceUnavailableError(
+            "Retrieval service is closed"
+        )
+        app.state.manager = mock_manager
+
+        response = await client.post("/retrieve", json={"query": "during shutdown"})
+
+        assert response.status_code == 503
+        assert response.json()["error_type"] == "unavailable"
 
     async def test_retrieve_projects_source_workspace_without_internal_fields(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.aretrieve = AsyncMock(
-            return_value=RetrievalResult(contexts={"chunks": [_finance_source_context()]})
+        mock_manager.retrieval.retrieve.return_value = ServiceResponse(
+            contexts={"chunks": [_finance_source_context()]},
+            sources=(
+                {
+                    "id": "1",
+                    "title": "report.pdf",
+                    "type": "document",
+                    "source_uri": "s3://bucket/report.pdf",
+                    "download_url": "/files/raw/doc-report?workspace=finance",
+                    "cited_chunk_ids": None,
+                    "chunks": [],
+                },
+            ),
+            trace={},
+            image_descriptions=(),
         )
         app.state.manager = mock_manager
 
@@ -1097,10 +1145,21 @@ class TestRetrieveEndpoint:
                     return []
                 return list(workspaces)
 
-        mock_manager.aretrieve = AsyncMock(
-            return_value=RetrievalResult(
-                contexts={"chunks": [{**_finance_source_context(), "image_data": "bytes"}]}
-            )
+        mock_manager.retrieval.retrieve.return_value = ServiceResponse(
+            contexts={"chunks": [{**_finance_source_context(), "image_data": "bytes"}]},
+            sources=(
+                {
+                    "id": "1",
+                    "title": "report.pdf",
+                    "type": "document",
+                    "source_uri": "s3://bucket/report.pdf",
+                    "download_url": None,
+                    "cited_chunk_ids": None,
+                    "chunks": [],
+                },
+            ),
+            trace={},
+            image_descriptions=(),
         )
         app.state.manager = mock_manager
         app.state.access_control = QueryOnlyAccess()
@@ -1135,10 +1194,8 @@ class TestRetrieveEndpoint:
         )
 
         assert response.status_code == 200
-        assert mock_manager.aretrieve.await_args.kwargs["workspaces"] == [
-            "default",
-            "research_notes",
-        ]
+        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        assert request.workspaces == ("default", "research_notes")
 
     async def test_retrieve_rejects_mode_field(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1149,7 +1206,7 @@ class TestRetrieveEndpoint:
             json={"query": "hello", "mode": "local"},
         )
         assert resp.status_code == 422
-        mock_manager.aretrieve.assert_not_called()
+        mock_manager.retrieval.retrieve.assert_not_called()
 
     async def test_retrieve_forwards_chunk_top_k_field(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1160,26 +1217,24 @@ class TestRetrieveEndpoint:
             json={"query": "hello", "chunk_top_k": 5},
         )
         assert resp.status_code == 200
-        assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] == 5
+        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        assert request.chunk_top_k == 5
 
-    async def test_retrieve_uses_shared_executor(
+    async def test_retrieve_passes_reader_scope_to_service(
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
         mock_manager,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from dlightrag.api.routes import rag as rag_routes
-
-        execute = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
-        monkeypatch.setattr(rag_routes, "execute_retrieve", execute)
         app.state.manager = mock_manager
 
         resp = await client.post("/retrieve", json={"query": "hello"})
 
         assert resp.status_code == 200
-        execute.assert_awaited_once()
-        mock_manager.aretrieve.assert_not_awaited()
+        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        assert request.projection.include_download_links is True
+        assert request.projection.downloadable_workspaces == frozenset({"default"})
+        assert request.projection.visual_workspaces == frozenset({"default"})
 
 
 # ---------------------------------------------------------------------------
