@@ -33,6 +33,7 @@ from dlightrag_agent.session.store import (
     EvidenceConflict,
     LeaseLost,
     SessionCommit,
+    SessionProgressClass,
     SettleCommit,
     VersionConflict,
 )
@@ -390,6 +391,7 @@ class PGJournalStore:
         settlement: EffectSettlement[M3HostUpdate],
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None = None,
+        progress: SessionProgressClass = "live",
     ) -> SettleCommit:
         if not entries:
             raise ValueError("a settlement requires at least one result entry")
@@ -404,6 +406,7 @@ class PGJournalStore:
                         settlement=settlement,
                         entries=entries,
                         projection=projection,
+                        progress=progress,
                     )
                 except _EvidenceIdentityConflict:
                     return EvidenceConflict()
@@ -418,6 +421,7 @@ class PGJournalStore:
         settlement: EffectSettlement[M3HostUpdate],
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None,
+        progress: SessionProgressClass,
     ) -> SettleCommit:
         if await self._hold_lease(conn) is None:
             return LeaseLost()
@@ -502,7 +506,8 @@ class PGJournalStore:
             len(entries),
             _uuid(projection.projection_id.value) if projection else None,
         )
-        await conn.execute(_ADVANCE_PROGRESS, self._owner_id, self._run_id)
+        if progress == "live":
+            await conn.execute(_ADVANCE_PROGRESS, self._owner_id, self._run_id)
         return EffectCommit(
             version=version + 1,
             appended_sequences=sequences,

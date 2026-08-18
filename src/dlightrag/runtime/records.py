@@ -64,9 +64,10 @@ class AnswerRunRecord:
     """Authoritative lifecycle state of one durable run.
 
     Durable progress replaces the checkpoint-era turn and recovery counters:
-    ``durable_progress_version`` advances only on fenced model turn appends,
-    compaction appends, effect settlements, and Fast stage settlements (M3
-    durable progress contract).
+    ``durable_progress_version`` advances only on live fenced work — model
+    turn appends, compaction appends, live effect settlements, and Fast stage
+    settlements. Recovery prelude (interrupted ``never`` intents, contract
+    changes, workspace-epoch handoff) does not advance it.
     """
 
     owner_id: str

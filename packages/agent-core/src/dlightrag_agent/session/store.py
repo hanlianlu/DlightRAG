@@ -10,12 +10,14 @@ contiguous entry-sequence range for every entry it appends (M3-D16).
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from dlightrag_agent.session.effects import EffectSettlement, HostUpdateT
 from dlightrag_agent.session.entries import SessionEntry
 from dlightrag_agent.session.ids import IntentId, SessionId
 from dlightrag_agent.session.projection import ContextProjection
+
+type SessionProgressClass = Literal["live", "prelude"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,9 +108,11 @@ class AgentSessionStore[HostUpdateT](Protocol):
     """Durable journal storage for one agent session.
 
     The PostgreSQL adapter commits host updates, ordered result entries,
-    projection, settlement, session version, and durable run progress in one
-    transaction; the in-memory adapter implements the same version and effect
-    semantics with :class:`NoHostUpdate`.
+    projection, settlement, session version, and — for live settlements —
+    durable run progress in one transaction. Recovery prelude settlements use
+    ``progress="prelude"`` and must not advance durable progress. The
+    in-memory adapter implements the same version and effect semantics with
+    :class:`NoHostUpdate`.
     """
 
     async def load(self, session_id: SessionId) -> AgentSessionSnapshot:
@@ -135,6 +139,7 @@ class AgentSessionStore[HostUpdateT](Protocol):
         settlement: EffectSettlement[HostUpdateT],
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None = None,
+        progress: SessionProgressClass = "live",
     ) -> SettleCommit:
         """Settle one existing unsettled intent atomically with its results."""
         ...
@@ -153,6 +158,7 @@ __all__ = [
     "LeaseLost",
     "NoHostUpdate",
     "SessionCommit",
+    "SessionProgressClass",
     "SettleCommit",
     "VersionConflict",
 ]

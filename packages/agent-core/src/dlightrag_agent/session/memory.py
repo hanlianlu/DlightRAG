@@ -25,6 +25,7 @@ from dlightrag_agent.session.store import (
     EffectMissing,
     NoHostUpdate,
     SessionCommit,
+    SessionProgressClass,
     SettleCommit,
     VersionConflict,
 )
@@ -80,7 +81,9 @@ class InMemoryAgentSessionStore:
         settlement: EffectSettlement[NoHostUpdate],
         entries: Sequence[SessionEntry],
         projection: ContextProjection | None = None,
+        progress: SessionProgressClass = "live",
     ) -> SettleCommit:
+        del progress
         session = self._sessions.get(session_id)
         if session is None:
             return EffectMissing(intent_id=intent_id)

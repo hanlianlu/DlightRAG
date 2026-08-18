@@ -661,3 +661,115 @@ async def test_event_appends_do_not_advance_progress(pool) -> None:
         assert progress == 0
     finally:
         await pool.release(conn)
+
+
+async def _progress(pool, run_id: str) -> int:
+    conn = await pool.acquire()
+    try:
+        value = await conn.fetchval(
+            "SELECT durable_progress_version FROM dlightrag_answer_runs"
+            " WHERE owner_id = $1 AND run_id = $2",
+            _OWNER,
+            uuid.UUID(run_id),
+        )
+        return int(value)
+    finally:
+        await pool.release(conn)
+
+
+async def _expire_lease(pool, run_id: str) -> None:
+    conn = await pool.acquire()
+    try:
+        await conn.execute(
+            "UPDATE dlightrag_answer_runs SET lease_expires_at = NOW() - INTERVAL '1 second'"
+            " WHERE run_id = $1",
+            uuid.UUID(run_id),
+        )
+    finally:
+        await pool.release(conn)
+
+
+async def test_live_settlement_advances_durable_progress(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    after_append = await _progress(pool, claimed.run.run_id)
+    settled = await store.settle_effect(
+        session_id=session_id,
+        expected_version=1,
+        intent_id=intent_id,
+        settlement=_settlement(intent_id, EvidenceSettlementUpdate()),
+        entries=[_result_entry(session_id, intent_id)],
+    )
+    assert settled.__class__.__name__ == "EffectCommit"
+    assert await _progress(pool, claimed.run.run_id) == after_append + 1
+
+
+async def test_prelude_settlement_does_not_advance_durable_progress(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.session_store
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    await store.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    after_append = await _progress(pool, claimed.run.run_id)
+    settled = await store.settle_effect(
+        session_id=session_id,
+        expected_version=1,
+        intent_id=intent_id,
+        settlement=_settlement(intent_id, EvidenceSettlementUpdate()),
+        entries=[_result_entry(session_id, intent_id)],
+        progress="prelude",
+    )
+    assert settled.__class__.__name__ == "EffectCommit"
+    assert await _progress(pool, claimed.run.run_id) == after_append
+    snapshot = await store.load(session_id)
+    assert snapshot.version == 2
+    assert isinstance(snapshot.entries[-1], EffectResultEntry)
+
+
+async def test_prelude_only_reclaims_still_abandon(pool) -> None:
+    claimed = await _claim(pool)
+    journal = claimed.execution.session_store
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    await journal.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    store = await _store(pool)
+    await _expire_lease(pool, claimed.run.run_id)
+    first = await store.claim_next(worker_id="reclaim-0")
+    assert first is not None
+    assert first.run.reclaims_without_progress == 1
+    settled = await first.execution.session_store.settle_effect(
+        session_id=session_id,
+        expected_version=1,
+        intent_id=intent_id,
+        settlement=_settlement(intent_id, EvidenceSettlementUpdate()),
+        entries=[_result_entry(session_id, intent_id)],
+        progress="prelude",
+    )
+    assert settled.__class__.__name__ == "EffectCommit"
+    for index in range(1, 3):
+        await _expire_lease(pool, claimed.run.run_id)
+        reclaimed = await store.claim_next(worker_id=f"reclaim-{index}")
+        assert reclaimed is not None
+        assert reclaimed.run.reclaims_without_progress == index + 1
+    await _expire_lease(pool, claimed.run.run_id)
+    fourth = await store.claim_next(worker_id="reclaim-3")
+    assert fourth is None
+    record = await store.get_run(owner_id=_OWNER, run_id=claimed.run.run_id)
+    assert record is not None
+    assert record.status == "failed"
+    assert record.error_kind == "run_abandoned"

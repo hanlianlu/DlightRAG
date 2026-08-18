@@ -239,3 +239,23 @@ async def test_settlement_entries_must_belong_to_the_intent() -> None:
             settlement=_settlement(intent.intent_id),
             entries=[_result_entry(session_id, IntentId.new())],
         )
+
+
+@pytest.mark.asyncio
+async def test_prelude_settlement_still_commits_the_effect() -> None:
+    store = InMemoryAgentSessionStore()
+    session_id = SessionId.new()
+    intent = _intent(session_id)
+    await store.append(session_id=session_id, expected_version=0, entries=[intent])
+
+    settled = await store.settle_effect(
+        session_id=session_id,
+        expected_version=1,
+        intent_id=intent.intent_id,
+        settlement=_settlement(intent.intent_id),
+        entries=[_result_entry(session_id, intent.intent_id)],
+        progress="prelude",
+    )
+    assert isinstance(settled, EffectCommit)
+    snapshot = await store.load(session_id)
+    assert snapshot.version == 2

@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from dlightrag_agent.session.effects import (
     EffectIntent,
@@ -945,6 +945,7 @@ class JournalRunBoundaries:
                 and tool.contract_version == intent.contract_version
                 and tool.input_schema_digest == intent.input_schema_digest
             )
+            progress: Literal["live", "prelude"] = "prelude"
             if intent.replay_policy == "safe" and contract_matches:
                 if tool is None:
                     raise RuntimeError("matched contract lost its tool")
@@ -958,6 +959,7 @@ class JournalRunBoundaries:
                     outcome = "succeeded"
                     content = f'Tool "{intent.tool_name}" failed: {exc}'
                     cached = False
+                progress = "live"
             elif intent.replay_policy == "safe":
                 outcome = "tool_contract_changed"
                 content = f'Tool "{intent.tool_name}" contract changed; result discarded.'
@@ -967,7 +969,11 @@ class JournalRunBoundaries:
                 content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
                 cached = False
             await self._settle_intent_recovery(
-                intent, outcome=outcome, content=content, cached=cached
+                intent,
+                outcome=outcome,
+                content=content,
+                cached=cached,
+                progress=progress,
             )
 
     async def _settle_intent_recovery(
@@ -977,6 +983,7 @@ class JournalRunBoundaries:
         outcome: str,
         content: str,
         cached: bool,
+        progress: Literal["live", "prelude"],
     ) -> None:
         result_entry = EffectResultEntry(
             entry_id=EntryId.new(),
@@ -1001,6 +1008,7 @@ class JournalRunBoundaries:
                 host_update=EvidenceSettlementUpdate(),
             ),
             entries=[result_entry],
+            progress=progress,
         )
         await self._handle_settlement(committed, intent)
 
