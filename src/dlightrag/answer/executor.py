@@ -6,10 +6,39 @@ import base64
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from dlightrag_agent.session.effects import (
+    EffectIntent,
+    EffectSettlement,
+    ToolResultEntry,
+    canonical_json,
+)
+from dlightrag_agent.session.entries import (
+    AssistantMessageEntry,
+    EffectIntentEntry,
+    EffectResultEntry,
+    ProfileFactEntry,
+    SessionEntry,
+    UserMessageEntry,
+)
 from dlightrag_agent.session.fold import PriorTurns
-from dlightrag_agent.tools import AgentTool
+from dlightrag_agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
+from dlightrag_agent.session.projection import ContextProjection, TokenAnchor
+from dlightrag_agent.session.store import (
+    AgentSessionStore,
+    EffectAlreadySettled,
+    EffectCommit,
+    EffectContractChanged,
+    EffectMissing,
+    EvidenceConflict,
+    LeaseLost,
+    SessionCommit,
+    SettleCommit,
+    VersionConflict,
+)
+from dlightrag_agent.tools import AgentTool, ExecutedTurn
 from dlightrag_ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag_ai.scheduler import model_call_scope
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
@@ -49,36 +78,43 @@ from dlightrag.answer.resources.models import (
 )
 from dlightrag.answer.resources.registry import FetchedBytesSink, FetchedResourceBytes
 from dlightrag.answer.resources.visual import ResourceInspector
-from dlightrag.answer.runs.checkpoints import (
-    ArtifactReader,
-    encode_checkpoint_state,
-    restore_agent_state,
-)
 from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
     AttachmentReference,
     LinkReference,
-    SessionBoundaries,
     build_current_answer_resources,
 )
-from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
 from dlightrag.answer.tools.resources import build_resource_tools
 from dlightrag.answer.tools.web import ExaSearch
 from dlightrag.runtime import (
-    CheckpointError,
     LeaseLostError,
-    PendingArtifact,
-    PendingArtifactReference,
     RunCancelledError,
     RunExecutionError,
     RunSession,
-    artifact_digest,
+)
+from dlightrag.runtime.blob_chunks import blob_digest, plan_blob
+from dlightrag.runtime.progress import RunProgressStore, StageCommit
+from dlightrag.runtime.records import artifact_digest
+from dlightrag.runtime.settlements import (
+    CompleteBlobDescriptor,
+    EvidenceSettlementUpdate,
+    FetchedResourceSettlementUpdate,
+    M3HostUpdate,
+    OpaqueEvidenceWrite,
+    OpaqueFetchedResourceWrite,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ArtifactReader(Protocol):
+    """Read one owner-scoped complete blob by digest (executor store surface)."""
+
+    async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None: ...
+    async def list_run_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]: ...
 
 
 class RawRetrieval(Protocol):
@@ -476,7 +512,6 @@ class AnswerExecutor:
                 asyncio.CancelledError,
                 RunCancelledError,
                 LeaseLostError,
-                CheckpointError,
                 RunExecutionError,
             ):
                 raise
@@ -491,29 +526,72 @@ class AnswerExecutor:
                 raise RunExecutionError(classify_answer_error(exc), message) from exc
 
     async def _execute(self, session: RunSession) -> Mapping[str, Any]:
-        request = AnswerRunInput.from_request(session.request)
+        request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
         await session.enter_phase("planning")
         projected_history = PriorTurns([dict(message) for message in request.history])
+
+        boundaries: JournalRunBoundaries | None = None
+        fast_boundaries: FastRunBoundaries | None = None
+
+        fetched_buffer: list[FetchedResourceBytes] = []
+
         run = await self.prepare_orchestrated_run(
             workspaces=list(request.workspaces),
             top_k=request.top_k,
             chunk_top_k=request.chunk_top_k,
             filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
             resources=await self._answer_run_resources(request, owner_id=session.owner_id),
-            fetched_bytes_sink=_fetched_bytes_sink(session),
+            fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
         )
         stream: AsyncIterator[str] | None = None
         try:
+            journal = session.execution.session_store
+            prepared_early: Any = None
             research = run.orchestrator.uses_research_path
-            if session.checkpoint is not None and not research:
-                raise CheckpointError(
-                    "checkpoint_incompatible",
-                    "Answer run checkpoint requires a research path this deployment no longer offers.",
+            if research:
+                session_id = SessionId(request.session_id)
+                prepared_early = run.orchestrator.prepare_run(
+                    request.query,
+                    conversation_history=run.history,
+                    query_images=run.query_images,
+                    registry=run.registry,
                 )
+                snapshot = await journal.load(session_id)
+                if snapshot.version == 0:
+                    snapshot = await self._seed_session(journal, session_id, request, snapshot)
+                else:
+                    await run.orchestrator.recover_from_fold(prepared_early, snapshot)
+                    await _adopt_durable_evidence(prepared_early, journal, session_id)
+                boundaries = JournalRunBoundaries(
+                    session=session,
+                    journal=journal,
+                    session_id=session_id,
+                    tools_by_name={tool.name: tool for tool in prepared_early.tools},
+                    ledger_state=lambda: prepared_early.evidence.ledger_state_json(),
+                    fetched_buffer=fetched_buffer,
+                    run_id=session.run_id,
+                    initial_version=snapshot.version,
+                )
+                if snapshot.version > 0:
+                    await boundaries.recover_pending_intents(snapshot)
+            else:
+                fast_boundaries = FastRunBoundaries(
+                    session=session,
+                    progress=session.execution.progress_store,
+                    run_id=session.run_id,
+                    plan={
+                        "query": request.query,
+                        "workspaces": list(request.workspaces),
+                        "top_k": request.top_k,
+                        "chunk_top_k": request.chunk_top_k,
+                    },
+                )
+                await fast_boundaries.settle_planner()
+
             async with self._telemetry.observe(
                 "answer_orchestration",
                 as_type="chain",
@@ -527,47 +605,13 @@ class AnswerExecutor:
                     "semantic_highlights": request.semantic_highlights,
                 },
             ) as pipeline_trace:
-                prepared = (
-                    run.orchestrator.prepare_run(
-                        request.query,
-                        conversation_history=run.history,
-                        query_images=run.query_images,
-                        registry=run.registry,
-                    )
-                    if research
-                    else None
-                )
-                if session.checkpoint is not None:
-                    if prepared is None:  # guarded above
-                        raise AssertionError("checkpointed Answer run has no research state")
-                    await restore_agent_state(
-                        prepared.state,
-                        {
-                            "version": session.checkpoint.version,
-                            "completed_turns": session.checkpoint.completed_turns,
-                            "state": session.checkpoint.state,
-                        },
-                        owner_id=session.owner_id,
-                        run_id=session.run_id,
-                        store=self._store,
-                        expected_completed_turns=session.completed_turns,
-                        load_corpus_image=self._load_corpus_image,
-                    )
-
-                async def encode(state: AgentRunState) -> Mapping[str, Any]:
-                    return await encode_checkpoint_state(
-                        state,
-                        owner_id=session.owner_id,
-                        run_id=session.run_id,
-                        store=self._store,
-                    )
-
-                boundaries = SessionBoundaries(session, encode=encode)
+                prepared = prepared_early
+                limit = boundaries if boundaries is not None else fast_boundaries
                 contexts, stream = await run.orchestrator.answer_stream(
                     request.query,
                     conversation_history=run.history,
                     run=prepared,
-                    boundaries=boundaries,
+                    boundaries=limit,  # type: ignore[arg-type]
                 )
                 answer_parts: list[str] = []
                 if stream is not None:
@@ -595,7 +639,7 @@ class AnswerExecutor:
                         capture_sensitive_data=self._telemetry.capture_sensitive_data,
                     )
                 )
-                return store_answer_result(
+                stored = store_answer_result(
                     answer=finalized.answer,
                     contexts=project_contexts_for_client(contexts),
                     sources=finalized.sources,
@@ -603,8 +647,72 @@ class AnswerExecutor:
                     trace=trace,
                     image_descriptions=run.image_descriptions,
                 )
+                if fast_boundaries is not None:
+                    await fast_boundaries.settle_retrieval(contexts)
+                    await fast_boundaries.settle_final(
+                        result=stored,
+                        result_digest=canonical_json(stored),
+                    )
+                return stored
         finally:
             await _close_execution_resources(stream, run.registry)
+
+    async def _seed_session(
+        self,
+        journal: AgentSessionStore[M3HostUpdate],
+        session_id: SessionId,
+        request: AnswerRunInput,
+        snapshot: Any,
+    ) -> Any:
+        """Append pinned history, objective, and profile facts atomically (M3-D25)."""
+        entries: list[SessionEntry] = [
+            UserMessageEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=_entry_timestamp(),
+                content={"text": turn.get("content", "")},
+            )
+            for turn in request.history
+        ]
+        entries.append(
+            ProfileFactEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=_entry_timestamp(),
+                key="objective",
+                value=request.query,
+            )
+        )
+        entries.append(
+            ProfileFactEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=_entry_timestamp(),
+                key="profile_facts",
+                value={
+                    "workspaces": list(request.workspaces),
+                    "context_policy_revision": request.context_policy_revision,
+                    "model_catalog_revision": request.model_catalog_revision,
+                },
+            )
+        )
+        initial = ContextProjection(
+            projection_id=ProjectionId.new(),
+            first_retained_sequence=1,
+            covered_through_sequence=0,
+            summary=None,
+            token_anchors=(
+                TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
+            ),
+        )
+        commit = await journal.append(
+            session_id=session_id, expected_version=0, entries=entries, projection=initial
+        )
+        if not isinstance(commit, SessionCommit):
+            raise RunExecutionError(
+                "run_execution_failed", "Cannot seed the pinned research session journal."
+            )
+        return await journal.load(session_id)
 
     async def prepare_orchestrated_run(
         self,
@@ -708,8 +816,8 @@ class AnswerExecutor:
         async def load(digest: str) -> bytes:
             content = await self._store.load_artifact(owner_id=owner_id, digest=digest)
             if content is None:
-                raise CheckpointError(
-                    "checkpoint_corrupt",
+                raise RunExecutionError(
+                    "run_execution_failed",
                     "Answer run attachment bytes no longer exist.",
                 )
             return content
@@ -767,25 +875,442 @@ class AnswerExecutor:
         return {role: pinned[role].profile for role in MODEL_ROLE_NAMES}
 
 
-def _fetched_bytes_sink(session: RunSession) -> FetchedBytesSink:
+def _buffered_fetched_bytes_sink(
+    buffer: list[FetchedResourceBytes],
+) -> FetchedBytesSink:
+    """Buffer fetched bytes until the turn's settlements make them durable."""
+
     async def persist(fetched: FetchedResourceBytes) -> None:
-        artifact = PendingArtifact(content=fetched.content)
-        await session.attach_artifacts(
-            artifacts=[artifact],
-            references=[
-                PendingArtifactReference(
-                    resource_id=fetched.resource_id,
-                    reference_kind="fetched_resource",
-                    ordinal=fetched.ordinal,
-                    digest=artifact.digest,
-                    filename=fetched.filename,
-                    mime_type=fetched.mime_type,
-                    transform_locator={"url": fetched.url},
-                )
-            ],
-        )
+        buffer.append(fetched)
 
     return persist
+
+
+class JournalRunBoundaries:
+    """Journal each complete turn and settle every intent in source order.
+
+    One append transaction commits the assistant entry, all valid intents, and
+    deterministic validation-result entries (M3-D26); each effect then settles
+    one at a time in assistant source order (M3-D12), with the turn's durable
+    evidence/fetched-resource host updates attached to the final settlement.
+    """
+
+    def __init__(
+        self,
+        *,
+        session: RunSession,
+        journal: AgentSessionStore[M3HostUpdate],
+        session_id: SessionId,
+        tools_by_name: Mapping[str, AgentTool],
+        ledger_state: Callable[[], str],
+        fetched_buffer: list[FetchedResourceBytes],
+        run_id: str,
+        initial_version: int = 0,
+    ) -> None:
+        self._session = session
+        self._journal = journal
+        self._session_id = session_id
+        self._tools_by_name = tools_by_name
+        self._ledger_state = ledger_state
+        self._fetched_buffer = fetched_buffer
+        self._run_id = run_id
+        self._version = initial_version
+
+    async def recover_pending_intents(self, snapshot: Any) -> None:
+        """Settle intents a crash left unsettled, per their pinned policy.
+
+        Committed effects fold and never execute again; unsettled ``safe``
+        effects replay only when tool name, replay policy, contract version,
+        and schema digest all match, unsettled ``never`` effects settle
+        interrupted, and a changed contract settles ``tool_contract_changed``
+        (M3-D13, 3C recovery).
+        """
+        import json as _json
+
+        settled_ids = {
+            entry.intent_id
+            for entry in snapshot.entries
+            if isinstance(entry, EffectResultEntry) and entry.intent_id is not None
+        }
+        for entry in snapshot.entries:
+            if not isinstance(entry, EffectIntentEntry):
+                continue
+            intent = entry.intent
+            if intent.intent_id in settled_ids:
+                continue
+            tool = self._tools_by_name.get(intent.tool_name)
+            contract_matches = (
+                tool is not None
+                and tool.replay_policy == intent.replay_policy
+                and tool.contract_version == intent.contract_version
+                and tool.input_schema_digest == intent.input_schema_digest
+            )
+            if intent.replay_policy == "safe" and contract_matches:
+                if tool is None:
+                    raise RuntimeError("matched contract lost its tool")
+                try:
+                    arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
+                    result = await tool.execute(arguments)
+                    outcome = "succeeded"
+                    content = result.content
+                    cached = result.cached
+                except Exception as exc:
+                    outcome = "succeeded"
+                    content = f'Tool "{intent.tool_name}" failed: {exc}'
+                    cached = False
+            elif intent.replay_policy == "safe":
+                outcome = "tool_contract_changed"
+                content = f'Tool "{intent.tool_name}" contract changed; result discarded.'
+                cached = False
+            else:
+                outcome = "interrupted"
+                content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
+                cached = False
+            await self._settle_intent_recovery(
+                intent, outcome=outcome, content=content, cached=cached
+            )
+
+    async def _settle_intent_recovery(
+        self,
+        intent: EffectIntent,
+        *,
+        outcome: str,
+        content: str,
+        cached: bool,
+    ) -> None:
+        result_entry = EffectResultEntry(
+            entry_id=EntryId.new(),
+            session_id=self._session_id,
+            timestamp=_entry_timestamp(),
+            intent_id=intent.intent_id,
+            result=ToolResultEntry(
+                tool_name=intent.tool_name,
+                call_id=intent.source_call_id or "",
+                outcome=outcome,  # type: ignore[arg-type]
+                content=content,
+                cached=cached,
+            ),
+        )
+        committed = await self._journal.settle_effect(
+            session_id=self._session_id,
+            expected_version=self._version,
+            intent_id=intent.intent_id,
+            settlement=EffectSettlement(
+                outcome=outcome,  # type: ignore[arg-type]
+                result=result_entry.result,
+                host_update=EvidenceSettlementUpdate(),
+            ),
+            entries=[result_entry],
+        )
+        await self._handle_settlement(committed, intent)
+
+    @property
+    def version(self) -> int:
+        return self._version
+
+    async def enter_phase(self, phase: str) -> None:
+        await self._session.enter_phase(phase)  # type: ignore[arg-type]
+
+    async def check_cancelled(self) -> None:
+        await self._session.check_cancelled()
+
+    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
+        assistant = _assistant_entry(executed, self._session_id)
+        intents = tuple(
+            EffectIntentEntry(
+                entry_id=EntryId.new(),
+                session_id=self._session_id,
+                timestamp=_entry_timestamp(),
+                intent=intent,
+            )
+            for intent in executed.intents
+        )
+        validation = tuple(
+            EffectResultEntry(
+                entry_id=EntryId.new(),
+                session_id=self._session_id,
+                timestamp=_entry_timestamp(),
+                result=result,
+            )
+            for result in executed.validation_results
+        )
+        commit = await self._journal.append(
+            session_id=self._session_id,
+            expected_version=self._version,
+            entries=(assistant, *intents, *validation),
+        )
+        if isinstance(commit, (VersionConflict, LeaseLost)):
+            raise LeaseLostError
+        self._version = commit.version
+
+        intent_list = list(executed.intents)
+        for position, intent in enumerate(intent_list):
+            await self._settle_intent(
+                executed,
+                intent,
+                turn_number=turn_number,
+                is_last=position == len(intent_list) - 1,
+            )
+
+    async def _settle_intent(
+        self,
+        executed: ExecutedTurn,
+        intent: EffectIntent,
+        *,
+        turn_number: int,
+        is_last: bool,
+    ) -> None:
+        execution = next(
+            (result for result in executed.results if result.call.id == intent.source_call_id),
+            None,
+        )
+        if execution is None:
+            outcome: str = "interrupted"
+            content = f'Tool "{intent.tool_name}" was interrupted before it settled.'
+            cached = False
+        else:
+            outcome = "succeeded"
+            content = execution.result.content
+            cached = execution.result.cached
+        result_entry = EffectResultEntry(
+            entry_id=EntryId.new(),
+            session_id=self._session_id,
+            timestamp=_entry_timestamp(),
+            intent_id=intent.intent_id,
+            result=ToolResultEntry(
+                tool_name=intent.tool_name,
+                call_id=intent.source_call_id or "",
+                outcome="succeeded" if outcome == "succeeded" else "interrupted",
+                content=content,
+                cached=cached,
+            ),
+        )
+        settlement = EffectSettlement(
+            outcome=outcome,  # type: ignore[arg-type]
+            result=result_entry.result,
+            host_update=self._host_update(intent, is_last=is_last),
+        )
+        committed = await self._journal.settle_effect(
+            session_id=self._session_id,
+            expected_version=self._version,
+            intent_id=intent.intent_id,
+            settlement=settlement,
+            entries=[result_entry],
+        )
+        await self._handle_settlement(committed, intent)
+
+    def _host_update(self, intent: EffectIntent, *, is_last: bool) -> M3HostUpdate:
+        if not is_last:
+            return EvidenceSettlementUpdate()
+        updates: list[M3HostUpdate] = []
+        if self._ledger_state() != "{}":
+            content = self._ledger_state().encode("utf-8")
+            updates.append(
+                EvidenceSettlementUpdate(
+                    evidence=(
+                        OpaqueEvidenceWrite(
+                            session_id=self._session_id.value,
+                            intent_id=intent.intent_id.value,
+                            result_ordinal=0,
+                            content_digest=blob_digest(content),
+                            locator_digest=blob_digest(b"{}"),
+                            content=content,
+                            locator=b"{}",
+                        ),
+                    )
+                )
+            )
+        for fetched in self._fetched_buffer:
+            plan = plan_blob(fetched.content)
+            updates.append(
+                FetchedResourceSettlementUpdate(
+                    resource=OpaqueFetchedResourceWrite(
+                        resource_id=fetched.resource_id,
+                        safe_name=fetched.filename,
+                        media_type=fetched.mime_type,
+                        capabilities={},
+                        blob_digest=plan.digest,
+                        source_locator_digest=blob_digest(fetched.url.encode("utf-8")),
+                        source_locator=fetched.url.encode("utf-8"),
+                        session_id=self._session_id.value,
+                        intent_id=intent.intent_id.value,
+                    ),
+                    complete_blob=CompleteBlobDescriptor(
+                        digest=plan.digest,
+                        total_bytes=plan.total_bytes,
+                        chunks=tuple(
+                            plan.chunk(fetched.content, index) for index in range(plan.chunk_count)
+                        ),
+                    ),
+                )
+            )
+        self._fetched_buffer.clear()
+        if len(updates) == 1:
+            return updates[0]
+        if len(updates) > 1:
+            raise RunExecutionError(
+                "run_execution_failed",
+                "A turn settlement cannot carry both evidence and fetched resources",
+            )
+        return EvidenceSettlementUpdate()
+
+    async def _handle_settlement(self, committed: SettleCommit, intent: EffectIntent) -> None:
+        if isinstance(committed, EffectCommit):
+            self._version = committed.version
+            return
+        if isinstance(committed, (VersionConflict, LeaseLost)):
+            raise LeaseLostError
+        if isinstance(committed, EffectAlreadySettled):
+            # Load and fold the committed settlement; never re-execute.
+            snapshot = await self._journal.load(self._session_id)
+            self._version = snapshot.version
+            return
+        if isinstance(committed, EffectContractChanged):
+            settled = await self._journal.settle_effect(
+                session_id=self._session_id,
+                expected_version=self._version,
+                intent_id=intent.intent_id,
+                settlement=EffectSettlement(
+                    outcome="tool_contract_changed",
+                    result=ToolResultEntry(
+                        tool_name=intent.tool_name,
+                        call_id=intent.source_call_id or "",
+                        outcome="tool_contract_changed",
+                        content=f'Tool "{intent.tool_name}" contract changed; result discarded.',
+                    ),
+                    host_update=EvidenceSettlementUpdate(),
+                ),
+                entries=[
+                    EffectResultEntry(
+                        entry_id=EntryId.new(),
+                        session_id=self._session_id,
+                        timestamp=_entry_timestamp(),
+                        intent_id=intent.intent_id,
+                        result=ToolResultEntry(
+                            tool_name=intent.tool_name,
+                            call_id=intent.source_call_id or "",
+                            outcome="tool_contract_changed",
+                            content=f'Tool "{intent.tool_name}" contract changed; result discarded.',
+                        ),
+                    )
+                ],
+            )
+            if isinstance(settled, EffectCommit):
+                self._version = settled.version
+                return
+            raise LeaseLostError
+        if isinstance(committed, EvidenceConflict):
+            raise RunExecutionError(
+                "evidence_settlement_conflict",
+                "Evidence identity conflict during settlement.",
+            )
+        if isinstance(committed, EffectMissing):
+            raise RunExecutionError(
+                "run_execution_failed", "Journal lost a committed effect intent."
+            )
+        raise RunExecutionError("run_execution_failed", "Unknown settlement outcome.")
+
+
+class FastRunBoundaries:
+    """Durable three-stage Fast boundaries (planner, retrieval, final_generation)."""
+
+    def __init__(
+        self,
+        *,
+        session: RunSession,
+        progress: RunProgressStore,
+        run_id: str,
+        plan: Mapping[str, Any],
+    ) -> None:
+        self._session = session
+        self._progress = progress
+        self._run_id = run_id
+        self._plan = plan
+        self._progress_version = 0
+
+    async def enter_phase(self, phase: str) -> None:
+        await self._session.enter_phase(phase)  # type: ignore[arg-type]
+
+    async def check_cancelled(self) -> None:
+        await self._session.check_cancelled()
+
+    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
+        raise AssertionError("Fast Answers never commit agent turns")
+
+    async def settle_planner(self) -> None:
+        stage_id = StageIntentId.deterministic(run_id=self._run_id, name="fast:planner:0")
+        committed = await self._progress.settle_stage(
+            expected_progress_version=self._progress_version,
+            stage_intent_id=stage_id,
+            stage_name="planner",
+            state=dict(self._plan),
+            evidence=(),
+        )
+        await self._observe(committed)
+
+    async def settle_retrieval(self, contexts: Any) -> None:
+        stage_id = StageIntentId.deterministic(run_id=self._run_id, name="fast:retrieval:1")
+        committed = await self._progress.settle_stage(
+            expected_progress_version=self._progress_version,
+            stage_intent_id=stage_id,
+            stage_name="retrieval",
+            state={"contexts": _contexts_summary(contexts)},
+            evidence=(),
+        )
+        await self._observe(committed)
+
+    async def settle_final(self, *, result: Mapping[str, Any], result_digest: str) -> None:
+        stage_id = StageIntentId.deterministic(run_id=self._run_id, name="fast:final_generation:2")
+        terminal = getattr(self._progress, "settle_terminal", None)
+        if terminal is not None:
+            committed = await terminal(
+                expected_progress_version=self._progress_version,
+                stage_intent_id=stage_id,
+                state={"result_digest": result_digest},
+                result=result,
+            )
+            await self._observe(committed)
+            return
+        committed = await self._progress.settle_stage(
+            expected_progress_version=self._progress_version,
+            stage_intent_id=stage_id,
+            stage_name="final_generation",
+            state={"result_digest": result_digest},
+            evidence=(),
+        )
+        await self._observe(committed)
+
+    async def _observe(self, committed: Any) -> None:
+        if isinstance(committed, StageCommit):
+            self._progress_version = committed.progress_version
+            return
+        raise LeaseLostError
+
+
+def _assistant_entry(executed: ExecutedTurn, session_id: SessionId) -> AssistantMessageEntry:
+    assistant = executed.assistant
+    return AssistantMessageEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_entry_timestamp(),
+        content=assistant.text,
+        stop_reason=assistant.stop_reason,
+        reasoning=assistant.reasoning,
+        tool_calls=assistant.tool_calls,
+        usage=assistant.usage_details,
+        cost=assistant.cost_details,
+        provider_state=assistant.provider_state,
+    )
+
+
+def _contexts_summary(contexts: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": kind,
+            "rows": len(contexts.get(kind, []) or []),
+        }
+        for kind in ("chunks", "entities", "relationships")
+    ]
 
 
 async def _close_execution_resources(
@@ -857,3 +1382,28 @@ __all__ = [
     "ResolvedAnswerResources",
     "answer_trace_output",
 ]
+
+
+def _entry_timestamp() -> datetime:
+    return datetime.now(UTC)
+
+
+def _agent_turn_count_from_snapshot(snapshot: Any) -> int:
+    """Count complete assistant turns from the folded journal."""
+    return sum(
+        1 for entry in snapshot.entries if entry.__class__.__name__ == "AssistantMessageEntry"
+    )
+
+
+async def _adopt_durable_evidence(prepared: Any, journal: Any, session_id: SessionId) -> None:
+    """Adopt the latest durable evidence state into the live ledger (recovery)."""
+    loader = getattr(journal, "load_evidence", None)
+    if loader is None or prepared is None:
+        return
+    writes = await loader(session_id)
+    if not writes:
+        return
+    import json as _json
+
+    latest = writes[-1]
+    prepared.evidence.adopt_ledger_state(_json.loads(latest.content.decode("utf-8")))

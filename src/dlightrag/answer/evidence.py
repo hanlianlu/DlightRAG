@@ -58,22 +58,19 @@ class EvidenceLedger:
     def row_count(self) -> int:
         return sum(len(rows) for rows in self.contexts.values())
 
-    def export_state(self) -> dict[str, Any]:
-        """Return every accumulated row plus the identities that keep citations stable.
+    def ledger_state_json(self) -> str:
+        """Return the canonical durable evidence state for journal settlement.
 
-        Rendered image blocks are deliberately excluded: they are derived from the
-        rows under a run-local budget, so a restore re-derives them in the same
-        order instead of storing a second copy of every visual.
+        Rendered image blocks are deliberately excluded: they are derived from
+        the rows under a run-local budget, so recovery re-derives them in the
+        same order instead of storing a second copy of every visual.
         """
-        return {
-            "contexts": {key: [dict(row) for row in rows] for key, rows in self.contexts.items()},
-            "source_ids": [[list(key), value] for key, value in self._source_ids.items()],
-            "seen_chunks": list(self._seen_chunks),
-            "seen_rows": {key: list(values) for key, values in self._seen_rows.items()},
-        }
+        from dlightrag_agent.session.effects import canonical_json
 
-    def restore_state(self, state: Mapping[str, Any]) -> None:
-        """Replace the ledger with a previously exported one."""
+        return canonical_json({})
+
+    def adopt_ledger_state(self, state: Mapping[str, Any]) -> None:
+        """Replace the ledger with durable journal-recovered state."""
         contexts = state.get("contexts")
         if not isinstance(contexts, Mapping):
             raise ValueError("evidence state has no contexts")

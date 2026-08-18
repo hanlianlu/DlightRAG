@@ -9,14 +9,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from dlightrag_agent.session.ids import SessionId
+from dlightrag_agent.session.store import AgentSessionStore
+
 from dlightrag.runtime.contracts import AnswerRunPhase, AnswerRunStatus
+from dlightrag.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
+from dlightrag.runtime.progress import RunProgressStore
+from dlightrag.runtime.settlements import M3HostUpdate
 
 type AnswerRunEventType = Literal["progress", "token", "reset", "done", "error"]
 type ArtifactReferenceKind = Literal["current_attachment", "history_attachment", "fetched_resource"]
 #: How a graceful shutdown left one owned run.
 type ShutdownOutcome = Literal["requeued", "cancelled", "lease_lost"]
-#: Whether a fenced worker's artifact write landed, or why it was refused.
-type ArtifactAttachOutcome = Literal["attached", "lease_lost", "turn_mismatch"]
 
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
@@ -57,21 +61,28 @@ class IdempotencyKeyConflict(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class AnswerRunRecord:
-    """Authoritative lifecycle state of one durable run."""
+    """Authoritative lifecycle state of one durable run.
+
+    Durable progress replaces the checkpoint-era turn and recovery counters:
+    ``durable_progress_version`` advances only on fenced model turn appends,
+    compaction appends, effect settlements, and Fast stage settlements (M3
+    durable progress contract).
+    """
 
     owner_id: str
     run_id: str
     idempotency_key: str | None
-    request: Mapping[str, Any]
+    prepared_input: Mapping[str, Any] | None
     status: AnswerRunStatus
     phase: AnswerRunPhase | None
     stop_reason: str | None
-    completed_turns: int
     cancel_requested_at: datetime.datetime | None
     lease_owner: str | None
     lease_expires_at: datetime.datetime | None
     fencing_epoch: int
-    recovery_count: int
+    durable_progress_version: int
+    last_reclaim_progress_version: int
+    reclaims_without_progress: int
     next_event_sequence: int
     events_trimmed_at: datetime.datetime | None
     result: Mapping[str, Any] | None
@@ -92,12 +103,49 @@ class AnswerRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class RunCheckpoint:
-    """Restorable agent state plus the turn number copied from the run row."""
+class ReclaimState:
+    """The three durable-progress counters one reclaim consults and updates."""
 
-    version: int
-    completed_turns: int
-    state: Mapping[str, Any]
+    durable_progress_version: int
+    last_reclaim_progress_version: int
+    reclaims_without_progress: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReclaimDecision:
+    """What one expired-lease reclaim decided: claimable or abandoned."""
+
+    abandoned: bool
+    reclaims_without_progress: int
+    last_reclaim_progress_version: int
+
+
+def advance_reclaim(
+    state: ReclaimState,
+    *,
+    max_reclaims: int = MAX_RECLAIMS_WITHOUT_PROGRESS,
+) -> ReclaimDecision:
+    """Advance the reclaim counters for one expired-lease reclaim.
+
+    Progress since the last reclaim resets the no-progress counter to one (this
+    reclaim itself). Consecutive reclaims without durable progress abandon the
+    run once the declared bound is reached: the fourth such reclaim abandons
+    under the default bound (M3 durable progress contract).
+    """
+    if max_reclaims < 1:
+        raise ValueError("max_reclaims must be positive")
+    if state.durable_progress_version > state.last_reclaim_progress_version:
+        return ReclaimDecision(
+            abandoned=False,
+            reclaims_without_progress=1,
+            last_reclaim_progress_version=state.durable_progress_version,
+        )
+    reclaims = state.reclaims_without_progress + 1
+    return ReclaimDecision(
+        abandoned=reclaims >= max_reclaims,
+        reclaims_without_progress=reclaims,
+        last_reclaim_progress_version=state.last_reclaim_progress_version,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,11 +167,31 @@ class RunCreation:
 
 
 @dataclass(frozen=True, slots=True)
+class RunExecutionContext:
+    """The immutable claim-bound execution surface one worker receives.
+
+    The PostgreSQL adapter creates this binding at claim/reclaim: owner id,
+    run id, worker id, lease owner, and fencing epoch are embedded, and the
+    bound session and progress stores carry no fencing parameters, so callers
+    can neither pass nor mutate them (M3 claim-bound execution stores).
+    """
+
+    owner_id: str
+    run_id: str
+    worker_id: str
+    lease_owner: str
+    fencing_epoch: int
+    session_store: AgentSessionStore[M3HostUpdate]
+    progress_store: RunProgressStore
+
+
+@dataclass(frozen=True, slots=True)
 class ClaimedRun:
-    """A run this worker now owns, with the checkpoint it must restore."""
+    """A run this worker now owns, with its claim-bound execution surface."""
 
     run: AnswerRunRecord
-    checkpoint: RunCheckpoint | None
+    execution: RunExecutionContext
+    pinned_session_id: SessionId | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,14 +200,6 @@ class LeaseRenewal:
 
     renewed: bool
     cancel_requested: bool
-
-
-@dataclass(frozen=True, slots=True)
-class CheckpointCommit:
-    """Definite outcome of one control-turn compare-and-set."""
-
-    outcome: Literal["committed", "lease_lost", "corrupt"]
-    completed_turns: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,22 +277,23 @@ __all__ = [
     "AnswerRunEvent",
     "AnswerRunEventType",
     "AnswerRunRecord",
-    "ArtifactAttachOutcome",
     "ArtifactReferenceKind",
     "CancellationOutcome",
-    "CheckpointCommit",
     "ClaimedRun",
     "IdempotencyKeyConflict",
     "LeaseRenewal",
     "PendingArtifact",
     "PendingArtifactReference",
+    "ReclaimDecision",
+    "ReclaimState",
     "RunArtifactReference",
-    "RunCheckpoint",
     "RunCreation",
     "RunDeletion",
+    "RunExecutionContext",
     "ShutdownOutcome",
     "SweepOutcome",
     "TerminalOutcome",
+    "advance_reclaim",
     "answer_run_request_fingerprint",
     "artifact_digest",
     "canonical_run_request_json",

@@ -8,7 +8,12 @@ from typing import Any
 from dlightrag_ai.messages import AssistantTurn, ToolCall, ToolDefinition
 from pydantic import BaseModel
 
-from dlightrag_agent.session.effects import EffectIntent, ReplayPolicy, schema_digest
+from dlightrag_agent.session.effects import (
+    EffectIntent,
+    ReplayPolicy,
+    ToolResultEntry,
+    schema_digest,
+)
 
 type ToolModelFunc = Callable[..., Awaitable[AssistantTurn]]
 type ToolExecute = Callable[[BaseModel], Awaitable["ToolResult"]]
@@ -108,6 +113,7 @@ class ExecutedTurn:
     results: tuple[ToolExecution, ...]
     messages: list[dict[str, Any]]
     intents: tuple[EffectIntent, ...] = ()
+    validation_results: tuple[ToolResultEntry, ...] = ()
 
 
 __all__ = [

@@ -18,7 +18,7 @@ import hashlib
 import hmac
 import secrets
 import tempfile
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -301,107 +301,6 @@ class ResourceRegistry:
             return
         self._fetched[resource_id] = content
         self._total_bytes += len(content)
-
-    def export_state(self) -> dict[str, Any]:
-        """Return the catalog, cursors, and replay slots a resumed run must reuse."""
-        return {
-            "resources": [
-                {
-                    "resource_id": item.resource_id,
-                    "filename": item.filename,
-                    "declared_mime": item.declared_mime,
-                    "source": item.source,
-                    "url": item.url,
-                    "byte_size": item.byte_size,
-                }
-                for item in self._resources.values()
-            ],
-            "cursors": {
-                token: {
-                    "resource_id": cursor.resource_id,
-                    "focus": cursor.focus,
-                    "plan_window_tokens": cursor.plan_window_tokens,
-                    "plan_position": cursor.plan_position,
-                    "char_offset": cursor.char_offset,
-                }
-                for token, cursor in self._cursors.items()
-            },
-            "fetched_ordinals": dict(self._fetched_ordinals),
-            "next_fetched_ordinal": self._next_fetched_ordinal,
-        }
-
-    def restore_state(self, state: Mapping[str, Any]) -> None:
-        """Adopt a checkpointed catalog after this run's inputs are re-registered.
-
-        Resource ids are minted per process, so a resumed run would otherwise
-        rename every resource the restored episode already names. The immutable
-        request replays its inputs in the original order, so the nth registered
-        input is rebound to the nth checkpointed input id; search-discovered
-        links are recreated outright because nothing replays them.
-        """
-        self._ensure_open()
-        entries = [dict(entry) for entry in state.get("resources") or []]
-        checkpointed_inputs = [
-            entry for entry in entries if str(entry.get("source") or "") != "web_search"
-        ]
-        registered_inputs = [
-            item for item in self._resources.values() if item.source != "web_search"
-        ]
-        if len(registered_inputs) != len(checkpointed_inputs):
-            raise ResourceStateMismatchError(
-                "checkpointed resource inputs do not match the replayed request"
-            )
-
-        renamed = {
-            item.resource_id: str(entry["resource_id"])
-            for item, entry in zip(registered_inputs, checkpointed_inputs, strict=True)
-        }
-        by_id: dict[str, _Registered] = {}
-        for item in registered_inputs:
-            item.resource_id = renamed[item.resource_id]
-            by_id[item.resource_id] = item
-        for entry in entries:
-            resource_id = str(entry["resource_id"])
-            if resource_id in by_id:
-                continue
-            url = str(entry.get("url") or "")
-            by_id[resource_id] = _Registered(
-                resource_id=resource_id,
-                filename=entry.get("filename"),
-                declared_mime=entry.get("declared_mime"),
-                source="web_search",
-                content=None,
-                url=url or None,
-                byte_size=entry.get("byte_size"),
-            )
-            if url:
-                key = ("link", normalize_https_url_identity(url).encode("utf-8"))
-                self._ids_by_dedup[key] = resource_id
-        self._resources = {
-            str(entry["resource_id"]): by_id[str(entry["resource_id"])] for entry in entries
-        }
-        self._ids_by_dedup = {
-            key: renamed.get(value, value) for key, value in self._ids_by_dedup.items()
-        }
-        self._cursors = {
-            str(token): _CursorState(
-                resource_id=str(cursor["resource_id"]),
-                focus=cursor.get("focus"),
-                plan_window_tokens=int(cursor["plan_window_tokens"]),
-                plan_position=int(cursor["plan_position"]),
-                char_offset=int(cursor["char_offset"]),
-            )
-            for token, cursor in (state.get("cursors") or {}).items()
-        }
-        self._fetched_ordinals = {
-            str(key): int(value) for key, value in (state.get("fetched_ordinals") or {}).items()
-        }
-        # Never below a restored slot: a later turn that reused an ordinal would
-        # rebind bytes a checkpointed turn already named.
-        self._next_fetched_ordinal = max(
-            int(state.get("next_fetched_ordinal") or 0),
-            max(self._fetched_ordinals.values(), default=-1) + 1,
-        )
 
     def _admit_caller_key(self, dedup_key: tuple[str, bytes]) -> None:
         if dedup_key in self._caller_dedup:

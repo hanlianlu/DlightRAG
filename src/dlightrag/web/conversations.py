@@ -191,9 +191,10 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
         self,
         *,
         owner_id: str,
-        request: Mapping[str, Any],
+        prepared_input: Mapping[str, Any],
         idempotency_fingerprint: str,
         idempotency_key: str | None = None,
+        resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
     ) -> WebAnswerSubmission | None:
@@ -203,7 +204,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
             principal_id=owner_id,
             conversation_id=self.conversation_id,
             submission_id=idempotency_key,
-            request=request,
+            request=prepared_input,
             idempotency_fingerprint=idempotency_fingerprint,
             artifacts=artifacts,
             references=references,
@@ -507,7 +508,7 @@ def _prepare_submission(
     for turn in snapshot.turns:
         if turn.run.status != "succeeded":
             continue
-        turn_request = AnswerRunRequest.from_request(turn.run.request)
+        turn_request = AnswerRunRequest.from_request(turn.run.prepared_input or {})
         history.extend(
             (
                 {"role": "user", "content": turn_request.query},
@@ -587,7 +588,7 @@ def project_conversation_turn(
     answer, and that answer is projected from the run's canonical result.
     """
     run = turn.run
-    request = AnswerRunRequest.from_request(run.request)
+    request = AnswerRunRequest.from_request(run.prepared_input or {})
     answer = ""
     answer_html = ""
     if run.status == "succeeded" and run.result is not None:

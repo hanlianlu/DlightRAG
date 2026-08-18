@@ -16,10 +16,7 @@ from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 
 from dlightrag.answer.resources.models import ResourceInput
-from dlightrag.answer.runs.models import AgentRunState
-
-#: Encode one control turn's restorable state into its checkpoint envelope.
-type CheckpointEncoder = Callable[[AgentRunState], Awaitable[Mapping[str, Any]]]
+from dlightrag.runtime.errors import RunExecutionError
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +241,12 @@ class AnswerRunInput:
     #: current-turn image; they point at artifacts an earlier run already stored.
     history_attachments: tuple[AttachmentReference, ...] = ()
     image_descriptions: tuple[str, ...] = ()
+    #: The UUIDv7 Research session id pinned at acceptance (M3-D10).
+    session_id: str = ""
+    #: Whether the accepted run takes the durable research path.
+    research: bool = False
+    #: The accepted resource manifest, present for research runs.
+    resource_manifest: tuple[Mapping[str, Any], ...] = ()
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -262,6 +265,9 @@ class AnswerRunInput:
             "model_catalog_revision": self.model_catalog_revision,
             "idempotency_fingerprint": self.idempotency_fingerprint,
             "image_descriptions": list(self.image_descriptions),
+            "session_id": self.session_id,
+            "research": self.research,
+            "resource_manifest": [dict(item) for item in self.resource_manifest],
         }
 
     @classmethod
@@ -299,7 +305,19 @@ class AnswerRunInput:
             attachments=attachments,
             history_attachments=history_attachments,
             image_descriptions=tuple(str(item) for item in request.get("image_descriptions") or ()),
+            session_id=str(request.get("session_id") or ""),
+            research=bool(request.get("research")),
+            resource_manifest=tuple(dict(item) for item in request.get("resource_manifest") or ()),
         )
+
+    @classmethod
+    def from_prepared_input(cls, prepared: Mapping[str, Any] | None) -> AnswerRunInput:
+        """Decode one durable prepared input into the immutable run input."""
+        if prepared is None:
+            raise RunExecutionError(
+                "run_execution_failed", "Answer run has no prepared input to execute."
+            )
+        return cls.from_request(prepared)
 
 
 def _attachment_references(value: Any) -> tuple[AttachmentReference, ...]:
@@ -327,24 +345,6 @@ def _link_references(value: Any) -> tuple[LinkReference, ...]:
     )
 
 
-class SessionBoundaries:
-    """Turn the orchestrator's agent boundaries into durable, fenced writes."""
-
-    def __init__(self, session: Any, *, encode: CheckpointEncoder) -> None:
-        self._session = session
-        self._encode = encode
-
-    async def enter_phase(self, phase: str) -> None:
-        await self._session.check_cancelled()
-        await self._session.enter_phase(phase)
-
-    async def turn_completed(self, state: AgentRunState) -> None:
-        await self._session.commit_checkpoint(await self._encode(state))
-
-    async def check_cancelled(self) -> None:
-        await self._session.check_cancelled()
-
-
 def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
 
@@ -354,9 +354,7 @@ __all__ = [
     "AnswerRunRequest",
     "AttachmentReference",
     "build_current_answer_resources",
-    "CheckpointEncoder",
     "in_memory_attachment_loader",
     "LinkReference",
     "PinnedModelProfile",
-    "SessionBoundaries",
 ]

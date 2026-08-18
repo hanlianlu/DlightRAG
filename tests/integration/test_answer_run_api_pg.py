@@ -289,7 +289,7 @@ async def test_create_persists_the_run_and_its_uploaded_bytes(
     record = await store.get_run(owner_id=owner, run_id=run_id)
     assert record is not None
     assert record.status == "queued"
-    assert record.request["query"] == "summarize"
+    assert (record.prepared_input or {})["query"] == "summarize"
     references = await store.list_run_artifacts(owner_id=owner, run_id=run_id)
     assert [reference.filename for reference in references] == ["notes.txt"]
     assert (

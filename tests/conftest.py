@@ -35,15 +35,35 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         self,
         *,
         owner_id: str,
-        request: Mapping[str, Any],
+        request: Mapping[str, Any] | None = None,
+        prepared_input: Mapping[str, Any] | None = None,
         idempotency_fingerprint: str | None = None,
         idempotency_key: str | None = None,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
     ) -> RunCreation:
+
+        from dlightrag_agent.session.ids import SessionId
+
+        if prepared_input is not None:
+            return await super().create_run(
+                owner_id=owner_id,
+                prepared_input=dict(prepared_input),
+                idempotency_fingerprint=(
+                    idempotency_fingerprint or answer_run_request_fingerprint(prepared_input)
+                ),
+                idempotency_key=idempotency_key,
+                artifacts=artifacts,
+                references=references,
+            )
+        request = request or {}
+        prepared: dict[str, Any] = {
+            "session_id": SessionId.new().value,
+            **dict(request),
+        }
         return await super().create_run(
             owner_id=owner_id,
-            request=request,
+            prepared_input=prepared,
             idempotency_fingerprint=(
                 idempotency_fingerprint or answer_run_request_fingerprint(request)
             ),
@@ -63,10 +83,17 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
     ) -> RunCreation:
+
+        from dlightrag_agent.session.ids import SessionId
+
+        prepared: dict[str, Any] = {
+            "session_id": SessionId.new().value,
+            **dict(request),
+        }
         return await super().create_run_in(
             conn,
             owner_id=owner_id,
-            request=request,
+            request=prepared,
             idempotency_fingerprint=(
                 idempotency_fingerprint or answer_run_request_fingerprint(request)
             ),

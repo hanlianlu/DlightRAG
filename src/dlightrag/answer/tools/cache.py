@@ -2,8 +2,7 @@
 """Deduplicate a run's exact tool calls across its turns and its restarts."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from collections.abc import Awaitable, Callable
 
 from dlightrag_agent.tools import ToolResult
 
@@ -19,35 +18,6 @@ class ExactCallCache:
         self._lock = asyncio.Lock()
         self._tasks: dict[str, asyncio.Future[ToolResult]] = {}
         self._closed = False
-
-    def export_results(self) -> dict[str, dict[str, Any]]:
-        """Return the calls this run already answered, newest state only.
-
-        An in-flight, cancelled, or failed call is not a completed result: it is
-        left out so a resumed run executes it again rather than replaying a
-        half-finished one.
-        """
-        exported: dict[str, dict[str, Any]] = {}
-        for key, task in self._tasks.items():
-            if not task.done() or task.cancelled() or task.exception() is not None:
-                continue
-            result = task.result()
-            exported[key] = {"content": result.content, "details": result.details}
-        return exported
-
-    def restore_results(self, results: Mapping[str, Mapping[str, Any]]) -> None:
-        """Seed completed results so a resumed run does not re-execute them."""
-        loop = asyncio.get_running_loop()
-        for key, payload in results.items():
-            details = payload.get("details")
-            future: asyncio.Future[ToolResult] = loop.create_future()
-            future.set_result(
-                ToolResult(
-                    content=str(payload.get("content") or ""),
-                    details=dict(details) if isinstance(details, Mapping) else None,
-                )
-            )
-            self._tasks[key] = future
 
     async def aclose(self) -> None:
         async with self._lock:

@@ -8,12 +8,11 @@ from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.records import (
     AnswerRunEvent,
     AnswerRunRecord,
-    ArtifactAttachOutcome,
-    CheckpointCommit,
     ClaimedRun,
     LeaseRenewal,
     PendingArtifact,
     PendingArtifactReference,
+    RunCreation,
     RunDeletion,
     ShutdownOutcome,
     SweepOutcome,
@@ -22,7 +21,13 @@ from dlightrag.runtime.records import (
 
 
 class AnswerRunStore(Protocol):
-    """The durable operations a run coordinator may perform."""
+    """The durable operations a run coordinator may perform.
+
+    Claim returns a run with its claim-bound execution surface; checkpoint-era
+    commit/attach methods are gone. Accepted attachments register through the
+    acceptance transaction, evidence and fetched resources through effect or
+    stage settlements (M3 registration paths).
+    """
 
     async def claim_next(self, *, worker_id: str) -> ClaimedRun | None: ...
 
@@ -47,30 +52,6 @@ class AnswerRunStore(Protocol):
     async def append_reset(
         self, *, owner_id: str, run_id: str, worker_id: str, fencing_epoch: int
     ) -> int | None: ...
-
-    async def commit_checkpoint(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        expected_completed_turns: int,
-        version: int,
-        state: Mapping[str, object],
-    ) -> CheckpointCommit: ...
-
-    async def attach_artifacts(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        expected_completed_turns: int,
-        artifacts: Sequence[PendingArtifact] = (),
-        references: Sequence[PendingArtifactReference] = (),
-    ) -> ArtifactAttachOutcome: ...
 
     async def finish_success(
         self,
@@ -115,4 +96,25 @@ class AnswerRunStore(Protocol):
     ) -> tuple[AnswerRunEvent, ...]: ...
 
 
-__all__ = ["AnswerRunStore"]
+class AnswerAcceptanceStore(Protocol):
+    """Acceptance-side durable operations for one new run.
+
+    Prepared input, accepted blob resources, and the run row commit in one
+    atomic acceptance transaction (M3 registration paths); queued and running
+    rows store exactly one bounded ``prepared_input_json``.
+    """
+
+    async def accept_run(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        idempotency_key: str | None,
+        prepared_input: Mapping[str, object],
+        resources: Sequence[Mapping[str, object]],
+        blobs: Sequence[PendingArtifact],
+        references: Sequence[PendingArtifactReference],
+    ) -> RunCreation: ...
+
+
+__all__ = ["AnswerAcceptanceStore", "AnswerRunStore"]

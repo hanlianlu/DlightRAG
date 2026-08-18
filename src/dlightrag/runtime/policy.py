@@ -5,13 +5,13 @@
 RUN_RETENTION_SECONDS = 30 * 24 * 3600
 #: A worker renews this window while it holds a run; expiry makes the row reclaimable.
 ANSWER_RUN_LEASE_SECONDS = 60
-#: Consecutive expired-lease reclaims allowed without a committed checkpoint.
-MAX_CONSECUTIVE_RECOVERIES = 4
+#: Consecutive expired-lease reclaims allowed without durable progress before abandon.
+MAX_RECLAIMS_WITHOUT_PROGRESS = 4
 RUN_ABANDONED_ERROR_KIND = "run_abandoned"
 
 __all__ = [
     "ANSWER_RUN_LEASE_SECONDS",
-    "MAX_CONSECUTIVE_RECOVERIES",
+    "MAX_RECLAIMS_WITHOUT_PROGRESS",
     "RUN_ABANDONED_ERROR_KIND",
     "RUN_RETENTION_SECONDS",
 ]

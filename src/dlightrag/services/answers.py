@@ -122,9 +122,10 @@ class AnswerRunAcceptor[T](Protocol):
         self,
         *,
         owner_id: str,
-        request: Mapping[str, Any],
+        prepared_input: Mapping[str, Any],
         idempotency_fingerprint: str,
         idempotency_key: str | None = None,
+        resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
     ) -> T | None: ...
@@ -238,6 +239,47 @@ class _AcceptanceProjection:
 def _attachment_bytes(resources: Sequence[ResourceInput]) -> list[bytes]:
     """Return the inline bytes an accepted run must persist with its input."""
     return [resource.content for resource in resources if resource.content is not None]
+
+
+def _prepared_input_payload(run_input: Any) -> dict[str, Any]:
+    """Encode the M3 prepared input: pinned session id plus the run input."""
+    from dlightrag_agent.session.ids import SessionId
+
+    return {
+        "session_id": SessionId.new().value,
+        **run_input.as_request(),
+    }
+
+
+def _require_prepared_input_bounds(prepared_input: Mapping[str, Any]) -> None:
+    from dlightrag_agent.session.effects import canonical_json
+
+    from dlightrag.answer.prepared_input import MAX_PREPARED_INPUT_BYTES, PreparedInputTooLargeError
+
+    encoded = canonical_json(dict(prepared_input)).encode("utf-8")
+    if len(encoded) > MAX_PREPARED_INPUT_BYTES:
+        raise PreparedInputTooLargeError(encoded_bytes=len(encoded))
+
+
+def _accepted_resource_payloads(
+    run_input: Any, *, attachment_bytes: Sequence[bytes]
+) -> list[dict[str, Any]]:
+    import hashlib
+
+    payloads: list[dict[str, Any]] = []
+    for ordinal, attachment in enumerate(run_input.attachments):
+        content = attachment_bytes[ordinal] if ordinal < len(attachment_bytes) else b""
+        payloads.append(
+            {
+                "resource_id": attachment.resource_id,
+                "safe_name": attachment.filename,
+                "media_type": attachment.mime_type or "application/octet-stream",
+                "capabilities": {},
+                "ordinal": ordinal,
+                "blob_digest": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    return payloads
 
 
 def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
@@ -433,14 +475,20 @@ class AnswerService:
             resources=acceptance_resources or None,
             idempotency_fingerprint=fingerprint,
         )
+        prepared_input = _prepared_input_payload(run_input)
+        _require_prepared_input_bounds(prepared_input)
+        resources_payload = _accepted_resource_payloads(
+            run_input, attachment_bytes=attachment_bytes
+        )
         async with self._coordinator.admission() as runtime_available:
             if not runtime_available:
                 raise AnswerRuntimeUnavailableError("Answer runtime is unavailable")
             accepted = await acceptor.create_run(
                 owner_id=owner_id,
-                request=run_input.as_request(),
-                idempotency_fingerprint=run_input.idempotency_fingerprint,
+                prepared_input=prepared_input,
+                idempotency_fingerprint=fingerprint,
                 idempotency_key=idempotency_key,
+                resources=resources_payload,
                 artifacts=[PendingArtifact(content=content) for content in attachment_bytes],
                 references=_artifact_references(run_input),
             )

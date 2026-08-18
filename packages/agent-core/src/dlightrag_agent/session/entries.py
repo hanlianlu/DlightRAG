@@ -10,6 +10,7 @@ milestones extend the closed union together with their first writers.
 adapters. The fold consumes the typed records, never a raw payload mapping.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Literal
@@ -316,6 +317,94 @@ def new_session_entry(
     )
 
 
+def decode_entry_payload(
+    *,
+    entry_type: str,
+    entry_id: EntryId,
+    session_id: SessionId,
+    sequence: int,
+    timestamp: datetime,
+    payload: Mapping[str, Any],
+) -> SessionEntry:
+    """Rebuild one typed entry from its canonical durable payload."""
+    common = {
+        "entry_id": entry_id,
+        "session_id": session_id,
+        "sequence": sequence,
+        "timestamp": timestamp,
+    }
+    if entry_type == "user_message":
+        return UserMessageEntry(**common, content=payload["content"])
+    if entry_type == "assistant_message":
+        calls = tuple(
+            ToolCall(
+                id=str(call["id"]),
+                name=str(call["name"]),
+                arguments=dict(call.get("arguments") or {}),
+                argument_error=call.get("argument_error"),
+                thought_signature=call.get("thought_signature"),
+            )
+            for call in payload.get("tool_calls") or ()
+        )
+        return AssistantMessageEntry(
+            **common,
+            content=str(payload["content"]),
+            stop_reason=payload["stop_reason"],
+            reasoning=str(payload.get("reasoning") or ""),
+            tool_calls=calls,
+            usage=payload.get("usage"),
+            cost=payload.get("cost"),
+            provider_state=payload.get("provider_state"),
+        )
+    if entry_type == "effect_intent":
+        return EffectIntentEntry(
+            **common,
+            intent=EffectIntent(
+                intent_id=IntentId(str(payload["intent_id"])),
+                tool_name=str(payload["tool_name"]),
+                replay_policy=payload["replay_policy"],
+                contract_version=int(payload["contract_version"]),
+                input_schema_digest=str(payload["input_schema_digest"]),
+                canonical_input=str(payload["canonical_input"]),
+                source_call_id=payload.get("source_call_id"),
+            ),
+        )
+    if entry_type == "effect_result":
+        return EffectResultEntry(
+            **common,
+            intent_id=(IntentId(str(payload["intent_id"])) if payload.get("intent_id") else None),
+            result=ToolResultEntry(
+                tool_name=str(payload["tool_name"]),
+                call_id=str(payload["call_id"]),
+                outcome=payload["outcome"],
+                content=str(payload["content"]),
+                details=payload.get("details"),
+                cached=bool(payload.get("cached") or False),
+            ),
+        )
+    if entry_type == "context_injection":
+        return ContextInjectionEntry(
+            **common,
+            content=payload["content"],
+            label=payload.get("label"),
+        )
+    if entry_type == "compaction":
+        return CompactionEntry(
+            **common,
+            projection_id=ProjectionId(str(payload["projection_id"])),
+            summary=payload.get("summary"),
+            covered_through_sequence=int(payload["covered_through_sequence"]),
+            first_retained_sequence=int(payload["first_retained_sequence"]),
+        )
+    if entry_type == "profile_fact":
+        return ProfileFactEntry(**common, key=str(payload["key"]), value=payload["value"])
+    if entry_type == "session_terminal":
+        return SessionTerminalEntry(
+            **common, reason=payload["reason"], detail=payload.get("detail")
+        )
+    raise ValueError(f"unknown journal entry type: {entry_type}")
+
+
 __all__ = [
     "ENTRY_TYPE_TO_CLASS",
     "SESSION_ENTRY_SCHEMA_VERSION",
@@ -330,6 +419,7 @@ __all__ = [
     "SessionTerminalEntry",
     "SessionTerminalReason",
     "UserMessageEntry",
+    "decode_entry_payload",
     "entry_type_of",
     "new_session_entry",
 ]

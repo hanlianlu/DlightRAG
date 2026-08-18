@@ -3,6 +3,7 @@
 
 import asyncio
 import io
+import uuid
 from collections.abc import Mapping
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -36,7 +37,7 @@ from dlightrag.answer.runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.runtime import CheckpointError, RunExecutionError, RunSession, artifact_digest
+from dlightrag.runtime import RunExecutionError, RunSession, artifact_digest
 
 
 def _executor() -> AnswerExecutor:
@@ -271,57 +272,7 @@ async def test_stream_close_failure_does_not_skip_registry_close(
     assert "Failed to close Answer stream" in caplog.text
 
 
-async def test_checkpointed_research_run_cannot_silently_fall_back_to_fast() -> None:
-    profile = ModelProfile(context_window_tokens=10_000, supports_tools=True)
-    pins = tuple(
-        PinnedModelProfile(
-            role=role,
-            fingerprint=ModelFingerprint("openai", f"test-{role}", None),
-            profile=profile,
-        )
-        for role in ("extract", "keyword", "query", "vlm")
-    )
-    request = AnswerRunInput(
-        query="resume",
-        workspaces=("default",),
-        pinned_models=pins,
-        context_policy_revision="m1-v1",
-        model_catalog_revision="test",
-        idempotency_fingerprint="request-hash",
-    )
-    registry = MagicMock(aclose=AsyncMock())
-    orchestrator = MagicMock(uses_research_path=False)
-    executor = _executor()
-    executor.prepare_orchestrated_run = AsyncMock(  # type: ignore[method-assign]
-        return_value=OrchestratorRun(
-            orchestrator=orchestrator,
-            image_descriptions=[],
-            query_images=None,
-            history=MagicMock(),
-            current_image_count=0,
-            workspaces=["default"],
-            registry=registry,
-        )
-    )
-    session = MagicMock(
-        owner_id="owner",
-        run_id="run-1",
-        request=request.as_request(),
-        checkpoint=MagicMock(version=1, completed_turns=1, state={}),
-        completed_turns=1,
-        enter_phase=AsyncMock(),
-    )
-
-    with pytest.raises(CheckpointError, match="requires a research path"):
-        await executor.execute(cast(RunSession, session))
-
-    orchestrator.prepare_run.assert_not_called()
-    registry.aclose.assert_awaited_once()
-
-
-async def test_resumed_research_restores_v1_checkpoint_before_streaming(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_research_run_seeds_the_pinned_session_journal() -> None:
     profile = ModelProfile(context_window_tokens=10_000, supports_tools=True)
     request = AnswerRunInput(
         query="resume",
@@ -337,19 +288,117 @@ async def test_resumed_research_restores_v1_checkpoint_before_streaming(
         context_policy_revision="m1-v1",
         model_catalog_revision="test",
         idempotency_fingerprint="request-hash",
+        session_id=str(uuid.uuid7()),
+        research=True,
     )
-    order: list[str] = []
-    restore = AsyncMock(side_effect=lambda *args, **kwargs: order.append("restore"))
-    monkeypatch.setattr("dlightrag.answer.executor.restore_agent_state", restore)
-    prepared = MagicMock(state=MagicMock())
+    prepared = MagicMock(tools=[], evidence=MagicMock(ledger_state_json=lambda: "{}"))
     orchestrator = MagicMock(uses_research_path=True)
     orchestrator.prepare_run.return_value = prepared
+    orchestrator.answer_stream = AsyncMock(
+        return_value=({"chunks": [], "entities": [], "relationships": []}, None)
+    )
+    registry = MagicMock(aclose=AsyncMock())
+    executor = _executor()
+    executor.prepare_orchestrated_run = AsyncMock(  # type: ignore[method-assign]
+        return_value=OrchestratorRun(
+            orchestrator=orchestrator,
+            image_descriptions=[],
+            query_images=None,
+            history=PriorTurns(),
+            current_image_count=0,
+            workspaces=["default"],
+            registry=registry,
+        )
+    )
 
-    async def answer_stream(*args: Any, **kwargs: Any):
-        assert order == ["restore"]
-        return {"chunks": [], "entities": [], "relationships": []}, None
+    from dlightrag_agent.session.ids import SessionId
+    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
 
-    orchestrator.answer_stream = AsyncMock(side_effect=answer_stream)
+    journal = InMemoryAgentSessionStore()
+    session = MagicMock(
+        owner_id="owner",
+        run_id="run-1",
+        prepared_input=request.as_request(),
+        enter_phase=AsyncMock(),
+        flush_tokens=AsyncMock(),
+        emit_token=AsyncMock(),
+        execution=MagicMock(session_store=journal, progress_store=MagicMock()),
+    )
+
+    result = await executor.execute(cast(RunSession, session))
+
+    assert result["answer"] == ""
+    snapshot = await journal.load(SessionId(request.session_id))
+    assert snapshot.version == 1
+    kinds = {entry.__class__.__name__ for entry in snapshot.entries}
+    assert "ProfileFactEntry" in kinds
+    assert "UserMessageEntry" not in kinds  # no history turns
+    orchestrator.answer_stream.assert_awaited_once()
+
+
+async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -> None:
+    profile = ModelProfile(context_window_tokens=10_000, supports_tools=True)
+    request = AnswerRunInput(
+        query="resume",
+        workspaces=("default",),
+        pinned_models=tuple(
+            PinnedModelProfile(
+                role=role,
+                fingerprint=ModelFingerprint("openai", f"test-{role}", None),
+                profile=profile,
+            )
+            for role in ("extract", "keyword", "query", "vlm")
+        ),
+        context_policy_revision="m1-v1",
+        model_catalog_revision="test",
+        idempotency_fingerprint="request-hash",
+        session_id=str(uuid.uuid7()),
+        research=True,
+    )
+    from datetime import UTC, datetime
+
+    from dlightrag_agent.session.entries import (
+        AssistantMessageEntry,
+        UserMessageEntry,
+    )
+    from dlightrag_agent.session.ids import EntryId, SessionId
+    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
+
+    session_id = SessionId(request.session_id)
+    now = datetime.now(UTC)
+    journal = InMemoryAgentSessionStore()
+    await journal.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[
+            UserMessageEntry(
+                entry_id=EntryId.new(), session_id=session_id, timestamp=now, content="q"
+            ),
+            AssistantMessageEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=now,
+                content="done",
+                stop_reason="stop",
+            ),
+        ],
+    )
+    recovered: list[str] = []
+    prepared = MagicMock(
+        tools=[],
+        evidence=MagicMock(ledger_state_json=lambda: "{}"),
+        episode=MagicMock(
+            record=MagicMock(side_effect=lambda exchange: recovered.append("record"))
+        ),
+    )
+    orchestrator = MagicMock(uses_research_path=True)
+    orchestrator.prepare_run.return_value = prepared
+    orchestrator.answer_stream = AsyncMock(
+        return_value=({"chunks": [], "entities": [], "relationships": []}, None)
+    )
+    orchestrator.recover_from_fold = AsyncMock(
+        side_effect=lambda run, snapshot: recovered.append("recovered")
+    )
     registry = MagicMock(aclose=AsyncMock())
     executor = _executor()
     executor.prepare_orchestrated_run = AsyncMock(  # type: ignore[method-assign]
@@ -366,19 +415,15 @@ async def test_resumed_research_restores_v1_checkpoint_before_streaming(
     session = MagicMock(
         owner_id="owner",
         run_id="run-1",
-        request=request.as_request(),
-        checkpoint=MagicMock(version=1, completed_turns=2, state={"episode": {}}),
-        completed_turns=2,
+        prepared_input=request.as_request(),
         enter_phase=AsyncMock(),
         flush_tokens=AsyncMock(),
+        emit_token=AsyncMock(),
+        execution=MagicMock(session_store=journal, progress_store=MagicMock()),
     )
 
     result = await executor.execute(cast(RunSession, session))
 
     assert result["answer"] == ""
-    restore.assert_awaited_once()
-    restore_call = restore.await_args
-    assert restore_call is not None
-    assert restore_call.kwargs["expected_completed_turns"] == 2
+    assert "recovered" in recovered
     orchestrator.answer_stream.assert_awaited_once()
-    registry.aclose.assert_awaited_once()

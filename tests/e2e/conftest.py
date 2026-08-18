@@ -126,16 +126,17 @@ def _run_record(
         owner_id="e2e",
         run_id=run_id,
         idempotency_key=None,
-        request=request,
+        prepared_input=request,
         status=status,  # type: ignore[arg-type]
         phase=None,
         stop_reason=None,
-        completed_turns=0,
         cancel_requested_at=now if cancel_requested else None,
         lease_owner=None,
         lease_expires_at=None,
         fencing_epoch=0,
-        recovery_count=0,
+        durable_progress_version=0,
+        last_reclaim_progress_version=0,
+        reclaims_without_progress=0,
         next_event_sequence=1,
         events_trimmed_at=None,
         result=result,
@@ -328,7 +329,7 @@ class E2EConversationService:
                     turn_number=turn.turn_number,
                     submission_id=turn.submission_id,
                     created_at=turn.created_at,
-                    run=_run_record(run_id, turn.run.request, status=status, result=result),
+                    run=_run_record(run_id, turn.run.prepared_input, status=status, result=result),
                 )
 
     async def attachment(self, _user: Any, run_id: str, ordinal: int) -> Any:
@@ -341,7 +342,9 @@ class E2EConversationService:
                 return None
             content, _mime = entry["bytes"][ordinal]
         reference = next(
-            item for item in _request_attachments(turn.run.request) if item["ordinal"] == ordinal
+            item
+            for item in _request_attachments(turn.run.prepared_input or {})
+            if item["ordinal"] == ordinal
         )
         return AnswerInputArtifact(
             reference_kind="current_attachment",

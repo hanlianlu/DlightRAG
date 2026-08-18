@@ -9,25 +9,20 @@ event. Subscribers replay durable events and detach without touching the run.
 
 import asyncio
 import datetime
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
 
 import dlightrag.runtime.coordinator as coordinator_module
 from dlightrag.runtime import (
+    MAX_RECLAIMS_WITHOUT_PROGRESS,
     AnswerRunEvent,
     AnswerRunRecord,
-    ArtifactAttachOutcome,
-    CheckpointCommit,
-    CheckpointError,
     ClaimedRun,
     LeaseLostError,
     LeaseRenewal,
-    PendingArtifact,
-    PendingArtifactReference,
     RunCancelledError,
-    RunCheckpoint,
     RunCoordinator,
     RunDeletion,
     RunExecutionError,
@@ -35,7 +30,6 @@ from dlightrag.runtime import (
     ShutdownOutcome,
     SweepOutcome,
     TerminalOutcome,
-    artifact_digest,
 )
 
 _OWNER = "owner-alpha"
@@ -65,14 +59,14 @@ class _MemoryStore:
         self.runs[run_id] = {
             "run_id": run_id,
             "status": "queued",
-            "completed_turns": 0,
-            "recovery_count": 0,
+            "durable_progress_version": 0,
+            "last_reclaim_progress_version": 0,
+            "reclaims_without_progress": 0,
             "fencing_epoch": 0,
             "lease_owner": None,
             "lease_live": False,
             "cancel_requested": False,
             "next_event_sequence": 1,
-            "checkpoint": None,
             "result": None,
             "error_kind": None,
             "request": {"query": "why"},
@@ -86,16 +80,17 @@ class _MemoryStore:
             owner_id=_OWNER,
             run_id=str(row["run_id"]),
             idempotency_key=None,
-            request=row["request"],
+            prepared_input=row.get("prepared_input"),
             status=row["status"],
             phase=None,
             stop_reason=None,
-            completed_turns=int(row["completed_turns"]),
             cancel_requested_at=now if row["cancel_requested"] else None,
             lease_owner=row["lease_owner"],
             lease_expires_at=now if row["lease_owner"] else None,
             fencing_epoch=int(row["fencing_epoch"]),
-            recovery_count=int(row["recovery_count"]),
+            durable_progress_version=int(row["durable_progress_version"]),
+            last_reclaim_progress_version=int(row["last_reclaim_progress_version"]),
+            reclaims_without_progress=int(row["reclaims_without_progress"]),
             next_event_sequence=int(row["next_event_sequence"]),
             events_trimmed_at=None,
             result=row["result"],
@@ -140,22 +135,49 @@ class _MemoryStore:
             if not eligible or row["cancel_requested"]:
                 continue
             if row["status"] == "running":
-                row["recovery_count"] = int(row["recovery_count"]) + 1
+                row["reclaims_without_progress"] = int(row["reclaims_without_progress"]) + 1
+                if int(row["reclaims_without_progress"]) >= MAX_RECLAIMS_WITHOUT_PROGRESS:
+                    row["status"] = "failed"
+                    row["error_kind"] = "run_abandoned"
+                    row["finished_at"] = True
+                    continue
             row["status"] = "running"
             row["lease_owner"] = worker_id
             row["lease_live"] = True
             row["fencing_epoch"] = int(row["fencing_epoch"]) + 1
-            checkpoint = row["checkpoint"]
+            from dlightrag_agent.session.memory import InMemoryAgentSessionStore
+
+            from dlightrag.runtime.records import RunExecutionContext
+
+            class _Progress:
+                def __init__(self, store, run_id):
+                    self._store = store
+                    self._run_id = run_id
+
+                async def load_stage(self, stage_intent_id):
+                    return None
+
+                async def settle_stage(self, **kwargs):
+                    from dlightrag.runtime.progress import StageCommit
+
+                    row = self._store.runs[self._run_id]
+                    row["durable_progress_version"] = int(row["durable_progress_version"]) + 1
+                    return StageCommit(
+                        progress_version=int(row["durable_progress_version"]),
+                        stage_intent_id=kwargs["stage_intent_id"],
+                        evidence_count=0,
+                    )
+
             return ClaimedRun(
                 run=self._record(row),
-                checkpoint=(
-                    RunCheckpoint(
-                        version=int(checkpoint["version"]),
-                        completed_turns=int(checkpoint["completed_turns"]),
-                        state=checkpoint["state"],
-                    )
-                    if checkpoint is not None
-                    else None
+                execution=RunExecutionContext(
+                    owner_id=_OWNER,
+                    run_id=str(row["run_id"]),
+                    worker_id=worker_id,
+                    lease_owner=worker_id,
+                    fencing_epoch=int(row["fencing_epoch"]),
+                    session_store=InMemoryAgentSessionStore(),  # type: ignore[arg-type]
+                    progress_store=_Progress(self, str(row["run_id"])),  # type: ignore[arg-type]
                 ),
             )
         return None
@@ -197,33 +219,6 @@ class _MemoryStore:
         if not self._owns(row, worker_id, fencing_epoch):
             return None
         return self._append(row, "reset", {})
-
-    async def commit_checkpoint(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        expected_completed_turns: int,
-        version: int,
-        state: Mapping[str, Any],
-    ) -> CheckpointCommit:
-        row = self.runs[run_id]
-        if not self._owns(row, worker_id, fencing_epoch):
-            return CheckpointCommit(
-                outcome="lease_lost", completed_turns=int(row["completed_turns"])
-            )
-        if int(row["completed_turns"]) != expected_completed_turns:
-            return CheckpointCommit(outcome="corrupt", completed_turns=int(row["completed_turns"]))
-        row["completed_turns"] = expected_completed_turns + 1
-        row["recovery_count"] = 0
-        row["checkpoint"] = {
-            "version": version,
-            "completed_turns": row["completed_turns"],
-            "state": dict(state),
-        }
-        return CheckpointCommit(outcome="committed", completed_turns=int(row["completed_turns"]))
 
     async def finish_success(
         self,
@@ -269,7 +264,7 @@ class _MemoryStore:
             status="failed",
             result=None,
             event_type="error",
-            payload={"kind": error_kind, "message": error_message},
+            payload={"error_kind": error_kind, "message": error_message},
         )
 
     async def finish_cancelled(
@@ -302,7 +297,6 @@ class _MemoryStore:
         row["result"] = result
         row["lease_owner"] = None
         row["lease_live"] = False
-        row["checkpoint"] = None
         sequence = self._append(row, event_type, payload)
         return TerminalOutcome(committed=True, status=status, event_sequence=sequence)  # type: ignore[arg-type]
 
@@ -357,36 +351,6 @@ class _MemoryStore:
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> Any:
         self.runs[run_id]["cancel_requested"] = True
         return None
-
-    async def attach_artifacts(
-        self,
-        *,
-        owner_id: str,
-        run_id: str,
-        worker_id: str,
-        fencing_epoch: int,
-        expected_completed_turns: int,
-        artifacts: Sequence[PendingArtifact] = (),
-        references: Sequence[PendingArtifactReference] = (),
-    ) -> ArtifactAttachOutcome:
-        row = self.runs[run_id]
-        if not self._owns(row, worker_id, fencing_epoch):
-            return "lease_lost"
-        if int(row["completed_turns"]) != expected_completed_turns:
-            return "turn_mismatch"
-        self.artifact_writes.append(
-            {
-                "run_id": run_id,
-                "epoch": fencing_epoch,
-                "expected_completed_turns": expected_completed_turns,
-                "artifacts": list(artifacts),
-                "references": list(references),
-            }
-        )
-        return "attached"
-
-    async def list_run_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]:
-        return ()
 
     async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None:
         return None
@@ -628,38 +592,29 @@ class TestDurableProgress:
         assert store.events["run-a"][1].payload["text"] == "alpha beta gamma"
         assert kinds.count("done") + kinds.count("error") == 1
 
-    async def test_checkpoint_advances_one_turn_and_survives_a_restart(self) -> None:
+    async def test_durable_progress_survives_a_restart(self) -> None:
         store = _MemoryStore()
         attempts: list[int] = []
 
         async def body(session: RunSession) -> Mapping[str, Any]:
-            attempts.append(session.completed_turns)
-            if session.completed_turns == 0:
-                await session.commit_checkpoint(
-                    {"version": 1, "completed_turns": 1, "state": {"episode": "one"}}
-                )
+            attempts.append(1)
+            if len(attempts) == 1:
                 raise RuntimeError("process died")
-            return {"answer": "resumed", "turns": session.completed_turns}
+            return {"answer": "resumed"}
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
         await coordinator.start()
         try:
             await _settle(lambda: store.runs["run-a"]["status"] == "failed")
-            store.runs["run-a"].update(
-                status="running",
-                lease_live=False,
-                error_kind=None,
-                checkpoint={"version": 1, "completed_turns": 1, "state": {"episode": "one"}},
-                completed_turns=1,
-            )
+            store.runs["run-a"].update(status="running", lease_live=False, error_kind=None)
             coordinator.wake()
             await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
         finally:
             await coordinator.aclose()
 
-        assert attempts == [0, 1]
-        assert store.runs["run-a"]["result"] == {"answer": "resumed", "turns": 1}
+        assert len(attempts) == 2
+        assert store.runs["run-a"]["result"] == {"answer": "resumed"}
 
     async def test_resumed_run_emits_reset_before_regenerated_output(self) -> None:
         store = _MemoryStore()
@@ -700,11 +655,11 @@ class TestDurableProgress:
 
         assert [event.event_type for event in store.events["run-a"]] == ["token", "done"]
 
-    async def test_unreadable_checkpoint_fails_the_run_with_its_public_kind(self) -> None:
+    async def test_executor_failure_fails_the_run_with_its_public_kind(self) -> None:
         store = _MemoryStore()
 
         async def body(session: RunSession) -> Mapping[str, Any]:
-            raise CheckpointError("checkpoint_too_large", "too big")
+            raise RunExecutionError("evidence_settlement_conflict", "conflict")
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
         store.add_run("run-a")
@@ -714,8 +669,8 @@ class TestDurableProgress:
         finally:
             await coordinator.aclose()
 
-        assert store.runs["run-a"]["error_kind"] == "checkpoint_too_large"
-        assert store.events["run-a"][-1].payload["kind"] == "checkpoint_too_large"
+        assert store.runs["run-a"]["error_kind"] == "evidence_settlement_conflict"
+        assert store.events["run-a"][-1].payload.get("error_kind") == "evidence_settlement_conflict"
 
     async def test_an_owner_classified_failure_keeps_its_actionable_message(self) -> None:
         store = _MemoryStore()
@@ -735,7 +690,7 @@ class TestDurableProgress:
             await coordinator.aclose()
 
         payload = store.events["run-a"][-1].payload
-        assert payload["kind"] == "CURRENT_DOCUMENT_PARSE_FAILED"
+        assert payload["error_kind"] == "CURRENT_DOCUMENT_PARSE_FAILED"
         assert "report.pdf" in payload["message"]
 
     async def test_an_unclassified_failure_never_leaks_its_exception_text(self) -> None:
@@ -753,7 +708,7 @@ class TestDurableProgress:
             await coordinator.aclose()
 
         payload = store.events["run-a"][-1].payload
-        assert payload["kind"] == "run_execution_failed"
+        assert payload["error_kind"] == "run_execution_failed"
         assert payload["message"] == "Run execution failed."
 
     async def test_a_foreign_public_message_attribute_never_reaches_a_client(self) -> None:
@@ -776,14 +731,16 @@ class TestDurableProgress:
 
         assert store.events["run-a"][-1].payload["message"] == "Run execution failed."
 
-    async def test_missing_checkpoint_for_a_resumed_turn_is_incompatible(self) -> None:
+    async def test_a_run_without_a_prepared_input_fails_before_execution(self) -> None:
         store = _MemoryStore()
-        store.add_run("run-a", completed_turns=2, checkpoint=None)
+        store.add_run("run-a", prepared_input=None)
         executed = False
 
         async def body(session: RunSession) -> Mapping[str, Any]:
             nonlocal executed
             executed = True
+            if session.prepared_input is None:
+                raise RunExecutionError("run_execution_failed", "no prepared input")
             return {"answer": "never"}
 
         coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
@@ -793,102 +750,8 @@ class TestDurableProgress:
         finally:
             await coordinator.aclose()
 
-        assert executed is False
-        assert store.runs["run-a"]["error_kind"] == "checkpoint_incompatible"
-
-    async def test_fetched_artifacts_are_attached_under_the_live_fence(self) -> None:
-        store = _MemoryStore()
-
-        async def body(session: RunSession) -> Mapping[str, Any]:
-            await session.attach_artifacts(
-                artifacts=[PendingArtifact(content=b"page-bytes")],
-                references=[
-                    PendingArtifactReference(
-                        resource_id="res-1",
-                        reference_kind="fetched_resource",
-                        ordinal=0,
-                        digest=artifact_digest(b"page-bytes"),
-                        filename="page.html",
-                        mime_type="text/html",
-                    )
-                ],
-            )
-            return {"answer": "ok"}
-
-        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
-        store.add_run("run-a")
-        await coordinator.start()
-        try:
-            await _settle(lambda: store.runs["run-a"]["status"] == "succeeded")
-        finally:
-            await coordinator.aclose()
-
-        assert len(store.artifact_writes) == 1
-        write = store.artifact_writes[0]
-        assert write["run_id"] == "run-a"
-        assert write["epoch"] == 1
-        assert write["expected_completed_turns"] == 0
-        assert write["references"][0].reference_kind == "fetched_resource"
-
-    async def test_attaching_against_a_stale_turn_fails_the_run_as_corrupt(self) -> None:
-        store = _MemoryStore()
-        store.add_run("run-a")
-
-        async def body(session: RunSession) -> Mapping[str, Any]:
-            store.runs["run-a"]["completed_turns"] = 5
-            await session.attach_artifacts(
-                artifacts=[PendingArtifact(content=b"page-bytes")],
-                references=[
-                    PendingArtifactReference(
-                        resource_id="res-1",
-                        reference_kind="fetched_resource",
-                        ordinal=0,
-                        digest=artifact_digest(b"page-bytes"),
-                        filename="page.html",
-                        mime_type="text/html",
-                    )
-                ],
-            )
-            return {"answer": "never"}
-
-        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
-        await coordinator.start()
-        try:
-            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
-        finally:
-            await coordinator.aclose()
-
-        assert store.runs["run-a"]["error_kind"] == "checkpoint_corrupt"
-
-    async def test_the_latched_corruption_raises_a_fresh_error_at_every_boundary(self) -> None:
-        """Re-raising one instance grows its traceback for the rest of the doomed turn."""
-        store = _MemoryStore()
-        store.add_run("run-a")
-        seen: list[BaseException] = []
-        depths: list[int] = []
-
-        async def body(session: RunSession) -> Mapping[str, Any]:
-            store.runs["run-a"]["completed_turns"] = 5
-            for _ in range(3):
-                try:
-                    # A tool boundary swallows this the way the tool loop does.
-                    await session.attach_artifacts(artifacts=[PendingArtifact(content=b"x")])
-                except CheckpointError as exc:
-                    seen.append(exc)
-                    depths.append(_traceback_depth(exc))
-            await session.check_cancelled()  # the next control boundary terminalizes
-            return {"answer": "never"}
-
-        coordinator = _coordinator(store, _Executor(body), answer_worker_concurrency=1)
-        await coordinator.start()
-        try:
-            await _settle(lambda: store.runs["run-a"]["status"] == "failed")
-        finally:
-            await coordinator.aclose()
-
-        assert store.runs["run-a"]["error_kind"] == "checkpoint_corrupt"
-        assert len({id(exc) for exc in seen}) == 3
-        assert depths[1] == depths[2]
+        assert executed is True
+        assert store.runs["run-a"]["error_kind"] == "run_execution_failed"
 
 
 class TestHeartbeatResilience:
@@ -1046,7 +909,7 @@ class TestCancellationAndShutdown:
         await coordinator.aclose()
 
         assert store.runs["run-a"]["status"] == "queued"
-        assert store.runs["run-a"]["recovery_count"] == 0
+        assert store.runs["run-a"]["reclaims_without_progress"] == 0
         assert store.runs["run-a"]["lease_owner"] is None
         assert not coordinator.active_runs
 

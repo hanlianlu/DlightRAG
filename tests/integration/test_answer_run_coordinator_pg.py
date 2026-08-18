@@ -1,10 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Integration tests for the durable Answer coordinator on PostgreSQL 18.
 
-Exercises the coordinator against the real fenced store: claim, per-turn
-checkpoint, process restart from the latest committed checkpoint, gap-free event
-replay across a reconnect, observed cancellation, graceful-shutdown requeue, and
-the checkpoint codec's round trip through JSONB.
+Exercises the coordinator against the real fenced store: claim, durable
+journal progress, process restart from the committed journal, gap-free event
+replay across a reconnect, observed cancellation, graceful-shutdown requeue,
+and the journal's round trip through JSONB.
 
 Every test runs inside a throwaway database created and dropped per test, so the
 developer's ``dlightrag`` database is never mutated.
@@ -14,6 +14,7 @@ Requires PostgreSQL at localhost:5432 (dlightrag/dlightrag); skipped otherwise.
 
 import asyncio
 import base64
+import datetime
 import json
 import uuid
 from collections.abc import AsyncIterator, Mapping
@@ -32,28 +33,19 @@ from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.streaming import AnswerStream
-from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import (
     AnswerExecutor,
     AnswerResourceResolver,
     OrchestratorRun,
-    _fetched_bytes_sink,
 )
-from dlightrag.answer.resources import registry as registry_module
-from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
-from dlightrag.answer.resources.registry import ResourceRegistry
-from dlightrag.answer.runs.checkpoints import encode_checkpoint_state, restore_agent_state
+from dlightrag.answer.resources.models import TextWindowBudget
 from dlightrag.answer.runs.execution import AnswerRunInput, PinnedModelProfile
-from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.answer.synthesizer import AnswerSynthesizer
-from dlightrag.answer.tools import ExactCallCache
 from dlightrag.application import Application, _compose
 from dlightrag.config import DlightragConfig, RuntimeConfig
 from dlightrag.model_settings import answer_executor_settings, answer_resource_settings
 from dlightrag.runtime import (
-    DurableWrites,
     RunCoordinator,
-    RunEventBroker,
     RunSession,
     answer_run_request_fingerprint,
 )
@@ -111,7 +103,7 @@ async def _pg_available() -> bool:
 
 
 @pytest.fixture
-async def store() -> AsyncIterator[PGAnswerRunStore]:
+async def store() -> AsyncIterator[FingerprintingAnswerRunStore]:
     if not await _pg_available():
         pytest.skip("PostgreSQL not available")
 
@@ -169,7 +161,7 @@ def _status_is(store: PGAnswerRunStore, run_id: str, status: str) -> Any:
     return _check
 
 
-async def test_checkpointed_turn_survives_a_new_worker(store: PGAnswerRunStore) -> None:
+async def test_journaled_turn_survives_a_new_worker(store: FingerprintingAnswerRunStore) -> None:
     creation = await store.create_run(
         owner_id=_OWNER,
         request=_REQUEST,
@@ -178,18 +170,33 @@ async def test_checkpointed_turn_survives_a_new_worker(store: PGAnswerRunStore) 
     run_id = creation.run.run_id
     seen: list[int] = []
 
+    from dlightrag_agent.session.entries import AssistantMessageEntry
+    from dlightrag_agent.session.ids import EntryId, SessionId
+
     async def body(session: RunSession) -> Mapping[str, Any]:
-        seen.append(session.completed_turns)
-        if session.completed_turns == 0:
-            await session.commit_checkpoint(
-                {"version": 1, "completed_turns": 1, "state": {"episode": {"exchanges": []}}}
+        journal = session.execution.session_store
+        assert session.prepared_input is not None
+        session_id = SessionId(str(session.prepared_input["session_id"]))
+        snapshot = await journal.load(session_id)
+        seen.append(snapshot.version)
+        if snapshot.version == 0:
+            entry = AssistantMessageEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=datetime.datetime.now(datetime.UTC),
+                content="searched",
+                stop_reason="stop",
             )
+            committed = await journal.append(
+                session_id=session_id, expected_version=0, entries=[entry]
+            )
+            assert committed.__class__.__name__ == "SessionCommit"
             await asyncio.sleep(30)
-        return {"answer": "second attempt", "turns": session.completed_turns}
+        return {"answer": "second attempt", "turns": snapshot.version}
 
     first = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
     await first.start()
-    await _settle(_checkpoint_committed(store, run_id))
+    await _settle(_journal_committed(store, run_id))
     await first.aclose()
 
     second = RunCoordinator(store=store, executor=_Executor(body), answer_worker_concurrency=1)
@@ -201,21 +208,21 @@ async def test_checkpointed_turn_survives_a_new_worker(store: PGAnswerRunStore) 
 
     run = await store.get_run(owner_id=_OWNER, run_id=run_id)
     assert run is not None
-    assert run.completed_turns == 1
+    assert run.durable_progress_version == 1
     assert run.result == {"answer": "second attempt", "turns": 1}
     assert seen == [0, 1]
 
 
-def _checkpoint_committed(store: PGAnswerRunStore, run_id: str) -> Any:
+def _journal_committed(store: PGAnswerRunStore, run_id: str) -> Any:
     async def _check() -> bool:
         run = await store.get_run(owner_id=_OWNER, run_id=run_id)
-        return run is not None and run.completed_turns == 1
+        return run is not None and run.durable_progress_version == 1
 
     return _check
 
 
 async def test_the_coordinator_applies_retention_without_an_execution_slot(
-    store: PGAnswerRunStore,
+    store: FingerprintingAnswerRunStore,
 ) -> None:
     """Every run-owning process trims expired event logs and prunes expired runs."""
     expired = await store.create_run(
@@ -277,7 +284,7 @@ async def test_the_coordinator_applies_retention_without_an_execution_slot(
 
 
 async def test_graceful_shutdown_requeues_without_crash_recovery(
-    store: PGAnswerRunStore,
+    store: FingerprintingAnswerRunStore,
 ) -> None:
     creation = await store.create_run(
         owner_id=_OWNER,
@@ -300,12 +307,12 @@ async def test_graceful_shutdown_requeues_without_crash_recovery(
     run = await store.get_run(owner_id=_OWNER, run_id=run_id)
     assert run is not None
     assert run.status == "queued"
-    assert run.recovery_count == 0
+    assert run.reclaims_without_progress == 0
     assert run.lease_owner is None
 
 
 async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
-    store: PGAnswerRunStore,
+    store: FingerprintingAnswerRunStore,
 ) -> None:
     creation = await store.create_run(
         owner_id=_OWNER,
@@ -347,7 +354,7 @@ async def test_reconnecting_subscriber_replays_without_gaps_or_duplicates(
 
 
 async def test_running_run_observes_cancellation_and_commits_cancelled(
-    store: PGAnswerRunStore,
+    store: FingerprintingAnswerRunStore,
 ) -> None:
     creation = await store.create_run(
         owner_id=_OWNER,
@@ -381,7 +388,7 @@ async def test_running_run_observes_cancellation_and_commits_cancelled(
     assert events[-1].payload == {"status": "cancelled"}
 
 
-async def test_checkpoint_round_trips_through_jsonb(store: PGAnswerRunStore) -> None:
+async def test_journal_round_trips_through_jsonb(store: FingerprintingAnswerRunStore) -> None:
     creation = await store.create_run(
         owner_id=_OWNER,
         request=_REQUEST,
@@ -390,129 +397,32 @@ async def test_checkpoint_round_trips_through_jsonb(store: PGAnswerRunStore) -> 
     run_id = creation.run.run_id
     claimed = await store.claim_next(worker_id="worker-1")
     assert claimed is not None
+    journal = claimed.execution.session_store
 
-    evidence = EvidenceLedger()
-    evidence.add_contexts({"chunks": [{"chunk_id": "c1", "content": "text", "_workspace": "ws"}]})
-    episode = _episode()
-    episode.record([{"role": "assistant", "content": "", "provider_state": {"native": True}}])
-    registry = ResourceRegistry()
-    registry.register(ResourceInput(content=b"bytes", filename="a.txt"))
-    state = AgentRunState(
-        evidence=evidence,
-        episode=episode,
-        tool_cache=ExactCallCache(),
-        registry=registry,
-        trace={"agent_turns": 1},
-        completed_turns=1,
-    )
-    envelope = await encode_checkpoint_state(state, owner_id=_OWNER, run_id=run_id, store=store)
-    commit = await store.commit_checkpoint(
-        owner_id=_OWNER,
-        run_id=run_id,
-        worker_id="worker-1",
-        fencing_epoch=claimed.run.fencing_epoch,
-        expected_completed_turns=0,
-        version=int(envelope["version"]),
-        state=envelope["state"],
-    )
-    assert commit.outcome == "committed"
+    from dlightrag_agent.session.entries import AssistantMessageEntry, UserMessageEntry
+    from dlightrag_agent.session.fold import fold_entries
+    from dlightrag_agent.session.ids import EntryId, SessionId
 
-    await store.release_for_shutdown(
-        owner_id=_OWNER,
-        run_id=run_id,
-        worker_id="worker-1",
-        fencing_epoch=claimed.run.fencing_epoch,
-    )
-    reclaimed = await store.claim_next(worker_id="worker-2")
-    assert reclaimed is not None
-    assert reclaimed.checkpoint is not None
-
-    resumed_registry = ResourceRegistry()
-    resumed_registry.register(ResourceInput(content=b"bytes", filename="a.txt"))
-    resumed = AgentRunState(
-        evidence=EvidenceLedger(),
-        episode=_episode(),
-        tool_cache=ExactCallCache(),
-        registry=resumed_registry,
-        trace={},
-    )
-    await restore_agent_state(
-        resumed,
-        {
-            "version": reclaimed.checkpoint.version,
-            "completed_turns": reclaimed.checkpoint.completed_turns,
-            "state": reclaimed.checkpoint.state,
-        },
-        owner_id=_OWNER,
-        run_id=run_id,
-        store=store,
-        expected_completed_turns=1,
-    )
-
-    assert resumed.completed_turns == 1
-    assert resumed.episode.messages() == episode.messages()
-    assert resumed.evidence.contexts["chunks"][0]["chunk_id"] == "c1"
-    assert [entry.resource_id for entry in resumed_registry.manifest()] == [
-        entry.resource_id for entry in registry.manifest()
+    assert creation.run.prepared_input is not None
+    session_id = SessionId(str(creation.run.prepared_input["session_id"]))
+    entries = [
+        UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.datetime.now(datetime.UTC),
+            content="question",
+        ),
+        AssistantMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=datetime.datetime.now(datetime.UTC),
+            content="searched",
+            stop_reason="stop",
+            provider_state={"native": True},
+        ),
     ]
-    await state.tool_cache.aclose()
-    await resumed.tool_cache.aclose()
-    await registry.aclose()
-    await resumed_registry.aclose()
-
-
-async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
-    store: PGAnswerRunStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Durable web bytes survive a restart even when the page no longer resolves."""
-    creation = await store.create_run(
-        owner_id=_OWNER,
-        request=_REQUEST,
-        idempotency_fingerprint=_REQUEST_FINGERPRINT,
-    )
-    run_id = creation.run.run_id
-    claimed = await store.claim_next(worker_id="worker-1")
-    assert claimed is not None
-    session = RunSession(store, claimed, broker=RunEventBroker(), writes=DurableWrites())
-
-    reached: list[str] = []
-
-    async def _validate(url: str, **kwargs: Any) -> None:
-        reached.append(url)
-
-    async def _fetch_original(url: str, **kwargs: Any) -> bytes:
-        reached.append(url)
-        return b"<html>the page as the run first read it</html>"
-
-    monkeypatch.setattr(registry_module, "avalidate_public_https_url", _validate)
-    monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _fetch_original)
-
-    registry = ResourceRegistry(fetched_bytes_sink=_fetched_bytes_sink(session))
-    resource_id = registry.register_discovered_link("https://example.com/a.html")
-    assert resource_id is not None
-    original = await registry.materialize(resource_id)
-    assert original == b"<html>the page as the run first read it</html>"
-
-    state = AgentRunState(
-        evidence=EvidenceLedger(),
-        episode=_episode(),
-        tool_cache=ExactCallCache(),
-        registry=registry,
-        trace={},
-        completed_turns=1,
-    )
-    envelope = await encode_checkpoint_state(state, owner_id=_OWNER, run_id=run_id, store=store)
-    commit = await store.commit_checkpoint(
-        owner_id=_OWNER,
-        run_id=run_id,
-        worker_id="worker-1",
-        fencing_epoch=claimed.run.fencing_epoch,
-        expected_completed_turns=0,
-        version=int(envelope["version"]),
-        state=envelope["state"],
-    )
-    assert commit.outcome == "committed"
-    before = await _references_by_resource(store, run_id)
+    committed = await journal.append(session_id=session_id, expected_version=0, entries=entries)
+    assert committed.__class__.__name__ == "SessionCommit"
 
     await store.release_for_shutdown(
         owner_id=_OWNER,
@@ -522,75 +432,16 @@ async def test_restored_fetched_resource_never_refetches_or_rebinds_its_slot(
     )
     reclaimed = await store.claim_next(worker_id="worker-2")
     assert reclaimed is not None
-    assert reclaimed.checkpoint is not None
-    resumed_session = RunSession(store, reclaimed, broker=RunEventBroker(), writes=DurableWrites())
 
-    async def _dead(url: str, **kwargs: Any) -> Any:
-        reached.append(url)
-        raise AssertionError(f"a restored run must not reach the network for {url}")
-
-    reached.clear()
-    monkeypatch.setattr(registry_module, "avalidate_public_https_url", _dead)
-    monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _dead)
-
-    resumed_registry = ResourceRegistry(fetched_bytes_sink=_fetched_bytes_sink(resumed_session))
-    resumed = AgentRunState(
-        evidence=EvidenceLedger(),
-        episode=_episode(),
-        tool_cache=ExactCallCache(),
-        registry=resumed_registry,
-        trace={},
-    )
-    await restore_agent_state(
-        resumed,
-        {
-            "version": reclaimed.checkpoint.version,
-            "completed_turns": reclaimed.checkpoint.completed_turns,
-            "state": reclaimed.checkpoint.state,
-        },
-        owner_id=_OWNER,
-        run_id=run_id,
-        store=store,
-        expected_completed_turns=1,
-    )
-
-    assert await resumed_registry.materialize(resource_id) == original
-    assert reached == []
-    assert await _references_by_resource(store, run_id) == before
-
-    monkeypatch.setattr(registry_module, "avalidate_public_https_url", _validate)
-
-    async def _fetch_later(url: str, **kwargs: Any) -> bytes:
-        return b"<html>a page discovered after the resume</html>"
-
-    monkeypatch.setattr(registry_module, "afetch_public_https_bytes", _fetch_later)
-    later_id = resumed_registry.register_discovered_link("https://example.com/b.html")
-    assert later_id is not None
-    await resumed_registry.materialize(later_id)
-
-    after = await _references_by_resource(store, run_id)
-    assert after[resource_id] == before[resource_id]
-    assert after[later_id][1] > after[resource_id][1]
-
-    await state.tool_cache.aclose()
-    await resumed.tool_cache.aclose()
-    await registry.aclose()
-    await resumed_registry.aclose()
-
-
-async def _references_by_resource(
-    store: PGAnswerRunStore, run_id: str
-) -> dict[str, tuple[str, int]]:
-    references = await store.list_run_artifacts(owner_id=_OWNER, run_id=run_id)
-    return {
-        reference.resource_id: (reference.digest, reference.ordinal)
-        for reference in references
-        if reference.reference_kind == "fetched_resource"
-    }
+    snapshot = await reclaimed.execution.session_store.load(session_id)
+    assert snapshot.version == 1
+    folded = fold_entries(snapshot.entries)
+    assert [message["role"] for message in folded] == ["user", "assistant"]
+    assert folded[1]["provider_state"] == {"native": True}
 
 
 async def test_accepted_run_executes_and_stores_a_projected_result_without_a_subscriber(
-    store: PGAnswerRunStore,
+    store: FingerprintingAnswerRunStore,
 ) -> None:
     """A descriptor-only caller still gets a finished run and a safe canonical result."""
     application, coordinator = _answer_runtime(store)
@@ -633,7 +484,7 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert result["trace"]["retrieval"] == "ok"
 
 
-def _answer_runtime(store: PGAnswerRunStore) -> tuple[Application, RunCoordinator]:
+def _answer_runtime(store: FingerprintingAnswerRunStore) -> tuple[Application, RunCoordinator]:
     """Compose the final executor and coordinator over the throwaway database."""
     config = DlightragConfig(runtime=RuntimeConfig(answer_worker_concurrency=1))
     components = _compose(config)

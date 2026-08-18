@@ -34,16 +34,17 @@ def _record(**overrides: Any) -> AnswerRunRecord:
         "owner_id": "owner",
         "run_id": _RUN_ID,
         "idempotency_key": None,
-        "request": {"query": "hi", "workspaces": ["default"]},
+        "prepared_input": {"query": "hi", "workspaces": ["default"]},
         "status": "queued",
         "phase": None,
         "stop_reason": None,
-        "completed_turns": 0,
         "cancel_requested_at": None,
         "lease_owner": None,
         "lease_expires_at": None,
         "fencing_epoch": 0,
-        "recovery_count": 0,
+        "durable_progress_version": 0,
+        "last_reclaim_progress_version": 0,
+        "reclaims_without_progress": 0,
         "next_event_sequence": 1,
         "events_trimmed_at": None,
         "result": None,
@@ -328,7 +329,7 @@ class TestStatus:
         run_application.record = _record(
             status="running",
             phase="researching",
-            completed_turns=2,
+            durable_progress_version=2,
             cancel_requested_at=_NOW,
         )
 
@@ -336,7 +337,7 @@ class TestStatus:
 
         assert body["status"] == "running"
         assert body["phase"] == "researching"
-        assert body["completed_turns"] == 2
+        assert body["durable_progress_version"] == 2
         assert body["cancel_requested"] is True
         assert body["result"] is None
 

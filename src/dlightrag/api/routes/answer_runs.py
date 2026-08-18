@@ -239,7 +239,7 @@ async def _status_payload(
     """Project one run's authoritative state for this authenticated reader."""
     result: dict[str, Any] | None = None
     if record.result is not None:
-        workspaces = [str(value) for value in record.request.get("workspaces") or ()]
+        workspaces = [str(value) for value in (record.prepared_input or {}).get("workspaces") or ()]
         result = project_answer_result(
             record.result,
             source_link_builder=SourceDownloadLinkBuilder(),
@@ -253,7 +253,7 @@ async def _status_payload(
     return {
         **_descriptor(record),
         "phase": record.phase,
-        "completed_turns": record.completed_turns,
+        "durable_progress_version": record.durable_progress_version,
         "cancel_requested": record.cancel_requested,
         "result": result,
         "error_kind": record.error_kind,
@@ -355,7 +355,7 @@ async def stream_answer_run_events(
             status_code=410,
             detail="Answer run events expired; read its result from the status endpoint",
         )
-    workspaces = [str(value) for value in record.request.get("workspaces") or ()]
+    workspaces = [str(value) for value in (record.prepared_input or {}).get("workspaces") or ()]
     downloadable = await authorized_workspaces(
         request, user, workspaces, AccessAction.WORKSPACE_DOWNLOAD_SOURCE
     )

@@ -154,11 +154,12 @@ class ToolTurnExecutor:
             raise ValueError("observation budget cannot be negative")
 
         tools_by_name = {tool.name: tool for tool in tools}
-        intents = (
-            ()
+        preflight = (
+            ToolPreflight(intents=(), validation_results=())
             if assistant.stop_reason == "length"
-            else preflight_tool_calls(assistant, tools).intents
+            else preflight_tool_calls(assistant, tools)
         )
+        intents = preflight.intents
         if assistant.stop_reason == "length":
             results = tuple(
                 _error(
@@ -194,6 +195,7 @@ class ToolTurnExecutor:
             results=results,
             messages=transcript,
             intents=intents,
+            validation_results=preflight.validation_results,
         )
 
 

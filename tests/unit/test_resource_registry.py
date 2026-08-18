@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import socket
 
 import pytest
@@ -391,25 +390,6 @@ async def test_cursor_pages_do_not_rebuild_whole_resource_windows(
     assert input_lengths.count(len(text)) == 1
     assert all(length < len(text) for length in input_lengths[1:])
     assert span_threads and all(thread_id != loop_thread for thread_id in span_threads)
-
-
-async def test_checkpoint_keeps_only_one_compact_active_cursor() -> None:
-    registry = ResourceRegistry()
-    text = "".join(f"line {index} " + "x" * 30 + "\n" for index in range(4000))
-    resource_id = registry.register(ResourceInput(content=text.encode("utf-8")))
-
-    current = await registry.read(resource_id, max_window_tokens=100)
-    for _ in range(10):
-        assert current.next_cursor is not None
-        current = await registry.read(
-            resource_id,
-            cursor=current.next_cursor,
-            max_window_tokens=40,
-        )
-
-    cursors = registry.export_state()["cursors"]
-    assert len(cursors) == 1
-    assert len(json.dumps(cursors)) < 1_024
 
 
 async def test_read_continues_within_single_oversized_line() -> None:

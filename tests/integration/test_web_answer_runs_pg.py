@@ -116,7 +116,13 @@ async def store(pool: Any, runs: PGAnswerRunStore) -> PGWebConversationStore:
 
 
 def _request(query: str = "why", **extra: Any) -> dict[str, Any]:
-    return {"query": query, "workspaces": ["alpha"], "history": [], **extra}
+    return {
+        "query": query,
+        "workspaces": ["alpha"],
+        "history": [],
+        "session_id": "00000000-0000-7000-8000-000000000001",
+        **extra,
+    }
 
 
 async def _conversation(store: PGWebConversationStore, owner: str = _OWNER) -> str:
@@ -159,7 +165,7 @@ async def _finish(pool: Any, run_id: str, *, status: str, error: str | None = No
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE dlightrag_answer_runs "
-            "SET status = $2, finished_at = NOW(), "
+            "SET status = $2, finished_at = NOW(), prepared_input_json = NULL, "
             "    result_json = CASE WHEN $2 = 'succeeded' "
             '        THEN \'{"answer": "done"}\'::jsonb ELSE NULL END, '
             "    error_kind = $3, error_message = $3 "
@@ -234,7 +240,7 @@ async def test_a_submission_commits_the_run_bytes_and_turn_together(
         )
     assert row["run_id"] == creation.turn.answer_run_id
     assert row["status"] == "queued"
-    assert await _count(pool, "dlightrag_answer_artifacts", owner_id=_OWNER, digest=digest) == 1
+    assert await _count(pool, "dlightrag_blobs", owner_id=_OWNER, digest=digest) == 1
     assert await _count(pool, "dlightrag_answer_run_artifacts", owner_id=_OWNER) == 1
 
 
@@ -408,7 +414,7 @@ async def test_the_same_submission_in_two_conversations_at_once_is_a_conflict(
     assert [type(error) for error in rejected] == [ConversationSubmissionConflict]
     assert await _count(pool, "dlightrag_answer_runs") == 1
     assert await _count(pool, "web_conversation_turns") == 1
-    assert await _count(pool, "dlightrag_answer_artifacts") == 1
+    assert await _count(pool, "dlightrag_blobs") == 1
     assert await _count(pool, "dlightrag_answer_run_artifacts") == 1
 
 
@@ -452,7 +458,7 @@ async def test_a_run_created_outside_a_conversation_keeps_the_same_key_namespace
     with pytest.raises(IdempotencyKeyConflict):
         await runs.create_run(
             owner_id=_OWNER,
-            request=other_request,
+            prepared_input=other_request,
             idempotency_fingerprint=answer_run_request_fingerprint(other_request),
             idempotency_key=submission_id,
         )
@@ -479,7 +485,7 @@ async def test_a_snapshot_projects_each_turn_from_its_run(
     assert snapshot is not None
     assert [turn.turn_number for turn in snapshot.turns] == [1, 2]
     assert [turn.run.status for turn in snapshot.turns] == ["queued", "succeeded"]
-    assert snapshot.turns[0].run.request["query"] == "first"
+    assert (snapshot.turns[0].run.prepared_input or {})["query"] == "first"
     assert snapshot.turns[1].run.result == {"answer": "done"}
 
 
@@ -597,7 +603,7 @@ async def test_deleting_a_conversation_deletes_its_runs_and_frees_its_bytes(
 
     assert await _count(pool, "dlightrag_answer_runs") == 0
     assert await _count(pool, "dlightrag_answer_run_artifacts") == 0
-    assert await _count(pool, "dlightrag_answer_artifacts") == 0
+    assert await _count(pool, "dlightrag_blobs") == 0
     assert await _count(pool, "web_conversation_turns") == 0
 
 
@@ -623,7 +629,7 @@ async def test_deletion_keeps_bytes_another_run_still_references(
 
     await store.delete_conversation(_OWNER, doomed, ttl_days=_TTL_DAYS)
 
-    assert await _count(pool, "dlightrag_answer_artifacts", owner_id=_OWNER, digest=digest) == 1
+    assert await _count(pool, "dlightrag_blobs", owner_id=_OWNER, digest=digest) == 1
     assert await _count(pool, "dlightrag_answer_runs") == 1
 
 
@@ -702,7 +708,7 @@ async def test_an_unlinked_successful_run_still_prunes(
     request = _request()
     creation = await runs.create_run(
         owner_id=_OWNER,
-        request=request,
+        prepared_input=request,
         idempotency_fingerprint=answer_run_request_fingerprint(request),
     )
     await _finish(pool, creation.run.run_id, status="succeeded")
@@ -731,7 +737,7 @@ async def test_a_turn_cannot_reference_a_run_another_principal_owns(
     request = _request()
     foreign = await runs.create_run(
         owner_id=_OTHER_OWNER,
-        request=request,
+        prepared_input=request,
         idempotency_fingerprint=answer_run_request_fingerprint(request),
     )
 

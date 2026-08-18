@@ -133,7 +133,7 @@ class AnswerRunStatusResponse(AnswerRunDescriptor):
     """Authoritative lifecycle state, plus the canonical result once it exists."""
 
     phase: AnswerRunPhase | None = None
-    completed_turns: int = 0
+    durable_progress_version: int = 0
     cancel_requested: bool = False
     result: AnswerResponse | None = None
     error_kind: str | None = None

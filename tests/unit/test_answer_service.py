@@ -56,16 +56,17 @@ def _record(
         owner_id=_OWNER,
         run_id=run_id,
         idempotency_key=None,
-        request={},
+        prepared_input={"query": "q"},
         status=status,  # type: ignore[arg-type]
         phase=None,
         stop_reason=None,
-        completed_turns=0,
         cancel_requested_at=None,
         lease_owner=None,
         lease_expires_at=None,
         fencing_epoch=0,
-        recovery_count=0,
+        durable_progress_version=0,
+        last_reclaim_progress_version=0,
+        reclaims_without_progress=0,
         next_event_sequence=1,
         events_trimmed_at=None,
         result=result,
@@ -102,17 +103,19 @@ class _Store:
         self,
         *,
         owner_id: str,
-        request: Mapping[str, Any],
+        prepared_input: Mapping[str, Any],
         idempotency_fingerprint: str,
         idempotency_key: str | None = None,
+        resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
     ) -> RunCreation:
         self.created.append(
             {
                 "owner_id": owner_id,
-                "request": dict(request),
+                "prepared_input": dict(prepared_input),
                 "idempotency_fingerprint": idempotency_fingerprint,
+                "resources": resources,
                 "idempotency_key": idempotency_key,
                 "artifacts": [artifact.content for artifact in artifacts],
                 "references": list(references),
@@ -421,7 +424,7 @@ async def test_carried_history_resource_loads_from_the_run_that_accepted_it() ->
         for reference in accepted["references"]
     ] == [("history_attachment", 0, "b" * 64)]
 
-    run_input = AnswerRunInput.from_request(accepted["request"])
+    run_input = AnswerRunInput.from_request(accepted["prepared_input"])
     assert run_input.workspaces == ("finance",)
     assert run_input.context_policy_revision == CONTEXT_POLICY_REVISION
     assert run_input.model_catalog_revision == MODEL_CATALOG_REVISION

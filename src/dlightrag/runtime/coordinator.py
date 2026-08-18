@@ -17,18 +17,12 @@ import contextlib
 import logging
 import random
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
 from dlightrag.runtime.contracts import AnswerRunPhase
-from dlightrag.runtime.errors import CheckpointError, CheckpointErrorKind, RunExecutionError
-from dlightrag.runtime.records import (
-    AnswerRunEvent,
-    ClaimedRun,
-    PendingArtifact,
-    PendingArtifactReference,
-    RunCheckpoint,
-)
+from dlightrag.runtime.errors import RunExecutionError
+from dlightrag.runtime.records import AnswerRunEvent, ClaimedRun
 from dlightrag.runtime.store import AnswerRunStore
 from dlightrag.runtime.subscription import RunEventBroker, follow_run_events
 
@@ -114,8 +108,9 @@ class RunSession:
     Every write is predicated on this worker's lease owner and fencing epoch and
     is shielded, so a shutdown cancellation never tears a small fenced write in
     half. The first zero-row write means the lease is gone: the session latches
-    closed so no later event, checkpoint, or terminal transition can be written
-    by a worker the run no longer belongs to.
+    closed so no later event, settlement, or terminal transition can be written
+    by a worker the run no longer belongs to. Checkpoint and artifact methods
+    are gone: journal settlements and acceptance carry those facts.
     """
 
     def __init__(
@@ -127,21 +122,20 @@ class RunSession:
         writes: DurableWrites,
         notify: Callable[[], None] | None = None,
     ) -> None:
+        execution = claimed.execution
         run = claimed.run
-        self.owner_id = run.owner_id
-        self.run_id = run.run_id
-        self.worker_id = str(run.lease_owner or "")
-        self.fencing_epoch = run.fencing_epoch
-        self.request: Mapping[str, Any] = run.request
-        self.completed_turns = run.completed_turns
-        self.checkpoint: RunCheckpoint | None = claimed.checkpoint
+        self.owner_id = execution.owner_id
+        self.run_id = execution.run_id
+        self.worker_id = execution.worker_id
+        self.fencing_epoch = execution.fencing_epoch
+        self.execution = execution
+        self.prepared_input: Mapping[str, Any] | None = run.prepared_input
         self._store = store
         self._broker = broker
         self._writes = writes
         self._notify = notify
         self._cancel_requested = run.cancel_requested
         self._lease_lost = False
-        self._corrupt: tuple[CheckpointErrorKind, str] | None = None
         self._pending_tokens: list[str] = []
         self._pending_chars = 0
         self._flush_deadline: float | None = None
@@ -172,10 +166,6 @@ class RunSession:
 
     def _guard(self) -> None:
         """Refuse every further durable write once this session lost coherence."""
-        if self._corrupt is not None:
-            # A fresh error each time: re-raising one latched instance appends a
-            # traceback for every boundary the doomed turn still crosses.
-            raise CheckpointError(*self._corrupt)
         if self._lease_lost:
             raise LeaseLostError
 
@@ -232,64 +222,6 @@ class RunSession:
                 text=text,
             )
         )
-
-    async def commit_checkpoint(self, envelope: Mapping[str, Any]) -> None:
-        """Advance one completed control turn and its checkpoint atomically."""
-        self._guard()
-        expected = self.completed_turns
-        commit = await self._writes.shield(
-            self._store.commit_checkpoint(
-                owner_id=self.owner_id,
-                run_id=self.run_id,
-                worker_id=self.worker_id,
-                fencing_epoch=self.fencing_epoch,
-                expected_completed_turns=expected,
-                version=int(envelope["version"]),
-                state=envelope["state"],
-            )
-        )
-        if commit.outcome == "lease_lost":
-            self._lease_lost = True
-            raise LeaseLostError
-        if commit.outcome == "corrupt":
-            raise CheckpointError(
-                "checkpoint_corrupt",
-                "Answer run state no longer matches its authoritative turn count.",
-            )
-        self.completed_turns = commit.completed_turns
-
-    async def attach_artifacts(
-        self,
-        *,
-        artifacts: Sequence[PendingArtifact] = (),
-        references: Sequence[PendingArtifactReference] = (),
-    ) -> None:
-        """Persist validated fetched bytes before they may enter a checkpoint."""
-        self._guard()
-        outcome = await self._writes.shield(
-            self._store.attach_artifacts(
-                owner_id=self.owner_id,
-                run_id=self.run_id,
-                worker_id=self.worker_id,
-                fencing_epoch=self.fencing_epoch,
-                expected_completed_turns=self.completed_turns,
-                artifacts=artifacts,
-                references=references,
-            )
-        )
-        if outcome == "turn_mismatch":
-            # The run advanced a turn without this worker; its replay slots no
-            # longer describe the durable state. Latching that here stops the
-            # rest of the turn from appending events for state it no longer owns,
-            # even though a tool boundary swallows this raise as a tool failure.
-            self._corrupt = (
-                "checkpoint_corrupt",
-                "Answer run artifacts no longer match its authoritative turn count.",
-            )
-            raise CheckpointError(*self._corrupt)
-        if outcome != "attached":
-            self._lease_lost = True
-            raise LeaseLostError
 
     async def _fenced(self, operation: Awaitable[int | None]) -> None:
         self._guard()
@@ -499,11 +431,6 @@ class RunCoordinator:
         self._sessions[session.run_id] = session
         heartbeat = asyncio.create_task(self._heartbeat_forever(session))
         try:
-            if claimed.run.completed_turns > 0 and claimed.checkpoint is None:
-                raise CheckpointError(
-                    "checkpoint_incompatible",
-                    "Answer run has completed turns but no restorable checkpoint.",
-                )
             result = await self._executor.execute(session)
             await session.flush_tokens()
             await self._finish_success(session, result)
@@ -516,8 +443,6 @@ class RunCoordinator:
             logger.info(
                 "Answer run %s lost its lease; leaving recovery to the next owner", session.run_id
             )
-        except CheckpointError as exc:
-            await self._finish_failure(session, exc.kind, exc.public_message)
         except RunExecutionError as exc:
             await self._finish_failure(session, exc.kind, exc.public_message)
         except Exception:

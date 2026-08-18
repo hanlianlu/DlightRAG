@@ -541,14 +541,14 @@ async def get_answer_run_tool(
             record.result,
             visual_workspaces=await _authorized_workspace_names(
                 AccessAction.WORKSPACE_READ_VISUAL_ASSET,
-                [str(value) for value in record.request.get("workspaces") or ()],
+                [str(value) for value in (record.prepared_input or {}).get("workspaces") or ()],
                 application=application,
             ),
         )
     return {
         **_run_descriptor(record),
         "phase": record.phase,
-        "completed_turns": record.completed_turns,
+        "durable_progress_version": record.durable_progress_version,
         "result": result,
         "error_kind": record.error_kind,
         "error_message": record.error_message,

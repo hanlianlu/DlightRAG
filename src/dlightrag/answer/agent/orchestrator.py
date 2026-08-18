@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 
-from dlightrag_agent.session.fold import PriorTurns, SessionEpisode
+from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
 from dlightrag_agent.tools import (
     AgentTool,
     ExecutedTurn,
@@ -38,7 +38,6 @@ from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.answer.resources.registry import ResourceRegistry
-from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 
@@ -49,11 +48,16 @@ StreamModel = Callable[..., AsyncIterator[str]]
 
 
 class RunBoundaries(Protocol):
-    """Durable boundaries a run may observe between agent steps."""
+    """Durable boundaries a run may observe between agent steps.
+
+    ``commit_turn`` journals the complete assistant response and its ordered
+    intents, settles every intent in source order, and advances durable
+    progress; the live executor executes tool calls before it is invoked.
+    """
 
     async def enter_phase(self, phase: str) -> None: ...
 
-    async def turn_completed(self, state: AgentRunState) -> None: ...
+    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None: ...
 
     async def check_cancelled(self) -> None: ...
 
@@ -64,7 +68,7 @@ class _NoBoundaries:
     async def enter_phase(self, phase: str) -> None:
         return None
 
-    async def turn_completed(self, state: AgentRunState) -> None:
+    async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
         return None
 
     async def check_cancelled(self) -> None:
@@ -73,11 +77,21 @@ class _NoBoundaries:
 
 @dataclass(slots=True)
 class PreparedRun:
-    """One run's restorable memory plus the wiring that executes it here."""
+    """One run's live memory plus the wiring that executes it here.
 
-    state: AgentRunState
+    The episode and evidence are request-local materializers rebuilt from the
+    durable journal on recovery; they carry no export/restore interface.
+    """
+
     context: ContextAssembler
     tools: list[AgentTool]
+    evidence: EvidenceLedger
+    episode: SessionEpisode
+    tool_cache: Any
+    registry: ResourceRegistry | None
+    trace: dict[str, Any]
+    agent_turn_count: int = 0
+    stop_reason: str = "model_stop"
 
 
 class AnswerOrchestrator:
@@ -193,24 +207,23 @@ class AnswerOrchestrator:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if self._stream_model_func is None or self._model_func is None:
             raise RuntimeError("Streaming research answer requires a final text stream")
-        state = run.state
         try:
             await self._research_until_stopped(run, boundaries=boundaries)
 
             await boundaries.enter_phase("generating")
             final_messages, indexer = await run.context.answer_turn(
-                evidence=state.evidence, episode=state.episode
+                evidence=run.evidence, episode=run.episode
             )
-            state.trace["agent_stop_reason"] = state.stop_reason
+            run.trace["agent_stop_reason"] = run.stop_reason
             return await self._synthesizer.synthesize_research_stream(
                 final_messages,
-                state.evidence.contexts,
+                run.evidence.contexts,
                 stream=self._stream_model_func,
                 indexer=indexer,
-                trace=state.trace,
+                trace=run.trace,
             )
         finally:
-            await state.tool_cache.aclose()
+            await run.tool_cache.aclose()
 
     async def _research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
         """Run evidence turns until the model stops, adds nothing, or hits the cap.
@@ -220,21 +233,20 @@ class AnswerOrchestrator:
         bounds that correction. The cap spans the whole run, not one process
         lifetime, so a resumed run continues its recorded turn count.
         """
-        state = run.state
-        while state.completed_turns < self._max_agent_turns:
+        while run.agent_turn_count < self._max_agent_turns:
             await boundaries.check_cancelled()
             await boundaries.enter_phase("researching")
             executed, changed = await self._execute_control_turn(run)
-            state.completed_turns += 1
-            state.trace["agent_turns"] = state.completed_turns
-            await boundaries.turn_completed(state)
+            run.agent_turn_count += 1
+            run.trace["agent_turns"] = run.agent_turn_count
+            await boundaries.commit_turn(executed, turn_number=run.agent_turn_count)
             if not executed.assistant.tool_calls:
-                state.stop_reason = "model_stop"
+                run.stop_reason = "model_stop"
                 return
             if not changed and not any(result.is_error for result in executed.results):
-                state.stop_reason = "no_new_evidence"
+                run.stop_reason = "no_new_evidence"
                 return
-        state.stop_reason = "turn_limit"
+        run.stop_reason = "turn_limit"
         logger.warning(
             "Research stopped at the %d-turn cap; answering from the evidence gathered so far",
             self._max_agent_turns,
@@ -251,6 +263,7 @@ class AnswerOrchestrator:
         conversation_history: PriorTurns | None = None,
         query_images: list[dict[str, Any]] | None = None,
         registry: ResourceRegistry | None = None,
+        agent_turn_count: int = 0,
     ) -> PreparedRun:
         """Build one run's memory and the tools bound to it, before any restore."""
         evidence = EvidenceLedger(image_budget=self._image_budget)
@@ -262,13 +275,6 @@ class AnswerOrchestrator:
         }
         tools, tool_cache = self._compose_tools(evidence, trace)
         return PreparedRun(
-            state=AgentRunState(
-                evidence=evidence,
-                episode=SessionEpisode(retained_tail_tokens=retained_tail_tokens),
-                tool_cache=tool_cache,
-                registry=registry,
-                trace=trace,
-            ),
             context=ContextAssembler(
                 model_profile=self._model_profile,
                 context_policy=self._context_policy,
@@ -278,6 +284,41 @@ class AnswerOrchestrator:
                 resource_manifest=self._resource_manifest,
             ),
             tools=tools,
+            evidence=evidence,
+            episode=SessionEpisode(retained_tail_tokens=retained_tail_tokens),
+            tool_cache=tool_cache,
+            registry=registry,
+            trace=trace,
+            agent_turn_count=agent_turn_count,
+        )
+
+    def adopt_agent_turn_count(self, run: PreparedRun, turns: int) -> None:
+        """Continue a resumed run's recorded turn count from the journal."""
+        run.agent_turn_count = int(turns)
+        run.trace["agent_turns"] = run.agent_turn_count
+
+    async def recover_from_fold(self, run: PreparedRun, snapshot: Any) -> None:
+        """Rebuild the live episode from the folded journal exchanges."""
+        messages = fold_entries(snapshot.entries)
+        exchanges: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("role") == "assistant" and message.get("tool_calls") and current:
+                exchanges.append(current)
+                current = [message]
+            else:
+                current.append(message)
+        if current:
+            exchanges.append(current)
+        for exchange in exchanges:
+            run.episode.record(exchange)
+        self.adopt_agent_turn_count(
+            run,
+            sum(
+                1
+                for entry in snapshot.entries
+                if entry.__class__.__name__ == "AssistantMessageEntry"
+            ),
         )
 
     def _compose_tools(
@@ -298,15 +339,14 @@ class AnswerOrchestrator:
         self,
         run: PreparedRun,
     ) -> tuple[ExecutedTurn, bool]:
-        state = run.state
         executor = ToolTurnExecutor(
             cast(ToolModel, self._model_func),
             telemetry=self._telemetry,
         )
         tool_schema_tokens = _tool_schema_tokens(run.tools)
         call_messages = await run.context.control_turn(
-            evidence=state.evidence,
-            episode=state.episode,
+            evidence=run.evidence,
+            episode=run.episode,
             tool_schema_tokens=tool_schema_tokens,
         )
         max_output_tokens = run.context.control_output_allowance(
@@ -327,7 +367,7 @@ class AnswerOrchestrator:
             self._text_window_budget.update(max(1, residual // call_count))
             return residual
 
-        previous_rows = state.evidence.row_count
+        previous_rows = run.evidence.row_count
         try:
             executed = await executor.run_turn(
                 call_messages,
@@ -338,11 +378,11 @@ class AnswerOrchestrator:
             )
         except ToolResultCapacityError as exc:
             raise AnswerInputOverflowError(str(exc)) from exc
-        state.trace["tool_observations"].extend(
+        run.trace["tool_observations"].extend(
             execution.observation.as_dict() for execution in executed.results
         )
-        state.episode.record(executed.messages[len(call_messages) :])
-        return executed, state.evidence.row_count != previous_rows
+        run.episode.record(executed.messages[len(call_messages) :])
+        return executed, run.evidence.row_count != previous_rows
 
 
 def _tool_schema_tokens(tools: list[AgentTool]) -> int:

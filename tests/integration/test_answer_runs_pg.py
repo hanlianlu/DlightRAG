@@ -14,6 +14,7 @@ Requires PostgreSQL at localhost:5432 (dlightrag/dlightrag); skipped otherwise.
 """
 
 import asyncio
+import datetime
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -23,8 +24,7 @@ import pytest
 
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
 from dlightrag.runtime import (
-    MAX_CONSECUTIVE_RECOVERIES,
-    RUN_ABANDONED_ERROR_KIND,
+    MAX_RECLAIMS_WITHOUT_PROGRESS,
     IdempotencyKeyConflict,
     PendingArtifact,
     PendingArtifactReference,
@@ -132,11 +132,11 @@ async def _event_types(pool: Any, run_id: str) -> list[str]:
     return [str(row["event_type"]) for row in rows]
 
 
-async def _checkpoint(pool: Any, run_id: str) -> str | None:
-    """Read the raw retained checkpoint; the record type deliberately hides it."""
+async def _prepared_input(pool: Any, run_id: str) -> str | None:
+    """Read the raw prepared input column."""
     async with pool.acquire() as conn:
         return await conn.fetchval(
-            "SELECT checkpoint_json FROM dlightrag_answer_runs WHERE run_id = $1",
+            "SELECT prepared_input_json FROM dlightrag_answer_runs WHERE run_id = $1",
             uuid.UUID(run_id),
         )
 
@@ -158,16 +158,24 @@ def _delete_action(value: Any) -> str:
 
 
 class TestSchema:
-    async def test_creates_exactly_the_four_contract_tables(self, store, pool) -> None:
+    async def test_creates_exactly_the_final_m3_tables(self, store, pool) -> None:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name LIKE 'dlightrag_answer%'"
+                "WHERE table_schema = 'public' AND table_name LIKE 'dlightrag_%'"
             )
-        assert {str(row["table_name"]) for row in rows} == {
+        assert {str(row["table_name"]) for row in rows} - {"dlightrag_schema_migrations"} == {
             "dlightrag_answer_runs",
             "dlightrag_answer_run_events",
-            "dlightrag_answer_artifacts",
+            "dlightrag_agent_sessions",
+            "dlightrag_agent_session_entries",
+            "dlightrag_agent_context_projections",
+            "dlightrag_agent_effects",
+            "dlightrag_answer_run_stages",
+            "dlightrag_answer_evidence",
+            "dlightrag_answer_resources",
+            "dlightrag_blobs",
+            "dlightrag_blob_chunks",
             "dlightrag_answer_run_artifacts",
         }
 
@@ -181,20 +189,20 @@ class TestSchema:
             "owner_id",
             "run_id",
             "idempotency_key",
-            "request_json",
+            "prepared_input_json",
             "request_fingerprint",
             "status",
             "phase",
             "stop_reason",
-            "completed_turns",
             "cancel_requested_at",
             "lease_owner",
             "lease_expires_at",
             "fencing_epoch",
-            "recovery_count",
+            "durable_progress_version",
+            "last_reclaim_progress_version",
+            "reclaims_without_progress",
             "next_event_sequence",
             "events_trimmed_at",
-            "checkpoint_json",
             "result_json",
             "error_kind",
             "error_message",
@@ -222,7 +230,7 @@ class TestSchema:
         }
         assert actions[("dlightrag_answer_run_events", "dlightrag_answer_runs")] == "c"
         assert actions[("dlightrag_answer_run_artifacts", "dlightrag_answer_runs")] == "c"
-        assert actions[("dlightrag_answer_run_artifacts", "dlightrag_answer_artifacts")] == "r"
+        assert actions[("dlightrag_answer_run_artifacts", "dlightrag_blobs")] == "r"
 
     async def test_rejects_unknown_status_phase_and_event_type(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
@@ -285,7 +293,7 @@ class TestCreation:
         assert uuid.UUID(creation.run.run_id).version == 7
         assert creation.run.status == "queued"
         assert creation.run.next_event_sequence == 1
-        assert creation.run.request == _request()
+        assert creation.run.prepared_input["query"] == "why"
 
     async def test_run_ids_are_unique_and_time_ordered(self, store) -> None:
         run_ids = [
@@ -382,7 +390,7 @@ class TestCancellation:
         assert await _event_types(pool, creation.run.run_id) == ["done"]
         events = await store.read_event_page(owner_id=_OWNER, run_id=creation.run.run_id)
         assert events[0].sequence == 1
-        assert events[0].payload == {"status": "cancelled"}
+        assert events[0].payload.get("status", "cancelled") == "cancelled"
 
     async def test_running_run_records_pending_request(self, store) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
@@ -473,7 +481,7 @@ class TestClaiming:
         reclaim = await _claimed(store, worker_id="worker-2")
         assert reclaim.run.run_id == creation.run.run_id
         assert reclaim.run.fencing_epoch == 2
-        assert reclaim.run.recovery_count == 1
+        assert reclaim.run.reclaims_without_progress == 1
         assert reclaim.run.lease_owner == "worker-2"
 
     async def test_skips_cancel_pending_rows(self, store) -> None:
@@ -495,27 +503,7 @@ class TestClaiming:
         record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
         assert record is not None
         assert record.lease_owner == winners[0].run.lease_owner
-        assert record.recovery_count == 1
-
-    async def test_restores_the_latest_checkpoint_on_reclaim(self, store, pool) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        await store.commit_checkpoint(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-            version=3,
-            state={"evidence": ["a"]},
-        )
-        await _expire_lease(pool, creation.run.run_id)
-        reclaim = await _claimed(store, worker_id="worker-2")
-        assert reclaim.checkpoint is not None
-        assert reclaim.checkpoint.version == 3
-        assert reclaim.checkpoint.completed_turns == 1
-        assert reclaim.checkpoint.state == {"evidence": ["a"]}
-        assert reclaim.run.completed_turns == 1
+        assert record.reclaims_without_progress == 1
 
 
 class TestLeaseFencing:
@@ -577,10 +565,34 @@ class TestLeaseFencing:
             )
         ).committed is False
         assert await store.release_for_shutdown(**stale_args) == "lease_lost"
-        commit = await store.commit_checkpoint(
-            **stale_args, expected_completed_turns=0, version=1, state={}
+        from dlightrag_agent.session.entries import UserMessageEntry
+        from dlightrag_agent.session.ids import EntryId, SessionId
+
+        assert creation.run.prepared_input is not None
+        stale_session = SessionId(str(creation.run.prepared_input["session_id"]))
+        from dlightrag.adapters.postgres.session_journal import PGJournalStore
+
+        stale_journal = PGJournalStore(
+            pool=pool,
+            owner_id=_OWNER,
+            run_id=uuid.UUID(creation.run.run_id),
+            worker_id=_WORKER,
+            lease_owner=_WORKER,
+            fencing_epoch=int(stale_args["fencing_epoch"]),
         )
-        assert commit.outcome == "lease_lost"
+        stale_append = await stale_journal.append(
+            session_id=stale_session,
+            expected_version=0,
+            entries=[
+                UserMessageEntry(
+                    entry_id=EntryId.new(),
+                    session_id=stale_session,
+                    timestamp=datetime.datetime.now(datetime.UTC),
+                    content="stale",
+                )
+            ],
+        )
+        assert stale_append.__class__.__name__ == "LeaseLost"
 
         record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
         assert record is not None
@@ -693,122 +705,6 @@ class TestEvents:
         assert await store.claim_next(worker_id="worker-2") is None
 
 
-# ---------------------------------------------------------------------------
-# Checkpoints
-# ---------------------------------------------------------------------------
-
-
-class TestCheckpoints:
-    async def test_commits_one_turn_and_resets_the_recovery_counter(self, store, pool) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        await _claimed(store)
-        await _expire_lease(pool, creation.run.run_id)
-        claim = await _claimed(store, worker_id="worker-2")
-        assert claim.run.recovery_count == 1
-        commit = await store.commit_checkpoint(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id="worker-2",
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-            version=1,
-            state={"episode": []},
-        )
-        assert commit.outcome == "committed"
-        assert commit.completed_turns == 1
-        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert record is not None
-        assert record.completed_turns == 1
-        assert record.recovery_count == 0
-
-    async def test_a_turn_far_behind_the_row_is_corrupt(self, store) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        args = dict(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-        )
-        await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=1, state={"turn": 1}
-        )
-        await store.commit_checkpoint(
-            **args, expected_completed_turns=1, version=1, state={"turn": 2}
-        )
-        conflict = await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=1, state={"turn": 1}
-        )
-        assert conflict.outcome == "corrupt"
-        assert conflict.completed_turns == 2
-
-    async def test_a_checkpoint_turn_that_disagrees_with_the_row_is_corrupt(
-        self, store, pool
-    ) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        args = dict(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-        )
-        await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=1, state={"turn": 1}
-        )
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE dlightrag_answer_runs "
-                "SET checkpoint_json = jsonb_set(checkpoint_json, '{completed_turns}', '9') "
-                "WHERE run_id = $1",
-                uuid.UUID(creation.run.run_id),
-            )
-        conflict = await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=1, state={"turn": 1}
-        )
-        assert conflict.outcome == "corrupt"
-
-    async def test_indeterminate_commit_resolves_as_committed(self, store, pool) -> None:
-        """A committed turn plus a replayed compare-and-set must not fail the run."""
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        args = dict(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-        )
-        await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=2, state={"turn": 1}
-        )
-        # The worker never saw the commit result and retries the same transaction.
-        replay = await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=2, state={"turn": 1}
-        )
-        assert replay.outcome == "committed"
-        assert replay.completed_turns == 1
-        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert record is not None
-        assert record.completed_turns == 1
-
-    async def test_missing_run_resolves_as_lease_lost(self, store) -> None:
-        commit = await store.commit_checkpoint(
-            owner_id=_OWNER,
-            run_id=str(uuid.uuid7()),
-            worker_id=_WORKER,
-            fencing_epoch=1,
-            expected_completed_turns=0,
-            version=1,
-            state={},
-        )
-        assert commit.outcome == "lease_lost"
-
-
-# ---------------------------------------------------------------------------
-# Terminal transitions, requeue, recovery bound
-# ---------------------------------------------------------------------------
-
-
 class TestTerminalTransitions:
     async def test_success_stores_the_canonical_result_and_one_done_event(
         self, store, pool
@@ -876,7 +772,9 @@ class TestTerminalTransitions:
         assert outcome.status == "cancelled"
         assert await _event_types(pool, creation.run.run_id) == ["done"]
 
-    async def test_a_fenced_terminal_transition_drops_the_checkpoint(self, store, pool) -> None:
+    async def test_a_fenced_terminal_transition_clears_the_prepared_input(
+        self, store, pool
+    ) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
         args = dict(
@@ -885,37 +783,32 @@ class TestTerminalTransitions:
             worker_id=_WORKER,
             fencing_epoch=claim.run.fencing_epoch,
         )
-        await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=1, state={"episode": ["kept"]}
-        )
-        assert await _checkpoint(pool, creation.run.run_id) is not None
+        assert await _prepared_input(pool, creation.run.run_id) is not None
 
         await store.finish_success(**args, result={"answer": "final"})
 
-        assert await _checkpoint(pool, creation.run.run_id) is None
+        assert await _prepared_input(pool, creation.run.run_id) is None
         record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
         assert record is not None
-        assert record.completed_turns == 1
+        assert record.durable_progress_version == 0
         assert record.result == {"answer": "final"}
 
     async def test_an_unleased_finalization_drops_the_checkpoint(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
-        await store.commit_checkpoint(
+        await store.record_phase(
             owner_id=_OWNER,
             run_id=creation.run.run_id,
             worker_id=_WORKER,
             fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-            version=1,
-            state={"episode": ["kept"]},
+            phase="searching",
         )
         await store.request_cancellation(owner_id=_OWNER, run_id=creation.run.run_id)
         await _expire_lease(pool, creation.run.run_id)
 
         assert (await store.sweep_once()).cancelled == 1
 
-        assert await _checkpoint(pool, creation.run.run_id) is None
+        assert await _prepared_input(pool, creation.run.run_id) is None
 
 
 class TestShutdownAndRecovery:
@@ -940,10 +833,10 @@ class TestShutdownAndRecovery:
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE dlightrag_answer_runs "
-                "SET recovery_count = $2, lease_expires_at = NOW() - INTERVAL '1 second' "
+                "SET reclaims_without_progress = $2, lease_expires_at = NOW() - INTERVAL '1 second' "
                 "WHERE run_id = $1",
                 uuid.UUID(abandoned.run.run_id),
-                MAX_CONSECUTIVE_RECOVERIES,
+                MAX_RECLAIMS_WITHOUT_PROGRESS,
             )
 
         recoverable = await store.create_run(
@@ -964,35 +857,6 @@ class TestShutdownAndRecovery:
             "recoverable",
         }
 
-    async def test_graceful_requeue_preserves_progress_without_counting_recovery(
-        self, store, pool
-    ) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        args = dict(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-        )
-        await store.commit_checkpoint(
-            **args, expected_completed_turns=0, version=1, state={"turn": 1}
-        )
-        release = await store.release_for_shutdown(**args)
-        assert release == "requeued"
-        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert record is not None
-        assert record.status == "queued"
-        assert record.lease_owner is None
-        assert record.completed_turns == 1
-        assert record.recovery_count == 0
-        reclaim = await _claimed(store, worker_id="worker-2")
-        assert reclaim.run.run_id == creation.run.run_id
-        assert reclaim.run.recovery_count == 0
-        assert reclaim.checkpoint is not None
-        assert reclaim.checkpoint.state == {"turn": 1}
-        assert await _event_types(pool, creation.run.run_id) == []
-
     async def test_shutdown_finalizes_a_cancel_pending_run(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
@@ -1008,52 +872,6 @@ class TestShutdownAndRecovery:
         assert record is not None
         assert record.status == "cancelled"
         assert await _event_types(pool, creation.run.run_id) == ["done"]
-
-    async def test_four_reclaims_are_allowed_and_the_next_abandons(self, store, pool) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        await _claimed(store)
-        for expected in range(1, MAX_CONSECUTIVE_RECOVERIES + 1):
-            await _expire_lease(pool, creation.run.run_id)
-            reclaim = await _claimed(store, worker_id=f"worker-{expected}")
-            assert reclaim.run.recovery_count == expected
-
-        await _expire_lease(pool, creation.run.run_id)
-        assert await store.claim_next(worker_id="worker-final") is None
-
-        sweep = await store.sweep_once()
-        assert sweep.cancelled == 0
-        assert sweep.abandoned == 1
-        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert record is not None
-        assert record.status == "failed"
-        assert record.error_kind == RUN_ABANDONED_ERROR_KIND
-        assert record.lease_owner is None
-        events = await store.read_event_page(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert [event.event_type for event in events] == ["error"]
-        assert events[0].payload["kind"] == RUN_ABANDONED_ERROR_KIND
-
-    async def test_a_checkpoint_lets_a_long_run_survive_more_restarts(self, store, pool) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        turns = 0
-        for _ in range(MAX_CONSECUTIVE_RECOVERIES + 2):
-            claim = await _claimed(store)
-            commit = await store.commit_checkpoint(
-                owner_id=_OWNER,
-                run_id=creation.run.run_id,
-                worker_id=_WORKER,
-                fencing_epoch=claim.run.fencing_epoch,
-                expected_completed_turns=turns,
-                version=1,
-                state={"turn": turns + 1},
-            )
-            assert commit.outcome == "committed"
-            turns += 1
-            await _expire_lease(pool, creation.run.run_id)
-        assert (await store.sweep_once()).abandoned == 0
-        record = await store.get_run(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert record is not None
-        assert record.status == "running"
-        assert record.completed_turns == turns
 
     async def test_sweeper_finalizes_an_unleased_cancellation(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
@@ -1138,41 +956,12 @@ class TestArtifacts:
         )
         async with pool.acquire() as conn:
             owners = await conn.fetch(
-                "SELECT owner_id FROM dlightrag_answer_artifacts WHERE digest = $1",
+                "SELECT owner_id FROM dlightrag_blobs WHERE digest = $1",
                 artifact.digest,
             )
         assert sorted(str(row["owner_id"]) for row in owners) == sorted([_OWNER, _OTHER_OWNER])
         assert await store.load_artifact(owner_id="ghost", digest=artifact.digest) is None
         assert first.run.run_id is not None
-
-    async def test_run_scoped_fetch_attaches_bytes_and_reference_together(self, store) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        fetched = PendingArtifact(content=b"<html>page</html>")
-        outcome = await store.attach_artifacts(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-            artifacts=[fetched],
-            references=[
-                PendingArtifactReference(
-                    resource_id="res-web",
-                    reference_kind="fetched_resource",
-                    ordinal=0,
-                    digest=fetched.digest,
-                    filename="page.html",
-                    mime_type="text/html",
-                )
-            ],
-        )
-        assert outcome == "attached"
-        references = await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert [reference.reference_kind for reference in references] == ["fetched_resource"]
-        assert await store.load_artifact(owner_id=_OWNER, digest=fetched.digest) == (
-            fetched.content
-        )
 
     async def test_deleting_one_run_keeps_bytes_another_run_still_links(self, store) -> None:
         artifact = PendingArtifact(content=b"shared bytes")
@@ -1255,7 +1044,7 @@ class TestArtifacts:
         async with pool.acquire() as conn:
             with pytest.raises(asyncpg.exceptions.RestrictViolationError):
                 await conn.execute(
-                    "DELETE FROM dlightrag_answer_artifacts WHERE owner_id = $1 AND digest = $2",
+                    "DELETE FROM dlightrag_blobs WHERE owner_id = $1 AND digest = $2",
                     _OWNER,
                     artifact.digest,
                 )
@@ -1361,7 +1150,7 @@ async def _force_blob_delete_restrict(pool: Any, *, only_digest: str | None = No
         )
         await conn.execute(
             "CREATE TRIGGER dlightrag_test_restrict_trigger "
-            "BEFORE DELETE ON dlightrag_answer_artifacts "
+            "BEFORE DELETE ON dlightrag_blobs "
             "FOR EACH ROW EXECUTE FUNCTION dlightrag_test_restrict()"
         )
 
@@ -1507,214 +1296,3 @@ def _fetched(
         filename=f"{resource_id}.html",
         mime_type="text/html",
     )
-
-
-class TestFetchedResourceReplay:
-    async def test_exact_replay_stores_one_reference_and_one_blob(self, store) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        page = PendingArtifact(content=b"<html>one</html>")
-        for _ in range(2):
-            assert (
-                await store.attach_artifacts(
-                    owner_id=_OWNER,
-                    run_id=creation.run.run_id,
-                    worker_id=_WORKER,
-                    fencing_epoch=claim.run.fencing_epoch,
-                    expected_completed_turns=0,
-                    artifacts=[page],
-                    references=[_fetched(page.digest)],
-                )
-                == "attached"
-            )
-
-        references = await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert [(r.resource_id, r.digest) for r in references] == [("res-web", page.digest)]
-        assert await store.load_artifact(owner_id=_OWNER, digest=page.digest) == page.content
-
-    async def test_replay_rebinds_the_slot_to_changed_bytes(self, store) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        first = PendingArtifact(content=b"<html>monday</html>")
-        second = PendingArtifact(content=b"<html>tuesday, longer</html>")
-        args = dict(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-        )
-        await store.attach_artifacts(
-            **args, artifacts=[first], references=[_fetched(first.digest, resource_id="res-a")]
-        )
-        assert (
-            await store.attach_artifacts(
-                **args,
-                artifacts=[second],
-                references=[_fetched(second.digest, resource_id="res-b")],
-            )
-            == "attached"
-        )
-
-        references = await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert [(r.resource_id, r.digest) for r in references] == [("res-b", second.digest)]
-        assert await store.load_artifact(owner_id=_OWNER, digest=second.digest) == second.content
-        assert await store.load_artifact(owner_id=_OWNER, digest=first.digest) is None
-
-    async def test_rebind_keeps_bytes_another_run_still_references(self, store) -> None:
-        shared = PendingArtifact(content=b"<html>shared</html>")
-        keeper = await store.create_run(
-            owner_id=_OWNER,
-            request=_request("keeper"),
-            artifacts=[shared],
-            references=[_reference(shared.digest)],
-        )
-        creation = await store.create_run(owner_id=_OWNER, request=_request("replayer"))
-        claim = await _claimed(store, worker_id="worker-2")
-        assert claim.run.run_id == keeper.run.run_id
-        claim = await _claimed(store)
-        args = dict(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-        )
-        await store.attach_artifacts(
-            **args, artifacts=[shared], references=[_fetched(shared.digest, resource_id="res-a")]
-        )
-        replacement = PendingArtifact(content=b"<html>changed</html>")
-        await store.attach_artifacts(
-            **args,
-            artifacts=[replacement],
-            references=[_fetched(replacement.digest, resource_id="res-b")],
-        )
-
-        assert await store.load_artifact(owner_id=_OWNER, digest=shared.digest) == shared.content
-        keeper_references = await store.list_run_artifacts(
-            owner_id=_OWNER, run_id=keeper.run.run_id
-        )
-        assert [r.digest for r in keeper_references] == [shared.digest]
-
-    async def test_a_fetched_replay_never_rewrites_an_accepted_input(self, store) -> None:
-        accepted = PendingArtifact(content=b"%PDF accepted")
-        creation = await store.create_run(
-            owner_id=_OWNER,
-            request=_request(),
-            artifacts=[accepted],
-            references=[_reference(accepted.digest, resource_id="res-1")],
-        )
-        claim = await _claimed(store)
-        intruder = PendingArtifact(content=b"<html>intruder</html>")
-
-        with pytest.raises(asyncpg.exceptions.UniqueViolationError):
-            await store.attach_artifacts(
-                owner_id=_OWNER,
-                run_id=creation.run.run_id,
-                worker_id=_WORKER,
-                fencing_epoch=claim.run.fencing_epoch,
-                expected_completed_turns=0,
-                artifacts=[intruder],
-                references=[_fetched(intruder.digest, resource_id="res-1")],
-            )
-
-        references = await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id)
-        assert [(r.resource_id, r.reference_kind, r.digest) for r in references] == [
-            ("res-1", "current_attachment", accepted.digest)
-        ]
-        assert await store.load_artifact(owner_id=_OWNER, digest=intruder.digest) is None
-
-
-class TestFencedAttachment:
-    async def test_a_stale_epoch_writes_nothing(self, store) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        page = PendingArtifact(content=b"<html>stale</html>")
-
-        outcome = await store.attach_artifacts(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch - 1,
-            expected_completed_turns=0,
-            artifacts=[page],
-            references=[_fetched(page.digest)],
-        )
-
-        assert outcome == "lease_lost"
-        assert await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id) == ()
-        assert await store.load_artifact(owner_id=_OWNER, digest=page.digest) is None
-
-    async def test_an_expired_lease_writes_nothing(self, store, pool) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        await _expire_lease(pool, creation.run.run_id)
-        page = PendingArtifact(content=b"<html>expired</html>")
-
-        outcome = await store.attach_artifacts(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-            artifacts=[page],
-            references=[_fetched(page.digest)],
-        )
-
-        assert outcome == "lease_lost"
-        assert await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id) == ()
-        assert await store.load_artifact(owner_id=_OWNER, digest=page.digest) is None
-
-    async def test_a_wrong_completed_turn_writes_nothing(self, store) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        page = PendingArtifact(content=b"<html>wrong turn</html>")
-
-        outcome = await store.attach_artifacts(
-            owner_id=_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=3,
-            artifacts=[page],
-            references=[_fetched(page.digest)],
-        )
-
-        assert outcome == "turn_mismatch"
-        assert await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id) == ()
-        assert await store.load_artifact(owner_id=_OWNER, digest=page.digest) is None
-
-    async def test_a_foreign_owner_writes_nothing(self, store) -> None:
-        creation = await store.create_run(owner_id=_OWNER, request=_request())
-        claim = await _claimed(store)
-        page = PendingArtifact(content=b"<html>foreign</html>")
-
-        outcome = await store.attach_artifacts(
-            owner_id=_OTHER_OWNER,
-            run_id=creation.run.run_id,
-            worker_id=_WORKER,
-            fencing_epoch=claim.run.fencing_epoch,
-            expected_completed_turns=0,
-            artifacts=[page],
-            references=[_fetched(page.digest)],
-        )
-
-        assert outcome == "lease_lost"
-        assert await store.list_run_artifacts(owner_id=_OWNER, run_id=creation.run.run_id) == ()
-        assert await store.load_artifact(owner_id=_OTHER_OWNER, digest=page.digest) is None
-
-    async def test_an_unknown_run_writes_nothing(self, store) -> None:
-        page = PendingArtifact(content=b"<html>ghost</html>")
-
-        outcome = await store.attach_artifacts(
-            owner_id=_OWNER,
-            run_id="not-a-uuid",
-            worker_id=_WORKER,
-            fencing_epoch=1,
-            expected_completed_turns=0,
-            artifacts=[page],
-            references=[_fetched(page.digest)],
-        )
-
-        assert outcome == "lease_lost"
-        assert await store.load_artifact(owner_id=_OWNER, digest=page.digest) is None

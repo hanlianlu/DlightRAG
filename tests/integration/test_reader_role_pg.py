@@ -327,12 +327,10 @@ _DAMAGE_CASES = [
     ),
     pytest.param(
         ANSWER_RUN_MIGRATION_SCOPE,
-        "ALTER TABLE dlightrag_answer_artifacts "
-        "DROP CONSTRAINT dlightrag_answer_artifacts_pkey CASCADE",
+        "ALTER TABLE dlightrag_blobs DROP CONSTRAINT dlightrag_blobs_pkey CASCADE",
         [
-            "primary key dlightrag_answer_artifacts (owner_id, digest)",
-            "foreign key dlightrag_answer_run_artifacts (owner_id, digest) "
-            "-> dlightrag_answer_artifacts",
+            "primary key dlightrag_blobs (owner_id, digest)",
+            "foreign key dlightrag_answer_run_artifacts (owner_id, digest) -> dlightrag_blobs",
         ],
         id="answer-primary-and-foreign-key",
     ),

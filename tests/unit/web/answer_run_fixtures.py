@@ -53,7 +53,11 @@ class FakeAnswers(AnswerService):
             owner_id=owner_id,
             idempotency_key=idempotency_key,
             idempotency_fingerprint=idempotency_fingerprint,
-            request={"query": request.query, "workspaces": list(request.workspaces)},
+            prepared_input={
+                "query": request.query,
+                "workspaces": list(request.workspaces),
+                "session_id": "00000000-0000-7000-8000-000000000001",
+            },
             artifacts=tuple(
                 PendingArtifact(content=resource.content)
                 for resource in request.resources
@@ -143,16 +147,17 @@ def answer_run(
         owner_id=owner_id,
         run_id=run_id,
         idempotency_key=SUBMISSION_ID,
-        request=request if request is not None else run_request(),
+        prepared_input=request if request is not None else run_request(),
         status=status,
         phase=None,
         stop_reason=None,
-        completed_turns=0,
         cancel_requested_at=cancel_requested_at,
         lease_owner=None,
         lease_expires_at=None,
         fencing_epoch=0,
-        recovery_count=0,
+        durable_progress_version=0,
+        last_reclaim_progress_version=0,
+        reclaims_without_progress=0,
         next_event_sequence=1,
         events_trimmed_at=events_trimmed_at,
         result=result,
