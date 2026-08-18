@@ -8,6 +8,40 @@ recovery workflows. PostgreSQL deployment tuning lives in
 
 The commands here are not part of normal ingestion or query traffic.
 
+## Full Development Reset
+
+The repository-owned `scripts/reset_development.py` erases the **complete**
+development environment: PostgreSQL contents and migration ledger, LightRAG
+corpus/KG/vector/doc-status state, DlightRAG metadata/jobs/Answer/Web state, and
+local runtime/corpus files. It has no partial scope, and it is never exposed
+over REST, Web, or MCP.
+
+```bash
+# Preview what a real run would affect (read-only, safe while running):
+uv run scripts/reset_development.py --mode docker --dry-run
+uv run scripts/reset_development.py --mode native --dry-run
+
+# Docker mode: delete both Compose volumes (pg18_data, dlightrag_data),
+# start only PostgreSQL, and verify the empty extension-only checkpoint:
+uv run scripts/reset_development.py --mode docker
+# or: make dev-reset
+
+# Native mode: replace the dedicated database's public schema, recreate
+# vector/pg_textsearch/pg_jieba, and empty the working-directory children:
+uv run scripts/reset_development.py --mode native
+```
+
+Interactive runs require typing the exact database name; `--yes` skips the
+prompt but never target validation. Native mode refuses a non-loopback host
+without `--allow-remote-reset` and refuses other database sessions without
+`--force-disconnect`. Docker mode returns at the PostgreSQL-only checkpoint:
+API, MCP, readers, and writers stay stopped; starting one writer is a separate
+explicit step (the writer applies the final baseline schema).
+
+This is deliberately different from the product `scripts/reset_workspace.py`
+command, which resets one or every authorized **Corpus Workspace** inside a
+running deployment. Neither command imports or delegates to the other.
+
 ## Durable Answer Runs
 
 Every answer is a durable PostgreSQL-owned run, so operating them is a database

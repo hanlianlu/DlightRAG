@@ -12,7 +12,7 @@ LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LA
 PYTHON_LINT_PATHS = packages/ src/ tests/ scripts/ prerequisite_setup.py
 PYTHON_SECURITY_PATHS = packages/ src/ scripts/ prerequisite_setup.py
 
-.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-build frontend-audit frontend-ci workspace-wheels test-unit ci ci-full test-e2e ci-e2e
+.PHONY: mineru-install mineru-api mineru-gradio mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health hooks sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-install frontend-typecheck frontend-lint frontend-build frontend-audit frontend-ci workspace-wheels test-unit ci ci-full test-e2e ci-e2e dev-reset
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -141,6 +141,9 @@ workspace-wheels: frontend-build
 
 test-unit:
 	uv run pytest tests/unit -q --tb=short
+
+dev-reset:
+	uv run scripts/reset_development.py --mode docker $(ARGS)
 
 # Pull-request gate: static analysis, frontend checks, isolated wheels, and unit tests.
 ci: sync-dev lint lint-security format-check typecheck architecture-check shellcheck-all frontend-ci workspace-wheels test-unit
