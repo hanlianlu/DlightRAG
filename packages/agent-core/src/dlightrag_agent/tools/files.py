@@ -1,0 +1,314 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Generic read/write/edit/grep/bash factories over an ExecutionEnvironment."""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable, Sequence
+from typing import cast
+
+from pydantic import BaseModel, Field, model_validator
+
+from dlightrag_agent.environment.access import (
+    AccessScheduler,
+    AllAccess,
+    PathAccess,
+)
+from dlightrag_agent.environment.child import build_child_environment
+from dlightrag_agent.environment.errors import (
+    TOOL_RESULT_CHAR_LIMIT,
+    TOOL_RESULT_PREVIEW_CHARS,
+    FullOutputUnavailable,
+    PathRejected,
+    WorkspaceQuotaExceeded,
+)
+from dlightrag_agent.environment.protocol import DirectoryEntry, ExecutionEnvironment
+from dlightrag_agent.environment.text import decode_workspace_text, encode_workspace_text
+from dlightrag_agent.tools.contracts import AgentTool, ToolResult
+
+type ResourceReader = Callable[[str, str | None], Awaitable[str]]
+type SpillWriter = Callable[[str], Awaitable[str]]
+
+
+class ReadArgs(BaseModel):
+    path: str | None = None
+    resource_id: str | None = None
+    offset: int | None = Field(default=None, ge=1)
+    limit: int | None = Field(default=None, ge=1)
+    cursor: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> ReadArgs:
+        if (self.path is None) == (self.resource_id is None):
+            raise ValueError("read requires exactly one of path or resource_id")
+        return self
+
+
+class WriteArgs(BaseModel):
+    path: str
+    content: str
+
+
+class EditArgs(BaseModel):
+    path: str
+    old_string: str
+    new_string: str
+    replace_all: bool = False
+
+
+class GrepArgs(BaseModel):
+    pattern: str
+    path: str = "."
+    glob: str | None = None
+
+
+class BashArgs(BaseModel):
+    command: str
+    timeout_seconds: float | None = Field(default=None, gt=0)
+
+
+def bound_tool_text(text: str, *, spill: SpillWriter | None) -> str:
+    """Apply the 50k/2k generic guard. Spill if a writer exists, else raise."""
+    if len(text) <= TOOL_RESULT_CHAR_LIMIT:
+        return text
+    if spill is None:
+        raise FullOutputUnavailable("oversized tool result has no spill or cursor backing")
+    raise FullOutputUnavailable("spill writer must be awaited by the tool, not bound_tool_text")
+
+
+async def preview_or_spill(text: str, *, spill: SpillWriter | None, tool: str) -> str:
+    """Return full text, or a preview plus spill handle, or raise."""
+    if len(text) <= TOOL_RESULT_CHAR_LIMIT:
+        return text
+    if spill is None:
+        raise FullOutputUnavailable("oversized tool result has no spill or cursor backing")
+    resource_id = await spill(text)
+    preview = text[:TOOL_RESULT_PREVIEW_CHARS]
+    return (
+        f"{tool} output exceeded {TOOL_RESULT_CHAR_LIMIT} characters "
+        f"({len(text)} chars). Full output: read(resource_id={resource_id!r}, cursor=...)\n"
+        f"{preview}"
+    )
+
+
+def path_tools(
+    environment: ExecutionEnvironment,
+    *,
+    scheduler: AccessScheduler,
+    ripgrep: str = "rg",
+    resource_reader: ResourceReader | None = None,
+    spill: SpillWriter | None = None,
+) -> list[AgentTool]:
+    """Return read/write/edit/grep/bash bound to one environment instance."""
+    return [
+        read_tool(environment, scheduler, resource_reader=resource_reader, spill=spill),
+        write_tool(environment, scheduler),
+        edit_tool(environment, scheduler),
+        grep_tool(environment, scheduler, ripgrep=ripgrep, spill=spill),
+        bash_tool(environment, scheduler, spill=spill),
+    ]
+
+
+def read_tool(
+    environment: ExecutionEnvironment | None,
+    scheduler: AccessScheduler,
+    *,
+    resource_reader: ResourceReader | None = None,
+    spill: SpillWriter | None = None,
+) -> AgentTool:
+    """Build ``read`` with whichever branches the host actually has."""
+
+    async def execute(args: BaseModel) -> ToolResult:
+        args = cast(ReadArgs, args)
+        if args.resource_id is not None:
+            if resource_reader is None:
+                return ToolResult(content="resource read is not available")
+            async with scheduler.hold(PathAccess(path=args.resource_id, kind="read")):
+                text = await resource_reader(args.resource_id, args.cursor)
+            return ToolResult(content=text)
+        if environment is None or args.path is None:
+            return ToolResult(content="path read requires an execution environment")
+        path = environment.resolve(args.path)
+        async with scheduler.hold(PathAccess(path=str(path), kind="read")):
+            kind = environment.stat_kind(path)
+            if kind == "directory":
+                return ToolResult(
+                    content=_render_listing(environment.list_directory(path), args.cursor)
+                )
+            if kind == "missing":
+                return ToolResult(content=f"file not found: {args.path}")
+            raw = environment.read_bytes(path)
+            try:
+                decoded = decode_workspace_text(raw)
+            except ValueError as exc:
+                return ToolResult(content=str(exc))
+            text = _slice_lines(decoded.text, offset=args.offset, limit=args.limit)
+            note = ""
+            if decoded.mixed_newlines:
+                note = "\n[mixed line endings preserved; not normalized]"
+            return ToolResult(content=await preview_or_spill(text + note, spill=spill, tool="read"))
+
+    return AgentTool(
+        name="read",
+        description="Read a workspace path or a durable resource id.",
+        input_model=ReadArgs,
+        execute=execute,
+        replay_policy="safe",
+    )
+
+
+def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+    async def execute(args: BaseModel) -> ToolResult:
+        args = cast(WriteArgs, args)
+        path = environment.resolve(args.path)
+        async with scheduler.hold(PathAccess(path=str(path), kind="write")):
+            try:
+                environment.write_bytes(path, args.content.encode("utf-8"))
+            except WorkspaceQuotaExceeded as exc:
+                return ToolResult(content=str(exc))
+            except PathRejected as exc:
+                return ToolResult(content=str(exc))
+        return ToolResult(content=f"wrote {args.path} ({len(args.content)} chars)")
+
+    return AgentTool(
+        name="write",
+        description="Create or overwrite a UTF-8 workspace file.",
+        input_model=WriteArgs,
+        execute=execute,
+        replay_policy="never",
+    )
+
+
+def edit_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> AgentTool:
+    async def execute(args: BaseModel) -> ToolResult:
+        args = cast(EditArgs, args)
+        if args.old_string == args.new_string:
+            return ToolResult(content="edit rejected: old_string and new_string are identical")
+        path = environment.resolve(args.path)
+        async with scheduler.hold(PathAccess(path=str(path), kind="readwrite")):
+            if environment.stat_kind(path) != "file":
+                return ToolResult(content=f"file not found: {args.path}")
+            decoded = decode_workspace_text(environment.read_bytes(path))
+            count = decoded.text.count(args.old_string)
+            if count == 0:
+                return ToolResult(content="old_string not found; re-read the file")
+            if count > 1 and not args.replace_all:
+                return ToolResult(content=f"old_string matches {count} times; set replace_all=true")
+            updated = decoded.text.replace(args.old_string, args.new_string)
+            try:
+                environment.write_bytes(path, encode_workspace_text(decoded, updated))
+            except WorkspaceQuotaExceeded as exc:
+                return ToolResult(content=str(exc))
+        return ToolResult(content=f"edited {args.path} ({count} replacement(s))")
+
+    return AgentTool(
+        name="edit",
+        description="Replace exact text in a workspace file.",
+        input_model=EditArgs,
+        execute=execute,
+        replay_policy="never",
+    )
+
+
+def grep_tool(
+    environment: ExecutionEnvironment,
+    scheduler: AccessScheduler,
+    *,
+    ripgrep: str,
+    spill: SpillWriter | None = None,
+) -> AgentTool:
+    async def execute(args: BaseModel) -> ToolResult:
+        args = cast(GrepArgs, args)
+        root = environment.resolve(args.path) if args.path != "." else environment.root
+        argv = [ripgrep, "--line-number", "--no-heading", "-e", args.pattern]
+        if args.glob:
+            argv.extend(["--glob", args.glob])
+        argv.append(str(root))
+        async with scheduler.hold(PathAccess(path=str(root), kind="search")):
+            home = environment.root / "tmp" / "home"
+            tmp = environment.root / "tmp"
+            home.mkdir(parents=True, exist_ok=True)
+            completed = await environment.run(
+                argv, env=build_child_environment(home=home, tmp=tmp), cwd=environment.root
+            )
+        text = completed.stdout if completed.returncode in {0, 1} else completed.stderr
+        return ToolResult(
+            content=await preview_or_spill(text or "(no matches)", spill=spill, tool="grep")
+        )
+
+    return AgentTool(
+        name="grep",
+        description="Search workspace files with ripgrep.",
+        input_model=GrepArgs,
+        execute=execute,
+        replay_policy="safe",
+    )
+
+
+def bash_tool(
+    environment: ExecutionEnvironment,
+    scheduler: AccessScheduler,
+    *,
+    spill: SpillWriter | None = None,
+) -> AgentTool:
+    async def execute(args: BaseModel) -> ToolResult:
+        args = cast(BashArgs, args)
+        home = environment.root / "tmp" / "home"
+        tmp = environment.root / "tmp"
+        home.mkdir(parents=True, exist_ok=True)
+        async with scheduler.hold(AllAccess()):
+            completed = await environment.run(
+                ["/bin/bash", "-lc", args.command],
+                env=build_child_environment(home=home, tmp=tmp),
+                cwd=environment.root,
+                timeout_seconds=args.timeout_seconds,
+            )
+        body = completed.stdout
+        if completed.stderr:
+            body = f"{body}\n{completed.stderr}".strip()
+        suffix = f"\nexit {completed.returncode}"
+        return ToolResult(content=await preview_or_spill(body + suffix, spill=spill, tool="bash"))
+
+    return AgentTool(
+        name="bash",
+        description="Run a bash command in the workspace.",
+        input_model=BashArgs,
+        execute=execute,
+        replay_policy="never",
+    )
+
+
+def _slice_lines(text: str, *, offset: int | None, limit: int | None) -> str:
+    if offset is None and limit is None:
+        return text
+    lines = text.splitlines()
+    start = (offset or 1) - 1
+    end = start + limit if limit is not None else len(lines)
+    return "\n".join(lines[start:end])
+
+
+def _render_listing(entries: Sequence[DirectoryEntry], cursor: str | None) -> str:
+    start = int(cursor) if cursor and cursor.isdigit() else 0
+    page = list(entries)[start : start + 200]
+    lines = [f"{entry.kind}\t{entry.size}\t{entry.name}" for entry in page]
+    if start + 200 < len(list(entries)):
+        lines.append(f"cursor={start + 200}")
+    return "\n".join(lines) or "(empty directory)"
+
+
+__all__ = [
+    "BashArgs",
+    "EditArgs",
+    "GrepArgs",
+    "ReadArgs",
+    "ResourceReader",
+    "SpillWriter",
+    "WriteArgs",
+    "bash_tool",
+    "bound_tool_text",
+    "edit_tool",
+    "grep_tool",
+    "path_tools",
+    "preview_or_spill",
+    "read_tool",
+    "write_tool",
+]
