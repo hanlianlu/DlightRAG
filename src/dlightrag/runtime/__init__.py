@@ -71,13 +71,17 @@ from dlightrag.runtime.records import (
     parse_run_id,
 )
 from dlightrag.runtime.settlements import (
+    CommittedSpillUpdate,
     CompleteBlobDescriptor,
     EvidenceSettlementUpdate,
     FetchedResourceSettlementUpdate,
+    HostUpdate,
+    InventoryPathRecord,
     M3HostUpdate,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
+    WorkspaceInventoryUpdate,
 )
 from dlightrag.runtime.store import AnswerAcceptanceStore, AnswerRunStore
 from dlightrag.runtime.subscription import (
@@ -85,6 +89,14 @@ from dlightrag.runtime.subscription import (
     EventReader,
     RunEventBroker,
     follow_run_events,
+)
+from dlightrag.runtime.workspace import (
+    CommittedSpillRecord,
+    HandoffCommit,
+    HandoffConflict,
+    HandoffLeaseLost,
+    InMemoryWorkspaceStore,
+    WorkspaceStore,
 )
 
 __all__ = [
@@ -102,11 +114,19 @@ __all__ = [
     "ArtifactReferenceKind",
     "CancellationOutcome",
     "ClaimedRun",
+    "CommittedSpillRecord",
+    "CommittedSpillUpdate",
     "CompleteBlobDescriptor",
     "DurableWrites",
     "EvidenceSettlementUpdate",
     "FetchedResourceSettlementUpdate",
+    "HandoffCommit",
+    "HandoffConflict",
+    "HandoffLeaseLost",
+    "HostUpdate",
     "IdempotencyKeyConflict",
+    "InMemoryWorkspaceStore",
+    "InventoryPathRecord",
     "LeaseRenewal",
     "LeaseLostError",
     "M3HostUpdate",
@@ -142,6 +162,8 @@ __all__ = [
     "StageProgressConflict",
     "StageRecord",
     "SweepOutcome",
+    "WorkspaceInventoryUpdate",
+    "WorkspaceStore",
     "SWEEP_SECONDS",
     "SHUTDOWN_WRITE_GRACE_SECONDS",
     "TOKEN_BATCH_CHARS",

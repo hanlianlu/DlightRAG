@@ -50,6 +50,7 @@ from dlightrag.runtime.progress import (
     StageRecord,
 )
 from dlightrag.runtime.settlements import (
+    CommittedSpillUpdate,
     CompleteBlobDescriptor,
     EvidenceSettlementUpdate,
     FetchedResourceSettlementUpdate,
@@ -57,6 +58,7 @@ from dlightrag.runtime.settlements import (
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
+    WorkspaceInventoryUpdate,
 )
 
 _LEASE_PREDICATE = """
@@ -990,7 +992,7 @@ def _host_update_digest(update: M3HostUpdate) -> str:
                 for r in update.resources
             ],
         }
-    else:
+    elif isinstance(update, FetchedResourceSettlementUpdate):
         payload = {
             "kind": "fetched_resource",
             "resource_id": update.resource.resource_id,
@@ -1007,6 +1009,22 @@ def _host_update_digest(update: M3HostUpdate) -> str:
                 for w in update.evidence
             ],
         }
+    elif isinstance(update, CommittedSpillUpdate):
+        payload = {
+            "kind": "committed_spill",
+            "resource_id": update.resource_id,
+            "content_digest": update.content_digest,
+            "size_bytes": update.size_bytes,
+        }
+    elif isinstance(update, WorkspaceInventoryUpdate):
+        payload = {
+            "kind": "workspace_inventory",
+            "replace_all": update.replace_all,
+            "upserts": [record.relative_path for record in update.upserts],
+            "deletes": list(update.deletes),
+        }
+    else:
+        raise ValueError(f"unknown host update variant: {type(update).__name__}")
     return _sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 

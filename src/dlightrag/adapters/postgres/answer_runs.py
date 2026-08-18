@@ -1159,6 +1159,14 @@ def _json_object(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _optional_int(row: Any, name: str) -> int | None:
+    try:
+        value = row[name]
+    except KeyError, TypeError:
+        return None
+    return int(value) if value is not None else None
+
+
 def answer_run_record(row: Any) -> AnswerRunRecord:
     """Project one stored run row into the storage-neutral M3 record."""
     prepared = row["prepared_input"]
@@ -1186,6 +1194,7 @@ def answer_run_record(row: Any) -> AnswerRunRecord:
         updated_at=row["updated_at"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        workspace_epoch=_optional_int(row, "workspace_epoch"),
     )
 
 

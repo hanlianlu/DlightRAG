@@ -93,6 +93,7 @@ class AnswerRunRecord:
     updated_at: datetime.datetime
     started_at: datetime.datetime | None
     finished_at: datetime.datetime | None
+    workspace_epoch: int | None = None
 
     @property
     def cancel_requested(self) -> bool:

@@ -110,15 +110,72 @@ class FetchedResourceSettlementUpdate:
     evidence: Sequence[OpaqueEvidenceWrite] = ()
 
 
-type M3HostUpdate = EvidenceSettlementUpdate | FetchedResourceSettlementUpdate
+@dataclass(frozen=True, slots=True)
+class InventoryPathRecord:
+    """One current-epoch path observation."""
+
+    relative_path: str
+    entry_type: str
+    size_bytes: int
+    mode: int | None = None
+    content_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.relative_path.strip():
+            raise ValueError("inventory path cannot be empty")
+        if self.size_bytes < 0:
+            raise ValueError("inventory size cannot be negative")
+        if self.content_digest is not None and len(self.content_digest) != 64:
+            raise ValueError("inventory content digest must be a SHA-256 hex digest")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceInventoryUpdate:
+    """Inventory upserts/deletes, or a full replace after bash/handoff scan."""
+
+    upserts: Sequence[InventoryPathRecord] = ()
+    deletes: Sequence[str] = ()
+    replace_all: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedSpillUpdate:
+    """Private spill bytes on the volume, addressed by a Resource Handle."""
+
+    resource_id: str
+    content_digest: str
+    size_bytes: int
+    session_id: str
+    intent_id: str
+
+    def __post_init__(self) -> None:
+        if not self.resource_id.strip():
+            raise ValueError("spill resource id cannot be empty")
+        if len(self.content_digest) != 64:
+            raise ValueError("spill content digest must be a SHA-256 hex digest")
+        if self.size_bytes < 0:
+            raise ValueError("spill size cannot be negative")
+
+
+type HostUpdate = (
+    EvidenceSettlementUpdate
+    | FetchedResourceSettlementUpdate
+    | CommittedSpillUpdate
+    | WorkspaceInventoryUpdate
+)
+type M3HostUpdate = HostUpdate
 
 
 __all__ = [
+    "CommittedSpillUpdate",
     "CompleteBlobDescriptor",
     "EvidenceSettlementUpdate",
     "FetchedResourceSettlementUpdate",
+    "HostUpdate",
+    "InventoryPathRecord",
     "M3HostUpdate",
     "OpaqueEvidenceResourceWrite",
     "OpaqueEvidenceWrite",
     "OpaqueFetchedResourceWrite",
+    "WorkspaceInventoryUpdate",
 ]

@@ -14,13 +14,15 @@ from dlightrag.runtime.records import (
     advance_reclaim,
 )
 from dlightrag.runtime.settlements import (
+    CommittedSpillUpdate,
     CompleteBlobDescriptor,
     EvidenceSettlementUpdate,
     FetchedResourceSettlementUpdate,
-    M3HostUpdate,
+    HostUpdate,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
     OpaqueFetchedResourceWrite,
+    WorkspaceInventoryUpdate,
 )
 
 
@@ -179,10 +181,14 @@ class TestM3HostUpdate:
         with pytest.raises(ValueError):
             CompleteBlobDescriptor(digest="a" * 64, total_bytes=10, chunks=(b"abc",))
 
-    def test_union_has_exactly_two_m3_variants(self) -> None:
-        # Spill/inventory/child-session variants do not exist until M4/M6.
-        variants = set(M3HostUpdate.__value__.__args__)  # type: ignore[attr-defined]
-        assert variants == {EvidenceSettlementUpdate, FetchedResourceSettlementUpdate}
+    def test_union_has_exactly_four_current_variants(self) -> None:
+        variants = set(HostUpdate.__value__.__args__)
+        assert variants == {
+            EvidenceSettlementUpdate,
+            FetchedResourceSettlementUpdate,
+            CommittedSpillUpdate,
+            WorkspaceInventoryUpdate,
+        }
 
     def test_fetched_resource_write_validates_digests(self) -> None:
         with pytest.raises(ValueError):
