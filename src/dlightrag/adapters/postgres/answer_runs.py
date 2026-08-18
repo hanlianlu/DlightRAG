@@ -118,7 +118,9 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
     CONSTRAINT dlightrag_answer_runs_error_check
         CHECK ((status = 'failed') = (error_kind IS NOT NULL)),
     CONSTRAINT dlightrag_answer_runs_prepared_input_check
-        CHECK ((status IN ('queued', 'running')) = (prepared_input_json IS NOT NULL))
+        CHECK ((status IN ('queued', 'running')) = (prepared_input_json IS NOT NULL)),
+    CONSTRAINT dlightrag_answer_runs_workspace_epoch_check
+        CHECK (workspace_epoch IS NULL OR workspace_epoch >= 1)
 )
 """
 

@@ -82,7 +82,7 @@ class _InspectResourceArgs(BaseModel):
     )
 
 
-def _read_resource_tool(
+def _legacy_resource_read_tool(
     registry: ResourceRegistry,
     text_window_budget: TextWindowBudget,
 ) -> AgentTool:
@@ -116,7 +116,7 @@ def _read_resource_tool(
     )
 
 
-def _inspect_resource_tool(inspector: ResourceInspector) -> AgentTool:
+def _inspect_tool(inspector: ResourceInspector) -> AgentTool:
     async def execute(args: BaseModel) -> ToolResult:
         inspect_args = cast(_InspectResourceArgs, args)
         try:
@@ -157,7 +157,7 @@ def build_resource_tools(
     """Return the resource peer tools; inspect only for a verified capability."""
     tools: list[AgentTool] = []
     if inspector is not None and visual_supported:
-        tools.append(_inspect_resource_tool(inspector))
+        tools.append(_inspect_tool(inspector))
     return tools
 
 
@@ -191,7 +191,7 @@ def make_resource_reader(
 ):
     """Adapt the registry into the agent-core resource-read callback."""
 
-    async def read_resource(resource_id: str, cursor: str | None) -> str:
+    async def read_registered(resource_id: str, cursor: str | None) -> str:
         result = await registry.read(
             resource_id,
             max_window_tokens=text_window_budget.tokens,
@@ -199,7 +199,7 @@ def make_resource_reader(
         )
         return format_resource_read(result)
 
-    return read_resource
+    return read_registered
 
 
 __all__ = ["build_resource_tools", "make_resource_reader"]

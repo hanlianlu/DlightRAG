@@ -877,7 +877,7 @@ web_search:
 
 The key's presence is the whole capability toggle. When set, the orchestrator
 may call Exa Search as a peer tool. Evidence-producing result URLs become
-request-local resource handles for optional `read_resource` calls; Exa Contents
+request-local resource handles for optional `read` calls; Exa Contents
 is a bounded internal fallback only after direct reading fails or returns no
 text. When unset, both Web capabilities are removed and answers stay
 corpus-only. Neither path supplies cookies or browser automation for login- or

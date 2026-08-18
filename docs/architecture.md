@@ -94,7 +94,7 @@ answer request (query + optional attachments)
                -> one AnswerSynthesizer final answer
        research path: resources present or an Exa web-search key is set
                -> agent selects from peer tools (search_knowledge_base,
-                    read_resource, inspect_resource, optional search_web)
+                    read, inspect, optional search_web)
                -> a selected KB search invokes the same canonical retrieval;
                     RetrievalPlanner preserves the agent query and derives
                     lexical/filter/image hints inside that operation
@@ -104,10 +104,10 @@ answer request (query + optional attachments)
          -> one tools-disabled AnswerSynthesizer final answer
 ```
 
-Resource reads are deterministic first. `read_resource` decodes UTF-8/CSV text
+Resource reads are deterministic first. `read` decodes UTF-8/CSV text
 directly and converts HTML, PDF, DOCX, PPTX, and XLSX through selected MarkItDown
 converters with plugins disabled and no network access; OOXML archives pass a
-zip-bomb preflight before any converter opens them. `inspect_resource` performs
+zip-bomb preflight before any converter opens them. `inspect` performs
 focused visual inspection through the VLM role (falling back to the default
 LLM), rasterizing PDFs off the event loop and bounding images through the one
 canonical image path. Every visual observation is marked as VLM-derived evidence
@@ -161,7 +161,7 @@ citable evidence.
 When `web_search.api_key` (Exa) is set, Exa Search is an optional peer
 capability. Its passages belong to no workspace and are packed beside corpus
 evidence; evidence-producing result URLs become inert request-local resource
-handles that the model may deep-read with `read_resource`. Exa Contents is not a
+handles that the model may deep-read with `read`. Exa Contents is not a
 peer tool: it is a bounded internal fallback only when a selected public URL
 cannot be read directly. A missing key removes both capabilities.
 

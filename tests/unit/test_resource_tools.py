@@ -23,7 +23,7 @@ from dlightrag.answer.resources.models import (
 from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.resources.visual import ResourceInspectionError, ResourceInspector
 from dlightrag.answer.tools.resources import (
-    _read_resource_tool,
+    _legacy_resource_read_tool,
 )
 from dlightrag.answer.tools.resources import (
     build_resource_tools as _build_resource_tools,
@@ -66,7 +66,7 @@ def build_resource_tools(
     visual_supported: bool = False,
 ) -> list[AgentTool]:
     budget = text_window_budget or TextWindowBudget(tokens=100)
-    return [_read_resource_tool(registry, budget)] + _build_resource_tools(
+    return [_legacy_resource_read_tool(registry, budget)] + _build_resource_tools(
         registry,
         text_window_budget=budget,
         inspector=inspector,

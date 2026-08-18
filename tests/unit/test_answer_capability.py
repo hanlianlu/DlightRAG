@@ -579,7 +579,7 @@ def _role_config(**roles: ModelConfig) -> DlightragConfig:
     )
 
 
-async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -> None:
+async def test_inspect_follows_vlm_capability_not_answer_capability() -> None:
     from dlightrag.answer.resources import ResourceInput
     from dlightrag.answer.resources.models import TextWindowBudget
 
@@ -602,7 +602,7 @@ async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -
     assert [tool.name for tool in tools] == ["inspect"]
 
 
-async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_images() -> None:
+async def test_inspect_is_withheld_when_only_the_answer_model_sees_images() -> None:
     from dlightrag.answer.resources import ResourceInput
     from dlightrag.answer.resources.models import TextWindowBudget
 

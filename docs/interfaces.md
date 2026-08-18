@@ -467,7 +467,7 @@ then one additional tools-disabled LLM call generates the final answer. A plain
 query with neither capability takes the fixed knowledge-base fast path and needs
 only its one answer-generation LLM call.
 Evidence-producing Exa result URLs are registered as opaque request-local
-resources, so the same `read_resource` tool can deepen a search result without
+resources, so the same `read` tool can deepen a search result without
 accepting an arbitrary model-supplied URL. Reading performs no login, cookie
 session, or Playwright interaction; callers provide authenticated bytes or
 screenshots as attachments when those are required.

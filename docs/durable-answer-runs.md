@@ -48,7 +48,7 @@ endpoint once at startup and caches the result by resolved model configuration.
 When two roles resolve to the same configuration they share one probe result.
 
 - Answer capability controls current-image admission and final answer images.
-- VLM capability controls query-image description and `inspect_resource`.
+- VLM capability controls query-image description and `inspect`.
 - Rerank capability controls image-bearing chat rerank requests.
 
 `supported` and `unsupported` are terminal for the process. Only `unknown`

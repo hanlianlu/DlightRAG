@@ -177,6 +177,8 @@ class TestSchema:
             "dlightrag_blobs",
             "dlightrag_blob_chunks",
             "dlightrag_answer_run_artifacts",
+            "dlightrag_answer_workspace_inventory",
+            "dlightrag_answer_committed_spills",
         }
 
     async def test_run_columns_match_the_contract(self, store, pool) -> None:
@@ -210,6 +212,7 @@ class TestSchema:
             "updated_at",
             "started_at",
             "finished_at",
+            "workspace_epoch",
         }
 
     async def test_foreign_keys_cascade_runs_and_restrict_blobs(self, store, pool) -> None:

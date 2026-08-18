@@ -286,8 +286,8 @@ picks one of two paths:
   call, with no control turn. This is the standard-RAG path.
 - **Research path** — the request has attachments (registered as request-local
   resources) or `web_search.api_key` (Exa) is set. The agent selects from the
-  available peer tools (`search_knowledge_base`, `read_resource`,
-  `inspect_resource`, and `search_web` when enabled); only the selected tools
+  available peer tools (`search_knowledge_base`, `read`,
+  `inspect`, and `search_web` when enabled); only the selected tools
   append observations to an `EvidenceLedger`.
   Every control turn replays the run's `SessionEpisode`: the newest exchanges carry
   provider-native reasoning so a thinking model resumes its own chain, while
@@ -298,7 +298,7 @@ picks one of two paths:
   envelope. The resulting `PriorTurns` is stored by value and reused unchanged;
   workers never trim history independently.
   Evidence-producing Web result URLs receive opaque request-local resource ids,
-  allowing a later `read_resource` call to deepen a selected source without a
+  allowing a later `read` call to deepen a selected source without a
   raw-URL tool.
   A control turn with no tool calls, or a tool batch that adds no evidence, ends
   research, as does the `max_agent_turns` safety cap. DlightRAG then makes one additional tools-disabled LLM call through
@@ -310,10 +310,10 @@ picks one of two paths:
 Both paths converge on the same `AnswerSynthesizer` generation and deterministic
 finalization, so citation validation, `sources`, `answer_images`, and
 `answer_blocks` are identical across paths. Resource reads are deterministic
-first: `read_resource` decodes UTF-8/CSV
+first: `read` decodes UTF-8/CSV
 directly and converts HTML/PDF/DOCX/PPTX/XLSX through selected MarkItDown
 converters (plugins disabled, no network, OOXML zip-bomb preflight).
-`inspect_resource` performs focused VLM inspection through the VLM role (or the
+`inspect` performs focused VLM inspection through the VLM role (or the
 default LLM), and marks every visual observation as VLM-derived evidence with its
 exact source/page/sheet/cell locator. Full resource bytes never enter model
 context — only bounded text windows, capped tool observations, and budgeted image
@@ -341,8 +341,8 @@ The answer prompt receives:
   source numbering
 - document/source metadata
 - quality-preserving bounded inline page or image previews when available
-- attachment evidence: bounded text windows from `read_resource` and VLM-derived
-  observations from `inspect_resource`, each carrying its source locator
+- attachment evidence: bounded text windows from `read` and VLM-derived
+  observations from `inspect`, each carrying its source locator
 
 ### Answer LLM Input Shape
 
@@ -387,7 +387,7 @@ The sections are intentional:
 
 - `## User-attached images` are part of the user's question, not retrieved evidence.
 - `## User-attached documents` contains attachment evidence read through
-  `read_resource`. Each answer assigns compact document labels such as `att-1`;
+  `read`. Each answer assigns compact document labels such as `att-1`;
   its chunk markers use the `[att-1-1]` form.
 - `## Knowledge-base evidence` contains LightRAG excerpts and page/image previews.
 - Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
@@ -495,7 +495,7 @@ without another network request or DNS lookup. Full bytes never enter model
 context — only bounded text windows, capped observations, and budgeted image
 blocks do.
 
-`read_resource` is deterministic. UTF-8 and CSV text decode directly; HTML, PDF,
+`read` is deterministic. UTF-8 and CSV text decode directly; HTML, PDF,
 DOCX, PPTX, and XLSX are converted through selected MarkItDown converters with
 plugins disabled and no network access. A fresh converter is built per call, and
 OOXML archives pass a central-directory zip-bomb preflight (entry-count,
@@ -508,7 +508,7 @@ deterministic focus plan is cached in memory and rebuilt once after recovery.
 Changing a later observation budget therefore neither skips nor repeats text,
 and consumed cursors do not accumulate in checkpoints.
 
-`inspect_resource` performs focused visual inspection through the VLM role
+`inspect` performs focused visual inspection through the VLM role
 (falling back to the default LLM). Images are bounded through the one canonical
 image path and `ImagePayloadBudget`; PDFs are rasterized with pypdfium2 off the
 event loop as a bounded low-resolution overview and, on request, one higher-
@@ -518,7 +518,7 @@ from and never treats a VLM description as the final answer.
 
 For a current source image, automatic image description, image-aware planning,
 direct visual retrieval, and bounded final-model visibility happen before the
-agent decides whether more research is needed. `inspect_resource` is therefore
+agent decides whether more research is needed. `inspect` is therefore
 optional: it re-examines the bounded whole image with a concrete focus and adds
 the result as located, citable VLM evidence. It does not currently accept a
 bounding box or crop arbitrary regions. PDF page locators and embedded visual
@@ -528,7 +528,7 @@ When `web_search.api_key` (Exa) is set, the research path can also call Exa
 Search as a peer tool. Exa passages come back already scored against the query;
 they belong to no workspace and are packed beside corpus evidence. Unique URLs
 that produced evidence become inert request-local handles, and only an explicit
-`read_resource` call fetches one under the normal SSRF, redirect, and byte
+`read` call fetches one under the normal SSRF, redirect, and byte
 limits. Exa Contents is a bounded internal fallback when direct extraction
 fails or is empty, not a model-visible tool. It does not supply cookies,
 authenticated sessions, or Playwright interaction. Login-gated content must be
