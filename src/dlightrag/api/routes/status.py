@@ -13,7 +13,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from dlightrag.app_state import request_config
 from dlightrag.contracts import ServiceRole
 from dlightrag.health import ApplicationHealth
 
@@ -70,7 +69,7 @@ def _not_ready(*, service_role: ServiceRole, detail: str) -> JSONResponse:
 @router.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
 async def health(request: Request) -> dict[str, object]:
     """Report process liveness and the capabilities this build exposes."""
-    config = request_config(request)
+    config = request.app.state.application.config
     application_health = _application_health(request)
 
     warnings = application_health.warnings
@@ -100,7 +99,7 @@ async def health(request: Request) -> dict[str, object]:
 )
 async def readiness(request: Request) -> ReadinessResponse | JSONResponse:
     """Return whether this process can accept query traffic."""
-    config = request_config(request)
+    config = request.app.state.application.config
     detail = await _application_health(request).readiness_detail()
     if detail is not None:
         return _not_ready(service_role=config.service_role, detail=detail)

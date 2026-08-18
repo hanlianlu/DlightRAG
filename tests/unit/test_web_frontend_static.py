@@ -85,8 +85,10 @@ def test_index_advertises_one_unified_attachment_policy() -> None:
 def test_index_route_advertises_exact_backend_attachment_limits() -> None:
     chat_source = (ROOT / "src/dlightrag/web/routes/chat.py").read_text(encoding="utf-8")
 
-    assert '"query_attachment_count_limit": manager.config.answer.max_attachments,' in chat_source
-    assert chat_source.count("manager.config.answer.max_attachment_bytes,") >= 2
+    assert (
+        '"query_attachment_count_limit": application.config.answer.max_attachments,' in chat_source
+    )
+    assert chat_source.count("application.config.answer.max_attachment_bytes,") >= 2
 
 
 def test_frontend_submits_only_the_unified_attachments_part() -> None:

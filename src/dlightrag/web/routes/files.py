@@ -26,12 +26,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from dlightrag.access import AccessAction
-from dlightrag.app_state import request_config
 from dlightrag.services.corpora import IngestSpec
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,
-    get_manager,
+    get_application,
     get_workspace,
     render_partial,
     templates,
@@ -51,7 +50,7 @@ async def download_source(
     """Download one source document through the Web session boundary."""
     from dlightrag_rag.workspaces import normalize_workspace
 
-    safe_workspace = normalize_workspace(workspace or request_config(request).workspace)
+    safe_workspace = normalize_workspace(workspace or get_application(request).config.workspace)
     try:
         await enforce_web_access(
             request,
@@ -67,7 +66,7 @@ async def download_source(
         raise
 
     try:
-        target = await get_manager(request).corpora.prepare_source_download(
+        target = await get_application(request).corpora.prepare_source_download(
             safe_workspace,
             document_id,
         )
@@ -110,11 +109,11 @@ async def _resolve_registered_workspace(
     """Return the requested workspace when it is registered."""
     from dlightrag_rag.workspaces import normalize_workspace
 
-    manager = get_manager(request)
+    application = get_application(request)
     try:
         known = {
             normalized
-            for item in await manager.corpora.list_workspaces()
+            for item in await application.corpora.list_workspaces()
             if (normalized := normalize_workspace(item))
         }
     except Exception:
@@ -128,11 +127,11 @@ async def _workspace_is_registered(request: Request, workspace: str) -> bool:
     """Return whether a workspace is registered; fail open on registry outages."""
     from dlightrag_rag.workspaces import normalize_workspace
 
-    manager = get_manager(request)
+    application = get_application(request)
     try:
         known = {
             normalized
-            for item in await manager.corpora.list_workspaces()
+            for item in await application.corpora.list_workspaces()
             if (normalized := normalize_workspace(item))
         }
     except Exception:
@@ -184,10 +183,10 @@ async def file_list(
 
 
 async def _file_list_response(request: Request, workspace: str):
-    manager = get_manager(request)
+    application = get_application(request)
     status: dict[str, Any] = {}
     try:
-        snapshot = await manager.corpora.file_panel_snapshot(workspace)
+        snapshot = await application.corpora.file_panel_snapshot(workspace)
         files = _file_view_models(list(snapshot.get("files") or []))
         status = dict(snapshot.get("pipeline_status") or {})
     except Exception:
@@ -227,8 +226,8 @@ async def upload_files(
     workspace: str = Depends(get_workspace),
 ):
     """Upload files and start background ingest.  Returns immediately."""
-    manager = get_manager(request)
-    cfg = request_config(request)
+    application = get_application(request)
+    cfg = application.config
     # Per-file document cap is the single shared limit used by every ingest
     # path (REST /ingest/blob, URL, web upload): one document may not exceed it.
     # The larger per-request cap is a temp-directory guard for multi-file
@@ -247,7 +246,7 @@ async def upload_files(
     # mechanism picks up new enqueues automatically after the current batch.
     already_busy = False
     try:
-        ps = await manager.corpora.get_pipeline_status(selected_workspace)
+        ps = await application.corpora.get_pipeline_status(selected_workspace)
         already_busy = bool(ps.get("busy"))
     except Exception:
         logger.debug(
@@ -301,7 +300,7 @@ async def upload_files(
         return error_response("Upload failed. Please try again.", status_code=500)
 
     try:
-        await manager.corpora.start_ingest_job(
+        await application.corpora.start_ingest_job(
             selected_workspace,
             IngestSpec(source_type="local", path=str(upload_dir)),
         )
@@ -353,10 +352,10 @@ async def ingest_status(
     if selected_workspace is None:
         return _stale_workspace_response()
     await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
-    manager = get_manager(request)
+    application = get_application(request)
 
     try:
-        ps = await manager.corpora.get_pipeline_status(selected_workspace)
+        ps = await application.corpora.get_pipeline_status(selected_workspace)
     except Exception:
         ps = {"busy": False, "latest_message": "Status unavailable"}
 
@@ -391,14 +390,14 @@ async def delete_files(
     """Delete files from workspace."""
     file_path = request.query_params.get("file_path", "")
     file_paths = [file_path] if file_path else []
-    manager = get_manager(request)
+    application = get_application(request)
     selected_workspace = _resolve_workspace(request.query_params.get("workspace"), workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         return _stale_workspace_response()
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE_FILES, selected_workspace)
 
     try:
-        await manager.corpora.delete_files(selected_workspace, file_paths=file_paths)
+        await application.corpora.delete_files(selected_workspace, file_paths=file_paths)
     except Exception:
         logger.exception("Delete failed")
         return error_response("Delete failed. Please try again.", status_code=500)

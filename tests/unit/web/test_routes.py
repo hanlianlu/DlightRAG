@@ -15,8 +15,9 @@ def app(test_config):
     assert test_config is not None
     real_app = create_app(include_web_app=True)
 
-    mock_manager = MagicMock()
-    mock_manager.corpora.file_panel_snapshot = AsyncMock(
+    mock_application = MagicMock()
+    mock_application.config = test_config
+    mock_application.corpora.file_panel_snapshot = AsyncMock(
         return_value={
             "files": [
                 {"file_path": "/data/report.pdf", "file_name": "report.pdf"},
@@ -25,8 +26,8 @@ def app(test_config):
             "pipeline_status": {"busy": False, "pending_enqueues": 0},
         }
     )
-    mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default", "finance"])
-    mock_manager.corpora.alist_workspace_records = AsyncMock(
+    mock_application.corpora.list_workspaces = AsyncMock(return_value=["default", "finance"])
+    mock_application.corpora.alist_workspace_records = AsyncMock(
         return_value=[
             {
                 "workspace": "default",
@@ -40,9 +41,10 @@ def app(test_config):
             },
         ]
     )
-    real_app.state.manager = mock_manager
+    real_app.state.application = mock_application
 
-    mock_manager.answer_capabilities = answer_capability_view()
+    capability_view = answer_capability_view()
+    mock_application.answers.capabilities = capability_view.read
 
     return real_app
 

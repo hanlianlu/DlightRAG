@@ -16,20 +16,26 @@ otherwise.
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
+from unittest.mock import MagicMock
 
 import asyncpg
 import pytest
+from dlightrag_ai.capacity import ModelProfile
+from dlightrag_ai.fingerprints import ModelFingerprint
+from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.access import UserContext, owner_id_from_user
 from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
-from tests.unit.conftest import prepare_test_answer_run_input
+from dlightrag.services.answers import AnswerService
 
 pytestmark = [
     pytest.mark.integration,
@@ -47,6 +53,12 @@ _PG_CONN_KWARGS: dict[str, Any] = dict(
 _ANON = UserContext(user_id="anonymous", auth_mode="none")
 _ALICE = UserContext(user_id="alice", auth_mode="jwt", claims={"iss": "https://issuer.test"})
 _BOB = UserContext(user_id="bob", auth_mode="jwt", claims={"iss": "https://issuer.test"})
+_PROFILE = ModelProfile(
+    context_window_tokens=200_000,
+    max_input_tokens=180_000,
+    max_output_tokens=16_000,
+    supports_tools=True,
+)
 
 
 async def _pg_available() -> bool:
@@ -92,8 +104,114 @@ async def store(pool: Any) -> PGAnswerRunStore:
     return created
 
 
-class _StoreBackedManager:
-    """The durable surface REST uses, wired straight to the real store."""
+class _StoreScheduler:
+    """Wake-free scheduler whose subscriptions replay the real PG event page."""
+
+    def __init__(self, store: PGAnswerRunStore) -> None:
+        self._store = store
+        self.is_started = True
+
+    def wake(self) -> None:
+        return None
+
+    @asynccontextmanager
+    async def admission(self) -> AsyncIterator[bool]:
+        yield self.is_started
+
+    def subscribe(
+        self, *, owner_id: str, run_id: str, after_sequence: int = 0
+    ) -> AsyncIterator[Any]:
+        async def _iterate() -> AsyncIterator[Any]:
+            events = await self._store.read_event_page(
+                owner_id=owner_id,
+                run_id=run_id,
+                after_sequence=after_sequence,
+            )
+            for event in events:
+                yield event
+
+        return _iterate()
+
+
+class _Resources:
+    async def pin_current_image_links(
+        self, request: Any, attachment_bytes: Any
+    ) -> tuple[Any, list[bytes]]:
+        return request, list(attachment_bytes)
+
+    async def resolve(
+        self,
+        _resources: Any,
+        /,
+        *,
+        models: RequestModelContext,
+        text_window_budget: Any,
+        confirm_image_context: Any,
+    ) -> Any:
+        del text_window_budget, confirm_image_context
+        return SimpleNamespace(
+            models=models,
+            registry=None,
+            research=False,
+            current_images=(),
+            resource_tools=(),
+            resource_manifest=(),
+            web_search=None,
+            image_budget=None,
+            query_images=(),
+        )
+
+
+class _Capabilities:
+    async def refresh_vlm(self) -> AnswerCapabilities:
+        return AnswerCapabilities(answer=None, vlm_status="unknown")
+
+    def current_profiles(self) -> dict[ModelRole, ModelProfile]:
+        return {role: _PROFILE for role in MODEL_ROLE_NAMES}
+
+    def request_model_context(
+        self, profiles: dict[ModelRole, ModelProfile] | None, /
+    ) -> RequestModelContext:
+        selected = profiles or self.current_profiles()
+        return RequestModelContext(
+            extract=selected["extract"],
+            query=selected["query"],
+            vlm=selected["vlm"],
+        )
+
+    def answer_image_policy(self, _profile: ModelProfile, /) -> Any:
+        return MagicMock()
+
+    async def confirmed_live_answer_context(
+        self, models: RequestModelContext, /
+    ) -> tuple[RequestModelContext, None]:
+        return models, None
+
+
+class _Retrieval:
+    def planner_for(self, _profile: ModelProfile | None = None) -> Any:
+        planner = MagicMock()
+        planner.history_input_measure.return_value = lambda messages: 10 * len(messages)
+        return planner
+
+    def warm(self, _workspaces: Any) -> None:
+        return None
+
+    async def schema_for(self, _workspaces: Any) -> dict[str, Any]:
+        return {}
+
+
+class _CapabilityView:
+    async def read(self) -> AnswerCapabilities:
+        return AnswerCapabilities(answer=None, vlm_status="unknown")
+
+
+def _fingerprint(role: ModelRole) -> ModelFingerprint:
+    return ModelFingerprint(provider="test", model=f"model-{role}", endpoint_fingerprint=None)
+
+
+class _StoreBackedApplication:
+    """Application shell with a real AnswerService wired to the real store."""
 
     def __init__(self, store: PGAnswerRunStore, config: DlightragConfig) -> None:
         self._store = store
@@ -101,86 +219,20 @@ class _StoreBackedManager:
         self.corpora = SimpleNamespace(
             alist_workspace_records=self._alist_workspace_records,
         )
+        self.answers = AnswerService(
+            store=store,
+            coordinator=cast(Any, _StoreScheduler(store)),
+            retrieval=cast(Any, _Retrieval()),
+            capabilities=cast(Any, _Capabilities()),
+            capability_view=cast(Any, _CapabilityView()),
+            models=cast(Any, SimpleNamespace(query_image_describer=lambda: MagicMock())),
+            resources=cast(Any, _Resources()),
+            model_fingerprint_for_role=_fingerprint,
+        )
 
     @staticmethod
     async def _alist_workspace_records() -> list[dict[str, str]]:
         return [{"workspace": "default"}]
-
-    async def aprepare_answer_run_input(
-        self,
-        request: Any,
-        *,
-        resources: Any,
-        idempotency_fingerprint: str,
-    ) -> Any:
-        pinned = await prepare_test_answer_run_input(
-            request,
-            resources=resources,
-            idempotency_fingerprint=idempotency_fingerprint,
-        )
-        return pinned
-
-    async def astart_answer_run(
-        self,
-        *,
-        owner_id: str,
-        request: Any,
-        idempotency_key: str | None = None,
-        attachment_bytes: Any = (),
-    ) -> Any:
-        from dlightrag.runtime import PendingArtifact, PendingArtifactReference
-
-        return await self._store.create_run(
-            owner_id=owner_id,
-            request=request.as_request(),
-            idempotency_fingerprint=request.idempotency_fingerprint,
-            idempotency_key=idempotency_key,
-            artifacts=[PendingArtifact(content=content) for content in attachment_bytes],
-            references=[
-                PendingArtifactReference(
-                    resource_id=item.resource_id,
-                    reference_kind="current_attachment",
-                    ordinal=item.ordinal,
-                    digest=item.digest,
-                    filename=item.filename,
-                    mime_type=item.mime_type,
-                )
-                for item in request.attachments
-            ],
-        )
-
-    async def areplay_answer_run(
-        self,
-        *,
-        owner_id: str,
-        idempotency_key: str,
-        idempotency_fingerprint: str,
-    ) -> Any:
-        replay = await self._store.replay_run(
-            owner_id=owner_id,
-            idempotency_key=idempotency_key,
-            idempotency_fingerprint=idempotency_fingerprint,
-        )
-        return replay.run if replay is not None else None
-
-    async def aget_answer_run(self, *, owner_id: str, run_id: str) -> Any:
-        return await self._store.get_run(owner_id=owner_id, run_id=run_id)
-
-    async def acancel_answer_run(self, *, owner_id: str, run_id: str) -> Any:
-        return await self._store.request_cancellation(owner_id=owner_id, run_id=run_id)
-
-    async def asubscribe_answer_run(
-        self, *, owner_id: str, run_id: str, after_sequence: int = 0
-    ) -> AsyncIterator[Any]:
-        events = await self._store.read_event_page(
-            owner_id=owner_id, run_id=run_id, after_sequence=after_sequence
-        )
-
-        async def _iterate() -> AsyncIterator[Any]:
-            for event in events:
-                yield event
-
-        return _iterate()
 
 
 @pytest.fixture
@@ -197,7 +249,7 @@ def app(store: PGAnswerRunStore, tmp_path) -> Iterator[FastAPI]:
     )
     set_config(config)
     application = create_app(include_web_app=False)
-    application.state.manager = _StoreBackedManager(store, config)
+    application.state.application = _StoreBackedApplication(store, config)
     application.dependency_overrides[get_current_user] = lambda: _ANON
     yield application
     application.dependency_overrides.clear()

@@ -5,6 +5,8 @@ import asyncio
 import base64
 import dataclasses
 import io
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +28,7 @@ from dlightrag.answer.capability import (
     AnswerImageCapability,
     derive_effective_max_images,
 )
+from dlightrag.answer.executor import AnswerResourceResolver
 from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
@@ -34,9 +37,9 @@ from dlightrag.config import (
     ModelCapacityOverrideConfig,
     ModelConfig,
 )
-from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.model_settings import (
     answer_capability_settings,
+    answer_resource_settings,
     model_profile_for_role,
     model_settings_for_role,
     rerank_scoring_model_settings,
@@ -318,7 +321,7 @@ async def test_terminal_status_is_terminal_no_reprobe(
 async def test_reprobe_respects_cooldown_when_still_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The cooldown lives in the shared probe cache, so a manager re-probe only
+    # The cooldown lives in the shared probe cache, so a capability re-probe only
     # reaches a model call when that model's own cooldown has elapsed.
     probed = _probed_models(monkeypatch, "unknown")
     coordinator, _health_updates = _coordinator(_reprobe_config())
@@ -580,13 +583,20 @@ async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -
     from dlightrag.answer.resources import ResourceInput
     from dlightrag.answer.resources.models import TextWindowBudget
 
-    manager = RAGServiceManager(config=_role_config())
-    manager._capabilities.narrow_role_image_profile("vlm", "supported")
+    config = _role_config()
+    capabilities, _ = _coordinator(config)
+    capabilities.resolve_profiles()
+    capabilities.narrow_role_image_profile("vlm", "supported")
+    resolver = AnswerResourceResolver(
+        settings=answer_resource_settings(config),
+        models=cast(Any, SimpleNamespace(vlm_func=MagicMock(return_value=AsyncMock()))),
+        capabilities=capabilities,
+    )
 
-    _registry, tools = manager._answer_resources.build_resource_context(
+    _registry, tools = resolver.build_resource_context(
         [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
         text_window_budget=TextWindowBudget(tokens=1_000),
-        vlm_profile=manager._capabilities.model_profile("vlm"),
+        vlm_profile=capabilities.model_profile("vlm"),
     )
 
     assert [tool.name for tool in tools] == ["read_resource", "inspect_resource"]
@@ -596,14 +606,21 @@ async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_imag
     from dlightrag.answer.resources import ResourceInput
     from dlightrag.answer.resources.models import TextWindowBudget
 
-    manager = RAGServiceManager(config=_role_config())
-    manager._capabilities.narrow_role_image_profile("vlm", "unsupported")
+    config = _role_config()
+    capabilities, _ = _coordinator(config)
+    capabilities.resolve_profiles()
+    capabilities.narrow_role_image_profile("vlm", "unsupported")
+    resolver = AnswerResourceResolver(
+        settings=answer_resource_settings(config),
+        models=cast(Any, SimpleNamespace(vlm_func=MagicMock(return_value=AsyncMock()))),
+        capabilities=capabilities,
+    )
 
-    _registry, tools = manager._answer_resources.build_resource_context(
+    _registry, tools = resolver.build_resource_context(
         [ResourceInput(filename="chart.png", content=b"\x89PNG", declared_mime="image/png")],
         text_window_budget=TextWindowBudget(tokens=1_000),
         vlm_profile=dataclasses.replace(
-            manager._capabilities.model_profile("vlm"),
+            capabilities.model_profile("vlm"),
             supports_images=False,
         ),
     )

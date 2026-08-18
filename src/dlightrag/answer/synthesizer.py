@@ -2,7 +2,7 @@
 """Final answer synthesis.
 
 Receives merged retrieval/evidence contexts from any path and generates the
-single final answer with proper citations.  Lives at the RAGServiceManager
+single final answer with proper citations. Lives in the Answer domain
 level -- shared across all workspaces.
 
 The synthesizer accepts a single ``model_func`` callable that follows the

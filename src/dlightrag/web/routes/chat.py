@@ -29,7 +29,7 @@ from dlightrag.web.conversations import (
 from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,
-    get_manager,
+    get_application,
     get_web_access_gate,
     get_web_conversation_service,
     get_workspace,
@@ -45,17 +45,17 @@ router = APIRouter()
 async def index(request: Request, workspace: str = Depends(get_workspace)):
     """Main page."""
 
-    manager = get_manager(request)
-    capabilities = await manager.answer_capabilities.read()
+    application = get_application(request)
+    capabilities = await application.answers.capabilities()
     workspaces: list[WorkspaceRecord]
     try:
-        workspaces = await manager.corpora.alist_workspace_records()
+        workspaces = await application.corpora.alist_workspace_records()
     except Exception:
         workspaces = [
             {
                 "workspace": workspace,
                 "display_name": workspace,
-                "embedding_model": manager.config.embedding.model,
+                "embedding_model": application.config.embedding.model,
             }
         ]
     workspaces = await filter_web_workspace_records(
@@ -93,9 +93,9 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "workspaces": workspaces,
             "primary_workspace": primary,
             "active_workspaces": active,
-            "query_attachment_count_limit": manager.config.answer.max_attachments,
-            "query_attachment_image_max_bytes": manager.config.answer.max_attachment_bytes,
-            "query_attachment_document_max_bytes": manager.config.answer.max_attachment_bytes,
+            "query_attachment_count_limit": application.config.answer.max_attachments,
+            "query_attachment_image_max_bytes": application.config.answer.max_attachment_bytes,
+            "query_attachment_document_max_bytes": application.config.answer.max_attachment_bytes,
             "query_attachment_extensions": document_extensions,
             "query_attachment_image_capability": capability_status,
             "query_attachment_image_limit": effective_current_upload_limit,
@@ -118,10 +118,10 @@ async def start_answer_run(
     transaction before this descriptor is returned, so the browser follows the
     run's own event stream and a page reload rediscovers it from history.
     """
-    manager = get_manager(request)
-    cfg = manager.config
+    application = get_application(request)
+    cfg = application.config
     # Enforce the probed answer capability at admission (pre-acceptance 4xx).
-    capability = (await manager.answer_capabilities.read()).answer
+    capability = (await application.answers.capabilities()).answer
     body = await parse_web_answer_request(
         request,
         max_attachments=cfg.answer.max_attachments,
@@ -187,7 +187,7 @@ async def cancel_answer_run(
     turn = await conversation_service.turn_for_run(user, run_id)
     if turn is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
-    outcome = await get_manager(request).acancel_answer_run(
+    outcome = await get_application(request).answers.cancel(
         owner_id=owner_id_from_user(user), run_id=run_id
     )
     if outcome.run is None:
@@ -219,7 +219,7 @@ async def answer_run_events(
             detail="Answer run events expired; read its result from the conversation",
         )
     downloadable, visual = await _projection_workspaces(request, turn.run.request)
-    events = await get_manager(request).asubscribe_answer_run(
+    events = get_application(request).answers.subscribe(
         owner_id=owner_id_from_user(user),
         run_id=run_id,
         after_sequence=resume_cursor(request),

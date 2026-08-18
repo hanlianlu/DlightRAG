@@ -16,24 +16,25 @@ from dlightrag.access import (
     WorkspaceSelectionConflictError,
     access_control_from_settings,
 )
-from dlightrag.app_state import request_config
+from dlightrag.application import Application
 from dlightrag.config import get_config
-from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.model_settings import access_settings
 
 
-def get_manager(request: Request) -> RAGServiceManager:
-    return request.app.state.manager
+def get_application(request: Request) -> Application:
+    return request.app.state.application
 
 
 def resolve_workspace(ws: str | None, request: Request | None = None) -> str:
-    workspace = request_config(request).workspace if request is not None else get_config().workspace
+    workspace = (
+        get_application(request).config.workspace if request is not None else get_config().workspace
+    )
     return normalize_workspace(ws or workspace)
 
 
 def get_access_control(request: Request) -> AccessControl:
     return getattr(request.app.state, "access_control", None) or access_control_from_settings(
-        access_settings(request_config(request))
+        access_settings(get_application(request).config)
     )
 
 
@@ -83,8 +84,8 @@ async def resolve_authorized_query_workspaces(
     """Resolve query targets after applying the caller's existing ACL."""
     try:
         return await get_access_gate(request, user).resolve_query_workspaces(
-            get_manager(request).corpora,
-            default_workspace=normalize_workspace(request_config(request).workspace),
+            get_application(request).corpora,
+            default_workspace=normalize_workspace(get_application(request).config.workspace),
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )

@@ -12,7 +12,7 @@ from dlightrag_ai.media import MODEL_IMAGE_MAX_PIXELS, verify_web_image_bytes
 from dlightrag_rag.ingestion.uploads import safe_upload_basename
 
 # One ordered attachment collection per message. Images and documents mix; the
-# manager extracts verified images into current-image blocks and registers the
+# Answer preparation extracts verified images into current-image blocks and registers the
 # rest as request-local resources. The admitted count is owned at runtime by
 # ``config.answer.max_attachments`` and threaded in by callers.
 SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(

@@ -19,9 +19,9 @@ class _Asset:
     media_type: str
 
 
-def _api_client(manager: object) -> AsyncClient:
+def _api_client(application_double: object) -> AsyncClient:
     app = FastAPI()
-    app.state.manager = manager
+    app.state.application = application_double
     app.include_router(api_images_router)
     app.dependency_overrides[get_current_user] = lambda: UserContext(
         user_id="test", auth_mode="none"
@@ -29,9 +29,9 @@ def _api_client(manager: object) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-def _web_client(manager: object, access_control: object | None = None) -> AsyncClient:
+def _web_client(application_double: object, access_control: object | None = None) -> AsyncClient:
     app = FastAPI()
-    app.state.manager = manager
+    app.state.application = application_double
     if access_control is not None:
         app.state.access_control = access_control
     app.include_router(web_images_router)
@@ -39,47 +39,57 @@ def _web_client(manager: object, access_control: object | None = None) -> AsyncC
 
 
 async def test_api_image_route_serves_asset() -> None:
-    manager = AsyncMock()
-    manager.corpora.get_visual_asset.return_value = _Asset(data=b"png", media_type="image/png")
+    application_double = AsyncMock()
+    application_double.corpora.get_visual_asset.return_value = _Asset(
+        data=b"png", media_type="image/png"
+    )
 
-    async with _api_client(manager) as client:
+    async with _api_client(application_double) as client:
         response = await client.get("/images/default/chunk_1?size=thumb")
 
     assert response.status_code == 200
     assert response.content == b"png"
     assert response.headers["content-type"] == "image/png"
-    manager.corpora.get_visual_asset.assert_awaited_once_with("default", "chunk_1", size="thumb")
+    application_double.corpora.get_visual_asset.assert_awaited_once_with(
+        "default", "chunk_1", size="thumb"
+    )
 
 
 async def test_api_image_route_returns_404_for_missing_asset() -> None:
-    manager = AsyncMock()
-    manager.corpora.get_visual_asset.return_value = None
+    application_double = AsyncMock()
+    application_double.corpora.get_visual_asset.return_value = None
 
-    async with _api_client(manager) as client:
+    async with _api_client(application_double) as client:
         response = await client.get("/images/default/missing")
 
     assert response.status_code == 404
 
 
 async def test_web_image_route_serves_same_origin_asset() -> None:
-    manager = AsyncMock()
-    manager.corpora.get_visual_asset.return_value = _Asset(data=b"jpeg", media_type="image/jpeg")
+    application_double = AsyncMock()
+    application_double.corpora.get_visual_asset.return_value = _Asset(
+        data=b"jpeg", media_type="image/jpeg"
+    )
 
-    async with _web_client(manager) as client:
+    async with _web_client(application_double) as client:
         response = await client.get("/images/default/chunk_1?size=full")
 
     assert response.status_code == 200
     assert response.content == b"jpeg"
     assert response.headers["content-type"] == "image/jpeg"
-    manager.corpora.get_visual_asset.assert_awaited_once_with("default", "chunk_1", size="full")
+    application_double.corpora.get_visual_asset.assert_awaited_once_with(
+        "default", "chunk_1", size="full"
+    )
 
 
 async def test_web_image_route_canonicalizes_scope_before_access_and_read() -> None:
-    manager = AsyncMock()
-    manager.corpora.get_visual_asset.return_value = _Asset(data=b"jpeg", media_type="image/jpeg")
+    application_double = AsyncMock()
+    application_double.corpora.get_visual_asset.return_value = _Asset(
+        data=b"jpeg", media_type="image/jpeg"
+    )
     access_control = AsyncMock()
 
-    async with _web_client(manager, access_control) as client:
+    async with _web_client(application_double, access_control) as client:
         response = await client.get("/images/Finance%20Reports/chunk_1?size=full")
 
     assert response.status_code == 200
@@ -88,7 +98,7 @@ async def test_web_image_route_canonicalizes_scope_before_access_and_read() -> N
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
         workspace="finance_reports",
     )
-    manager.corpora.get_visual_asset.assert_awaited_once_with(
+    application_double.corpora.get_visual_asset.assert_awaited_once_with(
         "finance_reports",
         "chunk_1",
         size="full",

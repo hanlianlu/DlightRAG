@@ -12,7 +12,6 @@ from dlightrag.access import (
     UserContext,
     authenticate_bearer_token,
 )
-from dlightrag.app_state import request_config
 from dlightrag.model_settings import authentication_settings
 
 
@@ -32,7 +31,7 @@ def authentication_http_error(error: AuthenticationError) -> HTTPException:
 
 async def get_current_user(request: Request) -> UserContext:
     """Extract one bearer token and authenticate it through Access."""
-    cfg = request_config(request)
+    cfg = request.app.state.application.config
     if cfg.auth_mode == "none":
         return UserContext(user_id="anonymous", auth_mode="none")
 

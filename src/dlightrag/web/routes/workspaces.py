@@ -12,11 +12,11 @@ from dlightrag.access import AccessAction, WorkspaceRecord
 from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,
-    get_manager,
+    get_application,
 )
 
 if TYPE_CHECKING:
-    from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.application import Application
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +31,9 @@ def _ordered_unique(workspaces: list[str]) -> list[str]:
     return result
 
 
-async def _visible_workspace_names(request: Request, manager: RAGServiceManager) -> list[str]:
+async def _visible_workspace_names(request: Request, application: Application) -> list[str]:
     records: list[WorkspaceRecord] = [
-        {"workspace": workspace} for workspace in await manager.corpora.list_workspaces()
+        {"workspace": workspace} for workspace in await application.corpora.list_workspaces()
     ]
     visible = await filter_web_workspace_records(request, AccessAction.WORKSPACE_QUERY, records)
     return [str(row["workspace"]) for row in visible]
@@ -127,7 +127,7 @@ async def create_workspace(
     """Create a new workspace and return updated workspace list."""
     from dlightrag.utils import validate_workspace_name
 
-    manager = get_manager(request)
+    application = get_application(request)
 
     try:
         name = validate_workspace_name(workspace_name)
@@ -138,13 +138,13 @@ async def create_workspace(
     await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
 
     # Duplicate check
-    existing = await manager.corpora.list_workspaces()
+    existing = await application.corpora.list_workspaces()
     if ws in existing:
         return _error(f"Workspace '{name}' already exists", status_code=409)
 
     # Initialize workspace (creates the WorkspaceRag)
     try:
-        await manager.corpora.create_workspace(ws, display_name=name)
+        await application.corpora.create_workspace(ws, display_name=name)
     except Exception:
         logger.exception("Workspace creation failed")
         return _error(
@@ -153,7 +153,7 @@ async def create_workspace(
         )
 
     response = JSONResponse({"workspace": ws, "display_name": name})
-    visible_workspaces = await _visible_workspace_names(request, manager)
+    visible_workspaces = await _visible_workspace_names(request, application)
     _set_workspace_cookies(
         response,
         request,
@@ -171,7 +171,7 @@ async def delete_workspace(
     confirm_name: str = Form(default=""),
 ):
     """Delete a workspace after type-to-confirm verification."""
-    manager = get_manager(request)
+    application = get_application(request)
     name = workspace_name.strip()
     confirm = confirm_name.strip()
 
@@ -184,7 +184,7 @@ async def delete_workspace(
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
 
     try:
-        await manager.corpora.reset(workspace_ids=(ws,))
+        await application.corpora.reset(workspace_ids=(ws,))
     except Exception:
         logger.exception("Workspace deletion failed")
         return _error(
@@ -192,7 +192,7 @@ async def delete_workspace(
             status_code=500,
         )
 
-    visible_workspaces = await _visible_workspace_names(request, manager)
+    visible_workspaces = await _visible_workspace_names(request, application)
     active = _cookie_active_workspaces(request, visible_workspaces)
     next_workspace = active[0] if active else _default_workspace(visible_workspaces)
 

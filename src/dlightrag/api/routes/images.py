@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from dlightrag.access import AccessAction, UserContext
 from dlightrag.api.auth import get_current_user
 
-from .deps import enforce_access, get_manager, resolve_workspace
+from .deps import enforce_access, get_application, resolve_workspace
 
 router = APIRouter()
 
@@ -22,10 +22,10 @@ async def image(
     user: UserContext = Depends(get_current_user),
 ) -> Response:
     """Serve a LightRAG sidecar-backed visual chunk asset."""
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_VISUAL_ASSET, workspace=ws)
-    asset = await manager.corpora.get_visual_asset(ws, chunk_id, size=size)
+    asset = await application.corpora.get_visual_asset(ws, chunk_id, size=size)
     if asset is None:
         raise HTTPException(status_code=404, detail="Image not found")
     return Response(

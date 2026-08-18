@@ -8,7 +8,8 @@ Tests:
 - CorpusAdmin.list_workspaces() PG workspace discovery
 """
 
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -83,6 +84,22 @@ async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None
         await registry.delete(workspace)
 
 
+def _corpus_admin(config: Any) -> Any:
+    from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory
+    from dlightrag.model_settings import corpus_admin_settings
+    from dlightrag.services.corpora import CorpusAdmin
+
+    backend = PGCorpusBackendFactory(config).create()
+    return CorpusAdmin(
+        settings=corpus_admin_settings(config),
+        pool=cast(Any, SimpleNamespace()),
+        maintenance=backend.maintenance,
+        ingest_jobs=cast(Any, SimpleNamespace()),
+        file_panel=cast(Any, SimpleNamespace()),
+        source_download_for=cast(Any, lambda _workspace: SimpleNamespace()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # CorpusAdmin.list_workspaces - PG workspace discovery
 # ---------------------------------------------------------------------------
@@ -94,8 +111,8 @@ class TestPGWorkspaceDiscovery:
 
     async def test_discovers_workspaces_from_workspace_meta(self) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
+        from dlightrag.adapters.postgres._pool import pg_pool
         from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
-        from dlightrag.core.servicemanager import RAGServiceManager
 
         pool, registry = await _open_workspace_registry()
         try:
@@ -122,24 +139,23 @@ class TestPGWorkspaceDiscovery:
             )
             set_config(cfg)
 
-            manager = RAGServiceManager(config=cfg)
+            pg_pool.bind(cfg)
+            corpora = _corpus_admin(cfg)
             try:
-                workspaces = await manager.corpora.list_workspaces()
+                workspaces = await corpora.list_workspaces()
 
                 assert _TEST_WORKSPACE_ALPHA in workspaces
                 assert _TEST_WORKSPACE_BETA in workspaces
             finally:
-                # Releases the process-global pg_pool, which is otherwise left
-                # bound to this test's event loop and dies with it.
-                await manager.aclose()
+                await pg_pool.close()
         finally:
             await _delete_test_workspaces(registry)
             await pool.close()
 
     async def test_empty_table_returns_default_workspace(self) -> None:
         """Empty workspace metadata falls back to config.workspace."""
+        from dlightrag.adapters.postgres._pool import pg_pool
         from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
-        from dlightrag.core.servicemanager import RAGServiceManager
 
         pool, registry = await _open_workspace_registry()
         try:
@@ -156,9 +172,10 @@ class TestPGWorkspaceDiscovery:
             )
             set_config(cfg)
 
-            manager = RAGServiceManager(config=cfg)
+            pg_pool.bind(cfg)
+            corpora = _corpus_admin(cfg)
             try:
-                workspaces = await manager.corpora.list_workspaces()
+                workspaces = await corpora.list_workspaces()
 
                 # Should at least contain the default workspace
                 # (may contain more if table has data from other tests)
@@ -166,7 +183,7 @@ class TestPGWorkspaceDiscovery:
                 assert len(workspaces) >= 1
                 assert "test_fallback_ws" in workspaces
             finally:
-                await manager.aclose()
+                await pg_pool.close()
         finally:
             await _delete_test_workspaces(registry, "test-fallback-ws")
             await pool.close()

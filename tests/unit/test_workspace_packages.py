@@ -262,18 +262,20 @@ def test_workspace_wheel_verifier_scopes_root_import_contracts(tmp_path: Path) -
     assert completed.returncode == 0, completed.stderr
 
 
-def test_workspace_wheel_verifier_rejects_answer_import_of_manager(tmp_path: Path) -> None:
+def test_workspace_wheel_verifier_rejects_answer_import_of_postgres_adapter(
+    tmp_path: Path,
+) -> None:
     _write_workspace_artifacts(
         tmp_path,
         root_additional_sources={
-            "answer/example.py": "from dlightrag.core.servicemanager import RAGServiceManager\n"
+            "answer/example.py": "from dlightrag.adapters.postgres import answer_runs\n"
         },
     )
 
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 1
-    assert "forbidden import dlightrag.core.servicemanager" in completed.stderr
+    assert "forbidden import dlightrag.adapters.postgres" in completed.stderr
 
 
 @pytest.mark.parametrize(

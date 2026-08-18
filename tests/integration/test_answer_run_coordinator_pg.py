@@ -31,7 +31,12 @@ from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
 from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.executor import AnswerExecutor, OrchestratorRun, _fetched_bytes_sink
+from dlightrag.answer.executor import (
+    AnswerExecutor,
+    AnswerResourceResolver,
+    OrchestratorRun,
+    _fetched_bytes_sink,
+)
 from dlightrag.answer.resources import registry as registry_module
 from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.answer.resources.registry import ResourceRegistry
@@ -40,11 +45,11 @@ from dlightrag.answer.runs.execution import AnswerRunInput, PinnedModelProfile
 from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import ExactCallCache
+from dlightrag.application import Application, _compose
 from dlightrag.config import DlightragConfig, RuntimeConfig
 from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
-from dlightrag.core.servicemanager import RAGServiceManager
-from dlightrag.model_settings import answer_executor_settings
+from dlightrag.model_settings import answer_executor_settings, answer_resource_settings
 from dlightrag.runtime import (
     DurableWrites,
     RunCoordinator,
@@ -588,21 +593,22 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     store: PGAnswerRunStore,
 ) -> None:
     """A descriptor-only caller still gets a finished run and a safe canonical result."""
-    manager = _answer_manager(store)
-    creation = await manager.astart_answer_run(
+    application, coordinator = _answer_runtime(store)
+    await coordinator.start()
+    creation = await store.create_run(
         owner_id=_OWNER,
-        request=_answer_run_input(),
+        request=_answer_run_input().as_request(),
+        idempotency_fingerprint=_REQUEST_FINGERPRINT,
     )
     run_id = creation.run.run_id
+    coordinator.wake()
     try:
         await _settle(_status_is(store, run_id, "succeeded"))
     finally:
-        coordinator = manager._answer_coordinator
-        manager._answer_coordinator = None
-        if coordinator is not None:
-            await coordinator.aclose()
+        await coordinator.aclose()
+        await application.aclose()
 
-    run = await manager.aget_answer_run(owner_id=_OWNER, run_id=run_id)
+    run = await store.get_run(owner_id=_OWNER, run_id=run_id)
     assert run is not None
     result = run.result
     assert result is not None
@@ -627,13 +633,11 @@ async def test_accepted_run_executes_and_stores_a_projected_result_without_a_sub
     assert result["trace"]["retrieval"] == "ok"
 
 
-def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
-    """Compose a descriptor owner and final executor over the throwaway database."""
-    manager = RAGServiceManager(
-        config=DlightragConfig(runtime=RuntimeConfig(answer_worker_concurrency=1))
-    )
-    manager._answer_run_store = store
-    manager._answer_coordinator = None
+def _answer_runtime(store: PGAnswerRunStore) -> tuple[Application, RunCoordinator]:
+    """Compose the final executor and coordinator over the throwaway database."""
+    config = DlightragConfig(runtime=RuntimeConfig(answer_worker_concurrency=1))
+    components = _compose(config)
+    application = Application(config, components)
     orchestrator = AnswerOrchestrator(
         synthesizer=cast(AnswerSynthesizer, _CitingSynthesizer()),
         retrieve_knowledge_base=_retrieve_visual,
@@ -644,12 +648,16 @@ def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
 
     executor = AnswerExecutor(
         store=store,
-        pool=manager._workspace_pool,
-        retrieve=manager.retrieval.retrieve_result,
-        models=manager._answer_models,
-        capabilities=manager._capabilities,
-        resources=manager._answer_resources,
-        settings=answer_executor_settings(manager.config),
+        pool=components.pool,
+        retrieve=components.retrieval.retrieve_result,
+        models=components.models,
+        capabilities=components.capabilities,
+        resources=AnswerResourceResolver(
+            settings=answer_resource_settings(config),
+            models=components.models,
+            capabilities=components.capabilities,
+        ),
+        settings=answer_executor_settings(config),
         telemetry=NOOP_TELEMETRY,
     )
 
@@ -665,8 +673,12 @@ def _answer_manager(store: PGAnswerRunStore) -> RAGServiceManager:
         )
 
     executor.prepare_orchestrated_run = _prepare  # type: ignore[method-assign]
-    manager._answer_executor = executor
-    return manager
+    coordinator = RunCoordinator(
+        store=store,
+        executor=executor,
+        answer_worker_concurrency=1,
+    )
+    return application, coordinator
 
 
 class _CitingSynthesizer:

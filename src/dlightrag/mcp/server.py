@@ -43,6 +43,7 @@ from dlightrag.access import (
 from dlightrag.answer.capability import answer_image_capability_summary
 from dlightrag.answer.errors import AnswerInputError, InvalidToolConfigurationError
 from dlightrag.answer.runs.results import project_answer_result
+from dlightrag.application import Application
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.client_attachments import answer_link_resources
 from dlightrag.core.client_contracts import (
@@ -51,10 +52,6 @@ from dlightrag.core.client_contracts import (
     QueryImage,
     conversation_history_as_dicts,
 )
-from dlightrag.core.client_requests import (
-    query_kwargs_from_payload,
-)
-from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.mcp.auth import DlightRAGTokenVerifier
 from dlightrag.mcp.contracts import (
     AnswerInput,
@@ -70,6 +67,8 @@ from dlightrag.mcp.contracts import (
 )
 from dlightrag.model_settings import access_settings
 from dlightrag.runtime import AnswerRunRecord, IdempotencyKeyConflict
+from dlightrag.services.answers import AnswerRequest as ServiceAnswerRequest
+from dlightrag.services.answers import AnswerRuntimeUnavailableError
 from dlightrag.services.corpora import (
     ingest_spec_from_payload,
     managed_local_ingest_documents,
@@ -170,6 +169,7 @@ class DlightRAGMCPServer(MCPServer):
                 InvalidToolConfigurationError,
                 RetrievalTimeoutError,
                 WorkspaceUnavailableError,
+                AnswerRuntimeUnavailableError,
             )
             inner = exc if isinstance(exc, surfaced) else exc.__cause__
             if isinstance(inner, InvalidToolConfigurationError):
@@ -177,7 +177,11 @@ class DlightRAGMCPServer(MCPServer):
                 text = f"Error [{inner.error_kind}]: {inner.public_message}"
             elif isinstance(
                 inner,
-                ValueError | PermissionError | RetrievalTimeoutError | WorkspaceUnavailableError,
+                ValueError
+                | PermissionError
+                | RetrievalTimeoutError
+                | WorkspaceUnavailableError
+                | AnswerRuntimeUnavailableError,
             ):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)
                 text = (
@@ -218,9 +222,10 @@ class DlightRAGRequestScopeMiddleware:
         access_token = get_access_token()
         scope = current_request_scope()
         if access_token is not None:
+            application = await _ensure_application()
             scope = RequestScope(
                 user_id=access_token.subject or access_token.client_id,
-                auth_mode=_get_config().auth_mode,
+                auth_mode=application.config.auth_mode,
                 claims=dict(access_token.claims or {}),
             )
         with request_scope_context(scope):
@@ -231,30 +236,30 @@ def _get_config() -> DlightragConfig:
     return get_config()
 
 
-_manager: RAGServiceManager | None = None
+_application: Application | None = None
 
 
-async def _ensure_manager() -> RAGServiceManager:
-    global _manager
-    if _manager is None:
-        _manager = await RAGServiceManager.acreate()
-    return _manager
+async def _ensure_application() -> Application:
+    global _application
+    if _application is None:
+        _application = await Application.acreate()
+    return _application
 
 
-async def _close_manager() -> None:
-    global _manager
-    manager, _manager = _manager, None
-    if manager is not None:
-        await manager.aclose()
+async def _close_application() -> None:
+    global _application
+    application, _application = _application, None
+    if application is not None:
+        await application.aclose()
 
 
 @asynccontextmanager
 async def _mcp_lifespan(_: MCPServer[Any]) -> AsyncIterator[None]:
-    await _ensure_manager()
+    await _ensure_application()
     try:
         yield
     finally:
-        await _close_manager()
+        await _close_application()
 
 
 def _http_auth(
@@ -293,39 +298,55 @@ def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]
     return normalize_workspace(label), display_name
 
 
-async def _enforce_access(action: str, workspace: str | None = None) -> None:
+async def _enforce_access(
+    action: str,
+    workspace: str | None = None,
+    *,
+    application: Application,
+) -> None:
     try:
-        await _access_gate().check(action, workspace=workspace)
+        await _access_gate(application).check(action, workspace=workspace)
     except AccessDeniedError as exc:
         raise ValueError(str(exc)) from None
 
 
-def _access_gate() -> AccessGate:
+def _access_gate(application: Application) -> AccessGate:
     return AccessGate(
-        access_control_from_settings(access_settings(_get_config())),
+        access_control_from_settings(access_settings(application.config)),
         current_request_scope(),
     )
 
 
-async def _filter_workspace_records(records: list[WorkspaceRecord]) -> list[WorkspaceRecord]:
-    return await _access_gate().filter_workspace_records(AccessAction.WORKSPACE_QUERY, records)
+async def _filter_workspace_records(
+    records: list[WorkspaceRecord],
+    *,
+    application: Application,
+) -> list[WorkspaceRecord]:
+    return await _access_gate(application).filter_workspace_records(
+        AccessAction.WORKSPACE_QUERY, records
+    )
 
 
-async def _authorized_workspace_names(action: str, workspaces: list[str]) -> set[str]:
-    return await _access_gate().authorized_workspace_ids(action, workspaces)
+async def _authorized_workspace_names(
+    action: str,
+    workspaces: list[str],
+    *,
+    application: Application,
+) -> set[str]:
+    return await _access_gate(application).authorized_workspace_ids(action, workspaces)
 
 
 async def _resolve_authorized_query_workspaces(
-    manager: RAGServiceManager,
+    application: Application,
     *,
     workspaces: list[str] | None,
     all_workspaces: bool,
 ) -> list[str]:
     """Resolve MCP query targets after applying the current request ACL."""
     try:
-        return await _access_gate().resolve_query_workspaces(
-            manager.corpora,
-            default_workspace=normalize_workspace(_get_config().workspace),
+        return await _access_gate(application).resolve_query_workspaces(
+            application.corpora,
+            default_workspace=normalize_workspace(application.config.workspace),
             workspaces=normalize_workspace_ids(workspaces) if workspaces is not None else None,
             all_workspaces=all_workspaces,
         )
@@ -381,17 +402,18 @@ async def retrieve_tool(
     query_images: QueryImagesParam = Field(default_factory=list),
 ) -> dict[str, Any]:
     args = RetrieveInput.model_validate(locals())
-    manager = await _ensure_manager()
+    application = await _ensure_application()
     resolved_workspaces = await _resolve_authorized_query_workspaces(
-        manager,
+        application,
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
     visual_workspaces = await _authorized_workspace_names(
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
         resolved_workspaces,
+        application=application,
     )
-    result = await manager.retrieval.retrieve(
+    result = await application.retrieval.retrieve(
         ServiceRequest(
             query=args.query,
             workspaces=tuple(resolved_workspaces),
@@ -462,27 +484,29 @@ async def answer_tool(
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
-    manager = await _ensure_manager()
-    max_attachments = manager.config.answer.max_attachments
+    application = await _ensure_application()
+    max_attachments = application.config.answer.max_attachments
     if len(args.attachments) > max_attachments:
         raise ValueError(f"Too many attachments; at most {max_attachments} are allowed")
     resolved_workspaces = await _resolve_authorized_query_workspaces(
-        manager,
+        application,
         workspaces=args.workspaces,
         all_workspaces=args.all_workspaces,
     )
     try:
-        creation = await manager.acreate_answer_run(
-            args.query,
-            workspaces=resolved_workspaces,
-            top_k=args.top_k,
-            chunk_top_k=args.chunk_top_k,
-            semantic_highlights=args.semantic_highlights,
-            history=conversation_history_as_dicts(args.history),
-            resources=answer_link_resources(args.attachments) or None,
+        creation = await application.answers.create(
+            request=ServiceAnswerRequest(
+                query=args.query,
+                workspaces=tuple(resolved_workspaces),
+                top_k=args.top_k,
+                chunk_top_k=args.chunk_top_k,
+                filters=MetadataFilter.model_validate(args.filters) if args.filters else None,
+                semantic_highlights=args.semantic_highlights,
+                history=tuple(conversation_history_as_dicts(args.history) or ()),
+                resources=tuple(answer_link_resources(args.attachments)),
+            ),
             idempotency_key=args.idempotency_key,
             owner_id=_owner_id(),
-            **query_kwargs_from_payload(args),
         )
     except IdempotencyKeyConflict:
         raise ValueError(
@@ -507,8 +531,8 @@ async def get_answer_run_tool(
     run_id: Annotated[str, Field(description="Run id returned by the answer tool.")],
 ) -> dict[str, Any]:
     args = AnswerRunInput.model_validate(locals())
-    manager = await _ensure_manager()
-    record = await manager.aget_answer_run(owner_id=_owner_id(), run_id=args.run_id)
+    application = await _ensure_application()
+    record = await application.answers.get(owner_id=_owner_id(), run_id=args.run_id)
     if record is None:
         raise ValueError(f"Answer run not found: {args.run_id}")
     result: dict[str, Any] | None = None
@@ -518,6 +542,7 @@ async def get_answer_run_tool(
             visual_workspaces=await _authorized_workspace_names(
                 AccessAction.WORKSPACE_READ_VISUAL_ASSET,
                 [str(value) for value in record.request.get("workspaces") or ()],
+                application=application,
             ),
         )
     return {
@@ -546,8 +571,8 @@ async def cancel_answer_run_tool(
     run_id: Annotated[str, Field(description="Run id returned by the answer tool.")],
 ) -> dict[str, Any]:
     args = AnswerRunInput.model_validate(locals())
-    manager = await _ensure_manager()
-    outcome = await manager.acancel_answer_run(owner_id=_owner_id(), run_id=args.run_id)
+    application = await _ensure_application()
+    outcome = await application.answers.cancel(owner_id=_owner_id(), run_id=args.run_id)
     if outcome.run is None:
         raise ValueError(f"Answer run not found: {args.run_id}")
     return _run_descriptor(outcome.run)
@@ -563,9 +588,9 @@ async def cancel_answer_run_tool(
     annotations=ToolAnnotations(read_only_hint=True),
 )
 async def list_workspaces_tool() -> dict[str, Any]:
-    manager = await _ensure_manager()
-    records = await manager.corpora.alist_workspace_records()
-    records = await _filter_workspace_records(records)
+    application = await _ensure_application()
+    records = await application.corpora.alist_workspace_records()
+    records = await _filter_workspace_records(records, application=application)
     return {
         "workspaces": [row["workspace"] for row in records],
         "records": records,
@@ -584,8 +609,8 @@ async def list_workspaces_tool() -> dict[str, Any]:
     annotations=ToolAnnotations(read_only_hint=True),
 )
 async def get_capabilities_tool() -> dict[str, Any]:
-    manager = await _ensure_manager()
-    capabilities = await manager.answer_capabilities.read()
+    application = await _ensure_application()
+    capabilities = await application.answers.capabilities()
     return {
         "answer_image_capability": answer_image_capability_summary(capabilities.answer),
     }
@@ -612,13 +637,17 @@ async def create_workspace_tool(
     ] = None,
 ) -> dict[str, Any]:
     args = CreateWorkspaceInput.model_validate(locals())
-    manager = await _ensure_manager()
+    application = await _ensure_application()
     normalized_workspace, normalized_display_name = _normalize_workspace_argument(args)
-    await _enforce_access(AccessAction.WORKSPACE_CREATE, normalized_workspace)
-    existing = await manager.corpora.list_workspaces()
+    await _enforce_access(
+        AccessAction.WORKSPACE_CREATE,
+        normalized_workspace,
+        application=application,
+    )
+    existing = await application.corpora.list_workspaces()
     if normalized_workspace in existing:
         raise ValueError(f"Workspace '{normalized_display_name}' already exists")
-    await manager.corpora.create_workspace(
+    await application.corpora.create_workspace(
         normalized_workspace,
         display_name=normalized_display_name,
     )
@@ -650,13 +679,17 @@ async def delete_workspace_tool(
     ] = False,
 ) -> dict[str, Any]:
     args = DeleteWorkspaceInput.model_validate(locals())
-    manager = await _ensure_manager()
+    application = await _ensure_application()
     from dlightrag.utils import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     normalized_workspace = normalize_workspace(label)
-    await _enforce_access(AccessAction.WORKSPACE_DELETE, normalized_workspace)
-    result = await manager.corpora.reset(
+    await _enforce_access(
+        AccessAction.WORKSPACE_DELETE,
+        normalized_workspace,
+        application=application,
+    )
+    result = await application.corpora.reset(
         workspace_ids=(normalized_workspace,),
         keep_files=args.keep_files,
         dry_run=args.dry_run,
@@ -809,26 +842,30 @@ async def ingest_tool(
     ] = None,
 ) -> dict[str, Any]:
     args = IngestInput.model_validate(locals())
-    manager = await _ensure_manager()
-    workspace_name = args.workspace or _get_config().workspace
+    application = await _ensure_application()
+    workspace_name = args.workspace or application.config.workspace
     workspace_name = normalize_workspace(workspace_name)
-    await _enforce_access(AccessAction.WORKSPACE_INGEST, workspace_name)
+    await _enforce_access(
+        AccessAction.WORKSPACE_INGEST,
+        workspace_name,
+        application=application,
+    )
     ingest_spec = ingest_spec_from_payload(args)
     if args.source_type == "local":
         path = managed_local_ingest_path(
             source_type=args.source_type,
             path=ingest_spec.path,
-            input_dir=_get_config().input_dir_path,
+            input_dir=application.config.input_dir_path,
             workspace=workspace_name,
         )
         managed_documents = managed_local_ingest_documents(
             source_type=args.source_type,
             documents=ingest_spec.documents,
-            input_dir=_get_config().input_dir_path,
+            input_dir=application.config.input_dir_path,
             workspace=workspace_name,
         )
         ingest_spec = ingest_spec.model_copy(update={"path": path, "documents": managed_documents})
-    return await manager.corpora.start_ingest_job(workspace_name, ingest_spec)
+    return await application.corpora.start_ingest_job(workspace_name, ingest_spec)
 
 
 @mcp_app.tool(
@@ -843,15 +880,15 @@ async def get_ingest_job_tool(
     job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
 ) -> dict[str, Any]:
     args = IngestJobStatusInput.model_validate(locals())
-    manager = await _ensure_manager()
+    application = await _ensure_application()
     if not args.job_id:
         raise ValueError("job_id is required")
-    result = await manager.corpora.get_ingest_job(args.job_id)
+    result = await application.corpora.get_ingest_job(args.job_id)
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
     workspace = result.get("workspace")
     workspace_id = normalize_workspace(str(workspace)) if workspace else None
-    await _enforce_access(AccessAction.JOB_READ, workspace_id)
+    await _enforce_access(AccessAction.JOB_READ, workspace_id, application=application)
     return result
 
 
@@ -867,16 +904,16 @@ async def cancel_ingest_job_tool(
     job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
 ) -> dict[str, Any]:
     args = IngestJobStatusInput.model_validate(locals())
-    manager = await _ensure_manager()
+    application = await _ensure_application()
     if not args.job_id:
         raise ValueError("job_id is required")
-    result = await manager.corpora.get_ingest_job(args.job_id)
+    result = await application.corpora.get_ingest_job(args.job_id)
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
     workspace = result.get("workspace")
     workspace_id = normalize_workspace(str(workspace)) if workspace else None
-    await _enforce_access(AccessAction.JOB_CANCEL, workspace_id)
-    cancelled = await manager.corpora.cancel_ingest_job(args.job_id)
+    await _enforce_access(AccessAction.JOB_CANCEL, workspace_id, application=application)
+    cancelled = await application.corpora.cancel_ingest_job(args.job_id)
     return cancelled if cancelled is not None else result
 
 
@@ -894,10 +931,14 @@ async def list_files_tool(
     ] = None,
 ) -> dict[str, Any]:
     args = ListFilesInput.model_validate(locals())
-    manager = await _ensure_manager()
-    workspace_name = normalize_workspace(args.workspace or _get_config().workspace)
-    await _enforce_access(AccessAction.WORKSPACE_LIST_FILES, workspace_name)
-    files = await manager.corpora.list_ingested_files(workspace_name)
+    application = await _ensure_application()
+    workspace_name = normalize_workspace(args.workspace or application.config.workspace)
+    await _enforce_access(
+        AccessAction.WORKSPACE_LIST_FILES,
+        workspace_name,
+        application=application,
+    )
+    files = await application.corpora.list_ingested_files(workspace_name)
     return {"files": files, "count": len(files), "workspace": workspace_name}
 
 
@@ -928,10 +969,14 @@ async def delete_files_tool(
     ] = False,
 ) -> dict[str, Any]:
     args = DeleteFilesInput.model_validate(locals())
-    manager = await _ensure_manager()
-    workspace_name = normalize_workspace(args.workspace or _get_config().workspace)
-    await _enforce_access(AccessAction.WORKSPACE_DELETE_FILES, workspace_name)
-    results = await manager.corpora.delete_files(
+    application = await _ensure_application()
+    workspace_name = normalize_workspace(args.workspace or application.config.workspace)
+    await _enforce_access(
+        AccessAction.WORKSPACE_DELETE_FILES,
+        workspace_name,
+        application=application,
+    )
+    results = await application.corpora.delete_files(
         workspace_name,
         filenames=args.filenames,
         file_paths=args.file_paths,

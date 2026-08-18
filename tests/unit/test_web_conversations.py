@@ -13,11 +13,10 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
-from tests.unit.conftest import answer_capability_view, prepare_test_answer_run_input
-from tests.unit.web.answer_run_fixtures import web_answer_submission
+from tests.unit.conftest import answer_capability_view
+from tests.unit.web.answer_run_fixtures import FakeAnswers, web_answer_submission
 
 _CID = "00000000-0000-0000-0000-000000000001"
-_AID = "00000000-0000-0000-0000-000000000020"
 
 
 # ---------------------------------------------------------------------------
@@ -42,12 +41,6 @@ def conversation_service() -> AsyncMock:
     service.delete.return_value = True
     service.delete_all.return_value = 2
     service.start_answer.return_value = web_answer_submission(conversation_id=_CID)
-    service.attachment.return_value = SimpleNamespace(
-        attachment_id=_AID,
-        filename="chart.png",
-        mime_type="image/png",
-        attachment_bytes=b"png-bytes",
-    )
     service.thumbnail.return_value = (b"derived-thumbnail", "image/jpeg")
     return service
 
@@ -55,10 +48,11 @@ def conversation_service() -> AsyncMock:
 @pytest.fixture
 async def conversation_client(conversation_service: AsyncMock):
     application = create_app(include_web_app=True)
-    application.state.web_conversation_service = conversation_service
-    application.state.manager = AsyncMock()
-    application.state.manager.answer_capabilities = answer_capability_view()
-    application.state.manager.corpora.alist_workspace_records.return_value = [
+    application.state.application = AsyncMock()
+    application.state.application.web_conversations = conversation_service
+    application.state.application.config = DlightragConfig()
+    application.state.application.answers.capabilities = answer_capability_view().read
+    application.state.application.corpora.alist_workspace_records.return_value = [
         {"workspace": "default"}
     ]
     transport = ASGITransport(app=application)
@@ -74,9 +68,9 @@ async def cookie_conversation_client(
     test_config.auth_mode = "simple"
     test_config.api_auth_token = "secret-token"
     application = create_app(include_web_app=True)
-    application.state.web_conversation_service = conversation_service
-    application.state.manager = AsyncMock(config=test_config)
-    application.state.manager.answer_capabilities = answer_capability_view()
+    application.state.application = AsyncMock(config=test_config)
+    application.state.application.web_conversations = conversation_service
+    application.state.application.answers.capabilities = answer_capability_view().read
     transport = ASGITransport(app=application)
     async with AsyncClient(
         transport=transport,
@@ -395,14 +389,14 @@ async def test_store_unavailability_returns_retryable_503(
     store = AsyncMock()
     getattr(store, store_method).side_effect = WebConversationUnavailableError()
     application = create_app(include_web_app=True)
-    application.state.web_conversation_service = WebConversationService(
+    service = WebConversationService(
         store=store,
-        prepare_run_input=prepare_test_answer_run_input,
-        run_store=AsyncMock(),
+        answers=FakeAnswers(),
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
     )
+    application.state.application = SimpleNamespace(web_conversations=service)
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.request(method, path)
@@ -469,14 +463,14 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
     store = AsyncMock()
     store.list_conversations.side_effect = store_error
     application = create_app(include_web_app=True)
-    application.state.web_conversation_service = WebConversationService(
+    service = WebConversationService(
         store=store,
-        prepare_run_input=prepare_test_answer_run_input,
-        run_store=AsyncMock(),
+        answers=FakeAnswers(),
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
     )
+    application.state.application = SimpleNamespace(web_conversations=service)
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         with pytest.raises(type(store_error), match=str(store_error)):

@@ -353,240 +353,6 @@ async def test_reader_startup_fails_when_the_migration_ledger_is_absent(scope_in
     assert conn.executed == []
 
 
-def _patch_manager_startup(
-    monkeypatch: pytest.MonkeyPatch, *, stub_answer_store: bool = True
-) -> None:
-    """Neutralize every startup step the schema tests do not exercise.
-
-    ``WorkspaceRag.acreate`` is patched so the real WorkspacePool warm-up path,
-    including its error conversion, still runs.
-    """
-    import dlightrag.core.servicemanager as servicemanager_module
-    import dlightrag.observability as observability
-    from dlightrag.adapters.postgres._pool import pg_pool
-    from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.services.corpora import CorpusAdmin
-    from dlightrag.services.retrieval import RetrievalPlannerRuntime
-
-    monkeypatch.setattr(observability, "init_tracing", lambda _config: None)
-    monkeypatch.setattr(pg_pool, "bind", lambda _config: None)
-    monkeypatch.setattr(CorpusAdmin, "initialize", AsyncMock())
-    monkeypatch.setattr(AnswerCapabilityCoordinator, "probe_all", AsyncMock())
-    monkeypatch.setattr(
-        RetrievalPlannerRuntime,
-        "planner_for",
-        lambda self, model_profile=None: None,
-    )
-    monkeypatch.setattr(CorpusAdmin, "start_recovery", AsyncMock())
-    monkeypatch.setattr(servicemanager_module.WorkspaceRag, "acreate", AsyncMock())
-    if stub_answer_store:
-        monkeypatch.setattr(RAGServiceManager, "_initialize_answer_run_store", AsyncMock())
-
-
-def _patch_answer_run_store(
-    monkeypatch: pytest.MonkeyPatch, *, failure: Exception | None = None
-) -> tuple[list[Any], list[bool]]:
-    """Replace the durable operational stores with ones that record their startup."""
-    import dlightrag.adapters.postgres.answer_runs as answer_runs_module
-    import dlightrag.adapters.postgres.web_conversations as web_conversations_module
-
-    built: list[Any] = []
-    validate_calls: list[bool] = []
-
-    class _Store:
-        async def initialize(self, *, validate_only: bool = False) -> None:
-            validate_calls.append(validate_only)
-            if failure is not None:
-                raise failure
-
-        async def list_active_run_requirements(self) -> tuple[Any, ...]:
-            return ()
-
-    def _factory() -> Any:
-        store = _Store()
-        built.append(store)
-        return store
-
-    monkeypatch.setattr(answer_runs_module, "PGAnswerRunStore", _factory)
-    # The Web conversation link table is part of the same operational schema; it
-    # is recorded separately so run-store assertions stay exact.
-    monkeypatch.setattr(
-        web_conversations_module,
-        "PGWebConversationStore",
-        lambda **_kwargs: _WebSchemaRecorder(),
-    )
-    return built, validate_calls
-
-
-class _WebSchemaRecorder:
-    """Records how the Web conversation schema was established at startup."""
-
-    calls: list[bool] = []
-
-    async def initialize(self, *, validate_only: bool = False) -> None:
-        type(self).calls.append(validate_only)
-
-
-@pytest.mark.parametrize("failing_step", ["corpus", "answer_run"])
-async def test_reader_startup_never_degrades_past_a_schema_failure(
-    failing_step: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag_rag.ports import CorpusSchemaError
-
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.services.corpora import CorpusAdmin
-
-    _patch_manager_startup(monkeypatch)
-    recovery = AsyncMock()
-    monkeypatch.setattr(CorpusAdmin, "start_recovery", recovery)
-    failure = AsyncMock(side_effect=CorpusSchemaError("doc_metadata is missing versions"))
-    if failing_step == "corpus":
-        monkeypatch.setattr(CorpusAdmin, "initialize", failure)
-    else:
-        monkeypatch.setattr(RAGServiceManager, "_initialize_answer_run_store", failure)
-    closed = AsyncMock()
-    monkeypatch.setattr(RAGServiceManager, "aclose", closed)
-
-    with pytest.raises(CorpusSchemaError, match="doc_metadata"):
-        await RAGServiceManager.acreate(config=_config(service_role="reader"))
-
-    closed.assert_awaited_once_with()
-    recovery.assert_not_awaited()
-
-
-async def test_reader_startup_closes_and_reraises_a_schema_failure_from_service_creation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """WorkspacePool schema failures stay transparent at reader startup."""
-    from dlightrag_rag.ports import CorpusSchemaError
-
-    import dlightrag.core.servicemanager as servicemanager_module
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.services.corpora import CorpusAdmin
-
-    _patch_manager_startup(monkeypatch)
-    failure = CorpusSchemaError("doc_metadata is missing versions: column_title")
-    monkeypatch.setattr(
-        servicemanager_module.WorkspaceRag, "acreate", AsyncMock(side_effect=failure)
-    )
-    recovery = AsyncMock()
-    monkeypatch.setattr(CorpusAdmin, "start_recovery", recovery)
-    closed: list[Any] = []
-
-    async def _aclose(self: Any) -> None:
-        closed.append(self)
-
-    monkeypatch.setattr(RAGServiceManager, "aclose", _aclose)
-
-    with pytest.raises(CorpusSchemaError) as excinfo:
-        await RAGServiceManager.acreate(config=_config(service_role="reader"))
-
-    assert excinfo.value is failure
-    assert len(closed) == 1
-    recovery.assert_not_awaited()
-
-
-async def test_reader_answer_run_store_starts_in_validation_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.health import ApplicationHealth
-
-    _built, validate_calls = _patch_answer_run_store(monkeypatch)
-
-    manager = object.__new__(RAGServiceManager)
-    manager._config = _config(service_role="reader")
-    manager._answer_run_store = None
-    manager._answer_store_lock = asyncio.Lock()
-    manager._health = ApplicationHealth(readiness_probe=None)
-
-    await manager._get_answer_run_store()
-
-    assert validate_calls == [True]
-
-
-@pytest.mark.parametrize(
-    ("service_role", "expected_validate_only"), [("reader", True), ("writer", False)]
-)
-async def test_manager_startup_initializes_the_answer_run_store_before_readiness(
-    service_role: str,
-    expected_validate_only: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-
-    _patch_manager_startup(monkeypatch, stub_answer_store=False)
-    built, validate_calls = _patch_answer_run_store(monkeypatch)
-
-    manager = await RAGServiceManager.acreate(config=_config(service_role=service_role))
-
-    assert validate_calls == [expected_validate_only]
-    assert manager.health.is_ready
-    # The one store built at startup is the one every later caller reuses.
-    assert await manager._get_answer_run_store() is built[0]
-    assert len(built) == 1
-
-
-@pytest.mark.parametrize(
-    ("service_role", "expected_validate_only"),
-    [("writer", False), ("reader", True)],
-)
-async def test_manager_startup_establishes_the_conversation_link_schema(
-    service_role: str,
-    expected_validate_only: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Run retention exempts conversation-linked runs, so that table must exist.
-
-    Every process that owns runs therefore establishes the Web conversation
-    schema at startup: a writer migrates it, a reader validates it.
-    """
-    from dlightrag.core.servicemanager import RAGServiceManager
-
-    _patch_manager_startup(monkeypatch, stub_answer_store=False)
-    _patch_answer_run_store(monkeypatch)
-    _WebSchemaRecorder.calls = []
-
-    await RAGServiceManager.acreate(config=_config(service_role=service_role))
-
-    assert _WebSchemaRecorder.calls == [expected_validate_only]
-
-
-async def test_reader_startup_aborts_when_the_answer_run_schema_is_absent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-    from dlightrag.runtime import RunSchemaError
-
-    _patch_manager_startup(monkeypatch, stub_answer_store=False)
-    failure = RunSchemaError("scope 'answer_runs' is missing table dlightrag_answer_runs")
-    _patch_answer_run_store(monkeypatch, failure=failure)
-    closed = AsyncMock()
-    monkeypatch.setattr(RAGServiceManager, "aclose", closed)
-
-    with pytest.raises(RunSchemaError) as excinfo:
-        await RAGServiceManager.acreate(config=_config(service_role="reader"))
-
-    assert excinfo.value is failure
-    closed.assert_awaited_once_with()
-
-
-async def test_manager_startup_degrades_on_a_transient_answer_run_store_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
-
-    _patch_manager_startup(monkeypatch, stub_answer_store=False)
-    _patch_answer_run_store(monkeypatch, failure=RuntimeError("connection refused"))
-
-    manager = await RAGServiceManager.acreate(config=_config())
-
-    assert manager.health.is_ready
-    assert any("Answer run store" in warning for warning in manager.health.warnings)
-
-
 async def test_reader_serves_web_routes() -> None:
     import dlightrag.config as config_module
     from dlightrag.api.server import create_app
@@ -660,7 +426,7 @@ class TestReadOnlyAdapter:
         conn = FakeConn()
         set_workspace_calls: list[str | None] = []
         init_pipeline_status = AsyncMock()
-        manager = SimpleNamespace(
+        client_manager = SimpleNamespace(
             _lock=asyncio.Lock(),
             _instances={"db": None, "ref_count": 0, "vector_signature": None},
             get_config=lambda *, vector_storage=None: {
@@ -672,8 +438,8 @@ class TestReadOnlyAdapter:
                 "vector_storage": vector_storage,
             },
         )
-        manager._assert_compatible_vector_signature = lambda signature: None
-        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+        client_manager._assert_compatible_vector_signature = lambda signature: None
+        monkeypatch.setattr(readonly, "ClientManager", client_manager, raising=False)
         monkeypatch.setattr(readonly, "ReadOnlyPostgreSQLDB", FakeDB, raising=False)
         monkeypatch.setattr(
             readonly,
@@ -734,11 +500,11 @@ class TestReadOnlyAdapter:
             lightrag, config=_config(service_role="reader")
         )
 
-        db = manager._instances["db"]
+        db = client_manager._instances["db"]
         assert isinstance(db, FakeDB)
         db.initdb.assert_awaited_once()
-        assert manager._instances["ref_count"] == 4
-        assert manager._instances["vector_signature"] == {
+        assert client_manager._instances["ref_count"] == 4
+        assert client_manager._instances["vector_signature"] == {
             "database": "db",
             "vector_storage": _config(service_role="reader").vector_storage,
         }
@@ -785,14 +551,14 @@ class TestReadOnlyAdapter:
             pool=SimpleNamespace(acquire=lambda: FakeAcquire(FakeConn())), workspace=""
         )
         seen_signatures: list[dict[str, Any]] = []
-        manager = SimpleNamespace(
+        client_manager = SimpleNamespace(
             _lock=asyncio.Lock(),
             _instances={"db": existing_db, "ref_count": 7, "vector_signature": {"database": "db"}},
             get_config=lambda *, vector_storage=None: {"database": "db"},
             _build_vector_signature=lambda config, vector_storage: {"database": config["database"]},
             _assert_compatible_vector_signature=lambda signature: seen_signatures.append(signature),
         )
-        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+        monkeypatch.setattr(readonly, "ClientManager", client_manager, raising=False)
         monkeypatch.setattr(
             readonly,
             "namespace_to_table_name",
@@ -836,8 +602,8 @@ class TestReadOnlyAdapter:
             lightrag, config=_config(service_role="reader")
         )
 
-        assert manager._instances["db"] is existing_db
-        assert manager._instances["ref_count"] == 8
+        assert client_manager._instances["db"] is existing_db
+        assert client_manager._instances["ref_count"] == 8
         assert seen_signatures == [{"database": "db"}]
 
     async def test_attach_entry_point_releases_db_when_schema_verification_fails(
@@ -872,7 +638,7 @@ class TestReadOnlyAdapter:
             assert db is existing_db
             instances["ref_count"] -= 1
 
-        manager = SimpleNamespace(
+        client_manager = SimpleNamespace(
             _lock=asyncio.Lock(),
             _instances=instances,
             get_config=lambda *, vector_storage=None: {"database": "db"},
@@ -880,7 +646,7 @@ class TestReadOnlyAdapter:
             _assert_compatible_vector_signature=lambda signature: None,
             release_client=AsyncMock(side_effect=release_client),
         )
-        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+        monkeypatch.setattr(readonly, "ClientManager", client_manager, raising=False)
 
         lightrag = SimpleNamespace(
             workspace="reader-workspace",
@@ -926,19 +692,19 @@ class TestReadOnlyAdapter:
 
         async def release_client(released_db: object) -> None:
             assert released_db is db
-            async with manager._lock:
+            async with client_manager._lock:
                 instances["ref_count"] -= 1
                 if instances["ref_count"] == 0:
                     await pool.close()
                     instances["db"] = None
                     instances["vector_signature"] = None
 
-        manager = SimpleNamespace(
+        client_manager = SimpleNamespace(
             _lock=asyncio.Lock(),
             _instances=instances,
             release_client=AsyncMock(side_effect=release_client),
         )
-        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+        monkeypatch.setattr(readonly, "ClientManager", client_manager, raising=False)
 
         rollback = asyncio.create_task(readonly._release_read_only_db(db, reference_count=3))
         await close_started.wait()
@@ -973,7 +739,7 @@ class TestReadOnlyAdapter:
         existing_db = SimpleNamespace(
             pool=SimpleNamespace(acquire=lambda: FakeAcquire(FakeConn())), workspace=""
         )
-        manager = SimpleNamespace(
+        client_manager = SimpleNamespace(
             _lock=asyncio.Lock(),
             _instances={"db": existing_db, "ref_count": 5, "vector_signature": {"database": "db"}},
             get_config=lambda *, vector_storage=None: {"database": "db"},
@@ -982,7 +748,7 @@ class TestReadOnlyAdapter:
                 RuntimeError("vector mismatch")
             ),
         )
-        monkeypatch.setattr(readonly, "ClientManager", manager, raising=False)
+        monkeypatch.setattr(readonly, "ClientManager", client_manager, raising=False)
 
         lightrag = SimpleNamespace(
             workspace="reader-workspace",
@@ -1008,4 +774,4 @@ class TestReadOnlyAdapter:
                 config=_config(service_role="reader"),
             )
 
-        assert manager._instances["ref_count"] == 5
+        assert client_manager._instances["ref_count"] == 5

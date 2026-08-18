@@ -17,7 +17,7 @@ import contextlib
 import logging
 import random
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from dlightrag.runtime.contracts import AnswerRunPhase
@@ -329,6 +329,7 @@ class RunCoordinator:
         self._broker = RunEventBroker()
         self._writes = DurableWrites()
         self._wake = asyncio.Event()
+        self._acceptance_lock = asyncio.Lock()
         self._closing = False
         self._scheduler: asyncio.Task[None] | None = None
         self._sweeper: asyncio.Task[None] | None = None
@@ -348,14 +349,27 @@ class RunCoordinator:
     def active_runs(self) -> tuple[str, ...]:
         return tuple(self._runs)
 
+    @property
+    def is_started(self) -> bool:
+        """Whether this process can currently execute newly accepted runs."""
+        tasks = (self._scheduler, self._sweeper, self._maintainer)
+        return not self._closing and all(task is not None and not task.done() for task in tasks)
+
+    @contextlib.asynccontextmanager
+    async def admission(self) -> AsyncIterator[bool]:
+        """Keep shutdown from crossing one short durable acceptance write."""
+        async with self._acceptance_lock:
+            yield self.is_started
+
     async def start(self) -> None:
         """Begin claiming accepted runs and sweeping abandoned ones."""
-        if self._scheduler is not None:
-            return
-        self._closing = False
-        self._scheduler = asyncio.create_task(self._schedule_forever())
-        self._sweeper = asyncio.create_task(self._sweep_forever())
-        self._maintainer = asyncio.create_task(self._maintain_forever())
+        async with self._acceptance_lock:
+            if self._scheduler is not None:
+                return
+            self._closing = False
+            self._scheduler = asyncio.create_task(self._schedule_forever())
+            self._sweeper = asyncio.create_task(self._sweep_forever())
+            self._maintainer = asyncio.create_task(self._maintain_forever())
 
     def wake(self) -> None:
         """Nudge this process after it accepted a run; polling remains the truth."""
@@ -363,25 +377,26 @@ class RunCoordinator:
 
     async def aclose(self) -> None:
         """Stop claiming, let fenced writes settle, then requeue owned work."""
-        self._closing = True
-        self._wake.set()
-        for task in (self._scheduler, self._sweeper, self._maintainer):
-            if task is not None:
+        async with self._acceptance_lock:
+            self._closing = True
+            self._wake.set()
+            for task in (self._scheduler, self._sweeper, self._maintainer):
+                if task is not None:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+            self._scheduler = None
+            self._sweeper = None
+            self._maintainer = None
+            running = list(self._runs.values())
+            for task in running:
                 task.cancel()
+            for task in running:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
-        self._scheduler = None
-        self._sweeper = None
-        self._maintainer = None
-        running = list(self._runs.values())
-        for task in running:
-            task.cancel()
-        for task in running:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        await self._writes.drain(SHUTDOWN_WRITE_GRACE_SECONDS)
-        self._runs.clear()
-        self._sessions.clear()
+            await self._writes.drain(SHUTDOWN_WRITE_GRACE_SECONDS)
+            self._runs.clear()
+            self._sessions.clear()
 
     def subscribe(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0

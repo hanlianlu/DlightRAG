@@ -14,7 +14,7 @@ from dlightrag.api.models import (
     SearchMetadataResponse,
 )
 
-from .deps import enforce_access, get_manager, resolve_workspace
+from .deps import enforce_access, get_application, resolve_workspace
 
 router = APIRouter()
 
@@ -38,10 +38,10 @@ async def search_metadata(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=f"Invalid metadata filter: {exc}") from exc
 
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
-    document_ids = await manager.corpora.search_metadata(ws, validated)
+    document_ids = await application.corpora.search_metadata(ws, validated)
     return {"document_ids": document_ids, "count": len(document_ids), "workspace": ws}
 
 
@@ -53,10 +53,10 @@ async def get_metadata(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Retrieve metadata of a specific document incrementally."""
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
-    data = await manager.corpora.get_metadata(ws, doc_id)
+    data = await application.corpora.get_metadata(ws, doc_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
     return {"doc_id": doc_id, "metadata": data}
@@ -74,11 +74,11 @@ async def update_metadata(
     if not body.metadata:
         raise HTTPException(status_code=400, detail="Empty 'metadata' dictionary")
 
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_UPDATE_METADATA, workspace=ws)
     try:
-        await manager.corpora.update_metadata(ws, doc_id, body.metadata)
+        await application.corpora.update_metadata(ws, doc_id, body.metadata)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found") from None
     return {"status": "success", "doc_id": doc_id}

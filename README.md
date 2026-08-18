@@ -18,7 +18,7 @@ Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 ```text
 Clients
   -> REST / Web / MCP / SDK adapters
-  -> RAGServiceManager (composition)
+  -> Application (composition)
       -> WorkspaceRag -> LightRAG main -> corpus storage
       -> dlightrag.runtime RunCoordinator -> Answer executor + root PG adapter
       -> dlightrag-rag-core corpus ports -> root PG corpus adapter
@@ -293,8 +293,10 @@ uv add dlightrag
 import asyncio
 import os
 
-from dlightrag import RAGServiceManager
+from dlightrag import Application
+from dlightrag.access import DEPLOYMENT_OWNER_ID
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
+from dlightrag.services.answers import AnswerRequest
 from dlightrag.services.corpora import IngestSpec
 
 
@@ -319,16 +321,22 @@ async def main() -> None:
             dim=3072,
         ),
     )
-    manager = await RAGServiceManager.acreate(config)
+    application = await Application.acreate(config)
     try:
-        await manager.corpora.ingest(
+        await application.corpora.ingest(
             workspace,
             IngestSpec(source_type="local", path="./docs"),
         )
-        answer = await manager.aanswer("What are the key findings?", workspace=workspace)
+        answer = await application.answers.answer(
+          AnswerRequest(
+            query="What are the key findings?",
+            workspaces=(workspace,),
+          ),
+          owner_id=DEPLOYMENT_OWNER_ID,
+        )
         print(answer.answer)
     finally:
-        await manager.aclose()
+        await application.aclose()
 
 
 asyncio.run(main())

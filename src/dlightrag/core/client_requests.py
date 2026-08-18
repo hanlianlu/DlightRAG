@@ -15,7 +15,7 @@ def _get(payload: Any, name: str, default: Any = None) -> Any:
 
 
 def query_kwargs_from_payload(payload: Any) -> dict[str, Any]:
-    """Return manager keyword arguments shared by retrieve/answer clients."""
+    """Return query keyword arguments shared by retrieve/answer clients."""
     kwargs: dict[str, Any] = {}
 
     filters = metadata_filter_from_payload(_get(payload, "filters"))

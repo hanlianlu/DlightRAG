@@ -205,7 +205,6 @@ forbidden_modules = [
     "dlightrag.core.client_contracts",
     "dlightrag.core.client_payloads",
     "dlightrag.core.client_requests",
-    "dlightrag.core.servicemanager",
     "dlightrag.mcp",
     "dlightrag.services",
     "dlightrag.web",
@@ -294,6 +293,29 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "answer-service-independence"
+name = "Answer service owns durable runs without composition, config, or transport dependencies"
+type = "forbidden"
+source_modules = ["dlightrag.services.answers"]
+forbidden_modules = [
+    "dlightrag.access",
+    "dlightrag.adapters",
+    "dlightrag.api",
+    "dlightrag.application",
+    "dlightrag.config",
+    "dlightrag.core.client_attachments",
+    "dlightrag.core.client_contracts",
+    "dlightrag.core.client_payloads",
+    "dlightrag.core.client_requests",
+    "dlightrag.mcp",
+    "dlightrag.model_settings",
+    "dlightrag.web",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
+
+[[tool.importlinter.contracts]]
 id = "postgres-adapter-owner-direction"
 name = "PostgreSQL adapters may implement owners but never import API or MCP"
 type = "forbidden"
@@ -338,6 +360,13 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "application-no-api-or-mcp"
+name = "Application composes owners without importing API or MCP transports"
+type = "forbidden"
+source_modules = ["dlightrag.application"]
+forbidden_modules = ["dlightrag.api", "dlightrag.mcp"]
+
+[[tool.importlinter.contracts]]
 id = "application-health-independence"
 name = "Application health must remain composition and adapter neutral"
 type = "forbidden"
@@ -361,7 +390,6 @@ type = "forbidden"
 source_modules = ["dlightrag.api.routes.status"]
 forbidden_modules = [
     "dlightrag.answer",
-    "dlightrag.core.servicemanager",
     "dlightrag.adapters.postgres",
 ]
 

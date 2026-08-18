@@ -35,7 +35,7 @@ Pick by **where the engine runs**, not by language preference:
   This is the common case.
 - **Engine runs inside your own process** (your application *is* the RAG service
   and owns its PostgreSQL, parser endpoint, and model providers): use the
-  **Python SDK** (`RAGServiceManager`). This is a power-user surface — the REST
+  **Python SDK** (`Application`). This is a power-user surface — the REST
   and MCP servers are themselves built on it.
 
 ### Configuration is one-time; the runtime surface is small
@@ -54,12 +54,12 @@ variables › `.env` › `config.yaml` › defaults (see
 Once configured, the SDK runtime is a small create-once / call / close lifecycle:
 
 ```python
-manager = await RAGServiceManager.acreate(config)  # start: warms the default workspace
+application = await Application.acreate(config)  # start: warms the default workspace
 # per request:
-await manager.corpora.ingest(...)
-await manager.retrieval.retrieve(RetrieveRequest(...))
-await manager.aanswer(...)  # or aanswer_stream(...)
-await manager.aclose()  # stop
+await application.corpora.ingest(...)
+await application.retrieval.retrieve(RetrieveRequest(...))
+await application.answers.answer(AnswerRequest(...), owner_id=owner_id)
+await application.aclose()  # stop
 ```
 
 `DlightragConfig` ships a curated default model stack, but it still needs the
@@ -71,19 +71,19 @@ provider overrides from any configuration source above.
 ### Python SDK
 
 ```python
-from dlightrag import DlightragConfig, RAGServiceManager
+from dlightrag import DlightragConfig, Application
 from dlightrag.services.corpora import IngestSpec
 
-manager = await RAGServiceManager.acreate(DlightragConfig())
+application = await Application.acreate(DlightragConfig())
 try:
     # Local files or directory
-    result = await manager.corpora.ingest(
+    result = await application.corpora.ingest(
         "default",
         IngestSpec(source_type="local", path="./docs"),
     )
 
     # Azure Blob Storage
-    result = await manager.corpora.ingest(
+    result = await application.corpora.ingest(
         "default",
         IngestSpec(
             source_type="azure_blob",
@@ -93,7 +93,7 @@ try:
     )
 
     # AWS S3
-    result = await manager.corpora.ingest(
+    result = await application.corpora.ingest(
         "default",
         IngestSpec(
             source_type="s3",
@@ -104,13 +104,13 @@ try:
     )
 
     # Explicit non-blocking ingest
-    job = await manager.corpora.start_ingest_job(
+    job = await application.corpora.start_ingest_job(
         "default",
         IngestSpec(source_type="s3", bucket="my-bucket", prefix="docs/"),
     )
-    status = await manager.corpora.get_ingest_job(job["job_id"])
+    status = await application.corpora.get_ingest_job(job["job_id"])
 finally:
-    await manager.aclose()
+    await application.aclose()
 ```
 
   `CorpusAdmin` accepts local, Azure Blob, S3, and public HTTPS sources. SaaS APIs
@@ -347,7 +347,8 @@ LightRAG's document status and DlightRAG's content-hash guard.
 
 | Interface | `retrieve` | `answer` | Following a run |
 |---|---|---|---|
-| Python SDK | `RetrievalResult` | durable run; `aanswer()` waits for the result | `aanswer_stream()` yields durable events |
+| In-process Application | `application.retrieval.retrieve()` | `application.answers.answer()` | `application.answers.subscribe()` yields durable events |
+| Python SDK | — | `AnswerRunClient.answer()` waits for the result | `AnswerRunClient.events()` yields reconnectable durable events |
 | REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
 | MCP Server | JSON text | descriptor-only, returns immediately | `get_answer_run` / `cancel_answer_run` tools |
 | Web UI | — | HTTP 202 run descriptor | rendered events at `/web/answer/{run_id}/events` |
@@ -366,7 +367,7 @@ LightRAG's document status and DlightRAG's content-hash guard.
 ### Durable Answer Runs
 
 Every answer is one durable run with one identifier and one lifecycle, shared by
-REST, MCP, Web, the Python manager, the CLI, and evaluation. There is no
+REST, MCP, Web, the Python application, the CLI, and evaluation. There is no
 ephemeral answer mode and no `stream` request field.
 
 `POST /answer` validates, persists, and returns **HTTP 202**:
@@ -492,10 +493,10 @@ Image support is a deployment capability, not a per-request negotiation, so call
 discover it up front. REST `GET /health` returns `answer_image_capability`
 (`status`, `effective_max_images`, `configured_ceiling`, `model`); the MCP
 `get_capabilities` tool returns the same summary; and the Python SDK exposes it as
-`manager.answer_image_capability`. When `status` is not `supported`, attaching
+`await application.answers.capabilities()`. When `status` is not `supported`, attaching
 image resources is rejected fail-closed with a stable `error_kind`
 (`CURRENT_IMAGES_UNSUPPORTED` or `ANSWER_IMAGE_CAPABILITY_UNKNOWN`): REST returns
-HTTP 400 (or a classified SSE `error` event carrying `error_kind` when streaming),
+HTTP 422 (or a classified SSE `error` event carrying `error_kind` when streaming),
 MCP returns the error text, and the SDK raises `AnswerImageError`.
 
 `GET /health` is liveness only: it answers from `ApplicationHealth` in-process
@@ -509,7 +510,7 @@ writable. A reader additionally proves its corpus session is still read-only and
 still resolves the corpus. `ApplicationHealth` single-flights and memoizes that
 adapter verdict for two seconds; ready, degraded, and closed transitions
 invalidate the memo so a startup or schema transition is never answered from a
-stale verdict. The status route imports neither the manager nor PostgreSQL. Any
+stale verdict. The status route imports neither the application nor PostgreSQL. Any
 failed condition returns a minimal HTTP 503 with a fixed detail string and no
 exception text.
 
@@ -546,9 +547,11 @@ ingestion.
 
 ```python
 # Retrieve: contexts only, no LLM answer
+from dlightrag.access import DEPLOYMENT_OWNER_ID
+from dlightrag.services.answers import AnswerRequest
 from dlightrag.services.retrieval import RetrieveRequest
 
-result = await manager.retrieval.retrieve(
+result = await application.retrieval.retrieve(
   RetrieveRequest(
     query="What are the key findings?",
     workspaces=("default",),
@@ -558,7 +561,7 @@ result.contexts  # RetrievalContexts: {"chunks": [...], "entities": [...], "rela
 result.sources  # client-safe source projections
 
 # Query a concrete, already-authorized workspace set
-all_contexts = await manager.retrieval.retrieve(
+all_contexts = await application.retrieval.retrieve(
   RetrieveRequest(
     query="What are the key findings?",
     workspaces=("finance", "legal"),
@@ -566,9 +569,13 @@ all_contexts = await manager.retrieval.retrieve(
 )
 
 # Answer: contexts + LLM-generated answer
-result = await manager.aanswer(
+result = await application.answers.answer(
+  AnswerRequest(
     query="What are the key findings?",
+    workspaces=("default",),
     semantic_highlights=True,  # optional; default false outside Web
+  ),
+  owner_id=DEPLOYMENT_OWNER_ID,
 )
 result.answer  # "The key findings are... [1-1] [2-3]"
 result.contexts  # same structure as retrieve, packed to what the answer model saw
@@ -584,18 +591,27 @@ from dlightrag.core.client_attachments import (
     resource_inputs_from_attachments,
 )
 
-result = await manager.aanswer(
+result = await application.answers.answer(
+  AnswerRequest(
     query="Summarize the attached report and figure.",
-    resources=resource_inputs_from_attachments(
+    workspaces=("default",),
+    resources=tuple(
+      resource_inputs_from_attachments(
         [
-            AnswerAttachment.from_path("report.pdf"),
-            AnswerAttachment.from_url("https://cdn.example.com/figure.png"),
+          AnswerAttachment.from_path("report.pdf"),
+          AnswerAttachment.from_url("https://cdn.example.com/figure.png"),
         ]
+      )
     ),
+    ),
+  owner_id=DEPLOYMENT_OWNER_ID,
 )
 
 # Streaming answer
-async for event in manager.aanswer_stream(query="What are the key findings?"):
+async for event in application.answers.answer_stream(
+  AnswerRequest(query="What are the key findings?", workspaces=("default",)),
+  owner_id=DEPLOYMENT_OWNER_ID,
+):
     print(event.event_type, event.payload)
 ```
 
@@ -760,7 +776,7 @@ semantic results and trace includes `bm25_error_type`. Conversely,
 `lightrag_error_type` records semantic-lane degradation to BM25-only results.
 
 REST uses the same answer and context shapes, while its HTTP adapter projects
-each source's authorized `download_url`. Transport-neutral manager/MCP payloads
+each source's authorized `download_url`. Transport-neutral application/MCP payloads
 keep `download_url` null.
 
 `all` is authorization-relative, not deployment-global. If 14 workspaces are
@@ -825,7 +841,7 @@ entities and relationships come from the knowledge graph.
 
 REST and Web responses never expose inline base64 page/image payloads. When a
 retrieved chunk has a visual sidecar, DlightRAG projects it to
-`image_url`/`thumbnail_url` routes. Python manager internals may still carry
+`image_url`/`thumbnail_url` routes. Python application internals may still carry
 `image_data` inside contexts so answer generation and reranking can use bounded
 multimodal payloads without a second database read.
 
@@ -1055,11 +1071,17 @@ from dlightrag.core.client_attachments import (
     resource_inputs_from_attachments,
 )
 
-result = await manager.aanswer(
+result = await application.answers.answer(
+  AnswerRequest(
     query="What does this diagram show?",
-    resources=resource_inputs_from_attachments(
+    workspaces=("default",),
+    resources=tuple(
+      resource_inputs_from_attachments(
         [AnswerAttachment.from_path("photo.png")]
+      )
     ),
+    ),
+  owner_id=DEPLOYMENT_OWNER_ID,
 )
 ```
 

@@ -7,7 +7,7 @@ import datetime
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
@@ -19,23 +19,24 @@ from httpx import ASGITransport, AsyncClient, Response
 from dlightrag.access import AuthenticationError, UserContext, authenticate_bearer_token
 from dlightrag.access import authentication as authentication_module
 from dlightrag.answer.citations.schemas import SourceReference
+from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.runs.results import AnswerResult
 from dlightrag.api.auth import get_current_user
 from dlightrag.api.server import create_app
+from dlightrag.application import ApplicationClosedError
 from dlightrag.config import (
     AccessControlConfig,
     AccessControlRuleConfig,
     DlightragConfig,
     set_config,
 )
-from dlightrag.core.servicemanager import RAGServiceUnavailableError
 from dlightrag.health import ApplicationHealth
 from dlightrag.model_settings import authentication_settings
 from dlightrag.runtime import AnswerRunRecord, RunCreation
+from dlightrag.services.answers import AnswerRuntimeUnavailableError
 from dlightrag.services.corpora import IngestSpec
 from dlightrag.services.retrieval import RetrievalTimeoutError
 from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
-from tests.unit.conftest import prepare_test_answer_run_input
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -107,8 +108,8 @@ def _api_app(test_config: DlightragConfig) -> Iterator[FastAPI]:
     app = create_app(include_web_app=False)
     yield app
     app.dependency_overrides.clear()
-    if hasattr(app.state, "manager"):
-        del app.state.manager
+    if hasattr(app.state, "application"):
+        del app.state.application
     if hasattr(app.state, "health"):
         del app.state.health
 
@@ -142,10 +143,10 @@ def mock_service():
 
 
 @pytest.fixture
-def mock_manager(_api_app: FastAPI, mock_service, test_config):
-    """Create a mock RAGServiceManager that delegates to mock_service."""
-    manager = AsyncMock()
-    manager.config = test_config
+def mock_application(_api_app: FastAPI, mock_service, test_config):
+    """Create an Application-shaped test double with explicit services."""
+    application = AsyncMock()
+    application.config = test_config
     corpora = SimpleNamespace()
     corpora.start_ingest_job = AsyncMock(
         return_value={
@@ -168,7 +169,7 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
             "lease_expires_at": "2026-08-05T00:00:00+00:00",
         }
     )
-    manager.retrieval = SimpleNamespace(
+    application.retrieval = SimpleNamespace(
         retrieve=AsyncMock(
             return_value=ServiceResponse(
                 contexts={"chunks": [], "entities": [], "relationships": []},
@@ -178,12 +179,12 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
             )
         )
     )
-    manager.aanswer = mock_service.aanswer
-    manager.astart_answer_run = AsyncMock(
-        return_value=RunCreation(run=_queued_run_record(), replayed=False)
+    application.answers = SimpleNamespace(
+        create=AsyncMock(return_value=RunCreation(run=_queued_run_record(), replayed=False)),
+        get=AsyncMock(return_value=_queued_run_record()),
+        cancel=AsyncMock(),
+        subscribe=MagicMock(),
     )
-    manager.aprepare_answer_run_input = AsyncMock(side_effect=prepare_test_answer_run_input)
-    manager.aget_answer_run = AsyncMock(return_value=_queued_run_record())
     corpora.cancel_ingest_job = AsyncMock()
     corpora.list_ingested_files = mock_service.alist_ingested_files
     corpora.delete_files = mock_service.adelete_files
@@ -212,8 +213,12 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
         return_value={"files": [], "pipeline_status": {"busy": False}}
     )
     corpora.get_pipeline_status = AsyncMock(return_value={"busy": False})
-    manager.corpora = corpora
-    manager.get_error_info = lambda: {"last_error": None, "timestamp": None, "retry_after": 30.0}
+    application.corpora = corpora
+    application.get_error_info = lambda: {
+        "last_error": None,
+        "timestamp": None,
+        "retry_after": 30.0,
+    }
     from dlightrag.answer.capability import AnswerImageCapability
 
     answer_image_capability = AnswerImageCapability(
@@ -228,25 +233,25 @@ def mock_manager(_api_app: FastAPI, mock_service, test_config):
     from dlightrag.adapters.postgres.corpus import PGReadinessProbe
     from dlightrag.answer.capability import answer_image_capability_summary
 
-    manager.health = ApplicationHealth(
+    application.health = ApplicationHealth(
         readiness_probe=PGReadinessProbe(test_config),
     )
-    manager.health.mark_ready()
-    manager.health.set_answer_image_capability(
+    application.health.mark_ready()
+    application.health.set_answer_image_capability(
         answer_image_capability_summary(answer_image_capability)
     )
-    _api_app.state.health = manager.health
-    manager.close = AsyncMock()
-    return manager
+    _api_app.state.health = application.health
+    application.close = AsyncMock()
+    return application
 
 
 @pytest.fixture
-def _patch_manager(_api_app: FastAPI, mock_manager):
-    """Set mock manager on app.state."""
-    _api_app.state.manager = mock_manager
+def _patch_application(_api_app: FastAPI, mock_application):
+    """Set the Application-shaped double on app state."""
+    _api_app.state.application = mock_application
     yield
-    if hasattr(_api_app.state, "manager"):
-        del _api_app.state.manager
+    if hasattr(_api_app.state, "application"):
+        del _api_app.state.application
 
 
 @pytest.fixture
@@ -261,13 +266,13 @@ class TestAuthMiddleware:
     """Test pluggable auth (none / simple / jwt)."""
 
     async def test_no_token_configured_passes(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.get("/health")
         assert resp.status_code == 200
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_simple_valid_token_passes(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -280,7 +285,7 @@ class TestAuthMiddleware:
         )
         assert resp.status_code == 200
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_simple_missing_auth_header_401(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -292,16 +297,16 @@ class TestAuthMiddleware:
 
 
 class TestWorkspaceLifecycleAPI:
-    """Workspace lifecycle API uses the durable manager registry."""
+    """Workspace lifecycle API uses the CorpusAdmin catalog."""
 
     async def test_routes_use_app_scoped_config_after_singleton_changes(
         self,
         client: AsyncClient,
         _api_app: FastAPI,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
     ) -> None:
-        _api_app.state.manager = mock_manager
+        _api_app.state.application = mock_application
         mock_config.workspace = "app_ws"
         singleton_config = mock_config.model_copy(deep=True)
         singleton_config.workspace = "singleton_ws"
@@ -310,12 +315,12 @@ class TestWorkspaceLifecycleAPI:
         resp = await client.get("/files")
 
         assert resp.status_code == 200
-        mock_manager.corpora.list_ingested_files.assert_awaited_once_with("app_ws")
+        mock_application.corpora.list_ingested_files.assert_awaited_once_with("app_ws")
 
     async def test_list_workspaces_returns_records(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         resp = await client.get("/workspaces")
 
@@ -323,13 +328,13 @@ class TestWorkspaceLifecycleAPI:
         body = resp.json()
         assert body["workspaces"] == ["default"]
         assert body["records"][0]["display_name"] == "default"
-        mock_manager.corpora.alist_workspace_records.assert_awaited_once()
+        mock_application.corpora.alist_workspace_records.assert_awaited_once()
 
     async def test_create_workspace_registers_empty_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        app.state.application = mock_application
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
             "/workspaces",
@@ -342,26 +347,26 @@ class TestWorkspaceLifecycleAPI:
             "display_name": "New Workspace",
             "created": True,
         }
-        mock_manager.corpora.create_workspace.assert_awaited_once_with(
+        mock_application.corpora.create_workspace.assert_awaited_once_with(
             "new_workspace",
             display_name="New Workspace",
         )
 
     async def test_create_workspace_rejects_duplicate(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        app.state.application = mock_application
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post("/workspaces", json={"workspace": "default"})
 
         assert resp.status_code == 409
-        mock_manager.corpora.create_workspace.assert_not_awaited()
+        mock_application.corpora.create_workspace.assert_not_awaited()
 
     async def test_delete_workspace_resets_and_removes_registry_row(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         resp = await client.delete("/workspaces/Old Workspace?keep_files=true&dry_run=true")
 
@@ -369,13 +374,13 @@ class TestWorkspaceLifecycleAPI:
         body = resp.json()
         assert body["workspace"] == "old_workspace"
         assert body["deleted"] is False
-        mock_manager.corpora.reset.assert_awaited_once_with(
+        mock_application.corpora.reset.assert_awaited_once_with(
             workspace_ids=("old_workspace",),
             keep_files=True,
             dry_run=True,
         )
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_simple_wrong_scheme_401(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -388,7 +393,7 @@ class TestWorkspaceLifecycleAPI:
         )
         assert resp.status_code == 401
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_simple_invalid_token_401(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -410,6 +415,7 @@ class TestWorkspaceLifecycleAPI:
             ("DELETE", "/files", {"filenames": ["f.pdf"]}),
         ],
     )
+    @pytest.mark.usefixtures("_patch_application")
     async def test_endpoint_requires_auth(
         self,
         method: str,
@@ -424,7 +430,7 @@ class TestWorkspaceLifecycleAPI:
         resp = await client.request(method, path, json=body)
         assert resp.status_code == 401
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_auth_mode_none_allows_all(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -433,7 +439,7 @@ class TestWorkspaceLifecycleAPI:
         resp = await client.get("/files")
         assert resp.status_code == 200
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_token_requires_explicit_simple_auth_mode(
         self, test_config: DlightragConfig
     ) -> None:
@@ -454,7 +460,7 @@ _JWT_VERIFICATION_KEY = "test-jwt-verification-key-for-unit-tests"
 class TestJWTAuth:
     """Test JWT authentication strategy."""
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_jwt_valid_token(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -475,9 +481,9 @@ class TestJWTAuth:
         )
         assert resp.status_code == 200
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_jwt_claims_access_control_denies_unmapped_workspace(
-        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_application
     ) -> None:
         cfg = mock_config_no_auth_override
         cfg.auth_mode = "jwt"
@@ -511,11 +517,11 @@ class TestJWTAuth:
         )
 
         assert resp.status_code == 403
-        mock_manager.retrieval.retrieve.assert_not_awaited()
+        mock_application.retrieval.retrieve.assert_not_awaited()
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_jwt_claims_access_control_allows_mapped_workspace(
-        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_application
     ) -> None:
         cfg = mock_config_no_auth_override
         cfg.auth_mode = "jwt"
@@ -549,9 +555,9 @@ class TestJWTAuth:
         )
 
         assert resp.status_code == 200
-        mock_manager.retrieval.retrieve.assert_awaited_once()
+        mock_application.retrieval.retrieve.assert_awaited_once()
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     @pytest.mark.parametrize(
         ("groups", "expected_status"),
         [
@@ -564,13 +570,13 @@ class TestJWTAuth:
         client: AsyncClient,
         _api_app: FastAPI,
         mock_config_no_auth_override: DlightragConfig,
-        mock_manager,
+        mock_application,
         groups: list[str],
         expected_status: int,
     ) -> None:
         registered = [f"ws_{index:02d}" for index in range(14)]
         allowed = registered[:10]
-        mock_manager.corpora.alist_workspace_records.return_value = [
+        mock_application.corpora.alist_workspace_records.return_value = [
             {"workspace": workspace} for workspace in registered
         ]
         mock_config_no_auth_override.access_control = AccessControlConfig(
@@ -597,12 +603,12 @@ class TestJWTAuth:
 
         assert response.status_code == expected_status
         if expected_status == 202:
-            run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
+            run_input = mock_application.answers.create.await_args.kwargs["request"]
             assert list(run_input.workspaces) == allowed
         else:
-            mock_manager.astart_answer_run.assert_not_awaited()
+            mock_application.answers.create.assert_not_awaited()
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_jwt_expired_token(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -827,7 +833,7 @@ class TestIngestEndpoint:
     """Test /ingest validation and routing."""
 
     @pytest.mark.parametrize("source_type", ["local", "azure_blob", "s3", "url"])
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_source_requires_identity(
         self,
         client: AsyncClient,
@@ -837,7 +843,7 @@ class TestIngestEndpoint:
         resp = await client.post("/ingest", json={"source_type": source_type})
         assert resp.status_code == 422
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_url_rejects_both_url_and_urls(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -852,35 +858,37 @@ class TestIngestEndpoint:
         assert resp.status_code == 422
 
     async def test_local_defaults_to_background_job(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         path = mock_config.input_dir_path / "default" / "file.pdf"
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/ingest",
             json={"source_type": "local", "path": "file.pdf"},
         )
         assert resp.status_code == 202
         assert resp.json()["job_id"] == "job-1"
-        mock_manager.corpora.start_ingest_job.assert_awaited_once_with(
+        mock_application.corpora.start_ingest_job.assert_awaited_once_with(
             "default",
             IngestSpec(source_type="local", path=str(path)),
         )
 
     async def test_local_path_must_be_under_input_dir(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/ingest",
             json={"source_type": "local", "path": "/data/file.pdf"},
         )
         assert resp.status_code == 400
         assert "relative to input_dir" in resp.json()["detail"]
-        mock_manager.corpora.start_ingest_job.assert_not_awaited()
+        mock_application.corpora.start_ingest_job.assert_not_awaited()
 
-    async def test_local_path_rejects_traversal(self, client: AsyncClient, mock_manager) -> None:
-        app.state.manager = mock_manager
+    async def test_local_path_rejects_traversal(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        app.state.application = mock_application
         resp = await client.post(
             "/ingest",
             json={
@@ -892,13 +900,13 @@ class TestIngestEndpoint:
 
         assert resp.status_code == 400
         assert "relative to input_dir" in resp.json()["detail"]
-        mock_manager.corpora.start_ingest_job.assert_not_awaited()
+        mock_application.corpora.start_ingest_job.assert_not_awaited()
 
     async def test_blob_upload_stages_file_for_local_ingest(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.config = mock_config
-        mock_manager.corpora.start_ingest_job.return_value = {
+        mock_application.config = mock_config
+        mock_application.corpora.start_ingest_job.return_value = {
             "job_id": "job-1",
             "workspace": "default",
             "source_type": "local",
@@ -906,7 +914,7 @@ class TestIngestEndpoint:
             "lease_owner": None,
             "lease_expires_at": None,
         }
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         resp = await client.post(
             "/ingest/blob",
@@ -918,16 +926,16 @@ class TestIngestEndpoint:
         assert body["job_id"] == "job-1"
         assert body["filename"] == "report.pdf"
         assert "lease_owner" not in body
-        call_args = mock_manager.corpora.start_ingest_job.call_args
+        call_args = mock_application.corpora.start_ingest_job.call_args
         assert call_args.args[0] == "default"
         ingest_spec = call_args.args[1]
         assert ingest_spec.source_type == "local"
         assert ingest_spec.path.startswith(str(mock_config.input_dir_path / "default"))
 
     async def test_get_get_ingest_job(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         resp = await client.get("/ingest/jobs/job-1")
 
@@ -937,13 +945,13 @@ class TestIngestEndpoint:
         # Queue bookkeeping stays server-side.
         assert "lease_owner" not in body
         assert "lease_expires_at" not in body
-        mock_manager.corpora.get_ingest_job.assert_awaited_once_with("job-1")
+        mock_application.corpora.get_ingest_job.assert_awaited_once_with("job-1")
 
     async def test_cancel_ingest_job(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
-        mock_manager.corpora.cancel_ingest_job = AsyncMock(
+        app.state.application = mock_application
+        mock_application.corpora.cancel_ingest_job = AsyncMock(
             return_value={
                 "job_id": "job-1",
                 "workspace": "default",
@@ -960,26 +968,26 @@ class TestIngestEndpoint:
         assert body["status"] == "failed"
         # Cancelling stops further work; it never unwinds what already landed.
         assert body["processed_items"] == 64
-        mock_manager.corpora.cancel_ingest_job.assert_awaited_once_with("job-1")
+        mock_application.corpora.cancel_ingest_job.assert_awaited_once_with("job-1")
 
     async def test_ingest_job_routes_canonicalize_stored_workspace_before_access(
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.api.routes import rag as rag_routes
 
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         job = {
             "job_id": "job-1",
             "workspace": "Finance Reports",
             "source_type": "s3",
             "status": "running",
         }
-        mock_manager.corpora.get_ingest_job.return_value = job
-        mock_manager.corpora.cancel_ingest_job.return_value = job
+        mock_application.corpora.get_ingest_job.return_value = job
+        mock_application.corpora.cancel_ingest_job.return_value = job
         enforce = AsyncMock()
         monkeypatch.setattr(rag_routes, "enforce_access", enforce)
 
@@ -992,18 +1000,18 @@ class TestIngestEndpoint:
         ]
 
     async def test_cancel_unknown_ingest_job_is_404(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
-        mock_manager.corpora.get_ingest_job = AsyncMock(return_value=None)
-        mock_manager.corpora.cancel_ingest_job = AsyncMock()
+        app.state.application = mock_application
+        mock_application.corpora.get_ingest_job = AsyncMock(return_value=None)
+        mock_application.corpora.cancel_ingest_job = AsyncMock()
 
         resp = await client.post("/ingest/jobs/nope/cancel")
 
         assert resp.status_code == 404
-        mock_manager.corpora.cancel_ingest_job.assert_not_awaited()
+        mock_application.corpora.cancel_ingest_job.assert_not_awaited()
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_s3_key_and_prefix_mutually_exclusive(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -1018,7 +1026,7 @@ class TestIngestEndpoint:
         )
         assert resp.status_code == 422
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_azure_blob_path_and_prefix_mutually_exclusive(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -1034,10 +1042,10 @@ class TestIngestEndpoint:
         assert resp.status_code == 422
 
     async def test_ingest_with_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         path = mock_config.input_dir_path / "project_x" / "file.pdf"
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/ingest",
             json={
@@ -1047,17 +1055,17 @@ class TestIngestEndpoint:
             },
         )
         assert resp.status_code == 202
-        call_kwargs = mock_manager.corpora.start_ingest_job.call_args
+        call_kwargs = mock_application.corpora.start_ingest_job.call_args
         assert call_kwargs[0][0] == "project_x"  # normalized: hyphens → underscores
         assert call_kwargs.args[1].path == str(path)
 
     async def test_ingest_service_unavailable_503(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.start_ingest_job = AsyncMock(
+        mock_application.corpora.start_ingest_job = AsyncMock(
             side_effect=WorkspaceUnavailableError("RAG not ready")
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/ingest",
             json={"source_type": "local", "path": "file.pdf"},
@@ -1074,35 +1082,35 @@ class TestRetrieveEndpoint:
     """Test /retrieve endpoint."""
 
     async def test_retrieve_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post("/retrieve", json={"query": "What is RAG?"})
         assert resp.status_code == 200
         body = resp.json()
         assert "answer" not in body
         assert "contexts" in body
         assert "sources" in body
-        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        request = mock_application.retrieval.retrieve.await_args.args[0]
         assert request.chunk_top_k is None
 
     async def test_retrieve_timeout_is_504(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.retrieval.retrieve.side_effect = RetrievalTimeoutError("timed out")
-        app.state.manager = mock_manager
+        mock_application.retrieval.retrieve.side_effect = RetrievalTimeoutError("timed out")
+        app.state.application = mock_application
 
         response = await client.post("/retrieve", json={"query": "slow"})
 
         assert response.status_code == 504
 
     async def test_retrieve_closed_service_is_503(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.retrieval.retrieve.side_effect = WorkspaceUnavailableError(
+        mock_application.retrieval.retrieve.side_effect = WorkspaceUnavailableError(
             "Retrieval service is closed"
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.post("/retrieve", json={"query": "during shutdown"})
 
@@ -1110,9 +1118,9 @@ class TestRetrieveEndpoint:
         assert response.json()["error_type"] == "unavailable"
 
     async def test_retrieve_projects_source_workspace_without_internal_fields(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.retrieval.retrieve.return_value = ServiceResponse(
+        mock_application.retrieval.retrieve.return_value = ServiceResponse(
             contexts={"chunks": [_finance_source_context()]},
             sources=(
                 {
@@ -1128,7 +1136,7 @@ class TestRetrieveEndpoint:
             trace={},
             image_descriptions=(),
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.post(
             "/retrieve",
@@ -1142,7 +1150,7 @@ class TestRetrieveEndpoint:
         assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
 
     async def test_retrieve_omits_download_and_visual_links_without_permissions(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         class QueryOnlyAccess:
             async def check(self, user, action, *, workspace=None):
@@ -1153,7 +1161,7 @@ class TestRetrieveEndpoint:
                     return []
                 return list(workspaces)
 
-        mock_manager.retrieval.retrieve.return_value = ServiceResponse(
+        mock_application.retrieval.retrieve.return_value = ServiceResponse(
             contexts={"chunks": [{**_finance_source_context(), "image_data": "bytes"}]},
             sources=(
                 {
@@ -1169,7 +1177,7 @@ class TestRetrieveEndpoint:
             trace={},
             image_descriptions=(),
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         app.state.access_control = QueryOnlyAccess()
 
         try:
@@ -1188,13 +1196,13 @@ class TestRetrieveEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
     ) -> None:
-        mock_manager.corpora.alist_workspace_records.return_value = [
+        mock_application.corpora.alist_workspace_records.return_value = [
             {"workspace": "default"},
             {"workspace": "research_notes"},
         ]
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.post(
             "/retrieve",
@@ -1202,44 +1210,44 @@ class TestRetrieveEndpoint:
         )
 
         assert response.status_code == 200
-        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        request = mock_application.retrieval.retrieve.await_args.args[0]
         assert request.workspaces == ("default", "research_notes")
 
     async def test_retrieve_rejects_mode_field(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/retrieve",
             json={"query": "hello", "mode": "local"},
         )
         assert resp.status_code == 422
-        mock_manager.retrieval.retrieve.assert_not_called()
+        mock_application.retrieval.retrieve.assert_not_called()
 
     async def test_retrieve_forwards_chunk_top_k_field(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/retrieve",
             json={"query": "hello", "chunk_top_k": 5},
         )
         assert resp.status_code == 200
-        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        request = mock_application.retrieval.retrieve.await_args.args[0]
         assert request.chunk_top_k == 5
 
     async def test_retrieve_passes_reader_scope_to_service(
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         resp = await client.post("/retrieve", json={"query": "hello"})
 
         assert resp.status_code == 200
-        request = mock_manager.retrieval.retrieve.await_args.args[0]
+        request = mock_application.retrieval.retrieve.await_args.args[0]
         assert request.projection.include_download_links is True
         assert request.projection.downloadable_workspaces == frozenset({"default"})
         assert request.projection.visual_workspaces == frozenset({"default"})
@@ -1257,14 +1265,14 @@ class TestHealthEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.get("/health")
         assert resp.status_code == 200
         body = resp.json()
@@ -1289,10 +1297,10 @@ class TestHealthEndpointEnhanced:
     """Test enhanced /health endpoint with degraded state."""
 
     async def test_health_shows_degraded(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.health.mark_degraded("Embedding unreachable")
-        app.state.manager = mock_manager
+        mock_application.health.mark_degraded("Embedding unreachable")
+        app.state.application = mock_application
         resp = await client.get("/health")
         body = resp.json()
         assert body["status"] == "degraded"
@@ -1302,9 +1310,9 @@ class TestHealthEndpointEnhanced:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.get("/health")
         body = resp.json()
         assert body["status"] == "healthy"
@@ -1323,7 +1331,7 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config_no_auth_override: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
@@ -1332,7 +1340,7 @@ class TestReadinessEndpoint:
         mock_config_no_auth_override.api_auth_token = "required-elsewhere"
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.get("/ready")
 
@@ -1344,15 +1352,15 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
 
-        mock_manager.health.mark_closed()
+        mock_application.health.mark_closed()
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.get("/ready")
 
@@ -1368,14 +1376,14 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
 
         mock_config.service_role = "reader"
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.get("/ready")
 
@@ -1390,13 +1398,13 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
 
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="on"))
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.get("/ready")
 
@@ -1411,7 +1419,7 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import dlightrag.adapters.postgres.corpus as corpus_module
@@ -1419,16 +1427,16 @@ class TestReadinessEndpoint:
         from dlightrag.adapters.postgres.corpus import PGReadinessProbe
 
         mock_config.service_role = "reader"
-        mock_manager.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
-        mock_manager.health.mark_ready()
-        app.state.health = mock_manager.health
+        mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
+        mock_application.health.mark_ready()
+        app.state.health = mock_application.health
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         monkeypatch.setattr(
             corpus_module,
             "verify_reader_corpus_session",
             AsyncMock(side_effect=RuntimeError("corpus pool is not read-only")),
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.get("/ready")
 
@@ -1443,7 +1451,7 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import dlightrag.adapters.postgres.corpus as corpus_module
@@ -1451,13 +1459,13 @@ class TestReadinessEndpoint:
         from dlightrag.adapters.postgres.corpus import PGReadinessProbe
 
         mock_config.service_role = "reader"
-        mock_manager.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
-        mock_manager.health.mark_ready()
-        app.state.health = mock_manager.health
+        mock_application.health = ApplicationHealth(readiness_probe=PGReadinessProbe(mock_config))
+        mock_application.health.mark_ready()
+        app.state.health = mock_application.health
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value="off"))
         corpus_probe = AsyncMock()
         monkeypatch.setattr(corpus_module, "verify_reader_corpus_session", corpus_probe)
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         response = await client.get("/ready")
 
@@ -1469,14 +1477,14 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         for _ in range(5):
             assert (await client.get("/ready")).status_code == 200
@@ -1487,7 +1495,7 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A burst against a cold cache costs one round trip, not one per caller."""
@@ -1503,7 +1511,7 @@ class TestReadinessEndpoint:
 
         probe = AsyncMock(side_effect=_slow_probe)
         monkeypatch.setattr(pg_pool, "run_once", probe)
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         polls = [asyncio.create_task(client.get("/ready")) for _ in range(5)]
         await started.wait()
@@ -1517,7 +1525,7 @@ class TestReadinessEndpoint:
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from dlightrag.adapters.postgres._pool import pg_pool
@@ -1534,7 +1542,7 @@ class TestReadinessEndpoint:
             return "off"
 
         monkeypatch.setattr(pg_pool, "run_once", AsyncMock(side_effect=_slow_probe))
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         abandoned = asyncio.create_task(client.get("/ready"))
         waiting = asyncio.create_task(client.get("/ready"))
@@ -1550,13 +1558,13 @@ class TestReadinessEndpoint:
     async def test_the_cached_verdict_expires(
         self,
         client: AsyncClient,
-        mock_manager,
+        mock_application,
     ) -> None:
         probe = AsyncMock(return_value=None)
         health = ApplicationHealth(readiness_probe=probe, readiness_cache_seconds=0.0)
         health.mark_ready()
         app.state.health = health
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         await client.get("/ready")
         await client.get("/ready")
@@ -1566,7 +1574,7 @@ class TestReadinessEndpoint:
     async def test_a_not_ready_transition_invalidates_the_cached_verdict(
         self,
         client: AsyncClient,
-        mock_manager,
+        mock_application,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Startup and schema transitions must never be served from a stale verdict."""
@@ -1574,12 +1582,12 @@ class TestReadinessEndpoint:
 
         probe = AsyncMock(return_value="off")
         monkeypatch.setattr(pg_pool, "run_once", probe)
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         assert (await client.get("/ready")).status_code == 200
-        mock_manager.health.mark_degraded("temporary startup failure")
+        mock_application.health.mark_degraded("temporary startup failure")
         assert (await client.get("/ready")).status_code == 503
-        mock_manager.health.mark_ready()
+        mock_application.health.mark_ready()
         assert (await client.get("/ready")).status_code == 200
 
         assert probe.await_count == 2
@@ -1594,21 +1602,21 @@ class TestDeleteEndpoint:
     """Test DELETE /files endpoint."""
 
     async def test_delete_by_filenames(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.request(
             "DELETE",
             "/files",
             json={"filenames": ["report.pdf"]},
         )
         assert resp.status_code == 200
-        mock_manager.corpora.delete_files.assert_awaited_once()
+        mock_application.corpora.delete_files.assert_awaited_once()
 
     async def test_delete_by_file_paths(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.request(
             "DELETE",
             "/files",
@@ -1617,29 +1625,29 @@ class TestDeleteEndpoint:
         assert resp.status_code == 200
 
     async def test_delete_with_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.request(
             "DELETE",
             "/files",
             json={"filenames": ["report.pdf"], "workspace": "project-y"},
         )
         assert resp.status_code == 200
-        call_kwargs = mock_manager.corpora.delete_files.call_args
+        call_kwargs = mock_application.corpora.delete_files.call_args
         assert call_kwargs[0][0] == "project_y"  # normalized: hyphens → underscores
 
     async def test_delete_forwards_dry_run(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.request(
             "DELETE",
             "/files",
             json={"filenames": ["report.pdf"], "dry_run": True},
         )
         assert resp.status_code == 200
-        assert mock_manager.corpora.delete_files.call_args.kwargs["dry_run"] is True
+        assert mock_application.corpora.delete_files.call_args.kwargs["dry_run"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1651,9 +1659,9 @@ class TestAnswerEndpoint:
     """POST /answer admission: what the run's immutable input may carry."""
 
     async def test_answer_forwards_explicit_filters(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             json={
@@ -1662,13 +1670,14 @@ class TestAnswerEndpoint:
             },
         )
         assert resp.status_code == 202
-        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
-        assert run_input.filters == {"author": "Ada"}
+        answer_request = mock_application.answers.create.await_args.kwargs["request"]
+        assert answer_request.filters is not None
+        assert answer_request.filters.author == "Ada"
 
     async def test_answer_forwards_answer_context_limits(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             json={
@@ -1677,14 +1686,14 @@ class TestAnswerEndpoint:
             },
         )
         assert resp.status_code == 202
-        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
-        assert run_input.chunk_top_k == 12
-        assert run_input.semantic_highlights is False
+        answer_request = mock_application.answers.create.await_args.kwargs["request"]
+        assert answer_request.chunk_top_k == 12
+        assert answer_request.semantic_highlights is False
 
     async def test_answer_forwards_semantic_highlights_opt_in(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             json={
@@ -1693,13 +1702,13 @@ class TestAnswerEndpoint:
             },
         )
         assert resp.status_code == 202
-        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
-        assert run_input.semantic_highlights is True
+        answer_request = mock_application.answers.create.await_args.kwargs["request"]
+        assert answer_request.semantic_highlights is True
 
     async def test_answer_rejects_query_images_and_accepts_attachment_links(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         query_images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
 
         rejected = await client.post(
@@ -1707,7 +1716,7 @@ class TestAnswerEndpoint:
             json={"query": "What is shown?", "query_images": query_images},
         )
         assert rejected.status_code == 422
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
         resp = await client.post(
             "/answer",
@@ -1718,15 +1727,16 @@ class TestAnswerEndpoint:
         )
 
         assert resp.status_code == 202
-        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
-        assert [link.url for link in run_input.links] == ["https://example.com/report.pdf"]
-        assert run_input.links[0].filename == "r.pdf"
-        assert run_input.attachments == ()
+        answer_request = mock_application.answers.create.await_args.kwargs["request"]
+        assert [resource.url for resource in answer_request.resources] == [
+            "https://example.com/report.pdf"
+        ]
+        assert answer_request.resources[0].filename == "r.pdf"
 
     async def test_answer_accepts_caller_history(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         history = [
             {"role": "user", "content": "What is the capital of France?"},
             {"role": "assistant", "content": "Paris."},
@@ -1738,14 +1748,14 @@ class TestAnswerEndpoint:
         )
 
         assert resp.status_code == 202
-        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
-        assert list(run_input.history) == history
+        answer_request = mock_application.answers.create.await_args.kwargs["request"]
+        assert list(answer_request.history) == history
 
     async def test_json_enforces_link_count_limit(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         mock_config.answer.max_attachments = 2
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         resp = await client.post(
             "/answer",
@@ -1757,17 +1767,43 @@ class TestAnswerEndpoint:
 
         assert resp.status_code == 413
         assert "2" in resp.json()["detail"]
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
     async def test_answer_service_unavailable_503(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.astart_answer_run = AsyncMock(
-            side_effect=RAGServiceUnavailableError("RAG not ready")
+        mock_application.answers.create = AsyncMock(
+            side_effect=ApplicationClosedError("RAG not ready")
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post("/answer", json={"query": "hello"})
         assert resp.status_code == 503
+
+    async def test_answer_runtime_unavailable_503(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        mock_application.answers.create = AsyncMock(
+            side_effect=AnswerRuntimeUnavailableError("Answer runtime is unavailable")
+        )
+        app.state.application = mock_application
+
+        response = await client.post("/answer", json={"query": "hello"})
+
+        assert response.status_code == 503
+        assert response.json()["error_type"] == "unavailable"
+
+    async def test_answer_input_rejection_uses_unprocessable_entity(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
+    ) -> None:
+        mock_application.answers.create = AsyncMock(
+            side_effect=AnswerInputOverflowError("The answer input is too large.")
+        )
+        app.state.application = mock_application
+
+        response = await client.post("/answer", json={"query": "hello"})
+
+        assert response.status_code == 422
+        assert response.json()["error_kind"] == "ANSWER_INPUT_OVERFLOW"
 
 
 # ---------------------------------------------------------------------------
@@ -1779,11 +1815,11 @@ class TestAnswerMultipart:
     """POST /answer multipart: one JSON request part plus repeated attachment files."""
 
     async def test_multipart_mixes_links_and_files(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         import json as json_mod
 
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         request_part = json_mod.dumps(
             {
                 "query": "compare",
@@ -1797,15 +1833,15 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 202
-        call = mock_manager.astart_answer_run.await_args.kwargs
-        run_input = call["request"]
-        assert [link.url for link in run_input.links] == ["https://example.com/a.pdf"]
-        assert call["attachment_bytes"] == [b"%PDF-body"]
-        assert run_input.attachments[0].filename == "report.pdf"
-        assert run_input.attachments[0].mime_type == "application/pdf"
+        answer_request = mock_application.answers.create.await_args.kwargs["request"]
+        link, upload = answer_request.resources
+        assert link.url == "https://example.com/a.pdf"
+        assert upload.content == b"%PDF-body"
+        assert upload.filename == "report.pdf"
+        assert upload.declared_mime == "application/pdf"
 
     async def test_multipart_accepts_maximum_unicode_history(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         import json as json_mod
 
@@ -1814,7 +1850,7 @@ class TestAnswerMultipart:
             MAX_HISTORY_MESSAGES,
         )
 
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         history = [
             {
                 "role": "user" if index % 2 == 0 else "assistant",
@@ -1835,15 +1871,15 @@ class TestAnswerMultipart:
         )
 
         assert response.status_code == 202
-        run_input = mock_manager.astart_answer_run.await_args.kwargs["request"]
-        assert len(run_input.history) == MAX_HISTORY_MESSAGES
+        answer_request = mock_application.answers.create.await_args.kwargs["request"]
+        assert len(answer_request.history) == MAX_HISTORY_MESSAGES
 
     async def test_multipart_requires_exactly_one_request_part(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         import json as json_mod
 
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         missing = await client.post(
             "/answer", files=[("attachments", ("a.txt", b"x", "text/plain"))]
         )
@@ -1864,14 +1900,14 @@ class TestAnswerMultipart:
             ],
         )
         assert duplicate.status_code == 400
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_rejects_wrong_part_name(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         import json as json_mod
 
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             data={"request": json_mod.dumps({"query": "q"})},
@@ -1879,12 +1915,12 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 400
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_malformed_request_part_is_422(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             data={"request": "{not json"},
@@ -1892,15 +1928,15 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 422
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_enforces_count_limit(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         import json as json_mod
 
         mock_config.answer.max_attachments = 2
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             data={"request": json_mod.dumps({"query": "q"})},
@@ -1908,15 +1944,15 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 413
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_enforces_per_item_limit(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         import json as json_mod
 
         mock_config.answer.max_attachment_bytes = 8
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             data={"request": json_mod.dumps({"query": "q"})},
@@ -1924,15 +1960,15 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 413
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
     async def test_multipart_enforces_total_limit(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         import json as json_mod
 
         mock_config.answer.max_total_attachment_bytes = 16
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post(
             "/answer",
             data={"request": json_mod.dumps({"query": "q"})},
@@ -1943,7 +1979,7 @@ class TestAnswerMultipart:
         )
 
         assert resp.status_code == 413
-        mock_manager.astart_answer_run.assert_not_awaited()
+        mock_application.answers.create.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1954,7 +1990,7 @@ class TestAnswerMultipart:
 class TestFilesEndpoint:
     """Test GET /files endpoint."""
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_list_files_success(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -1965,12 +2001,12 @@ class TestFilesEndpoint:
         assert "count" in body
 
     async def test_list_files_count_matches(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_ingested_files = AsyncMock(
+        mock_application.corpora.list_ingested_files = AsyncMock(
             return_value=["a.pdf", "b.pdf", "c.pdf"]
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.get("/files")
         assert resp.status_code == 200
         body = resp.json()
@@ -1978,12 +2014,12 @@ class TestFilesEndpoint:
         assert len(body["files"]) == 3
 
     async def test_list_files_with_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.get("/files?workspace=project-z")
         assert resp.status_code == 200
-        call_kwargs = mock_manager.corpora.list_ingested_files.call_args
+        call_kwargs = mock_application.corpora.list_ingested_files.call_args
         assert call_kwargs[0][0] == "project_z"  # normalized: hyphens → underscores
 
 
@@ -1996,15 +2032,15 @@ class TestAnswerStreamMode:
     """Runtime failure mappings the app still owns for its non-durable routes."""
 
     async def test_rejected_metadata_is_a_client_error_not_a_500(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         """Metadata validation happens below the request model, so it needs its own mapping."""
         from dlightrag_rag.retrieval.metadata_fields import MetadataValidationError
 
-        mock_manager.corpora.update_metadata = AsyncMock(
+        mock_application.corpora.update_metadata = AsyncMock(
             side_effect=MetadataValidationError("title is a built-in metadata field")
         )
-        app.state.manager = mock_manager
+        app.state.application = mock_application
         resp = await client.post("/metadata/doc-1", json={"metadata": {"title": "X"}})
         assert resp.status_code == 400
         assert resp.json()["error_type"] == "validation"
@@ -2014,9 +2050,9 @@ class TestAPIContracts:
     """Request and response contracts are explicit in OpenAPI."""
 
     async def test_openapi_exposes_pydantic_response_models(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        app.state.manager = mock_manager
+        app.state.application = mock_application
 
         resp = await client.get("/openapi.json")
 
@@ -2059,37 +2095,37 @@ class TestAPIContracts:
 
 
 class TestMetadataAPI:
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_search_route_is_not_shadowed_by_the_doc_id_route(
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
     ) -> None:
         """`/metadata/search` is a literal path, so it must be declared first."""
-        mock_manager.corpora.search_metadata = AsyncMock(return_value=["doc-1"])
-        app.state.manager = mock_manager
+        mock_application.corpora.search_metadata = AsyncMock(return_value=["doc-1"])
+        app.state.application = mock_application
 
         resp = await client.post("/metadata/search", json={"custom": {"department": "legal"}})
 
         assert resp.status_code == 200
         assert resp.json()["document_ids"] == ["doc-1"]
 
-    @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.usefixtures("_patch_application")
     async def test_unknown_filter_name_is_rejected_not_ignored(
         self,
         client: AsyncClient,
         mock_config: DlightragConfig,
-        mock_manager,
+        mock_application,
     ) -> None:
         """A dropped filter name would match every document instead of failing."""
-        mock_manager.corpora.search_metadata = AsyncMock(return_value=["doc-1"])
-        app.state.manager = mock_manager
+        mock_application.corpora.search_metadata = AsyncMock(return_value=["doc-1"])
+        app.state.application = mock_application
 
         resp = await client.post("/metadata/search", json={"nonsense": "x"})
 
         assert resp.status_code == 422
-        mock_manager.corpora.search_metadata.assert_not_awaited()
+        mock_application.corpora.search_metadata.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -2217,8 +2253,9 @@ async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
         yield b"\r\n--test--\r\n"
 
     application = create_app(include_web_app=False)
-    manager = AsyncMock()
-    manager.corpora.start_ingest_job.return_value = {
+    application_double = AsyncMock()
+    application_double.config = mock_config
+    application_double.corpora.start_ingest_job.return_value = {
         "job_id": "job-overflow",
         "workspace": "default",
         "source_type": "local",
@@ -2226,7 +2263,7 @@ async def test_real_app_returns_413_for_chunked_answer_multipart_overflow(
         "lease_owner": None,
         "lease_expires_at": None,
     }
-    application.state.manager = manager
+    application.state.application = application_double
     response = await _post(
         application,
         "/answer",
@@ -2263,8 +2300,9 @@ async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
         yield b"\r\n--test--\r\n"
 
     application = create_app(include_web_app=False)
-    manager = AsyncMock()
-    manager.corpora.start_ingest_job.return_value = {
+    application_double = AsyncMock()
+    application_double.config = mock_config
+    application_double.corpora.start_ingest_job.return_value = {
         "job_id": "job-overflow",
         "workspace": "default",
         "source_type": "local",
@@ -2272,7 +2310,7 @@ async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
         "lease_owner": None,
         "lease_expires_at": None,
     }
-    application.state.manager = manager
+    application.state.application = application_double
     response = await _post(
         application,
         "/ingest/blob",
@@ -2283,7 +2321,7 @@ async def test_real_app_caps_chunked_ingest_multipart_before_parsing(
     assert response.status_code == 413, response.text
     assert response.json()["error_type"] == "validation"
     assert response.json()["detail"] == "Request body is too large"
-    manager.corpora.start_ingest_job.assert_not_awaited()
+    application_double.corpora.start_ingest_job.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2294,7 +2332,7 @@ async def test_ingest_blob_authenticates_before_parsing_multipart(
     mock_config.api_auth_token = "secret-token"
     set_config(mock_config)
     application = create_app(include_web_app=False)
-    application.state.manager = AsyncMock()
+    application.state.application = AsyncMock()
 
     response = await _post(
         application,
@@ -2321,7 +2359,7 @@ async def test_multipart_header_does_not_raise_json_route_body_cap(
         yield b"\r\n--test--\r\n"
 
     application = create_app(include_web_app=False)
-    application.state.manager = AsyncMock()
+    application.state.application = AsyncMock()
     response = await _post(
         application,
         "/retrieve",

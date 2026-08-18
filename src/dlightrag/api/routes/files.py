@@ -25,7 +25,7 @@ from dlightrag.api.models import (
     FileListResponse,
 )
 
-from .deps import enforce_access, get_manager, resolve_workspace
+from .deps import enforce_access, get_application, resolve_workspace
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -38,10 +38,10 @@ async def list_files(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """List all ingested documents."""
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
-    files = await manager.corpora.list_ingested_files(ws)
+    files = await application.corpora.list_ingested_files(ws)
     return {"files": files, "count": len(files), "workspace": ws}
 
 
@@ -50,10 +50,10 @@ async def delete_files(
     body: DeleteRequest, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
     """Delete documents from knowledge base."""
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_DELETE_FILES, workspace=ws)
-    results = await manager.corpora.delete_files(
+    results = await application.corpora.delete_files(
         ws,
         file_paths=body.file_paths,
         filenames=body.filenames,
@@ -69,10 +69,10 @@ async def list_failed_files(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """List documents currently in DocStatus.FAILED."""
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
-    failed = await manager.corpora.list_failed_docs(ws)
+    failed = await application.corpora.list_failed_docs(ws)
     return {"failed": failed, "count": len(failed), "workspace": ws}
 
 
@@ -83,10 +83,10 @@ async def retry_failed_files(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Re-ingest FAILED documents from stored source/download metadata."""
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
-    return await manager.corpora.retry_failed_docs(ws)
+    return await application.corpora.retry_failed_docs(ws)
 
 
 @router.get("/files/raw/{document_id:path}", response_model=None)
@@ -104,7 +104,7 @@ async def serve_file(
         workspace=safe_workspace,
     )
     try:
-        target = await get_manager(request).corpora.prepare_source_download(
+        target = await get_application(request).corpora.prepare_source_download(
             safe_workspace,
             document_id,
         )

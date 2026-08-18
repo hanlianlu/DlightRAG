@@ -143,7 +143,7 @@ class ResolvedAnswerResources:
     query_images: list[dict[str, Any]] | None
 
 
-class IncompatibleAnswerRunError(RuntimeError):
+class IncompatibleActiveRunError(RuntimeError):
     """An accepted run cannot execute under this binary's Answer contract."""
 
 
@@ -445,7 +445,7 @@ class AnswerResourceResolver:
 
 
 class AnswerExecutor:
-    """Execute durable Answer runs without a manager or storage implementation dependency."""
+    """Execute durable Answer runs without composition or storage dependencies."""
 
     def __init__(
         self,
@@ -753,7 +753,7 @@ class AnswerExecutor:
         request: AnswerRunInput,
     ) -> dict[ModelRole, ModelProfile]:
         if request.context_policy_revision != CONTEXT_POLICY_REVISION:
-            raise IncompatibleAnswerRunError(
+            raise IncompatibleActiveRunError(
                 "answer run context policy revision does not match this binary; "
                 "drain active runs before deployment"
             )
@@ -761,7 +761,7 @@ class AnswerExecutor:
         if len(request.pinned_models) != len(MODEL_ROLE_NAMES) or set(pinned) != set(
             MODEL_ROLE_NAMES
         ):
-            raise IncompatibleAnswerRunError(
+            raise IncompatibleActiveRunError(
                 "answer run does not contain the complete pinned model role set"
             )
         return {role: pinned[role].profile for role in MODEL_ROLE_NAMES}
@@ -852,7 +852,7 @@ __all__ = [
     "AnswerExecutorSettings",
     "AnswerResourceResolver",
     "AnswerResourceSettings",
-    "IncompatibleAnswerRunError",
+    "IncompatibleActiveRunError",
     "OrchestratorRun",
     "ResolvedAnswerResources",
     "answer_trace_output",

@@ -911,6 +911,7 @@ def _smoke_root_interfaces() -> None:
     from dlightrag_rag.retrieval import RetrievalResult
 
     import dlightrag
+    from dlightrag import Application
     from dlightrag.access import DEPLOYMENT_OWNER_ID
     from dlightrag.config import DlightragConfig, RuntimeConfig
     from dlightrag.model_settings import rag_settings
@@ -1067,6 +1068,18 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed SDK did not expose the durable Answer client")
     if dlightrag.DlightragConfig is not DlightragConfig:
         raise ValueError("installed root package did not expose its config owner")
+    if dlightrag.Application is not Application:
+        raise ValueError("installed root package did not expose Application eagerly")
+    for retired_module in (
+        "dlightrag.app_state",
+        "dlightrag.core.servicemanager",
+    ):
+        try:
+            retired_spec = importlib.util.find_spec(retired_module)
+        except ModuleNotFoundError:
+            retired_spec = None
+        if retired_spec is not None:
+            raise ValueError(f"installed root package still contains {retired_module}")
     if config.max_async != 2:
         raise ValueError("installed root config did not preserve AI concurrency")
     if config.runtime.answer_worker_concurrency != 3:

@@ -393,7 +393,7 @@ class _MemoryStore:
 
 
 class _Executor:
-    """A deterministic stand-in for the manager's answer execution."""
+    """A deterministic stand-in for AnswerExecutor."""
 
     def __init__(self, body: Any) -> None:
         self._body = body

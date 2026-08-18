@@ -1,10 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""DlightRAG: PostgreSQL-backed multimodal RAG built on LightRAG main.
-
-Exposable as both a REST API (bulk ingestion) and MCP server (agent integration).
-"""
-
-from typing import TYPE_CHECKING
+"""DlightRAG's durable product entry points."""
 
 try:
     from importlib.metadata import version as _version
@@ -15,27 +10,11 @@ except Exception:
 __maintainer__ = "HanlianLyu"
 __credits__ = ["hllyu"]
 
+from dlightrag.application import Application
 from dlightrag.config import DlightragConfig
 
-if TYPE_CHECKING:
-    from dlightrag.core.servicemanager import RAGServiceManager
-
 __all__ = [
+    "Application",
     "DlightragConfig",
-    "RAGServiceManager",
     "__version__",
 ]
-
-
-def _lazy_imports():
-    """Lazy imports for heavy modules — only loaded when accessed."""
-    from dlightrag.core.servicemanager import RAGServiceManager
-
-    return RAGServiceManager
-
-
-# Re-export for convenience (lazy to avoid heavy import on package load)
-def __getattr__(name: str):
-    if name == "RAGServiceManager":
-        return _lazy_imports()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -482,8 +482,8 @@ class AnswerConfig(BaseModel):
         description="Maximum current and retrieved image blocks sent to the answer LLM.",
     )
 
-    # Vision support is runtime manager state, not config. Users do not set it
-    # in config.yaml; the startup probe records it on RAGServiceManager.
+    # Vision support is runtime Answer state, not config. Users do not set it
+    # in config.yaml; the startup probe records it on Application health.
     image_max_bytes: int = Field(
         default=3_000_000,
         ge=1,

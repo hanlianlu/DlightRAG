@@ -20,13 +20,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dlightrag.access import AccessAction, UserContext, owner_id_from_user
-from dlightrag.answer.runs.execution import (
-    AnswerRunRequest,
-    AttachmentReference,
-    LinkReference,
-    build_current_answer_resources,
-    in_memory_attachment_loader,
-)
+from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.answer.runs.results import project_answer_result
 from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor, sse_frame
@@ -37,18 +31,17 @@ from dlightrag.api.models import (
     AnswerRunDescriptor,
     AnswerRunStatusResponse,
 )
-from dlightrag.app_state import request_config
 from dlightrag.config import AnswerConfig
+from dlightrag.core.client_attachments import answer_link_resources
 from dlightrag.core.client_contracts import conversation_history_as_dicts
 from dlightrag.runtime import (
     AnswerRunEvent,
     AnswerRunRecord,
     IdempotencyKeyConflict,
-    answer_run_request_fingerprint,
-    artifact_digest,
 )
+from dlightrag.services.answers import AnswerRequest as ServiceAnswerRequest
 
-from .deps import authorized_workspaces, get_manager, resolve_authorized_query_workspaces
+from .deps import authorized_workspaces, get_application, resolve_authorized_query_workspaces
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -190,36 +183,37 @@ def _idempotency_key(request: Request) -> str | None:
     return value if value and value.strip() else None
 
 
-def _run_request(
+def _service_request(
     body: AnswerRequest,
     uploads: list[_UploadedAttachment],
     *,
     workspaces: list[str],
-) -> AnswerRunRequest:
-    """Normalize one validated transport request before model resolution."""
-    filters = body.filters.model_dump(exclude_none=True, mode="json") if body.filters else None
-    return AnswerRunRequest(
+) -> ServiceAnswerRequest:
+    """Project one validated wire request into the Answer application contract."""
+    from dlightrag_rag.retrieval import MetadataFilter
+
+    resources = answer_link_resources(body.attachments)
+    resources.extend(
+        ResourceInput(
+            filename=upload.filename,
+            content=upload.content,
+            declared_mime=upload.mime_type,
+        )
+        for upload in uploads
+    )
+    return ServiceAnswerRequest(
         query=body.query,
         workspaces=tuple(workspaces),
         history=tuple(conversation_history_as_dicts(body.history) or ()),
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
-        filters=filters,
+        filters=(
+            MetadataFilter.model_validate(body.filters.model_dump(exclude_none=True, mode="json"))
+            if body.filters
+            else None
+        ),
         semantic_highlights=body.semantic_highlights,
-        links=tuple(
-            LinkReference(url=link.url, filename=link.filename, ordinal=ordinal)
-            for ordinal, link in enumerate(body.attachments or [])
-        ),
-        attachments=tuple(
-            AttachmentReference(
-                digest=artifact_digest(upload.content),
-                filename=upload.filename,
-                mime_type=upload.mime_type,
-                ordinal=ordinal,
-                byte_size=len(upload.content),
-            )
-            for ordinal, upload in enumerate(uploads)
-        ),
+        resources=tuple(resources),
     )
 
 
@@ -285,8 +279,8 @@ async def create_answer_run(
     with one JSON ``request`` part plus repeated ``attachments`` files. Uploaded
     bytes and their references are committed with the run itself.
     """
-    manager = get_manager(request)
-    body, uploads = await _parse_answer_body(request, request_config(request).answer)
+    application = get_application(request)
+    body, uploads = await _parse_answer_body(request, application.config.answer)
     workspaces = await resolve_authorized_query_workspaces(
         request,
         user,
@@ -294,33 +288,10 @@ async def create_answer_run(
         all_workspaces=body.all_workspaces,
     )
     try:
-        run_request = _run_request(body, uploads, workspaces=workspaces)
-        owner_id = owner_id_from_user(user)
-        idempotency_key = _idempotency_key(request)
-        idempotency_fingerprint = answer_run_request_fingerprint(run_request.as_request())
-        if idempotency_key is not None:
-            replay = await manager.areplay_answer_run(
-                owner_id=owner_id,
-                idempotency_key=idempotency_key,
-                idempotency_fingerprint=idempotency_fingerprint,
-            )
-            if replay is not None:
-                return _descriptor(replay)
-        resources = await build_current_answer_resources(
-            links=run_request.links,
-            attachments=run_request.attachments,
-            attachment_loaders=[in_memory_attachment_loader(upload.content) for upload in uploads],
-        )
-        run_input = await manager.aprepare_answer_run_input(
-            run_request,
-            resources=resources or None,
-            idempotency_fingerprint=idempotency_fingerprint,
-        )
-        creation = await manager.astart_answer_run(
-            owner_id=owner_id,
-            request=run_input,
-            idempotency_key=idempotency_key,
-            attachment_bytes=[upload.content for upload in uploads],
+        creation = await application.answers.create(
+            request=_service_request(body, uploads, workspaces=workspaces),
+            owner_id=owner_id_from_user(user),
+            idempotency_key=_idempotency_key(request),
         )
     except IdempotencyKeyConflict:
         raise HTTPException(
@@ -335,8 +306,8 @@ async def get_answer_run(
     run_id: str, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
     """Return one owned run's status and, once it succeeded, its result."""
-    manager = get_manager(request)
-    record = await manager.aget_answer_run(owner_id=owner_id_from_user(user), run_id=run_id)
+    application = get_application(request)
+    record = await application.answers.get(owner_id=owner_id_from_user(user), run_id=run_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
     return await _status_payload(request, user, record)
@@ -359,8 +330,8 @@ async def cancel_answer_run(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Request cancellation; repeating it on a terminal run is a no-op."""
-    manager = get_manager(request)
-    outcome = await manager.acancel_answer_run(owner_id=owner_id_from_user(user), run_id=run_id)
+    application = get_application(request)
+    outcome = await application.answers.cancel(owner_id=owner_id_from_user(user), run_id=run_id)
     if outcome.outcome == "unknown" or outcome.run is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
     # 202 only while a running worker still has to observe the request.
@@ -373,10 +344,10 @@ async def stream_answer_run_events(
     run_id: str, request: Request, user: UserContext = Depends(get_current_user)
 ) -> StreamingResponse:
     """Replay this run's durable events from a cursor, then follow it live."""
-    manager = get_manager(request)
+    application = get_application(request)
     cursor = resume_cursor(request)
     owner_id = owner_id_from_user(user)
-    record = await manager.aget_answer_run(owner_id=owner_id, run_id=run_id)
+    record = await application.answers.get(owner_id=owner_id, run_id=run_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Answer run not found")
     if record.events_trimmed_at is not None:
@@ -391,9 +362,7 @@ async def stream_answer_run_events(
     visual = await authorized_workspaces(
         request, user, workspaces, AccessAction.WORKSPACE_READ_VISUAL_ASSET
     )
-    events = await manager.asubscribe_answer_run(
-        owner_id=owner_id, run_id=run_id, after_sequence=cursor
-    )
+    events = application.answers.subscribe(owner_id=owner_id, run_id=run_id, after_sequence=cursor)
     return StreamingResponse(
         follow_run_frames(
             events,

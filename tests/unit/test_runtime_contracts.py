@@ -2,6 +2,7 @@
 """Public contracts and dependency boundary of the durable runtime."""
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,50 +39,41 @@ _RUNTIME_RECORD_NAMES = frozenset(
 )
 
 
-def test_runtime_contracts_import_without_storage_or_answer() -> None:
+def test_sdk_and_runtime_import_without_composition_or_transports() -> None:
     script = """
 import sys
-from dlightrag.runtime import (
-    AnswerRunEvent,
-    AnswerRunPhase,
-    AnswerRunRecord,
-    AnswerRunStatus,
-    AnswerRunStore,
-    CheckpointError,
-    PendingArtifact,
-    RunCoordinator,
-    RunCheckpoint,
-    RunExecutionError,
-    RunExecutor,
-    answer_run_request_fingerprint,
-    artifact_digest,
-)
+import dlightrag.sdk.client
+import dlightrag.runtime
 
-assert AnswerRunStatus is not None
-assert AnswerRunPhase is not None
-assert AnswerRunRecord is not None
-assert AnswerRunEvent is not None
-assert RunCheckpoint is not None
-assert PendingArtifact is not None
-assert AnswerRunStore is not None
-assert CheckpointError is not None
-assert RunCoordinator is not None
-assert RunExecutionError is not None
-assert RunExecutor is not None
-assert answer_run_request_fingerprint({"query": "q"})
-assert artifact_digest(b"bytes")
-for forbidden in (
+forbidden = (
     "asyncpg",
-    "dlightrag.storage",
+    "fastapi",
+    "lightrag",
+    "PIL",
+    "dlightrag.adapters.postgres",
     "dlightrag.answer",
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",
-):
-    assert not any(name == forbidden or name.startswith(forbidden + ".") for name in sys.modules)
+)
+loaded = sorted(
+    name
+    for name in sys.modules
+    if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden)
+)
+if loaded:
+    raise SystemExit("unexpected eager imports: " + ", ".join(loaded))
 """
+    env = os.environ.copy()
+    source = str(_ROOT / "src")
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (source, env.get("PYTHONPATH"))))
 
-    subprocess.run([sys.executable, "-I", "-c", script], check=True)
+    subprocess.run(  # noqa: S603 - fixed interpreter and inline test program
+        [sys.executable, "-c", script],
+        cwd=_ROOT,
+        env=env,
+        check=True,
+    )
 
 
 def test_run_status_and_phase_literals_have_one_runtime_owner() -> None:

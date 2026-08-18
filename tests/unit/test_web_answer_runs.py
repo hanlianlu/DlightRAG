@@ -10,12 +10,14 @@ keys, retention, and concurrency live in the PostgreSQL integration suite.
 import asyncio
 import datetime
 import json
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.access import owner_id_from_user
 from dlightrag.api.answer_stream import follow_run_frames
 from dlightrag.api.server import create_app
 from dlightrag.runtime import AnswerRunEvent, IdempotencyKeyConflict
@@ -26,12 +28,14 @@ from dlightrag.web.conversation_models import (
 )
 from dlightrag.web.conversations import WebConversationService, project_conversation_turn
 from dlightrag.web.routes import chat as chat_routes
-from tests.unit.conftest import answer_capability_view, prepare_test_answer_run_input
+from tests.unit.conftest import answer_capability_view
 from tests.unit.web.answer_run_fixtures import (
     RUN_ID,
     SUBMISSION_ID,
     TURN_ID,
+    FakeAnswers,
     answer_run,
+    input_artifact,
     linked_turn,
     run_request,
     stored_result,
@@ -39,6 +43,7 @@ from tests.unit.web.answer_run_fixtures import (
 )
 
 _CID = "00000000-0000-0000-0000-000000000001"
+_ANONYMOUS = owner_id_from_user(None)
 _BODY = {
     "query": "What changed?",
     "workspaces": ["default"],
@@ -56,19 +61,26 @@ def service() -> AsyncMock:
 
 
 @pytest.fixture
-def manager() -> AsyncMock:
+def application_double() -> AsyncMock:
     created = AsyncMock()
-    created.answer_capabilities = answer_capability_view()
-    created.alist_workspace_records.return_value = [{"workspace": "default"}]
+    capability_view = answer_capability_view()
+    created.answers = SimpleNamespace(
+        capabilities=capability_view.read,
+        cancel=AsyncMock(),
+        subscribe=MagicMock(),
+    )
+    created.corpora = SimpleNamespace(
+        alist_workspace_records=AsyncMock(return_value=[{"workspace": "default"}])
+    )
     return created
 
 
 @pytest.fixture
-async def client(service: AsyncMock, manager: AsyncMock, test_config):
+async def client(service: AsyncMock, application_double: AsyncMock, test_config):
     application = create_app(include_web_app=True)
-    manager.config = test_config
-    application.state.manager = manager
-    application.state.web_conversation_service = service
+    application_double.config = test_config
+    application_double.web_conversations = service
+    application.state.application = application_double
     transport = ASGITransport(app=application)
     async with AsyncClient(
         transport=transport,
@@ -164,11 +176,10 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
     )
     existing = linked_turn(answer_run(status="running"))
     store.replay_answer_turn.return_value = existing
-    prepare = AsyncMock(side_effect=AssertionError("replay must not prepare model input"))
+    answers = FakeAnswers()
     service = WebConversationService(
         store=store,
-        prepare_run_input=prepare,
-        run_store=AsyncMock(),
+        answers=answers,
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
@@ -184,7 +195,7 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
 
     assert submission is not None
     assert submission.run.status == "running"
-    prepare.assert_not_awaited()
+    assert answers.prepared == []
     store.create_answer_turn.assert_not_awaited()
 
 
@@ -251,22 +262,22 @@ async def test_a_run_this_principal_does_not_own_is_404(
     assert response.status_code == 404
 
 
-async def test_cancelling_an_unowned_run_never_reaches_the_manager(
-    client: AsyncClient, service: AsyncMock, manager: AsyncMock
+async def test_cancelling_an_unowned_run_never_reaches_answer_service(
+    client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
     service.turn_for_run.return_value = None
 
     response = await client.delete(f"/web/answer/{RUN_ID}")
 
     assert response.status_code == 404
-    manager.acancel_answer_run.assert_not_awaited()
+    application_double.answers.cancel.assert_not_awaited()
 
 
 async def test_cancelling_a_running_run_reports_the_pending_request(
-    client: AsyncClient, manager: AsyncMock
+    client: AsyncClient, application_double: AsyncMock
 ) -> None:
     running = answer_run(status="running", cancel_requested_at=datetime.datetime.now(datetime.UTC))
-    manager.acancel_answer_run.return_value = Mock(outcome="pending", run=running)
+    application_double.answers.cancel.return_value = Mock(outcome="pending", run=running)
 
     response = await client.delete(f"/web/answer/{RUN_ID}")
 
@@ -276,9 +287,9 @@ async def test_cancelling_a_running_run_reports_the_pending_request(
 
 
 async def test_cancelling_a_terminal_run_is_a_200_no_op(
-    client: AsyncClient, manager: AsyncMock
+    client: AsyncClient, application_double: AsyncMock
 ) -> None:
-    manager.acancel_answer_run.return_value = Mock(
+    application_double.answers.cancel.return_value = Mock(
         outcome="already_terminal", run=answer_run(status="succeeded", result=stored_result())
     )
 
@@ -299,20 +310,19 @@ async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: AsyncMoc
 
 
 @pytest.fixture
-async def scoped_client(manager: AsyncMock, test_config):
+async def scoped_client(application_double: AsyncMock, test_config):
     """A client whose conversation service is real, over a store that must not run."""
     store = AsyncMock()
     application = create_app(include_web_app=True)
-    manager.config = test_config
-    application.state.manager = manager
-    application.state.web_conversation_service = WebConversationService(
+    application_double.config = test_config
+    application_double.web_conversations = WebConversationService(
         store=store,
-        prepare_run_input=prepare_test_answer_run_input,
-        run_store=AsyncMock(),
+        answers=FakeAnswers(),
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
     )
+    application.state.application = application_double
     transport = ASGITransport(app=application)
     async with AsyncClient(
         transport=transport,
@@ -338,15 +348,15 @@ async def scoped_client(manager: AsyncMock, test_config):
     "run_id", ["not-a-uuid", "019", RUN_ID[:-1]], ids=["text", "short", "trunc"]
 )
 async def test_a_malformed_run_id_is_the_same_opaque_404(
-    scoped_client: AsyncClient, manager: AsyncMock, method: str, path: str, run_id: str
+    scoped_client: AsyncClient, application_double: AsyncMock, method: str, path: str, run_id: str
 ) -> None:
     """An unparseable id is unknown, not a server fault, and never reaches storage."""
     response = await scoped_client.request(method, path.format(run_id=run_id))
 
     assert response.status_code == 404
     scoped_client.store.find_turn_by_run.assert_not_awaited()  # type: ignore[attr-defined]
-    manager.acancel_answer_run.assert_not_awaited()
-    manager.asubscribe_answer_run.assert_not_awaited()
+    application_double.answers.cancel.assert_not_awaited()
+    application_double.answers.subscribe.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -361,20 +371,20 @@ async def test_a_malformed_run_id_is_the_same_opaque_404(
 )
 async def test_the_resume_cursor_comes_from_either_form(
     client: AsyncClient,
-    manager: AsyncMock,
+    application_double: AsyncMock,
     header: str | None,
     query: str | None,
     expected: int,
 ) -> None:
-    async def _events(**_kwargs: Any):
+    def _events(**_kwargs: Any):
         return _empty_events()
 
-    manager.asubscribe_answer_run.side_effect = _events
+    application_double.answers.subscribe.side_effect = _events
     url = f"/web/answer/{RUN_ID}/events" + (f"?after={query}" if query is not None else "")
 
     await client.get(url, headers={"Last-Event-ID": header} if header is not None else None)
 
-    assert manager.asubscribe_answer_run.await_args.kwargs["after_sequence"] == expected
+    assert application_double.answers.subscribe.call_args.kwargs["after_sequence"] == expected
 
 
 @pytest.mark.parametrize(
@@ -388,7 +398,7 @@ async def test_the_resume_cursor_comes_from_either_form(
 )
 async def test_an_unusable_cursor_never_subscribes(
     client: AsyncClient,
-    manager: AsyncMock,
+    application_double: AsyncMock,
     header: str | None,
     query: str | None,
     status: int,
@@ -400,7 +410,7 @@ async def test_an_unusable_cursor_never_subscribes(
     )
 
     assert response.status_code == status
-    manager.asubscribe_answer_run.assert_not_awaited()
+    application_double.answers.subscribe.assert_not_called()
 
 
 async def _empty_events():
@@ -464,7 +474,7 @@ async def test_a_token_frame_carries_only_the_text() -> None:
 
 
 async def test_closing_the_event_stream_detaches_without_cancelling(
-    client: AsyncClient, manager: AsyncMock
+    client: AsyncClient, application_double: AsyncMock
 ) -> None:
     """Disconnecting is a transport decision, never a decision about the run."""
     detached = asyncio.Event()
@@ -476,10 +486,10 @@ async def test_closing_the_event_stream_detaches_without_cancelling(
         finally:
             detached.set()
 
-    async def _events(**_kwargs: Any):
+    def _events(**_kwargs: Any):
         return _iterate()
 
-    manager.asubscribe_answer_run.side_effect = _events
+    application_double.answers.subscribe.side_effect = _events
 
     async with client.stream("GET", f"/web/answer/{RUN_ID}/events") as response:
         assert response.status_code == 200
@@ -487,7 +497,7 @@ async def test_closing_the_event_stream_detaches_without_cancelling(
             break
 
     assert detached.is_set()
-    manager.acancel_answer_run.assert_not_awaited()
+    application_double.answers.cancel.assert_not_awaited()
 
 
 async def test_a_failed_run_becomes_a_public_browser_error() -> None:
@@ -580,31 +590,15 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
     assert "principal_id" not in turn.model_dump_json()
 
 
-async def test_terminal_attachment_loads_artifact_from_public_run_fields() -> None:
-    digest = "a" * 64
-    run = answer_run(
-        status="succeeded",
-        request=run_request(
-            attachments=[
-                {
-                    "digest": digest,
-                    "filename": "notes.txt",
-                    "mime_type": "text/plain",
-                    "ordinal": 0,
-                    "byte_size": 7,
-                }
-            ]
-        ),
-        result=stored_result(),
-    )
+async def test_terminal_attachment_is_read_through_the_answer_service() -> None:
     store = AsyncMock()
-    store.find_turn_by_run.return_value = linked_turn(run)
-    run_store = AsyncMock()
-    run_store.load_artifact.return_value = b"content"
+    store.find_turn_by_run.return_value = linked_turn(
+        answer_run(status="succeeded", result=stored_result())
+    )
+    answers = FakeAnswers({(RUN_ID, 0): input_artifact(content=b"content")})
     service = WebConversationService(
         store=store,
-        prepare_run_input=prepare_test_answer_run_input,
-        run_store=run_store,
+        answers=answers,
         max_turns=100,
         ttl_days=30,
         max_attachments=6,
@@ -613,8 +607,93 @@ async def test_terminal_attachment_loads_artifact_from_public_run_fields() -> No
     attachment = await service.attachment(None, RUN_ID, 0)
 
     assert attachment is not None
-    assert attachment[0].digest == digest
-    assert attachment[1] == b"content"
+    assert attachment.content == b"content"
+    assert answers.reads == [(_ANONYMOUS, RUN_ID, 0)]
+
+
+async def test_an_unowned_run_never_reads_an_input_artifact() -> None:
+    store = AsyncMock()
+    store.find_turn_by_run.return_value = None
+    answers = FakeAnswers({(RUN_ID, 0): input_artifact(content=b"content")})
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_turns=100,
+        ttl_days=30,
+        max_attachments=6,
+    )
+
+    assert await service.attachment(None, RUN_ID, 0) is None
+    assert answers.reads == []
+
+
+async def test_history_attachments_load_from_the_run_that_accepted_them() -> None:
+    origin_run_id = "019893f4-0000-7000-8000-0000000000ff"
+    now = datetime.datetime.now(datetime.UTC)
+    store = AsyncMock()
+    store.snapshot.return_value = ConversationSnapshot(
+        principal_id="anonymous",
+        conversation_id=_CID,
+        content_revision=1,
+        title="Conversation",
+        created_at=now,
+        updated_at=now,
+        turns=(
+            linked_turn(
+                answer_run(
+                    status="succeeded",
+                    run_id=origin_run_id,
+                    request=run_request(
+                        attachments=[
+                            {
+                                "digest": "b" * 64,
+                                "filename": "prior.png",
+                                "mime_type": "image/png",
+                                "ordinal": 3,
+                                "byte_size": 5,
+                            }
+                        ]
+                    ),
+                    result=stored_result(),
+                )
+            ),
+        ),
+    )
+    store.replay_answer_turn.return_value = None
+    store.create_answer_turn.return_value = None
+    answers = FakeAnswers(
+        {
+            (origin_run_id, 3): input_artifact(
+                content=b"prior-bytes",
+                ordinal=3,
+                filename="prior.png",
+                mime_type="image/png",
+                digest="b" * 64,
+            )
+        }
+    )
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_turns=100,
+        ttl_days=30,
+        max_attachments=6,
+    )
+
+    await service.start_answer(
+        None,
+        conversation_id=_CID,
+        submission_id=SUBMISSION_ID,
+        query="And now?",
+        workspaces=["default"],
+    )
+
+    request = answers.prepared[0]
+    # The carried reference is re-ordinalled for this run, while its bytes stay
+    # addressed by the run and ordinal that accepted them.
+    (carried,) = request.history_resources
+    assert (carried.source_ordinal, carried.digest) == (3, "b" * 64)
+    assert carried.run_id == origin_run_id
 
 
 def test_uploads_are_addressed_through_their_run() -> None:

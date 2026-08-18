@@ -25,7 +25,6 @@ from dlightrag.api.models import (
     RetrieveRequest,
     UploadIngestJobResponse,
 )
-from dlightrag.app_state import request_config
 from dlightrag.core.client_payloads import metadata_filter_from_payload
 from dlightrag.services.corpora import (
     CorpusResetResult,
@@ -40,7 +39,7 @@ from dlightrag.services.retrieval import RetrieveRequest as ServiceRequest
 from .deps import (
     authorized_workspaces,
     enforce_access,
-    get_manager,
+    get_application,
     resolve_authorized_query_workspaces,
     resolve_workspace,
 )
@@ -63,8 +62,8 @@ async def ingest(
     body: IngestRequest, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
     """Bulk document ingestion."""
-    manager = get_manager(request)
-    cfg = request_config(request)
+    application = get_application(request)
+    cfg = application.config
     ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
     ingest_spec = ingest_spec_from_payload(body)
@@ -86,7 +85,7 @@ async def ingest(
         )
         ingest_spec = ingest_spec.model_copy(update={"path": path, "documents": documents})
 
-    job = await manager.corpora.start_ingest_job(ws, ingest_spec)
+    job = await application.corpora.start_ingest_job(ws, ingest_spec)
     return _job_response(job)
 
 
@@ -97,8 +96,8 @@ async def get_ingest_job(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return durable ingest job status."""
-    manager = get_manager(request)
-    job = await manager.corpora.get_ingest_job(job_id)
+    application = get_application(request)
+    job = await application.corpora.get_ingest_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
     workspace = job.get("workspace")
@@ -119,8 +118,8 @@ async def cancel_ingest_job(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Stop a running ingest job, keeping whatever it already ingested."""
-    manager = get_manager(request)
-    job = await manager.corpora.get_ingest_job(job_id)
+    application = get_application(request)
+    job = await application.corpora.get_ingest_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
     workspace = job.get("workspace")
@@ -131,7 +130,7 @@ async def cancel_ingest_job(
         AccessAction.JOB_CANCEL,
         workspace=workspace_id,
     )
-    cancelled = await manager.corpora.cancel_ingest_job(job_id)
+    cancelled = await application.corpora.cancel_ingest_job(job_id)
     return cancelled if cancelled is not None else job
 
 
@@ -140,7 +139,7 @@ async def retrieve(
     body: RetrieveRequest, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
     """Retrieve contexts and sources without LLM answer generation."""
-    manager = get_manager(request)
+    application = get_application(request)
     resolved_workspaces = await resolve_authorized_query_workspaces(
         request,
         user,
@@ -159,7 +158,7 @@ async def retrieve(
         resolved_workspaces,
         AccessAction.WORKSPACE_READ_VISUAL_ASSET,
     )
-    result = await manager.retrieval.retrieve(
+    result = await application.retrieval.retrieve(
         ServiceRequest(
             query=body.query,
             workspaces=tuple(resolved_workspaces),
@@ -206,8 +205,8 @@ async def ingest_blob(
     """
     import json as _json
 
-    manager = get_manager(request)
-    cfg = request_config(request)
+    application = get_application(request)
+    cfg = application.config
     try:
         form = await request.form(
             max_files=2,
@@ -285,7 +284,7 @@ async def ingest_blob(
     if meta_dict is not None:
         kwargs["metadata"] = meta_dict
 
-    job = await manager.corpora.start_ingest_job(ws, IngestSpec(**kwargs))
+    job = await application.corpora.start_ingest_job(ws, IngestSpec(**kwargs))
     job["uploaded_file"] = str(target_path)
     job["filename"] = safe_name
     return _job_response(job)
@@ -296,10 +295,10 @@ async def reset_workspace(
     body: ResetRequest, request: Request, user: UserContext = Depends(get_current_user)
 ) -> CorpusResetResult:
     """Reset all RAG data for a workspace."""
-    manager = get_manager(request)
+    application = get_application(request)
     ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_RESET, workspace=ws)
-    return await manager.corpora.reset(
+    return await application.corpora.reset(
         workspace_ids=(ws,),
         keep_files=body.keep_files,
         dry_run=body.dry_run,

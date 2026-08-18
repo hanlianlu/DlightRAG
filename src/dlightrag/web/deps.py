@@ -20,7 +20,6 @@ from dlightrag.access import (
     access_control_from_settings,
 )
 from dlightrag.answer.citations.parser import CITATION_PATTERN
-from dlightrag.app_state import request_config
 from dlightrag.model_settings import access_settings
 from dlightrag.web.markdown import (
     inject_highlights,
@@ -30,7 +29,8 @@ from dlightrag.web.markdown import (
 )
 
 if TYPE_CHECKING:
-    from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.application import Application
+    from dlightrag.web.conversations import WebConversationService
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
@@ -280,19 +280,19 @@ def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) 
     return normalize_workspace(dlightrag_workspace)
 
 
-def get_manager(request: Request) -> RAGServiceManager:
-    """Get RAGServiceManager from app state."""
-    return request.app.state.manager
+def get_application(request: Request) -> Application:
+    """Return the one app-scoped composition root."""
+    return request.app.state.application
 
 
-def get_web_conversation_service(request: Request) -> Any:
-    """Return the one app-scoped Web conversation service."""
-    return request.app.state.web_conversation_service
+def get_web_conversation_service(request: Request) -> WebConversationService:
+    """Return the typed Web service through the Application lifetime guard."""
+    return get_application(request).web_conversations
 
 
 def _web_access_control(request: Request) -> AccessControl:
     return getattr(request.app.state, "access_control", None) or access_control_from_settings(
-        access_settings(request_config(request))
+        access_settings(get_application(request).config)
     )
 
 

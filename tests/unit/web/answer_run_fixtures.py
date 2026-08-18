@@ -4,7 +4,17 @@
 import datetime
 from typing import Any
 
-from dlightrag.runtime import AnswerRunRecord, AnswerRunStatus
+from dlightrag.runtime import (
+    AnswerRunRecord,
+    AnswerRunStatus,
+    PendingArtifact,
+)
+from dlightrag.services.answers import (
+    AnswerInputArtifact,
+    AnswerRequest,
+    AnswerRunAcceptor,
+    AnswerService,
+)
 from dlightrag.web.conversation_models import ConversationSummary, LinkedTurn
 from dlightrag.web.conversations import WebAnswerSubmission
 
@@ -12,6 +22,70 @@ NOW = datetime.datetime(2026, 8, 12, tzinfo=datetime.UTC)
 RUN_ID = "019893f4-0000-7000-8000-000000000001"
 TURN_ID = "00000000-0000-0000-0000-000000000010"
 SUBMISSION_ID = "00000000-0000-0000-0000-0000000000aa"
+
+
+class FakeAnswers(AnswerService):
+    """The durable Answer operations one Web conversation depends on."""
+
+    def __init__(self, artifacts: dict[tuple[str, int], AnswerInputArtifact] | None = None) -> None:
+        self.artifacts = dict(artifacts or {})
+        self.prepared: list[AnswerRequest] = []
+        self.reads: list[tuple[str, str, int]] = []
+
+    async def accept[T](
+        self,
+        *,
+        request: AnswerRequest,
+        owner_id: str,
+        idempotency_key: str,
+        idempotency_fingerprint: str,
+        acceptor: AnswerRunAcceptor[T],
+    ) -> T | None:
+        replay = await acceptor.replay_run(
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            idempotency_fingerprint=idempotency_fingerprint,
+        )
+        if replay is not None:
+            return replay
+        self.prepared.append(request)
+        return await acceptor.create_run(
+            owner_id=owner_id,
+            idempotency_key=idempotency_key,
+            idempotency_fingerprint=idempotency_fingerprint,
+            request={"query": request.query, "workspaces": list(request.workspaces)},
+            artifacts=tuple(
+                PendingArtifact(content=resource.content)
+                for resource in request.resources
+                if resource.content is not None
+            ),
+            references=(),
+        )
+
+    async def read_input_artifact(
+        self, *, owner_id: str, run_id: str, ordinal: int
+    ) -> AnswerInputArtifact | None:
+        self.reads.append((owner_id, run_id, ordinal))
+        return self.artifacts.get((run_id, ordinal))
+
+
+def input_artifact(
+    *,
+    content: bytes,
+    ordinal: int = 0,
+    filename: str = "notes.txt",
+    mime_type: str = "text/plain",
+    digest: str = "a" * 64,
+    reference_kind: str = "current_attachment",
+) -> AnswerInputArtifact:
+    return AnswerInputArtifact(
+        reference_kind=reference_kind,  # type: ignore[arg-type]
+        ordinal=ordinal,
+        filename=filename,
+        mime_type=mime_type,
+        digest=digest,
+        content=content,
+    )
 
 
 def run_request(**overrides: Any) -> dict[str, Any]:

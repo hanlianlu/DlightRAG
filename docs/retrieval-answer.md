@@ -119,8 +119,8 @@ RetrievalService.retrieve(RetrieveRequest(...))
         text excerpts, KG context, source metadata, optional images
 ```
 
-The public manager resolves workspaces and starts cold-service warm-up before
-entering this operation. A multi-workspace request plans once over the selected
+Each interface resolves an authorized concrete workspace set before entering
+`RetrievalService`, which starts cold-service warm-up. A multi-workspace request plans once over the selected
 workspace set, then dispatches that one resolved retrieval request to each
 workspace before round-robin merging.
 

@@ -305,7 +305,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
     link = page.get_by_role("link", name="Open source")
     assert link.get_attribute("target") == "_blank"
     assert link.get_attribute("rel") == "noopener noreferrer"
-    with page.expect_popup() as popup_info:
+    with page.context.expect_page() as popup_info:
         link.click()
     popup = popup_info.value
     assert popup.url.startswith("http://www.sgas.ruc.edu.cn/")

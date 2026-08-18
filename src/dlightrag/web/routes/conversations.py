@@ -14,7 +14,7 @@ from dlightrag.web.conversation_models import (
 )
 from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (
-    get_manager,
+    get_application,
     get_web_access_gate,
     get_web_conversation_service,
 )
@@ -83,7 +83,7 @@ async def conversation_history(
     request: Request,
     service: WebConversationService = Depends(get_web_conversation_service),
 ) -> ConversationHistory:
-    records = await get_manager(request).corpora.alist_workspace_records()
+    records = await get_application(request).corpora.alist_workspace_records()
     gate = get_web_access_gate(request)
     downloadable = await gate.filter_workspace_records(
         AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
@@ -145,14 +145,13 @@ async def run_attachment(
     stored = await service.attachment(_user(request), run_id, ordinal)
     if stored is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    reference, content = stored
     headers = {
         "Cache-Control": "private, max-age=3600",
         "X-Content-Type-Options": "nosniff",
     }
-    if not reference.mime_type.lower().startswith("image/"):
-        headers["Content-Disposition"] = _attachment_content_disposition(reference.filename)
-    return Response(content=content, media_type=reference.mime_type, headers=headers)
+    if not stored.mime_type.lower().startswith("image/"):
+        headers["Content-Disposition"] = _attachment_content_disposition(stored.filename)
+    return Response(content=stored.content, media_type=stored.mime_type, headers=headers)
 
 
 @router.get("/runs/{run_id}/attachments/{ordinal}/thumbnail")

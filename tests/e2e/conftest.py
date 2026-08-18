@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared fixtures for E2E Playwright tests.
 
-Starts a real FastAPI server on a random port with a mocked RAG service
-manager so the browser can exercise the full HTML/JS/CSS pipeline without
+Starts a real FastAPI server on a random port with a mocked Application so the
+browser can exercise the full HTML/JS/CSS pipeline without
 needing PostgreSQL, LLM, or embedding backends.
 
 Usage (opt-in, requires Playwright)::
@@ -12,13 +12,13 @@ Usage (opt-in, requires Playwright)::
 
 import base64
 import socket
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Generator, Mapping
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,7 +40,16 @@ from dlightrag.answer.runs.execution import (
     PinnedModelProfile,
 )
 from dlightrag.api.server import create_app
+from dlightrag.config import (
+    DlightragConfig,
+    EmbeddingConfig,
+    LLMConfig,
+    ModelCapacityOverrideConfig,
+    ModelConfig,
+    set_config,
+)
 from dlightrag.runtime import AnswerRunEvent, AnswerRunRecord
+from dlightrag.services.answers import AnswerInputArtifact
 from dlightrag.web.conversation_models import ConversationHistory, ConversationSummary, LinkedTurn
 from dlightrag.web.conversations import WebAnswerSubmission, project_conversation_turn
 
@@ -334,15 +343,20 @@ class E2EConversationService:
         reference = next(
             item for item in _request_attachments(turn.run.request) if item["ordinal"] == ordinal
         )
-        return SimpleNamespace(
-            filename=reference["filename"], mime_type=reference["mime_type"]
-        ), content
+        return AnswerInputArtifact(
+            reference_kind="current_attachment",
+            ordinal=ordinal,
+            filename=reference["filename"],
+            mime_type=reference["mime_type"],
+            digest=reference["digest"],
+            content=content,
+        )
 
     async def thumbnail(self, user: Any, run_id: str, ordinal: int) -> tuple[bytes, str] | None:
         stored = await self.attachment(user, run_id, ordinal)
-        if stored is None or not stored[0].mime_type.lower().startswith("image/"):
+        if stored is None or not stored.mime_type.lower().startswith("image/"):
             return None
-        return stored[1], stored[0].mime_type
+        return stored.content, stored.mime_type
 
     def seed_image_history(self, *, turn_count: int) -> str:
         """Create one long image conversation for browser loading probes."""
@@ -432,21 +446,37 @@ def e2e_base_url(
     e2e_conversation_service: E2EConversationService,
 ) -> Generator[str, Any]:
     """Start one real FastAPI server for the E2E session on a random port."""
-    manager = AsyncMock()
-    manager.config = SimpleNamespace(
-        workspace="default",
-        input_dir_path=Path("."),
-        citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
-        embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
-        answer=SimpleNamespace(
-            image_max_pixels=MODEL_IMAGE_MAX_PIXELS,
-            max_attachments=6,
-            max_attachment_bytes=100 * 1024 * 1024,
-            max_total_attachment_bytes=128 * 1024 * 1024,
+    working_directory = tempfile.TemporaryDirectory(prefix="dlightrag-e2e-")
+    application_config = DlightragConfig(  # type: ignore[call-arg]
+        working_dir=working_directory.name,
+        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
+        model_capacity_overrides=[
+            ModelCapacityOverrideConfig(
+                provider="openai",
+                model="gpt-5.4-mini",
+                context_window_tokens=400_000,
+                max_output_tokens=128_000,
+                supports_images=True,
+                supports_tools=True,
+                supports_reasoning=True,
+            )
+        ],
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="test",
+            startup_probe=False,
         ),
     )
+    application_config.answer.image_max_pixels = MODEL_IMAGE_MAX_PIXELS
+    application_config.answer.max_attachments = 6
+    application_config.answer.max_attachment_bytes = 100 * 1024 * 1024
+    application_config.answer.max_total_attachment_bytes = 128 * 1024 * 1024
+    set_config(application_config)
+    application_double = AsyncMock()
+    application_double.config = application_config
 
-    async def _events(*, owner_id: str, run_id: str, after_sequence: int = 0) -> Any:
+    def _events(*, owner_id: str, run_id: str, after_sequence: int = 0) -> Any:
         """Replay this run's durable events from the caller's cursor.
 
         The browser is the only consumer, so the whole log is short and
@@ -454,29 +484,32 @@ def e2e_base_url(
         Resuming after a sequence never repeats an earlier frame.
         """
         del owner_id
-        log: list[AnswerRunEvent] = [
-            _event(1, "progress", {"phase": "planning"}),
-            _event(2, "progress", {"phase": "generating"}),
-            *(
-                _event(3 + index, "token", {"text": token})
-                for index, token in enumerate(_ANSWER_TOKENS)
-            ),
-        ]
-        e2e_conversation_service.finish_run(run_id)
-        turn = await e2e_conversation_service.turn_for_run(None, run_id)
-        result = dict(turn.run.result or {}) if turn is not None else {}
-        log.append(
-            _event(3 + len(_ANSWER_TOKENS), "done", {"status": "succeeded", "result": result})
-        )
 
         async def _iterate() -> Any:
+            log: list[AnswerRunEvent] = [
+                _event(1, "progress", {"phase": "planning"}),
+                _event(2, "progress", {"phase": "generating"}),
+                *(
+                    _event(3 + index, "token", {"text": token})
+                    for index, token in enumerate(_ANSWER_TOKENS)
+                ),
+            ]
+            e2e_conversation_service.finish_run(run_id)
+            turn = await e2e_conversation_service.turn_for_run(None, run_id)
+            result = dict(turn.run.result or {}) if turn is not None else {}
+            log.append(
+                _event(
+                    3 + len(_ANSWER_TOKENS),
+                    "done",
+                    {"status": "succeeded", "result": result},
+                )
+            )
             for event in log:
                 if event.sequence > after_sequence:
                     yield event
 
         return _iterate()
 
-    manager.asubscribe_answer_run.side_effect = _events
     answer_image_capability = AnswerImageCapability(
         status="supported",
         configured_ceiling=3,
@@ -486,29 +519,37 @@ def e2e_base_url(
         model="test-model",
         failure_kind=None,
     )
-    manager.answer_capabilities = SimpleNamespace(
-        read=AsyncMock(
+    application_double.answers = SimpleNamespace(
+        subscribe=MagicMock(side_effect=_events),
+        cancel=AsyncMock(),
+        capabilities=AsyncMock(
             return_value=AnswerCapabilities(
                 answer=answer_image_capability,
                 vlm_status="unknown",
             )
-        )
+        ),
     )
-    manager.corpora.list_workspaces.return_value = MOCK_WORKSPACE_LIST
-    manager.corpora.alist_workspace_records.return_value = MOCK_WORKSPACES
-    manager.corpora.list_ingested_files.return_value = []
-    manager.corpora.get_pipeline_status.return_value = {"busy": False, "pending_enqueues": 0}
-    manager.corpora.file_panel_snapshot.return_value = {
+    application_double.corpora.list_workspaces.return_value = MOCK_WORKSPACE_LIST
+    application_double.corpora.alist_workspace_records.return_value = MOCK_WORKSPACES
+    application_double.corpora.list_ingested_files.return_value = []
+    application_double.corpora.get_pipeline_status.return_value = {
+        "busy": False,
+        "pending_enqueues": 0,
+    }
+    application_double.corpora.file_panel_snapshot.return_value = {
         "files": [],
         "pipeline_status": {"busy": False, "pending_enqueues": 0},
     }
-    manager.corpora.delete_files.return_value = {"deleted_count": 0}
-    manager.create_web_conversation_service = MagicMock(return_value=e2e_conversation_service)
+    application_double.corpora.delete_files.return_value = {"deleted_count": 0}
+    application_double.web_conversations = e2e_conversation_service
 
     port = _free_port()
     import uvicorn
 
-    with patch("dlightrag.api.server.RAGServiceManager.acreate", AsyncMock(return_value=manager)):
+    with patch(
+        "dlightrag.api.server.Application.acreate",
+        AsyncMock(return_value=application_double),
+    ):
         app = create_app(include_web_app=True)
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
         server = uvicorn.Server(config)
@@ -529,6 +570,7 @@ def e2e_base_url(
         yield base_url
         server.should_exit = True
         t.join(timeout=3)
+    working_directory.cleanup()
 
 
 @pytest.fixture(scope="session")

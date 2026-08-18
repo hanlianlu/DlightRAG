@@ -27,9 +27,9 @@ from dlightrag.api.middleware import (
 )
 from dlightrag.api.models import ANSWER_REQUEST_PART_MAX_BYTES, ErrorDetail
 from dlightrag.api.routes import router
-from dlightrag.app_state import request_config
-from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
+from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.runtime import RunSchemaError
+from dlightrag.services.answers import AnswerRuntimeUnavailableError
 from dlightrag.services.retrieval import RetrievalTimeoutError
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
@@ -83,24 +83,20 @@ def _request_body_limits(cfg: DlightragConfig) -> tuple[int, dict[str, int]]:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
-        manager = await RAGServiceManager.acreate(config=request_config(_app))
+        web_enabled = bool(getattr(_app.state, "web_enabled", False))
+        application = await Application.acreate(
+            config=_app.state.config,
+            web_enabled=web_enabled,
+        )
     except Exception:
-        logger.exception("Failed to initialize RAG service manager")
+        logger.exception("Failed to initialize DlightRAG application")
         raise
-    _app.state.manager = manager
-    _app.state.health = manager.health
-    conversation_service = None
+    _app.state.application = application
+    _app.state.health = application.health
     try:
-        if getattr(_app.state, "web_enabled", False):
-            conversation_service = manager.create_web_conversation_service()
-            _app.state.web_conversation_service = conversation_service
-        if conversation_service is not None:
-            await conversation_service.initialize()
         yield
     finally:
-        if conversation_service is not None:
-            await conversation_service.aclose()
-        await manager.aclose()
+        await application.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -164,13 +160,14 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         body = ErrorDetail(detail=str(exc.detail), error_type=error_type)
         return JSONResponse(status_code=status, content=body.model_dump())
 
-    @application.exception_handler(RAGServiceUnavailableError)
+    @application.exception_handler(ApplicationClosedError)
     @application.exception_handler(WorkspaceUnavailableError)
+    @application.exception_handler(AnswerRuntimeUnavailableError)
     async def rag_unavailable_handler(
         request: Request,  # noqa: ARG001
-        exc: RAGServiceUnavailableError | WorkspaceUnavailableError,
+        exc: ApplicationClosedError | WorkspaceUnavailableError | AnswerRuntimeUnavailableError,
     ) -> JSONResponse:
-        body = ErrorDetail(detail=exc.detail, error_type="unavailable")
+        body = ErrorDetail(detail=str(exc), error_type="unavailable")
         return JSONResponse(status_code=503, content=body.model_dump())
 
     @application.exception_handler(RetrievalTimeoutError)
@@ -194,9 +191,9 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         request: Request,  # noqa: ARG001
         exc: AnswerInputError,
     ) -> JSONResponse:
-        """Answer input rejection -> 400 with a stable error kind."""
+        """Answer input rejection -> 422 with a stable error kind."""
         body = ErrorDetail(detail=str(exc), error_type="validation", error_kind=exc.error_kind)
-        return JSONResponse(status_code=400, content=body.model_dump())
+        return JSONResponse(status_code=422, content=body.model_dump())
 
     @application.exception_handler(InvalidToolConfigurationError)
     async def invalid_tool_configuration_handler(

@@ -4,8 +4,8 @@ This document defines durable Answer behavior across two owners. The neutral
 `dlightrag.runtime` package owns lifecycle records, the store port, fenced
 sessions, subscriptions, checkpoint failures, and `RunCoordinator`. The Answer
 executor owns retrieval/synthesis and converts product failures to
-`RunExecutionError` before Runtime sees them. REST, MCP, Web, and the Python
-manager all use that same coordinator.
+`RunExecutionError` before Runtime sees them. `AnswerService` gives REST, MCP,
+Web, and in-process Python callers the same coordinator-backed lifecycle.
 
 `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the store
 port. Runtime never imports PostgreSQL, Answer implementation, RAG
@@ -40,7 +40,7 @@ The durable runtime rests on these query-time rules.
 ### Model image capabilities
 
 Answer, VLM, and chat-rerank image capability are separate facts because they
-may resolve to different model roles. The manager probes each distinct model
+may resolve to different model roles. Application startup probes each distinct model
 endpoint once at startup and caches the result by resolved model configuration.
 When two roles resolve to the same configuration they share one probe result.
 
@@ -217,11 +217,11 @@ only while `cancel_requested_at` is null. If finalization wins the row lock
 first, later cancellation is the terminal no-op; if cancellation wins first,
 the worker commits `cancelled` instead of `succeeded`.
 
-The Python manager keeps convenience methods:
+`AnswerService` keeps convenience methods:
 
-- `aanswer()` creates a run and waits for its result;
-- `aanswer_stream()` creates a run and subscribes to its events;
-- explicit run start/status/events/cancel methods expose the durable contract.
+- `answer()` creates a run and waits for its result;
+- `answer_stream()` creates a run and subscribes to its events;
+- `create()`, `get()`, `subscribe()`, and `cancel()` expose the durable contract.
 
 Cancelling a waiting convenience call or closing any event subscriber detaches
 that caller only. Explicit run cancellation is the sole client action that sets
@@ -241,8 +241,8 @@ creates the run, follows durable events, and falls back to status reads after a
 reconnect or an expired event log. The synchronous CLI invokes that helper
 through `asyncio.run`; the async evaluation script awaits it directly. Neither
 retains a synchronous endpoint nor implements an independent polling loop. The
-manager's `aanswer()` and `aanswer_stream()` convenience methods use the same
-coordinator semantics in process.
+`AnswerService.answer()` and `answer_stream()` use the same coordinator
+semantics in process.
 
 MCP `answer` is deliberately descriptor-only and returns immediately. The
 separate MCP status tool returns the canonical result after success, and the
@@ -250,10 +250,10 @@ cancel tool requests cancellation; MCP does not hold one tool call open for a
 tens-of-minutes run.
 
 Every transport derives the owner through one transport-neutral principal
-projection in core. `auth_mode="none"` and `auth_mode="simple"` intentionally
+projection in Access. `auth_mode="none"` and `auth_mode="simple"` intentionally
 collapse callers into one deployment owner; `auth_mode="jwt"` is the tenant
-boundary. Direct in-process manager calls without a user use that same
-deployment owner.
+boundary. Trusted in-process callers pass an explicit owner id to
+`AnswerService` and may use the deployment owner when no tenant boundary exists.
 
 ### Reader role
 

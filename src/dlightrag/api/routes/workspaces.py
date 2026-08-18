@@ -16,7 +16,7 @@ from dlightrag.api.models import (
 )
 from dlightrag.utils import validate_workspace_name
 
-from .deps import enforce_access, filter_workspace_records, get_manager
+from .deps import enforce_access, filter_workspace_records, get_application
 
 router = APIRouter()
 
@@ -36,8 +36,8 @@ async def list_workspaces(
     request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
     """List all registered workspaces."""
-    manager = get_manager(request)
-    records = await manager.corpora.alist_workspace_records()
+    application = get_application(request)
+    records = await application.corpora.alist_workspace_records()
     records = await filter_workspace_records(request, user, AccessAction.WORKSPACE_QUERY, records)
     return {
         "workspaces": [row["workspace"] for row in records],
@@ -56,14 +56,14 @@ async def create_workspace(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Create an empty workspace in the durable registry."""
-    manager = get_manager(request)
+    application = get_application(request)
     workspace, display_name = _normalize_create_body(body)
     await enforce_access(request, user, AccessAction.WORKSPACE_CREATE, workspace=workspace)
-    existing = await manager.corpora.list_workspaces()
+    existing = await application.corpora.list_workspaces()
     if workspace in existing:
         raise HTTPException(status_code=409, detail=f"Workspace '{display_name}' already exists")
 
-    await manager.corpora.create_workspace(workspace, display_name=display_name)
+    await application.corpora.create_workspace(workspace, display_name=display_name)
     return {
         "workspace": workspace,
         "display_name": display_name,
@@ -80,14 +80,14 @@ async def delete_workspace(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Delete/reset one workspace and remove its registry row."""
-    manager = get_manager(request)
+    application = get_application(request)
     try:
         label = validate_workspace_name(workspace)
         normalized = normalize_workspace(label)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await enforce_access(request, user, AccessAction.WORKSPACE_DELETE, workspace=normalized)
-    result = await manager.corpora.reset(
+    result = await application.corpora.reset(
         workspace_ids=(normalized,),
         keep_files=keep_files,
         dry_run=dry_run,

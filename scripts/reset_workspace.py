@@ -135,8 +135,8 @@ async def _run(
     keep_files: bool,
     dry_run: bool,
 ) -> CorpusResetResult:
+    from dlightrag.application import Application
     from dlightrag.config import get_config
-    from dlightrag.core.servicemanager import RAGServiceManager
 
     config = get_config()
     print("\nCorpus storage backends (from config):")
@@ -145,10 +145,10 @@ async def _run(
     print(f"  Graph:      {config.graph_storage}")
     print(f"  Default:    {config.workspace}")
 
-    manager = await RAGServiceManager.acreate(config)
+    application = await Application.acreate(config)
     try:
         return await _reset_with_corpora(
-            manager.corpora,
+            application.corpora,
             AccessGate(AllowAllAccessControl(), None),
             workspace=workspace,
             reset_all=reset_all,
@@ -157,7 +157,7 @@ async def _run(
             dry_run=dry_run,
         )
     finally:
-        await manager.aclose()
+        await application.aclose()
 
 
 def main() -> int:

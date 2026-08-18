@@ -21,11 +21,11 @@ from dlightrag.web.attachment_models import SUPPORTED_DOCUMENT_EXTENSIONS
 from tests.unit.conftest import answer_capability_view
 
 if TYPE_CHECKING:
-    from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.application import Application
 
 
-def _fake_manager(**attrs: object) -> RAGServiceManager:
-    return cast("RAGServiceManager", SimpleNamespace(**attrs))
+def _fake_application(**attrs: object) -> Application:
+    return cast("Application", SimpleNamespace(**attrs))
 
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
@@ -37,10 +37,10 @@ SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
 
 
 @pytest.fixture
-def mock_manager():
-    """Create a mock RAGServiceManager for web route tests."""
-    manager = AsyncMock()
-    manager.answer_capabilities = answer_capability_view(
+def mock_application():
+    """Create an Application-shaped Web route test double."""
+    application_double = AsyncMock()
+    capability_view = answer_capability_view(
         AnswerImageCapability(
             status="supported",
             configured_ceiling=8,
@@ -51,6 +51,7 @@ def mock_manager():
             failure_kind=None,
         )
     )
+    application_double.answers = SimpleNamespace(capabilities=capability_view.read)
     corpora = SimpleNamespace()
     corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
     corpora.alist_workspace_records = AsyncMock(
@@ -85,18 +86,18 @@ def mock_manager():
     corpora.get_visual_asset = AsyncMock()
     corpora.create_workspace = AsyncMock()
     corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
-    manager.corpora = corpora
-    return manager
+    application_double.corpora = corpora
+    return application_double
 
 
 @pytest.fixture
-def web_app(mock_manager, test_config: DlightragConfig):
-    """Create the FastAPI app with web routes enabled and manager set."""
+def web_app(mock_application, test_config: DlightragConfig):
+    """Create the FastAPI app with its Application-shaped double installed."""
     application = create_app(include_web_app=True)
-    mock_manager.config = test_config
-    application.state.manager = mock_manager
+    mock_application.config = test_config
+    application.state.application = mock_application
     conversation_service = AsyncMock()
-    application.state.web_conversation_service = conversation_service
+    mock_application.web_conversations = conversation_service
     return application
 
 
@@ -116,20 +117,20 @@ async def client(web_app):
 async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dlightrag.core.servicemanager import RAGServiceManager
+    from dlightrag.application import Application
 
-    manager = AsyncMock()
+    application_double = AsyncMock()
     conversation_service = AsyncMock()
     application = create_app(include_web_app=True)
-    manager.create_web_conversation_service = MagicMock(return_value=conversation_service)
-    monkeypatch.setattr(RAGServiceManager, "acreate", AsyncMock(return_value=manager))
+    application_double.health = MagicMock()
+    application_double.web_conversations = conversation_service
+    monkeypatch.setattr(Application, "acreate", AsyncMock(return_value=application_double))
 
     async with application.router.lifespan_context(application):
-        conversation_service.initialize.assert_awaited_once_with()
-        assert application.state.web_conversation_service is conversation_service
+        assert application.state.application.web_conversations is conversation_service
 
-    manager.create_web_conversation_service.assert_called_once_with()
-    manager.aclose.assert_awaited_once_with()
+    conversation_service.aclose.assert_not_awaited()
+    application_double.aclose.assert_awaited_once_with()
 
 
 async def test_web_static_assets_are_not_browser_persistent(client):
@@ -151,17 +152,17 @@ async def test_vendored_assets_allow_revalidation_caching(client):
     assert "no-store" not in resp.headers.get("cache-control", "")
 
 
-def _configure_web_manager(manager, cfg: DlightragConfig):
-    manager.config = cfg
-    manager.corpora.get_pipeline_status = AsyncMock(
+def _configure_web_application(application_double, cfg: DlightragConfig):
+    application_double.config = cfg
+    application_double.corpora.get_pipeline_status = AsyncMock(
         return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
     )
-    return manager
+    return application_double
 
 
-def _web_client_for(cfg: DlightragConfig, manager):
+def _web_client_for(cfg: DlightragConfig, application_double):
     application = create_app(include_web_app=True)
-    application.state.manager = _configure_web_manager(manager, cfg)
+    application.state.application = _configure_web_application(application_double, cfg)
     transport = ASGITransport(app=application)
     return AsyncClient(
         transport=transport,
@@ -180,26 +181,26 @@ class TestWebAuth:
     """Web routes follow global auth_mode."""
 
     async def test_simple_missing_auth_redirects_browser_get(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get("/web/")
 
         assert resp.status_code == 303
         assert resp.headers["location"].startswith("/web/login")
 
     async def test_source_download_login_redirect_preserves_workspace(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         from urllib.parse import parse_qs, urlsplit
 
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
 
-        async with _web_client_for(test_config, mock_manager) as client:
+        async with _web_client_for(test_config, mock_application) as client:
             response = await client.get(
                 "/web/files/raw/doc-report",
                 params={"workspace": "finance"},
@@ -210,12 +211,12 @@ class TestWebAuth:
         assert query["next"] == ["/web/files/raw/doc-report?workspace=finance"]
 
     async def test_simple_invalid_bearer_rejected(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
                 "/web/files",
                 headers={"Authorization": "Bearer wrong-token"},
@@ -224,12 +225,12 @@ class TestWebAuth:
         assert resp.status_code == 401
 
     async def test_simple_login_sets_cookie_and_grants_access(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             login = await c.post(
                 "/web/login",
                 data={"token": "secret-token", "next": "/web/"},
@@ -241,7 +242,7 @@ class TestWebAuth:
         assert resp.status_code == 200
 
     async def test_simple_login_cookie_downloads_source_without_bearer(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         from dlightrag_rag.source_download import LocalDownloadTarget
 
@@ -250,13 +251,13 @@ class TestWebAuth:
         source = test_config.input_dir_path / "default" / "notes.md"
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("downloadable notes", encoding="utf-8")
-        mock_manager.corpora.prepare_source_download.return_value = LocalDownloadTarget(
+        mock_application.corpora.prepare_source_download.return_value = LocalDownloadTarget(
             path=source.resolve(),
             media_type="text/markdown",
             filename="notes.md",
         )
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             await c.post(
                 "/web/login",
                 data={"token": "secret-token", "next": "/web/"},
@@ -273,17 +274,17 @@ class TestWebAuth:
         assert response.status_code == 200
         assert response.content == b"downloadable notes"
         assert rest_response.status_code == 401
-        mock_manager.corpora.prepare_source_download.assert_awaited_once_with(
+        mock_application.corpora.prepare_source_download.assert_awaited_once_with(
             "default", "doc-notes"
         )
 
     async def test_login_redirect_rejects_external_next(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             resp = await c.post(
                 "/web/login",
                 data={"token": "secret-token", "next": "https://evil.example/"},
@@ -293,12 +294,12 @@ class TestWebAuth:
         assert resp.headers["location"] == "/web/"
 
     async def test_invalid_auth_cookie_is_cleared(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             c.cookies.set("dlightrag_web_auth", "not base64!")
             resp = await c.get("/web/")
 
@@ -307,12 +308,12 @@ class TestWebAuth:
         assert "dlightrag_web_auth=" in resp.headers["set-cookie"]
 
     async def test_bearer_header_grants_web_access(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
                 "/web/files",
                 headers={"Authorization": "Bearer secret-token"},
@@ -321,12 +322,12 @@ class TestWebAuth:
         assert resp.status_code == 200
 
     async def test_jwt_invalid_bearer_rejected(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "jwt"
         test_config.jwt_verification_key = "test-jwt-verification-key-for-web-route-tests"
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
                 "/web/files",
                 headers={"Authorization": "Bearer not-a-jwt"},
@@ -335,7 +336,7 @@ class TestWebAuth:
         assert resp.status_code == 401
 
     async def test_jwt_bearer_header_grants_web_access(
-        self, test_config: DlightragConfig, mock_manager
+        self, test_config: DlightragConfig, mock_application
     ) -> None:
         test_config.auth_mode = "jwt"
         test_config.jwt_verification_key = "test-jwt-verification-key-for-web-route-tests"
@@ -348,7 +349,7 @@ class TestWebAuth:
             algorithm="HS256",
         )
 
-        async with _web_client_for(test_config, mock_manager) as c:
+        async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
                 "/web/files",
                 headers={"Authorization": f"Bearer {token}"},
@@ -440,7 +441,7 @@ class TestWebIndex:
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
         test_config.answer.max_attachment_bytes = 12_345
-        web_app.state.manager.config = test_config
+        web_app.state.application.config = test_config
 
         resp = await client.get("/web/")
 
@@ -450,8 +451,8 @@ class TestWebIndex:
     async def test_index_projects_supported_capability_effective_limit(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
-        web_app.state.manager.config = test_config
-        web_app.state.manager.answer_capabilities = answer_capability_view(
+        web_app.state.application.config = test_config
+        web_app.state.application.answers.capabilities = answer_capability_view(
             AnswerImageCapability(
                 status="supported",
                 configured_ceiling=8,
@@ -461,7 +462,7 @@ class TestWebIndex:
                 model="test-model",
                 failure_kind=None,
             )
-        )
+        ).read
 
         resp = await client.get("/web/")
 
@@ -472,8 +473,8 @@ class TestWebIndex:
     async def test_index_reprobes_unknown_capability_before_projecting_uploads(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
-        web_app.state.manager.config = test_config
-        web_app.state.manager.answer_capabilities = answer_capability_view(
+        web_app.state.application.config = test_config
+        web_app.state.application.answers.capabilities = answer_capability_view(
             AnswerImageCapability(
                 status="supported",
                 configured_ceiling=8,
@@ -483,14 +484,14 @@ class TestWebIndex:
                 model="test-model",
                 failure_kind=None,
             )
-        )
+        ).read
 
         resp = await client.get("/web/")
 
         assert resp.status_code == 200
         assert 'data-attachment-image-capability="supported"' in resp.text
         assert 'data-attachment-image-limit="2"' in resp.text
-        web_app.state.manager.answer_capabilities.read.assert_awaited_once()
+        web_app.state.application.answers.capabilities.assert_awaited_once()
 
     async def test_chat_template_projects_document_attachment_limits(
         self, client: AsyncClient
@@ -541,9 +542,9 @@ class TestWebFiles:
         assert "text/html" in resp.headers["content-type"]
 
     async def test_file_list_derives_display_name_from_path(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.file_panel_snapshot = AsyncMock(
+        mock_application.corpora.file_panel_snapshot = AsyncMock(
             return_value={
                 "files": [
                     {"doc_id": "d1", "file_path": "/tmp/reports/q4.pdf", "status": "processed"}
@@ -559,10 +560,10 @@ class TestWebFiles:
         assert 'title="/tmp/reports/q4.pdf"' in resp.text
 
     async def test_file_list_uses_file_panel_snapshot_for_cold_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default", "cold_ws"])
-        mock_manager.corpora.file_panel_snapshot = AsyncMock(
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default", "cold_ws"])
+        mock_application.corpora.file_panel_snapshot = AsyncMock(
             return_value={
                 "files": [
                     {"doc_id": "d1", "file_path": "/tmp/cold/report.pdf", "status": "processed"}
@@ -570,78 +571,78 @@ class TestWebFiles:
                 "pipeline_status": {"busy": False, "pending_enqueues": 0},
             }
         )
-        mock_manager.corpora.list_ingested_files = AsyncMock(return_value=[])
-        mock_manager.corpora.get_pipeline_status = AsyncMock(return_value={"busy": False})
+        mock_application.corpora.list_ingested_files = AsyncMock(return_value=[])
+        mock_application.corpora.get_pipeline_status = AsyncMock(return_value={"busy": False})
 
         resp = await client.get("/web/files", params={"workspace": "cold-ws"})
 
         assert resp.status_code == 200
         assert ">report.pdf</span>" in resp.text
-        mock_manager.corpora.file_panel_snapshot.assert_awaited_once_with("cold_ws")
-        mock_manager.corpora.list_ingested_files.assert_not_awaited()
-        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with("cold_ws")
+        mock_application.corpora.list_ingested_files.assert_not_awaited()
+        mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.corpora.file_panel_snapshot.assert_not_awaited()
-        mock_manager.corpora.list_ingested_files.assert_not_awaited()
-        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
+        mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+        mock_application.corpora.list_ingested_files.assert_not_awaited()
+        mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace_even_with_registered_cookie(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
         client.cookies.set("dlightrag_workspace", "test_ws")
 
         resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.corpora.file_panel_snapshot.assert_not_awaited()
-        mock_manager.corpora.list_ingested_files.assert_not_awaited()
-        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
+        mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+        mock_application.corpora.list_ingested_files.assert_not_awaited()
+        mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_canonicalizes_requested_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(
+        mock_application.corpora.list_workspaces = AsyncMock(
             return_value=["default", "test_fallback_ws"]
         )
 
         resp = await client.get("/web/files", params={"workspace": "test-fallback-ws"})
 
         assert resp.status_code == 200
-        mock_manager.corpora.file_panel_snapshot.assert_awaited_once_with("test_fallback_ws")
+        mock_application.corpora.file_panel_snapshot.assert_awaited_once_with("test_fallback_ws")
 
     async def test_file_list_rejects_stale_workspace_without_default(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["other_ws"])
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["other_ws"])
 
         resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.corpora.file_panel_snapshot.assert_not_awaited()
-        mock_manager.corpora.list_ingested_files.assert_not_awaited()
+        mock_application.corpora.file_panel_snapshot.assert_not_awaited()
+        mock_application.corpora.list_ingested_files.assert_not_awaited()
 
     async def test_ingest_status_rejects_stale_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.get("/web/ingest-status", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.corpora.get_pipeline_status.assert_not_awaited()
+        mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
     async def test_ingest_status_done_preserves_panel_content_container(
         self, client: AsyncClient, test_config: DlightragConfig
@@ -653,7 +654,7 @@ class TestWebFiles:
         assert resp.headers["hx-reswap"] == "innerHTML"
 
     async def test_upload_preserves_filename_for_directory_ingest(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
         resp = await client.post(
             "/web/files/upload",
@@ -661,8 +662,8 @@ class TestWebFiles:
         )
 
         assert resp.status_code == 200
-        mock_manager.corpora.start_ingest_job.assert_awaited_once()
-        call = mock_manager.corpora.start_ingest_job.await_args
+        mock_application.corpora.start_ingest_job.assert_awaited_once()
+        call = mock_application.corpora.start_ingest_job.await_args
         assert call.args[0] == "default"
         ingest_spec = call.args[1]
         assert ingest_spec.source_type == "local"
@@ -671,9 +672,9 @@ class TestWebFiles:
         assert (upload_dir / "report.pdf").read_bytes() == b"%PDF-fake"
 
     async def test_upload_rejects_stale_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
             "/web/files/upload",
@@ -683,7 +684,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.corpora.start_ingest_job.assert_not_awaited()
+        mock_application.corpora.start_ingest_job.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "filename",
@@ -702,7 +703,7 @@ class TestWebFiles:
             safe_upload_relative_path(filename)
 
     async def test_delete_files(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
         resp = await client.request(
             "DELETE",
@@ -710,12 +711,12 @@ class TestWebFiles:
             params={"file_path": "/tmp/test.pdf"},
         )
         assert resp.status_code == 200
-        mock_manager.corpora.delete_files.assert_awaited_once()
+        mock_application.corpora.delete_files.assert_awaited_once()
 
     async def test_delete_files_rejects_stale_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.request(
             "DELETE",
@@ -725,7 +726,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
-        mock_manager.corpora.delete_files.assert_not_awaited()
+        mock_application.corpora.delete_files.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -737,12 +738,12 @@ class TestWebWorkspaceCreate:
     """Tests for POST /web/workspaces/create."""
 
     async def test_create_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.create_workspace = AsyncMock()
+        mock_application.corpora.create_workspace = AsyncMock()
         # First call (duplicate check): workspace does not exist yet
         # Second call (post-create list): includes the new workspace
-        mock_manager.corpora.list_workspaces = AsyncMock(
+        mock_application.corpora.list_workspaces = AsyncMock(
             side_effect=[["default", "test_ws"], ["default", "test_ws", "new_workspace"]]
         )
         resp = await client.post(
@@ -758,13 +759,13 @@ class TestWebWorkspaceCreate:
         assert any(
             cookie.startswith("dlightrag_workspace_ids=new_workspace;") for cookie in set_cookies
         )
-        mock_manager.corpora.create_workspace.assert_awaited_once_with(
+        mock_application.corpora.create_workspace.assert_awaited_once_with(
             "new_workspace",
             display_name="new workspace",
         )
 
     async def test_create_workspace_duplicate(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
         resp = await client.post(
             "/web/workspaces/create",
@@ -798,10 +799,12 @@ class TestWebWorkspaceDelete:
     """Tests for POST /web/workspaces/delete."""
 
     async def test_delete_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.reset = AsyncMock(
+            return_value={"workspaces": {}, "total_errors": 0}
+        )
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
         resp = await client.post(
             "/web/workspaces/delete",
             data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
@@ -809,13 +812,15 @@ class TestWebWorkspaceDelete:
         assert resp.status_code == 200
         assert resp.json() == {"workspace": "test_ws", "next_workspace": "default"}
         assert "dlightrag_workspace=default" in resp.headers["set-cookie"]
-        mock_manager.corpora.reset.assert_awaited_once_with(workspace_ids=("test_ws",))
+        mock_application.corpora.reset.assert_awaited_once_with(workspace_ids=("test_ws",))
 
     async def test_delete_default_workspace_selects_first_remaining_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["research"])
+        mock_application.corpora.reset = AsyncMock(
+            return_value={"workspaces": {}, "total_errors": 0}
+        )
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["research"])
 
         resp = await client.post(
             "/web/workspaces/delete",
@@ -829,10 +834,12 @@ class TestWebWorkspaceDelete:
         assert any(cookie.startswith("dlightrag_workspace_ids=research;") for cookie in set_cookies)
 
     async def test_delete_hyphen_workspace_emits_canonical_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
-        mock_manager.corpora.reset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
-        mock_manager.corpora.list_workspaces = AsyncMock(return_value=["default"])
+        mock_application.corpora.reset = AsyncMock(
+            return_value={"workspaces": {}, "total_errors": 0}
+        )
+        mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
             "/web/workspaces/delete",
@@ -841,7 +848,7 @@ class TestWebWorkspaceDelete:
 
         assert resp.status_code == 200
         assert resp.json() == {"workspace": "test_fallback_ws", "next_workspace": "default"}
-        mock_manager.corpora.reset.assert_awaited_once_with(workspace_ids=("test_fallback_ws",))
+        mock_application.corpora.reset.assert_awaited_once_with(workspace_ids=("test_fallback_ws",))
 
     @pytest.mark.parametrize(
         ("workspace_name", "confirm_name"),

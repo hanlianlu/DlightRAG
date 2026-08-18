@@ -37,7 +37,7 @@
         <mxCell id="clients" value="&lt;b&gt;REST &#183; Web &#183; MCP &#183; SDK&lt;/b&gt;&lt;br&gt;auth &#183; uploads &#183; request contracts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="78" y="385" width="170" height="64" as="geometry"/>
         </mxCell>
-        <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;composition root&lt;br&gt;workspace routing &#183; reader/writer gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="manager" value="&lt;b&gt;Application&lt;/b&gt;&lt;br&gt;composition root&lt;br&gt;answers &#183; retrieval &#183; corpora" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=11;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="282" y="375" width="205" height="84" as="geometry"/>
         </mxCell>
         <mxCell id="run_coordinator" value="&lt;b&gt;RunCoordinator &#8635;&lt;/b&gt;&lt;br&gt;runtime.answer_worker_concurrency&lt;br&gt;leases &#183; events &#183; checkpoints" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=10;fontColor=#111827;spacing=7;" vertex="1" parent="1">

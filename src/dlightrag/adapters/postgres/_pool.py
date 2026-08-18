@@ -57,7 +57,7 @@ class PGPool:
         )
 
     def bind(self, config: Any) -> None:
-        """Bind the pool to an explicit config (manager/service startup).
+        """Bind the pool to an explicit config during Application startup.
 
         Prevents the domain pool from silently diverging from the process's
         service config -- notably the reader read-only invariant -- when a

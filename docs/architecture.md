@@ -23,13 +23,13 @@ independent concurrency owners.
 ```text
 Clients
   -> REST / Web / MCP / SDK adapters
-  -> RAGServiceManager
-       composition, workspace routing, user scope, writer/reader role gating
-       -> dlightrag.runtime RunCoordinator
+  -> Application
+       eager composition and lifecycle
+       -> AnswerService -> dlightrag.runtime RunCoordinator
             neutral lifecycle records, store port, leases, events, checkpoints
-            -> PGAnswerRunStore adapter
-     -> WorkspaceRag
-                one workspace runtime, ingest, retrieve, metadata, reset
+            -> AnswerExecutor -> PGAnswerRunStore adapter
+       -> RetrievalService -> WorkspacePool -> WorkspaceRag
+       -> CorpusAdmin -> WorkspacePool -> WorkspaceRag
   -> LightRAG main
        parser routing, staged ingest, chunks, doc status, KG, vectors
   -> DlightRAG PostgreSQL stores
@@ -147,7 +147,7 @@ unchanged while lexical terms, inferred metadata filters, and optional
 current-image hints are derived. Explicit filters and BM25 terms remain
 authoritative.
 
-Workspace resolution stays at the manager request boundary. It starts cold
+Workspace resolution stays at each interface's Access boundary. Retrieval starts cold
 workspace initialization before retrieval planning for retrieve-only, fast-answer,
 and research-answer requests; the later retrieval joins those same services.
 
@@ -202,7 +202,7 @@ extension checks, advisory-lock lifetimes, reader attachment, catalog scans,
 workspace maintenance, schema DDL, and SQL identifiers. Startup availability
 failures are translated to corpus errors; operation-specific failures retain
 their adapter context for the current product error policy.
-The current manager composes the adapter; the independently installable RAG
+The current `Application` composes the adapter; the independently installable RAG
 package, Runtime, status routes, API, Web, and MCP never import it. Corpus and
 operational pools remain separate even when they use the same endpoint.
 
@@ -305,9 +305,9 @@ import higher ones.
 
 ```text
 L9  api, mcp, web                                  interface adapters
-L8  core.servicemanager                            multi-workspace coordinator
-L7  dlightrag_rag.WorkspaceRag                     per-workspace corpus capability
-L6  core orchestration                             answer, current lifecycle, source/media projection
+L8  application; services                         composition and use cases
+L7  dlightrag_rag.WorkspacePool, WorkspaceRag      corpus runtime ownership
+L6  answer                                         execution, lifecycle, source/media projection
 L5  host and storage adapters                      PostgreSQL; LightRAG contract and lifecycle
 L4  workspace cores and model adapters             AI; Agent; RAG retrieval, ingestion, sourcing
 L3  product domain                                 access, requests, citations, conversations

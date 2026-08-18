@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from dlightrag.access import AccessAction
-from dlightrag.web.deps import enforce_web_access, get_manager
+from dlightrag.web.deps import enforce_web_access, get_application
 
 router = APIRouter()
 
@@ -20,10 +20,10 @@ async def image(
     size: VisualAssetSize = "thumb",
 ) -> Response:
     """Serve a same-origin source panel image."""
-    manager = get_manager(request)
+    application = get_application(request)
     workspace_id = normalize_workspace(workspace)
     await enforce_web_access(request, AccessAction.WORKSPACE_READ_VISUAL_ASSET, workspace_id)
-    asset = await manager.corpora.get_visual_asset(workspace_id, chunk_id, size=size)
+    asset = await application.corpora.get_visual_asset(workspace_id, chunk_id, size=size)
     if asset is None:
         raise HTTPException(status_code=404, detail="Image not found")
     return Response(
