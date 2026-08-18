@@ -143,20 +143,9 @@ def resolve_postgres_target(env: dict[str, str]) -> PostgresTarget:
 # ─────────────────────────────────────────────────────────────────
 
 
-def validate_native_target(
-    *,
-    target: PostgresTarget,
-    working_dir: Path,
-    repo_root: Path,
-    allow_remote_reset: bool,
-) -> list[str]:
-    """Return every safety violation; an empty list means the target is safe."""
+def validate_working_dir(working_dir: Path, repo_root: Path) -> list[str]:
+    """Return path-safety violations for the working-directory root."""
     violations: list[str] = []
-    if not allow_remote_reset and target.host not in _LOOPBACK_HOSTS:
-        violations.append(
-            f"native reset refuses non-loopback host {target.host!r}; "
-            "pass --allow-remote-reset to override for a dedicated development host"
-        )
     home = Path.home().resolve()
     root = working_dir
     if root == Path("/") or root == home:
@@ -176,6 +165,24 @@ def validate_native_target(
     for child in root.iterdir() if root.is_dir() else ():
         if child.is_symlink():
             violations.append(f"working-directory first-level child is a symbolic link: {child}")
+    return violations
+
+
+def validate_native_target(
+    *,
+    target: PostgresTarget,
+    working_dir: Path,
+    repo_root: Path,
+    allow_remote_reset: bool,
+) -> list[str]:
+    """Return every safety violation; an empty list means the target is safe."""
+    violations: list[str] = []
+    if not allow_remote_reset and target.host not in _LOOPBACK_HOSTS:
+        violations.append(
+            f"native reset refuses non-loopback host {target.host!r}; "
+            "pass --allow-remote-reset to override for a dedicated development host"
+        )
+    violations.extend(validate_working_dir(working_dir, repo_root))
     return violations
 
 
@@ -658,6 +665,14 @@ async def main(argv: list[str] | None = None) -> int:
     report.record("confirmation", "target confirmed")
 
     run_docker_reset(target, report)
+    # Every invocation also clears the verified host working directory so no
+    # half-reset environment can survive (M3-D36).
+    for violation in validate_working_dir(working_dir, repo_root):
+        report.fail("target", violation)
+    if not report.failures:
+        clear_working_dir_children(working_dir, report)
+        for violation in verify_working_dir_empty(working_dir):
+            report.fail("verify-working-dir", violation)
     _print_report(report, verbose=args.verbose)
     print("Development reset complete." if report.ok else "Development reset FAILED.")
     return 0 if report.ok else 1
