@@ -303,6 +303,17 @@ class RunCoordinator:
             self._sweeper = asyncio.create_task(self._sweep_forever())
             self._maintainer = asyncio.create_task(self._maintain_forever())
 
+    def cancel_local(self, owner_id: str, run_id: str) -> None:
+        """Signal a locally leased run's task; the listener re-read authority first.
+
+        Cancelling the task interrupts the executor at its next control
+        boundary; its shielded writes settle and the coordinator commits the
+        single cancelled terminal transition.
+        """
+        task = self._runs.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+
     def wake(self) -> None:
         """Nudge this process after it accepted a run; polling remains the truth."""
         self._wake.set()

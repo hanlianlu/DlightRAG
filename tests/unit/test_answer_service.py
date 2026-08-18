@@ -166,8 +166,12 @@ class _Coordinator:
         self.is_started = True
         self._admission_lock = asyncio.Lock()
         self.wakes = 0
+        self.cancelled_local: list[str] = []
         self.subscriptions: list[tuple[str, str, int]] = []
         self.attached = asyncio.Event()
+
+    def cancel_local(self, owner_id: str, run_id: str) -> None:
+        self.cancelled_local.append(run_id)
 
     @contextlib.asynccontextmanager
     async def admission(self) -> AsyncIterator[bool]:

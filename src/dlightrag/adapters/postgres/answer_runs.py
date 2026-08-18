@@ -27,7 +27,9 @@ from dlightrag.adapters.postgres._migrations import (
     verify_migrations,
 )
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
+from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
+from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
 from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.errors import RunSchemaError
 from dlightrag.runtime.policy import (
@@ -920,10 +922,17 @@ SELECT count(*)::int FROM inserted
 """
 
 _REQUEST_CANCELLATION = """
-UPDATE dlightrag_answer_runs
-SET cancel_requested_at = COALESCE(cancel_requested_at, NOW()),
-    updated_at = NOW()
-WHERE owner_id = $1 AND run_id = $2
+WITH updated AS (
+    UPDATE dlightrag_answer_runs
+    SET cancel_requested_at = COALESCE(cancel_requested_at, NOW()),
+        updated_at = NOW()
+    WHERE owner_id = $1 AND run_id = $2
+      AND status = 'running'
+    RETURNING 1
+), notified AS (
+    SELECT pg_notify('dlightrag_answer_run_cancel', $3) FROM updated
+)
+SELECT count(*)::int FROM notified
 """
 
 _REQUEUE_RUN = """
@@ -1547,6 +1556,48 @@ class PGAnswerRunStore(PostgresOperationRunner):
         return await self._run_read(_operation)
 
     # -- cancellation -------------------------------------------------
+    async def rescan_cancel_pending(self, *, worker_id: str) -> list[tuple[str, str]]:
+        """Return locally leased cancel-pending runs for this worker.
+
+        The listener calls this on every connect/reconnect and on every wake
+        notification; the payload itself never cancels anything (M3-D19).
+        """
+
+        async def _operation(conn: Any) -> list[tuple[str, str]]:
+            rows = await conn.fetch(
+                "SELECT owner_id, run_id FROM dlightrag_answer_runs"
+                " WHERE cancel_requested_at IS NOT NULL"
+                " AND status = 'running' AND lease_owner = $1"
+                " AND lease_expires_at > NOW()",
+                worker_id,
+            )
+            return [(str(row["owner_id"]), str(row["run_id"])) for row in rows]
+
+        return await self._run_read(_operation)
+
+    def build_cancellation_listener(
+        self,
+        *,
+        worker_id: str,
+        on_cancel: Callable[[str, str], Awaitable[None]],
+    ) -> RunCancellationListener:
+        """Build the dedicated reconnecting LISTEN listener for this store."""
+
+        async def _open_connection() -> Any:
+            if self._operation_pool is not None:
+                return await self._operation_pool.acquire().__aenter__()
+            pool = await pg_pool.get()
+            return await pool.acquire().__aenter__()
+
+        async def _rescan() -> list[tuple[str, str]]:
+            return await self.rescan_cancel_pending(worker_id=worker_id)
+
+        return RunCancellationListener(
+            open_connection=_open_connection,
+            rescan=_rescan,
+            on_cancel=on_cancel,
+        )
+
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -1567,7 +1618,12 @@ class PGAnswerRunStore(PostgresOperationRunner):
                         outcome="cancelled",
                         run=answer_run_record(await conn.fetchrow(_SELECT_RUN, owner, run_uuid)),
                     )
-                await conn.execute(_REQUEST_CANCELLATION, owner, run_uuid)
+                await conn.execute(
+                    _REQUEST_CANCELLATION,
+                    owner,
+                    run_uuid,
+                    cancellation_notify_key(owner_id=owner, run_id=str(run_uuid)),
+                )
                 return CancellationOutcome(
                     outcome="pending",
                     run=answer_run_record(await conn.fetchrow(_SELECT_RUN, owner, run_uuid)),

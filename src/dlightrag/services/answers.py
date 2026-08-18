@@ -163,6 +163,8 @@ class _RunScheduler(Protocol):
 
     def wake(self) -> None: ...
 
+    def cancel_local(self, owner_id: str, run_id: str) -> None: ...
+
     def subscribe(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0
     ) -> AsyncGenerator[AnswerRunEvent]: ...
@@ -522,8 +524,16 @@ class AnswerService:
         return await self._store.get_run(owner_id=owner_id, run_id=run_id)
 
     async def cancel(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
-        """Request cancellation; only this mutates a run on a caller's behalf."""
-        return await self._store.request_cancellation(owner_id=owner_id, run_id=run_id)
+        """Request cancellation; only this mutates a run on a caller's behalf.
+
+        A pending running cancellation also signals this process's local task
+        immediately after the durable commit, so the owner observes the stop
+        before the next heartbeat (Task 5 same-process signal).
+        """
+        outcome = await self._store.request_cancellation(owner_id=owner_id, run_id=run_id)
+        if outcome.outcome == "pending":
+            self._coordinator.cancel_local(owner_id, run_id)
+        return outcome
 
     def subscribe(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0

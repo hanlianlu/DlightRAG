@@ -114,6 +114,9 @@ class _StoreScheduler:
     def wake(self) -> None:
         return None
 
+    def cancel_local(self, owner_id: str, run_id: str) -> None:
+        return None
+
     @asynccontextmanager
     async def admission(self) -> AsyncIterator[bool]:
         yield self.is_started

@@ -1,6 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Storage-neutral contracts and coordination for durable work."""
 
+from dlightrag.runtime.cancellation import (
+    CANCEL_CHANNEL,
+    RunCancellationListener,
+    cancellation_notify_key,
+)
 from dlightrag.runtime.contracts import AnswerRunPhase, AnswerRunStatus
 from dlightrag.runtime.coordinator import (
     MAINTENANCE_SECONDS,
@@ -93,6 +98,7 @@ __all__ = [
     "AnswerRunRecord",
     "AnswerRunStatus",
     "AnswerRunStore",
+    "CANCEL_CHANNEL",
     "ArtifactReferenceKind",
     "CancellationOutcome",
     "ClaimedRun",
@@ -117,6 +123,7 @@ __all__ = [
     "RunCreation",
     "RunDeletion",
     "RunCancelledError",
+    "RunCancellationListener",
     "RunCoordinator",
     "RunExecutionContext",
     "RunExecutionError",
@@ -144,6 +151,7 @@ __all__ = [
     "answer_run_request_fingerprint",
     "artifact_digest",
     "canonical_run_request_json",
+    "cancellation_notify_key",
     "parse_run_id",
     "RUN_HEARTBEAT_SECONDS",
     "RUN_ABANDONED_ERROR_KIND",

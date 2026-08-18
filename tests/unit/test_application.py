@@ -35,6 +35,7 @@ from dlightrag.web.conversations import WebConversationService
 _CLOSE_ORDER = [
     "close:corpora",
     "close:coordinator",
+    "close:listener",
     "close:web_conversations",
     "close:retrieval",
     "close:models",
@@ -135,6 +136,19 @@ class _WebStore(_Collaborator):
             raise self.initialize_error
 
 
+class _CancellationListener:
+    def __init__(self, recorder: _Recorder) -> None:
+        self.recorder = recorder
+        self.ready = asyncio.Event()
+
+    async def start(self) -> None:
+        self.recorder.add("listener:start")
+        self.ready.set()
+
+    async def aclose(self) -> None:
+        self.recorder.add("close:listener")
+
+
 class _Coordinator(_Collaborator):
     def __init__(self, recorder: _Recorder) -> None:
         super().__init__(recorder, "coordinator")
@@ -199,6 +213,7 @@ class _Parts:
         self.run_store = _RunStore(self.recorder)
         self.web_store = _WebStore(self.recorder)
         self.coordinator = _Coordinator(self.recorder)
+        self.cancellation_listener = _CancellationListener(self.recorder)
         self.corpora = _Corpora(self.recorder)
         self.retrieval = _Retrieval(self.recorder)
         self.answers = object()
@@ -220,6 +235,7 @@ class _Parts:
                 run_store=cast(PGAnswerRunStore, self.run_store),
                 web_store=cast(PGWebConversationStore, self.web_store),
                 coordinator=cast(RunCoordinator, self.coordinator),
+                cancellation_listener=cast(Any, self.cancellation_listener),
                 corpora=cast(CorpusAdmin, self.corpora),
                 retrieval=cast(RetrievalService, self.retrieval),
                 answers=cast(AnswerService, self.answers),
@@ -279,6 +295,7 @@ async def test_application_exposes_only_typed_services_and_closes_in_dependency_
         "capabilities:probe_all",
         f"pool:acquire:{normalize_workspace(test_config.workspace)}",
         "corpora:start_recovery",
+        "listener:start",
         "coordinator:start",
         "web_conversations:start_retention",
     ]

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from dlightrag.answer.model_runtime import AnswerModelRuntime
     from dlightrag.health import ApplicationHealth
     from dlightrag.runtime import RunCoordinator
+    from dlightrag.runtime.cancellation import RunCancellationListener
     from dlightrag.services.answers import AnswerService
     from dlightrag.services.corpora import CorpusAdmin
     from dlightrag.services.retrieval import RetrievalService
@@ -56,6 +57,7 @@ class _ApplicationComponents:
     run_store: PGAnswerRunStore
     web_store: PGWebConversationStore
     coordinator: RunCoordinator
+    cancellation_listener: RunCancellationListener
     corpora: CorpusAdmin
     retrieval: RetrievalService
     answers: AnswerService
@@ -239,6 +241,15 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         ),
         answer_worker_concurrency=config.runtime.answer_worker_concurrency,
     )
+
+    async def _cancel_local(owner: str, run_id: str) -> None:
+        coordinator.cancel_local(owner, run_id)
+
+    cancellation_listener = run_store.build_cancellation_listener(
+        worker_id=coordinator.worker_id,
+        on_cancel=_cancel_local,
+    )
+
     answers = AnswerService(
         store=run_store,
         coordinator=coordinator,
@@ -260,6 +271,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         run_store=run_store,
         web_store=web_store,
         coordinator=coordinator,
+        cancellation_listener=cancellation_listener,
         corpora=corpora,
         retrieval=retrieval,
         answers=answers,
@@ -467,10 +479,22 @@ class Application:
     async def _start_run_coordinator(self) -> None:
         """Begin executing accepted runs once startup validated their schema.
 
-        A store that never initialized already reported its startup warning, so
-        this neither retries it nor turns a transient fault into a hard failure.
+        The cancellation listener's initial LISTEN and locally leased rescan
+        must succeed before the coordinator claims work (M3-D41); connection
+        failure keeps readiness false while the listener retries and never
+        permits heartbeat-only claiming.
         """
         if not self._runs_ready:
+            return
+        try:
+            await self._components.cancellation_listener.start()
+            await asyncio.wait_for(
+                self._components.cancellation_listener.ready.wait(), timeout=30.0
+            )
+        except Exception as exc:
+            self._runs_ready = False
+            self._components.health.add_warning("Answer runtime unavailable")
+            logger.warning("Answer cancellation listener failed to start: %s", exc)
             return
         try:
             await self._components.coordinator.start()
@@ -519,6 +543,7 @@ class Application:
         for label, close in (
             ("ingest jobs", components.corpora.aclose),
             ("the durable answer coordinator", components.coordinator.aclose),
+            ("the cancellation listener", components.cancellation_listener.aclose),
             ("Web conversation retention", components.web_conversations.aclose),
             ("the Retrieval service", components.retrieval.aclose),
             ("the Answer model runtime", components.models.aclose),
