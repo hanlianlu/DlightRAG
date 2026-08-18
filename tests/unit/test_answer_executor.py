@@ -8,6 +8,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dlightrag_agent.session.fold import PriorTurns
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.scheduler import ModelScheduler
@@ -35,7 +36,6 @@ from dlightrag.answer.runs.execution import (
     build_current_answer_resources,
     in_memory_attachment_loader,
 )
-from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.runtime import CheckpointError, RunExecutionError, RunSession, artifact_digest
 
 

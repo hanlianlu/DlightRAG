@@ -4,6 +4,7 @@
 from typing import Any
 
 import pytest
+from dlightrag_agent.session.fold import PriorTurns, SessionEpisode
 from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag_ai.tokens import estimate_messages_tokens
 
@@ -11,8 +12,6 @@ from dlightrag.answer.agent.context import ContextAssembler
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.prompts import CONTROL_TURN_INSTRUCTION
-from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.memory.episode import RunEpisode
 
 _WINDOW = 80_000
 _RETAINED_TAIL = 13_600
@@ -65,7 +64,7 @@ async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
     with pytest.raises(AnswerInputOverflowError, match="proactive compaction threshold"):
         await _assembler(history).control_turn(
             evidence=_ledger(0),
-            episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+            episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
             tool_schema_tokens=0,
         )
 
@@ -74,7 +73,7 @@ async def test_evidence_uses_the_residual_after_pinned_conversation_history() ->
     evidence = _ledger(5)
     messages = await _assembler(_long_history(25)).control_turn(
         evidence=evidence,
-        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=0,
     )
 
@@ -90,7 +89,7 @@ async def test_control_evidence_and_tool_schemas_stop_at_compaction_threshold() 
 
     messages = await assembler.control_turn(
         evidence=_ledger(100, chars=4_000),
-        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=tool_schema_tokens,
     )
 
@@ -219,12 +218,12 @@ async def test_research_turn_packing_runs_off_the_event_loop(
 
     await assembler.control_turn(
         evidence=_ledger(3),
-        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
         tool_schema_tokens=0,
     )
     await assembler.answer_turn(
         evidence=_ledger(3),
-        episode=RunEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
     )
 
     assert estimator_threads and loop_thread not in estimator_threads

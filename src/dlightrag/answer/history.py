@@ -5,9 +5,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from dlightrag_agent.session.fold import PriorTurns
 from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
-
-from dlightrag.core.memory.conversation import PriorTurns
 
 type HistoryInputMeasure = Callable[[list[dict[str, Any]]], int]
 

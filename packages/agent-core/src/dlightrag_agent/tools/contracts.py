@@ -8,6 +8,8 @@ from typing import Any
 from dlightrag_ai.messages import AssistantTurn, ToolCall, ToolDefinition
 from pydantic import BaseModel
 
+from dlightrag_agent.session.effects import EffectIntent, ReplayPolicy, schema_digest
+
 type ToolModelFunc = Callable[..., Awaitable[AssistantTurn]]
 type ToolExecute = Callable[[BaseModel], Awaitable["ToolResult"]]
 
@@ -28,12 +30,30 @@ class ToolResult:
 
 @dataclass(frozen=True, slots=True)
 class AgentTool:
-    """Executable tool with a Pydantic argument contract."""
+    """Executable tool with a Pydantic argument contract.
+
+    ``replay_policy``, ``contract_version``, and ``input_schema_digest`` are the
+    intent facts safe replay must match exactly (M3-D13, M3-D18). The digest is
+    the SHA-256 of the canonicalized input schema, so presentation fields and
+    declaration order never change it.
+    """
 
     name: str
     description: str
     input_model: type[BaseModel]
     execute: ToolExecute
+    replay_policy: ReplayPolicy = "safe"
+    contract_version: int = 1
+    input_schema_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if self.contract_version < 1:
+            raise ValueError("AgentTool contract_version must be positive")
+        object.__setattr__(
+            self,
+            "input_schema_digest",
+            schema_digest(self.input_model.model_json_schema()),
+        )
 
     @property
     def definition(self) -> ToolDefinition:
@@ -87,6 +107,7 @@ class ExecutedTurn:
     assistant: AssistantTurn
     results: tuple[ToolExecution, ...]
     messages: list[dict[str, Any]]
+    intents: tuple[EffectIntent, ...] = ()
 
 
 __all__ = [

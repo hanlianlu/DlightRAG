@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+from dlightrag_agent.session.fold import PriorTurns
 from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.tokens import estimate_content_tokens, estimate_messages_tokens
 from dlightrag_rag.retrieval import RetrievalContexts
@@ -34,7 +35,6 @@ from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
 from dlightrag.answer.prompts import answer_core
-from dlightrag.core.memory.conversation import PriorTurns
 
 logger = logging.getLogger(__name__)
 

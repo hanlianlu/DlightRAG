@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from dlightrag_agent.session.fold import PriorTurns
 from dlightrag_agent.tools import AgentTool
 from dlightrag_ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, ModelProfile
 from dlightrag_ai.scheduler import model_call_scope
@@ -66,7 +67,6 @@ from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
 from dlightrag.answer.tools.resources import build_resource_tools
 from dlightrag.answer.tools.web import ExaSearch
-from dlightrag.core.memory.conversation import PriorTurns
 from dlightrag.runtime import (
     CheckpointError,
     LeaseLostError,

@@ -380,3 +380,98 @@ async def test_assistant_provider_state_is_preserved_for_native_replay() -> None
     )
 
     assert executed.messages[-2]["provider_state"] == turn.provider_state
+
+
+async def _search_tool(_args: BaseModel) -> ToolResult:
+    return ToolResult(content="found")
+
+
+async def test_preflight_creates_ordered_intents_for_valid_calls() -> None:
+    from dlightrag_agent.tools import preflight_tool_calls
+
+    tools = [
+        AgentTool(
+            name="search",
+            description="search docs",
+            input_model=SearchArgs,
+            execute=_search_tool,
+        )
+    ]
+    turn = _turn(
+        ToolCall(id="1", name="search", arguments={"query": "a"}),
+        ToolCall(id="2", name="search", arguments={"query": "b"}),
+    )
+    preflight = preflight_tool_calls(turn, tools)
+
+    assert [intent.source_call_id for intent in preflight.intents] == ["1", "2"]
+    assert [intent.tool_name for intent in preflight.intents] == ["search", "search"]
+    assert all(intent.replay_policy == "safe" for intent in preflight.intents)
+    assert all(len(intent.input_schema_digest) == 64 for intent in preflight.intents)
+    assert all(intent.contract_version == 1 for intent in preflight.intents)
+    assert preflight.validation_results == ()
+
+
+async def test_preflight_orders_invalid_calls_as_validation_results() -> None:
+    from dlightrag_agent.tools import preflight_tool_calls
+
+    tools = [
+        AgentTool(
+            name="search",
+            description="search docs",
+            input_model=SearchArgs,
+            execute=_search_tool,
+        )
+    ]
+    turn = _turn(
+        ToolCall(id="1", name="invented", arguments={}),
+        ToolCall(id="2", name="search", arguments={"query": "ok"}),
+    )
+    preflight = preflight_tool_calls(turn, tools)
+
+    assert [intent.source_call_id for intent in preflight.intents] == ["2"]
+    assert len(preflight.validation_results) == 1
+    validation = preflight.validation_results[0]
+    assert validation.call_id == "1"
+    assert validation.outcome == "unknown_tool"
+    assert "not available" in validation.content
+
+
+async def test_preflight_is_never_policy_for_web_and_contracts_are_pinned() -> None:
+    from dlightrag_agent.tools import preflight_tool_calls
+
+    web_tool = AgentTool(
+        name="search_web",
+        description="web search",
+        input_model=SearchArgs,
+        execute=_search_tool,
+        replay_policy="never",
+        contract_version=7,
+    )
+    turn = _turn(ToolCall(id="1", name="search_web", arguments={"query": "q"}))
+    preflight = preflight_tool_calls(turn, [web_tool])
+
+    (intent,) = preflight.intents
+    assert intent.replay_policy == "never"
+    assert intent.contract_version == 7
+
+
+async def test_length_stopped_turn_produces_no_intents() -> None:
+    model = ScriptedModel(
+        _turn(
+            ToolCall(id="1", name="search", arguments={"query": "q"}),
+            stop_reason="length",
+        )
+    )
+    tools = [
+        AgentTool(
+            name="search",
+            description="search docs",
+            input_model=SearchArgs,
+            execute=_search_tool,
+        )
+    ]
+    executed = await ToolTurnExecutor(model.complete_turn).run_turn(
+        [{"role": "user", "content": "q"}], tools
+    )
+    assert executed.intents == ()
+    assert executed.results[0].is_error is True

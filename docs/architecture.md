@@ -99,7 +99,7 @@ answer request (query + optional attachments)
                     RetrievalPlanner preserves the agent query and derives
                     lexical/filter/image hints inside that operation
                -> selected tools write observations into the EvidenceLedger
-               -> each control turn replays the RunEpisode's exchanges
+               -> each control turn replays the session episode's exchanges
          -> evidence-growth convergence
          -> one tools-disabled AnswerSynthesizer final answer
 ```

@@ -19,6 +19,8 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
+from dlightrag_agent.session.fold import SessionEpisode
+
 from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.runtime import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -67,7 +69,7 @@ async def encode_checkpoint_state(
 
     payload: dict[str, Any] = {
         "evidence": state.evidence.export_state(),
-        "episode": state.episode.export_state(),
+        "episode": state.episode.canonical_json(),
         "tool_results": state.tool_cache.export_results(),
         "resources": state.registry.export_state() if state.registry is not None else None,
     }
@@ -136,7 +138,10 @@ async def restore_agent_state(
     )
     try:
         state.evidence.restore_state(payload["evidence"])
-        state.episode.restore_state(payload["episode"])
+        state.episode = SessionEpisode.from_canonical_json(
+            payload["episode"],
+            retained_tail_tokens=state.episode.retained_tail_tokens,
+        )
         state.tool_cache.restore_results(payload.get("tool_results") or {})
         resources = payload.get("resources")
         if state.registry is not None and resources is not None:

@@ -12,10 +12,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from dlightrag_agent.session.fold import SessionEpisode
+
     from dlightrag.answer.evidence import EvidenceLedger
     from dlightrag.answer.resources.registry import ResourceRegistry
     from dlightrag.answer.tools import ExactCallCache
-    from dlightrag.core.memory.episode import RunEpisode
 
 
 @dataclass(slots=True)
@@ -23,7 +24,7 @@ class AgentRunState:
     """The research memory one control turn advances and a checkpoint restores."""
 
     evidence: EvidenceLedger
-    episode: RunEpisode
+    episode: SessionEpisode
     tool_cache: ExactCallCache
     registry: ResourceRegistry | None = None
     trace: dict[str, Any] = field(default_factory=dict)

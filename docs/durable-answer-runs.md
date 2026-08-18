@@ -23,7 +23,7 @@ persists from Runtime. No `dlightrag.storage` compatibility package exists.
   semantics.
 - Durability adds no orchestration framework and reuses the ingest-job lease,
   recovery, sweep, and prune mechanics. DlightRAG keeps its custom agent loop,
-  `EvidenceLedger`, `RunEpisode`, and tools-disabled final synthesis.
+  `EvidenceLedger`, `SessionEpisode`, and tools-disabled final synthesis.
 
 ## Non-Goals
 
@@ -463,7 +463,7 @@ A checkpoint is written atomically after every completed agent control turn. It
 contains only JSON-safe state:
 
 - `EvidenceLedger` contexts and citation identities;
-- `RunEpisode` exchanges including provider-native state;
+- `SessionEpisode` exchanges including provider-native state;
 - completed exact-call cache results;
 - resource catalog plus compact active-cursor state: the original focus-plan
   budget, rank position, absolute character offset, and the exact continuation
@@ -481,7 +481,7 @@ follow the degradation rule below; missing attachment blobs fail the run as
 
 Each checkpoint has a schema version and an 8 MiB bound measured on its compact
 UTF-8 JSON representation after image-reference substitution. Before writing,
-older provider-native reasoning is discarded using the existing `RunEpisode`
+older provider-native reasoning is discarded using the existing `SessionEpisode`
 replay policy. If the compacted state still exceeds the bound, the worker fails
 the run with `checkpoint_too_large`; it does not retry the same deterministic
 turn forever.

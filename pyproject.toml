@@ -244,23 +244,7 @@ forbidden_modules = [
     "mcp",
 ]
 
-[[tool.importlinter.contracts]]
-id = "core-no-api-or-mcp"
-name = "Core modules do not directly import API or MCP transports"
-type = "forbidden"
-source_modules = ["dlightrag.core"]
-forbidden_modules = ["dlightrag.api", "dlightrag.mcp"]
-allow_indirect_imports = true
 
-[[tool.importlinter.contracts]]
-id = "core-domain-no-web"
-name = "Core domain modules do not directly assemble Web"
-type = "forbidden"
-source_modules = [
-    "dlightrag.core.memory",
-]
-forbidden_modules = ["dlightrag.web"]
-allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 id = "retrieval-service-independence"

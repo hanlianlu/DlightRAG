@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 
+from dlightrag_agent.session.fold import PriorTurns, SessionEpisode
 from dlightrag_agent.tools import (
     AgentTool,
     ExecutedTurn,
@@ -40,8 +41,6 @@ from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
-from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.memory.episode import RunEpisode
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +264,7 @@ class AnswerOrchestrator:
         return PreparedRun(
             state=AgentRunState(
                 evidence=evidence,
-                episode=RunEpisode(retained_tail_tokens=retained_tail_tokens),
+                episode=SessionEpisode(retained_tail_tokens=retained_tail_tokens),
                 tool_cache=tool_cache,
                 registry=registry,
                 trace=trace,
@@ -383,7 +382,7 @@ def research_history_input_measure(
         return (
             context.measure_control_input(
                 evidence=EvidenceLedger(image_budget=image_budget),
-                episode=RunEpisode(retained_tail_tokens=retained_tail_tokens),
+                episode=SessionEpisode(retained_tail_tokens=retained_tail_tokens),
             )
             + tool_schema_tokens
         )

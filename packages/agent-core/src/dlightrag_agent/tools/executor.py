@@ -5,15 +5,21 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
-from dataclasses import replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from typing import Any
 
 from dlightrag_ai.messages import AssistantTurn, ToolCall, ToolChoice
 from dlightrag_ai.telemetry import NOOP_TELEMETRY, Telemetry
 from dlightrag_ai.tokens import estimate_tokens, truncate_to_estimated_tokens
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from dlightrag_agent.session.effects import (
+    EffectIntent,
+    ToolResultEntry,
+    canonical_json,
+)
+from dlightrag_agent.session.ids import IntentId
 from dlightrag_agent.tools.contracts import (
     AgentTool,
     ExecutedTurn,
@@ -25,6 +31,87 @@ from dlightrag_agent.tools.contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolPreflight:
+    """Ordered intents for valid calls plus deterministic validation results."""
+
+    intents: tuple[EffectIntent, ...]
+    validation_results: tuple[ToolResultEntry, ...]
+
+
+def preflight_tool_calls(
+    assistant: AssistantTurn,
+    tools: Sequence[AgentTool],
+    *,
+    intent_factory: Callable[[], IntentId] = IntentId.new,
+) -> ToolPreflight:
+    """Create ordered intents for valid calls and validation results for invalid ones.
+
+    Intents keep assistant source order (M3-D12). Unknown tools and invalid
+    arguments produce deterministic validation-result entries instead of intents
+    (M3-D26); a length-stopped response must not be preflighted at all because
+    its calls are never executed (M3-D11).
+    """
+    tools_by_name = {tool.name: tool for tool in tools}
+    intents: list[EffectIntent] = []
+    validation_results: list[ToolResultEntry] = []
+    for call in assistant.tool_calls:
+        tool, _, outcome, message = _validate_call(call, tools_by_name)
+        if outcome is not None:
+            if message is None:
+                raise RuntimeError("validated tool call lost its error message")
+            validation_results.append(
+                ToolResultEntry(
+                    tool_name=call.name,
+                    call_id=call.id,
+                    outcome=outcome,  # type: ignore[arg-type]
+                    content=message,
+                )
+            )
+            continue
+        if tool is None:
+            raise RuntimeError("valid tool call lost its tool")
+        intents.append(
+            EffectIntent(
+                intent_id=intent_factory(),
+                tool_name=tool.name,
+                replay_policy=tool.replay_policy,
+                contract_version=tool.contract_version,
+                input_schema_digest=tool.input_schema_digest,
+                canonical_input=canonical_json(call.arguments),
+                source_call_id=call.id,
+            )
+        )
+    return ToolPreflight(intents=tuple(intents), validation_results=tuple(validation_results))
+
+
+def _validate_call(
+    call: ToolCall,
+    tools: dict[str, AgentTool],
+) -> tuple[AgentTool | None, BaseModel | None, str | None, str | None]:
+    """Validate one call: (tool, arguments, outcome, message) on success/error."""
+    tool = tools.get(call.name)
+    if tool is None:
+        return None, None, "unknown_tool", f'Tool "{call.name}" is not available.'
+    if call.argument_error:
+        return (
+            None,
+            None,
+            "invalid_arguments",
+            f'Arguments for tool "{call.name}" are invalid: {call.argument_error}',
+        )
+    try:
+        arguments = tool.input_model.model_validate(call.arguments)
+    except ValidationError as exc:
+        return (
+            None,
+            None,
+            "invalid_arguments",
+            f'Arguments for tool "{call.name}" are invalid: {exc}',
+        )
+    return tool, arguments, None, None
 
 
 class ToolTurnExecutor:
@@ -67,6 +154,11 @@ class ToolTurnExecutor:
             raise ValueError("observation budget cannot be negative")
 
         tools_by_name = {tool.name: tool for tool in tools}
+        intents = (
+            ()
+            if assistant.stop_reason == "length"
+            else preflight_tool_calls(assistant, tools).intents
+        )
         if assistant.stop_reason == "length":
             results = tuple(
                 _error(
@@ -97,7 +189,12 @@ class ToolTurnExecutor:
         if max_observation_tokens is not None:
             results = _fit_results(results, max_tokens=max_observation_tokens)
         transcript.extend(_tool_message(result) for result in results)
-        return ExecutedTurn(assistant=assistant, results=results, messages=transcript)
+        return ExecutedTurn(
+            assistant=assistant,
+            results=results,
+            messages=transcript,
+            intents=intents,
+        )
 
 
 def _fit_results(
@@ -175,30 +272,13 @@ async def _dispatch_call(
     *,
     started: float,
 ) -> ToolExecution:
-    tool = tools.get(call.name)
-    if tool is None:
-        return _error(
-            call,
-            f'Tool "{call.name}" is not available.',
-            outcome="unknown_tool",
-            started=started,
-        )
-    if call.argument_error:
-        return _error(
-            call,
-            f'Arguments for tool "{call.name}" are invalid: {call.argument_error}',
-            outcome="invalid_arguments",
-            started=started,
-        )
-    try:
-        arguments = tool.input_model.model_validate(call.arguments)
-    except ValidationError as exc:
-        return _error(
-            call,
-            f'Arguments for tool "{call.name}" are invalid: {exc}',
-            outcome="invalid_arguments",
-            started=started,
-        )
+    tool, arguments, outcome, message = _validate_call(call, tools)
+    if outcome is not None:
+        if message is None:
+            raise RuntimeError("invalid tool call lost its error message")
+        return _error(call, message, outcome=outcome, started=started)
+    if tool is None or arguments is None:
+        raise RuntimeError("valid tool call lost its tool or arguments")
     try:
         result = await tool.execute(arguments)
     except asyncio.CancelledError:
@@ -301,4 +381,4 @@ def _tool_message(execution: ToolExecution) -> dict[str, Any]:
     }
 
 
-__all__ = ["ToolTurnExecutor"]
+__all__ = ["ToolPreflight", "ToolTurnExecutor", "preflight_tool_calls"]

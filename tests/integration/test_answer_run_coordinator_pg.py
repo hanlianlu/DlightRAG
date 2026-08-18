@@ -21,6 +21,8 @@ from typing import Any, cast
 
 import asyncpg
 import pytest
+from dlightrag_agent.session.fold import PriorTurns
+from dlightrag_agent.session.fold import SessionEpisode as _RunEpisode
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.telemetry import NOOP_TELEMETRY
@@ -47,8 +49,6 @@ from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import ExactCallCache
 from dlightrag.application import Application, _compose
 from dlightrag.config import DlightragConfig, RuntimeConfig
-from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
 from dlightrag.model_settings import answer_executor_settings, answer_resource_settings
 from dlightrag.runtime import (
     DurableWrites,

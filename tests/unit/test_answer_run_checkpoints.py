@@ -11,6 +11,8 @@ import json
 from typing import Any
 
 import pytest
+from dlightrag_agent.session.fold import SessionEpisode
+from dlightrag_agent.session.fold import SessionEpisode as _RunEpisode
 from dlightrag_agent.tools import ToolResult
 
 from dlightrag.answer.evidence import EvidenceLedger
@@ -23,7 +25,6 @@ from dlightrag.answer.runs.checkpoints import (
 )
 from dlightrag.answer.runs.models import AgentRunState
 from dlightrag.answer.tools import ExactCallCache
-from dlightrag.core.memory.episode import RunEpisode as _RunEpisode
 from dlightrag.runtime import (
     CHECKPOINT_SCHEMA_VERSION,
     MAX_CHECKPOINT_BYTES,
@@ -145,8 +146,10 @@ class TestOwnerExports:
 
     async def test_episode_export_round_trips_provider_native_state(self) -> None:
         state = await _state_with_evidence()
-        restored = _episode()
-        restored.restore_state(state.episode.export_state())
+        restored = SessionEpisode.from_canonical_json(
+            state.episode.canonical_json(),
+            retained_tail_tokens=state.episode.retained_tail_tokens,
+        )
 
         assert restored.messages() == state.episode.messages()
         assert restored.messages()[0]["provider_state"] == {"reasoning": "native"}

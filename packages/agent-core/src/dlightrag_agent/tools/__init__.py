@@ -11,7 +11,7 @@ from dlightrag_agent.tools.contracts import (
     ToolResult,
     ToolResultCapacityError,
 )
-from dlightrag_agent.tools.executor import ToolTurnExecutor
+from dlightrag_agent.tools.executor import ToolPreflight, ToolTurnExecutor, preflight_tool_calls
 
 __all__ = [
     "AgentTool",
@@ -20,7 +20,9 @@ __all__ = [
     "ToolExecution",
     "ToolModelFunc",
     "ToolObservation",
+    "ToolPreflight",
     "ToolResult",
     "ToolResultCapacityError",
     "ToolTurnExecutor",
+    "preflight_tool_calls",
 ]

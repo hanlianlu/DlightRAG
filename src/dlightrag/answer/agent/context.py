@@ -4,6 +4,7 @@
 import asyncio
 from typing import Any
 
+from dlightrag_agent.session.fold import PriorTurns, SessionEpisode
 from dlightrag_ai.capacity import CONTEXT_POLICY, ContextPolicy, ModelProfile
 from dlightrag_ai.tokens import estimate_messages_tokens
 from dlightrag_rag.sourcing.source_contract import safe_source_filename
@@ -18,8 +19,6 @@ from dlightrag.answer.prompts import (
     answer_core,
 )
 from dlightrag.answer.resources.models import ResourceManifestEntry
-from dlightrag.core.memory.conversation import PriorTurns
-from dlightrag.core.memory.episode import RunEpisode
 
 
 class ContextAssembler:
@@ -53,7 +52,7 @@ class ContextAssembler:
         self,
         *,
         evidence: EvidenceLedger,
-        episode: RunEpisode,
+        episode: SessionEpisode,
         tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
         return await asyncio.to_thread(
@@ -67,7 +66,7 @@ class ContextAssembler:
         self,
         *,
         evidence: EvidenceLedger,
-        episode: RunEpisode,
+        episode: SessionEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
         return await asyncio.to_thread(self._build_answer_turn, evidence, episode)
 
@@ -75,7 +74,7 @@ class ContextAssembler:
         self,
         *,
         evidence: EvidenceLedger,
-        episode: RunEpisode,
+        episode: SessionEpisode,
     ) -> int:
         """Measure the exact control-turn messages without enforcing the limit."""
         return estimate_messages_tokens(self._compose_control_turn(evidence, episode))
@@ -141,7 +140,7 @@ class ContextAssembler:
     def _build_control_turn(
         self,
         evidence: EvidenceLedger,
-        episode: RunEpisode,
+        episode: SessionEpisode,
         tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
         messages = self._compose_control_turn(
@@ -160,7 +159,7 @@ class ContextAssembler:
     def _compose_control_turn(
         self,
         evidence: EvidenceLedger,
-        episode: RunEpisode,
+        episode: SessionEpisode,
         *,
         tool_schema_tokens: int = 0,
     ) -> list[dict[str, Any]]:
@@ -180,7 +179,7 @@ class ContextAssembler:
     def _build_answer_turn(
         self,
         evidence: EvidenceLedger,
-        episode: RunEpisode,
+        episode: SessionEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
         system = {"role": "system", "content": answer_core()}
         head = self._head(system, episode.last_exchange)
