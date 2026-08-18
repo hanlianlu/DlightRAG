@@ -1072,7 +1072,13 @@ def _smoke_root_interfaces() -> None:
         raise ValueError("installed root package did not expose Application eagerly")
     for retired_module in (
         "dlightrag.app_state",
+        "dlightrag.contracts",
+        "dlightrag.core.client_attachments",
+        "dlightrag.core.client_contracts",
+        "dlightrag.core.client_payloads",
+        "dlightrag.core.client_requests",
         "dlightrag.core.servicemanager",
+        "dlightrag.utils",
     ):
         try:
             retired_spec = importlib.util.find_spec(retired_module)

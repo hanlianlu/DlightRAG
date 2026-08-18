@@ -1,5 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Transport-neutral client payload contracts."""
+"""Canonical transport-neutral client payload contracts.
+
+These contracts are the one client-facing request vocabulary shared by the
+REST, Web, and MCP transports. They stay transport-neutral: no HTTP, browser,
+or MCP types may leak into these models, so every adapter projects them into
+its own surface instead of diverging.
+
+Caller-supplied conversation history is stateless: the client owns persistence
+and re-sends prior turns each request; DlightRAG never stores them. The message
+ceiling bounds request size (~50 prior turns); the planner independently
+truncates to the configured token budget before prompting the model.
+"""
 
 from collections.abc import Sequence
 from typing import Any, Literal
@@ -9,10 +20,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dlightrag.answer.resources.images import MAX_QUERY_IMAGES as _MAX_QUERY_IMAGES
 
-# Caller-supplied conversation history is stateless: the client owns persistence
-# and re-sends prior turns each request; DlightRAG never stores them. The message
-# ceiling bounds request size (~50 prior turns); the planner independently
-# truncates to the configured token budget before prompting the model.
 MAX_HISTORY_MESSAGES = 100
 MAX_HISTORY_CONTENT_CHARS = 16000
 MAX_BM25_QUERY_CHARS = 1024

@@ -5,13 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.answer.resources.models import ResourceInput
-from dlightrag.core.client_attachments import (
+from dlightrag.answer.resources.attachments import (
     AnswerAttachment,
-    answer_link_resources,
     resource_inputs_from_attachments,
 )
-from dlightrag.core.client_contracts import AnswerAttachmentLink
+from dlightrag.answer.resources.models import ResourceInput
 
 
 def test_from_path_reads_bytes_and_hides_caller_path(tmp_path: Path) -> None:
@@ -74,15 +72,3 @@ def test_from_url_validates_https_and_builds() -> None:
 
     with pytest.raises(ValueError):
         AnswerAttachment.from_url("http://example.com/report.pdf")
-
-
-def test_answer_link_resources_maps_descriptors() -> None:
-    links = [AnswerAttachmentLink(url="https://example.com/a.pdf", filename="a.pdf")]
-
-    [resource] = answer_link_resources(links)
-
-    assert resource.url == "https://example.com/a.pdf"
-    assert resource.filename == "a.pdf"
-    assert resource.content is None
-    assert answer_link_resources(None) == []
-    assert answer_link_resources([]) == []

@@ -25,7 +25,7 @@ from dlightrag.api.models import (
     RetrieveRequest,
     UploadIngestJobResponse,
 )
-from dlightrag.core.client_payloads import metadata_filter_from_payload
+from dlightrag.api.payloads import metadata_filter_from_payload
 from dlightrag.services.corpora import (
     CorpusResetResult,
     IngestSpec,

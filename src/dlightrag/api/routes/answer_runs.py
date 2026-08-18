@@ -20,6 +20,8 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dlightrag.access import AccessAction, UserContext, owner_id_from_user
+from dlightrag.answer.client_contracts import conversation_history_as_dicts
+from dlightrag.answer.resources.links import answer_link_resources
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.answer.runs.results import project_answer_result
 from dlightrag.answer.sources import SourceDownloadLinkBuilder
@@ -32,8 +34,6 @@ from dlightrag.api.models import (
     AnswerRunStatusResponse,
 )
 from dlightrag.config import AnswerConfig
-from dlightrag.core.client_attachments import answer_link_resources
-from dlightrag.core.client_contracts import conversation_history_as_dicts
 from dlightrag.runtime import (
     AnswerRunEvent,
     AnswerRunRecord,

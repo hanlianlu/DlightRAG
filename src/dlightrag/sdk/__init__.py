@@ -22,6 +22,7 @@ from dlightrag.sdk.http import (
     client_timeout,
     json_headers,
 )
+from dlightrag.sdk.requests import query_image_blocks_from_urls
 
 __all__ = [
     "CLIENT_TIMEOUT_ENV",
@@ -42,4 +43,5 @@ __all__ = [
     "client_timeout",
     "json_headers",
     "parse_sse_frames",
+    "query_image_blocks_from_urls",
 ]

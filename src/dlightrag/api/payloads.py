@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Transport-neutral retrieval response assembly."""
+"""Request-payload coercion for the REST transport."""
 
 from collections.abc import Mapping
 from typing import Any

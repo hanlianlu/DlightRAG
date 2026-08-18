@@ -41,17 +41,17 @@ from dlightrag.access import (
     request_scope_context,
 )
 from dlightrag.answer.capability import answer_image_capability_summary
-from dlightrag.answer.errors import AnswerInputError, InvalidToolConfigurationError
-from dlightrag.answer.runs.results import project_answer_result
-from dlightrag.application import Application
-from dlightrag.config import DlightragConfig, get_config
-from dlightrag.core.client_attachments import answer_link_resources
-from dlightrag.core.client_contracts import (
+from dlightrag.answer.client_contracts import (
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     QueryImage,
     conversation_history_as_dicts,
 )
+from dlightrag.answer.errors import AnswerInputError, InvalidToolConfigurationError
+from dlightrag.answer.resources.links import answer_link_resources
+from dlightrag.answer.runs.results import project_answer_result
+from dlightrag.application import Application
+from dlightrag.config import DlightragConfig, get_config
 from dlightrag.mcp.auth import DlightRAGTokenVerifier
 from dlightrag.mcp.contracts import (
     AnswerInput,
@@ -291,7 +291,7 @@ mcp_app = DlightRAGMCPServer(
 
 
 def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]:
-    from dlightrag.utils import validate_workspace_name
+    from dlightrag.services.corpora import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     display_name = validate_workspace_name(args.display_name or label)
@@ -680,7 +680,7 @@ async def delete_workspace_tool(
 ) -> dict[str, Any]:
     args = DeleteWorkspaceInput.model_validate(locals())
     application = await _ensure_application()
-    from dlightrag.utils import validate_workspace_name
+    from dlightrag.services.corpora import validate_workspace_name
 
     label = validate_workspace_name(args.workspace)
     normalized_workspace = normalize_workspace(label)

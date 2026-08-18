@@ -44,9 +44,6 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from dlightrag.core.client_requests import (
-    query_image_blocks_from_urls,
-)
 from dlightrag.sdk import (
     AnswerAttachmentUpload,
     AnswerRunCancelledError,
@@ -54,6 +51,7 @@ from dlightrag.sdk import (
     AnswerRunFailedError,
 )
 from dlightrag.sdk import http as sdk_http
+from dlightrag.sdk.requests import query_image_blocks_from_urls
 from dlightrag.services.corpora import ingest_kwargs_from_spec, ingest_spec_from_payload
 
 

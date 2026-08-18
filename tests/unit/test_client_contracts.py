@@ -1,20 +1,19 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for transport-neutral client request projection."""
+"""Tests for the shared client contracts across REST, Web, and MCP surfaces."""
 
 import pytest
 from dlightrag_rag.contracts import IngestDocument
 from pydantic import ValidationError
 
 from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
-from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
-from dlightrag.core.client_contracts import (
+from dlightrag.answer.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,
     AnswerAttachmentLink,
     ConversationMessage,
     conversation_history_as_dicts,
 )
-from dlightrag.core.client_requests import query_kwargs_from_payload
+from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
 from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
 from dlightrag.services.corpora import (
     IngestSpec,
@@ -102,18 +101,6 @@ def test_conversation_message_validation_and_projection() -> None:
 
 def test_public_retrieval_response_has_no_session_image_ids() -> None:
     assert "current_image_ids" not in RetrievalResponse.model_fields
-
-
-def test_query_kwargs_never_projects_conversation_state() -> None:
-    kwargs = query_kwargs_from_payload(
-        {
-            "conversation_history": [{"role": "user", "content": "Earlier"}],
-            "session_id": "session-1",
-            "referenced_image_ids": ["img_1"],
-        }
-    )
-
-    assert kwargs == {}
 
 
 def test_answer_links_are_https_only() -> None:
@@ -359,18 +346,6 @@ def test_non_url_ingest_rejects_download_uri_fields_before_manifest_returns(
 ) -> None:
     with pytest.raises(ValidationError, match="only valid for URL ingestion"):
         IngestSpec.model_validate(payload)
-
-
-def test_query_kwargs_from_payload_forwards_bm25_query() -> None:
-    kwargs = query_kwargs_from_payload({"bm25_query": "alpha beta"})
-
-    assert kwargs["bm25_query"] == "alpha beta"
-
-
-def test_query_kwargs_from_payload_omits_absent_bm25_query() -> None:
-    kwargs = query_kwargs_from_payload({"query": "q"})
-
-    assert "bm25_query" not in kwargs
 
 
 def test_retrieve_request_accepts_bm25_query() -> None:

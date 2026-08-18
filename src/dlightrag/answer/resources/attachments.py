@@ -1,21 +1,19 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""SDK answer-attachment conveniences and their internal ResourceInput adapter.
+"""Caller-facing answer-attachment conveniences and their ResourceInput adapter.
 
-``AnswerAttachment`` is a caller-facing convenience for the Python SDK only.
-Its adapter opens local paths, bounds inline bytes, and validates HTTPS links
-before producing the transport-neutral :class:`ResourceInput`. A caller path is
-read immediately and never travels into a ``ResourceInput`` (or the model): only
-the basename survives as a display filename.
+``AnswerAttachment`` is a convenience for Python SDK callers. Its adapter opens
+local paths, bounds inline bytes, and validates HTTPS links before producing the
+transport-neutral :class:`ResourceInput`. A caller path is read immediately and
+never travels into a ``ResourceInput`` (or the model): only the basename
+survives as a display filename.
 """
 
-from __future__ import annotations
-
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from dlightrag.answer.client_contracts import AnswerAttachmentLink
 from dlightrag.answer.resources.models import ResourceInput
-from dlightrag.core.client_contracts import AnswerAttachmentLink
 
 _DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 
@@ -114,17 +112,7 @@ def resource_inputs_from_attachments(
     return resources
 
 
-def answer_link_resources(
-    attachments: Sequence[AnswerAttachmentLink] | None,
-) -> list[ResourceInput]:
-    """Map transport link descriptors to inert HTTPS :class:`ResourceInput` objects."""
-    if not attachments:
-        return []
-    return [ResourceInput(filename=link.filename, url=link.url) for link in attachments]
-
-
 __all__ = [
     "AnswerAttachment",
-    "answer_link_resources",
     "resource_inputs_from_attachments",
 ]

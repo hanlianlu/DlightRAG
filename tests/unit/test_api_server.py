@@ -1845,7 +1845,7 @@ class TestAnswerMultipart:
     ) -> None:
         import json as json_mod
 
-        from dlightrag.core.client_contracts import (
+        from dlightrag.answer.client_contracts import (
             MAX_HISTORY_CONTENT_CHARS,
             MAX_HISTORY_MESSAGES,
         )
@@ -2390,8 +2390,8 @@ async def test_the_app_admits_answer_history_with_the_shared_body_cap(
 async def test_the_app_still_refuses_a_body_over_the_shared_json_budget(
     mock_config: DlightragConfig,
 ) -> None:
+    from dlightrag.answer.client_contracts import MAX_HISTORY_CONTENT_CHARS, MAX_HISTORY_MESSAGES
     from dlightrag.answer.resources.images import MAX_QUERY_IMAGES
-    from dlightrag.core.client_contracts import MAX_HISTORY_CONTENT_CHARS, MAX_HISTORY_MESSAGES
 
     set_config(mock_config)
     history_bytes = MAX_HISTORY_MESSAGES * MAX_HISTORY_CONTENT_CHARS * 4

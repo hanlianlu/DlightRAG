@@ -23,6 +23,24 @@ from dlightrag.access import WorkspaceRecord
 
 logger = logging.getLogger(__name__)
 
+_WORKSPACE_FORBIDDEN_RE = re.compile(r'[/\\<>"\']')
+
+
+def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
+    """Validate and trim a user-facing workspace name.
+
+    The returned value is still a display label. RAG owns conversion to the
+    canonical internal workspace identifier.
+    """
+    label = name.strip()
+    if not label:
+        raise ValueError("Workspace name cannot be empty")
+    if len(label) > max_length:
+        raise ValueError(f"Workspace name too long (max {max_length} characters)")
+    if _WORKSPACE_FORBIDDEN_RE.search(label):
+        raise ValueError("Workspace name contains forbidden characters")
+    return label
+
 
 class _CorpusContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
@@ -717,4 +735,5 @@ __all__ = [
     "ingest_spec_from_payload",
     "managed_local_ingest_documents",
     "managed_local_ingest_path",
+    "validate_workspace_name",
 ]

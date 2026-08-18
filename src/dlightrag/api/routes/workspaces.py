@@ -14,7 +14,7 @@ from dlightrag.api.models import (
     WorkspaceDeleteResponse,
     WorkspacesResponse,
 )
-from dlightrag.utils import validate_workspace_name
+from dlightrag.services.corpora import validate_workspace_name
 
 from .deps import enforce_access, filter_workspace_records, get_application
 

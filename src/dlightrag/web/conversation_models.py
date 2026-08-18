@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
-from dlightrag.core.client_contracts import ClientContractModel
+from dlightrag.answer.client_contracts import ClientContractModel
 from dlightrag.runtime import AnswerRunRecord, AnswerRunStatus
 
 

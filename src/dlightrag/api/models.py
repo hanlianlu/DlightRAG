@@ -8,7 +8,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from dlightrag.access import validate_query_workspace_selection
 from dlightrag.answer.citations.schemas import SourceReferencePayload
-from dlightrag.core.client_contracts import (
+from dlightrag.answer.client_contracts import (
     MAX_HISTORY_CONTENT_CHARS,
     MAX_HISTORY_MESSAGES,
     AnswerRequestContract,

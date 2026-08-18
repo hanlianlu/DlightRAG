@@ -125,7 +125,7 @@ async def create_workspace(
     workspace_name: str = Form(default=""),
 ):
     """Create a new workspace and return updated workspace list."""
-    from dlightrag.utils import validate_workspace_name
+    from dlightrag.services.corpora import validate_workspace_name
 
     application = get_application(request)
 

@@ -33,7 +33,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from dlightrag.contracts import ServiceRole
+type ServiceRole = Literal["writer", "reader"]
 
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"

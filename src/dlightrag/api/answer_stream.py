@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from dlightrag.core.client_contracts import model_dump_json_safe
+from dlightrag.answer.client_contracts import model_dump_json_safe
 from dlightrag.runtime import AnswerRunEvent
 
 #: A queued or quiet run keeps its connection alive with comments, not events.

@@ -3,7 +3,7 @@
 
 from uuid import UUID
 
-from dlightrag.core.client_contracts import ClientContractModel
+from dlightrag.answer.client_contracts import ClientContractModel
 
 
 class WebAnswerRequest(ClientContractModel):
