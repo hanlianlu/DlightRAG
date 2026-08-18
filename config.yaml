@@ -239,3 +239,7 @@ langfuse_host: http://host.docker.internal:3300
 # langfuse_export_external_spans: false
 # langfuse_trace_sensitive_data: true   # true = full detail (query, raw errors, raw IDs) for ops/dev; false = redact (privacy mode)
 # langfuse_environment: production
+
+agent:
+  execution_environment: disabled
+  workspace_root: null

@@ -44,8 +44,13 @@ LABEL maintainer="HanlianLyu"
 WORKDIR /app
 
 # Create non-root user BEFORE copying files to avoid chown layer duplication
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ripgrep ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
 RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
-    && mkdir -p /app/dlightrag_storage && chown app:app /app/dlightrag_storage
+    && mkdir -p /app/dlightrag_storage /app/dlightrag_agent_workspaces \
+    && chown app:app /app/dlightrag_storage /app/dlightrag_agent_workspaces
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 

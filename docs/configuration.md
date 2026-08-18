@@ -990,6 +990,19 @@ retrieval_timeout: 300
 max_agent_turns: 50
 ```
 
+```yaml
+agent:
+  execution_environment: disabled   # or local_trusted
+  workspace_root: null              # required absolute path when local_trusted
+```
+
+Path tools, Bash, and private spill are absent unless `execution_environment` is
+`local_trusted`. That value is an operator assertion, not a sandbox. The
+workspace root must be absolute, must not overlap `working_dir`, and must have
+headroom for one 2 GiB epoch copy. Compose mounts
+`/app/dlightrag_agent_workspaces`. Environment overrides use
+`DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT` and `DLIGHTRAG_AGENT__WORKSPACE_ROOT`.
+
 `max_agent_turns` is a safety cap, not a tuning knob: research normally ends when
 the agent calls no tool or a tool batch adds no evidence. The cap bounds a run
 that keeps finding new evidence -- an open-web question can always find one more

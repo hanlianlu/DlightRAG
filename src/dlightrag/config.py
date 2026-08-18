@@ -531,6 +531,18 @@ class RuntimeConfig(BaseModel):
     answer_worker_concurrency: int = Field(default=16, ge=1)
 
 
+class AgentExecutionConfig(BaseModel):
+    """Optional trusted local execution for path tools and spill."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    execution_environment: Literal["disabled", "local_trusted"] = Field(default="disabled")
+    workspace_root: str | None = Field(
+        default=None,
+        description="Absolute Agent Workspace root. Required when execution is local_trusted.",
+    )
+
+
 class WebConversationsConfig(BaseModel):
     """Durable Web conversation retention controls."""
 
@@ -870,6 +882,7 @@ class DlightragConfig(BaseSettings):
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
     answer: AnswerConfig = Field(default_factory=AnswerConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    agent: AgentExecutionConfig = Field(default_factory=AgentExecutionConfig)
     web_conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)

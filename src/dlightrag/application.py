@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from dlightrag.config import DlightragConfig, get_config
@@ -364,6 +366,7 @@ class Application:
         components = self._components
         components.capabilities.resolve_profiles()
         components.capabilities.validate_startup()
+        validate_agent_execution(self._config)
         init_tracing(self._config)
         # Bind the process-wide domain pool to this config so the endpoint and
         # role cannot silently diverge from a caller-supplied SDK config that
@@ -601,7 +604,37 @@ def _require_compatible_run(
         )
 
 
+def validate_agent_execution(config: DlightragConfig) -> Path | None:
+    """Reject unsafe local_trusted settings before the coordinator starts."""
+    settings = config.agent
+    if settings.execution_environment == "disabled":
+        return None
+    raw = (settings.workspace_root or "").strip()
+    if not raw:
+        raise ValueError(
+            "agent.workspace_root must be an absolute path when execution is local_trusted"
+        )
+    root = Path(raw).expanduser()
+    if not root.is_absolute():
+        raise ValueError(
+            "agent.workspace_root must be an absolute path when execution is local_trusted"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    working = Path(config.working_dir).expanduser().resolve()
+    resolved = root.resolve()
+    if resolved == working or resolved.is_relative_to(working) or working.is_relative_to(resolved):
+        raise ValueError("agent.workspace_root must not overlap working_dir")
+    usage = os.statvfs(resolved)
+    free = usage.f_bavail * usage.f_frsize
+    from dlightrag_agent.environment import WORKSPACE_MAX_BYTES
+
+    if free < WORKSPACE_MAX_BYTES:
+        raise ValueError("agent.workspace_root does not have headroom for one maximum epoch copy")
+    return resolved
+
+
 __all__ = [
     "Application",
     "ApplicationClosedError",
+    "validate_agent_execution",
 ]

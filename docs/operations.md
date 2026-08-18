@@ -72,6 +72,9 @@ concern rather than a request concern.
 - **Storage.** Queued runs are never rejected for capacity, so bound and monitor
   PostgreSQL storage: `dlightrag_blobs`/`dlightrag_blob_chunks` hold uploaded and fetched
   bytes, and `dlightrag_answer_run_events` holds token batches until trimmed.
+  When `agent.execution_environment` is `local_trusted`, every Answer worker
+  including readers must mount the same RWX path at `agent.workspace_root`
+  (Compose: `/app/dlightrag_agent_workspaces`).
 - **Probes.** Route traffic on unauthenticated `GET /ready` (database and corpus
   readiness, short-cached). `GET /health` is liveness only and never touches
   PostgreSQL.
