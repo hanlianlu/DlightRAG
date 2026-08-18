@@ -73,8 +73,8 @@ The atomic durable outcome of an Effect Intent, including its ordered result and
 _Avoid_: Tool result when referring to the full commit boundary
 
 **Durable Progress**:
-A monotonically increasing run fact advanced only by fenced execution boundaries that recovery must not repeat.
-_Avoid_: Heartbeat, phase, turn count
+A monotonically increasing run fact advanced only by live fenced execution boundaries that recovery must not repeat.
+_Avoid_: Heartbeat, phase, turn count, recovery interrupt, Workspace Epoch handoff
 
 **Fast Stage**:
 A deterministic durable progress boundary inside a Fast Answer, used for recovery without creating an Agent Session.
@@ -87,7 +87,7 @@ Citable, run-scoped source material with durable identity and content/locator in
 _Avoid_: Summary, agent prose
 
 **Resource Handle**:
-An opaque owner/run-scoped identity through which prepared, fetched, or evidence-backed content remains addressable across recovery.
+An opaque owner/run-scoped identity through which prepared, fetched, evidence-backed, or spilled content remains addressable across recovery.
 _Avoid_: File path, URL, blob id
 
 **Blob**:
@@ -98,7 +98,37 @@ _Avoid_: Artifact when referring only to stored bytes
 A complete Blob that currently has no run or Resource Handle reference and is therefore eligible for grace-delayed cleanup.
 _Avoid_: Failed artifact
 
+**Spill**:
+Private full tool output retained for the life of an active Answer Run and addressed only through a Resource Handle.
+_Avoid_: Artifact, report, Journal Entry, Blob when referring to the handle
+
+**Published Artifact**:
+An owner-visible output reference created by fenced publication of staged Agent Workspace bytes.
+_Avoid_: Spill, Blob when referring to the reference rather than the bytes
+
+## Execution And Workspace
+
+**Execution Environment**:
+The optional file-and-process host that makes path tools, Spill, and workspace staging possible.
+_Avoid_: Sandbox, container runtime
+
+**Agent Workspace**:
+The model-visible filesystem rooted at the active Workspace Epoch's workspace directory.
+_Avoid_: Corpus Workspace, working_dir, workspace when it could mean a corpus scope
+
+**Workspace Epoch**:
+One filesystem generation of an Agent Workspace; recovery copies a stable observation of the recorded epoch and never executes in the old one.
+_Avoid_: Durable Progress, Fencing Epoch, checkpoint
+
+**Workspace Inventory**:
+The current Workspace Epoch's path, type, size, and digest observation of an Agent Workspace.
+_Avoid_: Journal Entry, checkpoint, historical epoch listing
+
 ## Operations
+
+**Fencing Epoch**:
+The monotonically increasing write-generation of one Answer Run lease; every durable write is predicated on the current epoch and a live lease.
+_Avoid_: Workspace Epoch, Durable Progress
 
 **Journal Schema Reset**:
 The pre-release replacement of all development data with the journal, progress, resource, evidence, and chunked-Blob schema.
