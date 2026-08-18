@@ -773,3 +773,141 @@ async def test_prelude_only_reclaims_still_abandon(pool) -> None:
     assert record is not None
     assert record.status == "failed"
     assert record.error_kind == "run_abandoned"
+
+
+async def test_writer_startup_adds_workspace_tables(pool) -> None:
+    await _store(pool)
+    conn = await pool.acquire()
+    try:
+        tables = await conn.fetch(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            " AND tablename LIKE 'dlightrag_answer_%'"
+        )
+        names = {row["tablename"] for row in tables}
+        assert "dlightrag_answer_workspace_inventory" in names
+        assert "dlightrag_answer_committed_spills" in names
+        column = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns"
+            " WHERE table_name = 'dlightrag_answer_runs' AND column_name = 'workspace_epoch'"
+        )
+        assert column == 1
+    finally:
+        await pool.release(conn)
+
+
+async def test_committed_spill_cannot_carry_a_blob_digest(pool) -> None:
+    claimed = await _claim(pool)
+    conn = await pool.acquire()
+    try:
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                "INSERT INTO dlightrag_answer_resources ("
+                " owner_id, run_id, resource_id, kind, safe_name, media_type, blob_digest)"
+                " VALUES ($1, $2, 'res_bad', 'committed_spill', 'x', 'text/plain', $3)",
+                _OWNER,
+                uuid.UUID(claimed.run.run_id),
+                "a" * 64,
+            )
+    finally:
+        await pool.release(conn)
+
+
+async def test_handoff_wrong_epoch_writes_zero_rows(pool) -> None:
+    claimed = await _claim(pool)
+    store = claimed.execution.workspace_store
+    assert store is not None
+    result = await store.handoff_epoch(expected_epoch=3, destination_epoch=4, inventory=())
+    assert result.__class__.__name__ == "HandoffConflict"
+    record = await (await _store(pool)).get_run(owner_id=_OWNER, run_id=claimed.run.run_id)
+    assert record is not None
+    assert record.workspace_epoch is None
+
+
+async def test_settle_effect_writes_inventory_and_spill_without_prelude_progress(pool) -> None:
+    from dlightrag.runtime.settlements import (
+        CommittedSpillUpdate,
+        InventoryPathRecord,
+        WorkspaceInventoryUpdate,
+    )
+
+    claimed = await _claim(pool)
+    journal = claimed.execution.session_store
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    await journal.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    after_append = await _progress(pool, claimed.run.run_id)
+    settled = await journal.settle_effect(
+        session_id=session_id,
+        expected_version=1,
+        intent_id=intent_id,
+        settlement=_settlement(
+            intent_id,
+            WorkspaceInventoryUpdate(
+                upserts=(
+                    InventoryPathRecord(
+                        relative_path="notes/a.md", entry_type="file", size_bytes=4
+                    ),
+                )
+            ),
+        ),
+        entries=[_result_entry(session_id, intent_id)],
+        progress="prelude",
+    )
+    assert settled.__class__.__name__ == "EffectCommit"
+    assert await _progress(pool, claimed.run.run_id) == after_append
+    intent_two = IntentId.new()
+    await journal.append(
+        session_id=session_id,
+        expected_version=2,
+        entries=[_intent_entry(session_id, intent_two)],
+    )
+    await journal.settle_effect(
+        session_id=session_id,
+        expected_version=3,
+        intent_id=intent_two,
+        settlement=_settlement(
+            intent_two,
+            CommittedSpillUpdate(
+                resource_id="res_spill",
+                content_digest="c" * 64,
+                size_bytes=12,
+                session_id=str(session_id),
+                intent_id=str(intent_two),
+            ),
+        ),
+        entries=[_result_entry(session_id, intent_two)],
+    )
+    workspace = claimed.execution.workspace_store
+    assert workspace is not None
+    assert any(item.relative_path == "notes/a.md" for item in await workspace.load_inventory())
+    assert any(item.resource_id == "res_spill" for item in await workspace.load_spills())
+
+
+async def test_terminal_finish_deletes_spill_rows(pool) -> None:
+    claimed = await _claim(pool)
+    workspace = claimed.execution.workspace_store
+    assert workspace is not None
+    from dlightrag.runtime.workspace import CommittedSpillRecord
+
+    await workspace.register_spill(
+        CommittedSpillRecord(
+            resource_id="res_done",
+            content_digest="d" * 64,
+            size_bytes=1,
+            session_id=str(uuid.uuid4()),
+            intent_id=str(uuid.uuid4()),
+        )
+    )
+    store = await _store(pool)
+    await store.finish_success(
+        owner_id=_OWNER,
+        run_id=claimed.run.run_id,
+        worker_id=_WORKER,
+        fencing_epoch=claimed.execution.fencing_epoch,
+        result={"answer": "ok"},
+    )
+    assert await workspace.load_spills() == ()

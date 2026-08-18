@@ -32,7 +32,7 @@ class TestMigrationDeclaration:
         assert versions == sorted(versions)
         assert len(set(versions)) == len(versions)
 
-    def test_declares_exactly_the_ten_final_m3_tables(self) -> None:
+    def test_declares_the_m3_tables_and_additive_workspace_tables(self) -> None:
         created = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", _all_statements()))
         assert created == {
             "dlightrag_answer_runs",
@@ -47,6 +47,8 @@ class TestMigrationDeclaration:
             "dlightrag_blobs",
             "dlightrag_blob_chunks",
             "dlightrag_answer_run_artifacts",
+            "dlightrag_answer_workspace_inventory",
+            "dlightrag_answer_committed_spills",
         }
 
     def test_no_checkpoint_or_single_row_artifact_columns_remain(self) -> None:

@@ -16,6 +16,7 @@ from dlightrag.runtime.contracts import AnswerRunPhase, AnswerRunStatus
 from dlightrag.runtime.policy import MAX_RECLAIMS_WITHOUT_PROGRESS
 from dlightrag.runtime.progress import RunProgressStore
 from dlightrag.runtime.settlements import M3HostUpdate
+from dlightrag.runtime.workspace import WorkspaceStore
 
 type AnswerRunEventType = Literal["progress", "token", "reset", "done", "error"]
 type ArtifactReferenceKind = Literal["current_attachment", "history_attachment", "fetched_resource"]
@@ -185,6 +186,7 @@ class RunExecutionContext:
     fencing_epoch: int
     session_store: AgentSessionStore[M3HostUpdate]
     progress_store: RunProgressStore
+    workspace_store: WorkspaceStore | None = None
 
 
 @dataclass(frozen=True, slots=True)

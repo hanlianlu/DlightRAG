@@ -597,6 +597,57 @@ class PGJournalStore:
             for write in update.evidence:
                 await self._write_evidence(conn, write)
             return _host_update_digest(update)
+        if isinstance(update, CommittedSpillUpdate):
+            from dlightrag.adapters.postgres.workspace import _upsert_spill
+            from dlightrag.runtime.workspace import CommittedSpillRecord
+
+            await _upsert_spill(
+                conn,
+                self._owner_id,
+                self._run_id,
+                CommittedSpillRecord(
+                    resource_id=update.resource_id,
+                    content_digest=update.content_digest,
+                    size_bytes=update.size_bytes,
+                    session_id=update.session_id,
+                    intent_id=update.intent_id,
+                ),
+            )
+            return _host_update_digest(update)
+        if isinstance(update, WorkspaceInventoryUpdate):
+            if update.replace_all:
+                await conn.execute(
+                    "DELETE FROM dlightrag_answer_workspace_inventory"
+                    " WHERE owner_id = $1 AND run_id = $2",
+                    self._owner_id,
+                    self._run_id,
+                )
+            else:
+                for path in update.deletes:
+                    await conn.execute(
+                        "DELETE FROM dlightrag_answer_workspace_inventory"
+                        " WHERE owner_id = $1 AND run_id = $2 AND relative_path = $3",
+                        self._owner_id,
+                        self._run_id,
+                        path,
+                    )
+            for record in update.upserts:
+                await conn.execute(
+                    "INSERT INTO dlightrag_answer_workspace_inventory ("
+                    " owner_id, run_id, relative_path, entry_type, mode, size_bytes, content_digest)"
+                    " VALUES ($1, $2, $3, $4, $5, $6, $7)"
+                    " ON CONFLICT (owner_id, run_id, relative_path) DO UPDATE SET"
+                    " entry_type = EXCLUDED.entry_type, mode = EXCLUDED.mode,"
+                    " size_bytes = EXCLUDED.size_bytes, content_digest = EXCLUDED.content_digest",
+                    self._owner_id,
+                    self._run_id,
+                    record.relative_path,
+                    record.entry_type,
+                    record.mode,
+                    record.size_bytes,
+                    record.content_digest,
+                )
+            return _host_update_digest(update)
         raise ValueError(f"unknown host update variant: {type(update).__name__}")
 
     async def _write_evidence(self, conn: Any, write: OpaqueEvidenceWrite) -> None:

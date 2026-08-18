@@ -29,6 +29,7 @@ from dlightrag.adapters.postgres._migrations import (
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
+from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
 from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
 from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.errors import RunSchemaError
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at          TIMESTAMPTZ,
     finished_at         TIMESTAMPTZ,
+    workspace_epoch     BIGINT,
     PRIMARY KEY (owner_id, run_id),
     CONSTRAINT dlightrag_answer_runs_status_check
         CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
@@ -105,7 +107,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
         CHECK (fencing_epoch >= 0 AND next_event_sequence >= 1
                AND durable_progress_version >= 0
                AND last_reclaim_progress_version >= 0
-               AND reclaims_without_progress >= 0),
+               AND reclaims_without_progress >= 0
+               AND (workspace_epoch IS NULL OR workspace_epoch >= 1)),
     CONSTRAINT dlightrag_answer_runs_lease_check
         CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
     CONSTRAINT dlightrag_answer_runs_terminal_check
@@ -312,12 +315,14 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_resources (
     FOREIGN KEY (owner_id, run_id)
         REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
     CONSTRAINT dlightrag_answer_resources_kind_check
-        CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob')),
+        CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill')),
     CONSTRAINT dlightrag_answer_resources_blob_link_check
         CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL)
                OR (kind = 'fetched_blob'
                    AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL)
-               OR (kind = 'evidence' AND locator_digest IS NOT NULL))
+               OR (kind = 'evidence' AND locator_digest IS NOT NULL)
+               OR (kind = 'committed_spill'
+                   AND blob_digest IS NULL AND locator_digest IS NULL))
 )
 """
 
@@ -399,6 +404,56 @@ _CREATE_INDEXES = (
     "WHERE blob_digest IS NOT NULL",
 )
 
+_M4_WORKSPACE_DDL = (
+    "ALTER TABLE dlightrag_answer_runs ADD COLUMN IF NOT EXISTS workspace_epoch BIGINT",
+    "ALTER TABLE dlightrag_answer_runs "
+    "DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_workspace_epoch_check",
+    "ALTER TABLE dlightrag_answer_runs "
+    "ADD CONSTRAINT dlightrag_answer_runs_workspace_epoch_check "
+    "CHECK (workspace_epoch IS NULL OR workspace_epoch >= 1)",
+    """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_workspace_inventory (
+    owner_id        TEXT        NOT NULL,
+    run_id          UUID        NOT NULL,
+    relative_path   TEXT        NOT NULL,
+    entry_type      TEXT        NOT NULL,
+    mode            INTEGER,
+    size_bytes      BIGINT      NOT NULL,
+    content_digest  TEXT,
+    PRIMARY KEY (owner_id, run_id, relative_path),
+    FOREIGN KEY (owner_id, run_id)
+        REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE
+)
+""",
+    """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
+    owner_id        TEXT        NOT NULL,
+    run_id          UUID        NOT NULL,
+    resource_id     TEXT        NOT NULL,
+    content_digest  TEXT        NOT NULL,
+    size_bytes      BIGINT      NOT NULL,
+    session_id      UUID        NOT NULL,
+    intent_id       UUID        NOT NULL,
+    PRIMARY KEY (owner_id, run_id, resource_id),
+    FOREIGN KEY (owner_id, run_id)
+        REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE
+)
+""",
+    "ALTER TABLE dlightrag_answer_resources "
+    "DROP CONSTRAINT IF EXISTS dlightrag_answer_resources_kind_check",
+    "ALTER TABLE dlightrag_answer_resources "
+    "ADD CONSTRAINT dlightrag_answer_resources_kind_check "
+    "CHECK (kind IN ('accepted_blob', 'evidence', 'fetched_blob', 'committed_spill'))",
+    "ALTER TABLE dlightrag_answer_resources "
+    "DROP CONSTRAINT IF EXISTS dlightrag_answer_resources_blob_link_check",
+    "ALTER TABLE dlightrag_answer_resources "
+    "ADD CONSTRAINT dlightrag_answer_resources_blob_link_check "
+    "CHECK ((kind = 'accepted_blob' AND blob_digest IS NOT NULL) "
+    "OR (kind = 'fetched_blob' AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL) "
+    "OR (kind = 'evidence' AND locator_digest IS NOT NULL) "
+    "OR (kind = 'committed_spill' AND blob_digest IS NULL AND locator_digest IS NULL))",
+)
+
 ANSWER_RUN_MIGRATIONS = (
     Migration(
         "0001_answer_runs",
@@ -418,6 +473,8 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_RUN_ARTIFACTS,
             _ADD_SESSION_PROJECTION_FK,
             *_CREATE_INDEXES,
+            _M4_WORKSPACE_DDL[3],
+            _M4_WORKSPACE_DDL[4],
         ),
     ),
 )
@@ -450,6 +507,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "updated_at",
             "started_at",
             "finished_at",
+            "workspace_epoch",
         ),
         primary_key=("owner_id", "run_id"),
         checks=(
@@ -461,6 +519,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "dlightrag_answer_runs_result_check",
             "dlightrag_answer_runs_error_check",
             "dlightrag_answer_runs_prepared_input_check",
+            "dlightrag_answer_runs_workspace_epoch_check",
         ),
         indexes=(
             "idx_dlightrag_answer_runs_claim",
@@ -730,6 +789,42 @@ ANSWER_RUN_SCHEMA_TABLES = (
         ),
         indexes=("idx_dlightrag_answer_run_artifacts_digest",),
     ),
+    TableRequirement(
+        name="dlightrag_answer_workspace_inventory",
+        columns=(
+            "owner_id",
+            "run_id",
+            "relative_path",
+            "entry_type",
+            "mode",
+            "size_bytes",
+            "content_digest",
+        ),
+        primary_key=("owner_id", "run_id", "relative_path"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
+            ),
+        ),
+    ),
+    TableRequirement(
+        name="dlightrag_answer_committed_spills",
+        columns=(
+            "owner_id",
+            "run_id",
+            "resource_id",
+            "content_digest",
+            "size_bytes",
+            "session_id",
+            "intent_id",
+        ),
+        primary_key=("owner_id", "run_id", "resource_id"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
+            ),
+        ),
+    ),
 )
 
 #: ``(expression, output name)`` for every column :func:`answer_run_record` reads.
@@ -757,6 +852,7 @@ _RUN_COLUMN_SPECS: tuple[tuple[str, str], ...] = (
     ("updated_at", "updated_at"),
     ("started_at", "started_at"),
     ("finished_at", "finished_at"),
+    ("workspace_epoch", "workspace_epoch"),
 )
 
 
@@ -1254,6 +1350,8 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 migrations=ANSWER_RUN_MIGRATIONS,
                 schema_error=RunSchemaError,
             )
+            for statement in _M4_WORKSPACE_DDL:
+                await conn.execute(statement)
 
         await self._run(_operation)
         self._initialized = True
@@ -1746,6 +1844,14 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 lease_owner=worker,
                 fencing_epoch=run.fencing_epoch,
             ),
+            workspace_store=PGWorkspaceStore(
+                pool=self._operation_pool,
+                owner_id=owner,
+                run_id=run_uuid,
+                worker_id=worker,
+                lease_owner=worker,
+                fencing_epoch=run.fencing_epoch,
+            ),
         )
         return ClaimedRun(run=run, execution=execution)
 
@@ -1963,6 +2069,18 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     withhold_on_cancel,
                 )
                 if sequence is not None:
+                    await conn.execute(
+                        "DELETE FROM dlightrag_answer_committed_spills"
+                        " WHERE owner_id = $1 AND run_id = $2",
+                        owner,
+                        run_uuid,
+                    )
+                    await conn.execute(
+                        "DELETE FROM dlightrag_answer_resources"
+                        " WHERE owner_id = $1 AND run_id = $2 AND kind = 'committed_spill'",
+                        owner,
+                        run_uuid,
+                    )
                     return TerminalOutcome(
                         committed=True,
                         status=status,  # type: ignore[arg-type]

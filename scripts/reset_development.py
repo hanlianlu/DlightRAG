@@ -127,6 +127,25 @@ def _working_dir_root(repo_root: Path, env: dict[str, str]) -> Path:
     return path.resolve()
 
 
+def _workspace_root(repo_root: Path, env: dict[str, str]) -> Path | None:
+    """Resolve the optional Agent Workspace root without importing product code."""
+    configured = env.get("DLIGHTRAG_AGENT_WORKSPACE_ROOT")
+    if not configured:
+        config_file = repo_root / "config.yaml"
+        if config_file.is_file():
+            for raw in config_file.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line.startswith("workspace_root:"):
+                    configured = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    break
+    if not configured or configured in {"null", "None", "~"}:
+        return None
+    path = Path(configured)
+    if not path.is_absolute():
+        path = repo_root / path
+    return path.resolve()
+
+
 def resolve_postgres_target(env: dict[str, str]) -> PostgresTarget:
     prefix = "DLIGHTRAG_POSTGRES_"
     return PostgresTarget(
@@ -650,6 +669,9 @@ async def main(argv: list[str] | None = None) -> int:
         clear_working_dir_children(working_dir, report)
         for violation in verify_working_dir_empty(working_dir):
             report.fail("verify-working-dir", violation)
+        workspace_root = _workspace_root(repo_root, env)
+        if workspace_root is not None:
+            clear_working_dir_children(workspace_root, report)
         _print_report(report, verbose=args.verbose)
         print("Development reset complete." if report.ok else "Development reset FAILED.")
         return 0 if report.ok else 1
@@ -673,6 +695,9 @@ async def main(argv: list[str] | None = None) -> int:
         clear_working_dir_children(working_dir, report)
         for violation in verify_working_dir_empty(working_dir):
             report.fail("verify-working-dir", violation)
+        workspace_root = _workspace_root(repo_root, env)
+        if workspace_root is not None:
+            clear_working_dir_children(workspace_root, report)
     _print_report(report, verbose=args.verbose)
     print("Development reset complete." if report.ok else "Development reset FAILED.")
     return 0 if report.ok else 1
