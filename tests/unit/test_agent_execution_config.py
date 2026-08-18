@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.application import validate_agent_execution
+from dlightrag.answer.execution_settings import validate_agent_execution
 from dlightrag.config import AgentExecutionConfig, DlightragConfig
 
 
@@ -17,7 +17,14 @@ def test_disabled_ignores_workspace_root(tmp_path: Path) -> None:
             execution_environment="disabled", workspace_root=str(tmp_path / "ws")
         ),
     )
-    assert validate_agent_execution(config) is None
+    assert (
+        validate_agent_execution(
+            execution_environment=config.agent.execution_environment,
+            workspace_root=config.agent.workspace_root,
+            working_dir=config.working_dir,
+        )
+        is None
+    )
 
 
 def test_local_trusted_requires_absolute_root(tmp_path: Path) -> None:
@@ -26,7 +33,11 @@ def test_local_trusted_requires_absolute_root(tmp_path: Path) -> None:
         agent=AgentExecutionConfig(execution_environment="local_trusted", workspace_root=None),
     )
     with pytest.raises(ValueError, match="absolute path"):
-        validate_agent_execution(config)
+        validate_agent_execution(
+            execution_environment=config.agent.execution_environment,
+            workspace_root=config.agent.workspace_root,
+            working_dir=config.working_dir,
+        )
 
 
 def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:
@@ -39,7 +50,11 @@ def test_workspace_root_must_not_overlap_working_dir(tmp_path: Path) -> None:
         ),
     )
     with pytest.raises(ValueError, match="overlap"):
-        validate_agent_execution(config)
+        validate_agent_execution(
+            execution_environment=config.agent.execution_environment,
+            workspace_root=config.agent.workspace_root,
+            working_dir=config.working_dir,
+        )
 
 
 def test_unknown_agent_key_is_rejected() -> None:

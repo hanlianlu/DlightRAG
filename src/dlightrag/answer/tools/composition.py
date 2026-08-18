@@ -2,16 +2,17 @@
 """The peer tools one research run offers, composed per run and never globally."""
 
 import hashlib
-import json
 from collections import Counter
 from typing import Any
 
+from dlightrag_agent.environment import AccessScheduler
+from dlightrag_agent.environment.protocol import ExecutionEnvironment
 from dlightrag_agent.tools import AgentTool, ToolResult
+from dlightrag_agent.tools.files import path_tools, read_tool
 from pydantic import BaseModel
 
 from dlightrag.answer.errors import InvalidToolConfigurationError
 from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.tools.cache import ExactCallCache
 from dlightrag.answer.tools.search import (
     KnowledgeRetrieval,
     RegisterWebSource,
@@ -29,15 +30,19 @@ def compose_research_tools(
     search_web: WebSearch | None,
     resource_tools: list[AgentTool],
     register_web_source: RegisterWebSource | None,
-) -> tuple[list[AgentTool], ExactCallCache]:
-    """Bind one run's tools to its ledger; every observation lands there, not in a reply."""
-    cache = ExactCallCache()
+    resource_reader: Any | None = None,
+    environment: ExecutionEnvironment | None = None,
+    scheduler: AccessScheduler | None = None,
+    spill: Any | None = None,
+    ripgrep: str = "rg",
+) -> list[AgentTool]:
+    """Bind one run's tools to its ledger. Path tools appear only with an environment."""
+    access = scheduler or AccessScheduler()
     tools = [
         knowledge_base_search_tool(
             retrieve=retrieve_knowledge_base,
             evidence=evidence,
             trace=trace,
-            cache=cache,
         )
     ]
     if search_web is not None:
@@ -47,45 +52,55 @@ def compose_research_tools(
                 evidence=evidence,
                 trace=trace,
                 register_web_source=register_web_source,
-                cache=cache,
             )
         )
-    tools.extend(_ledger_backed(tool, evidence, cache) for tool in resource_tools)
+    if resource_reader is not None:
+        tools.append(read_tool(environment, access, resource_reader=resource_reader, spill=spill))
+    else:
+        tools.extend(
+            _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "read"
+        )
+    tools.extend(
+        _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "inspect"
+    )
+    if environment is not None:
+        extras = [
+            tool
+            for tool in path_tools(environment, scheduler=access, ripgrep=ripgrep, spill=spill)
+            if tool.name != "read"
+        ]
+        tools.extend(extras)
     _reject_duplicate_names(tools)
-    return tools, cache
+    return tools
 
 
 def _reject_duplicate_names(tools: list[AgentTool]) -> None:
-    """Fail the run before any model call when two peer tools share a name.
-
-    A tool name is the model's only handle on a tool, so a collision silently
-    hides one of them behind the other.
-    """
     counts = Counter(tool.name for tool in tools)
     duplicates = tuple(name for name, count in counts.items() if count > 1)
     if duplicates:
         raise InvalidToolConfigurationError(duplicates)
 
 
-def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger, cache: ExactCallCache) -> AgentTool:
-    """Cache equivalent resource calls and land each observation in the ledger."""
-
+def _ledger_backed(tool: AgentTool, evidence: EvidenceLedger) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
-        async def run_once() -> ToolResult:
-            result = await tool.execute(raw)
-            row = _resource_row(tool.name, result)
-            if row is not None:
-                evidence.add_rows([row])
-                await evidence.aflush_images()
-            return result
+        result = await tool.execute(raw)
+        row = _resource_row(tool.name, result)
+        if row is not None:
+            evidence.add_rows([row])
+            await evidence.aflush_images()
+        return result
 
-        return await cache.run(_resource_call_key(tool.name, raw), run_once)
-
-    return AgentTool(tool.name, tool.description, tool.input_model, execute)
+    return AgentTool(
+        tool.name,
+        tool.description,
+        tool.input_model,
+        execute,
+        replay_policy=tool.replay_policy,
+        contract_version=tool.contract_version,
+    )
 
 
 def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
-    """Project a resource observation into a citable, re-readable evidence row."""
     details = result.details or {}
     resource_id = str(details.get("resource_id") or "")
     if not resource_id or not result.content.strip():
@@ -99,7 +114,7 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
         "title": str(details.get("title") or resource_id),
     }
     evidence_key = result.content
-    if tool_name == "read_resource":
+    if tool_name == "read":
         content, marker, cursor = evidence_key.rpartition("\n[more text available; cursor=")
         if marker and cursor.endswith("]"):
             evidence_key = content
@@ -109,17 +124,12 @@ def _resource_row(tool_name: str, result: ToolResult) -> dict[str, Any] | None:
         "reference_id": resource_id,
         "full_doc_id": resource_id,
         "file_path": str(metadata.get("title") or resource_id),
-        "content": evidence_key if tool_name == "read_resource" else result.content,
+        "content": evidence_key if tool_name == "read" else result.content,
         "page_number": None,
         "_workspace": "__web_search__" if source_type == "web_search" else "__attachment__",
         "_evidence_key": f"{tool_name}:{identity}",
         "metadata": metadata,
     }
-
-
-def _resource_call_key(name: str, raw: BaseModel) -> str:
-    payload = json.dumps(raw.model_dump(), ensure_ascii=False, sort_keys=True, default=str)
-    return f"{name}:{payload}"
 
 
 __all__ = ["compose_research_tools"]

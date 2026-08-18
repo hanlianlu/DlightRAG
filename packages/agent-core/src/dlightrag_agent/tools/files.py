@@ -30,11 +30,11 @@ type SpillWriter = Callable[[str], Awaitable[str]]
 
 
 class ReadArgs(BaseModel):
-    path: str | None = None
-    resource_id: str | None = None
-    offset: int | None = Field(default=None, ge=1)
-    limit: int | None = Field(default=None, ge=1)
-    cursor: str | None = None
+    path: str | None = Field(default=None, description="Workspace-relative path to read.")
+    resource_id: str | None = Field(default=None, description="Opaque durable resource id.")
+    offset: int | None = Field(default=None, ge=1, description="1-based line offset.")
+    limit: int | None = Field(default=None, ge=1, description="Maximum lines to return.")
+    cursor: str | None = Field(default=None, description="Continuation cursor.")
 
     @model_validator(mode="after")
     def _exactly_one_target(self) -> ReadArgs:
@@ -44,26 +44,28 @@ class ReadArgs(BaseModel):
 
 
 class WriteArgs(BaseModel):
-    path: str
-    content: str
+    path: str = Field(description="Workspace-relative path to write.")
+    content: str = Field(description="Full UTF-8 file contents.")
 
 
 class EditArgs(BaseModel):
-    path: str
-    old_string: str
-    new_string: str
-    replace_all: bool = False
+    path: str = Field(description="Workspace-relative path to edit.")
+    old_string: str = Field(description="Exact text to replace.")
+    new_string: str = Field(description="Replacement text.")
+    replace_all: bool = Field(default=False, description="Replace every match.")
 
 
 class GrepArgs(BaseModel):
-    pattern: str
-    path: str = "."
-    glob: str | None = None
+    pattern: str = Field(description="ripgrep pattern.")
+    path: str = Field(default=".", description="Workspace path to search.")
+    glob: str | None = Field(default=None, description="Optional glob filter.")
 
 
 class BashArgs(BaseModel):
-    command: str
-    timeout_seconds: float | None = Field(default=None, gt=0)
+    command: str = Field(description="Bash command to run.")
+    timeout_seconds: float | None = Field(
+        default=None, gt=0, description="Optional process timeout in seconds."
+    )
 
 
 def bound_tool_text(text: str, *, spill: SpillWriter | None) -> str:

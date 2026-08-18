@@ -130,6 +130,7 @@ class RunSession:
         self.fencing_epoch = execution.fencing_epoch
         self.execution = execution
         self.prepared_input: Mapping[str, Any] | None = run.prepared_input
+        self.workspace_epoch: int | None = run.workspace_epoch
         self._store = store
         self._broker = broker
         self._writes = writes

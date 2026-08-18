@@ -87,8 +87,9 @@ from dlightrag.answer.runs.execution import (
 )
 from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
-from dlightrag.answer.tools.resources import build_resource_tools
+from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.answer.tools.web import ExaSearch
+from dlightrag.answer.workspace import bind_run_workspace
 from dlightrag.runtime import (
     LeaseLostError,
     RunCancelledError,
@@ -494,6 +495,9 @@ class AnswerExecutor:
         resources: AnswerResourceResolver,
         settings: AnswerExecutorSettings,
         telemetry: Telemetry,
+        execution_environment: str = "disabled",
+        workspace_root: str | None = None,
+        working_dir: str = "./dlightrag_storage",
     ) -> None:
         self._store = store
         self._pool = pool
@@ -503,6 +507,9 @@ class AnswerExecutor:
         self._resources = resources
         self._settings = settings
         self._telemetry = telemetry
+        self._execution_environment = execution_environment
+        self._workspace_root_setting = workspace_root
+        self._working_dir = working_dir
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
         with model_call_scope((session.owner_id, session.run_id)):
@@ -552,6 +559,24 @@ class AnswerExecutor:
             journal = session.execution.session_store
             prepared_early: Any = None
             research = run.orchestrator.uses_research_path
+            if research:
+                from dlightrag.answer.execution_settings import validate_agent_execution
+
+                root = validate_agent_execution(
+                    execution_environment=self._execution_environment,
+                    workspace_root=self._workspace_root_setting,
+                    working_dir=self._working_dir,
+                )
+                if root is not None:
+                    bound = await bind_run_workspace(
+                        workspace_root=root,
+                        owner_id=session.owner_id,
+                        run_id=session.run_id,
+                        fencing_epoch=session.execution.fencing_epoch,
+                        recorded_epoch=session.workspace_epoch,
+                        store=session.execution.workspace_store,
+                    )
+                    run.orchestrator._environment = bound.environment
             if research:
                 session_id = SessionId(request.session_id)
                 prepared_early = run.orchestrator.prepare_run(
@@ -726,6 +751,7 @@ class AnswerExecutor:
         pinned_image_descriptions: tuple[str, ...],
         projected_history: PriorTurns,
         model_profiles: Mapping[ModelRole, ModelProfile],
+        environment: object | None = None,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -789,6 +815,12 @@ class AnswerExecutor:
                 context_policy=CONTEXT_POLICY,
                 max_agent_turns=self._settings.max_agent_turns,
                 telemetry=self._telemetry,
+                environment=environment,
+                resource_reader=(
+                    make_resource_reader(resolved.registry, text_window_budget)
+                    if resolved.registry is not None
+                    else None
+                ),
             )
             return OrchestratorRun(
                 orchestrator=orchestrator,

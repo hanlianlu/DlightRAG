@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for the read_resource / inspect_resource peer tools."""
+"""Tests for the read / inspect peer tools."""
 
 from __future__ import annotations
 
@@ -22,7 +22,12 @@ from dlightrag.answer.resources.models import (
 )
 from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.resources.visual import ResourceInspectionError, ResourceInspector
-from dlightrag.answer.tools.resources import build_resource_tools as _build_resource_tools
+from dlightrag.answer.tools.resources import (
+    _read_resource_tool,
+)
+from dlightrag.answer.tools.resources import (
+    build_resource_tools as _build_resource_tools,
+)
 from tests.unit.conftest import answer_image_policy
 
 
@@ -60,41 +65,42 @@ def build_resource_tools(
     inspector: ResourceInspector | None = None,
     visual_supported: bool = False,
 ) -> list[AgentTool]:
-    return _build_resource_tools(
+    budget = text_window_budget or TextWindowBudget(tokens=100)
+    return [_read_resource_tool(registry, budget)] + _build_resource_tools(
         registry,
-        text_window_budget=text_window_budget or TextWindowBudget(tokens=100),
+        text_window_budget=budget,
         inspector=inspector,
         visual_supported=visual_supported,
     )
 
 
-def test_read_resource_registered_without_inspector() -> None:
+def test_read_registered_without_inspector() -> None:
     registry = ResourceRegistry()
     names = {tool.name for tool in build_resource_tools(registry)}
-    assert names == {"read_resource"}
+    assert names == {"read"}
 
 
-def test_inspect_resource_absent_when_capability_unverified() -> None:
+def test_inspect_absent_when_capability_unverified() -> None:
     registry = ResourceRegistry()
     inspector = _inspector(registry, _RecordingVLM())
     names = {
         tool.name
         for tool in build_resource_tools(registry, inspector=inspector, visual_supported=False)
     }
-    assert names == {"read_resource"}
+    assert names == {"read"}
 
 
-def test_inspect_resource_registered_only_for_verified_capability() -> None:
+def test_inspect_registered_only_for_verified_capability() -> None:
     registry = ResourceRegistry()
     inspector = _inspector(registry, _RecordingVLM())
     names = {
         tool.name
         for tool in build_resource_tools(registry, inspector=inspector, visual_supported=True)
     }
-    assert names == {"read_resource", "inspect_resource"}
+    assert names == {"read", "inspect"}
 
 
-def test_read_resource_tool_schema_is_exact() -> None:
+def test_read_tool_schema_is_exact() -> None:
     registry = ResourceRegistry()
     (read_tool,) = build_resource_tools(registry)
     fields = read_tool.input_model.model_fields
@@ -112,24 +118,22 @@ def test_read_resource_tool_schema_is_exact() -> None:
         read_tool.input_model.model_validate({"resource_id": "res-1", "url": "https://x"})
 
 
-def test_inspect_resource_tool_schema_is_exact() -> None:
+def test_inspect_tool_schema_is_exact() -> None:
     registry = ResourceRegistry()
     inspector = _inspector(registry, _RecordingVLM())
     tools = _tools_by_name(
         build_resource_tools(registry, inspector=inspector, visual_supported=True)
     )
-    fields = tools["inspect_resource"].input_model.model_fields
+    fields = tools["inspect"].input_model.model_fields
     assert set(fields) == {"resource_id", "focus", "locator", "cursor"}
     assert fields["resource_id"].is_required()
     assert fields["focus"].is_required()
     assert not fields["locator"].is_required()
     assert not fields["cursor"].is_required()
-    assert (
-        tools["inspect_resource"].input_model.model_json_schema()["additionalProperties"] is False
-    )
+    assert tools["inspect"].input_model.model_json_schema()["additionalProperties"] is False
 
 
-async def test_read_resource_tool_returns_text_and_handles() -> None:
+async def test_read_tool_returns_text_and_handles() -> None:
     async with ResourceRegistry() as registry:
         resource_id = registry.register(
             ResourceInput(filename="notes.txt", content=b"alpha\nbeta\ngamma")
@@ -145,7 +149,7 @@ async def test_read_resource_tool_returns_text_and_handles() -> None:
     assert result.details["source_type"] == "web_attachment"
 
 
-async def test_read_resource_uses_the_current_turn_window_budget() -> None:
+async def test_read_uses_the_current_turn_window_budget() -> None:
     registry = ResourceRegistry()
     resource_id = registry.register(ResourceInput(filename="notes.txt", content=b"text"))
     registry.read = AsyncMock(  # type: ignore[method-assign]
@@ -169,7 +173,7 @@ async def test_read_resource_uses_the_current_turn_window_budget() -> None:
     assert [call.kwargs["max_window_tokens"] for call in registry.read.await_args_list] == [10, 3]
 
 
-async def test_read_resource_formats_within_the_current_turn_budget() -> None:
+async def test_read_formats_within_the_current_turn_budget() -> None:
     registry = ResourceRegistry()
     text = "".join(f"line {index} " + "x" * 30 + "\n" for index in range(400))
     resource_id = registry.register(ResourceInput(filename="notes.txt", content=text.encode()))
@@ -184,7 +188,7 @@ async def test_read_resource_formats_within_the_current_turn_budget() -> None:
     assert result.protected_suffix
 
 
-async def test_read_resource_tool_redacts_unexpected_failures(
+async def test_read_tool_redacts_unexpected_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ResourceRegistry()
@@ -202,7 +206,7 @@ async def test_read_resource_tool_redacts_unexpected_failures(
     assert "secret" not in str(failure.value)
 
 
-async def test_inspect_resource_tool_returns_derived_evidence() -> None:
+async def test_inspect_tool_returns_derived_evidence() -> None:
     async with ResourceRegistry() as registry:
         resource_id = registry.register(
             ResourceInput(
@@ -213,7 +217,7 @@ async def test_inspect_resource_tool_returns_derived_evidence() -> None:
         tools = _tools_by_name(
             build_resource_tools(registry, inspector=inspector, visual_supported=True)
         )
-        inspect_tool = tools["inspect_resource"]
+        inspect_tool = tools["inspect"]
         args = inspect_tool.input_model.model_validate(
             {"resource_id": resource_id, "focus": "describe"}
         )
@@ -224,7 +228,7 @@ async def test_inspect_resource_tool_returns_derived_evidence() -> None:
     assert "derived_by_vlm" in result.content
 
 
-async def test_inspect_resource_tool_propagates_vlm_failure() -> None:
+async def test_inspect_tool_propagates_vlm_failure() -> None:
     async with ResourceRegistry() as registry:
         resource_id = registry.register(
             ResourceInput(filename="chart.png", content=_png((1, 2, 3)), declared_mime="image/png")
@@ -233,7 +237,7 @@ async def test_inspect_resource_tool_propagates_vlm_failure() -> None:
         tools = _tools_by_name(
             build_resource_tools(registry, inspector=inspector, visual_supported=True)
         )
-        inspect_tool = tools["inspect_resource"]
+        inspect_tool = tools["inspect"]
         args = inspect_tool.input_model.model_validate(
             {"resource_id": resource_id, "focus": "describe"}
         )

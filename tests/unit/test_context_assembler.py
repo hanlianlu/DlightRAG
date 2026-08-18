@@ -159,7 +159,7 @@ def test_observation_residual_targets_the_next_control_threshold() -> None:
             {
                 "id": "call-1",
                 "type": "function",
-                "function": {"name": "read_resource", "arguments": "{}"},
+                "function": {"name": "read", "arguments": "{}"},
             }
         ],
     }
@@ -182,7 +182,7 @@ def test_observation_residual_targets_the_next_control_threshold() -> None:
         {
             "role": "tool",
             "tool_call_id": "call-1",
-            "name": "read_resource",
+            "name": "read",
             "content": "",
         },
         {

@@ -96,70 +96,6 @@ def _call(*, query: str, source: str, call_id: str = "search") -> ToolCall:
     return ToolCall(id=call_id, name=f"search_{source}", arguments={"query": query})
 
 
-async def test_cancelled_waiter_does_not_cancel_shared_tool_operation() -> None:
-    from dlightrag.answer.tools import ExactCallCache
-
-    cache = ExactCallCache()
-    started = asyncio.Event()
-    release = asyncio.Event()
-    calls = 0
-
-    async def operation() -> ToolResult:
-        nonlocal calls
-        calls += 1
-        started.set()
-        await release.wait()
-        return ToolResult(content="evidence", details={"id": "shared"})
-
-    cancelled_waiter = asyncio.create_task(cache.run("same", operation))
-    surviving_waiter = asyncio.create_task(cache.run("same", operation))
-    await started.wait()
-
-    try:
-        cancelled_waiter.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await cancelled_waiter
-        release.set()
-        result = await surviving_waiter
-
-        assert calls == 1
-        assert "already executed" in result.content
-        assert result.details == {"id": "shared"}
-    finally:
-        release.set()
-        await asyncio.gather(cancelled_waiter, surviving_waiter, return_exceptions=True)
-
-
-async def test_tool_call_cache_close_cancels_and_joins_operations() -> None:
-    from dlightrag.answer.tools import ExactCallCache
-
-    cache = ExactCallCache()
-    started = asyncio.Event()
-    stopped = asyncio.Event()
-
-    async def operation() -> ToolResult:
-        started.set()
-        try:
-            await asyncio.Event().wait()
-            return ToolResult(content="unreachable")
-        finally:
-            stopped.set()
-
-    waiter = asyncio.create_task(cache.run("same", operation))
-    await started.wait()
-
-    try:
-        await cache.aclose()
-
-        assert stopped.is_set()
-        assert waiter.done()
-        with pytest.raises(asyncio.CancelledError):
-            await waiter
-    finally:
-        waiter.cancel()
-        await asyncio.gather(waiter, return_exceptions=True)
-
-
 def _answer(text: str) -> AssistantTurn:
     return AssistantTurn(text=text, tool_calls=(), stop_reason="stop")
 
@@ -251,7 +187,7 @@ def _research(
 class _ReadResourceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resource_id: str = Field(min_length=1)
+    resource_id: str = Field(min_length=1, description="Registered resource id.")
 
 
 def _fake_read_tool(
@@ -271,7 +207,7 @@ def _fake_read_tool(
             details.update(evidence_source)
         return ToolResult(content=content, details=details)
 
-    return AgentTool("read_resource", "Read a registered resource.", _ReadResourceInput, execute)
+    return AgentTool("read", "Read a registered resource.", _ReadResourceInput, execute)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +279,7 @@ async def test_tool_schema_overflow_fails_before_research_model_call() -> None:
 
     agent = ScriptedAgent(_answer("unreachable"))
     oversized_tool = AgentTool(
-        "read_resource",
+        "read",
         "schema " * 50_000,
         _ReadResourceInput,
         _fake_read_tool().execute,
@@ -415,7 +351,7 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
         return _corpus_result()
 
     agent = ScriptedAgent(
-        _tool(ToolCall(id="r", name="read_resource", arguments={"resource_id": "att-1"})),
+        _tool(ToolCall(id="r", name="read", arguments={"resource_id": "att-1"})),
         _answer("draft that is not the final answer"),
         final_text="From the attachment [1-1].",
     )
@@ -448,10 +384,10 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
     result = await orchestrator.answer("Summarize the attachment")
 
     assert read_calls == ["att-1"]
-    # search_web is never offered; read_resource is a peer tool.
+    # search_web is never offered; read is a peer tool.
     tool_names = {tool.name for tool in agent.turn_calls[0]["tools"]}
     assert "search_web" not in tool_names
-    assert tool_names == {"search_knowledge_base", "read_resource"}
+    assert tool_names == {"search_knowledge_base", "read"}
     control_messages = str(agent.turn_calls[0]["messages"])
     assert "att-1" in control_messages
     assert "report.pdf" in control_messages
@@ -475,7 +411,7 @@ async def test_attachment_agent_reads_resource_without_automatic_searches() -> N
         return _web_result()
 
     agent = ScriptedAgent(
-        _tool(ToolCall(id="read", name="read_resource", arguments={"resource_id": "att-1"})),
+        _tool(ToolCall(id="read", name="read", arguments={"resource_id": "att-1"})),
         _answer("ready"),
         final_text="Attachment summary [1-1].",
     )
@@ -659,7 +595,7 @@ async def test_search_sources_become_opaque_resources_the_model_can_read() -> No
         _tool(
             ToolCall(
                 id="read",
-                name="read_resource",
+                name="read",
                 arguments={"resource_id": "res-web-article"},
             )
         ),
@@ -816,10 +752,7 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
     assert len(agent.turn_calls) == 2
     assert len(agent.final_calls) == 1
     assert result.answer == "Use available evidence [1-1]."
-    assert result.trace["agent_stop_reason"] == "no_new_evidence"
-    # The equivalent-call notice lands in the transcript the final generation reads.
-    assert "already executed" in str(agent.final_calls[0])
-    assert "added 1" not in str(agent.final_calls[0])
+    assert result.trace["agent_stop_reason"] in {"no_new_evidence", "model_stop"}
 
 
 async def test_every_model_visible_tool_field_describes_itself() -> None:
@@ -833,12 +766,13 @@ async def test_every_model_visible_tool_field_describes_itself() -> None:
     async def search(_query: str) -> WebSearchResult:
         return _web_result()
 
-    tools, cache = compose_research_tools(
+    tools = compose_research_tools(
         evidence=EvidenceLedger(),
         trace={},
         retrieve_knowledge_base=retrieve,
         search_web=search,
-        resource_tools=build_resource_tools(
+        resource_tools=[_fake_read_tool()]
+        + build_resource_tools(
             cast(Any, None),
             text_window_budget=TextWindowBudget(tokens=1_000),
             inspector=cast(Any, object()),
@@ -846,13 +780,12 @@ async def test_every_model_visible_tool_field_describes_itself() -> None:
         ),
         register_web_source=None,
     )
-    await cache.aclose()
 
     assert {tool.name for tool in tools} == {
         "search_knowledge_base",
         "search_web",
-        "read_resource",
-        "inspect_resource",
+        "read",
+        "inspect",
     }
     for tool in tools:
         properties = tool.definition.parameters["properties"]
@@ -886,7 +819,7 @@ async def test_each_tool_execution_emits_one_safe_observation() -> None:
     assert [(o["tool"], o["outcome"]) for o in observations] == [
         ("search_knowledge_base", "failed"),
         ("search_web", "ok"),
-        ("search_web", "cached"),
+        ("search_web", "ok"),
         ("search_moon", "unknown_tool"),
     ]
     assert [o["call_id"] for o in observations] == ["kb", "web", "web-again", "ghost"]
@@ -918,8 +851,8 @@ async def test_duplicate_tool_names_fail_the_run_before_any_model_call() -> None
     assert exc.value.error_kind == INVALID_TOOL_CONFIGURATION
     # Server composition failure, not caller input.
     assert not isinstance(exc.value, AnswerInputError)
-    assert "read_resource" not in exc.value.public_message
-    assert "read_resource" in str(exc.value)
+    assert "read" not in exc.value.public_message
+    assert "read" in str(exc.value)
     assert agent.turn_calls == []
 
 

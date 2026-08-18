@@ -280,7 +280,7 @@ def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> s
         filename = safe_source_filename(entry.filename or "resource")
         kind = "image" if (entry.declared_mime or "").lower().startswith("image/") else "resource"
         lines.append(f"- [resource: {entry.resource_id}] {filename} ({kind})")
-    lines.append("Use only these opaque resource ids with read_resource or inspect_resource.")
+    lines.append("Use only these opaque resource ids with read or inspect.")
     return "\n".join(lines)
 
 

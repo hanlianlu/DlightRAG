@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Model-visible ``read_resource`` and ``inspect_resource`` peer tools.
+"""Model-visible ``read`` and ``inspect`` resource branches.
 
-``read_resource`` returns bounded deterministic text; ``inspect_resource``
+``read`` returns bounded deterministic text; ``inspect``
 returns bounded VLM-derived visual evidence. The inspect tool is registered only
 when a verified visual capability exists, so a text-only deployment never
 advertises a tool it cannot serve. These adapters depend inward on the resource
@@ -109,7 +109,7 @@ def _read_resource_tool(
         )
 
     return AgentTool(
-        name="read_resource",
+        name="read",
         description=_READ_DESCRIPTION,
         input_model=_ReadResourceArgs,
         execute=execute,
@@ -140,7 +140,7 @@ def _inspect_resource_tool(inspector: ResourceInspector) -> AgentTool:
         )
 
     return AgentTool(
-        name="inspect_resource",
+        name="inspect",
         description=_INSPECT_DESCRIPTION,
         input_model=_InspectResourceArgs,
         execute=execute,
@@ -155,7 +155,7 @@ def build_resource_tools(
     visual_supported: bool = False,
 ) -> list[AgentTool]:
     """Return the resource peer tools; inspect only for a verified capability."""
-    tools = [_read_resource_tool(registry, text_window_budget)]
+    tools: list[AgentTool] = []
     if inspector is not None and visual_supported:
         tools.append(_inspect_resource_tool(inspector))
     return tools
@@ -185,4 +185,21 @@ def _describe_inspection_locator(locator: InspectionLocator) -> str:
     return f"{handle} @ {locator.anchor}" if locator.anchor else handle
 
 
-__all__ = ["build_resource_tools"]
+def make_resource_reader(
+    registry: ResourceRegistry,
+    text_window_budget: TextWindowBudget,
+):
+    """Adapt the registry into the agent-core resource-read callback."""
+
+    async def read_resource(resource_id: str, cursor: str | None) -> str:
+        result = await registry.read(
+            resource_id,
+            max_window_tokens=text_window_budget.tokens,
+            cursor=cursor,
+        )
+        return format_resource_read(result)
+
+    return read_resource
+
+
+__all__ = ["build_resource_tools", "make_resource_reader"]

@@ -599,7 +599,7 @@ async def test_inspect_resource_follows_vlm_capability_not_answer_capability() -
         vlm_profile=capabilities.model_profile("vlm"),
     )
 
-    assert [tool.name for tool in tools] == ["read_resource", "inspect_resource"]
+    assert [tool.name for tool in tools] == ["inspect"]
 
 
 async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_images() -> None:
@@ -625,7 +625,7 @@ async def test_inspect_resource_is_withheld_when_only_the_answer_model_sees_imag
         ),
     )
 
-    assert [tool.name for tool in tools] == ["read_resource"]
+    assert [tool.name for tool in tools] == []
 
 
 async def test_zero_configured_ceiling_disables_answer_images_without_a_model_call(

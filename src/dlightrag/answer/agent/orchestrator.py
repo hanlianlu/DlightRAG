@@ -87,7 +87,6 @@ class PreparedRun:
     tools: list[AgentTool]
     evidence: EvidenceLedger
     episode: SessionEpisode
-    tool_cache: Any
     registry: ResourceRegistry | None
     trace: dict[str, Any]
     agent_turn_count: int = 0
@@ -114,6 +113,8 @@ class AnswerOrchestrator:
         context_policy: ContextPolicy = CONTEXT_POLICY,
         max_agent_turns: int = 50,
         telemetry: Telemetry,
+        environment: object | None = None,
+        resource_reader: object | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -129,6 +130,8 @@ class AnswerOrchestrator:
         self._context_policy = context_policy
         self._max_agent_turns = max(1, max_agent_turns)
         self._telemetry = telemetry
+        self._environment = environment
+        self._resource_reader = resource_reader
 
     @property
     def uses_research_path(self) -> bool:
@@ -207,23 +210,20 @@ class AnswerOrchestrator:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if self._stream_model_func is None or self._model_func is None:
             raise RuntimeError("Streaming research answer requires a final text stream")
-        try:
-            await self._research_until_stopped(run, boundaries=boundaries)
+        await self._research_until_stopped(run, boundaries=boundaries)
 
-            await boundaries.enter_phase("generating")
-            final_messages, indexer = await run.context.answer_turn(
-                evidence=run.evidence, episode=run.episode
-            )
-            run.trace["agent_stop_reason"] = run.stop_reason
-            return await self._synthesizer.synthesize_research_stream(
-                final_messages,
-                run.evidence.contexts,
-                stream=self._stream_model_func,
-                indexer=indexer,
-                trace=run.trace,
-            )
-        finally:
-            await run.tool_cache.aclose()
+        await boundaries.enter_phase("generating")
+        final_messages, indexer = await run.context.answer_turn(
+            evidence=run.evidence, episode=run.episode
+        )
+        run.trace["agent_stop_reason"] = run.stop_reason
+        return await self._synthesizer.synthesize_research_stream(
+            final_messages,
+            run.evidence.contexts,
+            stream=self._stream_model_func,
+            indexer=indexer,
+            trace=run.trace,
+        )
 
     async def _research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
         """Run evidence turns until the model stops, adds nothing, or hits the cap.
@@ -273,7 +273,7 @@ class AnswerOrchestrator:
             "web_search_cost_dollars": 0.0,
             "tool_observations": [],
         }
-        tools, tool_cache = self._compose_tools(evidence, trace)
+        tools = self._compose_tools(evidence, trace)
         return PreparedRun(
             context=ContextAssembler(
                 model_profile=self._model_profile,
@@ -286,7 +286,6 @@ class AnswerOrchestrator:
             tools=tools,
             evidence=evidence,
             episode=SessionEpisode(retained_tail_tokens=retained_tail_tokens),
-            tool_cache=tool_cache,
             registry=registry,
             trace=trace,
             agent_turn_count=agent_turn_count,
@@ -325,7 +324,7 @@ class AnswerOrchestrator:
         self,
         evidence: EvidenceLedger,
         trace: dict[str, Any],
-    ) -> tuple[list[AgentTool], Any]:
+    ) -> list[AgentTool]:
         return compose_research_tools(
             evidence=evidence,
             trace=trace,
@@ -333,6 +332,8 @@ class AnswerOrchestrator:
             search_web=self._search_web,
             resource_tools=self._resource_tools,
             register_web_source=self._register_web_source,
+            resource_reader=self._resource_reader,
+            environment=self._environment,  # type: ignore[arg-type]
         )
 
     async def _execute_control_turn(

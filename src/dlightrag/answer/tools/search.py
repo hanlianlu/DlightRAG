@@ -6,7 +6,6 @@ evidence arrived; the passages themselves land in the run's ledger, never in the
 reply the model reads back.
 """
 
-import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -15,7 +14,6 @@ from dlightrag_rag.retrieval import RetrievalResult
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.tools.cache import ExactCallCache
 from dlightrag.answer.tools.web import (
     WebSearchResult,
     WebSearchUnavailable,
@@ -44,14 +42,10 @@ def knowledge_base_search_tool(
     retrieve: KnowledgeRetrieval,
     evidence: EvidenceLedger,
     trace: dict[str, Any],
-    cache: ExactCallCache,
 ) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = _as(raw, SearchInput)
-        return await cache.run(
-            _call_key("knowledge_base", args.query),
-            lambda: _search_corpus(retrieve, args.query, evidence, trace),
-        )
+        return await _search_corpus(retrieve, args.query, evidence, trace)
 
     return AgentTool(
         "search_knowledge_base",
@@ -67,14 +61,10 @@ def web_search_tool(
     evidence: EvidenceLedger,
     trace: dict[str, Any],
     register_web_source: RegisterWebSource | None,
-    cache: ExactCallCache,
 ) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = _as(raw, SearchInput)
-        return await cache.run(
-            _call_key("web", args.query),
-            lambda: _search_open_web(search, args.query, evidence, trace, register_web_source),
-        )
+        return await _search_open_web(search, args.query, evidence, trace, register_web_source)
 
     return AgentTool(
         "search_web",
@@ -138,10 +128,6 @@ async def _search_open_web(
             for resource_id, title in readable_sources.items()
         )
     return ToolResult(content=content)
-
-
-def _call_key(name: str, query: str) -> str:
-    return f"{name}:{json.dumps(query.strip(), ensure_ascii=False)}"
 
 
 def _as[T: BaseModel](value: BaseModel, expected: type[T]) -> T:

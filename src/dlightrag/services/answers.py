@@ -717,7 +717,7 @@ class AnswerService:
                 async def unused_retrieve(_query: str) -> RetrievalResult:
                     raise RuntimeError("acceptance tool definitions are never executed")
 
-                tools, tool_cache = compose_research_tools(
+                tools = compose_research_tools(
                     evidence=evidence,
                     trace={},
                     retrieve_knowledge_base=unused_retrieve,
@@ -731,19 +731,16 @@ class AnswerService:
                         else None
                     ),
                 )
-                try:
-                    measure = research_history_input_measure(
-                        model_profile=models.query,
-                        context_policy=CONTEXT_POLICY,
-                        query=request.query,
-                        query_images=resolved.query_images,
-                        resource_manifest=resolved.resource_manifest,
-                        image_budget=resolved.image_budget,
-                        tools=tools,
-                        retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
-                    )
-                finally:
-                    await tool_cache.aclose()
+                measure = research_history_input_measure(
+                    model_profile=models.query,
+                    context_policy=CONTEXT_POLICY,
+                    query=request.query,
+                    query_images=resolved.query_images,
+                    resource_manifest=resolved.resource_manifest,
+                    image_budget=resolved.image_budget,
+                    tools=tools,
+                    retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
+                )
                 targets.append(
                     HistoryProjectionTarget(
                         "research_seed",
