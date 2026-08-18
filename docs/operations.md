@@ -70,7 +70,7 @@ concern rather than a request concern.
   is trimmed on schedule regardless, after which its events endpoint returns 410
   and clients read the canonical result from the status endpoint.
 - **Storage.** Queued runs are never rejected for capacity, so bound and monitor
-  PostgreSQL storage: `dlightrag_answer_artifacts` holds uploaded and fetched
+  PostgreSQL storage: `dlightrag_blobs`/`dlightrag_blob_chunks` hold uploaded and fetched
   bytes, and `dlightrag_answer_run_events` holds token batches until trimmed.
 - **Probes.** Route traffic on unauthenticated `GET /ready` (database and corpus
   readiness, short-cached). `GET /health` is liveness only and never touches

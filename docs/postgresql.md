@@ -158,7 +158,7 @@ under the `answer_runs` migration scope:
 | --- | --- | --- |
 | `dlightrag_answer_runs` | `(owner_id, run_id)` | status, phase, completed turns, stop reason, cancellation request, lease owner/expiry, fencing epoch, consecutive-recovery count, next event sequence, event-trim timestamp, latest checkpoint, canonical result or terminal error |
 | `dlightrag_answer_run_events` | `(owner_id, run_id, event_sequence)` | gap-free `progress` / `token` / `reset` / `done` / `error` events |
-| `dlightrag_answer_artifacts` | `(owner_id, digest)` | immutable content-addressed bytes within one owner |
+| `dlightrag_blobs` | `(owner_id, digest)` | immutable content-addressed blob metadata within one owner |
 | `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered run inputs and fetched resources, referencing a digest |
 
 `run_id` is a UUIDv7. A partial unique index makes one idempotency key unique per

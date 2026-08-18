@@ -183,7 +183,7 @@ recover       -> expired lease reclaimed, resumed from the latest checkpoint
 A process restart resumes from the latest completed control turn; generation
 interrupted mid-stream emits `reset` and regenerates. Four tables own that state:
 `dlightrag_answer_runs`, `dlightrag_answer_run_events`,
-`dlightrag_answer_artifacts`, and `dlightrag_answer_run_artifacts`. See
+`dlightrag_blobs`/`dlightrag_blob_chunks`, and `dlightrag_answer_run_artifacts`. See
 [durable-answer-runs.md](durable-answer-runs.md) for the full contract and
 [postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
 
@@ -216,7 +216,7 @@ inserted inside the run's own creation transaction, so history exists before the
 202 response.
 
 Uploaded answer attachments are stored once as owner-scoped content-addressed
-blobs in `dlightrag_answer_artifacts` and referenced by
+chunked blobs in `dlightrag_blobs`/`dlightrag_blob_chunks` and referenced by
 `dlightrag_answer_run_artifacts`; there is no Web-owned raw attachment table, no
 parsed-chunk table, and no vector cache. Historical attachments are re-registered
 lazily as request-local resources on every follow-up, newest first up to the

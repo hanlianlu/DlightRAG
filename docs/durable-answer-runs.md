@@ -2,10 +2,11 @@
 
 This document defines durable Answer behavior across two owners. The neutral
 `dlightrag.runtime` package owns lifecycle records, the store port, fenced
-sessions, subscriptions, checkpoint failures, and `RunCoordinator`. The Answer
-executor owns retrieval/synthesis and converts product failures to
-`RunExecutionError` before Runtime sees them. `AnswerService` gives REST, MCP,
-Web, and in-process Python callers the same coordinator-backed lifecycle.
+sessions, subscriptions, durable progress, the cancellation listener, and
+`RunCoordinator`. The Answer executor owns retrieval/synthesis, converts
+product failures to `RunExecutionError`, and journals research turns through
+the agent-core session journal. `AnswerService` gives REST, MCP, Web, and
+in-process Python callers the same coordinator-backed lifecycle.
 
 `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the store
 port. Runtime never imports PostgreSQL, Answer implementation, RAG
@@ -16,7 +17,9 @@ persists from Runtime. No `dlightrag.storage` compatibility package exists.
 
 - Every answer is one durable run with one identifier and one lifecycle.
 - Client disconnect does not cancel the run.
-- A process restart resumes from the latest completed research control turn.
+- A process restart resumes research from the durable session journal: the
+  folded entries reconstruct the active model context, committed effects never
+  execute again, and unsettled intents replay only under their pinned policy.
 - REST, MCP, Web, and Python use the same run state, artifacts, events, and
   final result.
 - Durability does not change retrieval, citation, workspace, or round-robin
@@ -133,24 +136,23 @@ all execution slots are busy. Only a claim that will start or resume model/tool
 execution reserves a slot.
 
 Fencing and crash recovery use separate counters. The fencing epoch increments
-monotonically on every claim and never resets. A consecutive-recovery counter
-increments when an expired lease is reclaimed and resets after each committed
-control-turn checkpoint. A fixed internal maximum permits four consecutive
-reclaims without durable progress. The next reclaim instead atomically fails
-the run with `run_abandoned` and appends its `error` event. This prevents a
-deterministic process-killing run at the head of the queue from monopolizing
-every worker while allowing a long run that checkpoints progress to survive
-more total process restarts. The bound is not configurable.
+monotonically on every claim and never resets. Durable progress replaces the
+checkpoint-era turn and recovery counters: `durable_progress_version` advances
+only on fenced model turn appends, compaction appends, effect settlements, and
+Fast stage settlements; `reclaims_without_progress` counts consecutive
+expired-lease reclaims without such progress, and four of them abandon the run
+with `run_abandoned` and its `error` event. A long run that commits journal
+progress between reclaims survives more total process restarts. The bound is
+not configurable.
 
 A worker renews only an unexpired lease by comparing its owner and fencing
 epoch. If a heartbeat or ordinary lease-guarded write affects no row, the
 worker rereads the row: an expired lease or owner/epoch divergence means
 ownership is lost, so it cancels and joins its in-process work, performs no run
 transition, releases the local execution slot, and leaves recovery to the
-current or next owner. It never tries to revive an expired lease. The
-indeterminate checkpoint-commit procedure below is the only zero-row retry
-exception. Blocking CPU work remains cancellation-cooperative at its existing
-result-commit boundary; the stale worker cannot persist that result.
+current or next owner. It never tries to revive an expired lease. Blocking
+CPU work remains cancellation-cooperative at its existing settlement boundary;
+the stale worker cannot persist that result.
 
 A durable Answer run has no wall-clock execution deadline. `retrieval_timeout`
 bounds one caller-awaited inline Retrieval operation and does not wrap Answer
@@ -161,16 +163,16 @@ terminal transition, lease loss, or process shutdown; there is no run-timeout
 setting.
 
 On graceful shutdown the coordinator stops claiming rows first. Active workers
-may finish an in-flight terminal transition or control-turn checkpoint during
-the application's shutdown grace; remaining work is then cancelled and joined.
+may finish an in-flight terminal transition or journal settlement during the
+application's shutdown grace; remaining work is then cancelled and joined.
 Each owned cancel-pending run is finalized as `cancelled` with its terminal
 `done` event. Every other owned nonterminal run receives a fenced `running` to
-`queued` transition that clears its lease while preserving its latest
-checkpoint, turn count, and cancellation field. It is immediately reclaimable
-as ordinary queued work and does not increment the consecutive-recovery
-counter. Only reclaim after lease expiry counts as crash recovery. A run
-interrupted during generation emits `reset` when next claimed, whether the
-interruption was a crash or graceful shutdown.
+`queued` transition that clears its lease while preserving its durable
+progress and cancellation field. It is immediately reclaimable as ordinary
+queued work and does not increment the reclaim counter. Only reclaim after
+lease expiry counts as crash recovery. A run interrupted during generation
+emits `reset` when next claimed, whether the interruption was a crash or
+graceful shutdown.
 
 If every process is busy, an accepted row remains `queued` until a worker has a
 slot or the caller cancels it. Queue age never turns an accepted run into a
@@ -183,7 +185,7 @@ sweep-interval setting exists.
 
 - `queued`, `running`, `succeeded`, `failed`, or `cancelled`;
 - whether cancellation has been requested for a running run;
-- current phase and completed control-turn count;
+- current phase and durable progress version;
 - the final answer payload for `succeeded`;
 - one public error kind and message for terminal failures.
 
@@ -296,13 +298,14 @@ order applies writer migrations before starting readers on the new revision.
 One row owns the run:
 
 - owner identity and `run_id`;
-- normalized immutable request input;
-- status, phase, stop reason, and completed turn count;
-- cancellation request time, lease owner, lease expiration, fencing epoch, and
-  consecutive-recovery count;
+- bounded prepared input JSON (`prepared_input_json`), required for queued and
+  running rows and cleared on every terminal transition;
+- status, phase, and stop reason;
+- cancellation request time, lease owner, lease expiration, and fencing epoch;
+- durable progress: `durable_progress_version`,
+  `last_reclaim_progress_version`, and `reclaims_without_progress`;
 - next durable event sequence;
 - event-log trim timestamp;
-- latest checkpoint JSON;
 - final result JSON or terminal error;
 - created, updated, started, and finished timestamps.
 
@@ -350,14 +353,16 @@ endpoint configuration because provider credentials remain deployment state.
 Startup aborts while an active run pins another endpoint or context-policy
 revision; operators drain or owner-cancel those runs before deployment.
 
-The run row is the sole authority for lifecycle status, phase, completed turn
-count, stop reason, cancellation, lease, final result, and terminal error. The
-checkpoint is restorable agent state, not a second lifecycle record. A control
-turn transaction writes the checkpoint and advances the row's completed-turn
-count atomically. Its update predicate requires the current lease owner,
-unexpired lease, fencing epoch, and expected completed-turn count. Recovery
-rejects a checkpoint whose copied turn number does not equal the authoritative
-row value.
+The run row is the sole authority for lifecycle status, phase, durable
+progress, stop reason, cancellation, lease, final result, and terminal error.
+Research state lives in the append-only session journal, never in a full-state
+checkpoint. One transaction commits the complete assistant response plus its
+ordered intents; each effect then settles one at a time in assistant source
+order, and every settlement advances session version and durable progress
+under the live lease/epoch predicate. Recovery folds committed entries into
+the model context, replays unsettled `safe` intents only when the tool
+contract matches exactly, settles unsettled `never` intents interrupted, and
+settles changed contracts `tool_contract_changed`.
 
 ### `dlightrag_answer_run_events`
 
@@ -408,30 +413,28 @@ presentation phases are not durable.
 Every sub-turn phase transition uses one small transaction that, under the
 current unexpired lease and fencing epoch, updates the run row's `phase` and
 appends the matching `progress` event with the next durable sequence. It does
-not modify the checkpoint or completed-turn count. Recovery may re-execute an
-uncheckpointed turn and append an earlier phase again; `progress` is a durable
-last-writer-wins state notification, not a monotonic workflow history, so this
-does not emit `reset`. `reset` is reserved for clearing a partial token draft
-before regenerated output.
+not modify durable progress. Recovery may re-enter an earlier phase;
+`progress` is a durable last-writer-wins state notification, not a monotonic
+workflow history, so this does not emit `reset`. `reset` is reserved for
+clearing a partial token draft before regenerated output.
 
-### `dlightrag_answer_artifacts`
+### `dlightrag_blobs` and `dlightrag_blob_chunks`
 
-Immutable raw bytes are content-addressed within one owner namespace. The table
-stores the owner, SHA-256 digest, byte size, bytes, and creation timestamp.
-Lifetime is derived only from run references; there is no independent
-artifact-retention state. Caller attachments may be reused across runs without
-cross-owner deduplication.
+Immutable raw bytes are content-addressed within one owner namespace and
+chunked into exactly 1,048,576 bytes per non-final chunk. Metadata existence
+means complete: one transaction writes every chunk and inserts the blob row
+last, so a partial blob is never visible. Lifetime is derived only from run and
+resource references; there is no independent artifact-retention state. Caller
+attachments may be reused across runs without cross-owner deduplication.
 
-Run-scoped fetched Web bytes use the same blob contract. They are stored only
-after the existing HTTPS, redirect, DNS, SSRF, and byte validation passes.
-Storing the blob and its run-artifact reference is one transaction performed
-before the tool result may enter a checkpoint. Once that turn is checkpointed,
-its resource id is permanently bound to those validated bytes and recovery
-never silently re-fetches a changed page. Recovery reads the stored bytes without
-live DNS revalidation because no network request occurs; ordinary live URL reads
-retain their per-read validation. Work from an uncheckpointed tool batch may
-execute again after a crash and carries no same-bytes guarantee, consistent
-with the read-only-tool replay non-goal.
+Accepted attachments and fetched Web bytes share this blob contract. Accepted
+inputs register atomically with run acceptance; fetched Web bytes settle
+through their effect's `FetchedResourceSettlementUpdate` after the existing
+HTTPS, redirect, DNS, SSRF, and byte validation passes, so the resource id is
+permanently bound to those validated bytes and recovery never silently
+re-fetches a changed page. Recovery reads the stored bytes without live DNS
+revalidation because no network request occurs; ordinary live URL reads retain
+their per-read validation.
 
 ### `dlightrag_answer_run_artifacts`
 
@@ -441,18 +444,18 @@ resource kind, and any deterministic transform locator needed to regenerate a
 page or image window. It distinguishes current attachments, historical
 attachments, and run-scoped fetched resources.
 
-Its `(owner, digest)` columns have a composite foreign key to the artifact
-table with `ON DELETE RESTRICT`. Inserting a reference therefore takes the
-PostgreSQL key-share lock that serializes against blob deletion; reusing a blob
-is not protected merely by checking both tables in one READ COMMITTED
-transaction.
+Its `(owner, digest)` columns have a composite foreign key to
+`dlightrag_blobs` with `ON DELETE RESTRICT`. Inserting a reference therefore
+takes the PostgreSQL key-share lock that serializes against blob deletion;
+reusing a blob is not protected merely by checking both tables in one READ
+COMMITTED transaction.
 
 Deterministic attachment conversion is recomputed from stored bytes on resume;
 no conversion-result table is introduced. VLM inspection prose remains run
 evidence, not a cross-run cache.
 
-Deleting a run removes that run's references, not shared bytes. An artifact row
-is deleted only when no run-artifact row references its digest for that owner.
+Deleting a run removes that run's references, not shared bytes. A blob is
+deleted only when no run/resource reference keeps its digest for that owner.
 Reference checks and deletion occur in one transaction, and the foreign key
 rejects deletion if a concurrent run has adopted the digest. A deferred cleanup
 pass may retry a blob that remained because of that race.
