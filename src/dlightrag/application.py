@@ -132,6 +132,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.runtime import RunCoordinator
     from dlightrag.services.answers import AnswerService
     from dlightrag.services.corpora import CorpusAdmin
+    from dlightrag.services.memory import MemoryService
     from dlightrag.services.retrieval import RetrievalPlannerRuntime, RetrievalService
     from dlightrag.web.conversations import WebConversationService
 
