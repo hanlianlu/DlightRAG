@@ -150,9 +150,9 @@ class _Resources:
         models: RequestModelContext,
         text_window_budget: Any,
         confirm_image_context: Any,
-        research: bool,
+        resolved_mode: str,
     ) -> Any:
-        del text_window_budget, confirm_image_context, research
+        del text_window_budget, confirm_image_context, resolved_mode
         return SimpleNamespace(
             models=models,
             registry=None,

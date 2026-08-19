@@ -272,9 +272,9 @@ class _Resources:
         models: RequestModelContext,
         text_window_budget: Any,
         confirm_image_context: Any,
-        research: bool = False,
+        resolved_mode: str = "fast",
     ) -> Any:
-        del resources, text_window_budget, confirm_image_context, research
+        del resources, text_window_budget, confirm_image_context, resolved_mode
         self.calls.append("resolve")
         return MagicMock(
             models=models,

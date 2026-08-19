@@ -39,6 +39,7 @@ from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.images import AnswerImageBudget
+from dlightrag.answer.mode import ResolvedMode
 from dlightrag.answer.publication import StagedArtifact, scan_artifact_directory
 from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.answer.resources.registry import ResourceRegistry
@@ -121,7 +122,7 @@ class AnswerOrchestrator:
         telemetry: Telemetry,
         environment: object | None = None,
         resource_reader: object | None = None,
-        research_path: bool,
+        resolved_mode: ResolvedMode,
         delegate_host: DelegateHost | None = None,
     ) -> None:
         self._synthesizer = synthesizer
@@ -140,7 +141,7 @@ class AnswerOrchestrator:
         self._environment = environment
         self._resource_reader = resource_reader
         self._workspace: RunWorkspace | None = None
-        self._research_path = research_path
+        self._resolved_mode: ResolvedMode = resolved_mode
         self._delegate_host = delegate_host
         self._access = AccessScheduler()
 
@@ -177,9 +178,9 @@ class AnswerOrchestrator:
         return scan_artifact_directory(self._workspace.workspace / "artifacts")
 
     @property
-    def uses_research_path(self) -> bool:
-        """Whether this orchestrator runs AgentLoop instead of Fast."""
-        return self._research_path
+    def resolved_mode(self) -> ResolvedMode:
+        """The durable Fast or Research path this orchestrator was built for."""
+        return self._resolved_mode
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -195,7 +196,7 @@ class AnswerOrchestrator:
         boundaries: RunBoundaries | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         limits = boundaries or _NoBoundaries()
-        if not self.uses_research_path:
+        if self._resolved_mode == "fast":
             if query_images:
                 raise RuntimeError("Current images require request resources")
             return await self._fast_answer_stream(
@@ -303,11 +304,7 @@ class AnswerOrchestrator:
         """Build one run's memory and the tools bound to it, before any restore."""
         evidence = EvidenceLedger(image_budget=self._image_budget)
         retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
-        trace: dict[str, Any] = {
-            "agent_turns": 0,
-            "web_search_cost_dollars": 0.0,
-            "tool_observations": [],
-        }
+        trace = _fresh_research_trace()
         tools = self._compose_tools(evidence, trace, child=False)
         return PreparedRun(
             context=ContextAssembler(
@@ -330,11 +327,7 @@ class AnswerOrchestrator:
         """Build a zero-history child session bound to this parent's tools and model."""
         evidence = EvidenceLedger(image_budget=self._image_budget)
         retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
-        trace: dict[str, Any] = {
-            "agent_turns": 0,
-            "web_search_cost_dollars": 0.0,
-            "tool_observations": [],
-        }
+        trace = _fresh_research_trace()
         tools = self._compose_tools(evidence, trace, child=True)
         return PreparedRun(
             context=ContextAssembler(
@@ -473,6 +466,14 @@ class AnswerOrchestrator:
         )
         run.episode.record(executed.messages[len(call_messages) :])
         return executed, run.evidence.row_count != previous_rows
+
+
+def _fresh_research_trace() -> dict[str, Any]:
+    return {
+        "agent_turns": 0,
+        "web_search_cost_dollars": 0.0,
+        "tool_observations": [],
+    }
 
 
 _CHILD_OBJECTIVE_PREFIX = (

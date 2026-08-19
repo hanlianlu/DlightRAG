@@ -34,6 +34,7 @@ from dlightrag.answer.images import AnswerImagePolicy
 from dlightrag.answer.mode import (
     ModeCapability,
     ModeResource,
+    ResolvedMode,
     require_supported_mode,
     resource_role,
     valid_modes,
@@ -242,7 +243,7 @@ class _AnswerResourcePreparer(Protocol):
             [RequestModelContext],
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
         ],
-        research: bool,
+        resolved_mode: ResolvedMode,
     ) -> ResolvedAnswerResources: ...
 
 
@@ -787,7 +788,7 @@ class AnswerService:
             models=models,
             text_window_budget=text_window_budget,
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
-            research="research" in allowed_modes,
+            resolved_mode=("research" if "research" in allowed_modes else "fast"),
         )
         try:
             workspaces = list(request.workspaces)

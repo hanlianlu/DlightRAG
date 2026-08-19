@@ -73,7 +73,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
-from dlightrag.answer.mode import ModeResource, resource_role
+from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import is_empty_answer
 from dlightrag.answer.resources import ResourceInput, ResourceRegistry
@@ -85,7 +85,7 @@ from dlightrag.answer.resources.models import (
 from dlightrag.answer.resources.registry import FetchedBytesSink, FetchedResourceBytes
 from dlightrag.answer.resources.visual import ResourceInspector
 from dlightrag.answer.router import AnswerModeRouter, RoutingFailedError
-from dlightrag.answer.routing import decide_resolved_mode
+from dlightrag.answer.routing import AnswerRoutingStore, decide_resolved_mode
 from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
@@ -129,6 +129,10 @@ class ArtifactReader(Protocol):
 
     async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None: ...
     async def list_run_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]: ...
+
+
+class AnswerExecutionStore(ArtifactReader, AnswerRoutingStore, Protocol):
+    """Executor store: artifacts plus the lease-fenced Routing Record."""
 
 
 class RawRetrieval(Protocol):
@@ -289,7 +293,7 @@ class AnswerResourceResolver:
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
         ],
         fetched_bytes_sink: FetchedBytesSink | None = None,
-        research: bool,
+        resolved_mode: ResolvedMode,
     ) -> ResolvedAnswerResources:
         """Resolve resource capabilities, manifests, tools, and image transport."""
         if resources and not models.query.supports_tools:
@@ -336,7 +340,7 @@ class AnswerResourceResolver:
             resource_manifest = registry.manifest() if registry is not None else ()
             image_budget: AnswerImageBudget | None = None
             query_images: list[dict[str, Any]] | None = current_images or None
-            if research:
+            if resolved_mode == "research":
                 image_budget = self._capabilities.answer_image_policy(models.query).new_budget()
                 query_images = (
                     await self.budget_agent_images(
@@ -497,7 +501,7 @@ class AnswerExecutor:
     def __init__(
         self,
         *,
-        store: ArtifactReader,
+        store: AnswerExecutionStore,
         pool: WorkspacePool,
         retrieve: RawRetrieval,
         models: AnswerModelRuntime,
@@ -544,16 +548,12 @@ class AnswerExecutor:
 
     async def _ensure_resolved_mode(
         self, session: RunSession, request: AnswerRunInput
-    ) -> tuple[str, str | None]:
-        load = getattr(self._store, "load_routing", None)
-        resolve = getattr(self._store, "resolve", None)
-        if not inspect.iscoroutinefunction(load) or not inspect.iscoroutinefunction(resolve):
-            raise RunExecutionError("routing_failed", "Routing record is missing.")
-        record = await load(owner_id=session.owner_id, run_id=session.run_id)  # type: ignore[misc]
+    ) -> tuple[ResolvedMode, str | None]:
+        record = await self._store.load_routing(owner_id=session.owner_id, run_id=session.run_id)
         if record is None:
             raise RunExecutionError("routing_failed", "Routing record is missing.")
         if record.resolved_mode:
-            return str(record.resolved_mode), record.research_session_id
+            return _require_resolved_mode(record.resolved_mode), record.research_session_id
         try:
             decided = decide_resolved_mode(
                 requested_mode=record.requested_mode,
@@ -562,13 +562,13 @@ class AnswerExecutor:
         except ValueError as exc:
             raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
         if decided is None:
-            decided = await self._route_with_model(request, valid_modes=record.valid_modes)
-        if decided not in {"fast", "research"}:
-            raise RunExecutionError("routing_failed", "Answer mode routing failed.")
+            decided = _require_resolved_mode(
+                await self._route_with_model(request, valid_modes=record.valid_modes)
+            )
         research_session_id = None
         if decided == "research" and record.requested_mode == "auto":
             research_session_id = SessionId.new().value
-        written = await resolve(  # type: ignore[misc]
+        written = await self._store.resolve(
             owner_id=session.owner_id,
             run_id=session.run_id,
             worker_id=session.worker_id,
@@ -576,7 +576,10 @@ class AnswerExecutor:
             resolved_mode=decided,
             research_session_id=research_session_id,
         )
-        return written or decided, research_session_id or record.research_session_id
+        return (
+            _require_resolved_mode(written or decided),
+            research_session_id or record.research_session_id,
+        )
 
     async def _route_with_model(
         self, request: AnswerRunInput, *, valid_modes: tuple[str, ...]
@@ -622,7 +625,7 @@ class AnswerExecutor:
             filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
             resources=await self._answer_run_resources(request, owner_id=session.owner_id),
             fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
-            research=resolved_mode == "research",
+            resolved_mode=resolved_mode,
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
@@ -631,8 +634,7 @@ class AnswerExecutor:
         try:
             journal = session.execution.session_store
             prepared_early: Any = None
-            research = resolved_mode == "research"
-            if research:
+            if resolved_mode == "research":
                 from dlightrag.answer.execution_settings import validate_agent_execution
 
                 root = validate_agent_execution(
@@ -655,7 +657,6 @@ class AnswerExecutor:
                     except WorkspaceIntegrityError as exc:
                         raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
                     run.orchestrator.bind_workspace(bound)
-            if research:
                 session_id = SessionId(
                     request.session_id or research_session_id or SessionId.new().value
                 )
@@ -719,7 +720,7 @@ class AnswerExecutor:
                 input={"query": request.query},
                 metadata={
                     "run_id": session.run_id,
-                    "research": research,
+                    "resolved_mode": resolved_mode,
                     "workspaces": run.workspaces,
                     "history_turns": len(run.history or []),
                     "query_image_count": run.current_image_count,
@@ -860,7 +861,7 @@ class AnswerExecutor:
         projected_history: PriorTurns,
         model_profiles: Mapping[ModelRole, ModelProfile],
         environment: object | None = None,
-        research: bool,
+        resolved_mode: ResolvedMode,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -876,7 +877,7 @@ class AnswerExecutor:
             text_window_budget=text_window_budget,
             confirm_image_context=self._capabilities.pinned_answer_context,
             fetched_bytes_sink=fetched_bytes_sink,
-            research=research,
+            resolved_mode=resolved_mode,
         )
         try:
             models = resolved.models
@@ -893,13 +894,13 @@ class AnswerExecutor:
                     filters=filters,
                     query_images=resolved.current_images,
                     image_descriptions=image_descriptions,
-                    preserve_query=True if research else None,
+                    preserve_query=True if resolved_mode == "research" else None,
                     model_profile=models.extract,
                 )
 
             model_func: Callable[..., Any] | None = None
             stream_model_func: Callable[..., AsyncIterator[str]] | None = None
-            if research:
+            if resolved_mode == "research":
                 tool_model = self._models.query_tool_model()
                 model_func = tool_model
                 stream_model_func = tool_model.stream_text
@@ -925,8 +926,8 @@ class AnswerExecutor:
                 context_policy=CONTEXT_POLICY,
                 telemetry=self._telemetry,
                 environment=environment,
-                research_path=research,
-                delegate_host=DelegateHost() if research else None,
+                resolved_mode=resolved_mode,
+                delegate_host=DelegateHost() if resolved_mode == "research" else None,
                 resource_reader=(
                     make_resource_reader(resolved.registry, text_window_budget)
                     if resolved.registry is not None
@@ -1729,6 +1730,12 @@ async def _close_execution_resources(
         raise cancellation
 
 
+def _require_resolved_mode(value: str | None) -> ResolvedMode:
+    if value == "fast" or value == "research":
+        return value
+    raise RunExecutionError("routing_failed", "Answer mode routing failed.")
+
+
 def _async_store_method(store: object, name: str) -> Any | None:
     method = getattr(store, name, None)
     if inspect.iscoroutinefunction(method):
@@ -1837,6 +1844,7 @@ def _observe_workspace_warmup(task: asyncio.Task[None]) -> None:
 
 
 __all__ = [
+    "AnswerExecutionStore",
     "AnswerExecutor",
     "AnswerExecutorSettings",
     "AnswerResourceResolver",

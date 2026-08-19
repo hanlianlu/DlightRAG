@@ -260,13 +260,13 @@ class E2EConversationService:
                         conversation=self._summary(value),
                     )
             run_id = str(uuid4())
+            requested_mode = mode or "auto"
             request = _run_request(
                 query=query,
                 workspaces=workspaces,
                 attachments=attachments,
                 idempotency_fingerprint=submission_id,
             )
-            del mode
             turn = LinkedTurn(
                 turn_id=str(uuid4()),
                 turn_number=len(value["turns"]) + 1,
@@ -279,6 +279,7 @@ class E2EConversationService:
             value["updated_at"] = datetime.now(UTC)
             self._runs[run_id] = {
                 "conversation_id": conversation_id,
+                "requested_mode": requested_mode,
                 "bytes": {
                     attachment.ordinal: (attachment.attachment_bytes, attachment.mime_type)
                     for attachment in attachments

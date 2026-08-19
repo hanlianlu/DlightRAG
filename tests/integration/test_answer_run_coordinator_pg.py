@@ -495,7 +495,7 @@ def _answer_runtime(store: FingerprintingAnswerRunStore) -> tuple[Application, R
         model_profile=ModelProfile(context_window_tokens=1_000_000),
         telemetry=NOOP_TELEMETRY,
         text_window_budget=TextWindowBudget(tokens=850_000),
-        research_path=False,
+        resolved_mode="fast",
     )
 
     executor = AnswerExecutor(

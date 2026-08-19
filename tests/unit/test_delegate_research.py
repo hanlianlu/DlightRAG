@@ -188,7 +188,7 @@ def _child_orchestrator(model_func: Any) -> AnswerOrchestrator:
         model_profile=profile,
         text_window_budget=TextWindowBudget(CONTEXT_POLICY.hard_input_limit(profile)),
         delegate_host=DelegateHost(),
-        research_path=True,
+        resolved_mode="research",
     )
 
 
