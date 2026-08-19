@@ -542,7 +542,10 @@ class Application:
         purge = getattr(self._components.memory, "purge_expired", None)
         if purge is None:
             return
-        await purge()
+        try:
+            await purge()
+        except Exception:
+            logger.warning("Memory retention failed", exc_info=True)
         if self._memory_janitor is None:
             self._memory_janitor = asyncio.create_task(self._purge_memory_forever())
 

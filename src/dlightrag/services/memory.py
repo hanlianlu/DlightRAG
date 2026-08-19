@@ -17,7 +17,7 @@ from dlightrag.answer.memory_store import (
 
 
 class MemoryService:
-    """List and forget Memory Records for one authenticated owner."""
+    """Owner list/forget plus fleet purge of expired superseded rows."""
 
     def __init__(self, store: AnswerMemoryStore) -> None:
         self._store = store

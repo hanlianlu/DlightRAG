@@ -26,7 +26,8 @@ def _recency(record: MemoryRecord) -> datetime:
 
 
 class AnswerMemoryStore(Protocol):
-    """Persist Memory Records. Callers enforce JWT; every method is owner-scoped."""
+    """Persist Memory Records. Callers enforce JWT. Row methods are owner-scoped;
+    purge and prune are fleet-wide retention."""
 
     async def count_active(self, *, owner_id: str) -> int: ...
 
