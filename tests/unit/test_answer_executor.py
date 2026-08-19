@@ -293,6 +293,7 @@ async def test_research_run_seeds_the_pinned_session_journal() -> None:
     prepared = MagicMock(tools=[], evidence=MagicMock(ledger_state_json=lambda: "{}"))
     orchestrator = MagicMock(uses_research_path=True)
     orchestrator.prepare_run.return_value = prepared
+    orchestrator.staged_artifacts.return_value = ()
     orchestrator.answer_stream = AsyncMock(
         return_value=({"chunks": [], "entities": [], "relationships": []}, None)
     )
@@ -392,6 +393,7 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
     )
     orchestrator = MagicMock(uses_research_path=True)
     orchestrator.prepare_run.return_value = prepared
+    orchestrator.staged_artifacts.return_value = ()
     orchestrator.answer_stream = AsyncMock(
         return_value=({"chunks": [], "entities": [], "relationships": []}, None)
     )

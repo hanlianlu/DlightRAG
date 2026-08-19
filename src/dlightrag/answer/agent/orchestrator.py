@@ -5,8 +5,8 @@ One owner routes every answer. A request with no registered resources and no
 open-web capability takes the standard-RAG fast path: fixed knowledge-base
 retrieval and one final answer generation, with no control turn. A request with
 attachments/resources or a web-search capability enters the research loop:
-the model selects from the available peer tools, evidence-growth convergence,
-and one additional tools-disabled final answer generation.
+the model selects from the available peer tools and writes the answer when it
+stops calling tools.
 """
 
 import json
@@ -39,10 +39,12 @@ from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.images import AnswerImageBudget
+from dlightrag.answer.publication import StagedArtifact, scan_artifact_directory
 from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
+from dlightrag.answer.workspace import RunWorkspace
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +136,18 @@ class AnswerOrchestrator:
         self._telemetry = telemetry
         self._environment = environment
         self._resource_reader = resource_reader
-        self._workspace: Any = None
+        self._workspace: RunWorkspace | None = None
+
+    def bind_workspace(self, workspace: RunWorkspace) -> None:
+        """Attach the claimed run workspace used for tools, spill, and publication."""
+        self._workspace = workspace
+        self._environment = workspace.environment
+
+    def staged_artifacts(self) -> tuple[StagedArtifact, ...]:
+        """Regular files under artifacts/, or empty when no workspace is bound."""
+        if self._workspace is None:
+            return ()
+        return scan_artifact_directory(self._workspace.workspace / "artifacts")
 
     @property
     def uses_research_path(self) -> bool:
@@ -336,6 +349,8 @@ class AnswerOrchestrator:
         from dlightrag.answer.workspace import spill_receipt, write_spill_file
 
         workspace = self._workspace
+        if workspace is None:
+            raise RuntimeError("spill requires a bound workspace")
 
         async def write(text: str) -> dict[str, object]:
             resource_id = f"spill_{uuid4().hex}"

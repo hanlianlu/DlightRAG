@@ -7,7 +7,6 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from dlightrag_agent.session.effects import (
@@ -71,7 +70,7 @@ from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semant
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
 from dlightrag.answer.model_runtime import AnswerModelRuntime
-from dlightrag.answer.publication import is_empty_answer, scan_artifact_directory
+from dlightrag.answer.publication import is_empty_answer
 from dlightrag.answer.resources import ResourceInput, ResourceRegistry
 from dlightrag.answer.resources.models import (
     ResourceManifestEntry,
@@ -586,8 +585,7 @@ class AnswerExecutor:
                         raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
                     except WorkspaceIntegrityError as exc:
                         raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
-                    run.orchestrator._environment = bound.environment
-                    run.orchestrator._workspace = bound
+                    run.orchestrator.bind_workspace(bound)
             if research:
                 session_id = SessionId(request.session_id)
                 prepared_early = run.orchestrator.prepare_run(
@@ -677,7 +675,7 @@ class AnswerExecutor:
                 )
                 publications, primary_handle, artifact_descriptors, report_sources = (
                     _stage_publications(
-                        orchestrator=run.orchestrator,
+                        staged=run.orchestrator.staged_artifacts(),
                         answer=finalized.answer,
                         contexts=contexts,
                         require_answer=getattr(prepared_early, "stop_reason", None) == "model_stop",
@@ -1412,18 +1410,11 @@ def _context_count(contexts: RetrievalContexts, key: str) -> int:
 
 def _stage_publications(
     *,
-    orchestrator: Any,
+    staged: Sequence[Any],
     answer: str,
     contexts: RetrievalContexts,
     require_answer: bool = False,
 ) -> tuple[list[PendingPublication], str | None, list[dict[str, Any]], list[Any]]:
-    workspace = getattr(orchestrator, "_workspace", None)
-    root = getattr(workspace, "workspace", None)
-    if workspace is None or not isinstance(root, Path):
-        if require_answer and is_empty_answer(answer=answer, has_primary_report=False):
-            raise RunExecutionError("empty_answer", "The run produced no answer.")
-        return [], None, [], []
-    staged = scan_artifact_directory(root / "artifacts")
     has_report = any(item.kind == "primary_report" for item in staged)
     if require_answer and is_empty_answer(answer=answer, has_primary_report=has_report):
         raise RunExecutionError("empty_answer", "The run produced no answer.")

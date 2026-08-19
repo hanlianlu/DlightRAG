@@ -1301,3 +1301,34 @@ async def test_research_stream_final_flows_through_synthesizer_no_context() -> N
     assert max_tokens_seen == []
     assert "Best-effort answer." in "".join(emitted)
     assert not contexts["chunks"]
+
+
+def test_bound_workspace_exposes_staged_artifacts(tmp_path: Any) -> None:
+    from dlightrag_agent.environment import LocalExecutionEnvironment
+
+    from dlightrag.answer.workspace import RunWorkspace
+
+    root = tmp_path
+    artifacts = root / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "report.md").write_text("# Findings\n", encoding="utf-8")
+    (artifacts / "table.csv").write_text("a,b\n", encoding="utf-8")
+    orchestrator = _research(
+        ScriptedAgent(_answer("stop"), final_text="Done."),
+        lambda _query: _corpus_result(),
+        None,
+    )
+    assert orchestrator.staged_artifacts() == ()
+    orchestrator.bind_workspace(
+        RunWorkspace(
+            epoch=1,
+            workspace=root,
+            spill_dir=root / "spill",
+            environment=LocalExecutionEnvironment(root),
+        )
+    )
+    staged = orchestrator.staged_artifacts()
+    assert {item.relative_path: item.kind for item in staged} == {
+        "report.md": "primary_report",
+        "table.csv": "published_artifact",
+    }

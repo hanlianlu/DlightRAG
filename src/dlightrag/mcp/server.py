@@ -222,10 +222,9 @@ class DlightRAGRequestScopeMiddleware:
         access_token = get_access_token()
         scope = current_request_scope()
         if access_token is not None:
-            application = await _ensure_application()
             scope = RequestScope(
                 user_id=access_token.subject or access_token.client_id,
-                auth_mode=application.config.auth_mode,
+                auth_mode=_get_config().auth_mode,
                 claims=dict(access_token.claims or {}),
             )
         with request_scope_context(scope):

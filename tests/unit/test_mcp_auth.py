@@ -62,6 +62,40 @@ async def test_mcp_access_token_preserves_identity_claims_and_scopes(
         auth_context_var.reset(auth_token)
 
 
+@pytest.mark.asyncio
+async def test_mcp_request_scope_does_not_boot_application(
+    monkeypatch: pytest.MonkeyPatch,
+    test_config: DlightragConfig,
+) -> None:
+    from dlightrag.application import Application
+
+    set_config(
+        test_config.model_copy(update={"auth_mode": "jwt", "jwt_verification_key": "test-key"})
+    )
+
+    async def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("request scope must not start Application")
+
+    monkeypatch.setattr(Application, "acreate", _boom)
+    token = AccessToken(
+        token="signed-token",
+        client_id="client",
+        scopes=[],
+        subject="alice",
+        claims={"sub": "alice"},
+    )
+    auth_token = auth_context_var.set(AuthenticatedUser(token))
+
+    async def capture(_ctx: Any) -> None:
+        assert current_request_scope().user_id == "alice"
+        assert current_request_scope().auth_mode == "jwt"
+
+    try:
+        await DlightRAGRequestScopeMiddleware()(object(), capture)  # type: ignore[arg-type]
+    finally:
+        auth_context_var.reset(auth_token)
+
+
 async def test_mcp_request_scope_restores_prior_scope_when_handler_fails(
     test_config: DlightragConfig,
 ) -> None:
