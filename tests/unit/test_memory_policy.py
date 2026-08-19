@@ -25,7 +25,7 @@ def _write(**overrides: object) -> MemoryWrite:
         "kind": "preference",
         "body": "Do not use email.",
         "confidence": 0.9,
-        "provenance": MemoryProvenance(run_id="run-1"),
+        "provenance": MemoryProvenance(run_id="run-1", session_id="sess-1"),
     }
     payload.update(overrides)
     return MemoryWrite(**payload)  # type: ignore[arg-type]
@@ -62,15 +62,29 @@ def test_quota_and_provenance_are_enforced() -> None:
         evaluate_memory_write(_write(writes_last_hour=MEMORY_WRITES_PER_HOUR))
     with pytest.raises(MemoryWriteRejectedError):
         evaluate_memory_write(_write(provenance=MemoryProvenance(run_id="")))
+    with pytest.raises(MemoryWriteRejectedError):
+        evaluate_memory_write(_write(provenance=MemoryProvenance(run_id="run-1")))
 
 
 def test_forget_requires_a_target() -> None:
     with pytest.raises(MemoryWriteRejectedError):
         evaluate_memory_write(_write(action="forget", body="", supersedes_id=None))
     evaluate_memory_write(_write(action="forget", body="", supersedes_id="mem-1"))
+    with pytest.raises(MemoryWriteRejectedError):
+        evaluate_memory_write(
+            _write(
+                action="forget",
+                body="",
+                supersedes_id="mem-1",
+                writes_last_hour=MEMORY_WRITES_PER_HOUR,
+            )
+        )
 
 
 def test_auto_recall_keeps_newest_active_within_caps() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
     records = tuple(
         MemoryRecord(
             owner_id="o",
@@ -80,12 +94,14 @@ def test_auto_recall_keeps_newest_active_within_caps() -> None:
             confidence=1.0,
             provenance=MemoryProvenance(run_id="r"),
             status="superseded" if index == 0 else "active",
+            updated_at=start + timedelta(minutes=index),
         )
         for index in range(20)
     )
-    chosen = select_auto_recall(records)
+    chosen = select_auto_recall(tuple(reversed(records)))
     assert len(chosen) == MEMORY_RECALL_LIMIT
     assert all(record.status == "active" for record in chosen)
+    assert chosen[0].memory_id == "19"
     text = render_auto_recall(chosen)
     assert "not evidence" in text
     assert "[1]" not in text
