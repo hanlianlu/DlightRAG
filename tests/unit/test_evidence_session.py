@@ -322,3 +322,28 @@ def test_transform_preserves_stable_citation_ids_across_full_render() -> None:
     assert "web evidence" in text
     assert "[1-1]" in text
     assert "[2-1]" in text
+
+
+def test_empty_ledger_state_is_empty_object() -> None:
+    assert EvidenceLedger().ledger_state_json() == "{}"
+
+
+def test_ledger_state_round_trips_identities_without_image_bytes() -> None:
+    import json
+
+    source = EvidenceLedger()
+    source.add_rows([_corpus_row(chunk="c1", content="keep me")])
+    source.add_rows(_web("web keep", resource_id="res-a"))
+    source.contexts["chunks"][0]["image_data"] = "AAAA"
+
+    payload = json.loads(source.ledger_state_json())
+    assert "image_data" not in payload["contexts"]["chunks"][0]
+    restored = EvidenceLedger()
+    restored.adopt_ledger_state(payload)
+    assert [row["content"] for row in restored.contexts["chunks"]] == [
+        row["content"] for row in source.contexts["chunks"]
+    ]
+    assert restored.citation_handles() == [
+        "[1] report.pdf",
+        "[2] Page A [resource: res-a]",
+    ]

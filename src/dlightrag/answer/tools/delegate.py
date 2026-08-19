@@ -95,6 +95,7 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
         )
     if host.model_func is None:
         raise RuntimeError("delegate_research has no model")
+    prior_chunks = host.evidence.row_count if host.evidence is not None else 0
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _CHILD_SYSTEM},
         {"role": "user", "content": objective},
@@ -117,22 +118,15 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
             status=status,
             summary=summary,
         )
-    handles = _evidence_handles(host.evidence)
+    handles = (
+        host.evidence.citation_handles(after_chunk_count=prior_chunks)
+        if host.evidence is not None
+        else []
+    )
     content = summary.strip()
     if handles:
         content += "\nEvidence handles:\n" + "\n".join(f"- {item}" for item in handles)
     return ToolResult(content=content)
-
-
-def _evidence_handles(evidence: EvidenceLedger | None) -> list[str]:
-    if evidence is None:
-        return []
-    try:
-        state = evidence.ledger_state_json()
-    except Exception:
-        return []
-    text = state if isinstance(state, str) else str(state)
-    return [text[:200]] if text.strip() else []
 
 
 class _ChildLoopHost:

@@ -69,6 +69,19 @@ async def test_delegate_runs_a_silent_child_turn() -> None:
 
     persist = AsyncMock()
     finish = AsyncMock()
+    evidence = EvidenceLedger()
+    evidence.add_rows(
+        [
+            {
+                "chunk_id": "c1",
+                "reference_id": "src",
+                "content": "parent already had this",
+                "file_path": "old.pdf",
+                "_workspace": "ws",
+                "metadata": {"title": "Old"},
+            }
+        ]
+    )
     host = DelegateHost(
         parent_session_id=SessionId.new(),
         run_id=str(SessionId.new().value),
@@ -78,6 +91,7 @@ async def test_delegate_runs_a_silent_child_turn() -> None:
         load_child=AsyncMock(return_value=None),
         finish_child=finish,
         child_tools=[],
+        evidence=evidence,
     )
     tool = delegate_research_tool(host=host)
     token = bind_tool_call("call-9", "delegate_research")
@@ -86,5 +100,6 @@ async def test_delegate_runs_a_silent_child_turn() -> None:
     finally:
         reset_tool_call(token)
     assert "Child summary." in result.content
+    assert "Evidence handles" not in result.content
     persist.assert_awaited()
     finish.assert_awaited()

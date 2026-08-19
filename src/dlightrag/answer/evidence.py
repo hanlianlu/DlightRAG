@@ -63,11 +63,45 @@ class EvidenceLedger:
 
         Rendered image blocks are deliberately excluded: they are derived from
         the rows under a run-local budget, so recovery re-derives them in the
-        same order instead of storing a second copy of every visual.
+        same order instead of storing a second copy of every visual. An empty
+        ledger serializes as ``{}`` so settlement can skip a no-op write.
         """
         from dlightrag_agent.session.effects import canonical_json
 
-        return canonical_json({})
+        if not self.row_count and not self._source_ids:
+            return canonical_json({})
+        return canonical_json(self.durable_state())
+
+    def durable_state(self) -> dict[str, Any]:
+        """JSON-ready identity and rows, without derived image blocks."""
+        return {
+            "contexts": {
+                key: [_durable_row(row) for row in rows] for key, rows in self.contexts.items()
+            },
+            "source_ids": [[list(key), value] for key, value in self._source_ids.items()],
+            "seen_chunks": sorted(self._seen_chunks),
+            "seen_rows": {key: sorted(values) for key, values in self._seen_rows.items()},
+        }
+
+    def citation_handles(self, *, after_chunk_count: int = 0) -> list[str]:
+        """Parent-visible citation identities, newest-admitted first after a cursor."""
+        seen: set[str] = set()
+        handles: list[str] = []
+        for row in self.contexts.get("chunks", [])[after_chunk_count:]:
+            reference_id = str(row.get("reference_id") or "")
+            if not reference_id or reference_id in seen:
+                continue
+            seen.add(reference_id)
+            metadata = row.get("metadata") or {}
+            title = (
+                str(metadata.get("title") or "")
+                or str(row.get("file_path") or "").rsplit("/", 1)[-1]
+                or "Source"
+            )
+            resource_id = str(metadata.get("resource_id") or "")
+            suffix = f" [resource: {resource_id}]" if resource_id else ""
+            handles.append(f"[{reference_id}] {title}{suffix}")
+        return handles
 
     def adopt_ledger_state(self, state: Mapping[str, Any]) -> None:
         """Replace the ledger with durable journal-recovered state."""
@@ -331,6 +365,15 @@ def _collapsed_handle_block(collapsed: list[ContextRow]) -> dict[str, Any] | Non
         "type": "text",
         "text": "## Retained evidence (re-read for detail)\n" + "\n".join(lines),
     }
+
+
+def _durable_row(row: ContextRow) -> dict[str, Any]:
+    payload = dict(row)
+    payload.pop("image_data", None)
+    metadata = payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        payload["metadata"] = dict(metadata)
+    return payload
 
 
 __all__ = ["EvidenceDelta", "EvidenceLedger"]
