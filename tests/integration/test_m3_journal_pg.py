@@ -972,3 +972,33 @@ async def test_result_details_commit_inventory_and_spill(pool) -> None:
     inventory = await workspace.load_inventory()
     assert any(item.relative_path == "notes.md" for item in inventory)
     assert any(item.resource_id == "spill_from_details" for item in await workspace.load_spills())
+
+
+async def test_list_runs_is_owner_scoped_and_cursorable(pool) -> None:
+    store = await _store(pool)
+    first = await store.accept_run(
+        owner_id=_OWNER,
+        run_id=str(uuid.uuid7()),
+        idempotency_key=None,
+        fingerprint="a" * 64,
+        prepared_input=_prepared_input(),
+    )
+    second = await store.accept_run(
+        owner_id=_OWNER,
+        run_id=str(uuid.uuid7()),
+        idempotency_key=None,
+        fingerprint="b" * 64,
+        prepared_input=_prepared_input(),
+    )
+    await store.accept_run(
+        owner_id="other",
+        run_id=str(uuid.uuid7()),
+        idempotency_key=None,
+        fingerprint="c" * 64,
+        prepared_input=_prepared_input(),
+    )
+    page = await store.list_runs(owner_id=_OWNER, limit=1)
+    assert len(page) == 1
+    assert page[0].run_id == first.run.run_id
+    rest = await store.list_runs(owner_id=_OWNER, after_run_id=page[0].run_id, limit=10)
+    assert [item.run_id for item in rest] == [second.run.run_id]

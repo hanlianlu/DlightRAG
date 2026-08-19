@@ -58,6 +58,13 @@ class TestMigrationDeclaration:
         assert "recovery_count" not in statements
         assert "dlightrag_answer_artifacts" not in statements
 
+    def test_publication_kinds_are_declared(self) -> None:
+        from dlightrag.adapters.postgres.answer_runs import _M5_PUBLICATION_DDL
+
+        statements = _all_statements() + "\n".join(_M5_PUBLICATION_DDL)
+        assert "primary_report" in statements
+        assert "published_artifact" in statements
+
     def test_run_artifacts_reference_blobs_not_a_content_table(self) -> None:
         statements = _all_statements()
         assert "REFERENCES dlightrag_blobs (owner_id, digest)" in statements

@@ -373,7 +373,8 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_artifacts (
         REFERENCES dlightrag_blobs (owner_id, digest) ON DELETE RESTRICT,
     CONSTRAINT dlightrag_answer_run_artifacts_kind_check
         CHECK (reference_kind IN
-               ('current_attachment', 'history_attachment', 'fetched_resource')),
+               ('current_attachment', 'history_attachment', 'fetched_resource',
+                'primary_report', 'published_artifact')),
     CONSTRAINT dlightrag_answer_run_artifacts_ordinal_check
         CHECK (ordinal >= 0)
 )
@@ -454,6 +455,16 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
     "OR (kind = 'fetched_blob' AND blob_digest IS NOT NULL AND locator_digest IS NOT NULL) "
     "OR (kind = 'evidence' AND locator_digest IS NOT NULL) "
     "OR (kind = 'committed_spill' AND blob_digest IS NULL AND locator_digest IS NULL))",
+)
+
+_M5_PUBLICATION_DDL = (
+    "ALTER TABLE dlightrag_answer_run_artifacts "
+    "DROP CONSTRAINT IF EXISTS dlightrag_answer_run_artifacts_kind_check",
+    "ALTER TABLE dlightrag_answer_run_artifacts "
+    "ADD CONSTRAINT dlightrag_answer_run_artifacts_kind_check "
+    "CHECK (reference_kind IN ("
+    "'current_attachment', 'history_attachment', 'fetched_resource', "
+    "'primary_report', 'published_artifact'))",
 )
 
 ANSWER_RUN_MIGRATIONS = (
@@ -865,6 +876,19 @@ def answer_run_columns(alias: str = "") -> str:
 
 
 _RUN_COLUMNS = answer_run_columns()
+_LIST_RUNS = f"""
+SELECT {_RUN_COLUMNS}
+FROM dlightrag_answer_runs
+WHERE owner_id = $1 ORDER BY created_at, run_id LIMIT $2
+"""  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
+_LIST_RUNS_AFTER = f"""
+SELECT {_RUN_COLUMNS}
+FROM dlightrag_answer_runs
+WHERE owner_id = $1 AND (created_at, run_id) > (
+ SELECT created_at, run_id FROM dlightrag_answer_runs
+ WHERE owner_id = $1 AND run_id = $2)
+ORDER BY created_at, run_id LIMIT $3
+"""  # noqa: S608 - interpolates only the trusted _RUN_COLUMNS constant
 
 _INSERT_RUN = f"""
 INSERT INTO dlightrag_answer_runs (
@@ -1354,6 +1378,8 @@ class PGAnswerRunStore(PostgresOperationRunner):
             )
             for statement in _M4_WORKSPACE_DDL:
                 await conn.execute(statement)
+            for statement in _M5_PUBLICATION_DDL:
+                await conn.execute(statement)
 
         await self._run(_operation)
         self._initialized = True
@@ -1617,6 +1643,36 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         return await self._run_read(_operation)
 
+    async def list_runs(
+        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+    ) -> tuple[AnswerRunRecord, ...]:
+        owner = _require_owner(owner_id)
+        cap = max(1, min(int(limit), 100))
+        after = parse_run_id(after_run_id) if after_run_id else None
+
+        async def _operation(conn: Any) -> tuple[AnswerRunRecord, ...]:
+            if after is None:
+                rows = await conn.fetch(_LIST_RUNS, owner, cap)
+            else:
+                rows = await conn.fetch(_LIST_RUNS_AFTER, owner, after, cap)
+            return tuple(answer_run_record(row) for row in rows)
+
+        return await self._run_read(_operation)
+
+    async def list_run_artifacts(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunArtifactReference, ...]:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            return ()
+
+        async def _operation(conn: Any) -> tuple[RunArtifactReference, ...]:
+            rows = await conn.fetch(_SELECT_RUN_ARTIFACTS, owner, run_uuid)
+            return tuple(_reference_record(row) for row in rows)
+
+        return await self._run_read(_operation)
+
     async def read_event_page(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0
     ) -> tuple[AnswerRunEvent, ...]:
@@ -1647,20 +1703,6 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 return None
             chunks = await conn.fetch(_SELECT_BLOB_CHUNKS, owner, digest)
             return b"".join(bytes(row["content"]) for row in chunks)
-
-        return await self._run_read(_operation)
-
-    async def list_run_artifacts(
-        self, *, owner_id: str, run_id: str
-    ) -> tuple[RunArtifactReference, ...]:
-        owner = _require_owner(owner_id)
-        run_uuid = parse_run_id(run_id)
-        if run_uuid is None:
-            return ()
-
-        async def _operation(conn: Any) -> tuple[RunArtifactReference, ...]:
-            rows = await conn.fetch(_SELECT_RUN_ARTIFACTS, owner, run_uuid)
-            return tuple(_reference_record(row) for row in rows)
 
         return await self._run_read(_operation)
 

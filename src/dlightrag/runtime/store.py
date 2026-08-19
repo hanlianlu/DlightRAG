@@ -12,6 +12,7 @@ from dlightrag.runtime.records import (
     LeaseRenewal,
     PendingArtifact,
     PendingArtifactReference,
+    RunArtifactReference,
     RunCreation,
     RunDeletion,
     ShutdownOutcome,
@@ -90,6 +91,14 @@ class AnswerRunStore(Protocol):
     async def prune_expired_runs(self) -> RunDeletion: ...
 
     async def get_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None: ...
+
+    async def list_runs(
+        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+    ) -> tuple[AnswerRunRecord, ...]: ...
+
+    async def list_run_artifacts(
+        self, *, owner_id: str, run_id: str
+    ) -> tuple[RunArtifactReference, ...]: ...
 
     async def read_event_page(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0

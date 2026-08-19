@@ -19,7 +19,13 @@ from dlightrag.runtime.settlements import M3HostUpdate
 from dlightrag.runtime.workspace import WorkspaceStore
 
 type AnswerRunEventType = Literal["progress", "token", "reset", "done", "error"]
-type ArtifactReferenceKind = Literal["current_attachment", "history_attachment", "fetched_resource"]
+type ArtifactReferenceKind = Literal[
+    "current_attachment",
+    "history_attachment",
+    "fetched_resource",
+    "primary_report",
+    "published_artifact",
+]
 #: How a graceful shutdown left one owned run.
 type ShutdownOutcome = Literal["requeued", "cancelled", "lease_lost"]
 

@@ -348,6 +348,14 @@ class _MemoryStore:
         row = self.runs.get(run_id)
         return self._record(row) if row is not None else None
 
+    async def list_runs(
+        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+    ) -> tuple[AnswerRunRecord, ...]:
+        return ()
+
+    async def list_run_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]:
+        return ()
+
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> Any:
         self.runs[run_id]["cancel_requested"] = True
         return None
