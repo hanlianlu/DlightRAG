@@ -89,6 +89,29 @@ async def test_supersede_missing_id_is_a_public_reject() -> None:
         )
 
 
+async def test_service_purge_expired_uses_retention_cutoff() -> None:
+    from dlightrag.services.memory import MemoryService
+
+    store = InMemoryAnswerMemoryStore()
+    await store.insert(_record(memory_id="old"))
+    await store.supersede(owner_id="alpha", old_id="old", new=_record(memory_id="new"))
+    stale = await store.get(owner_id="alpha", memory_id="old")
+    assert stale is not None
+    store._rows[("alpha", "old")] = MemoryRecord(
+        owner_id=stale.owner_id,
+        memory_id=stale.memory_id,
+        kind=stale.kind,
+        body=stale.body,
+        confidence=stale.confidence,
+        provenance=stale.provenance,
+        status="superseded",
+        created_at=stale.created_at,
+        updated_at=datetime.now(UTC) - timedelta(days=40),
+    )
+    removed = await MemoryService(store).purge_expired()
+    assert removed == 1
+
+
 async def test_purge_only_old_superseded_rows() -> None:
     store = InMemoryAnswerMemoryStore()
     await store.insert(_record(memory_id="old"))

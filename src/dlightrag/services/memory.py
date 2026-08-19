@@ -8,7 +8,12 @@ from dlightrag.answer.memory import (
     MemoryWrite,
     memory_owner_allowed,
 )
-from dlightrag.answer.memory_store import AnswerMemoryStore, commit_memory_write
+from dlightrag.answer.memory_store import (
+    AnswerMemoryStore,
+    commit_memory_write,
+    default_purge_cutoff,
+    write_log_cutoff,
+)
 
 
 class MemoryService:
@@ -36,6 +41,11 @@ class MemoryService:
                 supersedes_id=memory_id,
             ),
         )
+
+    async def purge_expired(self) -> int:
+        removed = await self._store.purge_superseded(older_than=default_purge_cutoff())
+        await self._store.prune_write_log(older_than=write_log_cutoff())
+        return removed
 
 
 __all__ = ["MemoryService"]

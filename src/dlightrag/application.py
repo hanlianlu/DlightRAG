@@ -314,6 +314,7 @@ class Application:
         self._runs_ready = True
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None
+        self._memory_janitor: asyncio.Task[None] | None = None
 
     @classmethod
     async def acreate(
@@ -405,6 +406,7 @@ class Application:
             recovery_ready = await self._start_ingest_recovery()
             await self._start_run_coordinator()
             await self._initialize_web_conversations()
+            await self._start_memory_janitor()
         except BaseException:
             try:
                 await self.aclose()
@@ -535,6 +537,37 @@ class Application:
             return
         await self._components.web_conversations.start_retention()
 
+    async def _start_memory_janitor(self) -> None:
+        purge = getattr(self._components.memory, "purge_expired", None)
+        if purge is None:
+            return
+        await purge()
+        if self._memory_janitor is None:
+            self._memory_janitor = asyncio.create_task(self._purge_memory_forever())
+
+    async def _purge_memory_forever(self) -> None:
+        from dlightrag.runtime.coordinator import MAINTENANCE_SECONDS
+
+        while True:
+            await asyncio.sleep(MAINTENANCE_SECONDS)
+            try:
+                await self._components.memory.purge_expired()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Memory retention failed", exc_info=True)
+
+    async def _stop_memory_janitor(self) -> None:
+        task = self._memory_janitor
+        self._memory_janitor = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
     # ------------------------------------------------------------------
     # Shutdown
     # ------------------------------------------------------------------
@@ -565,6 +598,7 @@ class Application:
         components = self._components
         cancellation: asyncio.CancelledError | None = None
         for label, close in (
+            ("memory janitor", self._stop_memory_janitor),
             ("ingest jobs", components.corpora.aclose),
             ("the durable answer coordinator", components.coordinator.aclose),
             ("the cancellation listener", components.cancellation_listener.aclose),

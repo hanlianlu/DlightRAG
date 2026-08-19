@@ -161,6 +161,11 @@ DELETE FROM dlightrag_answer_memory_records
 WHERE status = 'superseded' AND updated_at < $1
 """
 
+_PRUNE_LOG = """
+DELETE FROM dlightrag_answer_memory_write_log
+WHERE written_at < $1
+"""
+
 
 def _uuid(value: str, *, label: str) -> uuid.UUID:
     try:
@@ -284,6 +289,13 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
     async def purge_superseded(self, *, older_than: datetime) -> int:
         async def _operation(conn: Any) -> int:
             result = await conn.execute(_PURGE, older_than)
+            return int(str(result).rsplit(" ", 1)[-1])
+
+        return await self._run_once(_operation)
+
+    async def prune_write_log(self, *, older_than: datetime) -> int:
+        async def _operation(conn: Any) -> int:
+            result = await conn.execute(_PRUNE_LOG, older_than)
             return int(str(result).rsplit(" ", 1)[-1])
 
         return await self._run_once(_operation)

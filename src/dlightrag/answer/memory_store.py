@@ -48,6 +48,8 @@ class AnswerMemoryStore(Protocol):
 
     async def purge_superseded(self, *, older_than: datetime) -> int: ...
 
+    async def prune_write_log(self, *, older_than: datetime) -> int: ...
+
 
 class InMemoryAnswerMemoryStore:
     """Process-local store with the durable store's owner isolation."""
@@ -141,6 +143,12 @@ class InMemoryAnswerMemoryStore:
             del self._rows[key]
         return len(victims)
 
+    async def prune_write_log(self, *, older_than: datetime) -> int:
+        kept = [(owner, stamp) for owner, stamp in self._writes if stamp >= older_than]
+        removed = len(self._writes) - len(kept)
+        self._writes = kept
+        return removed
+
 
 async def commit_memory_write(store: AnswerMemoryStore, write: MemoryWrite) -> MemoryRecord | None:
     """Run the checklist, then insert, supersede, or hard-delete."""
@@ -199,9 +207,14 @@ def default_purge_cutoff() -> datetime:
     return datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS)
 
 
+def write_log_cutoff() -> datetime:
+    return datetime.now(UTC) - timedelta(hours=2)
+
+
 __all__ = [
     "AnswerMemoryStore",
     "InMemoryAnswerMemoryStore",
     "commit_memory_write",
     "default_purge_cutoff",
+    "write_log_cutoff",
 ]
