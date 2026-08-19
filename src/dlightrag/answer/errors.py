@@ -23,6 +23,8 @@ ANSWER_RESOURCE_INVALID = "ANSWER_RESOURCE_INVALID"
 UNSUPPORTED_ANSWER_MODE = "unsupported_answer_mode"
 UNSUPPORTED_RESOURCE_CAPABILITY = "unsupported_resource_capability"
 ROUTING_FAILED = "routing_failed"
+MEMORY_WRITE_REJECTED = "memory_write_rejected"
+MEMORY_UNAVAILABLE = "memory_unavailable"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
@@ -117,6 +119,23 @@ class AnswerResourceAdmissionError(AnswerInputError):
         )
 
 
+class MemoryWriteRejectedError(AnswerInputError):
+    """A named Memory Write failed the closed checklist."""
+
+    def __init__(self, public_message: str) -> None:
+        super().__init__(public_message, error_kind=MEMORY_WRITE_REJECTED)
+
+
+class MemoryUnavailableError(AnswerInputError):
+    """This principal cannot write or auto-recall Memory Records."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Long-term memory requires a JWT owner.",
+            error_kind=MEMORY_UNAVAILABLE,
+        )
+
+
 class InvalidToolConfigurationError(RuntimeError):
     """A run composed two peer tools that share one model-visible name.
 
@@ -154,9 +173,13 @@ __all__ = [
     "UNSUPPORTED_ANSWER_MODE",
     "UNSUPPORTED_RESOURCE_CAPABILITY",
     "ROUTING_FAILED",
+    "MEMORY_WRITE_REJECTED",
+    "MEMORY_UNAVAILABLE",
     "AnswerInputError",
     "AnswerImageError",
     "AnswerInputOverflowError",
+    "MemoryUnavailableError",
+    "MemoryWriteRejectedError",
     "AnswerModelCapabilityError",
     "AnswerResourceAdmissionError",
     "CurrentDocumentParseError",
