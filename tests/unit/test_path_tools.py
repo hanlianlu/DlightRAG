@@ -85,7 +85,9 @@ async def test_write_attaches_inventory_details(tmp_path: Path) -> None:
     assert inventory["replace_all"] is False
     upserts = inventory["upserts"]
     assert isinstance(upserts, list)
-    assert upserts[0]["relative_path"] == "notes.md"
+    first = upserts[0]
+    assert isinstance(first, dict)
+    assert first["relative_path"] == "notes.md"
     assert inventory["upserts"][0]["size_bytes"] == 5
 
 
