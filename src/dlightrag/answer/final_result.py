@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """The final M3 durable Answer result and its strict read-side projection.
 
-The sole durable M3 result shape is: ``answer``, ``answer_sources``,
+The sole durable result shape is: ``answer``, ``answer_sources``,
 ``report_sources``, nullable ``primary_report``, ``artifacts``,
 ``answer_images``, ``trace``, nullable ``usage``, and ``image_descriptions``
 (M3-D5). ``contexts``, ``references``, and answer blocks are not durable
@@ -57,7 +57,7 @@ class FinalAnswerResult:
     answer_sources: tuple[DurableSourceIdentity, ...]
     trace: Mapping[str, Any]
     report_sources: tuple[DurableSourceIdentity, ...] = ()
-    primary_report: str | None = None
+    primary_report: str | None = None  # Resource Handle id, never report bytes
     artifacts: tuple[Mapping[str, Any], ...] = ()
     answer_images: tuple[Mapping[str, Any], ...] = ()
     usage: Mapping[str, Any] | None = None
