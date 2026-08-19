@@ -11,7 +11,7 @@ from typing import Literal
 from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
 
 MemoryKind = Literal["preference", "fact"]
-MemoryStatus = Literal["active", "superseded", "forgotten"]
+MemoryStatus = Literal["active", "superseded"]
 
 MEMORY_BODY_LIMIT = 500
 MEMORY_ACTIVE_LIMIT = 200
