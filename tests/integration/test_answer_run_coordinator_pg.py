@@ -540,7 +540,10 @@ class _CitingSynthesizer:
         contexts: Any,
         *,
         conversation_history: PriorTurns | None = None,
+        memory_text: str = "",
     ) -> tuple[Any, AsyncIterator[str]]:
+        del memory_text
+
         async def _stream() -> AsyncIterator[str]:
             yield "the drawing shows it [1]"
 
