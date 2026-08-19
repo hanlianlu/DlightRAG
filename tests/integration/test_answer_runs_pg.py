@@ -181,6 +181,7 @@ class TestSchema:
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
             "dlightrag_answer_child_sessions",
+            "dlightrag_answer_memory_records",
         }
 
     async def test_run_columns_match_the_contract(self, store, pool) -> None:
