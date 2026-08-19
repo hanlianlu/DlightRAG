@@ -57,16 +57,28 @@ def test_parent_tools_include_delegate_and_child_omits_it() -> None:
     assert "bash" not in {tool.name for tool in child}
 
 
-async def test_finished_child_replays_stored_summary() -> None:
-    run_child = AsyncMock()
+async def test_replay_returns_journal_outcome_not_sidecar_summary() -> None:
+    persist = AsyncMock()
+    finish = AsyncMock()
+
+    async def run_child(_child_id: SessionId, _objective: str, _call_id: str) -> ChildOutcome:
+        return ChildOutcome(
+            status="succeeded",
+            summary="Journaled child finding.",
+            handles=("[1] report.pdf",),
+            usage={"input_tokens": 8},
+            child_session_id="child",
+        )
+
     host = DelegateHost(
         parent_session_id=SessionId.new(),
         run_id=str(SessionId.new().value),
         owner_id="owner",
         load_child=AsyncMock(
-            return_value={"status": "succeeded", "summary": "Prior child finding."}
+            return_value={"status": "succeeded", "summary": "Sidecar-only summary."}
         ),
-        persist=AsyncMock(),
+        persist=persist,
+        finish_child=finish,
         run_child=run_child,
     )
     tool = delegate_research_tool(host=host)
@@ -75,8 +87,10 @@ async def test_finished_child_replays_stored_summary() -> None:
         result = await tool.execute(DelegateInput(objective="what happened?"))
     finally:
         reset_tool_call(token)
-    assert result.content == "Prior child finding."
-    run_child.assert_not_awaited()
+    assert "Journaled child finding." in result.content
+    assert "[1] report.pdf" in result.content
+    assert "Usage: input_tokens=8" in result.content
+    assert "Sidecar-only summary." not in result.content
 
 
 async def test_delegate_reports_child_outcome_and_usage() -> None:
@@ -224,5 +238,8 @@ async def test_child_session_journals_and_replays_without_rerun() -> None:
         parent_call_id="call-1",
         parent_session_id=parent_id,
     )
-    assert second.summary == "Journaled child summary."
+    assert second.summary == first.summary
+    assert second.usage == first.usage
+    assert second.handles == first.handles
+    assert second.status == first.status
     assert calls["n"] == 1

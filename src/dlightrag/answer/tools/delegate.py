@@ -74,20 +74,6 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
     child_id = SessionId.deterministic(
         run_id=host.run_id, name=f"delegate:{host.parent_session_id.value}:{call_id}"
     )
-    existing = None
-    if host.load_child is not None:
-        existing = await host.load_child(
-            owner_id=host.owner_id, run_id=host.run_id, child_session_id=child_id.value
-        )
-    if existing is not None and existing.get("status") in {"succeeded", "failed", "cancelled"}:
-        return ToolResult(
-            content=str(existing.get("summary") or "Child session already finished."),
-            details={
-                "child_session_id": child_id.value,
-                "status": str(existing.get("status")),
-                "replayed": True,
-            },
-        )
     if host.persist is not None:
         await host.persist(
             owner_id=host.owner_id,

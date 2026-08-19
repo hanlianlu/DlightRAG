@@ -328,8 +328,8 @@ class AnswerOrchestrator:
             agent_turn_count=agent_turn_count,
         )
 
-    def prepare_child_run(self, objective: str) -> PreparedRun:
-        """Build a zero-history child run bound to this parent's tools and model."""
+    def prepare_child_session(self, objective: str) -> PreparedRun:
+        """Build a zero-history child session bound to this parent's tools and model."""
         evidence = EvidenceLedger(image_budget=self._image_budget)
         retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
         trace: dict[str, Any] = {

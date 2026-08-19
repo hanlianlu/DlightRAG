@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
+from dlightrag_agent.loop import LoopCancelled
 from dlightrag_agent.session.effects import (
     EffectIntent,
     EffectSettlement,
@@ -1411,7 +1412,7 @@ async def run_child_session(
     parent_session_id: SessionId,
 ) -> ChildOutcome:
     """Run or resume one child Agent Session under the parent lease."""
-    prepared = orchestrator.prepare_child_run(objective)
+    prepared = orchestrator.prepare_child_session(objective)
     snapshot = await journal.load(child_id)
     if snapshot.version == 0:
         snapshot = await _seed_child_session(
@@ -1448,6 +1449,9 @@ async def run_child_session(
         summary = _child_summary(prepared, status)
     except LeaseLostError:
         raise
+    except LoopCancelled:
+        status, journal_reason = "cancelled", "cancelled"
+        summary = _child_summary(prepared, "cancelled")
     except Exception as exc:
         status, journal_reason = "failed", "abandoned"
         summary = f"Child session failed: {exc}"
