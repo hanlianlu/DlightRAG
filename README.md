@@ -475,6 +475,7 @@ Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 - [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
 - [docs/interfaces.md](docs/interfaces.md) - SDK, REST, MCP, and Web contracts.
 - [docs/security.md](docs/security.md) - auth, JWT/JWKS, IdP boundaries, and access control.
+- [docs/roadmap.md](docs/roadmap.md) - decided follow-ups that are not a milestone yet.
 - [docs/configuration.md](docs/configuration.md) - configuration precedence, fields, and defaults.
 - [docs/retrieval-answer.md](docs/retrieval-answer.md) - retrieval, filters, BM25, fusion, rerank, answers, citations, and highlights.
 - [docs/postgresql.md](docs/postgresql.md) - PostgreSQL requirements and tuning.

@@ -15,6 +15,8 @@ host a full identity-provider login system.
 For enterprise deployments, use an external identity provider or gateway to
 authenticate users and issue tokens. DlightRAG verifies those tokens and maps
 verified claims to workspace permissions when access control is enabled.
+The browser still pastes that bearer into an HttpOnly cookie; the later Web
+identity UX is on [roadmap.md](roadmap.md).
 
 ## Authentication Modes
 
