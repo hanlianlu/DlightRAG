@@ -539,7 +539,11 @@ class AgentExecutionConfig(BaseModel):
     execution_environment: Literal["disabled", "local_trusted"] = Field(default="disabled")
     workspace_root: str | None = Field(
         default=None,
-        description="Absolute Agent Workspace root. Required when execution is local_trusted.",
+        description=(
+            "Absolute Agent Workspace root. When local_trusted and unset, "
+            "defaults to ~/.dlightrag/agent_workspaces. Multi-host deployments "
+            "must set the same absolute path on every worker."
+        ),
     )
 
 

@@ -993,15 +993,25 @@ max_agent_turns: 50
 ```yaml
 agent:
   execution_environment: disabled   # or local_trusted
-  workspace_root: null              # required absolute path when local_trusted
+  workspace_root: null              # optional; see below
 ```
 
 Path tools, Bash, and private spill are absent unless `execution_environment` is
-`local_trusted`. That value is an operator assertion, not a sandbox. The
-workspace root must be absolute, must not overlap `working_dir`, and must have
-headroom for one 2 GiB epoch copy. Compose mounts
-`/app/dlightrag_agent_workspaces`. Environment overrides use
-`DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT` and `DLIGHTRAG_AGENT__WORKSPACE_ROOT`.
+`local_trusted`. That value is an operator assertion, not a sandbox.
+
+When `local_trusted` and `workspace_root` is unset, native processes use
+`~/.dlightrag/agent_workspaces` (outside the repo, never `working_dir`). An
+explicit value must be an absolute path. The root must not overlap
+`working_dir` and must have headroom for one 2 GiB epoch copy. Multi-host
+deployments must set the same absolute path on every worker; do not rely on `~`.
+
+Official Compose already sets
+`DLIGHTRAG_AGENT__WORKSPACE_ROOT=/app/dlightrag_agent_workspaces` on the named
+volume. In that stack you only need `execution_environment: local_trusted` (or
+`DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT=local_trusted`); leave `workspace_root`
+null so the Compose env wins. If you remove that env var, the container falls
+back to the service user's `~/.dlightrag/agent_workspaces`, which is **not** the
+named volume.
 
 `max_agent_turns` is a safety cap, not a tuning knob: research normally ends when
 the agent calls no tool or a tool batch adds no evidence. The cap bounds a run

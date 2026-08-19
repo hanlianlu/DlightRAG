@@ -8,6 +8,13 @@ from pathlib import Path
 
 from dlightrag_agent.environment import WORKSPACE_MAX_BYTES
 
+DEFAULT_LOCAL_WORKSPACE_ROOT = Path.home() / ".dlightrag" / "agent_workspaces"
+
+
+def default_local_workspace_root() -> Path:
+    """Single-machine default: outside the repo, never the corpus working_dir."""
+    return DEFAULT_LOCAL_WORKSPACE_ROOT.expanduser().resolve()
+
 
 def validate_agent_execution(
     *,
@@ -19,15 +26,14 @@ def validate_agent_execution(
     if execution_environment == "disabled":
         return None
     raw = (workspace_root or "").strip()
-    if not raw:
-        raise ValueError(
-            "agent.workspace_root must be an absolute path when execution is local_trusted"
-        )
-    root = Path(raw).expanduser()
-    if not root.is_absolute():
-        raise ValueError(
-            "agent.workspace_root must be an absolute path when execution is local_trusted"
-        )
+    if not raw or raw in {"null", "None"}:
+        root = default_local_workspace_root()
+    else:
+        root = Path(raw).expanduser()
+        if not root.is_absolute():
+            raise ValueError(
+                "agent.workspace_root must be an absolute path when execution is local_trusted"
+            )
     root.mkdir(parents=True, exist_ok=True)
     working = Path(working_dir).expanduser().resolve()
     resolved = root.resolve()
@@ -39,4 +45,8 @@ def validate_agent_execution(
     return resolved
 
 
-__all__ = ["validate_agent_execution"]
+__all__ = [
+    "DEFAULT_LOCAL_WORKSPACE_ROOT",
+    "default_local_workspace_root",
+    "validate_agent_execution",
+]

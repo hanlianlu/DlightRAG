@@ -129,16 +129,23 @@ def _working_dir_root(repo_root: Path, env: dict[str, str]) -> Path:
 
 def _workspace_root(repo_root: Path, env: dict[str, str]) -> Path | None:
     """Resolve the optional Agent Workspace root without importing product code."""
-    configured = env.get("DLIGHTRAG_AGENT_WORKSPACE_ROOT")
-    if not configured:
-        config_file = repo_root / "config.yaml"
-        if config_file.is_file():
-            for raw in config_file.read_text(encoding="utf-8").splitlines():
-                line = raw.strip()
-                if line.startswith("workspace_root:"):
-                    configured = line.split(":", 1)[1].strip().strip('"').strip("'")
-                    break
+    configured = env.get("DLIGHTRAG_AGENT__WORKSPACE_ROOT") or env.get(
+        "DLIGHTRAG_AGENT_WORKSPACE_ROOT"
+    )
+    execution = env.get("DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT") or env.get(
+        "DLIGHTRAG_AGENT_EXECUTION_ENVIRONMENT"
+    )
+    config_file = repo_root / "config.yaml"
+    if config_file.is_file():
+        for raw in config_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not configured and line.startswith("workspace_root:"):
+                configured = line.split(":", 1)[1].strip().strip('"').strip("'")
+            if not execution and line.startswith("execution_environment:"):
+                execution = line.split(":", 1)[1].strip().strip('"').strip("'")
     if not configured or configured in {"null", "None", "~"}:
+        if (execution or "").strip() == "local_trusted":
+            return (Path.home() / ".dlightrag" / "agent_workspaces").resolve()
         return None
     path = Path(configured)
     if not path.is_absolute():

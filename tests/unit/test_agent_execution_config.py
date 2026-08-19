@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.answer.execution_settings import validate_agent_execution
+from dlightrag.answer.execution_settings import (
+    default_local_workspace_root,
+    validate_agent_execution,
+)
 from dlightrag.config import AgentExecutionConfig, DlightragConfig
 
 
@@ -27,16 +30,23 @@ def test_disabled_ignores_workspace_root(tmp_path: Path) -> None:
     )
 
 
-def test_local_trusted_requires_absolute_root(tmp_path: Path) -> None:
-    config = DlightragConfig(
+def test_local_trusted_without_root_uses_home_default(tmp_path: Path) -> None:
+    resolved = validate_agent_execution(
+        execution_environment="local_trusted",
+        workspace_root=None,
         working_dir=str(tmp_path / "corpus"),
-        agent=AgentExecutionConfig(execution_environment="local_trusted", workspace_root=None),
     )
+    assert resolved == default_local_workspace_root()
+    assert resolved is not None
+    assert resolved.is_dir()
+
+
+def test_local_trusted_rejects_a_relative_root(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="absolute path"):
         validate_agent_execution(
-            execution_environment=config.agent.execution_environment,
-            workspace_root=config.agent.workspace_root,
-            working_dir=config.working_dir,
+            execution_environment="local_trusted",
+            workspace_root="relative/workspaces",
+            working_dir=str(tmp_path / "corpus"),
         )
 
 
