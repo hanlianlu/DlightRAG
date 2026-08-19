@@ -62,6 +62,14 @@ _Avoid_: Workspace when it could mean an agent filesystem
 A durable research conversation within one Answer Run, reconstructed from its source journal.
 _Avoid_: Run, thread
 
+**Child Session**:
+A durable Agent Session namespace inside the same Answer Run, created by Delegate Research, with parent provenance and no lease of its own.
+_Avoid_: child run, queued sub-job, recursive Answer Run
+
+**Delegate Research**:
+The Answer-owned foreground tool that creates or recovers one Child Session and returns a distilled summary plus evidence handles, never child prose as Evidence.
+_Avoid_: background swarm, nested Answer Run, write/edit/bash
+
 **Prepared Input**:
 The immutable, bounded execution description accepted for a new Answer Run after authorization, capability resolution, and profile pinning.
 _Avoid_: Request payload, checkpoint
