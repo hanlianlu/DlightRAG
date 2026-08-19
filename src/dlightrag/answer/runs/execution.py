@@ -15,6 +15,7 @@ from typing import Any
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.fingerprints import ModelFingerprint
 
+from dlightrag.answer.mode import canonical_answer_mode
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.runtime.errors import RunExecutionError
 
@@ -182,6 +183,7 @@ class AnswerRunRequest:
     links: tuple[LinkReference, ...] = ()
     attachments: tuple[AttachmentReference, ...] = ()
     history_attachments: tuple[AttachmentReference, ...] = ()
+    mode: str = "auto"
 
     def as_request(self) -> dict[str, Any]:
         return {
@@ -195,6 +197,7 @@ class AnswerRunRequest:
             "links": [item.as_json() for item in self.links],
             "attachments": [item.as_json() for item in self.attachments],
             "history_attachments": [item.as_json() for item in self.history_attachments],
+            "mode": canonical_answer_mode(self.mode),
         }
 
     @classmethod
@@ -212,6 +215,7 @@ class AnswerRunRequest:
             links=_link_references(request.get("links")),
             attachments=_attachment_references(request.get("attachments")),
             history_attachments=_attachment_references(request.get("history_attachments")),
+            mode=str(request.get("mode") or "auto"),
         )
 
 

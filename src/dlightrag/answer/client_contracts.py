@@ -115,6 +115,7 @@ class AnswerRequestContract(QueryRequestContract):
     attachments: list[AnswerAttachmentLink] | None = None
     semantic_highlights: bool = False
     history: list[ConversationMessage] | None = Field(default=None, max_length=MAX_HISTORY_MESSAGES)
+    mode: Literal["auto", "fast", "research"] | None = None
 
 
 def model_dump_json_safe(value: Any) -> Any:

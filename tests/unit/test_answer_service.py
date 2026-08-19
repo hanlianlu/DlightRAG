@@ -15,6 +15,7 @@ from dlightrag_ai.fingerprints import ModelFingerprint
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 
 from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
+from dlightrag.answer.errors import UnsupportedAnswerModeError
 from dlightrag.answer.resources.models import ResourceInput
 from dlightrag.answer.runs.execution import AnswerRunInput, AnswerRunRequest
 from dlightrag.runtime import (
@@ -348,6 +349,20 @@ def _request(**overrides: Any) -> AnswerRequest:
     values: dict[str, Any] = {"query": "why?", "workspaces": ("finance",)}
     values.update(overrides)
     return AnswerRequest(**values)
+
+
+async def test_explicit_fast_with_pdf_creates_no_run() -> None:
+    store = _Store()
+    service = _service(store=store)
+    with pytest.raises(UnsupportedAnswerModeError):
+        await service.create(
+            request=_request(
+                mode="fast",
+                resources=(ResourceInput(filename="brief.pdf", content=b"%PDF"),),
+            ),
+            owner_id=_OWNER,
+        )
+    assert store.created == []
 
 
 async def test_idempotent_replay_returns_before_preparation_and_materialization() -> None:

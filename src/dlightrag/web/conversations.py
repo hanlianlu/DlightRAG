@@ -496,6 +496,7 @@ def _prepare_submission(
     snapshot: ConversationSnapshot,
     attachments: Sequence[ValidatedWebAttachment],
     max_attachments: int,
+    mode: str | None = None,
 ) -> _PreparedSubmission:
     """Normalize one browser submission into the run's immutable input.
 
@@ -523,6 +524,7 @@ def _prepare_submission(
         workspaces=tuple(workspaces),
         history=tuple(history),
         semantic_highlights=True,
+        mode=mode,
         resources=tuple(
             ResourceInput(
                 filename=attachment.filename,

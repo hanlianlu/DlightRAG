@@ -503,6 +503,7 @@ async def answer_tool(
                 semantic_highlights=args.semantic_highlights,
                 history=tuple(conversation_history_as_dicts(args.history) or ()),
                 resources=tuple(answer_link_resources(args.attachments)),
+                mode=args.mode,
             ),
             idempotency_key=args.idempotency_key,
             owner_id=_owner_id(),

@@ -20,6 +20,8 @@ ANSWER_STREAM_FAILED = "ANSWER_STREAM_FAILED"
 INVALID_TOOL_CONFIGURATION = "invalid_tool_configuration"
 MODEL_CAPABILITY_UNAVAILABLE = "MODEL_CAPABILITY_UNAVAILABLE"
 ANSWER_RESOURCE_INVALID = "ANSWER_RESOURCE_INVALID"
+UNSUPPORTED_ANSWER_MODE = "unsupported_answer_mode"
+UNSUPPORTED_RESOURCE_CAPABILITY = "unsupported_resource_capability"
 
 _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 
@@ -84,6 +86,26 @@ class AnswerModelCapabilityError(AnswerInputError):
         )
 
 
+class UnsupportedAnswerModeError(AnswerInputError):
+    """Requested Answer Mode is outside the Valid Mode Set, or auto has none."""
+
+    def __init__(self, requested: str) -> None:
+        super().__init__(
+            f"Answer mode {requested!r} is not valid for this request.",
+            error_kind=UNSUPPORTED_ANSWER_MODE,
+        )
+
+
+class UnsupportedResourceCapabilityError(AnswerInputError):
+    """No mode remains because a prepared resource has no registered branch."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This request needs a resource capability that no answer mode can provide.",
+            error_kind=UNSUPPORTED_RESOURCE_CAPABILITY,
+        )
+
+
 class AnswerResourceAdmissionError(AnswerInputError):
     """A caller resource violates the safe Answer admission contract."""
 
@@ -128,6 +150,8 @@ __all__ = [
     "CURRENT_IMAGE_LIMIT_EXCEEDED",
     "INVALID_TOOL_CONFIGURATION",
     "MODEL_CAPABILITY_UNAVAILABLE",
+    "UNSUPPORTED_ANSWER_MODE",
+    "UNSUPPORTED_RESOURCE_CAPABILITY",
     "AnswerInputError",
     "AnswerImageError",
     "AnswerInputOverflowError",
@@ -136,5 +160,7 @@ __all__ = [
     "CurrentDocumentParseError",
     "CurrentImagePayloadError",
     "InvalidToolConfigurationError",
+    "UnsupportedAnswerModeError",
+    "UnsupportedResourceCapabilityError",
     "classify_answer_error",
 ]

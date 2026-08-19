@@ -31,6 +31,13 @@ from dlightrag.answer.history import (
     project_history,
 )
 from dlightrag.answer.images import AnswerImagePolicy
+from dlightrag.answer.mode import (
+    ModeCapability,
+    ModeResource,
+    require_supported_mode,
+    resource_role,
+    valid_modes,
+)
 from dlightrag.answer.resources.images import QueryImageDescriber, prepare_query_images
 from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
 from dlightrag.answer.runs.execution import (
@@ -97,6 +104,7 @@ class AnswerRequest:
     semantic_highlights: bool = False
     resources: tuple[ResourceInput, ...] = ()
     history_resources: tuple[AnswerHistoryResource, ...] = ()
+    mode: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +339,7 @@ def _normalized_request(request: AnswerRequest) -> AnswerRunRequest:
         semantic_highlights=request.semantic_highlights,
         links=tuple(links),
         attachments=tuple(attachments),
+        mode=request.mode or "auto",
         history_attachments=tuple(
             AttachmentReference(
                 digest=resource.digest,
@@ -451,6 +460,7 @@ class AnswerService:
         fingerprint = idempotency_fingerprint or answer_run_request_fingerprint(
             run_request.as_request()
         )
+        self._reject_unsupported_mode(run_request)
         if idempotency_key is not None:
             replay = await acceptor.replay_run(
                 owner_id=owner_id,
@@ -501,6 +511,35 @@ class AnswerService:
             if accepted is not None:
                 self._coordinator.wake()
         return accepted
+
+    def _reject_unsupported_mode(self, request: AnswerRunRequest) -> None:
+        """Fail closed before a run row exists when the requested mode cannot resolve."""
+        profiles = self._capabilities.current_profiles()
+        query = profiles["query"]
+        vlm = profiles["vlm"]
+        resources: list[ModeResource] = []
+        for attachment in request.attachments:
+            resources.append(
+                ModeResource(
+                    role=resource_role(filename=attachment.filename, mime_type=attachment.mime_type)
+                )
+            )
+        for link in request.links:
+            role = resource_role(filename=link.filename or link.url, mime_type=link.mime_type)
+            if role == "other":
+                role = "document"
+            resources.append(ModeResource(role=role))
+        require_supported_mode(
+            requested=request.mode,
+            valid=valid_modes(
+                resources=tuple(resources),
+                capability=ModeCapability(
+                    query_supports_tools=query.supports_tools,
+                    query_supports_images=query.supports_images,
+                    inspect_available=vlm.supports_images,
+                ),
+            ),
+        )
 
     def _history_resource_input(
         self,

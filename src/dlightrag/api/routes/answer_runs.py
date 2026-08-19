@@ -214,6 +214,7 @@ def _service_request(
         ),
         semantic_highlights=body.semantic_highlights,
         resources=tuple(resources),
+        mode=body.mode,
     )
 
 
