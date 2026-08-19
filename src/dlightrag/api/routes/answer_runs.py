@@ -279,7 +279,9 @@ async def list_answer_runs(
     """List this owner's durable runs, oldest first."""
     application = get_application(request)
     rows = await application.answers.list(
-        owner_id=owner_id_from_user(user), after_run_id=after, limit=limit
+        owner_id=owner_id_from_user(user),
+        after_run_id=after,
+        limit=min(max(limit, 1), 100),
     )
     return {"runs": [_descriptor(record) for record in rows]}
 
@@ -316,7 +318,7 @@ async def read_answer_artifact(
     application = get_application(request)
     header = request.headers.get("range", "")
     offset = 0
-    length = 1_048_576
+    length = None
     if header.lower().startswith("bytes="):
         spec = header.split("=", 1)[1]
         start_s, _, end_s = spec.partition("-")
@@ -324,6 +326,8 @@ async def read_answer_artifact(
             offset = int(start_s)
         if end_s.isdigit():
             length = max(0, int(end_s) - offset + 1)
+        else:
+            length = 1_048_576
     payload = await application.answers.read_artifact(
         owner_id=owner_id_from_user(user),
         run_id=run_id,
@@ -337,6 +341,7 @@ async def read_answer_artifact(
         content=payload,
         media_type="application/octet-stream",
         headers={
+            "Accept-Ranges": "bytes",
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="download"',
         },

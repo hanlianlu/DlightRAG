@@ -155,7 +155,6 @@ class AnswerResourceSettings:
 class AnswerExecutorSettings:
     default_top_k: int
     default_chunk_top_k: int
-    max_agent_turns: int
     semantic_highlights: SemanticHighlightSettings
 
 
@@ -837,7 +836,6 @@ class AnswerExecutor:
                 text_window_budget=text_window_budget,
                 model_profile=query_profile,
                 context_policy=CONTEXT_POLICY,
-                max_agent_turns=self._settings.max_agent_turns,
                 telemetry=self._telemetry,
                 environment=environment,
                 resource_reader=(

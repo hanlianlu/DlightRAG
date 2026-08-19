@@ -117,6 +117,8 @@ class AnswerResponse(RetrievalResponse):
     references: list[ReferenceSummary] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
     answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    primary_report: str | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnswerRunDescriptor(ClientContractModel):

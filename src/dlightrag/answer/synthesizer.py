@@ -70,9 +70,9 @@ class AnswerSynthesizer:
     Images found in chunks are inlined as ``image_url`` content blocks -- no
     separate VLM routing is needed.
 
-    Both ``generate_stream()`` and ``synthesize_research_stream()`` use the same
-    unified freetext system prompt and identical evidence preparation. Sources
-    are projected from validated inline ``[n]`` and ``[n-m]`` markers.
+    ``generate_stream()`` uses the unified freetext system prompt and identical
+    evidence preparation. Sources are projected from validated inline ``[n]``
+    and ``[n-m]`` markers.
     """
 
     def __init__(
@@ -174,59 +174,6 @@ class AnswerSynthesizer:
             cast(Any, token_iterator).trace = prepared.trace
 
         return prepared.contexts, token_iterator
-
-    # ------------------------------------------------------------------
-    # Research path: single final owner over a tool transcript
-    # ------------------------------------------------------------------
-
-    async def synthesize_research_stream(
-        self,
-        messages: list[dict[str, Any]],
-        contexts: RetrievalContexts,
-        *,
-        stream: Callable[..., AsyncIterator[str]],
-        indexer: CitationIndexer,
-        trace: dict[str, Any] | None = None,
-    ) -> tuple[RetrievalContexts, AnswerStream]:
-        """Own the tools-disabled final stream for the research path.
-
-        Streaming analogue of :meth:`synthesize_research`.  Wraps the provider's
-        native token stream with :class:`AnswerStream` for post-stream citation
-        validation and no-context handling.
-        """
-        result_trace = dict(trace or {})
-        no_context = not _has_research_evidence(contexts, messages)
-        input_tokens = estimate_messages_tokens(messages)
-        input_limit = self._context_policy.hard_input_limit(self._model_profile)
-        if input_tokens > input_limit:
-            raise AnswerInputOverflowError(
-                "Research final input exceeds the resolved model input limit: "
-                f"{input_tokens} > {input_limit} estimated input tokens"
-            )
-        max_output_tokens = self._context_policy.output_allowance(
-            self._model_profile,
-            input_tokens=input_tokens,
-        )
-
-        call_kwargs: dict[str, Any] = {"messages": messages}
-        if max_output_tokens is not None:
-            call_kwargs["max_tokens"] = max_output_tokens
-        token_iterator: AsyncIterator[str] = stream(**call_kwargs)
-        result_trace.update(
-            {
-                "answer_input_limit_tokens": input_limit,
-                "context_policy_revision": self._context_policy.revision,
-                "answer_input_tokens": input_tokens,
-            }
-        )
-        if no_context:
-            token_iterator = _prepend_no_context_stream(token_iterator)
-            result_trace["answer_no_context"] = True
-
-        wrapped = AnswerStream(token_iterator, indexer=indexer)
-        cast(Any, wrapped).trace = result_trace
-        cast(Any, wrapped).image_descriptions = []
-        return contexts, wrapped
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -441,24 +388,6 @@ async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:
             yield token
     finally:
         await aclose_answer_stream(token_iterator)
-
-
-def _has_research_evidence(
-    contexts: RetrievalContexts,
-    messages: list[dict[str, Any]],
-) -> bool:
-    """A research answer is grounded by ledger context or an image it can see."""
-    return any(
-        contexts.get(key) for key in ("chunks", "entities", "relationships")
-    ) or _messages_have_images(messages)
-
-
-def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
-    return any(
-        isinstance(content, list)
-        and any(isinstance(block, dict) and block.get("type") == "image_url" for block in content)
-        for content in (message.get("content") for message in messages)
-    )
 
 
 __all__ = ["NO_CONTEXT_DISCLAIMER", "AnswerSynthesizer"]

@@ -167,7 +167,6 @@ def _research(
     resource_tools: list[AgentTool] | None = None,
     register_web_source: Any = None,
     resource_manifest: tuple[ResourceManifestEntry, ...] = (),
-    max_agent_turns: int = 50,
     image_budget: AnswerImageBudget | None = None,
 ) -> _DrainedOrchestrator:
     effective_profile = model_profile or answer_model_profile()
@@ -181,7 +180,6 @@ def _research(
         resource_manifest=resource_manifest,
         register_web_source=register_web_source,
         model_profile=effective_profile,
-        max_agent_turns=max_agent_turns,
         image_budget=image_budget,
         text_window_budget=TextWindowBudget(
             tokens=CONTEXT_POLICY.hard_input_limit(effective_profile)
@@ -736,7 +734,7 @@ async def test_two_followup_sources_execute_as_parallel_tool_calls() -> None:
     await task
 
 
-async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
+async def test_silent_turn_ends_loop_and_answers() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()
 
@@ -888,8 +886,7 @@ async def test_a_tool_error_loop_is_still_bounded_by_the_turn_cap() -> None:
     async def search(_query: str) -> WebSearchResult:
         return _web_result("web fact")
 
-    # An unrecoverable tool cannot spin forever: max_agent_turns stays the only
-    # error-loop safety cap, and the run still answers from what it has.
+    # An unrecoverable tool cannot spin forever: the scripted agent still stops.
     agent = ScriptedAgent(
         *(
             _tool(_call(query=f"attempt {index}", source="knowledge_base", call_id=f"c{index}"))

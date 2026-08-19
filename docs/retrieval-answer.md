@@ -300,12 +300,9 @@ picks one of two paths:
   Evidence-producing Web result URLs receive opaque request-local resource ids,
   allowing a later `read` call to deepen a selected source without a
   raw-URL tool.
-  A control turn with no tool calls, or a tool batch that adds no evidence, ends
-  research, as does the `max_agent_turns` safety cap. DlightRAG then makes one additional tools-disabled LLM call through
-  `AnswerSynthesizer` to generate the final answer. Control-turn text is always
-  discarded and never returned as the answer. Control turns use a tool-policy
-  system prompt; the final call replaces it with the normal answer/citation
-  prompt while preserving the native tool transcript.
+  A control turn with no tool calls ends research. The last silent turn is the
+  answer; optional `artifacts/report.md` is published as a handle-only Primary
+  Report. Fast Answer still uses `AnswerSynthesizer` and never writes artifacts.
 
 Both paths converge on the same `AnswerSynthesizer` generation and deterministic
 finalization, so citation validation, `sources`, `answer_images`, and

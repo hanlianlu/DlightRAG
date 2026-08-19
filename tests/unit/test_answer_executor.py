@@ -51,7 +51,6 @@ def _executor() -> AnswerExecutor:
         settings=AnswerExecutorSettings(
             default_top_k=10,
             default_chunk_top_k=20,
-            max_agent_turns=8,
             semantic_highlights=SemanticHighlightSettings(
                 enabled=True,
                 timeout=10.0,

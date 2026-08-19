@@ -56,10 +56,9 @@ uses the existing cooldown-bounded, single-flight lazy re-probe.
 
 ### Agent termination
 
-Tool errors are not convergence. A control turn may stop for no new evidence
-only when it contains no tool errors. An invalid, unavailable, or failed tool
-result is replayed to the model for correction; the existing
-`max_agent_turns` bound remains the only error-loop safety cap.
+Tool errors are not convergence. An invalid, unavailable, or failed tool result
+is replayed to the model for correction. Research ends when the model writes the
+answer and makes no tool call.
 
 Every model-visible field has a description. Tool names are checked for
 uniqueness after per-run composition. Each tool execution emits one observation
@@ -515,8 +514,7 @@ citation identity remain; a missing visual never fails the run.
 If the process dies during a read-only tool batch, the batch may execute again.
 The next checkpoint makes completed turns durable.
 
-A resumed run continues its recorded turn count; `max_agent_turns` bounds the
-whole run, not one process lifetime. A fast-path answer has no control turn and
+A resumed run continues from the recorded journal. A fast-path answer has no control turn and
 therefore no intermediate checkpoint; recovery emits `reset` and re-executes it
 from immutable input.
 

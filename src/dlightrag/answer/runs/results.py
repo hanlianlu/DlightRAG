@@ -146,6 +146,17 @@ def project_answer_result(
         "answer_blocks": answer_blocks_from_markdown(answer, images),
         "trace": dict(stored.get("trace") or {}),
         "image_descriptions": list(stored.get("image_descriptions") or ()),
+        "primary_report": stored.get("primary_report"),
+        "artifacts": [
+            {
+                "resource_id": item.get("resource_id"),
+                "kind": item.get("kind"),
+                "filename": item.get("filename"),
+                "media_type": item.get("media_type"),
+            }
+            for item in stored.get("artifacts") or ()
+            if isinstance(item, Mapping)
+        ],
     }
 
 

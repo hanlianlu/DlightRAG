@@ -146,7 +146,6 @@ def answer_executor_settings(config: DlightragConfig) -> AnswerExecutorSettings:
     return AnswerExecutorSettings(
         default_top_k=config.top_k,
         default_chunk_top_k=config.chunk_top_k,
-        max_agent_turns=config.max_agent_turns,
         semantic_highlights=semantic_highlight_settings(config),
     )
 

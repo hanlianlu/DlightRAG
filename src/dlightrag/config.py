@@ -1237,15 +1237,6 @@ class DlightragConfig(BaseSettings):
         gt=0,
         description="Timeout in seconds for one caller-awaited inline retrieval.",
     )
-    max_agent_turns: int = Field(
-        default=50,
-        gt=0,
-        description=(
-            "Safety cap on research control turns per answer. Research normally stops when "
-            "the agent calls no tool or a batch adds no evidence; the cap bounds a run that "
-            "keeps finding new evidence, and answers from what it has instead of failing."
-        ),
-    )
     # ===== Observability =====
     langfuse_public_key: str | None = Field(default=None)
     langfuse_secret_key: str | None = Field(default=None)

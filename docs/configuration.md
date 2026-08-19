@@ -987,7 +987,6 @@ max_upload_bytes: 104857600
 max_upload_size_mb: 512
 ingest_timeout:
 retrieval_timeout: 300
-max_agent_turns: 50
 ```
 
 ```yaml
@@ -1013,10 +1012,8 @@ null so the Compose env wins. If you remove that env var, the container falls
 back to the service user's `~/.dlightrag/agent_workspaces`, which is **not** the
 named volume.
 
-`max_agent_turns` is a safety cap, not a tuning knob: research normally ends when
-the agent calls no tool or a tool batch adds no evidence. The cap bounds a run
-that keeps finding new evidence -- an open-web question can always find one more
-page -- and answers from what it already has instead of failing.
+Research ends when the model writes the answer and makes no tool call, or when
+the run is cancelled or the provider fails. There is no turn cap.
 
 Conversation history is projected once when an answer run is accepted. The
 projector keeps the newest contiguous complete user/assistant pairs that fit

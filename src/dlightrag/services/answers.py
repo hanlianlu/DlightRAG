@@ -542,9 +542,9 @@ class AnswerService:
         run_id: str,
         resource_id: str,
         offset: int = 0,
-        length: int = 1_048_576,
+        length: int | None = None,
     ) -> bytes | None:
-        """Read a bounded slice of one published or input artifact."""
+        """Read a published artifact; omit length to return the remainder."""
         refs = await self._store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
         match = next((item for item in refs if item.resource_id == resource_id), None)
         if match is None:
@@ -553,8 +553,9 @@ class AnswerService:
         if blob is None:
             return None
         start = max(0, offset)
-        end = start + max(0, length)
-        return blob[start:end]
+        if length is None:
+            return blob[start:]
+        return blob[start : start + max(0, length)]
 
     async def get(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Read one owned run; unknown and foreign identifiers both return ``None``."""

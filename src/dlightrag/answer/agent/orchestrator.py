@@ -115,7 +115,6 @@ class AnswerOrchestrator:
         text_window_budget: TextWindowBudget,
         model_profile: ModelProfile,
         context_policy: ContextPolicy = CONTEXT_POLICY,
-        max_agent_turns: int = 50,
         telemetry: Telemetry,
         environment: object | None = None,
         resource_reader: object | None = None,
@@ -132,7 +131,6 @@ class AnswerOrchestrator:
         self._text_window_budget = text_window_budget
         self._model_profile = model_profile
         self._context_policy = context_policy
-        self._max_agent_turns = max(1, max_agent_turns)
         self._telemetry = telemetry
         self._environment = environment
         self._resource_reader = resource_reader
