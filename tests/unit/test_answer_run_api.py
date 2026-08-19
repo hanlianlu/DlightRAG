@@ -94,7 +94,9 @@ class _RunApplication:
         *,
         owner_id: str,
         idempotency_key: str | None = None,
+        auth_mode: str = "none",
     ) -> RunCreation:
+        del auth_mode
         if self.conflict:
             raise IdempotencyKeyConflict("reused")
         if self.replay_record is not None:

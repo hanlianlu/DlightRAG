@@ -40,7 +40,9 @@ class FakeAnswers(AnswerService):
         idempotency_key: str,
         idempotency_fingerprint: str,
         acceptor: AnswerRunAcceptor[T],
+        auth_mode: str = "none",
     ) -> T | None:
+        del auth_mode
         replay = await acceptor.replay_run(
             owner_id=owner_id,
             idempotency_key=idempotency_key,
