@@ -932,7 +932,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
             ),
         ),
         checks=("dlightrag_answer_child_sessions_status_check",),
-        unique_indexes=(),
+        unique=(("owner_id", "run_id", "parent_session_id", "parent_call_id"),),
     ),
     TableRequirement(
         name="dlightrag_answer_committed_spills",
@@ -1077,6 +1077,15 @@ WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
   AND r.status = 'running' AND r.lease_expires_at > NOW()
   AND (rt.resolved_mode IS NULL OR rt.resolved_mode = $5)
 RETURNING rt.resolved_mode
+"""
+
+_HOLD_RUN_LEASE = """
+SELECT 1
+FROM dlightrag_answer_runs
+WHERE owner_id = $1 AND run_id = $2
+  AND lease_owner = $3 AND fencing_epoch = $4
+  AND status = 'running' AND lease_expires_at > NOW()
+FOR UPDATE
 """
 
 _UPSERT_CHILD_SESSION = """
@@ -1851,7 +1860,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
         child_session_id: str,
         parent_session_id: str,
         parent_call_id: str,
-    ) -> None:
+        worker_id: str,
+        fencing_epoch: int,
+    ) -> bool:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
         child_uuid = parse_run_id(child_session_id)
@@ -1859,17 +1870,24 @@ class PGAnswerRunStore(PostgresOperationRunner):
         if run_uuid is None or child_uuid is None or parent_uuid is None:
             raise ValueError("child session ids must be canonical UUIDs")
 
-        async def _operation(conn: Any) -> None:
-            await conn.execute(
-                _UPSERT_CHILD_SESSION,
-                owner,
-                run_uuid,
-                child_uuid,
-                parent_uuid,
-                parent_call_id,
-            )
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return False
+                await conn.execute(
+                    _UPSERT_CHILD_SESSION,
+                    owner,
+                    run_uuid,
+                    child_uuid,
+                    parent_uuid,
+                    parent_call_id,
+                )
+                return True
 
-        await self._run_write(_operation)
+        return await self._run_write(_operation)
 
     async def load_child_session(
         self, *, owner_id: str, run_id: str, child_session_id: str
@@ -1900,17 +1918,28 @@ class PGAnswerRunStore(PostgresOperationRunner):
         child_session_id: str,
         status: str,
         summary: str,
-    ) -> None:
+        worker_id: str,
+        fencing_epoch: int,
+    ) -> bool:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
         child_uuid = parse_run_id(child_session_id)
         if run_uuid is None or child_uuid is None:
             raise ValueError("child session ids must be canonical UUIDs")
 
-        async def _operation(conn: Any) -> None:
-            await conn.execute(_FINISH_CHILD_SESSION, owner, run_uuid, child_uuid, status, summary)
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return False
+                tag = await conn.execute(
+                    _FINISH_CHILD_SESSION, owner, run_uuid, child_uuid, status, summary
+                )
+                return not str(tag).endswith(" 0")
 
-        await self._run_write(_operation)
+        return await self._run_write(_operation)
 
     async def delete_runs_in(
         self, conn: Any, *, owner_id: str, run_ids: Sequence[str]

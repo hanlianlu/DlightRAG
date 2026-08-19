@@ -94,7 +94,8 @@ answer request (query + optional attachments)
                -> one AnswerSynthesizer final answer
        research path: resources present or an Exa web-search key is set
                -> agent selects from peer tools (search_knowledge_base,
-                    read, inspect, optional search_web)
+                    read, inspect, optional search_web, optional
+                    delegate_research, optional path grep)
                -> a selected KB search invokes the same canonical retrieval;
                     RetrievalPlanner preserves the agent query and derives
                     lexical/filter/image hints inside that operation

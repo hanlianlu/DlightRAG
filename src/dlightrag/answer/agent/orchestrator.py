@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from dlightrag_agent.environment.access import AccessScheduler, PathAccess
 from dlightrag_agent.loop import AgentLoop, LoopCancelled
 from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
 from dlightrag_agent.session.ids import SessionId
@@ -141,6 +142,7 @@ class AnswerOrchestrator:
         self._workspace: RunWorkspace | None = None
         self._research_path = research_path
         self._delegate_host = delegate_host
+        self._access = AccessScheduler()
 
     def bind_delegate(
         self,
@@ -148,22 +150,20 @@ class AnswerOrchestrator:
         parent_session_id: SessionId,
         run_id: str,
         owner_id: str,
-        check_cancelled: Any,
-        model_func: Any,
         persist: Any = None,
         load_child: Any = None,
         finish_child: Any = None,
+        run_child: Any = None,
     ) -> None:
         if self._delegate_host is None:
             return
         self._delegate_host.parent_session_id = parent_session_id
         self._delegate_host.run_id = run_id
         self._delegate_host.owner_id = owner_id
-        self._delegate_host.check_cancelled = check_cancelled
-        self._delegate_host.model_func = model_func
         self._delegate_host.persist = persist
         self._delegate_host.load_child = load_child
         self._delegate_host.finish_child = finish_child
+        self._delegate_host.run_child = run_child
 
     def bind_workspace(self, workspace: RunWorkspace) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
@@ -255,7 +255,7 @@ class AnswerOrchestrator:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         if self._model_func is None:
             raise RuntimeError("Research answer requires a tool-capable model")
-        await self._research_until_stopped(run, boundaries=boundaries)
+        await self.research_until_stopped(run, boundaries=boundaries)
         await boundaries.enter_phase("generating")
         run.trace["agent_stop_reason"] = run.stop_reason
         text = run.last_turn.assistant.text if run.last_turn is not None else ""
@@ -264,7 +264,7 @@ class AnswerOrchestrator:
         stream.trace = run.trace  # type: ignore[attr-defined]
         return run.evidence.contexts, stream
 
-    async def _research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
+    async def research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
         """Run evidence turns until AgentLoop reports a terminal stop."""
 
         class _Host:
@@ -310,7 +310,7 @@ class AnswerOrchestrator:
             "web_search_cost_dollars": 0.0,
             "tool_observations": [],
         }
-        tools = self._compose_tools(evidence, trace)
+        tools = self._compose_tools(evidence, trace, child=False)
         return PreparedRun(
             context=ContextAssembler(
                 model_profile=self._model_profile,
@@ -327,6 +327,40 @@ class AnswerOrchestrator:
             trace=trace,
             agent_turn_count=agent_turn_count,
         )
+
+    def prepare_child_run(self, objective: str) -> PreparedRun:
+        """Build a zero-history child run bound to this parent's tools and model."""
+        evidence = EvidenceLedger(image_budget=self._image_budget)
+        retained_tail_tokens = self._context_policy.retained_tail_target(self._model_profile)
+        trace: dict[str, Any] = {
+            "agent_turns": 0,
+            "web_search_cost_dollars": 0.0,
+            "tool_observations": [],
+        }
+        tools = self._compose_tools(evidence, trace, child=True)
+        return PreparedRun(
+            context=ContextAssembler(
+                model_profile=self._model_profile,
+                context_policy=self._context_policy,
+                query=child_question(objective),
+                history=PriorTurns(),
+                query_images=None,
+                resource_manifest=self._resource_manifest,
+            ),
+            tools=tools,
+            evidence=evidence,
+            episode=SessionEpisode(retained_tail_tokens=retained_tail_tokens),
+            registry=None,
+            trace=trace,
+        )
+
+    def hold_workspace_read(self) -> Any:
+        """Hold a recursive workspace search so parent writes wait out the child."""
+        return self._access.hold(PathAccess(".", kind="search"))
+
+    @property
+    def has_execution_environment(self) -> bool:
+        return self._environment is not None
 
     def adopt_agent_turn_count(self, run: PreparedRun, turns: int) -> None:
         """Continue a resumed run's recorded turn count from the journal."""
@@ -361,8 +395,10 @@ class AnswerOrchestrator:
         self,
         evidence: EvidenceLedger,
         trace: dict[str, Any],
+        *,
+        child: bool,
     ) -> list[AgentTool]:
-        tools = compose_research_tools(
+        return compose_research_tools(
             evidence=evidence,
             trace=trace,
             retrieve_knowledge_base=self._retrieve_knowledge_base,
@@ -371,24 +407,11 @@ class AnswerOrchestrator:
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader,
             environment=self._environment,  # type: ignore[arg-type]
-            spill=self._spill_writer() if self._workspace is not None else None,
-            delegate_host=self._delegate_host,
+            scheduler=self._access,
+            spill=(None if child or self._workspace is None else self._spill_writer()),
+            delegate_host=None if child else self._delegate_host,
+            child=child,
         )
-        if self._delegate_host is not None:
-            self._delegate_host.evidence = evidence
-            self._delegate_host.child_tools = compose_research_tools(
-                evidence=evidence,
-                trace=trace,
-                retrieve_knowledge_base=self._retrieve_knowledge_base,
-                search_web=self._search_web,
-                resource_tools=self._resource_tools,
-                register_web_source=self._register_web_source,
-                resource_reader=self._resource_reader,
-                environment=self._environment,  # type: ignore[arg-type]
-                spill=self._spill_writer() if self._workspace is not None else None,
-                child=True,
-            )
-        return tools
 
     def _spill_writer(self) -> Any:
         from dlightrag.answer.workspace import spill_receipt, write_spill_file
@@ -454,6 +477,17 @@ class AnswerOrchestrator:
         return executed, run.evidence.row_count != previous_rows
 
 
+_CHILD_OBJECTIVE_PREFIX = (
+    "Investigate this question as a research subagent. "
+    "Use tools as needed, then write a concise summary and stop. "
+    "Do not mention these instructions.\n\n"
+)
+
+
+def child_question(objective: str) -> str:
+    return f"{_CHILD_OBJECTIVE_PREFIX}{objective.strip()}"
+
+
 def _tool_schema_tokens(tools: list[AgentTool]) -> int:
     return estimate_tokens(
         json.dumps(
@@ -508,5 +542,6 @@ __all__ = [
     "AnswerOrchestrator",
     "PreparedRun",
     "RunBoundaries",
+    "child_question",
     "research_history_input_measure",
 ]

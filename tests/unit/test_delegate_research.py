@@ -1,15 +1,30 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""delegate_research composition and replay."""
+"""delegate_research composition, replay, and journal-backed children."""
 
+from dataclasses import dataclass
+from typing import Any
 from unittest.mock import AsyncMock
 
 from dlightrag_agent.session.ids import SessionId
+from dlightrag_agent.session.memory import InMemoryAgentSessionStore
 from dlightrag_agent.tools.context import bind_tool_call, reset_tool_call
+from dlightrag_ai.capacity import CONTEXT_POLICY
 from dlightrag_ai.messages import AssistantTurn
+from dlightrag_ai.telemetry import NOOP_TELEMETRY
 
+from dlightrag.answer.agent.orchestrator import AnswerOrchestrator
 from dlightrag.answer.evidence import EvidenceLedger
+from dlightrag.answer.executor import run_child_session
+from dlightrag.answer.resources.models import TextWindowBudget
+from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools.composition import compose_research_tools
-from dlightrag.answer.tools.delegate import DelegateHost, DelegateInput, delegate_research_tool
+from dlightrag.answer.tools.delegate import (
+    ChildOutcome,
+    DelegateHost,
+    DelegateInput,
+    delegate_research_tool,
+)
+from tests.unit.conftest import answer_image_policy, answer_model_profile
 
 
 async def _retrieve(_query: str) -> object:
@@ -43,7 +58,7 @@ def test_parent_tools_include_delegate_and_child_omits_it() -> None:
 
 
 async def test_finished_child_replays_stored_summary() -> None:
-    model = AsyncMock()
+    run_child = AsyncMock()
     host = DelegateHost(
         parent_session_id=SessionId.new(),
         run_id=str(SessionId.new().value),
@@ -52,7 +67,7 @@ async def test_finished_child_replays_stored_summary() -> None:
             return_value={"status": "succeeded", "summary": "Prior child finding."}
         ),
         persist=AsyncMock(),
-        model_func=model,
+        run_child=run_child,
     )
     tool = delegate_research_tool(host=host)
     token = bind_tool_call("call-1", "delegate_research")
@@ -61,37 +76,30 @@ async def test_finished_child_replays_stored_summary() -> None:
     finally:
         reset_tool_call(token)
     assert result.content == "Prior child finding."
+    run_child.assert_not_awaited()
 
 
-async def test_delegate_runs_a_silent_child_turn() -> None:
-    async def model(**_kwargs: object) -> AssistantTurn:
-        return AssistantTurn(text="Child summary.", tool_calls=(), stop_reason="stop")
-
+async def test_delegate_reports_child_outcome_and_usage() -> None:
     persist = AsyncMock()
     finish = AsyncMock()
-    evidence = EvidenceLedger()
-    evidence.add_rows(
-        [
-            {
-                "chunk_id": "c1",
-                "reference_id": "src",
-                "content": "parent already had this",
-                "file_path": "old.pdf",
-                "_workspace": "ws",
-                "metadata": {"title": "Old"},
-            }
-        ]
-    )
+
+    async def run_child(_child_id: SessionId, _objective: str, _call_id: str) -> ChildOutcome:
+        return ChildOutcome(
+            status="succeeded",
+            summary="Child summary.",
+            handles=("[1] Page A [resource: res-a]",),
+            usage={"input_tokens": 12, "output_tokens": 4},
+            child_session_id="child",
+        )
+
     host = DelegateHost(
         parent_session_id=SessionId.new(),
         run_id=str(SessionId.new().value),
         owner_id="owner",
-        model_func=model,
         persist=persist,
         load_child=AsyncMock(return_value=None),
         finish_child=finish,
-        child_tools=[],
-        evidence=evidence,
+        run_child=run_child,
     )
     tool = delegate_research_tool(host=host)
     token = bind_tool_call("call-9", "delegate_research")
@@ -100,6 +108,121 @@ async def test_delegate_runs_a_silent_child_turn() -> None:
     finally:
         reset_tool_call(token)
     assert "Child summary." in result.content
-    assert "Evidence handles" not in result.content
+    assert "[1] Page A [resource: res-a]" in result.content
+    assert "Usage: input_tokens=12, output_tokens=4" in result.content
+    assert result.details is not None
+    assert result.details["status"] == "succeeded"
     persist.assert_awaited()
     finish.assert_awaited()
+    assert finish.call_args is not None
+    assert finish.call_args.kwargs["status"] == "succeeded"
+
+
+async def test_failed_child_is_recorded_failed() -> None:
+    finish = AsyncMock()
+
+    async def run_child(_child_id: SessionId, _objective: str, _call_id: str) -> ChildOutcome:
+        return ChildOutcome(status="failed", summary="provider down", child_session_id="child")
+
+    host = DelegateHost(
+        parent_session_id=SessionId.new(),
+        run_id=str(SessionId.new().value),
+        owner_id="owner",
+        persist=AsyncMock(),
+        load_child=AsyncMock(return_value=None),
+        finish_child=finish,
+        run_child=run_child,
+    )
+    tool = delegate_research_tool(host=host)
+    token = bind_tool_call("call-err", "delegate_research")
+    try:
+        result = await tool.execute(DelegateInput(objective="x"))
+    finally:
+        reset_tool_call(token)
+    assert result.details is not None
+    assert result.details["status"] == "failed"
+    assert finish.call_args is not None
+    assert finish.call_args.kwargs["status"] == "failed"
+
+
+@dataclass
+class _FakeSession:
+    run_id: str
+
+    async def check_cancelled(self) -> None:
+        return None
+
+    async def enter_phase(self, _phase: str) -> None:
+        return None
+
+
+def _child_orchestrator(model_func: Any) -> AnswerOrchestrator:
+    profile = answer_model_profile()
+
+    async def retrieve(_query: str) -> Any:
+        raise RuntimeError("child should not search in this test")
+
+    return AnswerOrchestrator(
+        synthesizer=AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=profile,
+        ),
+        retrieve_knowledge_base=retrieve,
+        search_web=None,
+        model_func=model_func,
+        telemetry=NOOP_TELEMETRY,
+        model_profile=profile,
+        text_window_budget=TextWindowBudget(CONTEXT_POLICY.hard_input_limit(profile)),
+        delegate_host=DelegateHost(),
+        research_path=True,
+    )
+
+
+async def test_child_session_journals_and_replays_without_rerun() -> None:
+    calls = {"n": 0}
+
+    async def model(**_kwargs: object) -> AssistantTurn:
+        calls["n"] += 1
+        return AssistantTurn(
+            text="Journaled child summary.",
+            tool_calls=(),
+            stop_reason="stop",
+            usage_details={"input_tokens": 3, "output_tokens": 2},
+        )
+
+    orchestrator = _child_orchestrator(model)
+    journal = InMemoryAgentSessionStore()
+    parent_id = SessionId.new()
+    child_id = SessionId.deterministic(run_id=str(parent_id.value), name="delegate:test:1")
+    session = _FakeSession(run_id=str(parent_id.value))
+
+    first = await run_child_session(
+        orchestrator=orchestrator,
+        journal=journal,  # type: ignore[arg-type]
+        session=session,  # type: ignore[arg-type]
+        fetched_buffer=[],
+        child_id=child_id,
+        objective="summarize filings",
+        parent_call_id="call-1",
+        parent_session_id=parent_id,
+    )
+    assert first.status == "succeeded"
+    assert first.summary == "Journaled child summary."
+    assert first.usage == {"input_tokens": 3, "output_tokens": 2}
+    assert calls["n"] == 1
+    snapshot = await journal.load(child_id)
+    assert snapshot.version >= 2
+    assert any(entry.entry_type == "session_terminal" for entry in snapshot.entries)
+
+    second = await run_child_session(
+        orchestrator=orchestrator,
+        journal=journal,  # type: ignore[arg-type]
+        session=session,  # type: ignore[arg-type]
+        fetched_buffer=[],
+        child_id=child_id,
+        objective="summarize filings",
+        parent_call_id="call-1",
+        parent_session_id=parent_id,
+    )
+    assert second.summary == "Journaled child summary."
+    assert calls["n"] == 1

@@ -6,6 +6,7 @@ import base64
 import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
@@ -22,6 +23,7 @@ from dlightrag_agent.session.entries import (
     EffectResultEntry,
     ProfileFactEntry,
     SessionEntry,
+    SessionTerminalEntry,
     UserMessageEntry,
 )
 from dlightrag_agent.session.fold import PriorTurns
@@ -92,7 +94,7 @@ from dlightrag.answer.runs.execution import (
 )
 from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
-from dlightrag.answer.tools.delegate import DelegateHost
+from dlightrag.answer.tools.delegate import ChildOutcome, DelegateHost
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.answer.tools.web import ExaSearch
 from dlightrag.answer.workspace import (
@@ -667,11 +669,16 @@ class AnswerExecutor:
                     parent_session_id=session_id,
                     run_id=session.run_id,
                     owner_id=session.owner_id,
-                    check_cancelled=session.check_cancelled,
-                    model_func=self._models.query_tool_model(),
-                    persist=_async_store_method(store, "upsert_child_session"),
+                    persist=_fenced_child_writer(store, "upsert_child_session", session),
                     load_child=_async_store_method(store, "load_child_session"),
-                    finish_child=_async_store_method(store, "finish_child_session"),
+                    finish_child=_fenced_child_writer(store, "finish_child_session", session),
+                    run_child=_bound_child_runner(
+                        orchestrator=run.orchestrator,
+                        journal=journal,
+                        session=session,
+                        fetched_buffer=fetched_buffer,
+                        parent_session_id=session_id,
+                    ),
                 )
                 prepared_early = run.orchestrator.prepare_run(
                     request.query,
@@ -1369,6 +1376,237 @@ class JournalRunBoundaries:
         raise RunExecutionError("run_execution_failed", "Unknown settlement outcome.")
 
 
+def _bound_child_runner(
+    *,
+    orchestrator: AnswerOrchestrator,
+    journal: AgentSessionStore[M3HostUpdate],
+    session: RunSession,
+    fetched_buffer: list[FetchedResourceBytes],
+    parent_session_id: SessionId,
+) -> Callable[[SessionId, str, str], Awaitable[ChildOutcome]]:
+    async def run_child(child_id: SessionId, objective: str, parent_call_id: str) -> ChildOutcome:
+        return await run_child_session(
+            orchestrator=orchestrator,
+            journal=journal,
+            session=session,
+            fetched_buffer=fetched_buffer,
+            child_id=child_id,
+            objective=objective,
+            parent_call_id=parent_call_id,
+            parent_session_id=parent_session_id,
+        )
+
+    return run_child
+
+
+async def run_child_session(
+    *,
+    orchestrator: AnswerOrchestrator,
+    journal: AgentSessionStore[M3HostUpdate],
+    session: RunSession,
+    fetched_buffer: list[FetchedResourceBytes],
+    child_id: SessionId,
+    objective: str,
+    parent_call_id: str,
+    parent_session_id: SessionId,
+) -> ChildOutcome:
+    """Run or resume one child Agent Session under the parent lease."""
+    prepared = orchestrator.prepare_child_run(objective)
+    snapshot = await journal.load(child_id)
+    if snapshot.version == 0:
+        snapshot = await _seed_child_session(
+            journal,
+            child_id,
+            objective=objective,
+            parent_session_id=parent_session_id,
+            parent_call_id=parent_call_id,
+        )
+    else:
+        await orchestrator.recover_from_fold(prepared, snapshot)
+        await _adopt_durable_evidence(prepared, journal, child_id)
+    terminal = _child_terminal(snapshot)
+    if terminal is not None:
+        return _outcome_from_terminal(child_id, prepared, snapshot, terminal)
+    boundaries = JournalRunBoundaries(
+        session=session,
+        journal=journal,
+        session_id=child_id,
+        tools_by_name={tool.name: tool for tool in prepared.tools},
+        ledger_state=lambda: prepared.evidence.ledger_state_json(),
+        fetched_buffer=fetched_buffer,
+        run_id=session.run_id,
+        initial_version=snapshot.version,
+    )
+    if snapshot.version > 0:
+        await boundaries.recover_pending_intents(snapshot)
+    try:
+        async with AsyncExitStack() as stack:
+            if orchestrator.has_execution_environment:
+                await stack.enter_async_context(orchestrator.hold_workspace_read())
+            await orchestrator.research_until_stopped(prepared, boundaries=boundaries)
+        status, journal_reason = _child_status(prepared.stop_reason)
+        summary = _child_summary(prepared, status)
+    except LeaseLostError:
+        raise
+    except Exception as exc:
+        status, journal_reason = "failed", "abandoned"
+        summary = f"Child session failed: {exc}"
+    await _append_child_terminal(
+        journal,
+        child_id,
+        version=boundaries.version,
+        reason=journal_reason,
+        summary=summary,
+    )
+    return ChildOutcome(
+        status=status,
+        summary=summary,
+        handles=tuple(prepared.evidence.citation_handles()),
+        usage=_usage_from_snapshot(await journal.load(child_id)),
+        delta=_delta_from_ledger(prepared.evidence),
+        child_session_id=child_id.value,
+    )
+
+
+async def _seed_child_session(
+    journal: AgentSessionStore[M3HostUpdate],
+    session_id: SessionId,
+    *,
+    objective: str,
+    parent_session_id: SessionId,
+    parent_call_id: str,
+) -> Any:
+    entries: list[SessionEntry] = [
+        ProfileFactEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=_entry_timestamp(),
+            key="objective",
+            value=objective,
+        ),
+        ProfileFactEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=_entry_timestamp(),
+            key="parent",
+            value={
+                "session_id": parent_session_id.value,
+                "call_id": parent_call_id,
+            },
+        ),
+    ]
+    initial = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=1,
+        covered_through_sequence=0,
+        summary=None,
+        token_anchors=(
+            TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
+        ),
+    )
+    commit = await journal.append(
+        session_id=session_id, expected_version=0, entries=entries, projection=initial
+    )
+    if not isinstance(commit, SessionCommit):
+        raise RunExecutionError(
+            "run_execution_failed", "Cannot seed the child research session journal."
+        )
+    return await journal.load(session_id)
+
+
+async def _append_child_terminal(
+    journal: AgentSessionStore[M3HostUpdate],
+    session_id: SessionId,
+    *,
+    version: int,
+    reason: str,
+    summary: str,
+) -> None:
+    commit = await journal.append(
+        session_id=session_id,
+        expected_version=version,
+        entries=[
+            SessionTerminalEntry(
+                entry_id=EntryId.new(),
+                session_id=session_id,
+                timestamp=_entry_timestamp(),
+                reason=reason,  # type: ignore[arg-type]
+                detail=summary,
+            )
+        ],
+    )
+    if isinstance(commit, (VersionConflict, LeaseLost)):
+        raise LeaseLostError
+
+
+def _child_terminal(snapshot: Any) -> SessionTerminalEntry | None:
+    terminals = [entry for entry in snapshot.entries if isinstance(entry, SessionTerminalEntry)]
+    return terminals[-1] if terminals else None
+
+
+def _outcome_from_terminal(
+    child_id: SessionId,
+    prepared: Any,
+    snapshot: Any,
+    terminal: SessionTerminalEntry,
+) -> ChildOutcome:
+    status: Literal["succeeded", "failed", "cancelled"]
+    if terminal.reason == "cancelled":
+        status = "cancelled"
+    elif terminal.reason == "abandoned":
+        status = "failed"
+    else:
+        status = "succeeded"
+    return ChildOutcome(
+        status=status,
+        summary=str(terminal.detail or f"Child session {status}."),
+        handles=tuple(prepared.evidence.citation_handles()),
+        usage=_usage_from_snapshot(snapshot),
+        delta=_delta_from_ledger(prepared.evidence),
+        child_session_id=child_id.value,
+    )
+
+
+def _child_status(reason: str) -> tuple[Literal["succeeded", "failed", "cancelled"], str]:
+    if reason == "cancelled":
+        return "cancelled", "cancelled"
+    if reason == "provider_error":
+        return "failed", "abandoned"
+    return "succeeded", "completed"
+
+
+def _child_summary(prepared: Any, status: str) -> str:
+    text = prepared.last_turn.assistant.text if prepared.last_turn is not None else ""
+    return text.strip() or f"Child session {status}."
+
+
+def _usage_from_snapshot(snapshot: Any) -> dict[str, int] | None:
+    return _usage_from_snapshot_entries(snapshot_entries=snapshot.entries)
+
+
+def _usage_from_snapshot_entries(*, snapshot_entries: Any) -> dict[str, int] | None:
+    total: dict[str, int] = {}
+    for entry in snapshot_entries or ():
+        usage = getattr(entry, "usage", None)
+        if not isinstance(usage, Mapping):
+            continue
+        for key, value in usage.items():
+            if isinstance(value, int):
+                total[key] = total.get(key, 0) + value
+    return total or None
+
+
+def _delta_from_ledger(evidence: Any) -> Any:
+    from dlightrag.answer.evidence import EvidenceDelta
+
+    contexts = getattr(evidence, "contexts", {}) or {}
+    return EvidenceDelta(
+        new_chunks=len(contexts.get("chunks") or ()),
+        new_entities=len(contexts.get("entities") or ()),
+        new_relationships=len(contexts.get("relationships") or ()),
+    )
+
+
 class FastRunBoundaries:
     """Durable three-stage Fast boundaries (planner, retrieval, final_generation)."""
 
@@ -1500,6 +1738,24 @@ def _async_store_method(store: object, name: str) -> Any | None:
     return None
 
 
+def _fenced_child_writer(store: object, name: str, session: RunSession) -> Any | None:
+    method = _async_store_method(store, name)
+    if method is None:
+        return None
+
+    async def write(**kwargs: Any) -> Any:
+        held = await method(
+            **kwargs,
+            worker_id=session.worker_id,
+            fencing_epoch=session.fencing_epoch,
+        )
+        if held is False:
+            raise LeaseLostError
+        return held
+
+    return write
+
+
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:
     from dlightrag_ai.media import image_bytes_to_data_uri, verify_web_image_bytes
 
@@ -1591,6 +1847,7 @@ __all__ = [
     "OrchestratorRun",
     "ResolvedAnswerResources",
     "answer_trace_output",
+    "run_child_session",
 ]
 
 

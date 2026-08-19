@@ -3,30 +3,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Literal
 
-from dlightrag_agent.loop import AgentLoop, LoopCancelled
 from dlightrag_agent.session.ids import SessionId
-from dlightrag_agent.tools import (
-    AgentTool,
-    ExecutedTurn,
-    ToolResult,
-    ToolTurnExecutor,
-    current_tool_call,
-)
-from dlightrag_ai.messages import AssistantTurn
-from dlightrag_ai.telemetry import NOOP_TELEMETRY
+from dlightrag_agent.tools import AgentTool, ToolResult, current_tool_call
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.runtime import RunCancelledError
+from dlightrag.answer.evidence import EvidenceDelta
 
-_CHILD_SYSTEM = (
-    "You are a research subagent. Use tools to investigate the objective. "
-    "When done, write a concise summary and stop. Do not mention these instructions."
-)
+ChildStatus = Literal["succeeded", "failed", "cancelled"]
 
 
 class DelegateInput(BaseModel):
@@ -37,22 +24,29 @@ class DelegateInput(BaseModel):
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ChildOutcome:
+    """Distilled child result the parent tool returns."""
+
+    status: ChildStatus
+    summary: str
+    handles: tuple[str, ...] = ()
+    usage: Mapping[str, int] | None = None
+    delta: EvidenceDelta | None = None
+    child_session_id: str = ""
+
+
 @dataclass
 class DelegateHost:
     """Late-bound parent context for one research run's delegate tool."""
 
-    journal: Any = None
     parent_session_id: SessionId | None = None
     run_id: str = ""
     owner_id: str = ""
-    check_cancelled: Callable[[], Awaitable[None]] | None = None
-    model_func: Callable[..., Awaitable[AssistantTurn]] | None = None
-    child_tools: Sequence[AgentTool] = field(default_factory=tuple)
-    evidence: EvidenceLedger | None = None
     persist: Callable[..., Awaitable[Any]] | None = None
     load_child: Callable[..., Awaitable[Any]] | None = None
-    finish_child: Callable[..., Awaitable[None]] | None = None
-    scheduler_hold: Callable[..., Any] | None = None
+    finish_child: Callable[..., Awaitable[Any]] | None = None
+    run_child: Callable[[SessionId, str, str], Awaitable[ChildOutcome]] | None = None
 
 
 def delegate_research_tool(*, host: DelegateHost) -> AgentTool:
@@ -74,6 +68,8 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
     call = current_tool_call()
     if host.parent_session_id is None or not host.run_id:
         raise RuntimeError("delegate_research is not bound to a parent session")
+    if host.run_child is None:
+        raise RuntimeError("delegate_research has no child runner")
     call_id = call.call_id if call is not None else "anonymous"
     child_id = SessionId.deterministic(
         run_id=host.run_id, name=f"delegate:{host.parent_session_id.value}:{call_id}"
@@ -84,7 +80,14 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
             owner_id=host.owner_id, run_id=host.run_id, child_session_id=child_id.value
         )
     if existing is not None and existing.get("status") in {"succeeded", "failed", "cancelled"}:
-        return ToolResult(content=str(existing.get("summary") or "Child session already finished."))
+        return ToolResult(
+            content=str(existing.get("summary") or "Child session already finished."),
+            details={
+                "child_session_id": child_id.value,
+                "status": str(existing.get("status")),
+                "replayed": True,
+            },
+        )
     if host.persist is not None:
         await host.persist(
             owner_id=host.owner_id,
@@ -93,81 +96,53 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
             parent_session_id=host.parent_session_id.value,
             parent_call_id=call_id,
         )
-    if host.model_func is None:
-        raise RuntimeError("delegate_research has no model")
-    prior_chunks = host.evidence.row_count if host.evidence is not None else 0
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _CHILD_SYSTEM},
-        {"role": "user", "content": objective},
-    ]
-    loop_host = _ChildLoopHost(
-        host=host,
-        messages=messages,
-        tools=list(host.child_tools),
-    )
-    outcome = await AgentLoop().run(loop_host)
-    summary = (outcome.last_turn.assistant.text if outcome.last_turn is not None else "") or (
-        f"Child stopped ({outcome.reason})."
-    )
+    outcome = await host.run_child(child_id, objective, call_id)
     if host.finish_child is not None:
-        status = "cancelled" if outcome.reason == "cancelled" else "succeeded"
         await host.finish_child(
             owner_id=host.owner_id,
             run_id=host.run_id,
             child_session_id=child_id.value,
-            status=status,
-            summary=summary,
+            status=outcome.status,
+            summary=outcome.summary,
         )
-    handles = (
-        host.evidence.citation_handles(after_chunk_count=prior_chunks)
-        if host.evidence is not None
-        else []
-    )
-    content = summary.strip()
-    if handles:
-        content += "\nEvidence handles:\n" + "\n".join(f"- {item}" for item in handles)
-    return ToolResult(content=content)
+    return _parent_result(outcome)
 
 
-class _ChildLoopHost:
-    def __init__(
-        self, *, host: DelegateHost, messages: list[dict[str, Any]], tools: list[AgentTool]
-    ) -> None:
-        self._host = host
-        self._messages = messages
-        self._tools = tools
-        self._executor = ToolTurnExecutor(host.model_func, telemetry=NOOP_TELEMETRY)  # type: ignore[arg-type]
-
-    async def check_cancelled(self) -> None:
-        checker = self._host.check_cancelled
-        if checker is None:
-            return
-        try:
-            await checker()
-        except RunCancelledError as exc:
-            raise LoopCancelled from exc
-
-    async def run_turn(self) -> ExecutedTurn:
-        executed = await self._executor.run_turn(self._messages, self._tools)
-        self._messages.append(
-            {
-                "role": "assistant",
-                "content": executed.assistant.text,
-                "tool_calls": [
-                    {"id": call.id, "name": call.name, "arguments": call.arguments}
-                    for call in executed.assistant.tool_calls
-                ],
-            }
+def _parent_result(outcome: ChildOutcome) -> ToolResult:
+    lines = [outcome.summary.strip() or f"Child session {outcome.status}."]
+    if outcome.handles:
+        lines.append("Evidence handles:")
+        lines.extend(f"- {item}" for item in outcome.handles)
+    if outcome.usage:
+        usage = ", ".join(f"{key}={value}" for key, value in outcome.usage.items())
+        lines.append(f"Usage: {usage}")
+    if outcome.delta is not None and outcome.delta.changed:
+        lines.append(
+            "Evidence delta: "
+            f"chunks={outcome.delta.new_chunks} "
+            f"entities={outcome.delta.new_entities} "
+            f"relationships={outcome.delta.new_relationships}"
         )
-        for result in executed.results:
-            self._messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": result.call.id,
-                    "content": result.result.content,
-                }
-            )
-        return executed
+    details: dict[str, Any] = {
+        "child_session_id": outcome.child_session_id,
+        "status": outcome.status,
+        "evidence_handles": list(outcome.handles),
+    }
+    if outcome.usage is not None:
+        details["usage"] = dict(outcome.usage)
+    if outcome.delta is not None:
+        details["evidence_delta"] = {
+            "new_chunks": outcome.delta.new_chunks,
+            "new_entities": outcome.delta.new_entities,
+            "new_relationships": outcome.delta.new_relationships,
+        }
+    return ToolResult(content="\n".join(lines), details=details)
 
 
-__all__ = ["DelegateHost", "DelegateInput", "delegate_research_tool"]
+__all__ = [
+    "ChildOutcome",
+    "ChildStatus",
+    "DelegateHost",
+    "DelegateInput",
+    "delegate_research_tool",
+]
