@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from dlightrag_agent.loop import AgentLoop, LoopCancelled
 from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
 from dlightrag_agent.tools import (
     AgentTool,
@@ -34,6 +35,7 @@ from dlightrag_ai.tokens import estimate_tokens
 from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.answer.agent.context import ContextAssembler
+from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.images import AnswerImageBudget
@@ -92,6 +94,7 @@ class PreparedRun:
     trace: dict[str, Any]
     agent_turn_count: int = 0
     stop_reason: str = "model_stop"
+    last_turn: ExecutedTurn | None = None
 
 
 class AnswerOrchestrator:
@@ -210,49 +213,41 @@ class AnswerOrchestrator:
         *,
         boundaries: RunBoundaries,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        if self._stream_model_func is None or self._model_func is None:
-            raise RuntimeError("Streaming research answer requires a final text stream")
+        if self._model_func is None:
+            raise RuntimeError("Research answer requires a tool-capable model")
         await self._research_until_stopped(run, boundaries=boundaries)
-
         await boundaries.enter_phase("generating")
-        final_messages, indexer = await run.context.answer_turn(
-            evidence=run.evidence, episode=run.episode
-        )
         run.trace["agent_stop_reason"] = run.stop_reason
-        return await self._synthesizer.synthesize_research_stream(
-            final_messages,
-            run.evidence.contexts,
-            stream=self._stream_model_func,
-            indexer=indexer,
-            trace=run.trace,
-        )
+        text = run.last_turn.assistant.text if run.last_turn is not None else ""
+        indexer = run.evidence.render_blocks()[1]
+        stream = AnswerStream(_single_chunk(text), indexer=indexer)
+        stream.trace = run.trace  # type: ignore[attr-defined]
+        return run.evidence.contexts, stream
 
     async def _research_until_stopped(self, run: PreparedRun, *, boundaries: RunBoundaries) -> None:
-        """Run evidence turns until the model stops, adds nothing, or hits the cap.
+        """Run evidence turns until AgentLoop reports a terminal stop."""
 
-        A tool error is not convergence: an invalid, unavailable, or failed result
-        is replayed so the model can correct it, and only ``max_agent_turns``
-        bounds that correction. The cap spans the whole run, not one process
-        lifetime, so a resumed run continues its recorded turn count.
-        """
-        while run.agent_turn_count < self._max_agent_turns:
-            await boundaries.check_cancelled()
-            await boundaries.enter_phase("researching")
-            executed, changed = await self._execute_control_turn(run)
-            run.agent_turn_count += 1
-            run.trace["agent_turns"] = run.agent_turn_count
-            await boundaries.commit_turn(executed, turn_number=run.agent_turn_count)
-            if not executed.assistant.tool_calls:
-                run.stop_reason = "model_stop"
-                return
-            if not changed and not any(result.is_error for result in executed.results):
-                run.stop_reason = "no_new_evidence"
-                return
-        run.stop_reason = "turn_limit"
-        logger.warning(
-            "Research stopped at the %d-turn cap; answering from the evidence gathered so far",
-            self._max_agent_turns,
-        )
+        class _Host:
+            async def check_cancelled(self) -> None:
+                try:
+                    await boundaries.check_cancelled()
+                except Exception as exc:
+                    if exc.__class__.__name__ in {"RunCancelledError", "AnswerRunCancelledError"}:
+                        raise LoopCancelled from exc
+                    raise
+
+            async def run_turn(self) -> ExecutedTurn:
+                await boundaries.enter_phase("researching")
+                executed, _changed = await self_outer._execute_control_turn(run)
+                run.agent_turn_count += 1
+                run.trace["agent_turns"] = run.agent_turn_count
+                await boundaries.commit_turn(executed, turn_number=run.agent_turn_count)
+                return executed
+
+        self_outer = self
+        outcome = await AgentLoop().run(_Host())
+        run.stop_reason = outcome.reason
+        run.last_turn = outcome.last_turn
 
     # ------------------------------------------------------------------
     # Research helpers
@@ -444,6 +439,11 @@ def research_history_input_measure(
         )
 
     return measure
+
+
+async def _single_chunk(text: str) -> AsyncIterator[str]:
+    if text:
+        yield text
 
 
 __all__ = [

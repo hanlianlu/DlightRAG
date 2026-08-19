@@ -579,6 +579,74 @@ async def cancel_answer_run_tool(
 
 
 @mcp_app.tool(
+    name="list_answer_runs",
+    description="List this caller's durable answer runs, oldest first.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def list_answer_runs_tool(
+    after: Annotated[str | None, Field(default=None, description="Cursor run id")] = None,
+    limit: Annotated[int, Field(default=50, description="Page size")] = 50,
+) -> dict[str, Any]:
+    application = await _ensure_application()
+    rows = await application.answers.list(owner_id=_owner_id(), after_run_id=after, limit=limit)
+    return {"runs": [_run_descriptor(record) for record in rows]}
+
+
+@mcp_app.tool(
+    name="list_answer_artifacts",
+    description="List artifact descriptors for one owned answer run.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def list_answer_artifacts_tool(
+    run_id: Annotated[str, Field(description="Run id")],
+) -> dict[str, Any]:
+    application = await _ensure_application()
+    items = await application.answers.list_artifacts(owner_id=_owner_id(), run_id=run_id)
+    return {
+        "artifacts": [
+            {
+                "resource_id": item.resource_id,
+                "kind": item.reference_kind,
+                "filename": item.filename,
+                "media_type": item.mime_type,
+            }
+            for item in items
+        ]
+    }
+
+
+@mcp_app.tool(
+    name="read_answer_artifact",
+    description="Read up to 1 MiB of one artifact as base64, returning the next offset.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def read_answer_artifact_tool(
+    run_id: Annotated[str, Field(description="Run id")],
+    resource_id: Annotated[str, Field(description="Artifact resource id")],
+    offset: Annotated[int, Field(default=0, description="Byte offset")] = 0,
+    length: Annotated[int, Field(default=1_048_576, description="Max bytes")] = 1_048_576,
+) -> dict[str, Any]:
+    import base64
+
+    application = await _ensure_application()
+    chunk = await application.answers.read_artifact(
+        owner_id=_owner_id(),
+        run_id=run_id,
+        resource_id=resource_id,
+        offset=max(0, offset),
+        length=min(max(0, length), 1_048_576),
+    )
+    if chunk is None:
+        raise ValueError("artifact not found")
+    return {
+        "data": base64.b64encode(chunk).decode("ascii"),
+        "offset": offset,
+        "next_offset": offset + len(chunk),
+        "bytes": len(chunk),
+    }
+
+
+@mcp_app.tool(
     name="list_workspaces",
     description=(
         "List workspaces visible to the current user. Returns workspace ids plus "

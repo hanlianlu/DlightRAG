@@ -7,6 +7,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from dlightrag_agent.session.effects import (
@@ -70,6 +71,7 @@ from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semant
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
 from dlightrag.answer.model_runtime import AnswerModelRuntime
+from dlightrag.answer.publication import is_empty_answer, scan_artifact_directory
 from dlightrag.answer.resources import ResourceInput, ResourceRegistry
 from dlightrag.answer.resources.models import (
     ResourceManifestEntry,
@@ -102,7 +104,7 @@ from dlightrag.runtime import (
 )
 from dlightrag.runtime.blob_chunks import blob_digest, plan_blob
 from dlightrag.runtime.progress import RunProgressStore, StageCommit
-from dlightrag.runtime.records import artifact_digest
+from dlightrag.runtime.records import PendingPublication, artifact_digest
 from dlightrag.runtime.settlements import (
     CompleteBlobDescriptor,
     EvidenceSettlementUpdate,
@@ -674,6 +676,15 @@ class AnswerExecutor:
                         capture_sensitive_data=self._telemetry.capture_sensitive_data,
                     )
                 )
+                publications, primary_handle, artifact_descriptors, report_sources = (
+                    _stage_publications(
+                        orchestrator=run.orchestrator,
+                        answer=finalized.answer,
+                        contexts=contexts,
+                        require_answer=getattr(prepared_early, "stop_reason", None) == "model_stop",
+                    )
+                )
+                session.pending_publications = publications
                 stored = store_answer_result(
                     answer=finalized.answer,
                     contexts=project_contexts_for_client(contexts),
@@ -681,6 +692,9 @@ class AnswerExecutor:
                     answer_images=images,
                     trace=trace,
                     image_descriptions=run.image_descriptions,
+                    primary_report=primary_handle,
+                    artifacts=artifact_descriptors,
+                    report_sources=report_sources,
                 )
                 if fast_boundaries is not None:
                     await fast_boundaries.settle_retrieval(contexts)
@@ -1396,6 +1410,58 @@ def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[s
 def _context_count(contexts: RetrievalContexts, key: str) -> int:
     items = contexts.get(key, [])
     return len(items) if isinstance(items, list) else 0
+
+
+def _stage_publications(
+    *,
+    orchestrator: Any,
+    answer: str,
+    contexts: RetrievalContexts,
+    require_answer: bool = False,
+) -> tuple[list[PendingPublication], str | None, list[dict[str, Any]], list[Any]]:
+    workspace = getattr(orchestrator, "_workspace", None)
+    root = getattr(workspace, "workspace", None)
+    if workspace is None or not isinstance(root, Path):
+        if require_answer and is_empty_answer(answer=answer, has_primary_report=False):
+            raise RunExecutionError("empty_answer", "The run produced no answer.")
+        return [], None, [], []
+    staged = scan_artifact_directory(root / "artifacts")
+    has_report = any(item.kind == "primary_report" for item in staged)
+    if require_answer and is_empty_answer(answer=answer, has_primary_report=has_report):
+        raise RunExecutionError("empty_answer", "The run produced no answer.")
+    publications: list[PendingPublication] = []
+    descriptors: list[dict[str, Any]] = []
+    primary_handle: str | None = None
+    report_sources: list[Any] = []
+    for item in staged:
+        payload = item.path.read_bytes()
+        if item.kind == "primary_report":
+            cleaned = finalize_answer(payload.decode("utf-8"), contexts)
+            payload = cleaned.answer.encode("utf-8")
+            report_sources = list(cleaned.sources)
+            primary_handle = "primary_report"
+            resource_id = "primary_report"
+        else:
+            resource_id = f"artifact-{item.relative_path.replace('/', '-')}"
+        publications.append(
+            PendingPublication(
+                resource_id=resource_id,
+                reference_kind=item.kind,
+                filename=item.relative_path,
+                mime_type=item.media_type,
+                content=payload,
+            )
+        )
+        descriptors.append(
+            {
+                "resource_id": resource_id,
+                "kind": item.kind,
+                "filename": item.relative_path,
+                "media_type": item.media_type,
+                "size_bytes": len(payload),
+            }
+        )
+    return publications, primary_handle, descriptors, report_sources
 
 
 def answer_trace_output(

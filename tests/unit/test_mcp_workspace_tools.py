@@ -234,8 +234,11 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "get_capabilities",
         "get_ingest_job",
         "ingest",
+        "list_answer_artifacts",
+        "list_answer_runs",
         "list_files",
         "list_workspaces",
+        "read_answer_artifact",
         "retrieve",
     }
     answer_tool = next(tool for tool in tools if tool.name == "answer")

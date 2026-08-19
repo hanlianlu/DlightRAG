@@ -139,6 +139,13 @@ class _Store:
             return None
         return self._run
 
+    async def list_runs(
+        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+    ) -> tuple[AnswerRunRecord, ...]:
+        if owner_id != _OWNER:
+            return ()
+        return (self._run,)
+
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> CancellationOutcome:
         self.cancellations.append((owner_id, run_id))
         return CancellationOutcome(outcome="cancelled", run=self._run)

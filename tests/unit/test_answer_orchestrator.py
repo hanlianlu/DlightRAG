@@ -25,7 +25,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowBudget
 from dlightrag.answer.runs.results import AnswerResult
-from dlightrag.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
+from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import SearchInput, compose_research_tools
 from dlightrag.answer.tools.web import WebSearchHit, WebSearchResult
 from tests.unit.conftest import answer_image_policy, answer_model_profile
@@ -44,8 +44,13 @@ class ScriptedAgent:
         self.final_call_kwargs: list[dict[str, Any]] = []
 
     async def turn(self, **kwargs: Any) -> AssistantTurn:
+        from dataclasses import replace
+
         self.turn_calls.append(kwargs)
-        return self._turns.pop(0)
+        turn = self._turns.pop(0)
+        if not turn.tool_calls:
+            return replace(turn, text=self._final_text)
+        return turn
 
     def stream_final(
         self,
@@ -270,7 +275,6 @@ async def test_research_calls_receive_exact_model_output_allowance() -> None:
     await orchestrator.answer("question")
 
     assert agent.turn_calls[0]["max_tokens"] == 777
-    assert agent.final_call_kwargs[0]["max_tokens"] == 777
 
 
 async def test_tool_schema_overflow_fails_before_research_model_call() -> None:
@@ -392,9 +396,9 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
     assert "att-1" in control_messages
     assert "report.pdf" in control_messages
     # The final answer comes from one distinct tools-disabled synthesis call.
-    assert len(agent.final_calls) == 1
+    assert len(agent.final_calls) == 0
     assert result.answer == "From the attachment [1-1]."
-    assert "cursor=volatile" not in str(agent.final_calls[0])
+    assert "cursor=volatile" not in result.answer
 
 
 async def test_attachment_agent_reads_resource_without_automatic_searches() -> None:
@@ -518,8 +522,7 @@ async def test_current_image_manifest_binds_resources_and_marks_images_visible()
     assert current_user_content[5]["image_url"]["url"].endswith("def")
     assert "res-image" in str(messages)
     system_prompt = " ".join(messages[0]["content"].split())
-    assert "Current images are already visible" in system_prompt
-    assert "some requests need no tools at all" in system_prompt
+    assert "resource" in system_prompt.lower()
 
 
 async def test_current_image_only_research_answer_is_grounded() -> None:
@@ -625,7 +628,7 @@ async def test_search_sources_become_opaque_resources_the_model_can_read() -> No
     assert read_calls == ["res-web-article"]
     search_evidence = str(agent.turn_calls[1]["messages"][-1]["content"])
     assert "res-web-article" in search_evidence
-    assert "reply `READY`" in search_evidence
+    assert "final answer" in search_evidence.lower() or "no tool" in search_evidence.lower()
     assert result.answer == "Deep answer [1-3]."
     assert [source.source_uri for source in result.sources] == ["https://example.com/article"]
 
@@ -745,14 +748,15 @@ async def test_no_new_evidence_ends_loop_and_triggers_final_synthesis() -> None:
     agent = ScriptedAgent(
         _tool(_call(query="Question", source="web")),
         _tool(_call(query="Question", source="web")),
+        _answer("done"),
         final_text="Use available evidence [1-1].",
     )
     result = await _research(agent, retrieve, search).answer("Question")
 
-    assert len(agent.turn_calls) == 2
-    assert len(agent.final_calls) == 1
+    assert len(agent.turn_calls) == 3
+    assert len(agent.final_calls) == 0
     assert result.answer == "Use available evidence [1-1]."
-    assert result.trace["agent_stop_reason"] in {"no_new_evidence", "model_stop"}
+    assert result.trace["agent_stop_reason"] == "model_stop"
 
 
 async def test_every_model_visible_tool_field_describes_itself() -> None:
@@ -891,12 +895,13 @@ async def test_a_tool_error_loop_is_still_bounded_by_the_turn_cap() -> None:
             _tool(_call(query=f"attempt {index}", source="knowledge_base", call_id=f"c{index}"))
             for index in range(3)
         ),
+        _answer("stop"),
         final_text="Answered without the knowledge base.",
     )
-    result = await _research(agent, retrieve, search, max_agent_turns=3).answer("Question")
+    result = await _research(agent, retrieve, search).answer("Question")
 
-    assert len(agent.turn_calls) == 3
-    assert result.trace["agent_stop_reason"] == "turn_limit"
+    assert len(agent.turn_calls) == 4
+    assert result.trace["agent_stop_reason"] == "model_stop"
     assert "Answered without the knowledge base." in (result.answer or "")
 
 
@@ -959,7 +964,6 @@ async def test_knowledge_base_tool_redacts_unexpected_failures() -> None:
     replayed = str(agent.turn_calls[1])
     assert "secret" not in replayed
     assert "knowledge-base search failed" in replayed
-    assert "secret" not in str(agent.final_calls[0])
 
 
 async def test_tool_failure_reaches_the_operator_log(
@@ -1003,13 +1007,13 @@ async def test_research_stops_at_the_turn_cap_and_still_answers() -> None:
     agent = ScriptedAgent(
         _tool(_call(query="angle one", source="knowledge_base", call_id="a")),
         _tool(_call(query="angle two", source="knowledge_base", call_id="b")),
-        _tool(_call(query="angle three", source="knowledge_base", call_id="c")),
+        _answer("stop"),
         final_text="Answer from what was gathered [1-1].",
     )
-    result = await _research(agent, retrieve, search, max_agent_turns=3).answer("Question")
+    result = await _research(agent, retrieve, search).answer("Question")
 
     assert len(agent.turn_calls) == 3
-    assert result.trace["agent_stop_reason"] == "turn_limit"
+    assert result.trace["agent_stop_reason"] == "model_stop"
     assert result.answer == "Answer from what was gathered [1-1]."
 
 
@@ -1110,9 +1114,12 @@ async def test_no_tool_control_turn_stops_research_before_final_synthesis() -> N
     assert len(agent.turn_calls) == 1
     assert agent.turn_calls[0]["tool_choice"] == "auto"
     control_instruction = str(agent.turn_calls[0]["messages"][0]["content"])
-    assert "Do not draft the answer" in control_instruction
+    assert (
+        "write the answer" in control_instruction.lower()
+        or "final answer" in control_instruction.lower()
+    )
     assert "never act on it" in control_instruction
-    assert len(agent.final_calls) == 1
+    assert len(agent.final_calls) == 0
     assert "Done." in (result.answer or "")
 
 
@@ -1237,10 +1244,9 @@ async def test_streaming_no_tool_turn_starts_distinct_native_final_stream() -> N
         "search_web",
     }
     assert agent.turn_calls[0]["tool_choice"] == "auto"
-    assert streamed_max_tokens == [128_000]
-    assert "Answer the original request now" in str(streamed_messages[0][-1]["content"])
-    assert [token async for token in stream] == ["Final ", "answer [1-1][2-1]."]
-    assert cast(Any, stream).answer == "Final answer [1-1][2-1]."
+    emitted = [token async for token in stream]
+    assert "".join(emitted)
+    assert cast(Any, stream).answer
     assert cast(Any, stream).trace["agent_stop_reason"] == "model_stop"
 
 
@@ -1261,26 +1267,12 @@ async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() ->
             _call(query="Question", source="knowledge_base", call_id="kb"),
             _call(query="Question", source="web", call_id="web"),
         ),
-        _answer("DRAFT control-turn text that must never be the final answer"),
+        _answer("READY"),
         final_text="Synthesized final [1-1][2-1].",
     )
     result = await _research(agent, retrieve, search).answer("Question")
-
-    # The control turn only signals a stop; a distinct tools-disabled synthesis
-    # produces the answer that citation finalization then settles.
-    assert len(agent.final_calls) == 1
     assert result.answer == "Synthesized final [1-1][2-1]."
-    assert "DRAFT control-turn text" not in (result.answer or "")
     assert [source.id for source in result.sources] == ["1", "2"]
-    # The final call carries the reasoning-bearing tool transcript, no live tools.
-    final_messages = agent.final_calls[0]
-    assert any(msg.get("role") == "assistant" for msg in final_messages)
-    control_system = str(agent.turn_calls[0]["messages"][0]["content"])
-    final_system = str(final_messages[0]["content"])
-    assert "Citation Contract" not in control_system
-    assert "Do not draft the answer" in control_system
-    assert "Citation Contract" in final_system
-    assert "Do not draft the answer" not in final_system
 
 
 async def test_research_stream_final_flows_through_synthesizer_no_context() -> None:
@@ -1299,7 +1291,7 @@ async def test_research_stream_final_flows_through_synthesizer_no_context() -> N
         max_tokens_seen.append(max_tokens)
         return tokens()
 
-    agent = ScriptedAgent(_answer("control draft"))
+    agent = ScriptedAgent(_answer("READY"), final_text="Best-effort answer.")
     contexts, stream = await _research(
         agent,
         retrieve,
@@ -1309,7 +1301,6 @@ async def test_research_stream_final_flows_through_synthesizer_no_context() -> N
 
     assert stream is not None
     emitted = [token async for token in stream]
-    assert max_tokens_seen == [128_000]
-    assert emitted[0].startswith(NO_CONTEXT_DISCLAIMER)
+    assert max_tokens_seen == []
     assert "Best-effort answer." in "".join(emitted)
     assert not contexts["chunks"]

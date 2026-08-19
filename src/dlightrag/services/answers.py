@@ -144,6 +144,10 @@ class _AnswerRunRepository(AnswerRunAcceptor[RunCreation], Protocol):
 
     async def get_run(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None: ...
 
+    async def list_runs(
+        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+    ) -> tuple[AnswerRunRecord, ...]: ...
+
     async def request_cancellation(self, *, owner_id: str, run_id: str) -> CancellationOutcome: ...
 
     async def list_run_artifacts(
@@ -518,6 +522,39 @@ class AnswerService:
             declared_mime=resource.mime_type,
             loader=load,
         )
+
+    async def list(
+        self, *, owner_id: str, after_run_id: str | None = None, limit: int = 50
+    ) -> tuple[AnswerRunRecord, ...]:
+        """List this owner's runs oldest-first after an optional cursor."""
+        return await self._store.list_runs(
+            owner_id=owner_id, after_run_id=after_run_id, limit=limit
+        )
+
+    async def list_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]:
+        """List artifact descriptors for one owned run."""
+        return await self._store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
+
+    async def read_artifact(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        resource_id: str,
+        offset: int = 0,
+        length: int = 1_048_576,
+    ) -> bytes | None:
+        """Read a bounded slice of one published or input artifact."""
+        refs = await self._store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
+        match = next((item for item in refs if item.resource_id == resource_id), None)
+        if match is None:
+            return None
+        blob = await self._store.load_artifact(owner_id=owner_id, digest=match.digest)
+        if blob is None:
+            return None
+        start = max(0, offset)
+        end = start + max(0, length)
+        return blob[start:end]
 
     async def get(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Read one owned run; unknown and foreign identifiers both return ``None``."""

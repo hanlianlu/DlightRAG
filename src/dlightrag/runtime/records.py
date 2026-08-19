@@ -246,6 +246,17 @@ class RunDeletion:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingPublication:
+    """Staged workspace bytes to attach at successful terminal commit."""
+
+    resource_id: str
+    reference_kind: ArtifactReferenceKind
+    filename: str
+    mime_type: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class PendingArtifact:
     """Immutable bytes in one owner's content-addressed namespace."""
 
@@ -293,6 +304,7 @@ __all__ = [
     "IdempotencyKeyConflict",
     "LeaseRenewal",
     "PendingArtifact",
+    "PendingPublication",
     "PendingArtifactReference",
     "ReclaimDecision",
     "ReclaimState",

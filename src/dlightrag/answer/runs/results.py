@@ -57,6 +57,9 @@ def store_answer_result(
     answer_images: Sequence[Mapping[str, Any]],
     trace: Mapping[str, Any],
     image_descriptions: Sequence[str],
+    primary_report: str | None = None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+    report_sources: Sequence[SourceReference] = (),
 ) -> dict[str, Any]:
     """Project one finished run into its durable, transport-neutral result.
 
@@ -74,6 +77,11 @@ def store_answer_result(
         ],
         "trace": dict(trace),
         "image_descriptions": list(image_descriptions),
+        "primary_report": primary_report,
+        "artifacts": [dict(item) for item in artifacts],
+        "report_sources": dump_answer_snapshot(list(report_sources))["sources"]
+        if report_sources
+        else [],
     }
 
 

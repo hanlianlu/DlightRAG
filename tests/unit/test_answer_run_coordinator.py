@@ -9,7 +9,7 @@ event. Subscribers replay durable events and detach without touching the run.
 
 import asyncio
 import datetime
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import pytest
@@ -229,7 +229,9 @@ class _MemoryStore:
         fencing_epoch: int,
         result: Mapping[str, Any],
         stop_reason: str | None = None,
+        publications: Sequence[Any] = (),
     ) -> TerminalOutcome:
+        del publications
         row = self.runs[run_id]
         if row["cancel_requested"]:
             return await self.finish_cancelled(

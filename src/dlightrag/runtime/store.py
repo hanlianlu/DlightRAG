@@ -12,6 +12,7 @@ from dlightrag.runtime.records import (
     LeaseRenewal,
     PendingArtifact,
     PendingArtifactReference,
+    PendingPublication,
     RunArtifactReference,
     RunCreation,
     RunDeletion,
@@ -63,6 +64,7 @@ class AnswerRunStore(Protocol):
         fencing_epoch: int,
         result: Mapping[str, object],
         stop_reason: str | None = None,
+        publications: Sequence[PendingPublication] = (),
     ) -> TerminalOutcome: ...
 
     async def finish_failure(
@@ -99,6 +101,8 @@ class AnswerRunStore(Protocol):
     async def list_run_artifacts(
         self, *, owner_id: str, run_id: str
     ) -> tuple[RunArtifactReference, ...]: ...
+
+    async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None: ...
 
     async def read_event_page(
         self, *, owner_id: str, run_id: str, after_sequence: int = 0

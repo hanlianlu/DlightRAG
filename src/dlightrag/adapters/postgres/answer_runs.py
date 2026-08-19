@@ -1511,6 +1511,25 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         return await self._run_write(_operation)
 
+    async def _write_publications(
+        self, conn: Any, owner: str, run_uuid: uuid.UUID, publications: Sequence[Any]
+    ) -> None:
+        for index, item in enumerate(publications):
+            blob = PendingArtifact(content=item.content)
+            await self._write_blob(conn, owner, blob)
+            await conn.execute(
+                _INSERT_RUN_ARTIFACT,
+                owner,
+                run_uuid,
+                item.resource_id,
+                item.reference_kind,
+                index,
+                blob.digest,
+                item.filename,
+                item.mime_type,
+                "{}",
+            )
+
     async def _write_blob(self, conn: Any, owner: str, blob: PendingArtifact) -> None:
         plan = _plan_blob(blob.content)
         await conn.execute(_INSERT_BLOB_METADATA, owner, blob.digest, plan.total_bytes)
@@ -2015,6 +2034,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         fencing_epoch: int,
         result: Mapping[str, object],
         stop_reason: str | None = None,
+        publications: Sequence[Any] = (),
     ) -> TerminalOutcome:
         return await self._finish_run(
             owner_id=owner_id,
@@ -2029,6 +2049,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
             event_type="done",
             payload={"status": "succeeded", "result": result},
             withhold_on_cancel=True,
+            publications=publications,
         )
 
     async def finish_failure(
@@ -2089,6 +2110,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         event_type: str,
         payload: Mapping[str, Any],
         withhold_on_cancel: bool,
+        publications: Sequence[Any] = (),
     ) -> TerminalOutcome:
         owner = _require_owner(owner_id)
         run_uuid = parse_run_id(run_id)
@@ -2113,6 +2135,8 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     withhold_on_cancel,
                 )
                 if sequence is not None:
+                    if status == "succeeded" and publications:
+                        await self._write_publications(conn, owner, run_uuid, publications)
                     await conn.execute(
                         "DELETE FROM dlightrag_answer_committed_spills"
                         " WHERE owner_id = $1 AND run_id = $2",

@@ -269,6 +269,81 @@ async def _status_payload(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/answer")
+async def list_answer_runs(
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+    after: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """List this owner's durable runs, oldest first."""
+    application = get_application(request)
+    rows = await application.answers.list(
+        owner_id=owner_id_from_user(user), after_run_id=after, limit=limit
+    )
+    return {"runs": [_descriptor(record) for record in rows]}
+
+
+@router.get("/answer/{run_id}/artifacts")
+async def list_answer_artifacts(
+    run_id: str, request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
+    application = get_application(request)
+    items = await application.answers.list_artifacts(
+        owner_id=owner_id_from_user(user), run_id=run_id
+    )
+    return {
+        "artifacts": [
+            {
+                "resource_id": item.resource_id,
+                "kind": item.reference_kind,
+                "filename": item.filename,
+                "media_type": item.mime_type,
+                "digest": item.digest,
+            }
+            for item in items
+        ]
+    }
+
+
+@router.get("/answer/{run_id}/artifacts/{resource_id}")
+async def read_answer_artifact(
+    run_id: str,
+    resource_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> Response:
+    application = get_application(request)
+    header = request.headers.get("range", "")
+    offset = 0
+    length = 1_048_576
+    if header.lower().startswith("bytes="):
+        spec = header.split("=", 1)[1]
+        start_s, _, end_s = spec.partition("-")
+        if start_s.isdigit():
+            offset = int(start_s)
+        if end_s.isdigit():
+            length = max(0, int(end_s) - offset + 1)
+    payload = await application.answers.read_artifact(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        resource_id=resource_id,
+        offset=offset,
+        length=length,
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="download"',
+        },
+        status_code=206 if header else 200,
+    )
+
+
 @router.post("/answer", response_model=AnswerRunDescriptor, status_code=202)
 async def create_answer_run(
     request: Request, user: UserContext = Depends(get_current_user)

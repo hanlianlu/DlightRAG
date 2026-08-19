@@ -248,6 +248,45 @@ class AnswerRunClient:
                 )
             await asyncio.sleep(STATUS_POLL_SECONDS)
 
+    async def list_runs(self, *, after: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        response = await self._client.get(
+            self._url("/answer"),
+            params={"after": after, "limit": limit} if after else {"limit": limit},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return list(payload.get("runs") or [])
+
+    async def list_artifacts(self, run_id: str) -> list[dict[str, Any]]:
+        response = await self._client.get(
+            self._url(f"/answer/{run_id}/artifacts"), headers=self._headers
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return list(payload.get("artifacts") or [])
+
+    async def iter_artifact(
+        self, run_id: str, resource_id: str, *, chunk_size: int = 1_048_576
+    ) -> AsyncGenerator[bytes]:
+        offset = 0
+        while True:
+            end = offset + max(1, chunk_size) - 1
+            response = await self._client.get(
+                self._url(f"/answer/{run_id}/artifacts/{resource_id}"),
+                headers={**self._headers, "Range": f"bytes={offset}-{end}"},
+            )
+            if response.status_code == 404:
+                return
+            response.raise_for_status()
+            chunk = response.content
+            if not chunk:
+                return
+            yield chunk
+            if len(chunk) < chunk_size:
+                return
+            offset += len(chunk)
+
     @staticmethod
     def _terminal_result(
         run_id: str,

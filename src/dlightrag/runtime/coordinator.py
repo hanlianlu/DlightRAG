@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.errors import RunExecutionError
-from dlightrag.runtime.records import AnswerRunEvent, ClaimedRun
+from dlightrag.runtime.records import AnswerRunEvent, ClaimedRun, PendingPublication
 from dlightrag.runtime.store import AnswerRunStore
 from dlightrag.runtime.subscription import RunEventBroker, follow_run_events
 
@@ -143,6 +143,7 @@ class RunSession:
         # A run that already committed an event has a partial draft somewhere;
         # regenerated output must clear it before the first new token.
         self._reset_pending = run.next_event_sequence > 1
+        self.pending_publications: list[PendingPublication] = []
 
     # -- state ---------------------------------------------------------
     @property
@@ -522,6 +523,7 @@ class RunCoordinator:
                 worker_id=session.worker_id,
                 fencing_epoch=session.fencing_epoch,
                 result=result,
+                publications=tuple(session.pending_publications),
             )
         )
         self._broker.notify(session.owner_id, session.run_id)
