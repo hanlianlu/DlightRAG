@@ -12,6 +12,7 @@ from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
+from dlightrag.answer.memory import apply_standing_memory
 from dlightrag.answer.prompts import (
     CONTROL_TURN_INSTRUCTION,
     FINAL_TURN_INSTRUCTION,
@@ -278,9 +279,7 @@ def _empty_tool_message(call: dict[str, Any]) -> dict[str, Any]:
 
 
 def _with_memory(prompt: str, memory_text: str) -> str:
-    if not memory_text:
-        return prompt
-    return f"{prompt}\n\n{memory_text}"
+    return apply_standing_memory(prompt, memory_text)
 
 
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:

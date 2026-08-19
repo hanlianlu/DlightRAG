@@ -9,8 +9,10 @@ from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
 from dlightrag_ai.tokens import estimate_messages_tokens
 
 from dlightrag.answer.agent.context import ContextAssembler
+from dlightrag.answer.agent.orchestrator import research_history_input_measure
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
+from dlightrag.answer.memory import reserved_auto_recall_text
 from dlightrag.answer.prompts import CONTROL_TURN_INSTRUCTION
 
 _WINDOW = 80_000
@@ -227,6 +229,22 @@ async def test_research_turn_packing_runs_off_the_event_loop(
     )
 
     assert estimator_threads and loop_thread not in estimator_threads
+
+
+def test_research_seed_measure_grows_when_memory_is_reserved() -> None:
+    kwargs = {
+        "model_profile": ModelProfile(context_window_tokens=_WINDOW),
+        "context_policy": CONTEXT_POLICY,
+        "query": "What changed?",
+        "query_images": None,
+        "resource_manifest": (),
+        "image_budget": None,
+        "tools": [],
+        "retained_tail_tokens": _RETAINED_TAIL,
+    }
+    empty = research_history_input_measure(**kwargs)
+    reserved = research_history_input_measure(**kwargs, memory_text=reserved_auto_recall_text())
+    assert reserved([]) > empty([])
 
 
 async def test_control_turn_carries_non_citable_memory() -> None:

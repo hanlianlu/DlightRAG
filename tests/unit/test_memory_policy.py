@@ -14,7 +14,9 @@ from dlightrag.answer.memory import (
     MemoryWrite,
     evaluate_memory_write,
     render_auto_recall,
+    reserved_auto_recall_text,
     select_auto_recall,
+    standing_memory_for_acceptance,
 )
 
 
@@ -106,3 +108,12 @@ def test_auto_recall_keeps_newest_active_within_caps() -> None:
     assert "not evidence" in text
     assert "[1]" not in text
     assert render_auto_recall(()) == ""
+
+
+def test_acceptance_reserves_full_recall_only_for_jwt() -> None:
+    reserved = reserved_auto_recall_text()
+    assert reserved.count("- (") == MEMORY_RECALL_LIMIT
+    assert MEMORY_BODY_LIMIT * MEMORY_RECALL_LIMIT <= len(reserved)
+    assert standing_memory_for_acceptance("jwt") == reserved
+    assert standing_memory_for_acceptance("none") == ""
+    assert standing_memory_for_acceptance("simple") == ""

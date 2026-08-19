@@ -537,6 +537,7 @@ def research_history_input_measure(
     image_budget: AnswerImageBudget | None,
     tools: list[AgentTool],
     retained_tail_tokens: int,
+    memory_text: str = "",
 ) -> Callable[[list[dict[str, Any]]], int]:
     """Return the exact zero-evidence Research seed serializer used at acceptance."""
     tool_schema_tokens = _tool_schema_tokens(tools)
@@ -549,6 +550,7 @@ def research_history_input_measure(
             history=PriorTurns(history),
             query_images=query_images,
             resource_manifest=resource_manifest,
+            memory_text=memory_text,
         )
         return (
             context.measure_control_input(

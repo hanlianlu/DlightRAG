@@ -31,6 +31,7 @@ from dlightrag.answer.history import (
     project_history,
 )
 from dlightrag.answer.images import AnswerImagePolicy
+from dlightrag.answer.memory import standing_memory_for_acceptance
 from dlightrag.answer.mode import (
     ModeCapability,
     ModeResource,
@@ -506,6 +507,7 @@ class AnswerService:
             idempotency_fingerprint=fingerprint,
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
+            auth_mode=auth_mode,
         )
         prepared_input = _prepared_input_payload(
             run_input, requested_mode=requested_mode, auth_mode=auth_mode
@@ -752,6 +754,7 @@ class AnswerService:
         idempotency_fingerprint: str,
         requested_mode: str,
         allowed_modes: frozenset[str],
+        auth_mode: str = "none",
     ) -> AnswerRunInput:
         """Resolve one normalized request into immutable durable run input."""
         projection = await self._project_acceptance(
@@ -759,6 +762,7 @@ class AnswerService:
             resources=resources,
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
+            auth_mode=auth_mode,
         )
         return AnswerRunInput(
             query=request.query,
@@ -785,6 +789,7 @@ class AnswerService:
         resources: list[ResourceInput] | None,
         requested_mode: str,
         allowed_modes: frozenset[str],
+        auth_mode: str = "none",
     ) -> _AcceptanceProjection:
         """Resolve the exact shared-history envelopes without building the run rig."""
         if resources:
@@ -816,6 +821,7 @@ class AnswerService:
                 else ()
             )
             schema = await self._retrieval.schema_for(workspaces)
+            memory_text = standing_memory_for_acceptance(auth_mode)
             targets = [
                 HistoryProjectionTarget(
                     "planner",
@@ -857,6 +863,7 @@ class AnswerService:
                     image_budget=resolved.image_budget,
                     tools=tools,
                     retained_tail_tokens=CONTEXT_POLICY.retained_tail_target(models.query),
+                    memory_text=memory_text,
                 )
                 targets.append(
                     HistoryProjectionTarget(
@@ -877,7 +884,7 @@ class AnswerService:
                     HistoryProjectionTarget(
                         "fast_generation",
                         models.query,
-                        synthesizer.history_input_measure(request.query),
+                        synthesizer.history_input_measure(request.query, memory_text=memory_text),
                     )
                 )
             if requested_mode == "auto" and allowed_modes >= {"fast", "research"}:

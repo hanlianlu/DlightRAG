@@ -138,6 +138,37 @@ def render_auto_recall(records: tuple[MemoryRecord, ...]) -> str:
     return "\n".join(lines)
 
 
+def apply_standing_memory(prompt: str, memory_text: str) -> str:
+    """Append the non-citable recall block, or return the prompt unchanged."""
+    if not memory_text:
+        return prompt
+    return f"{prompt}\n\n{memory_text}"
+
+
+def reserved_auto_recall_text() -> str:
+    """Worst-case standing block one JWT accept must leave room for."""
+    body = "x" * MEMORY_BODY_LIMIT
+    records = tuple(
+        MemoryRecord(
+            owner_id="reserve",
+            memory_id=f"{index:02d}",
+            kind="preference" if index < MEMORY_RECALL_KIND_LIMIT else "fact",
+            body=body,
+            confidence=1.0,
+            provenance=MemoryProvenance(run_id="reserve", session_id="reserve"),
+        )
+        for index in range(MEMORY_RECALL_LIMIT)
+    )
+    return render_auto_recall(records)
+
+
+def standing_memory_for_acceptance(auth_mode: str) -> str:
+    """Reserve full auto-recall at accept so execute cannot overflow after 202."""
+    if not memory_owner_allowed(auth_mode):
+        return ""
+    return reserved_auto_recall_text()
+
+
 __all__ = [
     "MEMORY_ACTIVE_LIMIT",
     "MEMORY_BODY_LIMIT",
@@ -150,8 +181,11 @@ __all__ = [
     "MemoryRecord",
     "MemoryStatus",
     "MemoryWrite",
+    "apply_standing_memory",
     "evaluate_memory_write",
     "memory_owner_allowed",
     "render_auto_recall",
+    "reserved_auto_recall_text",
     "select_auto_recall",
+    "standing_memory_for_acceptance",
 ]

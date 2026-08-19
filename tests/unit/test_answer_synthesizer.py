@@ -15,6 +15,7 @@ from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.errors import AnswerInputOverflowError
+from dlightrag.answer.memory import reserved_auto_recall_text
 from dlightrag.answer.synthesizer import NO_CONTEXT_DISCLAIMER, AnswerSynthesizer
 from tests.unit.conftest import answer_image_policy, answer_model_profile
 
@@ -407,6 +408,15 @@ class TestAnswerSynthesizerStream:
 
 
 class TestAnswerSynthesizerCapacity:
+    def test_history_measure_grows_when_memory_is_reserved(self) -> None:
+        synth = AnswerSynthesizer(
+            image_policy=answer_image_policy(),
+            model_profile=answer_model_profile(),
+        )
+        empty = synth.history_input_measure("query")
+        reserved = synth.history_input_measure("query", memory_text=reserved_auto_recall_text())
+        assert reserved([]) > empty([])
+
     def test_evidence_capacity_uses_the_full_residual_model_input(self) -> None:
         synth = AnswerSynthesizer(
             image_policy=answer_image_policy(),

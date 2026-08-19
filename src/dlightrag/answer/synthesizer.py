@@ -34,6 +34,7 @@ from dlightrag.answer.context import AnswerContextPacker
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
+from dlightrag.answer.memory import apply_standing_memory
 from dlightrag.answer.prompts import answer_core
 
 logger = logging.getLogger(__name__)
@@ -91,11 +92,12 @@ class AnswerSynthesizer:
     def history_input_measure(
         self,
         query: str,
+        memory_text: str = "",
     ) -> Callable[[list[dict[str, Any]]], int]:
         """Return the exact zero-evidence final-call serializer for history fitting."""
 
         def measure(history: list[dict[str, Any]]) -> int:
-            system_prompt = answer_core()
+            system_prompt = apply_standing_memory(answer_core(), memory_text)
             budget = self._image_policy.new_budget()
             empty_contexts: RetrievalContexts = {
                 "chunks": [],
@@ -192,9 +194,7 @@ class AnswerSynthesizer:
         original_history = list((conversation_history or PriorTurns()).messages)
 
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
-            system_prompt = answer_core()
-            if memory_text:
-                system_prompt = f"{system_prompt}\n\n{memory_text}"
+            system_prompt = apply_standing_memory(answer_core(), memory_text)
             budget = self._image_policy.new_budget()
             prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
             no_context = not any(
