@@ -11,6 +11,7 @@ export interface AnswerEnvelope {
     workspaces: string[];
     conversationId: string;
     submissionId: string;
+    mode?: 'auto' | 'fast' | 'research';
 }
 
 export interface AnswerRequestInit {
@@ -30,6 +31,7 @@ export function buildAnswerRequest(
                 workspaces: envelope.workspaces,
                 conversation_id: envelope.conversationId,
                 submission_id: envelope.submissionId,
+                ...(envelope.mode ? {mode: envelope.mode} : {}),
             }),
         };
     }
@@ -38,6 +40,7 @@ export function buildAnswerRequest(
     form.append('workspaces', JSON.stringify(envelope.workspaces));
     form.append('conversation_id', envelope.conversationId);
     form.append('submission_id', envelope.submissionId);
+    if (envelope.mode) form.append('mode', envelope.mode);
     for (const file of attachments) form.append('attachments', file, file.name);
     return {body: form};
 }

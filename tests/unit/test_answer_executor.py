@@ -288,7 +288,6 @@ async def test_research_run_seeds_the_pinned_session_journal() -> None:
         model_catalog_revision="test",
         idempotency_fingerprint="request-hash",
         session_id=str(uuid.uuid7()),
-        research=True,
     )
     prepared = MagicMock(tools=[], evidence=MagicMock(ledger_state_json=lambda: "{}"))
     orchestrator = MagicMock(uses_research_path=True)
@@ -353,7 +352,6 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
         model_catalog_revision="test",
         idempotency_fingerprint="request-hash",
         session_id=str(uuid.uuid7()),
-        research=True,
     )
     from datetime import UTC, datetime
 

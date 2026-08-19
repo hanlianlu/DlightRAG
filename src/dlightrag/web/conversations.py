@@ -418,6 +418,7 @@ class WebConversationService:
         query: str,
         workspaces: Sequence[str],
         attachments: Sequence[ValidatedWebAttachment] = (),
+        mode: str | None = None,
     ) -> WebAnswerSubmission | None:
         """Create or replay one submission's run and its conversation entry.
 
@@ -434,6 +435,7 @@ class WebConversationService:
             query=query,
             workspaces=workspaces,
             attachments=attachments,
+            mode=mode,
         )
         prepared = _prepare_submission(
             query=query,
@@ -441,6 +443,7 @@ class WebConversationService:
             snapshot=snapshot,
             attachments=attachments,
             max_attachments=self._max_attachments,
+            mode=mode,
         )
         return await self._answers.accept(
             request=prepared.request,
@@ -500,6 +503,7 @@ def _prepare_submission(
     snapshot: ConversationSnapshot,
     attachments: Sequence[ValidatedWebAttachment],
     max_attachments: int,
+    mode: str | None = None,
 ) -> _PreparedSubmission:
     """Normalize one browser submission into the run's immutable input.
 
@@ -527,6 +531,7 @@ def _prepare_submission(
         workspaces=tuple(workspaces),
         history=tuple(history),
         semantic_highlights=True,
+        mode=mode,
         resources=tuple(
             ResourceInput(
                 filename=attachment.filename,
@@ -556,12 +561,14 @@ def _web_answer_request_fingerprint(
     query: str,
     workspaces: Sequence[str],
     attachments: Sequence[ValidatedWebAttachment],
+    mode: str | None = None,
 ) -> str:
     """Hash only the stable browser submission, before conversation enrichment."""
     return answer_run_request_fingerprint(
         {
             "conversation_id": conversation_id,
             "query": query,
+            "mode": mode or "auto",
             "workspaces": list(workspaces),
             "attachments": [
                 {

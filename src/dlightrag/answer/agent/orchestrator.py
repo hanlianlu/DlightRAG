@@ -1,12 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Capability-driven answer orchestrator.
 
-One owner routes every answer. A request with no registered resources and no
-open-web capability takes the standard-RAG fast path: fixed knowledge-base
-retrieval and one final answer generation, with no control turn. A request with
-attachments/resources or a web-search capability enters the research loop:
-the model selects from the available peer tools and writes the answer when it
-stops calling tools.
+One owner routes every answer. Resolved Fast mode takes the standard-RAG path: fixed knowledge-base
+retrieval and one final answer generation, with no control turn. Resolved
+Research mode enters the agent loop: the model selects from the available peer
+tools and writes the answer when it stops calling tools.
 """
 
 import json
@@ -120,6 +118,7 @@ class AnswerOrchestrator:
         telemetry: Telemetry,
         environment: object | None = None,
         resource_reader: object | None = None,
+        research_path: bool | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -137,6 +136,7 @@ class AnswerOrchestrator:
         self._environment = environment
         self._resource_reader = resource_reader
         self._workspace: RunWorkspace | None = None
+        self._research_path = research_path
 
     def bind_workspace(self, workspace: RunWorkspace) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
@@ -151,7 +151,9 @@ class AnswerOrchestrator:
 
     @property
     def uses_research_path(self) -> bool:
-        """A request researches when it has resources or a web-search capability."""
+        """Whether this orchestrator runs AgentLoop instead of Fast."""
+        if self._research_path is not None:
+            return self._research_path
         return bool(self._resource_manifest) or self._search_web is not None
 
     # ------------------------------------------------------------------

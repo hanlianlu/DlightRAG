@@ -7,6 +7,7 @@ import '../styles/files.css';
 import '../styles/sources.css';
 
 import {setupAttachmentInputs} from './attachments.ts';
+import {setupAnswerModeMenu} from './answer_mode.ts';
 import {setupQueryForm} from './chat.ts';
 import {setupConversations} from './conversations.ts';
 import {setupFilesPanel} from './files-panel.ts';
@@ -30,6 +31,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setupPanelResize();
     setupImageLightbox();
     setupAttachmentInputs();
+    setupAnswerModeMenu();
     setupQueryForm();
     setupMathRendering();
     setupConversations();

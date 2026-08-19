@@ -245,10 +245,8 @@ class AnswerRunInput:
     #: current-turn image; they point at artifacts an earlier run already stored.
     history_attachments: tuple[AttachmentReference, ...] = ()
     image_descriptions: tuple[str, ...] = ()
-    #: The UUIDv7 Research session id pinned at acceptance (M3-D10).
+    #: The UUIDv7 Research session id pinned at acceptance for explicit research.
     session_id: str = ""
-    #: Whether the accepted run takes the durable research path.
-    research: bool = False
     #: The accepted resource manifest, present for research runs.
     resource_manifest: tuple[Mapping[str, Any], ...] = ()
 
@@ -270,7 +268,6 @@ class AnswerRunInput:
             "idempotency_fingerprint": self.idempotency_fingerprint,
             "image_descriptions": list(self.image_descriptions),
             "session_id": self.session_id,
-            "research": self.research,
             "resource_manifest": [dict(item) for item in self.resource_manifest],
         }
 
@@ -310,7 +307,6 @@ class AnswerRunInput:
             history_attachments=history_attachments,
             image_descriptions=tuple(str(item) for item in request.get("image_descriptions") or ()),
             session_id=str(request.get("session_id") or ""),
-            research=bool(request.get("research")),
             resource_manifest=tuple(dict(item) for item in request.get("resource_manifest") or ()),
         )
 

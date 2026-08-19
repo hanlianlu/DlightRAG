@@ -5,6 +5,7 @@ import {conversationStore} from '../stores/conversationStore.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';
 import {createSSEParser} from '../lib/sse.ts';
 import {buildAnswerRequest} from '../lib/answer_request.ts';
+import {readStoredAnswerMode} from './answer_mode.ts';
 import {cancelAnswerRun, getAnswerRun} from '../api/conversations.ts';
 import type {
     AnswerRunDescriptor,
@@ -327,6 +328,7 @@ export async function submitQuery(query: string): Promise<void> {
                 workspaces: activeWorkspaces,
                 conversationId: conversationStore.activeConversationId,
                 submissionId,
+                ...(readStoredAnswerMode() ? {mode: readStoredAnswerMode()!} : {}),
             },
             attachmentFiles,
         );

@@ -286,6 +286,7 @@ class AnswerResourceResolver:
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
         ],
         fetched_bytes_sink: FetchedBytesSink | None = None,
+        research: bool | None = None,
     ) -> ResolvedAnswerResources:
         """Resolve resource capabilities, manifests, tools, and image transport."""
         if resources and not models.query.supports_tools:
@@ -330,7 +331,8 @@ class AnswerResourceResolver:
                 else ()
             )
             resource_manifest = registry.manifest() if registry is not None else ()
-            research = web_search is not None or bool(resource_manifest)
+            inferred = web_search is not None or bool(resource_manifest)
+            research = inferred if research is None else research
             image_budget: AnswerImageBudget | None = None
             query_images: list[dict[str, Any]] | None = current_images or None
             if research:
@@ -542,16 +544,16 @@ class AnswerExecutor:
 
     async def _ensure_resolved_mode(
         self, session: RunSession, request: AnswerRunInput
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         load = getattr(self._store, "load_routing", None)
         resolve = getattr(self._store, "resolve", None)
         if not inspect.iscoroutinefunction(load) or not inspect.iscoroutinefunction(resolve):
-            return None
+            return None, None
         record = await load(owner_id=session.owner_id, run_id=session.run_id)  # type: ignore[misc]
         if record is None:
             raise RunExecutionError("routing_failed", "Routing record is missing.")
         if record.resolved_mode:
-            return str(record.resolved_mode)
+            return str(record.resolved_mode), record.research_session_id
         try:
             decided = decide_resolved_mode(
                 requested_mode=record.requested_mode,
@@ -572,7 +574,7 @@ class AnswerExecutor:
             resolved_mode=decided,
             research_session_id=research_session_id,
         )
-        return written or decided
+        return written or decided, research_session_id or record.research_session_id
 
     async def _route_with_model(
         self, request: AnswerRunInput, *, valid_modes: tuple[str, ...]
@@ -602,7 +604,7 @@ class AnswerExecutor:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
         await session.enter_phase("routing")
-        await self._ensure_resolved_mode(session, request)
+        resolved_mode, research_session_id = await self._ensure_resolved_mode(session, request)
         await session.enter_phase("planning")
         projected_history = PriorTurns([dict(message) for message in request.history])
 
@@ -618,6 +620,7 @@ class AnswerExecutor:
             filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
             resources=await self._answer_run_resources(request, owner_id=session.owner_id),
             fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
+            research=None if resolved_mode is None else resolved_mode == "research",
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
@@ -626,7 +629,11 @@ class AnswerExecutor:
         try:
             journal = session.execution.session_store
             prepared_early: Any = None
-            research = run.orchestrator.uses_research_path
+            research = (
+                run.orchestrator.uses_research_path
+                if resolved_mode is None
+                else resolved_mode == "research"
+            )
             if research:
                 from dlightrag.answer.execution_settings import validate_agent_execution
 
@@ -651,7 +658,9 @@ class AnswerExecutor:
                         raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
                     run.orchestrator.bind_workspace(bound)
             if research:
-                session_id = SessionId(request.session_id)
+                session_id = SessionId(
+                    request.session_id or research_session_id or SessionId.new().value
+                )
                 prepared_early = run.orchestrator.prepare_run(
                     request.query,
                     conversation_history=run.history,
@@ -837,6 +846,7 @@ class AnswerExecutor:
         projected_history: PriorTurns,
         model_profiles: Mapping[ModelRole, ModelProfile],
         environment: object | None = None,
+        research: bool | None = None,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -852,6 +862,7 @@ class AnswerExecutor:
             text_window_budget=text_window_budget,
             confirm_image_context=self._capabilities.pinned_answer_context,
             fetched_bytes_sink=fetched_bytes_sink,
+            research=research,
         )
         try:
             models = resolved.models
@@ -900,6 +911,7 @@ class AnswerExecutor:
                 context_policy=CONTEXT_POLICY,
                 telemetry=self._telemetry,
                 environment=environment,
+                research_path=research,
                 resource_reader=(
                     make_resource_reader(resolved.registry, text_window_budget)
                     if resolved.registry is not None

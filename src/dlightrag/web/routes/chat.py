@@ -146,6 +146,7 @@ async def start_answer_run(
             query=query,
             workspaces=target_workspaces,
             attachments=body.attachments,
+            mode=body.mode,
         )
     except ConversationSubmissionConflict, IdempotencyKeyConflict:
         raise HTTPException(

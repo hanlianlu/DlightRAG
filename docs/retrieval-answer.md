@@ -14,9 +14,9 @@ fusion, reranking, citations, and answer generation.
 `/retrieve` is a knowledge-base-only path: it accepts `query_images` for visual
 search and every `top_k`/`chunk_top_k`/`direct_visual`/KG/BM25/RRF/rerank control.
 `/answer` takes a query plus optional **attachments** and routes through one
-`AnswerOrchestrator`. The orchestrator takes a standard-RAG fast path when a
-request has no attachments and no web-search capability, and a research path when
-it has attachments (request-local resources) or an Exa web-search key.
+`AnswerOrchestrator`. The public Answer Mode is ``auto | fast | research`` (omitted means auto).
+Fast and Research are resolved from that selector and the Valid Mode Set;
+configuring Web Search does not by itself force Research.
 
 REST, MCP, and Python answer/retrieve calls remain stateless: each call owns
 only its current query, attachments (answers) or images (retrieve), search scope,

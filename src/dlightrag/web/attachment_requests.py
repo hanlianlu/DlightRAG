@@ -4,7 +4,7 @@
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import HTTPException, Request
@@ -40,6 +40,16 @@ class ParsedWebAnswerRequest:
     conversation_id: UUID
     submission_id: UUID
     attachments: tuple[ValidatedWebAttachment, ...]
+    mode: str | None = None
+
+
+def _optional_mode(value: Any) -> Literal["auto", "fast", "research"] | None:
+    if value in (None, ""):
+        return None
+    mode = str(value)
+    if mode in {"auto", "fast", "research"}:
+        return mode  # type: ignore[return-value]
+    raise HTTPException(status_code=422, detail="Invalid mode")
 
 
 def _json_list(value: Any, *, field: str) -> list[Any]:
@@ -75,6 +85,7 @@ async def parse_web_answer_request(
             conversation_id=body.conversation_id,
             submission_id=body.submission_id,
             attachments=(),
+            mode=body.mode,
         )
 
     try:
@@ -143,6 +154,7 @@ async def parse_web_answer_request(
                 workspaces=[str(item) for item in workspaces_raw] or None,
                 conversation_id=UUID(str(form.get("conversation_id"))),
                 submission_id=UUID(str(form.get("submission_id"))),
+                mode=_optional_mode(form.get("mode")),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -152,6 +164,7 @@ async def parse_web_answer_request(
             conversation_id=body.conversation_id,
             submission_id=body.submission_id,
             attachments=attachments,
+            mode=body.mode,
         )
     finally:
         await form.close()
