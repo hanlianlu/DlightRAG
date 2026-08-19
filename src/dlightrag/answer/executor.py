@@ -3,6 +3,7 @@
 
 import asyncio
 import base64
+import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -69,6 +70,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
+from dlightrag.answer.mode import ModeResource, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import is_empty_answer
 from dlightrag.answer.resources import ResourceInput, ResourceRegistry
@@ -79,6 +81,8 @@ from dlightrag.answer.resources.models import (
 )
 from dlightrag.answer.resources.registry import FetchedBytesSink, FetchedResourceBytes
 from dlightrag.answer.resources.visual import ResourceInspector
+from dlightrag.answer.router import AnswerModeRouter, RoutingFailedError
+from dlightrag.answer.routing import decide_resolved_mode
 from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
@@ -536,9 +540,69 @@ class AnswerExecutor:
                 )
                 raise RunExecutionError(classify_answer_error(exc), message) from exc
 
+    async def _ensure_resolved_mode(
+        self, session: RunSession, request: AnswerRunInput
+    ) -> str | None:
+        load = getattr(self._store, "load_routing", None)
+        resolve = getattr(self._store, "resolve", None)
+        if not inspect.iscoroutinefunction(load) or not inspect.iscoroutinefunction(resolve):
+            return None
+        record = await load(owner_id=session.owner_id, run_id=session.run_id)  # type: ignore[misc]
+        if record is None:
+            raise RunExecutionError("routing_failed", "Routing record is missing.")
+        if record.resolved_mode:
+            return str(record.resolved_mode)
+        try:
+            decided = decide_resolved_mode(
+                requested_mode=record.requested_mode,
+                valid_modes=frozenset(record.valid_modes),
+            )
+        except ValueError as exc:
+            raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
+        if decided is None:
+            decided = await self._route_with_model(request, valid_modes=record.valid_modes)
+        research_session_id = None
+        if decided == "research" and record.requested_mode == "auto":
+            research_session_id = SessionId.new().value
+        written = await resolve(  # type: ignore[misc]
+            owner_id=session.owner_id,
+            run_id=session.run_id,
+            worker_id=session.worker_id,
+            fencing_epoch=session.fencing_epoch,
+            resolved_mode=decided,
+            research_session_id=research_session_id,
+        )
+        return written or decided
+
+    async def _route_with_model(
+        self, request: AnswerRunInput, *, valid_modes: tuple[str, ...]
+    ) -> str:
+        model, _telemetry = self._models.new_highlight_model()
+        router = AnswerModeRouter(model)
+        resources = tuple(
+            ModeResource(role=resource_role(filename=item.filename, mime_type=item.mime_type))
+            for item in (*request.attachments, *request.history_attachments)
+        )
+        tools = ["search_knowledge_base"]
+        if self._models.web_search() is not None:
+            tools.append("search_web")
+        try:
+            return await router.choose(
+                query=request.query,
+                history=request.history,
+                resources=resources,
+                tool_categories=tools,
+                has_images=any(item.role == "image" for item in resources),
+                valid_modes=valid_modes,
+            )
+        except RoutingFailedError as exc:
+            raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
+
     async def _execute(self, session: RunSession) -> Mapping[str, Any]:
         request = AnswerRunInput.from_prepared_input(session.prepared_input)
         model_profiles = self.validate_pinned_model_profiles(request)
+        await session.enter_phase("routing")
+        await self._ensure_resolved_mode(session, request)
         await session.enter_phase("planning")
         projected_history = PriorTurns([dict(message) for message in request.history])
 

@@ -30,7 +30,7 @@ from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOper
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
-from dlightrag.answer.routing import RoutingAcceptance
+from dlightrag.answer.routing import RoutingAcceptance, RoutingRecord
 from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
 from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.errors import RunSchemaError
@@ -1015,6 +1015,26 @@ INSERT INTO dlightrag_answer_run_routing (
 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
 """
 
+_SELECT_ROUTING = """
+SELECT requested_mode, valid_modes, resolved_mode, research_session_id
+FROM dlightrag_answer_run_routing
+WHERE owner_id = $1 AND run_id = $2
+"""
+
+_RESOLVE_ROUTING = """
+UPDATE dlightrag_answer_run_routing AS rt
+SET resolved_mode = $5,
+    research_session_id = COALESCE($6, rt.research_session_id),
+    updated_at = NOW()
+FROM dlightrag_answer_runs AS r
+WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
+  AND rt.owner_id = $1 AND rt.run_id = $2
+  AND r.lease_owner = $3 AND r.fencing_epoch = $4
+  AND r.status = 'running' AND r.lease_expires_at > NOW()
+  AND (rt.resolved_mode IS NULL OR rt.resolved_mode = $5)
+RETURNING rt.resolved_mode
+"""
+
 _CLAIM_RUN = f"""
 UPDATE dlightrag_answer_runs
 SET status = 'running',
@@ -1709,6 +1729,55 @@ class PGAnswerRunStore(PostgresOperationRunner):
             record.context_policy_revision,
             record.research_session_id,
         )
+
+    async def load_routing(self, *, owner_id: str, run_id: str) -> RoutingRecord | None:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            return None
+
+        async def _operation(conn: Any) -> RoutingRecord | None:
+            row = await conn.fetchrow(_SELECT_ROUTING, owner, run_uuid)
+            if row is None:
+                return None
+            valid = tuple(str(item) for item in (row["valid_modes"] or ()))
+            return RoutingRecord(
+                requested_mode=str(row["requested_mode"]),
+                valid_modes=valid,
+                resolved_mode=row["resolved_mode"],
+                research_session_id=row["research_session_id"],
+            )
+
+        return await self._run_read(_operation)
+
+    async def resolve(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+        resolved_mode: str,
+        research_session_id: str | None = None,
+    ) -> str | None:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        if run_uuid is None:
+            raise ValueError("run_id must be a canonical UUID")
+
+        async def _operation(conn: Any) -> str | None:
+            value = await conn.fetchval(
+                _RESOLVE_ROUTING,
+                owner,
+                run_uuid,
+                worker_id,
+                fencing_epoch,
+                resolved_mode,
+                research_session_id,
+            )
+            return str(value) if value is not None else None
+
+        return await self._run_write(_operation)
 
     async def delete_runs_in(
         self, conn: Any, *, owner_id: str, run_ids: Sequence[str]

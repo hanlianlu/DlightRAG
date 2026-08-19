@@ -22,7 +22,7 @@ from dlightrag_rag.workspaces import require_canonical_workspace_id
 from dlightrag.answer.agent.orchestrator import research_history_input_measure
 from dlightrag.answer.capabilities import AnswerCapabilities, RequestModelContext
 from dlightrag.answer.capability import AnswerImageCapability
-from dlightrag.answer.errors import AnswerInputOverflowError
+from dlightrag.answer.errors import AnswerInputOverflowError, UnsupportedAnswerModeError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.executor import ResolvedAnswerResources
 from dlightrag.answer.history import (
@@ -257,14 +257,16 @@ def _attachment_bytes(resources: Sequence[ResourceInput]) -> list[bytes]:
     return [resource.content for resource in resources if resource.content is not None]
 
 
-def _prepared_input_payload(run_input: Any) -> dict[str, Any]:
-    """Encode the M3 prepared input: pinned session id plus the run input."""
+def _prepared_input_payload(run_input: Any, *, requested_mode: str) -> dict[str, Any]:
+    """Encode the M3 prepared input. Research session ids pin only for explicit research."""
     from dlightrag_agent.session.ids import SessionId
 
-    return {
-        "session_id": SessionId.new().value,
-        **run_input.as_request(),
-    }
+    payload = dict(run_input.as_request())
+    if requested_mode == "research":
+        payload["session_id"] = str(payload.get("session_id") or "") or SessionId.new().value
+    else:
+        payload["session_id"] = ""
+    return payload
 
 
 def _require_prepared_input_bounds(prepared_input: Mapping[str, Any]) -> None:
@@ -492,8 +494,10 @@ class AnswerService:
             run_request,
             resources=acceptance_resources or None,
             idempotency_fingerprint=fingerprint,
+            requested_mode=requested_mode,
+            allowed_modes=allowed_modes,
         )
-        prepared_input = _prepared_input_payload(run_input)
+        prepared_input = _prepared_input_payload(run_input, requested_mode=requested_mode)
         _require_prepared_input_bounds(prepared_input)
         resources_payload = _accepted_resource_payloads(
             run_input, attachment_bytes=attachment_bytes
@@ -734,9 +738,16 @@ class AnswerService:
         *,
         resources: list[ResourceInput] | None,
         idempotency_fingerprint: str,
+        requested_mode: str,
+        allowed_modes: frozenset[str],
     ) -> AnswerRunInput:
         """Resolve one normalized request into immutable durable run input."""
-        projection = await self._project_acceptance(request, resources=resources)
+        projection = await self._project_acceptance(
+            request,
+            resources=resources,
+            requested_mode=requested_mode,
+            allowed_modes=allowed_modes,
+        )
         return AnswerRunInput(
             query=request.query,
             workspaces=request.workspaces,
@@ -760,6 +771,8 @@ class AnswerService:
         request: AnswerRunRequest,
         *,
         resources: list[ResourceInput] | None,
+        requested_mode: str,
+        allowed_modes: frozenset[str],
     ) -> _AcceptanceProjection:
         """Resolve the exact shared-history envelopes without building the run rig."""
         if resources:
@@ -798,11 +811,11 @@ class AnswerService:
                         request.query,
                         schema=schema,
                         current_image_descriptions=list(image_descriptions) or None,
-                        preserve_query=True if resolved.research else None,
+                        preserve_query=True if "research" in allowed_modes else None,
                     ),
                 )
             ]
-            if resolved.research:
+            if "research" in allowed_modes:
                 evidence = EvidenceLedger(image_budget=resolved.image_budget)
 
                 async def unused_retrieve(_query: str) -> RetrievalResult:
@@ -840,7 +853,7 @@ class AnswerService:
                         proactive_compaction=True,
                     )
                 )
-            else:
+            if "fast" in allowed_modes:
                 synthesizer = AnswerSynthesizer(
                     image_policy=self._capabilities.answer_image_policy(models.query),
                     model_profile=models.query,
@@ -854,12 +867,38 @@ class AnswerService:
                         synthesizer.history_input_measure(request.query),
                     )
                 )
+            if requested_mode == "auto" and allowed_modes >= {"fast", "research"}:
+                from dlightrag.answer.router import AnswerModeRouter
+
+                async def _unused_router(**_kwargs: Any) -> str:
+                    raise RuntimeError("acceptance router measure never calls the model")
+
+                router = AnswerModeRouter(_unused_router)
+                mode_resources = tuple(
+                    ModeResource(
+                        role=resource_role(filename=item.filename, mime_type=item.mime_type)
+                    )
+                    for item in (*request.attachments, *request.history_attachments)
+                )
+                targets.append(
+                    HistoryProjectionTarget(
+                        "router",
+                        models.query,
+                        router.history_input_measure(
+                            request.query,
+                            resources=mode_resources,
+                            valid_modes=tuple(sorted(allowed_modes)),
+                        ),
+                    )
+                )
             try:
                 history = project_history(
                     [dict(message) for message in request.history],
                     targets=targets,
                 )
             except HistoryProjectionOverflowError as exc:
+                if exc.target == "router":
+                    raise UnsupportedAnswerModeError("auto") from exc
                 raise AnswerInputOverflowError(str(exc)) from exc
             return _AcceptanceProjection(
                 history=tuple(dict(message) for message in history.messages),
