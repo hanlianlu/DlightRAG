@@ -106,6 +106,18 @@ _Avoid_: Artifact, report, Journal Entry, Blob when referring to the handle
 An owner-visible output reference created by fenced publication of staged Agent Workspace bytes.
 _Avoid_: Spill, Blob when referring to the reference rather than the bytes
 
+**Primary Report**:
+The optional published Markdown document taken from `artifacts/report.md` after citation finalization; its bytes live in the Blob store and the result names it by Resource Handle.
+_Avoid_: answer body, Spill, Compaction Summary, required report
+
+**Publication**:
+The fenced terminal transaction that makes staged Agent Workspace files owner-visible as Published Artifacts.
+_Avoid_: Staging, Spill settlement, a second model call
+
+**AgentLoop**:
+The unlimited research turn loop that stops when the model emits no tool call, or when cancel, provider error, or an all-terminate batch ends the attempt.
+_Avoid_: max_agent_turns, READY protocol, Fast Answer
+
 ## Execution And Workspace
 
 **Execution Environment**:
