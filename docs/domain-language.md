@@ -75,7 +75,7 @@ The immutable, bounded execution description accepted for a new Answer Run after
 _Avoid_: Request payload, checkpoint
 
 **Public Request Fingerprint**:
-The digest of the normalized caller request used for owner-scoped idempotency before Prepared Input is built.
+The digest of the normalized caller request used for owner-scoped idempotency before Prepared Input is built. Canonical Answer Mode is part of that digest: omitted equals `auto`.
 _Avoid_: Prepared-input hash
 
 ## Journal And Effects
