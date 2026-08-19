@@ -741,7 +741,7 @@ durable sequence as the SSE `id` and the event type as `event:`.
 
 | Event | Payload | Description |
 |---|---|---|
-| `progress` | `{"phase": "planning" \| "searching" \| "researching" \| "generating"}` | Last-writer-wins phase notification, not a monotonic history |
+| `progress` | `{"phase": "routing" \| "planning" \| "searching" \| "researching" \| "generating"}` | Last-writer-wins phase notification, not a monotonic history |
 | `token` | `{"text": "..."}` | Coalesced answer text batch (repeats) |
 | `reset` | `{}` | Clear the partial draft; regenerated output follows |
 | `done` | `{"status": "succeeded", "result": {...}}` or `{"status": "cancelled"}` | Terminal; succeeded embeds the complete canonical result |

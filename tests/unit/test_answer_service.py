@@ -110,6 +110,7 @@ class _Store:
         resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
+        routing: object | None = None,
     ) -> RunCreation:
         self.created.append(
             {
@@ -120,6 +121,7 @@ class _Store:
                 "idempotency_key": idempotency_key,
                 "artifacts": [artifact.content for artifact in artifacts],
                 "references": list(references),
+                "routing": routing,
             }
         )
         return RunCreation(run=self._run, replayed=False)
@@ -419,6 +421,9 @@ async def test_accepted_run_stores_input_artifacts_and_wakes_the_coordinator() -
     assert accepted["owner_id"] == _OWNER
     assert accepted["idempotency_key"] == "key-1"
     assert accepted["artifacts"] == [b"hello"]
+    assert accepted["routing"] is not None
+    assert accepted["routing"].requested_mode == "auto"
+    assert "research" in accepted["routing"].valid_modes
     assert [
         (reference.reference_kind, reference.ordinal, reference.filename)
         for reference in accepted["references"]

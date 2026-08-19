@@ -35,9 +35,10 @@ interface ProgressPayload {
   phase: string;
 }
 
-type PhaseLabel = 'planning' | 'searching' | 'researching' | 'generating';
+type PhaseLabel = 'routing' | 'planning' | 'searching' | 'researching' | 'generating';
 
 const PHASE_LABELS: Record<PhaseLabel, string> = {
+  routing: 'Choosing answer mode...',
   planning: 'Analyzing query...',
   searching: 'Searching knowledge base...',
   researching: 'Researching sources...',

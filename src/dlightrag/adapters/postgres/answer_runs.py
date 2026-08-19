@@ -30,6 +30,7 @@ from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOper
 from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
+from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.runtime.cancellation import RunCancellationListener, cancellation_notify_key
 from dlightrag.runtime.contracts import AnswerRunPhase
 from dlightrag.runtime.errors import RunSchemaError
@@ -102,7 +103,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_runs (
     CONSTRAINT dlightrag_answer_runs_status_check
         CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
     CONSTRAINT dlightrag_answer_runs_phase_check
-        CHECK (phase IS NULL OR phase IN ('planning', 'searching', 'researching', 'generating')),
+        CHECK (phase IS NULL OR phase IN ('routing', 'planning', 'searching', 'researching', 'generating')),
     CONSTRAINT dlightrag_answer_runs_counter_check
         CHECK (fencing_epoch >= 0 AND next_event_sequence >= 1
                AND durable_progress_version >= 0
@@ -380,6 +381,33 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_artifacts (
 )
 """
 
+_CREATE_ROUTING = """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
+    owner_id                 TEXT        NOT NULL,
+    run_id                   UUID        NOT NULL,
+    requested_mode           TEXT        NOT NULL,
+    valid_modes              TEXT[]      NOT NULL,
+    resolved_mode            TEXT,
+    model_fingerprints       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    context_policy_revision  TEXT        NOT NULL,
+    research_session_id      TEXT,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, run_id),
+    FOREIGN KEY (owner_id, run_id)
+        REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_answer_run_routing_requested_check
+        CHECK (requested_mode IN ('auto', 'fast', 'research')),
+    CONSTRAINT dlightrag_answer_run_routing_valid_check
+        CHECK (array_length(valid_modes, 1) >= 1
+               AND valid_modes <@ ARRAY['fast', 'research']::text[]),
+    CONSTRAINT dlightrag_answer_run_routing_resolved_check
+        CHECK (resolved_mode IS NULL
+               OR (resolved_mode IN ('fast', 'research')
+                   AND resolved_mode = ANY (valid_modes)))
+)
+"""
+
 _CREATE_INDEXES = (
     # Claim and sweep scan nonterminal rows oldest-first across every owner.
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_runs_claim "
@@ -457,6 +485,15 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
     "OR (kind = 'committed_spill' AND blob_digest IS NULL AND locator_digest IS NULL))",
 )
 
+_M6_ROUTING_DDL = (
+    _CREATE_ROUTING,
+    "ALTER TABLE dlightrag_answer_runs DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_phase_check",
+    "ALTER TABLE dlightrag_answer_runs "
+    "ADD CONSTRAINT dlightrag_answer_runs_phase_check "
+    "CHECK (phase IS NULL OR phase IN ("
+    "'routing', 'planning', 'searching', 'researching', 'generating'))",
+)
+
 _M5_PUBLICATION_DDL = (
     "ALTER TABLE dlightrag_answer_run_artifacts "
     "DROP CONSTRAINT IF EXISTS dlightrag_answer_run_artifacts_kind_check",
@@ -484,6 +521,7 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_BLOBS,
             _CREATE_BLOB_CHUNKS,
             _CREATE_RUN_ARTIFACTS,
+            _CREATE_ROUTING,
             _ADD_SESSION_PROJECTION_FK,
             *_CREATE_INDEXES,
             _M4_WORKSPACE_DDL[3],
@@ -821,6 +859,32 @@ ANSWER_RUN_SCHEMA_TABLES = (
         ),
     ),
     TableRequirement(
+        name="dlightrag_answer_run_routing",
+        columns=(
+            "owner_id",
+            "run_id",
+            "requested_mode",
+            "valid_modes",
+            "resolved_mode",
+            "model_fingerprints",
+            "context_policy_revision",
+            "research_session_id",
+            "created_at",
+            "updated_at",
+        ),
+        primary_key=("owner_id", "run_id"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
+            ),
+        ),
+        checks=(
+            "dlightrag_answer_run_routing_requested_check",
+            "dlightrag_answer_run_routing_valid_check",
+            "dlightrag_answer_run_routing_resolved_check",
+        ),
+    ),
+    TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(
             "owner_id",
@@ -920,17 +984,29 @@ LIMIT $4
 """
 
 _SELECT_CLAIM_CANDIDATE = """
-SELECT owner_id, run_id
-FROM dlightrag_answer_runs
-WHERE cancel_requested_at IS NULL
+SELECT r.owner_id, r.run_id
+FROM dlightrag_answer_runs r
+WHERE EXISTS (
+    SELECT 1 FROM dlightrag_answer_run_routing rt
+    WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
+)
+  AND r.cancel_requested_at IS NULL
   AND (
-      status = 'queued'
-      OR (status = 'running' AND lease_expires_at < NOW()
-          AND reclaims_without_progress < $1)
+      r.status = 'queued'
+      OR (r.status = 'running' AND r.lease_expires_at < NOW()
+          AND r.reclaims_without_progress < $1)
   )
-ORDER BY created_at, run_id
+ORDER BY r.created_at, r.run_id
 LIMIT 1
-FOR UPDATE SKIP LOCKED
+FOR UPDATE OF r SKIP LOCKED
+"""
+
+_INSERT_ROUTING = """
+INSERT INTO dlightrag_answer_run_routing (
+    owner_id, run_id, requested_mode, valid_modes, resolved_mode,
+    model_fingerprints, context_policy_revision, research_session_id
+)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
 """
 
 _CLAIM_RUN = f"""
@@ -1380,6 +1456,8 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 await conn.execute(statement)
             for statement in _M5_PUBLICATION_DDL:
                 await conn.execute(statement)
+            for statement in _M6_ROUTING_DDL:
+                await conn.execute(statement)
 
         await self._run(_operation)
         self._initialized = True
@@ -1415,6 +1493,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         resources: Sequence[Mapping[str, object]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
+        routing: RoutingAcceptance | None = None,
     ) -> RunCreation:
         """Accept one M3 run with its bounded prepared input (3E)."""
         return await self.accept_run(
@@ -1426,6 +1505,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
             resources=resources,
             blobs=artifacts,
             references=references,
+            routing=routing,
         )
 
     async def accept_run(
@@ -1439,6 +1519,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         resources: Sequence[Mapping[str, object]] = (),
         blobs: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
+        routing: RoutingAcceptance | None = None,
     ) -> RunCreation:
         """Atomically accept one run: blobs, resources, references, run row.
 
@@ -1507,6 +1588,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
                         reference.mime_type,
                         json.dumps(dict(reference.transform_locator), ensure_ascii=False),
                     )
+                await self._insert_routing(
+                    conn, owner, run_uuid, routing, prepared_input=prepared_input
+                )
                 return RunCreation(run=answer_run_record(row), replayed=False)
 
         return await self._run_write(_operation)
@@ -1551,6 +1635,7 @@ class PGAnswerRunStore(PostgresOperationRunner):
         idempotency_key: str | None = None,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
+        routing: RoutingAcceptance | None = None,
     ) -> RunCreation:
         """Create or replay one run inside a transaction the caller already owns.
 
@@ -1594,7 +1679,30 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 reference.mime_type,
                 json.dumps(dict(reference.transform_locator), ensure_ascii=False),
             )
+        await self._insert_routing(conn, owner, run_uuid, routing, prepared_input=request)
         return RunCreation(run=answer_run_record(row), replayed=False)
+
+    async def _insert_routing(
+        self,
+        conn: Any,
+        owner: str,
+        run_uuid: uuid.UUID,
+        routing: RoutingAcceptance | None,
+        *,
+        prepared_input: Mapping[str, Any],
+    ) -> None:
+        record = routing or RoutingAcceptance.fallback(prepared_input)
+        await conn.execute(
+            _INSERT_ROUTING,
+            owner,
+            run_uuid,
+            record.requested_mode,
+            list(record.valid_modes),
+            record.resolved_mode,
+            json.dumps(dict(record.model_fingerprints), ensure_ascii=False),
+            record.context_policy_revision,
+            record.research_session_id,
+        )
 
     async def delete_runs_in(
         self, conn: Any, *, owner_id: str, run_ids: Sequence[str]

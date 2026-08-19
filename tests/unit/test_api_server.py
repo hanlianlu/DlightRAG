@@ -2074,7 +2074,7 @@ class TestAPIContracts:
         phase_schema = schemas["AnswerRunStatusResponse"]["properties"]["phase"]
         assert phase_schema["anyOf"][0] == {
             "type": "string",
-            "enum": ["planning", "searching", "researching", "generating"],
+            "enum": ["routing", "planning", "searching", "researching", "generating"],
         }
         ingest_properties = schemas["IngestRequest"]["properties"]
         assert "download_uri" in ingest_properties

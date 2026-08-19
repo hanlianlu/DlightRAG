@@ -49,6 +49,7 @@ class TestMigrationDeclaration:
             "dlightrag_answer_run_artifacts",
             "dlightrag_answer_workspace_inventory",
             "dlightrag_answer_committed_spills",
+            "dlightrag_answer_run_routing",
         }
 
     def test_no_checkpoint_or_single_row_artifact_columns_remain(self) -> None:

@@ -406,7 +406,7 @@ payload ordering. This projection does not append or modify an event.
 
 Web derives previews from token text and requests semantic highlights after
 `done`; neither preview nor highlight output is stored. `progress` uses the core
-phases `planning`, `searching`, `researching`, and `generating`; Web-local
+phases `routing`, `planning`, `searching`, `researching`, and `generating`; Web-local
 presentation phases are not durable.
 
 Every sub-turn phase transition uses one small transaction that, under the

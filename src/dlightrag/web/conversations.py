@@ -19,6 +19,7 @@ from dlightrag_ai.media import thumbnail_bytes
 
 from dlightrag.access import UserContext, owner_id_from_user
 from dlightrag.answer.resources.models import ResourceInput
+from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.answer.runs.execution import (
     AnswerRunRequest,
     AttachmentReference,
@@ -118,6 +119,7 @@ class WebConversationStore(Protocol):
         title_hint: str | None,
         max_turns: int,
         ttl_days: int,
+        routing: RoutingAcceptance | None = None,
     ) -> AnswerTurnCreation | None: ...
 
 
@@ -197,6 +199,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
         resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
+        routing: RoutingAcceptance | None = None,
     ) -> WebAnswerSubmission | None:
         if idempotency_key is None:
             raise ValueError("Web Answer acceptance requires a submission id")
@@ -211,6 +214,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
             title_hint=self.title_hint,
             max_turns=self.max_turns,
             ttl_days=self.ttl_days,
+            routing=routing,
         )
         return None if creation is None else _submission(creation)
 

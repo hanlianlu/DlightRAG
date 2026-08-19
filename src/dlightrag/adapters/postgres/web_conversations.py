@@ -34,6 +34,7 @@ from dlightrag.adapters.postgres.answer_runs import (
     answer_run_columns,
     answer_run_record,
 )
+from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.runtime import (
     PendingArtifact,
     PendingArtifactReference,
@@ -653,6 +654,7 @@ class PGWebConversationStore(PostgresOperationRunner):
         title_hint: str | None,
         max_turns: int,
         ttl_days: int,
+        routing: RoutingAcceptance | None = None,
     ) -> AnswerTurnCreation | None:
         """Accept one submission as a run plus its conversation entry, atomically.
 
@@ -697,6 +699,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                     idempotency_key=submission_id,
                     artifacts=artifacts,
                     references=references,
+                    routing=routing,
                 )
                 try:
                     turn_row = await conn.fetchrow(

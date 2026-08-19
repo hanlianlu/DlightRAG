@@ -3,13 +3,14 @@
 
 import ast
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _STATUS_VALUES = ("queued", "running", "succeeded", "failed", "cancelled")
-_PHASE_VALUES = ("planning", "searching", "researching", "generating")
+_PHASE_VALUES = ("routing", "planning", "searching", "researching", "generating")
 _RUNTIME_RECORD_NAMES = frozenset(
     {
         "AnswerRunEventType",
@@ -100,6 +101,14 @@ def test_run_status_and_phase_literals_have_one_runtime_owner() -> None:
     expected = [_ROOT / "src/dlightrag/runtime/contracts.py"]
     assert owners[_STATUS_VALUES] == expected
     assert owners[_PHASE_VALUES] == expected
+
+
+def test_frontend_phase_union_matches_runtime() -> None:
+    text = (_ROOT / "frontend/lib/chat_renderer.ts").read_text(encoding="utf-8")
+    match = re.search(r"type PhaseLabel = ([^;]+);", text)
+    assert match is not None
+    values = tuple(part.strip().strip("'\"") for part in match.group(1).split("|"))
+    assert values == _PHASE_VALUES
 
 
 def test_postgres_adapter_does_not_publish_or_supply_runtime_records() -> None:

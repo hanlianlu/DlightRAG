@@ -7,7 +7,7 @@ AnswerRunStatus: TypeAlias = Literal[  # noqa: UP040 - preserve the inline OpenA
     "queued", "running", "succeeded", "failed", "cancelled"
 ]
 AnswerRunPhase: TypeAlias = Literal[  # noqa: UP040 - preserve the inline OpenAPI enum
-    "planning", "searching", "researching", "generating"
+    "routing", "planning", "searching", "researching", "generating"
 ]
 
 __all__ = ["AnswerRunPhase", "AnswerRunStatus"]

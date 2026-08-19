@@ -11,6 +11,7 @@ import pytest
 from dlightrag.adapters.postgres.answer_runs import (
     PGAnswerRunStore,
 )
+from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.config import (
     DlightragConfig,
     EmbeddingConfig,
@@ -82,6 +83,7 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
         idempotency_key: str | None = None,
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
+        routing: RoutingAcceptance | None = None,
     ) -> RunCreation:
 
         from dlightrag_agent.session.ids import SessionId
@@ -100,6 +102,7 @@ class FingerprintingAnswerRunStore(PGAnswerRunStore):
             idempotency_key=idempotency_key,
             artifacts=artifacts,
             references=references,
+            routing=routing,
         )
 
 

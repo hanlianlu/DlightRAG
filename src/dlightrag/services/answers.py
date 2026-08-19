@@ -40,6 +40,7 @@ from dlightrag.answer.mode import (
 )
 from dlightrag.answer.resources.images import QueryImageDescriber, prepare_query_images
 from dlightrag.answer.resources.models import ResourceInput, TextWindowBudget
+from dlightrag.answer.routing import RoutingAcceptance
 from dlightrag.answer.runs.execution import (
     AnswerRunInput,
     AnswerRunRequest,
@@ -136,6 +137,7 @@ class AnswerRunAcceptor[T](Protocol):
         resources: Sequence[Mapping[str, Any]] = (),
         artifacts: Sequence[PendingArtifact] = (),
         references: Sequence[PendingArtifactReference] = (),
+        routing: RoutingAcceptance | None = None,
     ) -> T | None: ...
 
     async def replay_run(
@@ -460,7 +462,7 @@ class AnswerService:
         fingerprint = idempotency_fingerprint or answer_run_request_fingerprint(
             run_request.as_request()
         )
-        self._reject_unsupported_mode(run_request)
+        requested_mode, allowed_modes = self._reject_unsupported_mode(run_request)
         if idempotency_key is not None:
             replay = await acceptor.replay_run(
                 owner_id=owner_id,
@@ -507,12 +509,25 @@ class AnswerService:
                 resources=resources_payload,
                 artifacts=[PendingArtifact(content=content) for content in attachment_bytes],
                 references=_artifact_references(run_input),
+                routing=RoutingAcceptance(
+                    requested_mode=requested_mode,
+                    valid_modes=tuple(sorted(allowed_modes)),
+                    context_policy_revision=CONTEXT_POLICY_REVISION,
+                    model_fingerprints={
+                        item.role: {
+                            "provider": item.fingerprint.provider,
+                            "model": item.fingerprint.model,
+                            "endpoint_fingerprint": item.fingerprint.endpoint_fingerprint,
+                        }
+                        for item in run_input.pinned_models
+                    },
+                ),
             )
             if accepted is not None:
                 self._coordinator.wake()
         return accepted
 
-    def _reject_unsupported_mode(self, request: AnswerRunRequest) -> None:
+    def _reject_unsupported_mode(self, request: AnswerRunRequest) -> tuple[str, frozenset[str]]:
         """Fail closed before a run row exists when the requested mode cannot resolve."""
         profiles = self._capabilities.current_profiles()
         query = profiles["query"]
@@ -529,17 +544,16 @@ class AnswerService:
             if role == "other":
                 role = "document"
             resources.append(ModeResource(role=role))
-        require_supported_mode(
-            requested=request.mode,
-            valid=valid_modes(
-                resources=tuple(resources),
-                capability=ModeCapability(
-                    query_supports_tools=query.supports_tools,
-                    query_supports_images=query.supports_images,
-                    inspect_available=vlm.supports_images,
-                ),
+        allowed = valid_modes(
+            resources=tuple(resources),
+            capability=ModeCapability(
+                query_supports_tools=query.supports_tools,
+                query_supports_images=query.supports_images,
+                inspect_available=vlm.supports_images,
             ),
         )
+        requested = require_supported_mode(requested=request.mode, valid=allowed)
+        return requested, allowed
 
     def _history_resource_input(
         self,
