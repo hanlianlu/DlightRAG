@@ -24,6 +24,26 @@ _Avoid_: Fast Answer
 A durable Answer Run that plans, retrieves, and generates without creating an Agent Session or research workspace.
 _Avoid_: Retrieval, non-durable fast path
 
+**Web Conversation**:
+The browser conversation surface that creates Answer Runs; it is a transport, not a research capability.
+_Avoid_: Web Search, Web, Web Channel when meaning Exa or open-web retrieval
+
+**Web Search**:
+The optional open-web evidence capability used inside an Answer Run.
+_Avoid_: Web UI, Web Conversation, Web Channel
+
+**Answer Mode**:
+The caller-facing selector `auto | fast | research`. Omitted means `auto` on REST, MCP, Web Conversation, and Python.
+_Avoid_: research bool, inferred path, Web Search as a mode
+
+**Valid Mode Set**:
+The capability-derived subset of `{fast, research}` that one Prepared Input may legally resolve to.
+_Avoid_: requested mode, router guess, heuristic from Web Search being configured
+
+**Resolved Mode**:
+The durable `fast` or `research` value written once after routing; crash recovery does not recompute it.
+_Avoid_: Answer Mode when the request was `auto`
+
 **Corpus Administration**:
 The product capability for corpus workspace lifecycle, ingestion, files, metadata, visual assets, and reset.
 _Avoid_: Workspace manager
