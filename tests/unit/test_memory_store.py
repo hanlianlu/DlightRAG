@@ -6,7 +6,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
-from dlightrag.answer.memory import MemoryProvenance, MemoryRecord, MemoryWrite
+from dlightrag.answer.memory import (
+    MEMORY_SUPERSEDE_RETENTION_DAYS,
+    MemoryProvenance,
+    MemoryRecord,
+    MemoryWrite,
+)
 from dlightrag.answer.memory_store import InMemoryAnswerMemoryStore, commit_memory_write
 
 
@@ -106,7 +111,7 @@ async def test_service_purge_expired_uses_retention_cutoff() -> None:
         provenance=stale.provenance,
         status="superseded",
         created_at=stale.created_at,
-        updated_at=datetime.now(UTC) - timedelta(days=40),
+        updated_at=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS + 10),
     )
     store._writes = [
         ("alpha", datetime.now(UTC) - timedelta(hours=3)),
@@ -132,9 +137,12 @@ async def test_purge_only_old_superseded_rows() -> None:
         provenance=stale.provenance,
         status="superseded",
         created_at=stale.created_at,
-        updated_at=datetime.now(UTC) - timedelta(days=40),
+        updated_at=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS + 10),
     )
-    removed = await store.purge_superseded(older_than=datetime.now(UTC) - timedelta(days=30))
+    assert MEMORY_SUPERSEDE_RETENTION_DAYS == 30
+    removed = await store.purge_superseded(
+        older_than=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS)
+    )
     assert removed == 1
     assert await store.get(owner_id="alpha", memory_id="old") is None
     assert await store.get(owner_id="alpha", memory_id="new") is not None
