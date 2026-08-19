@@ -71,8 +71,12 @@ The Answer-owned foreground tool that creates or recovers one Child Session and 
 _Avoid_: background swarm, nested Answer Run, write/edit/bash
 
 **Prepared Input**:
-The immutable, bounded execution description accepted for a new Answer Run after authorization, capability resolution, and profile pinning.
+The immutable, bounded execution description accepted for a new Answer Run after authorization, capability resolution, and profile pinning. Resolve never rewrites it.
 _Avoid_: Request payload, checkpoint
+
+**Routing Record**:
+The Answer-owned one-to-one durable fact of requested mode, valid modes, and nullable resolved mode for one Answer Run. An `auto`→research Agent Session id is issued here, not by mutating Prepared Input.
+_Avoid_: Prepared Input, second policy source, inferred research bool
 
 **Public Request Fingerprint**:
 The digest of the normalized caller request used for owner-scoped idempotency before Prepared Input is built. Canonical Answer Mode is part of that digest: omitted equals `auto`.
