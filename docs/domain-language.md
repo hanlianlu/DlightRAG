@@ -82,6 +82,16 @@ _Avoid_: Prepared Input, second policy source, inferred research bool
 The digest of the normalized caller request used for owner-scoped idempotency before Prepared Input is built. Canonical Answer Mode is part of that digest: omitted equals `auto`.
 _Avoid_: Prepared-input hash
 
+## Long-Term Memory
+
+**Memory Record**:
+An owner-scoped, non-citable remembered preference or fact that may be recalled across separate conversations. It is never Evidence and never a citation source.
+_Avoid_: Compaction Summary, Journal Entry, PriorTurns, Evidence, Artifact, remembered citation
+
+**Memory Write**:
+The only durable create, supersede, or forget of a Memory Record: a named remember or forget channel that passed a closed policy check.
+_Avoid_: Silent promotion, transcript scan, model aside, journal side effect
+
 ## Journal And Effects
 
 **Journal Entry**:
@@ -94,7 +104,7 @@ _Avoid_: Checkpoint, transcript snapshot
 
 **Compaction Summary**:
 Typed continuation memory for one contiguous journal prefix, validated and rendered by the framework but never treated as citable Evidence.
-_Avoid_: Free-form checkpoint, evidence summary
+_Avoid_: Free-form checkpoint, evidence summary, Memory Record
 
 **Effect Intent**:
 A durable declaration of one validated tool operation and the replay contract under which it may execute.
