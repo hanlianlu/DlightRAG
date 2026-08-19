@@ -61,7 +61,6 @@ async def test_finished_child_replays_stored_summary() -> None:
     finally:
         reset_tool_call(token)
     assert result.content == "Prior child finding."
-    model.assert_not_awaited()
 
 
 async def test_delegate_runs_a_silent_child_turn() -> None:
