@@ -2,7 +2,12 @@
 """DlightRAG tool adapters and per-run composition."""
 
 from dlightrag.answer.tools.composition import compose_research_tools
-from dlightrag.answer.tools.delegate import ChildOutcome, DelegateHost, delegate_research_tool
+from dlightrag.answer.tools.delegate import (
+    ChildOutcome,
+    DelegateHost,
+    child_session_id,
+    delegate_research_tool,
+)
 from dlightrag.answer.tools.search import KnowledgeRetrieval, SearchInput, WebSearch
 
 __all__ = [
@@ -12,5 +17,6 @@ __all__ = [
     "ChildOutcome",
     "DelegateHost",
     "compose_research_tools",
+    "child_session_id",
     "delegate_research_tool",
 ]

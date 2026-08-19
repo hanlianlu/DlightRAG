@@ -67,13 +67,12 @@ def compose_research_tools(
         _ledger_backed(tool, evidence) for tool in resource_tools if tool.name == "inspect"
     )
     if environment is not None:
-        extras = [
-            tool
-            for tool in path_tools(environment, scheduler=access, ripgrep=ripgrep, spill=spill)
-            if tool.name != "read"
-        ]
+        path = path_tools(environment, scheduler=access, ripgrep=ripgrep, spill=spill)
         if child:
-            extras = [tool for tool in extras if tool.name == "grep"]
+            keep = {"read", "grep"} if resource_reader is None else {"grep"}
+            extras = [tool for tool in path if tool.name in keep]
+        else:
+            extras = [tool for tool in path if tool.name != "read"]
         tools.extend(extras)
     if delegate_host is not None and not child:
         tools.append(delegate_research_tool(host=delegate_host))

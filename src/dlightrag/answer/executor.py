@@ -697,6 +697,9 @@ class AnswerExecutor:
                     fetched_buffer=fetched_buffer,
                     run_id=session.run_id,
                     initial_version=snapshot.version,
+                    link_delegate_intent=_fenced_child_writer(
+                        store, "bind_child_parent_intent", session
+                    ),
                 )
                 if snapshot.version > 0:
                     await boundaries.recover_pending_intents(snapshot)
@@ -1050,6 +1053,7 @@ class JournalRunBoundaries:
         fetched_buffer: list[FetchedResourceBytes],
         run_id: str,
         initial_version: int = 0,
+        link_delegate_intent: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
         self._session = session
         self._journal = journal
@@ -1059,6 +1063,7 @@ class JournalRunBoundaries:
         self._fetched_buffer = fetched_buffer
         self._run_id = run_id
         self._version = initial_version
+        self._link_delegate_intent = link_delegate_intent
 
     async def recover_pending_intents(self, snapshot: Any) -> None:
         """Settle intents a crash left unsettled, per their pinned policy.
@@ -1164,6 +1169,26 @@ class JournalRunBoundaries:
         )
         await self._handle_settlement(committed, intent)
 
+    async def _bind_delegate_parent_intents(self, intents: Sequence[EffectIntent]) -> None:
+        if self._link_delegate_intent is None:
+            return
+        from dlightrag.answer.tools.delegate import child_session_id
+
+        for intent in intents:
+            if intent.tool_name != "delegate_research" or not intent.source_call_id:
+                continue
+            child_id = child_session_id(
+                run_id=self._run_id,
+                parent_session_id=self._session_id,
+                call_id=intent.source_call_id,
+            )
+            await self._link_delegate_intent(
+                owner_id=self._session.owner_id,
+                run_id=self._run_id,
+                child_session_id=child_id.value,
+                parent_intent_id=intent.intent_id.value,
+            )
+
     @property
     def version(self) -> int:
         return self._version
@@ -1202,6 +1227,7 @@ class JournalRunBoundaries:
         if isinstance(commit, (VersionConflict, LeaseLost)):
             raise LeaseLostError
         self._version = commit.version
+        await self._bind_delegate_parent_intents(executed.intents)
 
         intent_list = list(executed.intents)
         for position, intent in enumerate(intent_list):

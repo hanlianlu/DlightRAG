@@ -71,8 +71,10 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
     if host.run_child is None:
         raise RuntimeError("delegate_research has no child runner")
     call_id = call.call_id if call is not None else "anonymous"
-    child_id = SessionId.deterministic(
-        run_id=host.run_id, name=f"delegate:{host.parent_session_id.value}:{call_id}"
+    child_id = child_session_id(
+        run_id=host.run_id,
+        parent_session_id=host.parent_session_id,
+        call_id=call_id,
     )
     if host.persist is not None:
         await host.persist(
@@ -92,6 +94,18 @@ async def _run_delegate(host: DelegateHost, objective: str) -> ToolResult:
             summary=outcome.summary,
         )
     return _parent_result(outcome)
+
+
+def child_session_id(
+    *,
+    run_id: str,
+    parent_session_id: SessionId,
+    call_id: str,
+) -> SessionId:
+    """Deterministic child SessionId for one parent tool call."""
+    return SessionId.deterministic(
+        run_id=run_id, name=f"delegate:{parent_session_id.value}:{call_id}"
+    )
 
 
 def _parent_result(outcome: ChildOutcome) -> ToolResult:
@@ -130,5 +144,6 @@ __all__ = [
     "ChildStatus",
     "DelegateHost",
     "DelegateInput",
+    "child_session_id",
     "delegate_research_tool",
 ]

@@ -415,6 +415,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_child_sessions (
     child_session_id   UUID        NOT NULL,
     parent_session_id  UUID        NOT NULL,
     parent_call_id     TEXT        NOT NULL,
+    parent_intent_id   UUID,
     status             TEXT        NOT NULL,
     summary            TEXT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -519,6 +520,7 @@ _M6_ROUTING_DDL = (
     "CHECK (phase IS NULL OR phase IN ("
     "'routing', 'planning', 'searching', 'researching', 'generating'))",
     _CREATE_CHILD_SESSIONS,
+    "ALTER TABLE dlightrag_answer_child_sessions ADD COLUMN IF NOT EXISTS parent_intent_id UUID",
 )
 
 _M5_PUBLICATION_DDL = (
@@ -920,6 +922,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
             "child_session_id",
             "parent_session_id",
             "parent_call_id",
+            "parent_intent_id",
             "status",
             "summary",
             "created_at",
@@ -1097,9 +1100,16 @@ ON CONFLICT (owner_id, run_id, parent_session_id, parent_call_id) DO NOTHING
 """
 
 _SELECT_CHILD_SESSION = """
-SELECT child_session_id, status, summary
+SELECT child_session_id, status, summary, parent_intent_id
 FROM dlightrag_answer_child_sessions
 WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+"""
+
+_BIND_CHILD_PARENT_INTENT = """
+UPDATE dlightrag_answer_child_sessions
+SET parent_intent_id = $4, updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+  AND parent_intent_id IS NULL
 """
 
 _FINISH_CHILD_SESSION = """
@@ -1906,6 +1916,9 @@ class PGAnswerRunStore(PostgresOperationRunner):
                 "child_session_id": str(row["child_session_id"]),
                 "status": str(row["status"]),
                 "summary": row["summary"],
+                "parent_intent_id": (
+                    str(row["parent_intent_id"]) if row["parent_intent_id"] is not None else None
+                ),
             }
 
         return await self._run_read(_operation)
@@ -1936,6 +1949,37 @@ class PGAnswerRunStore(PostgresOperationRunner):
                     return False
                 tag = await conn.execute(
                     _FINISH_CHILD_SESSION, owner, run_uuid, child_uuid, status, summary
+                )
+                return not str(tag).endswith(" 0")
+
+        return await self._run_write(_operation)
+
+    async def bind_child_parent_intent(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        parent_intent_id: str,
+        worker_id: str,
+        fencing_epoch: int,
+    ) -> bool:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        intent_uuid = parse_run_id(parent_intent_id)
+        if run_uuid is None or child_uuid is None or intent_uuid is None:
+            raise ValueError("child session ids must be canonical UUIDs")
+
+        async def _operation(conn: Any) -> bool:
+            async with conn.transaction():
+                held = await conn.fetchval(
+                    _HOLD_RUN_LEASE, owner, run_uuid, worker_id, fencing_epoch
+                )
+                if held is None:
+                    return False
+                tag = await conn.execute(
+                    _BIND_CHILD_PARENT_INTENT, owner, run_uuid, child_uuid, intent_uuid
                 )
                 return not str(tag).endswith(" 0")
 
