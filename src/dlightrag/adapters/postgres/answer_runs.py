@@ -399,7 +399,7 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
     CONSTRAINT dlightrag_answer_run_routing_requested_check
         CHECK (requested_mode IN ('auto', 'fast', 'research')),
     CONSTRAINT dlightrag_answer_run_routing_valid_check
-        CHECK (array_length(valid_modes, 1) >= 1
+        CHECK (COALESCE(array_length(valid_modes, 1), 0) >= 1
                AND valid_modes <@ ARRAY['fast', 'research']::text[]),
     CONSTRAINT dlightrag_answer_run_routing_resolved_check
         CHECK (resolved_mode IS NULL
@@ -487,6 +487,12 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_committed_spills (
 
 _M6_ROUTING_DDL = (
     _CREATE_ROUTING,
+    "ALTER TABLE dlightrag_answer_run_routing "
+    "DROP CONSTRAINT IF EXISTS dlightrag_answer_run_routing_valid_check",
+    "ALTER TABLE dlightrag_answer_run_routing "
+    "ADD CONSTRAINT dlightrag_answer_run_routing_valid_check "
+    "CHECK (COALESCE(array_length(valid_modes, 1), 0) >= 1 "
+    "AND valid_modes <@ ARRAY['fast', 'research']::text[])",
     "ALTER TABLE dlightrag_answer_runs DROP CONSTRAINT IF EXISTS dlightrag_answer_runs_phase_check",
     "ALTER TABLE dlightrag_answer_runs "
     "ADD CONSTRAINT dlightrag_answer_runs_phase_check "
