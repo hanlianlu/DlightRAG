@@ -54,6 +54,7 @@ from dlightrag.runtime.settlements import (
     CompleteBlobDescriptor,
     EvidenceSettlementUpdate,
     FetchedResourceSettlementUpdate,
+    InventoryPathRecord,
     M3HostUpdate,
     OpaqueEvidenceResourceWrite,
     OpaqueEvidenceWrite,
@@ -450,6 +451,9 @@ class PGJournalStore:
         host_update_digest = await self._write_host_update(
             conn, session_id, intent_id, settlement.host_update
         )
+        await self._write_result_workspace_facts(
+            conn, session_id, intent_id, settlement.result.details
+        )
 
         last_sequence = await conn.fetchval(
             "SELECT last_sequence FROM dlightrag_agent_sessions"
@@ -649,6 +653,54 @@ class PGJournalStore:
                 )
             return _host_update_digest(update)
         raise ValueError(f"unknown host update variant: {type(update).__name__}")
+
+    async def _write_result_workspace_facts(
+        self,
+        conn: Any,
+        session_id: SessionId,
+        intent_id: IntentId,
+        details: Any,
+    ) -> None:
+        if not isinstance(details, Mapping):
+            return
+        spill = details.get("committed_spill")
+        if isinstance(spill, Mapping):
+            from dlightrag.adapters.postgres.workspace import _upsert_spill
+            from dlightrag.runtime.workspace import CommittedSpillRecord
+
+            await _upsert_spill(
+                conn,
+                self._owner_id,
+                self._run_id,
+                CommittedSpillRecord(
+                    resource_id=str(spill["resource_id"]),
+                    content_digest=str(spill["content_digest"]),
+                    size_bytes=int(spill["size_bytes"]),
+                    session_id=str(session_id),
+                    intent_id=str(intent_id),
+                ),
+            )
+        inventory = details.get("workspace_inventory")
+        if isinstance(inventory, Mapping):
+            update = WorkspaceInventoryUpdate(
+                upserts=tuple(
+                    InventoryPathRecord(
+                        relative_path=str(item["relative_path"]),
+                        entry_type=str(item["entry_type"]),
+                        size_bytes=int(item["size_bytes"]),
+                        mode=int(item["mode"]) if item.get("mode") is not None else None,
+                        content_digest=(
+                            str(item["content_digest"])
+                            if item.get("content_digest") is not None
+                            else None
+                        ),
+                    )
+                    for item in inventory.get("upserts") or ()
+                ),
+                deletes=tuple(str(path) for path in inventory.get("deletes") or ()),
+                replace_all=bool(inventory.get("replace_all")),
+            )
+            await self._write_host_update(conn, session_id, intent_id, update)
 
     async def _write_evidence(self, conn: Any, write: OpaqueEvidenceWrite) -> None:
         await conn.execute(

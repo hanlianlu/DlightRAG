@@ -4,13 +4,23 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from dlightrag_agent.environment import LocalExecutionEnvironment
 
 from dlightrag.runtime.workspace import HandoffCommit, WorkspaceStore
+
+
+class WorkspaceRecoveryFailed(RuntimeError):
+    """Source changed during copy or there is not enough headroom. Retryable."""
+
+
+class WorkspaceIntegrityError(RuntimeError):
+    """Unsupported entries or a stable source/destination digest mismatch."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,11 +60,7 @@ async def bind_run_workspace(
     source_epoch = recorded_epoch
     destination = fencing_epoch
     if source_epoch is None:
-        workspace, spill = epoch_paths(root, destination)
-        workspace.mkdir(parents=True, exist_ok=True)
-        (workspace / "artifacts").mkdir(exist_ok=True)
-        (workspace / "tmp").mkdir(exist_ok=True)
-        spill.mkdir(parents=True, exist_ok=True)
+        workspace, spill = _prepare_epoch_dirs(root, destination)
         if store is not None:
             await store.handoff_epoch(
                 expected_epoch=None, destination_epoch=destination, inventory=()
@@ -66,13 +72,13 @@ async def bind_run_workspace(
             environment=LocalExecutionEnvironment(workspace),
         )
     if source_epoch != destination:
-        await _copy_epoch(root, source_epoch, destination, store)
+        await copy_epoch_verified(root, source_epoch, destination, store)
         if store is not None:
             result = await store.handoff_epoch(
                 expected_epoch=source_epoch, destination_epoch=destination, inventory=()
             )
             if not isinstance(result, HandoffCommit):
-                raise RuntimeError("workspace epoch handoff failed")
+                raise WorkspaceRecoveryFailed("workspace epoch handoff failed")
         _retire_epoch(root, source_epoch)
     workspace, spill = epoch_paths(root, destination)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -85,30 +91,37 @@ async def bind_run_workspace(
     )
 
 
-async def _copy_epoch(
+async def copy_epoch_verified(
     root: Path, source_epoch: int, destination: int, store: WorkspaceStore | None
 ) -> None:
+    """Copy a stable observation of the source epoch; never execute in the old one."""
     source_ws, source_spill = epoch_paths(root, source_epoch)
-    dest_ws, dest_spill = epoch_paths(root, destination)
-    if dest_ws.parent.exists():
-        shutil.rmtree(dest_ws.parent)
-    dest_ws.parent.mkdir(parents=True)
-    if source_ws.exists():
-        shutil.copytree(source_ws, dest_ws, symlinks=False)
-    else:
-        dest_ws.mkdir(parents=True)
-    dest_spill.mkdir(parents=True, exist_ok=True)
-    if store is not None:
-        for spill in await store.load_spills():
-            src = source_spill / f"{spill.resource_id}.txt"
-            if src.is_file():
-                shutil.copy2(src, dest_spill / src.name)
-
-
-def _retire_epoch(root: Path, epoch: int) -> None:
-    stale = root / "epochs" / str(epoch)
-    if stale.exists():
-        shutil.rmtree(stale, ignore_errors=True)
+    dest_parent = root / "epochs" / str(destination)
+    temp_parent = root / "epochs" / f".tmp-{destination}-{uuid.uuid4().hex}"
+    try:
+        manifest_a = _workspace_manifest(source_ws) if source_ws.exists() else {}
+        temp_ws = temp_parent / "workspace"
+        temp_spill = temp_parent / "internal" / "tool-results"
+        temp_ws.mkdir(parents=True)
+        temp_spill.mkdir(parents=True)
+        if source_ws.exists():
+            _copy_tree_regular_files(source_ws, temp_ws)
+        manifest_b = _workspace_manifest(source_ws) if source_ws.exists() else {}
+        if manifest_a != manifest_b:
+            raise WorkspaceRecoveryFailed("workspace source changed during copy")
+        if _workspace_manifest(temp_ws) != manifest_a:
+            raise WorkspaceIntegrityError("copied workspace does not match the source manifest")
+        if store is not None:
+            _copy_committed_spills(source_spill, temp_spill, await store.load_spills())
+        if dest_parent.exists():
+            shutil.rmtree(dest_parent)
+        temp_parent.rename(dest_parent)
+    except WorkspaceRecoveryFailed, WorkspaceIntegrityError:
+        shutil.rmtree(temp_parent, ignore_errors=True)
+        raise
+    except OSError as exc:
+        shutil.rmtree(temp_parent, ignore_errors=True)
+        raise WorkspaceRecoveryFailed(str(exc)) from exc
 
 
 def write_spill_file(spill_dir: Path, resource_id: str, text: str) -> Path:
@@ -118,11 +131,92 @@ def write_spill_file(spill_dir: Path, resource_id: str, text: str) -> Path:
     return path
 
 
+def spill_receipt(resource_id: str, text: str) -> dict[str, object]:
+    data = text.encode("utf-8")
+    return {
+        "resource_id": resource_id,
+        "content_digest": hashlib.sha256(data).hexdigest(),
+        "size_bytes": len(data),
+    }
+
+
+def _prepare_epoch_dirs(root: Path, epoch: int) -> tuple[Path, Path]:
+    workspace, spill = epoch_paths(root, epoch)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "artifacts").mkdir(exist_ok=True)
+    (workspace / "tmp").mkdir(exist_ok=True)
+    spill.mkdir(parents=True, exist_ok=True)
+    return workspace, spill
+
+
+def _workspace_manifest(root: Path) -> dict[str, tuple[str, int, str]]:
+    if not root.exists():
+        return {}
+    manifest: dict[str, tuple[str, int, str]] = {}
+    for current, dirnames, filenames in os.walk(root):
+        for name in list(dirnames):
+            path = Path(current) / name
+            if path.is_symlink():
+                raise WorkspaceIntegrityError("workspace contains a symbolic link")
+        for name in filenames:
+            path = Path(current) / name
+            if path.is_symlink() or not path.is_file():
+                raise WorkspaceIntegrityError("workspace contains a special or linked file")
+            rel = str(path.relative_to(root))
+            data = path.read_bytes()
+            manifest[rel] = ("file", len(data), hashlib.sha256(data).hexdigest())
+    return manifest
+
+
+def _copy_tree_regular_files(source: Path, dest: Path) -> None:
+    for current, dirnames, filenames in os.walk(source):
+        rel_dir = Path(current).relative_to(source)
+        target_dir = dest / rel_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for name in dirnames:
+            if (Path(current) / name).is_symlink():
+                raise WorkspaceIntegrityError("workspace contains a symbolic link")
+        for name in filenames:
+            src = Path(current) / name
+            if src.is_symlink() or not src.is_file():
+                raise WorkspaceIntegrityError("workspace contains a special or linked file")
+            shutil.copy2(src, target_dir / name)
+
+
+def _copy_committed_spills(source_dir: Path, dest_dir: Path, spills: object) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for spill in spills:  # type: ignore[attr-defined]
+        name = f"{spill.resource_id}.txt"
+        src = source_dir / name
+        if not src.is_file():
+            raise WorkspaceIntegrityError(f"committed spill {spill.resource_id} is missing")
+        data = src.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != spill.content_digest or len(data) != spill.size_bytes:
+            raise WorkspaceIntegrityError(
+                f"committed spill {spill.resource_id} failed digest check"
+            )
+        dest = dest_dir / name
+        dest.write_bytes(data)
+        if hashlib.sha256(dest.read_bytes()).hexdigest() != digest:
+            raise WorkspaceIntegrityError(f"copied spill {spill.resource_id} does not match")
+
+
+def _retire_epoch(root: Path, epoch: int) -> None:
+    stale = root / "epochs" / str(epoch)
+    if stale.exists():
+        shutil.rmtree(stale, ignore_errors=True)
+
+
 __all__ = [
     "RunWorkspace",
+    "WorkspaceIntegrityError",
+    "WorkspaceRecoveryFailed",
     "bind_run_workspace",
+    "copy_epoch_verified",
     "epoch_paths",
     "owner_shard",
     "run_root",
+    "spill_receipt",
     "write_spill_file",
 ]

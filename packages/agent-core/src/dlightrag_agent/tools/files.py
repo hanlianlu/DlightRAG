@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
-from typing import cast
+import hashlib
+import os
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -26,7 +28,7 @@ from dlightrag_agent.environment.text import decode_workspace_text, encode_works
 from dlightrag_agent.tools.contracts import AgentTool, ToolResult
 
 type ResourceReader = Callable[[str, str | None], Awaitable[str]]
-type SpillWriter = Callable[[str], Awaitable[str]]
+type SpillWriter = Callable[[str], Awaitable[Mapping[str, object]]]
 
 
 class ReadArgs(BaseModel):
@@ -77,19 +79,29 @@ def bound_tool_text(text: str, *, spill: SpillWriter | None) -> str:
     raise FullOutputUnavailable("spill writer must be awaited by the tool, not bound_tool_text")
 
 
-async def preview_or_spill(text: str, *, spill: SpillWriter | None, tool: str) -> str:
-    """Return full text, or a preview plus spill handle, or raise."""
+async def preview_or_spill(
+    text: str,
+    *,
+    spill: SpillWriter | None,
+    tool: str,
+    preview: Literal["head", "tail"] = "head",
+) -> tuple[str, dict[str, object] | None]:
+    """Return (model text, optional committed-spill receipt)."""
     if len(text) <= TOOL_RESULT_CHAR_LIMIT:
-        return text
+        return text, None
     if spill is None:
         raise FullOutputUnavailable("oversized tool result has no spill or cursor backing")
-    resource_id = await spill(text)
-    preview = text[:TOOL_RESULT_PREVIEW_CHARS]
-    return (
+    receipt = dict(await spill(text))
+    resource_id = str(receipt["resource_id"])
+    excerpt = (
+        text[:TOOL_RESULT_PREVIEW_CHARS] if preview == "head" else text[-TOOL_RESULT_PREVIEW_CHARS:]
+    )
+    rendered = (
         f"{tool} output exceeded {TOOL_RESULT_CHAR_LIMIT} characters "
         f"({len(text)} chars). Full output: read(resource_id={resource_id!r}, cursor=...)\n"
-        f"{preview}"
+        f"{excerpt}"
     )
+    return rendered, {"committed_spill": receipt}
 
 
 def path_tools(
@@ -147,7 +159,8 @@ def read_tool(
             note = ""
             if decoded.mixed_newlines:
                 note = "\n[mixed line endings preserved; not normalized]"
-            return ToolResult(content=await preview_or_spill(text + note, spill=spill, tool="read"))
+            body, extra = await preview_or_spill(text + note, spill=spill, tool="read")
+            return ToolResult(content=body, details=extra)
 
     return AgentTool(
         name="read",
@@ -169,7 +182,10 @@ def write_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) ->
                 return ToolResult(content=str(exc))
             except PathRejected as exc:
                 return ToolResult(content=str(exc))
-        return ToolResult(content=f"wrote {args.path} ({len(args.content)} chars)")
+        return ToolResult(
+            content=f"wrote {args.path} ({len(args.content)} chars)",
+            details=_inventory_details(environment.root, path),
+        )
 
     return AgentTool(
         name="write",
@@ -200,7 +216,10 @@ def edit_tool(environment: ExecutionEnvironment, scheduler: AccessScheduler) -> 
                 environment.write_bytes(path, encode_workspace_text(decoded, updated))
             except WorkspaceQuotaExceeded as exc:
                 return ToolResult(content=str(exc))
-        return ToolResult(content=f"edited {args.path} ({count} replacement(s))")
+        return ToolResult(
+            content=f"edited {args.path} ({count} replacement(s))",
+            details=_inventory_details(environment.root, path),
+        )
 
     return AgentTool(
         name="edit",
@@ -233,9 +252,8 @@ def grep_tool(
                 argv, env=build_child_environment(home=home, tmp=tmp), cwd=environment.root
             )
         text = completed.stdout if completed.returncode in {0, 1} else completed.stderr
-        return ToolResult(
-            content=await preview_or_spill(text or "(no matches)", spill=spill, tool="grep")
-        )
+        body, extra = await preview_or_spill(text or "(no matches)", spill=spill, tool="grep")
+        return ToolResult(content=body, details=extra)
 
     return AgentTool(
         name="grep",
@@ -268,7 +286,13 @@ def bash_tool(
         if completed.stderr:
             body = f"{body}\n{completed.stderr}".strip()
         suffix = f"\nexit {completed.returncode}"
-        return ToolResult(content=await preview_or_spill(body + suffix, spill=spill, tool="bash"))
+        body, extra = await preview_or_spill(
+            body + suffix, spill=spill, tool="bash", preview="tail"
+        )
+        details = _scan_inventory(environment.root)
+        if extra:
+            details = {**details, **extra}
+        return ToolResult(content=body, details=details)
 
     return AgentTool(
         name="bash",
@@ -277,6 +301,49 @@ def bash_tool(
         execute=execute,
         replay_policy="never",
     )
+
+
+def _inventory_details(root: object, path: object) -> dict[str, object]:
+    from pathlib import Path
+
+    file_path = Path(path)  # type: ignore[arg-type]
+    root_path = Path(root)  # type: ignore[arg-type]
+    data = file_path.read_bytes()
+    record = {
+        "relative_path": str(file_path.relative_to(root_path)),
+        "entry_type": "file",
+        "size_bytes": len(data),
+        "mode": file_path.stat().st_mode,
+        "content_digest": hashlib.sha256(data).hexdigest(),
+    }
+    return {"workspace_inventory": {"replace_all": False, "upserts": [record], "deletes": []}}
+
+
+def _scan_inventory(root: object) -> dict[str, object]:
+    from pathlib import Path
+
+    root_path = Path(root)  # type: ignore[arg-type]
+    upserts: list[dict[str, object]] = []
+    for current, dirnames, filenames in os.walk(root_path):
+        dirnames[:] = [name for name in dirnames if not (Path(current) / name).is_symlink()]
+        for name in filenames:
+            file_path = Path(current) / name
+            if file_path.is_symlink():
+                continue
+            try:
+                stat = file_path.stat()
+            except OSError:
+                continue
+            upserts.append(
+                {
+                    "relative_path": str(file_path.relative_to(root_path)),
+                    "entry_type": "file",
+                    "size_bytes": stat.st_size,
+                    "mode": stat.st_mode,
+                    "content_digest": None,
+                }
+            )
+    return {"workspace_inventory": {"replace_all": True, "upserts": upserts, "deletes": []}}
 
 
 def _slice_lines(text: str, *, offset: int | None, limit: int | None) -> str:

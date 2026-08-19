@@ -14,6 +14,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast
+from uuid import uuid4
 
 from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
 from dlightrag_agent.tools import (
@@ -132,6 +133,7 @@ class AnswerOrchestrator:
         self._telemetry = telemetry
         self._environment = environment
         self._resource_reader = resource_reader
+        self._workspace: Any = None
 
     @property
     def uses_research_path(self) -> bool:
@@ -334,7 +336,20 @@ class AnswerOrchestrator:
             register_web_source=self._register_web_source,
             resource_reader=self._resource_reader,
             environment=self._environment,  # type: ignore[arg-type]
+            spill=self._spill_writer() if self._workspace is not None else None,
         )
+
+    def _spill_writer(self) -> Any:
+        from dlightrag.answer.workspace import spill_receipt, write_spill_file
+
+        workspace = self._workspace
+
+        async def write(text: str) -> dict[str, object]:
+            resource_id = f"spill_{uuid4().hex}"
+            write_spill_file(workspace.spill_dir, resource_id, text)
+            return spill_receipt(resource_id, text)
+
+        return write
 
     async def _execute_control_turn(
         self,

@@ -89,7 +89,11 @@ from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.answer.tools.web import ExaSearch
-from dlightrag.answer.workspace import bind_run_workspace
+from dlightrag.answer.workspace import (
+    WorkspaceIntegrityError,
+    WorkspaceRecoveryFailed,
+    bind_run_workspace,
+)
 from dlightrag.runtime import (
     LeaseLostError,
     RunCancelledError,
@@ -568,15 +572,21 @@ class AnswerExecutor:
                     working_dir=self._working_dir,
                 )
                 if root is not None:
-                    bound = await bind_run_workspace(
-                        workspace_root=root,
-                        owner_id=session.owner_id,
-                        run_id=session.run_id,
-                        fencing_epoch=session.execution.fencing_epoch,
-                        recorded_epoch=session.workspace_epoch,
-                        store=session.execution.workspace_store,
-                    )
+                    try:
+                        bound = await bind_run_workspace(
+                            workspace_root=root,
+                            owner_id=session.owner_id,
+                            run_id=session.run_id,
+                            fencing_epoch=session.execution.fencing_epoch,
+                            recorded_epoch=session.workspace_epoch,
+                            store=session.execution.workspace_store,
+                        )
+                    except WorkspaceRecoveryFailed as exc:
+                        raise RunExecutionError("workspace_recovery_failed", str(exc)) from exc
+                    except WorkspaceIntegrityError as exc:
+                        raise RunExecutionError("workspace_integrity_error", str(exc)) from exc
                     run.orchestrator._environment = bound.environment
+                    run.orchestrator._workspace = bound
             if research:
                 session_id = SessionId(request.session_id)
                 prepared_early = run.orchestrator.prepare_run(
@@ -1122,6 +1132,7 @@ class JournalRunBoundaries:
                 call_id=intent.source_call_id or "",
                 outcome="succeeded" if outcome == "succeeded" else "interrupted",
                 content=content,
+                details=None if execution is None else execution.result.details,
                 cached=cached,
             ),
         )

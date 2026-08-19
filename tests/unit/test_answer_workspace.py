@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.answer.workspace import bind_run_workspace, write_spill_file
+from dlightrag.answer.workspace import (
+    WorkspaceIntegrityError,
+    bind_run_workspace,
+    write_spill_file,
+)
 from dlightrag.runtime.workspace import InMemoryWorkspaceStore
 
 
@@ -51,3 +55,26 @@ async def test_recover_copies_prior_epoch(tmp_path: Path) -> None:
     assert (recovered.workspace / "notes.txt").read_text(encoding="utf-8") == "keep"
     assert store.workspace_epoch == 2
     assert first.workspace.exists() is False or recovered.workspace != first.workspace
+
+
+@pytest.mark.asyncio
+async def test_recover_rejects_a_symlink_as_integrity_error(tmp_path: Path) -> None:
+    store = InMemoryWorkspaceStore(workspace_epoch=1)
+    first = await bind_run_workspace(
+        workspace_root=tmp_path,
+        owner_id="owner",
+        run_id="run-2",
+        fencing_epoch=1,
+        recorded_epoch=1,
+        store=store,
+    )
+    (first.workspace / "link").symlink_to(tmp_path / "outside")
+    with pytest.raises(WorkspaceIntegrityError):
+        await bind_run_workspace(
+            workspace_root=tmp_path,
+            owner_id="owner",
+            run_id="run-2",
+            fencing_epoch=2,
+            recorded_epoch=1,
+            store=store,
+        )

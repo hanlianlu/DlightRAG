@@ -911,3 +911,64 @@ async def test_terminal_finish_deletes_spill_rows(pool) -> None:
         result={"answer": "ok"},
     )
     assert await workspace.load_spills() == ()
+
+
+async def test_result_details_commit_inventory_and_spill(pool) -> None:
+    claimed = await _claim(pool)
+    journal = claimed.execution.session_store
+    session_id = SessionId.new()
+    intent_id = IntentId.new()
+    await journal.append(
+        session_id=session_id,
+        expected_version=0,
+        entries=[_intent_entry(session_id, intent_id)],
+    )
+    result = EffectResultEntry(
+        entry_id=EntryId.new(),
+        session_id=session_id,
+        timestamp=_now(),
+        intent_id=intent_id,
+        result=ToolResultEntry(
+            tool_name="write",
+            call_id="c1",
+            outcome="succeeded",
+            content="wrote notes.md",
+            details={
+                "workspace_inventory": {
+                    "replace_all": False,
+                    "upserts": [
+                        {
+                            "relative_path": "notes.md",
+                            "entry_type": "file",
+                            "size_bytes": 5,
+                            "mode": 0o644,
+                            "content_digest": "e" * 64,
+                        }
+                    ],
+                    "deletes": [],
+                },
+                "committed_spill": {
+                    "resource_id": "spill_from_details",
+                    "content_digest": "f" * 64,
+                    "size_bytes": 12,
+                },
+            },
+        ),
+    )
+    settled = await journal.settle_effect(
+        session_id=session_id,
+        expected_version=1,
+        intent_id=intent_id,
+        settlement=EffectSettlement(
+            outcome="succeeded",
+            result=result.result,
+            host_update=EvidenceSettlementUpdate(),
+        ),
+        entries=[result],
+    )
+    assert settled.__class__.__name__ == "EffectCommit"
+    workspace = claimed.execution.workspace_store
+    assert workspace is not None
+    inventory = await workspace.load_inventory()
+    assert any(item.relative_path == "notes.md" for item in inventory)
+    assert any(item.resource_id == "spill_from_details" for item in await workspace.load_spills())

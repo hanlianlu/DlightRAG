@@ -62,6 +62,34 @@ async def test_oversized_result_without_spill_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_oversized_result_with_spill_returns_receipt() -> None:
+    async def spill(text: str) -> dict[str, object]:
+        return {"resource_id": "spill_1", "content_digest": "a" * 64, "size_bytes": len(text)}
+
+    body, extra = await preview_or_spill("x" * 50_001, spill=spill, tool="grep")
+    assert "spill_1" in body
+    assert extra is not None
+    receipt = extra["committed_spill"]
+    assert isinstance(receipt, dict)
+    assert receipt["resource_id"] == "spill_1"
+
+
+@pytest.mark.asyncio
+async def test_write_attaches_inventory_details(tmp_path: Path) -> None:
+    env, scheduler = _env(tmp_path)
+    writer = write_tool(env, scheduler)
+    result = await writer.execute(WriteArgs(path="notes.md", content="hello"))
+    assert result.details is not None
+    inventory = result.details["workspace_inventory"]
+    assert isinstance(inventory, dict)
+    assert inventory["replace_all"] is False
+    upserts = inventory["upserts"]
+    assert isinstance(upserts, list)
+    assert upserts[0]["relative_path"] == "notes.md"
+    assert inventory["upserts"][0]["size_bytes"] == 5
+
+
+@pytest.mark.asyncio
 async def test_grep_uses_argv_not_a_shell(tmp_path: Path) -> None:
     fake = tmp_path / "rg"
     fake.write_text(
