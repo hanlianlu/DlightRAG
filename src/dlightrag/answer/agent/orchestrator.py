@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from dlightrag_agent.loop import AgentLoop, LoopCancelled
 from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
+from dlightrag_agent.session.ids import SessionId
 from dlightrag_agent.tools import (
     AgentTool,
     ExecutedTurn,
@@ -42,6 +43,7 @@ from dlightrag.answer.resources.models import ResourceManifestEntry, TextWindowB
 from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
+from dlightrag.answer.tools.delegate import DelegateHost
 from dlightrag.answer.workspace import RunWorkspace
 
 logger = logging.getLogger(__name__)
@@ -119,6 +121,7 @@ class AnswerOrchestrator:
         environment: object | None = None,
         resource_reader: object | None = None,
         research_path: bool | None = None,
+        delegate_host: DelegateHost | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -137,6 +140,30 @@ class AnswerOrchestrator:
         self._resource_reader = resource_reader
         self._workspace: RunWorkspace | None = None
         self._research_path = research_path
+        self._delegate_host = delegate_host
+
+    def bind_delegate(
+        self,
+        *,
+        parent_session_id: SessionId,
+        run_id: str,
+        owner_id: str,
+        check_cancelled: Any,
+        model_func: Any,
+        persist: Any = None,
+        load_child: Any = None,
+        finish_child: Any = None,
+    ) -> None:
+        if self._delegate_host is None:
+            return
+        self._delegate_host.parent_session_id = parent_session_id
+        self._delegate_host.run_id = run_id
+        self._delegate_host.owner_id = owner_id
+        self._delegate_host.check_cancelled = check_cancelled
+        self._delegate_host.model_func = model_func
+        self._delegate_host.persist = persist
+        self._delegate_host.load_child = load_child
+        self._delegate_host.finish_child = finish_child
 
     def bind_workspace(self, workspace: RunWorkspace) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
@@ -335,7 +362,7 @@ class AnswerOrchestrator:
         evidence: EvidenceLedger,
         trace: dict[str, Any],
     ) -> list[AgentTool]:
-        return compose_research_tools(
+        tools = compose_research_tools(
             evidence=evidence,
             trace=trace,
             retrieve_knowledge_base=self._retrieve_knowledge_base,
@@ -345,7 +372,23 @@ class AnswerOrchestrator:
             resource_reader=self._resource_reader,
             environment=self._environment,  # type: ignore[arg-type]
             spill=self._spill_writer() if self._workspace is not None else None,
+            delegate_host=self._delegate_host,
         )
+        if self._delegate_host is not None:
+            self._delegate_host.evidence = evidence
+            self._delegate_host.child_tools = compose_research_tools(
+                evidence=evidence,
+                trace=trace,
+                retrieve_knowledge_base=self._retrieve_knowledge_base,
+                search_web=self._search_web,
+                resource_tools=self._resource_tools,
+                register_web_source=self._register_web_source,
+                resource_reader=self._resource_reader,
+                environment=self._environment,  # type: ignore[arg-type]
+                spill=self._spill_writer() if self._workspace is not None else None,
+                child=True,
+            )
+        return tools
 
     def _spill_writer(self) -> Any:
         from dlightrag.answer.workspace import spill_receipt, write_spill_file

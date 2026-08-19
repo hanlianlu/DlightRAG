@@ -180,6 +180,7 @@ class TestSchema:
             "dlightrag_answer_workspace_inventory",
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
+            "dlightrag_answer_child_sessions",
         }
 
     async def test_run_columns_match_the_contract(self, store, pool) -> None:

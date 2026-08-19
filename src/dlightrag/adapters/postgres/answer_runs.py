@@ -408,6 +408,26 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_run_routing (
 )
 """
 
+_CREATE_CHILD_SESSIONS = """
+CREATE TABLE IF NOT EXISTS dlightrag_answer_child_sessions (
+    owner_id           TEXT        NOT NULL,
+    run_id             UUID        NOT NULL,
+    child_session_id   UUID        NOT NULL,
+    parent_session_id  UUID        NOT NULL,
+    parent_call_id     TEXT        NOT NULL,
+    status             TEXT        NOT NULL,
+    summary            TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (owner_id, run_id, child_session_id),
+    UNIQUE (owner_id, run_id, parent_session_id, parent_call_id),
+    FOREIGN KEY (owner_id, run_id)
+        REFERENCES dlightrag_answer_runs (owner_id, run_id) ON DELETE CASCADE,
+    CONSTRAINT dlightrag_answer_child_sessions_status_check
+        CHECK (status IN ('running', 'succeeded', 'failed', 'cancelled'))
+)
+"""
+
 _CREATE_INDEXES = (
     # Claim and sweep scan nonterminal rows oldest-first across every owner.
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_runs_claim "
@@ -498,6 +518,7 @@ _M6_ROUTING_DDL = (
     "ADD CONSTRAINT dlightrag_answer_runs_phase_check "
     "CHECK (phase IS NULL OR phase IN ("
     "'routing', 'planning', 'searching', 'researching', 'generating'))",
+    _CREATE_CHILD_SESSIONS,
 )
 
 _M5_PUBLICATION_DDL = (
@@ -528,6 +549,7 @@ ANSWER_RUN_MIGRATIONS = (
             _CREATE_BLOB_CHUNKS,
             _CREATE_RUN_ARTIFACTS,
             _CREATE_ROUTING,
+            _CREATE_CHILD_SESSIONS,
             _ADD_SESSION_PROJECTION_FK,
             *_CREATE_INDEXES,
             _M4_WORKSPACE_DDL[3],
@@ -891,6 +913,28 @@ ANSWER_RUN_SCHEMA_TABLES = (
         ),
     ),
     TableRequirement(
+        name="dlightrag_answer_child_sessions",
+        columns=(
+            "owner_id",
+            "run_id",
+            "child_session_id",
+            "parent_session_id",
+            "parent_call_id",
+            "status",
+            "summary",
+            "created_at",
+            "updated_at",
+        ),
+        primary_key=("owner_id", "run_id", "child_session_id"),
+        foreign_keys=(
+            ForeignKeyRequirement(
+                columns=("owner_id", "run_id"), references="dlightrag_answer_runs"
+            ),
+        ),
+        checks=("dlightrag_answer_child_sessions_status_check",),
+        unique_indexes=(),
+    ),
+    TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(
             "owner_id",
@@ -1033,6 +1077,26 @@ WHERE rt.owner_id = r.owner_id AND rt.run_id = r.run_id
   AND r.status = 'running' AND r.lease_expires_at > NOW()
   AND (rt.resolved_mode IS NULL OR rt.resolved_mode = $5)
 RETURNING rt.resolved_mode
+"""
+
+_UPSERT_CHILD_SESSION = """
+INSERT INTO dlightrag_answer_child_sessions (
+    owner_id, run_id, child_session_id, parent_session_id, parent_call_id, status
+)
+VALUES ($1, $2, $3, $4, $5, 'running')
+ON CONFLICT (owner_id, run_id, parent_session_id, parent_call_id) DO NOTHING
+"""
+
+_SELECT_CHILD_SESSION = """
+SELECT child_session_id, status, summary
+FROM dlightrag_answer_child_sessions
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
+"""
+
+_FINISH_CHILD_SESSION = """
+UPDATE dlightrag_answer_child_sessions
+SET status = $4, summary = $5, updated_at = NOW()
+WHERE owner_id = $1 AND run_id = $2 AND child_session_id = $3
 """
 
 _CLAIM_RUN = f"""
@@ -1778,6 +1842,75 @@ class PGAnswerRunStore(PostgresOperationRunner):
             return str(value) if value is not None else None
 
         return await self._run_write(_operation)
+
+    async def upsert_child_session(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        parent_session_id: str,
+        parent_call_id: str,
+    ) -> None:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        parent_uuid = parse_run_id(parent_session_id)
+        if run_uuid is None or child_uuid is None or parent_uuid is None:
+            raise ValueError("child session ids must be canonical UUIDs")
+
+        async def _operation(conn: Any) -> None:
+            await conn.execute(
+                _UPSERT_CHILD_SESSION,
+                owner,
+                run_uuid,
+                child_uuid,
+                parent_uuid,
+                parent_call_id,
+            )
+
+        await self._run_write(_operation)
+
+    async def load_child_session(
+        self, *, owner_id: str, run_id: str, child_session_id: str
+    ) -> dict[str, Any] | None:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            return None
+
+        async def _operation(conn: Any) -> dict[str, Any] | None:
+            row = await conn.fetchrow(_SELECT_CHILD_SESSION, owner, run_uuid, child_uuid)
+            if row is None:
+                return None
+            return {
+                "child_session_id": str(row["child_session_id"]),
+                "status": str(row["status"]),
+                "summary": row["summary"],
+            }
+
+        return await self._run_read(_operation)
+
+    async def finish_child_session(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        child_session_id: str,
+        status: str,
+        summary: str,
+    ) -> None:
+        owner = _require_owner(owner_id)
+        run_uuid = parse_run_id(run_id)
+        child_uuid = parse_run_id(child_session_id)
+        if run_uuid is None or child_uuid is None:
+            raise ValueError("child session ids must be canonical UUIDs")
+
+        async def _operation(conn: Any) -> None:
+            await conn.execute(_FINISH_CHILD_SESSION, owner, run_uuid, child_uuid, status, summary)
+
+        await self._run_write(_operation)
 
     async def delete_runs_in(
         self, conn: Any, *, owner_id: str, run_ids: Sequence[str]

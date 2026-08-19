@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Provider-neutral tool contracts and deterministic turn execution."""
 
+from dlightrag_agent.tools.context import current_tool_call
 from dlightrag_agent.tools.contracts import (
     AgentTool,
     ExecutedTurn,
@@ -33,6 +34,7 @@ __all__ = [
     "ToolResult",
     "ToolResultCapacityError",
     "ToolTurnExecutor",
+    "current_tool_call",
     "bash_tool",
     "edit_tool",
     "grep_tool",

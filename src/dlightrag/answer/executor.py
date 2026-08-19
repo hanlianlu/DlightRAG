@@ -92,6 +92,7 @@ from dlightrag.answer.runs.execution import (
 )
 from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
+from dlightrag.answer.tools.delegate import DelegateHost
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.answer.tools.web import ExaSearch
 from dlightrag.answer.workspace import (
@@ -661,6 +662,17 @@ class AnswerExecutor:
                 session_id = SessionId(
                     request.session_id or research_session_id or SessionId.new().value
                 )
+                store = self._store
+                run.orchestrator.bind_delegate(
+                    parent_session_id=session_id,
+                    run_id=session.run_id,
+                    owner_id=session.owner_id,
+                    check_cancelled=session.check_cancelled,
+                    model_func=self._models.query_tool_model(),
+                    persist=_async_store_method(store, "upsert_child_session"),
+                    load_child=_async_store_method(store, "load_child_session"),
+                    finish_child=_async_store_method(store, "finish_child_session"),
+                )
                 prepared_early = run.orchestrator.prepare_run(
                     request.query,
                     conversation_history=run.history,
@@ -912,6 +924,7 @@ class AnswerExecutor:
                 telemetry=self._telemetry,
                 environment=environment,
                 research_path=research,
+                delegate_host=DelegateHost() if research else None,
                 resource_reader=(
                     make_resource_reader(resolved.registry, text_window_budget)
                     if resolved.registry is not None
@@ -1078,8 +1091,16 @@ class JournalRunBoundaries:
                 if tool is None:
                     raise RuntimeError("matched contract lost its tool")
                 try:
+                    from dlightrag_agent.tools.context import bind_tool_call, reset_tool_call
+
                     arguments = tool.input_model.model_validate(_json.loads(intent.canonical_input))
-                    result = await tool.execute(arguments)
+                    token = bind_tool_call(
+                        intent.source_call_id or intent.intent_id.value, intent.tool_name
+                    )
+                    try:
+                        result = await tool.execute(arguments)
+                    finally:
+                        reset_tool_call(token)
                     outcome = "succeeded"
                     content = result.content
                     cached = result.cached
@@ -1470,6 +1491,13 @@ async def _close_execution_resources(
             logger.warning("Failed to close Answer resource registry", exc_info=True)
     if cancellation is not None:
         raise cancellation
+
+
+def _async_store_method(store: object, name: str) -> Any | None:
+    method = getattr(store, name, None)
+    if inspect.iscoroutinefunction(method):
+        return method
+    return None
 
 
 def _verified_current_image_data_uri(data: bytes, *, max_pixels: int) -> tuple[str, str]:

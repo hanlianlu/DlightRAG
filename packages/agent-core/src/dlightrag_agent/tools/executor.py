@@ -281,6 +281,9 @@ async def _dispatch_call(
         return _error(call, message, outcome=outcome, started=started)
     if tool is None or arguments is None:
         raise RuntimeError("valid tool call lost its tool or arguments")
+    from dlightrag_agent.tools.context import bind_tool_call, reset_tool_call
+
+    token = bind_tool_call(call.id, call.name)
     try:
         result = await tool.execute(arguments)
     except asyncio.CancelledError:
@@ -294,6 +297,8 @@ async def _dispatch_call(
             outcome="failed",
             started=started,
         )
+    finally:
+        reset_tool_call(token)
     return ToolExecution(
         call=call,
         result=result,
