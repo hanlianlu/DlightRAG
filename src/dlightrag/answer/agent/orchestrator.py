@@ -121,7 +121,7 @@ class AnswerOrchestrator:
         telemetry: Telemetry,
         environment: object | None = None,
         resource_reader: object | None = None,
-        research_path: bool | None = None,
+        research_path: bool,
         delegate_host: DelegateHost | None = None,
     ) -> None:
         self._synthesizer = synthesizer
@@ -179,9 +179,7 @@ class AnswerOrchestrator:
     @property
     def uses_research_path(self) -> bool:
         """Whether this orchestrator runs AgentLoop instead of Fast."""
-        if self._research_path is not None:
-            return self._research_path
-        return bool(self._resource_manifest) or self._search_web is not None
+        return self._research_path
 
     # ------------------------------------------------------------------
     # Public entry points

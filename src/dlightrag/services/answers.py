@@ -242,6 +242,7 @@ class _AnswerResourcePreparer(Protocol):
             [RequestModelContext],
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
         ],
+        research: bool,
     ) -> ResolvedAnswerResources: ...
 
 
@@ -786,6 +787,7 @@ class AnswerService:
             models=models,
             text_window_budget=text_window_budget,
             confirm_image_context=self._capabilities.confirmed_live_answer_context,
+            research="research" in allowed_modes,
         )
         try:
             workspaces = list(request.workspaces)

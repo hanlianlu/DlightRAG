@@ -8,9 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dlightrag.runtime.contracts import ANSWER_RUN_PHASES
+
 _ROOT = Path(__file__).resolve().parents[2]
 _STATUS_VALUES = ("queued", "running", "succeeded", "failed", "cancelled")
-_PHASE_VALUES = ("routing", "planning", "searching", "researching", "generating")
+_PHASE_VALUES = ANSWER_RUN_PHASES
 _RUNTIME_RECORD_NAMES = frozenset(
     {
         "AnswerRunEventType",

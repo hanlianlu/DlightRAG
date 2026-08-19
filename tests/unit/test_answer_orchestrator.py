@@ -78,6 +78,7 @@ class _DrainedOrchestrator(AnswerOrchestrator):
     """
 
     def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("research_path", False)
         super().__init__(telemetry=NOOP_TELEMETRY, **kwargs)
 
     async def answer(self, query: str, **kwargs: Any) -> AnswerResult:
@@ -184,6 +185,7 @@ def _research(
         text_window_budget=TextWindowBudget(
             tokens=CONTEXT_POLICY.hard_input_limit(effective_profile)
         ),
+        research_path=True,
     )
 
 
@@ -365,6 +367,7 @@ async def test_resources_without_web_still_research_and_read_attachments() -> No
         text_window_budget=TextWindowBudget(tokens=850_000),
         model_func=agent.turn,
         stream_model_func=agent.stream_final,
+        research_path=True,
         resource_tools=[
             _fake_read_tool(
                 "attachment evidence\n[more text available; cursor=volatile]",
@@ -471,6 +474,7 @@ async def test_current_image_manifest_binds_resources_and_marks_images_visible()
         text_window_budget=TextWindowBudget(tokens=850_000),
         model_func=agent.turn,
         stream_model_func=agent.stream_final,
+        research_path=True,
         resource_tools=[_fake_read_tool()],
         resource_manifest=(
             ResourceManifestEntry(

@@ -298,6 +298,16 @@ async def test_research_run_seeds_the_pinned_session_journal() -> None:
     )
     registry = MagicMock(aclose=AsyncMock())
     executor = _executor()
+    store = cast(Any, executor._store)
+    store.load_routing = AsyncMock(
+        return_value=MagicMock(
+            resolved_mode="research",
+            research_session_id=request.session_id,
+            requested_mode="research",
+            valid_modes=("fast", "research"),
+        )
+    )
+    store.resolve = AsyncMock(return_value="research")
     executor.prepare_orchestrated_run = AsyncMock(  # type: ignore[method-assign]
         return_value=OrchestratorRun(
             orchestrator=orchestrator,
@@ -400,6 +410,16 @@ async def test_resumed_research_recovers_the_episode_from_the_folded_journal() -
     )
     registry = MagicMock(aclose=AsyncMock())
     executor = _executor()
+    store = cast(Any, executor._store)
+    store.load_routing = AsyncMock(
+        return_value=MagicMock(
+            resolved_mode="research",
+            research_session_id=request.session_id,
+            requested_mode="research",
+            valid_modes=("fast", "research"),
+        )
+    )
+    store.resolve = AsyncMock(return_value="research")
     executor.prepare_orchestrated_run = AsyncMock(  # type: ignore[method-assign]
         return_value=OrchestratorRun(
             orchestrator=orchestrator,

@@ -6,7 +6,7 @@ from dlightrag.runtime.cancellation import (
     RunCancellationListener,
     cancellation_notify_key,
 )
-from dlightrag.runtime.contracts import AnswerRunPhase, AnswerRunStatus
+from dlightrag.runtime.contracts import ANSWER_RUN_PHASES, AnswerRunPhase, AnswerRunStatus
 from dlightrag.runtime.coordinator import (
     MAINTENANCE_SECONDS,
     RUN_HEARTBEAT_SECONDS,
@@ -101,6 +101,7 @@ from dlightrag.runtime.workspace import (
 
 __all__ = [
     "ANSWER_RUN_LEASE_SECONDS",
+    "ANSWER_RUN_PHASES",
     "AnswerAcceptanceStore",
     "AnswerRunEvent",
     "AnswerRunEventType",

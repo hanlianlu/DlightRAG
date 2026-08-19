@@ -272,13 +272,13 @@ class _Resources:
         models: RequestModelContext,
         text_window_budget: Any,
         confirm_image_context: Any,
+        research: bool = False,
     ) -> Any:
-        del resources, text_window_budget, confirm_image_context
+        del resources, text_window_budget, confirm_image_context, research
         self.calls.append("resolve")
         return MagicMock(
             models=models,
             registry=self._registry,
-            research=False,
             current_images=[],
             resource_tools=[],
             resource_manifest=(),

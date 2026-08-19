@@ -187,7 +187,6 @@ class ResolvedAnswerResources:
     resource_manifest: tuple[ResourceManifestEntry, ...]
     current_images: list[dict[str, Any]]
     current_image_count: int
-    research: bool
     image_budget: AnswerImageBudget | None
     query_images: list[dict[str, Any]] | None
 
@@ -290,7 +289,7 @@ class AnswerResourceResolver:
             Awaitable[tuple[RequestModelContext, AnswerImageCapability | None]],
         ],
         fetched_bytes_sink: FetchedBytesSink | None = None,
-        research: bool | None = None,
+        research: bool,
     ) -> ResolvedAnswerResources:
         """Resolve resource capabilities, manifests, tools, and image transport."""
         if resources and not models.query.supports_tools:
@@ -335,8 +334,6 @@ class AnswerResourceResolver:
                 else ()
             )
             resource_manifest = registry.manifest() if registry is not None else ()
-            inferred = web_search is not None or bool(resource_manifest)
-            research = inferred if research is None else research
             image_budget: AnswerImageBudget | None = None
             query_images: list[dict[str, Any]] | None = current_images or None
             if research:
@@ -357,7 +354,6 @@ class AnswerResourceResolver:
                 resource_manifest=resource_manifest,
                 current_images=current_images,
                 current_image_count=len(current_images),
-                research=research,
                 image_budget=image_budget,
                 query_images=query_images,
             )
@@ -548,11 +544,11 @@ class AnswerExecutor:
 
     async def _ensure_resolved_mode(
         self, session: RunSession, request: AnswerRunInput
-    ) -> tuple[str | None, str | None]:
+    ) -> tuple[str, str | None]:
         load = getattr(self._store, "load_routing", None)
         resolve = getattr(self._store, "resolve", None)
         if not inspect.iscoroutinefunction(load) or not inspect.iscoroutinefunction(resolve):
-            return None, None
+            raise RunExecutionError("routing_failed", "Routing record is missing.")
         record = await load(owner_id=session.owner_id, run_id=session.run_id)  # type: ignore[misc]
         if record is None:
             raise RunExecutionError("routing_failed", "Routing record is missing.")
@@ -567,6 +563,8 @@ class AnswerExecutor:
             raise RunExecutionError("routing_failed", "Answer mode routing failed.") from exc
         if decided is None:
             decided = await self._route_with_model(request, valid_modes=record.valid_modes)
+        if decided not in {"fast", "research"}:
+            raise RunExecutionError("routing_failed", "Answer mode routing failed.")
         research_session_id = None
         if decided == "research" and record.requested_mode == "auto":
             research_session_id = SessionId.new().value
@@ -624,7 +622,7 @@ class AnswerExecutor:
             filters=MetadataFilter.model_validate(request.filters) if request.filters else None,
             resources=await self._answer_run_resources(request, owner_id=session.owner_id),
             fetched_bytes_sink=_buffered_fetched_bytes_sink(fetched_buffer),
-            research=None if resolved_mode is None else resolved_mode == "research",
+            research=resolved_mode == "research",
             pinned_image_descriptions=request.image_descriptions,
             projected_history=projected_history,
             model_profiles=model_profiles,
@@ -633,11 +631,7 @@ class AnswerExecutor:
         try:
             journal = session.execution.session_store
             prepared_early: Any = None
-            research = (
-                run.orchestrator.uses_research_path
-                if resolved_mode is None
-                else resolved_mode == "research"
-            )
+            research = resolved_mode == "research"
             if research:
                 from dlightrag.answer.execution_settings import validate_agent_execution
 
@@ -866,7 +860,7 @@ class AnswerExecutor:
         projected_history: PriorTurns,
         model_profiles: Mapping[ModelRole, ModelProfile],
         environment: object | None = None,
-        research: bool | None = None,
+        research: bool,
     ) -> OrchestratorRun:
         history = projected_history
         models = self._capabilities.request_model_context(model_profiles)
@@ -899,13 +893,13 @@ class AnswerExecutor:
                     filters=filters,
                     query_images=resolved.current_images,
                     image_descriptions=image_descriptions,
-                    preserve_query=True if resolved.research else None,
+                    preserve_query=True if research else None,
                     model_profile=models.extract,
                 )
 
             model_func: Callable[..., Any] | None = None
             stream_model_func: Callable[..., AsyncIterator[str]] | None = None
-            if resolved.research:
+            if research:
                 tool_model = self._models.query_tool_model()
                 model_func = tool_model
                 stream_model_func = tool_model.stream_text
