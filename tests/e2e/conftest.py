@@ -245,6 +245,7 @@ class E2EConversationService:
         query: str,
         workspaces: Any,
         attachments: Any = (),
+        mode: str | None = None,
     ) -> WebAnswerSubmission | None:
         with self._lock:
             value = self._conversations.get(conversation_id)
@@ -265,6 +266,7 @@ class E2EConversationService:
                 attachments=attachments,
                 idempotency_fingerprint=submission_id,
             )
+            del mode
             turn = LinkedTurn(
                 turn_id=str(uuid4()),
                 turn_number=len(value["turns"]) + 1,
