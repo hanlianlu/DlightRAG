@@ -518,7 +518,7 @@ class AnswerService:
         query = profiles["query"]
         vlm = profiles["vlm"]
         resources: list[ModeResource] = []
-        for attachment in request.attachments:
+        for attachment in (*request.attachments, *request.history_attachments):
             resources.append(
                 ModeResource(
                     role=resource_role(filename=attachment.filename, mime_type=attachment.mime_type)

@@ -246,6 +246,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert {
         "query",
         "history",
+        "mode",
         "attachments",
         "filters",
         "chunk_top_k",

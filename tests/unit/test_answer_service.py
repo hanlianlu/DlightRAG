@@ -365,6 +365,29 @@ async def test_explicit_fast_with_pdf_creates_no_run() -> None:
     assert store.created == []
 
 
+async def test_explicit_fast_with_history_pdf_creates_no_run() -> None:
+    store = _Store()
+    service = _service(store=store)
+    with pytest.raises(UnsupportedAnswerModeError):
+        await service.create(
+            request=_request(
+                mode="fast",
+                history_resources=(
+                    AnswerHistoryResource(
+                        run_id="run-prior",
+                        source_ordinal=0,
+                        digest="a" * 64,
+                        filename="old.pdf",
+                        mime_type="application/pdf",
+                        byte_size=4,
+                    ),
+                ),
+            ),
+            owner_id=_OWNER,
+        )
+    assert store.created == []
+
+
 async def test_idempotent_replay_returns_before_preparation_and_materialization() -> None:
     replayed = RunCreation(run=_record(status="running"), replayed=True)
     store = _Store(replay=replayed)
@@ -419,8 +442,8 @@ async def test_carried_history_resource_loads_from_the_run_that_accepted_it() ->
                 kind="current_attachment",
                 ordinal=3,
                 digest="b" * 64,
-                filename="prior.png",
-                mime_type="image/png",
+                filename="prior.txt",
+                mime_type="text/plain",
             ),
         ),
         blobs={"b" * 64: b"prior-bytes"},
@@ -434,8 +457,8 @@ async def test_carried_history_resource_loads_from_the_run_that_accepted_it() ->
                     run_id="run-1",
                     source_ordinal=3,
                     digest="b" * 64,
-                    filename="prior.png",
-                    mime_type="image/png",
+                    filename="prior.txt",
+                    mime_type="text/plain",
                     byte_size=11,
                 ),
             )

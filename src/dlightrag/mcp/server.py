@@ -10,7 +10,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from dlightrag_rag.contracts import SourceType
 from dlightrag_rag.pool import WorkspaceUnavailableError
@@ -480,6 +480,10 @@ async def answer_tool(
         Field(default=False, description="Include semantic highlight phrases in cited sources."),
     ] = False,
     history: HistoryParam = None,
+    mode: Annotated[
+        Literal["auto", "fast", "research"] | None,
+        Field(default=None, description="Answer mode. Omit for auto."),
+    ] = None,
     idempotency_key: IdempotencyKeyParam = None,
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
