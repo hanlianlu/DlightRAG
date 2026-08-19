@@ -105,3 +105,13 @@ async def test_pg_purge_superseded(store: PGAnswerMemoryStore) -> None:
     removed = await store.purge_superseded(older_than=datetime.now(UTC) - timedelta(days=30))
     assert removed == 1
     assert await store.get(owner_id="alpha", memory_id=old.memory_id) is None
+
+
+async def test_pg_prune_write_log(store: PGAnswerMemoryStore) -> None:
+    await store.insert(_record(body="Logged."))
+    async with store._operation_pool.acquire() as conn:  # type: ignore[union-attr]
+        await conn.execute(
+            "UPDATE dlightrag_answer_memory_write_log SET written_at = NOW() - INTERVAL '3 hours'"
+        )
+    removed = await store.prune_write_log(older_than=datetime.now(UTC) - timedelta(hours=2))
+    assert removed >= 1
