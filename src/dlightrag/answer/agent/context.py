@@ -40,6 +40,7 @@ class ContextAssembler:
         history: PriorTurns,
         query_images: list[dict[str, Any]] | None,
         resource_manifest: tuple[ResourceManifestEntry, ...],
+        memory_text: str = "",
     ) -> None:
         self._model_profile = model_profile
         self._context_policy = context_policy
@@ -47,6 +48,7 @@ class ContextAssembler:
         self._control_target = context_policy.compaction_trigger(model_profile)
         self._history = history
         self._question = _question_message(query, query_images, resource_manifest)
+        self._memory_text = memory_text
 
     async def control_turn(
         self,
@@ -163,7 +165,10 @@ class ContextAssembler:
         *,
         tool_schema_tokens: int = 0,
     ) -> list[dict[str, Any]]:
-        system = {"role": "system", "content": agent_control_prompt()}
+        system = {
+            "role": "system",
+            "content": _with_memory(agent_control_prompt(), self._memory_text),
+        }
         head = self._head(system, episode.messages())
         messages = list(head)
         if evidence.row_count:
@@ -181,7 +186,7 @@ class ContextAssembler:
         evidence: EvidenceLedger,
         episode: SessionEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        system = {"role": "system", "content": answer_core()}
+        system = {"role": "system", "content": _with_memory(answer_core(), self._memory_text)}
         head = self._head(system, episode.last_exchange)
         blocks, indexer = self._pack(evidence, head=head, final=True)
         messages = [*head, {"role": "user", "content": blocks}]
@@ -270,6 +275,12 @@ def _empty_tool_message(call: dict[str, Any]) -> dict[str, Any]:
         "name": str(function.get("name") or ""),
         "content": "",
     }
+
+
+def _with_memory(prompt: str, memory_text: str) -> str:
+    if not memory_text:
+        return prompt
+    return f"{prompt}\n\n{memory_text}"
 
 
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:

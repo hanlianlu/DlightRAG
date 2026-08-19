@@ -73,6 +73,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
+from dlightrag.answer.memory import render_auto_recall
 from dlightrag.answer.memory_store import AnswerMemoryStore
 from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
@@ -634,6 +635,10 @@ class AnswerExecutor:
             projected_history=projected_history,
             model_profiles=model_profiles,
         )
+        auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
+        if self._memory_store is not None and auth_mode == "jwt":
+            recalled = await self._memory_store.list_for_recall(owner_id=session.owner_id)
+            run.orchestrator.bind_recall(render_auto_recall(recalled))
         stream: AsyncIterator[str] | None = None
         try:
             journal = session.execution.session_store

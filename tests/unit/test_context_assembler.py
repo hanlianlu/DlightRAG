@@ -227,3 +227,22 @@ async def test_research_turn_packing_runs_off_the_event_loop(
     )
 
     assert estimator_threads and loop_thread not in estimator_threads
+
+
+async def test_control_turn_carries_non_citable_memory() -> None:
+    assembler = ContextAssembler(
+        model_profile=ModelProfile(context_window_tokens=_WINDOW),
+        query="What changed?",
+        history=PriorTurns(),
+        query_images=None,
+        resource_manifest=(),
+        memory_text="Remembered about this owner (not evidence; do not cite):\n- (preference) No email.",
+    )
+    messages = await assembler.control_turn(
+        evidence=EvidenceLedger(),
+        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=0,
+    )
+    system = str(messages[0]["content"])
+    assert "not evidence" in system
+    assert "No email." in system

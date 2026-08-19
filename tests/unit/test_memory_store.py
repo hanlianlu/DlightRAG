@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from dlightrag.answer.errors import MemoryUnavailableError
+from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from dlightrag.answer.memory import MemoryProvenance, MemoryRecord, MemoryWrite
 from dlightrag.answer.memory_store import InMemoryAnswerMemoryStore, commit_memory_write
 
@@ -70,6 +70,23 @@ async def test_commit_remember_and_reject_none_owner() -> None:
     assert written.body == "No email."
     with pytest.raises(MemoryUnavailableError):
         await commit_memory_write(store, _remember(auth_mode="none"))
+
+
+async def test_supersede_missing_id_is_a_public_reject() -> None:
+    store = InMemoryAnswerMemoryStore()
+    with pytest.raises(MemoryWriteRejectedError, match="No matching memory to replace"):
+        await commit_memory_write(
+            store,
+            MemoryWrite(
+                owner_id="alpha",
+                auth_mode="jwt",
+                kind="fact",
+                body="Replacement.",
+                confidence=1.0,
+                provenance=MemoryProvenance(run_id="r", session_id="s"),
+                supersedes_id="missing",
+            ),
+        )
 
 
 async def test_purge_only_old_superseded_rows() -> None:

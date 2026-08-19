@@ -131,6 +131,7 @@ class AnswerSynthesizer:
         query: str,
         contexts: RetrievalContexts,
         conversation_history: PriorTurns | None = None,
+        memory_text: str = "",
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming final answer generation.
 
@@ -147,6 +148,7 @@ class AnswerSynthesizer:
             query,
             contexts,
             conversation_history=conversation_history,
+            memory_text=memory_text,
         )
 
         logger.info(
@@ -185,11 +187,14 @@ class AnswerSynthesizer:
         contexts: RetrievalContexts,
         *,
         conversation_history: PriorTurns | None = None,
+        memory_text: str = "",
     ) -> _PreparedModelCall:
         original_history = list((conversation_history or PriorTurns()).messages)
 
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
             system_prompt = answer_core()
+            if memory_text:
+                system_prompt = f"{system_prompt}\n\n{memory_text}"
             budget = self._image_policy.new_budget()
             prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
             no_context = not any(

@@ -146,6 +146,7 @@ class AnswerOrchestrator:
         self._resolved_mode: ResolvedMode = resolved_mode
         self._delegate_host = delegate_host
         self._memory_host = memory_host
+        self._memory_text = ""
         self._access = AccessScheduler()
 
     def bind_delegate(
@@ -185,6 +186,10 @@ class AnswerOrchestrator:
         self._memory_host.run_id = run_id
         self._memory_host.session_id = session_id
         self._memory_host.store = store
+
+    def bind_recall(self, text: str) -> None:
+        """Attach the non-citable auto-recall block for this run."""
+        self._memory_text = text
 
     def bind_workspace(self, workspace: RunWorkspace) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
@@ -253,6 +258,7 @@ class AnswerOrchestrator:
             query,
             retrieval.contexts,
             conversation_history=conversation_history,
+            memory_text=self._memory_text,
         )
         if stream is not None:
             existing = getattr(stream, "trace", None)
@@ -334,6 +340,7 @@ class AnswerOrchestrator:
                 history=conversation_history or PriorTurns(),
                 query_images=query_images,
                 resource_manifest=self._resource_manifest,
+                memory_text=self._memory_text,
             ),
             tools=tools,
             evidence=evidence,
@@ -357,6 +364,7 @@ class AnswerOrchestrator:
                 history=PriorTurns(),
                 query_images=None,
                 resource_manifest=self._resource_manifest,
+                memory_text=self._memory_text,
             ),
             tools=tools,
             evidence=evidence,

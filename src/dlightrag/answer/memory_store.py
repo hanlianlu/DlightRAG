@@ -184,7 +184,12 @@ async def commit_memory_write(store: AnswerMemoryStore, write: MemoryWrite) -> M
         updated_at=now,
     )
     if (write.supersedes_id or "").strip():
-        await store.supersede(owner_id=write.owner_id, old_id=write.supersedes_id or "", new=record)
+        try:
+            await store.supersede(
+                owner_id=write.owner_id, old_id=write.supersedes_id or "", new=record
+            )
+        except KeyError:
+            raise MemoryWriteRejectedError("No matching memory to replace.") from None
     else:
         await store.insert(record)
     return record
