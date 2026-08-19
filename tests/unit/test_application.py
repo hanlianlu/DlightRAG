@@ -239,6 +239,8 @@ class _Parts:
                 corpora=cast(CorpusAdmin, self.corpora),
                 retrieval=cast(RetrievalService, self.retrieval),
                 answers=cast(AnswerService, self.answers),
+                memory=cast(Any, self.answers),
+                memory_store=cast(Any, self.run_store),
                 web_conversations=cast(WebConversationService, self.web_conversations),
             ),
             web_enabled=web_enabled,

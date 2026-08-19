@@ -223,6 +223,8 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
         await self._run_once(_operation)
 
     async def supersede(self, *, owner_id: str, old_id: str, new: MemoryRecord) -> None:
+        if new.owner_id != owner_id:
+            raise ValueError("supersede cannot change owner")
         old_uuid = _uuid(old_id, label="memory_id")
         params = _insert_params(new)
 

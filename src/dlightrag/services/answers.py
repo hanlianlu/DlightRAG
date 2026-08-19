@@ -259,11 +259,14 @@ def _attachment_bytes(resources: Sequence[ResourceInput]) -> list[bytes]:
     return [resource.content for resource in resources if resource.content is not None]
 
 
-def _prepared_input_payload(run_input: Any, *, requested_mode: str) -> dict[str, Any]:
+def _prepared_input_payload(
+    run_input: Any, *, requested_mode: str, auth_mode: str = "none"
+) -> dict[str, Any]:
     """Encode the M3 prepared input. Research session ids pin only for explicit research."""
     from dlightrag_agent.session.ids import SessionId
 
     payload = dict(run_input.as_request())
+    payload["auth_mode"] = auth_mode
     if requested_mode == "research":
         payload["session_id"] = str(payload.get("session_id") or "") or SessionId.new().value
     else:
@@ -416,6 +419,7 @@ class AnswerService:
         request: AnswerRequest,
         owner_id: str,
         idempotency_key: str | None = None,
+        auth_mode: str = "none",
     ) -> RunCreation:
         """Accept one durable run and return its descriptor without waiting.
 
@@ -430,6 +434,7 @@ class AnswerService:
             idempotency_key=idempotency_key,
             idempotency_fingerprint=None,
             acceptor=self._store,
+            auth_mode=auth_mode,
         )
         if creation is None:
             raise RuntimeError("Answer run acceptance returned no descriptor")
@@ -443,6 +448,7 @@ class AnswerService:
         idempotency_key: str,
         idempotency_fingerprint: str,
         acceptor: AnswerRunAcceptor[T],
+        auth_mode: str = "none",
     ) -> T | None:
         """Accept through a typed atomic linker while preserving one run pipeline."""
         return await self._accept(
@@ -451,6 +457,7 @@ class AnswerService:
             idempotency_key=idempotency_key,
             idempotency_fingerprint=idempotency_fingerprint,
             acceptor=acceptor,
+            auth_mode=auth_mode,
         )
 
     async def _accept[T](
@@ -461,6 +468,7 @@ class AnswerService:
         idempotency_key: str | None,
         idempotency_fingerprint: str | None,
         acceptor: AnswerRunAcceptor[T],
+        auth_mode: str = "none",
     ) -> T | None:
         run_request = _normalized_request(request)
         fingerprint = idempotency_fingerprint or answer_run_request_fingerprint(
@@ -499,7 +507,9 @@ class AnswerService:
             requested_mode=requested_mode,
             allowed_modes=allowed_modes,
         )
-        prepared_input = _prepared_input_payload(run_input, requested_mode=requested_mode)
+        prepared_input = _prepared_input_payload(
+            run_input, requested_mode=requested_mode, auth_mode=auth_mode
+        )
         _require_prepared_input_bounds(prepared_input)
         resources_payload = _accepted_resource_payloads(
             run_input, attachment_bytes=attachment_bytes

@@ -47,7 +47,12 @@ from dlightrag.answer.client_contracts import (
     QueryImage,
     conversation_history_as_dicts,
 )
-from dlightrag.answer.errors import AnswerInputError, InvalidToolConfigurationError
+from dlightrag.answer.errors import (
+    AnswerInputError,
+    InvalidToolConfigurationError,
+    MemoryUnavailableError,
+    MemoryWriteRejectedError,
+)
 from dlightrag.answer.resources.links import answer_link_resources
 from dlightrag.answer.runs.results import project_answer_result
 from dlightrag.application import Application
@@ -511,6 +516,7 @@ async def answer_tool(
             ),
             idempotency_key=args.idempotency_key,
             owner_id=_owner_id(),
+            auth_mode=current_request_scope().auth_mode,
         )
     except IdempotencyKeyConflict:
         raise ValueError(
@@ -617,6 +623,54 @@ async def list_answer_artifacts_tool(
             for item in items
         ]
     }
+
+
+@mcp_app.tool(
+    name="list_memories",
+    description="List this caller's stored long-term memories. Not evidence.",
+    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+)
+async def list_memories_tool() -> dict[str, Any]:
+    application = await _ensure_application()
+    try:
+        rows = await application.memory.list_active(
+            owner_id=_owner_id(), auth_mode=current_request_scope().auth_mode
+        )
+    except MemoryUnavailableError as exc:
+        raise ValueError(exc.public_message) from exc
+    return {
+        "memories": [
+            {
+                "memory_id": row.memory_id,
+                "kind": row.kind,
+                "body": row.body,
+                "confidence": row.confidence,
+            }
+            for row in rows
+        ]
+    }
+
+
+@mcp_app.tool(
+    name="forget_memory",
+    description="Permanently delete one stored memory by id.",
+    annotations=ToolAnnotations(read_only_hint=False, idempotent_hint=True),
+)
+async def forget_memory_tool(
+    memory_id: Annotated[str, Field(description="Memory id")],
+) -> dict[str, Any]:
+    application = await _ensure_application()
+    try:
+        await application.memory.forget(
+            owner_id=_owner_id(),
+            auth_mode=current_request_scope().auth_mode,
+            memory_id=memory_id,
+        )
+    except MemoryUnavailableError as exc:
+        raise ValueError(exc.public_message) from exc
+    except MemoryWriteRejectedError as exc:
+        raise ValueError(exc.public_message) from exc
+    return {"forgotten": memory_id}
 
 
 @mcp_app.tool(

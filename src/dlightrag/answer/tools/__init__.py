@@ -8,6 +8,7 @@ from dlightrag.answer.tools.delegate import (
     child_session_id,
     delegate_research_tool,
 )
+from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.search import KnowledgeRetrieval, SearchInput, WebSearch
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "WebSearch",
     "ChildOutcome",
     "DelegateHost",
+    "MemoryHost",
     "compose_research_tools",
     "child_session_id",
     "delegate_research_tool",

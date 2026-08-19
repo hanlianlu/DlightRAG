@@ -258,6 +258,18 @@ class AnswerRunClient:
         payload = response.json()
         return list(payload.get("runs") or [])
 
+    async def list_memories(self) -> list[dict[str, Any]]:
+        response = await self._client.get(self._url("/memory"), headers=self._headers)
+        response.raise_for_status()
+        payload = response.json()
+        return list(payload.get("memories") or [])
+
+    async def forget_memory(self, memory_id: str) -> None:
+        response = await self._client.delete(
+            self._url(f"/memory/{memory_id}"), headers=self._headers
+        )
+        response.raise_for_status()
+
     async def list_artifacts(self, run_id: str) -> list[dict[str, Any]]:
         response = await self._client.get(
             self._url(f"/answer/{run_id}/artifacts"), headers=self._headers

@@ -31,6 +31,16 @@ def owner_id_from_principal(
 
 
 DEPLOYMENT_OWNER_ID = owner_id_from_principal(auth_mode="none", user_id="anonymous")
+SIMPLE_OWNER_ID = owner_id_from_principal(auth_mode="simple", user_id="shared")
+
+
+def auth_mode_for_owner(owner_id: str) -> str:
+    """Recover the auth mode that produced this owner namespace."""
+    if owner_id == DEPLOYMENT_OWNER_ID:
+        return "none"
+    if owner_id == SIMPLE_OWNER_ID:
+        return "simple"
+    return "jwt"
 
 
 def owner_id_from_user(user: UserContext | None) -> str:
@@ -46,6 +56,8 @@ def owner_id_from_user(user: UserContext | None) -> str:
 
 __all__ = [
     "DEPLOYMENT_OWNER_ID",
+    "SIMPLE_OWNER_ID",
+    "auth_mode_for_owner",
     "UserContext",
     "owner_id_from_principal",
     "owner_id_from_user",

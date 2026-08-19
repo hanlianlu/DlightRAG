@@ -46,6 +46,7 @@ from dlightrag.answer.resources.registry import ResourceRegistry
 from dlightrag.answer.synthesizer import AnswerSynthesizer
 from dlightrag.answer.tools import KnowledgeRetrieval, WebSearch, compose_research_tools
 from dlightrag.answer.tools.delegate import DelegateHost
+from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.workspace import RunWorkspace
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,7 @@ class AnswerOrchestrator:
         resource_reader: object | None = None,
         resolved_mode: ResolvedMode,
         delegate_host: DelegateHost | None = None,
+        memory_host: MemoryHost | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._retrieve_knowledge_base = retrieve_knowledge_base
@@ -143,6 +145,7 @@ class AnswerOrchestrator:
         self._workspace: RunWorkspace | None = None
         self._resolved_mode: ResolvedMode = resolved_mode
         self._delegate_host = delegate_host
+        self._memory_host = memory_host
         self._access = AccessScheduler()
 
     def bind_delegate(
@@ -165,6 +168,23 @@ class AnswerOrchestrator:
         self._delegate_host.load_child = load_child
         self._delegate_host.finish_child = finish_child
         self._delegate_host.run_child = run_child
+
+    def bind_memory(
+        self,
+        *,
+        owner_id: str,
+        auth_mode: str,
+        run_id: str,
+        session_id: str,
+        store: Any,
+    ) -> None:
+        if self._memory_host is None:
+            return
+        self._memory_host.owner_id = owner_id
+        self._memory_host.auth_mode = auth_mode
+        self._memory_host.run_id = run_id
+        self._memory_host.session_id = session_id
+        self._memory_host.store = store
 
     def bind_workspace(self, workspace: RunWorkspace) -> None:
         """Attach the claimed run workspace used for tools, spill, and publication."""
@@ -401,6 +421,7 @@ class AnswerOrchestrator:
             scheduler=self._access,
             spill=(None if child or self._workspace is None else self._spill_writer()),
             delegate_host=None if child else self._delegate_host,
+            memory_host=None if child else self._memory_host,
             child=child,
         )
 

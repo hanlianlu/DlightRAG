@@ -373,6 +373,7 @@ async def create_answer_run(
             request=_service_request(body, uploads, workspaces=workspaces),
             owner_id=owner_id_from_user(user),
             idempotency_key=_idempotency_key(request),
+            auth_mode=user.auth_mode,
         )
     except IdempotencyKeyConflict:
         raise HTTPException(

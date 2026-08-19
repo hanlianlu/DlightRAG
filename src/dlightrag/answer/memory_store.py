@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
+from dlightrag.answer.errors import MemoryWriteRejectedError
 from dlightrag.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
     MemoryRecord,
@@ -73,6 +74,8 @@ class InMemoryAnswerMemoryStore:
         self._log(record.owner_id)
 
     async def supersede(self, *, owner_id: str, old_id: str, new: MemoryRecord) -> None:
+        if new.owner_id != owner_id:
+            raise ValueError("supersede cannot change owner")
         current = self._rows.get((owner_id, old_id))
         if current is None or current.status != "active":
             raise KeyError(old_id)
@@ -157,9 +160,15 @@ async def commit_memory_write(store: AnswerMemoryStore, write: MemoryWrite) -> M
     evaluate_memory_write(filled)
     if write.action == "forget":
         if (write.supersedes_id or "").strip():
-            await store.forget(owner_id=write.owner_id, memory_id=write.supersedes_id or "")
+            removed = await store.forget(
+                owner_id=write.owner_id, memory_id=write.supersedes_id or ""
+            )
+            if not removed:
+                raise MemoryWriteRejectedError("No matching memory to forget.")
             return None
-        await store.forget_matching(owner_id=write.owner_id, body=write.body)
+        deleted = await store.forget_matching(owner_id=write.owner_id, body=write.body)
+        if deleted == 0:
+            raise MemoryWriteRejectedError("No matching memory to forget.")
         return None
     now = datetime.now(UTC)
     record = MemoryRecord(

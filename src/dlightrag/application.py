@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from dlightrag_rag.pool import WorkspacePool
 
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
+    from dlightrag.adapters.postgres.memory import PGAnswerMemoryStore
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.answer.capabilities import AnswerCapabilityCoordinator
     from dlightrag.answer.model_runtime import AnswerModelRuntime
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from dlightrag.runtime.cancellation import RunCancellationListener
     from dlightrag.services.answers import AnswerService
     from dlightrag.services.corpora import CorpusAdmin
+    from dlightrag.services.memory import MemoryService
     from dlightrag.services.retrieval import RetrievalService
     from dlightrag.web.conversations import WebConversationService
 
@@ -61,6 +63,8 @@ class _ApplicationComponents:
     corpora: CorpusAdmin
     retrieval: RetrievalService
     answers: AnswerService
+    memory: MemoryService
+    memory_store: PGAnswerMemoryStore
     web_conversations: WebConversationService
 
 
@@ -97,6 +101,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
     from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
     from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
+    from dlightrag.adapters.postgres.memory import PGAnswerMemoryStore
     from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.adapters.retrieval import (
@@ -227,6 +232,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     )
 
     run_store = PGAnswerRunStore()
+    memory_store = PGAnswerMemoryStore()
     coordinator = RunCoordinator(
         store=run_store,
         executor=AnswerExecutor(
@@ -241,6 +247,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             execution_environment=config.agent.execution_environment,
             workspace_root=config.agent.workspace_root,
             working_dir=config.working_dir,
+            memory_store=memory_store,
         ),
         answer_worker_concurrency=config.runtime.answer_worker_concurrency,
     )
@@ -265,6 +272,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             model_settings_for_role(config, role)
         ),
     )
+    memory = MemoryService(memory_store)
     web_store = PGWebConversationStore(run_store=run_store)
     return _ApplicationComponents(
         health=health,
@@ -278,6 +286,8 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         corpora=corpora,
         retrieval=retrieval,
         answers=answers,
+        memory=memory,
+        memory_store=memory_store,
         web_conversations=WebConversationService(
             store=web_store,
             answers=answers,
@@ -331,6 +341,10 @@ class Application:
     @property
     def answers(self) -> AnswerService:
         return self._open().answers
+
+    @property
+    def memory(self) -> MemoryService:
+        return self._open().memory
 
     @property
     def retrieval(self) -> RetrievalService:

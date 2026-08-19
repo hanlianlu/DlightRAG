@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from dlightrag.answer.errors import InvalidToolConfigurationError
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.tools.delegate import DelegateHost, delegate_research_tool
+from dlightrag.answer.tools.memory import MemoryHost, forget_tool, recall_memory_tool, remember_tool
 from dlightrag.answer.tools.search import (
     KnowledgeRetrieval,
     RegisterWebSource,
@@ -37,6 +38,7 @@ def compose_research_tools(
     spill: Any | None = None,
     ripgrep: str = "rg",
     delegate_host: DelegateHost | None = None,
+    memory_host: MemoryHost | None = None,
     child: bool = False,
 ) -> list[AgentTool]:
     """Bind one run's tools to its ledger. Path tools appear only with an environment."""
@@ -76,6 +78,14 @@ def compose_research_tools(
         tools.extend(extras)
     if delegate_host is not None and not child:
         tools.append(delegate_research_tool(host=delegate_host))
+    if memory_host is not None and not child:
+        tools.extend(
+            (
+                remember_tool(host=memory_host),
+                forget_tool(host=memory_host),
+                recall_memory_tool(host=memory_host),
+            )
+        )
     _reject_duplicate_names(tools)
     return tools
 

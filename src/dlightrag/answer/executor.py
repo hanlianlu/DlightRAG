@@ -73,6 +73,7 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
+from dlightrag.answer.memory_store import AnswerMemoryStore
 from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import is_empty_answer
@@ -96,6 +97,7 @@ from dlightrag.answer.runs.execution import (
 from dlightrag.answer.runs.results import store_answer_result
 from dlightrag.answer.sources import project_contexts_for_client
 from dlightrag.answer.tools.delegate import ChildOutcome, DelegateHost
+from dlightrag.answer.tools.memory import MemoryHost
 from dlightrag.answer.tools.resources import build_resource_tools, make_resource_reader
 from dlightrag.answer.tools.web import ExaSearch
 from dlightrag.answer.workspace import (
@@ -512,6 +514,7 @@ class AnswerExecutor:
         execution_environment: str = "disabled",
         workspace_root: str | None = None,
         working_dir: str = "./dlightrag_storage",
+        memory_store: AnswerMemoryStore | None = None,
     ) -> None:
         self._store = store
         self._pool = pool
@@ -524,6 +527,7 @@ class AnswerExecutor:
         self._execution_environment = execution_environment
         self._workspace_root_setting = workspace_root
         self._working_dir = working_dir
+        self._memory_store = memory_store
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
         with model_call_scope((session.owner_id, session.run_id)):
@@ -661,6 +665,13 @@ class AnswerExecutor:
                     request.session_id or research_session_id or SessionId.new().value
                 )
                 store = self._store
+                run.orchestrator.bind_memory(
+                    owner_id=session.owner_id,
+                    auth_mode=str((session.prepared_input or {}).get("auth_mode") or "none"),
+                    run_id=session.run_id,
+                    session_id=session_id.value,
+                    store=self._memory_store,
+                )
                 run.orchestrator.bind_delegate(
                     parent_session_id=session_id,
                     run_id=session.run_id,
@@ -931,6 +942,11 @@ class AnswerExecutor:
                 environment=environment,
                 resolved_mode=resolved_mode,
                 delegate_host=DelegateHost() if resolved_mode == "research" else None,
+                memory_host=(
+                    MemoryHost()
+                    if resolved_mode == "research" and self._memory_store is not None
+                    else None
+                ),
                 resource_reader=(
                     make_resource_reader(resolved.registry, text_window_budget)
                     if resolved.registry is not None
