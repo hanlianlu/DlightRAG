@@ -296,6 +296,7 @@ type = "forbidden"
 source_modules = ["dlightrag.runtime"]
 forbidden_modules = [
     "dlightrag.adapters.postgres",
+    "dlightrag.answer",
     "dlightrag.api",
     "dlightrag.mcp",
     "dlightrag.web",

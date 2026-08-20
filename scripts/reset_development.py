@@ -129,12 +129,8 @@ def _working_dir_root(repo_root: Path, env: dict[str, str]) -> Path:
 
 def _workspace_root(repo_root: Path, env: dict[str, str]) -> Path | None:
     """Resolve the optional Agent Workspace root without importing product code."""
-    configured = env.get("DLIGHTRAG_AGENT__WORKSPACE_ROOT") or env.get(
-        "DLIGHTRAG_AGENT_WORKSPACE_ROOT"
-    )
-    execution = env.get("DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT") or env.get(
-        "DLIGHTRAG_AGENT_EXECUTION_ENVIRONMENT"
-    )
+    configured = env.get("DLIGHTRAG_AGENT__WORKSPACE_ROOT")
+    execution = env.get("DLIGHTRAG_AGENT__EXECUTION_ENVIRONMENT")
     config_file = repo_root / "config.yaml"
     if config_file.is_file():
         for raw in config_file.read_text(encoding="utf-8").splitlines():
@@ -511,6 +507,15 @@ def clear_working_dir_children(working_dir: Path, report: ResetReport) -> None:
             report.fail("working-dir", f"cannot remove {child}: {exc}")
 
 
+def clear_runtime_dirs(working_dir: Path, workspace_root: Path | None, report: ResetReport) -> None:
+    """Clear the working directory and the optional Agent Workspace root."""
+    clear_working_dir_children(working_dir, report)
+    for violation in verify_working_dir_empty(working_dir):
+        report.fail("verify-working-dir", violation)
+    if workspace_root is not None:
+        clear_working_dir_children(workspace_root, report)
+
+
 def verify_working_dir_empty(working_dir: Path) -> list[str]:
     violations: list[str] = []
     if working_dir.exists():
@@ -673,12 +678,7 @@ async def main(argv: list[str] | None = None) -> int:
         )
         # Independent cleanup steps continue past earlier failures so one
         # failure never hides the rest; every failure is reported (M3-D39).
-        clear_working_dir_children(working_dir, report)
-        for violation in verify_working_dir_empty(working_dir):
-            report.fail("verify-working-dir", violation)
-        workspace_root = _workspace_root(repo_root, env)
-        if workspace_root is not None:
-            clear_working_dir_children(workspace_root, report)
+        clear_runtime_dirs(working_dir, _workspace_root(repo_root, env), report)
         _print_report(report, verbose=args.verbose)
         print("Development reset complete." if report.ok else "Development reset FAILED.")
         return 0 if report.ok else 1
@@ -699,12 +699,7 @@ async def main(argv: list[str] | None = None) -> int:
     for violation in validate_working_dir(working_dir, repo_root):
         report.fail("target", violation)
     if not report.failures:
-        clear_working_dir_children(working_dir, report)
-        for violation in verify_working_dir_empty(working_dir):
-            report.fail("verify-working-dir", violation)
-        workspace_root = _workspace_root(repo_root, env)
-        if workspace_root is not None:
-            clear_working_dir_children(workspace_root, report)
+        clear_runtime_dirs(working_dir, _workspace_root(repo_root, env), report)
     _print_report(report, verbose=args.verbose)
     print("Development reset complete." if report.ok else "Development reset FAILED.")
     return 0 if report.ok else 1

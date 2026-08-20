@@ -158,7 +158,7 @@ def _delete_action(value: Any) -> str:
 
 
 class TestSchema:
-    async def test_creates_exactly_the_final_m3_tables(self, store, pool) -> None:
+    async def test_creates_exactly_the_answer_schema_tables(self, store, pool) -> None:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT table_name FROM information_schema.tables "

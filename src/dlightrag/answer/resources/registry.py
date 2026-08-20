@@ -472,7 +472,7 @@ class ResourceRegistry:
     async def _read_link_text_view(self, resource: _Registered) -> _ConvertedResource:
         """Read a link, falling back to provider text only when direct fails/empty.
 
-        Checkpoint-restored bytes already passed the complete fetch gate and
+        Settled bytes already passed the complete fetch gate and
         never re-enter the network path. Otherwise SSRF revalidation runs before
         any direct, cached, or fallback path, so a private, invalid, or credential
         URL raises here and never reaches the fallback.
