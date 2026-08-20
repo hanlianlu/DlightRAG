@@ -863,15 +863,7 @@ class AnswerExecutor:
                 },
             )
         )
-        initial = ContextProjection(
-            projection_id=ProjectionId.new(),
-            first_retained_sequence=1,
-            covered_through_sequence=0,
-            summary=None,
-            token_anchors=(
-                TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
-            ),
-        )
+        initial = _initial_projection()
         commit = await journal.append(
             session_id=session_id, expected_version=0, entries=entries, projection=initial
         )
@@ -1581,15 +1573,7 @@ async def _seed_child_session(
             },
         ),
     ]
-    initial = ContextProjection(
-        projection_id=ProjectionId.new(),
-        first_retained_sequence=1,
-        covered_through_sequence=0,
-        summary=None,
-        token_anchors=(
-            TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
-        ),
-    )
+    initial = _initial_projection()
     commit = await journal.append(
         session_id=session_id, expected_version=0, entries=entries, projection=initial
     )
@@ -1767,6 +1751,19 @@ class FastRunBoundaries:
             self._progress_version = committed.progress_version
             return
         raise LeaseLostError
+
+
+def _initial_projection() -> ContextProjection:
+    """The seed projection every fresh parent or child journal commits."""
+    return ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=1,
+        covered_through_sequence=0,
+        summary=None,
+        token_anchors=(
+            TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
+        ),
+    )
 
 
 def _last_entry_sequence(snapshot: Any) -> int:

@@ -254,9 +254,13 @@ def validate_projection_commit(
 
 
 _INPUT_USAGE_KEYS = ("prompt_tokens", "input_tokens", "prompt_token_count")
-_OUTPUT_USAGE_KEYS = ("completion_tokens", "output_tokens", "candidates_token_count")
-_INPUT_USAGE_EXTRAS = ("cache_read_input_tokens", "cache_creation_input_tokens")
-_OUTPUT_USAGE_EXTRAS = ("thoughts_token_count", "reasoning_tokens")
+_OUTPUT_USAGE_KEYS = (
+    "completion_tokens",
+    "output_tokens",
+    "candidates_tokens",
+    "candidates_token_count",
+)
+_OUTPUT_USAGE_EXTRAS = ("thoughts_tokens", "thoughts_token_count", "reasoning_tokens")
 
 
 def _usage_int(usage: Mapping[str, object], key: str) -> int | None:
@@ -296,7 +300,7 @@ def token_anchor_from_usage(
     measured_output = _first_usage_int(usage, _OUTPUT_USAGE_KEYS) or 0
     return TokenAnchor(
         through_sequence=through_sequence,
-        measured_input_tokens=measured_input + _extra_usage_int(usage, _INPUT_USAGE_EXTRAS),
+        measured_input_tokens=measured_input,
         measured_output_tokens=measured_output + _extra_usage_int(usage, _OUTPUT_USAGE_EXTRAS),
     )
 
@@ -347,7 +351,7 @@ def live_anchor(
 def accounted_input_tokens(
     *,
     estimated_input_tokens: int,
-    live_anchor: TokenAnchor | None,
+    measured_anchor: TokenAnchor | None,
     unanchored_tail_tokens: int,
 ) -> int:
     """Combine one live measured anchor with the not-yet-anchored tail.
@@ -358,9 +362,9 @@ def accounted_input_tokens(
     """
     if estimated_input_tokens < 0 or unanchored_tail_tokens < 0:
         raise ValueError("token estimates cannot be negative")
-    if live_anchor is None:
+    if measured_anchor is None:
         return estimated_input_tokens
-    return live_anchor.measured_input_tokens + unanchored_tail_tokens
+    return measured_anchor.measured_input_tokens + unanchored_tail_tokens
 
 
 __all__ = [

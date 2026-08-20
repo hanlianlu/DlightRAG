@@ -216,18 +216,26 @@ class TestMeasuredAnchors:
         assert token_anchor_from_usage(4, {"completion_tokens": 20}) is None
         assert token_anchor_from_usage(4, {"prompt_tokens": -1}) is None
 
-    def test_cache_and_reasoning_tokens_join_the_measurement(self) -> None:
+    def test_reasoning_tokens_join_output_and_cache_does_not_inflate_input(self) -> None:
         anchor = token_anchor_from_usage(
             7,
             {
                 "prompt_tokens": 50,
                 "completion_tokens": 10,
                 "cache_read_input_tokens": 5,
-                "thoughts_token_count": 3,
+                "thoughts_tokens": 3,
             },
         )
         assert anchor == TokenAnchor(
-            through_sequence=7, measured_input_tokens=55, measured_output_tokens=13
+            through_sequence=7, measured_input_tokens=50, measured_output_tokens=13
+        )
+
+    def test_gemini_remapped_output_keys_are_measured(self) -> None:
+        anchor = token_anchor_from_usage(
+            2, {"prompt_tokens": 40, "candidates_tokens": 8, "thoughts_tokens": 2}
+        )
+        assert anchor == TokenAnchor(
+            through_sequence=2, measured_input_tokens=40, measured_output_tokens=10
         )
 
     def test_projection_keeps_coverage_when_recording_an_anchor(self) -> None:
@@ -284,7 +292,7 @@ class TestMeasuredAnchors:
         assert (
             accounted_input_tokens(
                 estimated_input_tokens=120,
-                live_anchor=None,
+                measured_anchor=None,
                 unanchored_tail_tokens=15,
             )
             == 120
@@ -292,7 +300,7 @@ class TestMeasuredAnchors:
         assert (
             accounted_input_tokens(
                 estimated_input_tokens=120,
-                live_anchor=TokenAnchor(
+                measured_anchor=TokenAnchor(
                     through_sequence=3, measured_input_tokens=80, measured_output_tokens=4
                 ),
                 unanchored_tail_tokens=15,
@@ -304,6 +312,6 @@ class TestMeasuredAnchors:
         with pytest.raises(ValueError):
             accounted_input_tokens(
                 estimated_input_tokens=-1,
-                live_anchor=None,
+                measured_anchor=None,
                 unanchored_tail_tokens=0,
             )
