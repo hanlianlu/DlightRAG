@@ -899,7 +899,9 @@ Set `api_host: 0.0.0.0` only when the server is behind a trusted network or
 Use [security.md](security.md) for `simple`, static JWT, JWKS/OIDC issuer, and
 access-control deployment guidance. The related config fields are `auth_mode`,
 `api_auth_token`, `jwt_verification_key`, `jwt_jwks_url`, `jwt_issuer`,
-`jwt_audience`, `jwt_algorithm`, `cors_allow_origins`, and `access_control`.
+`jwt_audience`, `jwt_algorithm`, `cors_allow_origins`, `access_control`, and
+`web_identity` (edge-asserted Web identity: `edge` in `cloudflare | azure |
+aws`, plus `issuer`, `audience`, and an optional `jwks_url` required for `aws`).
 
 The Python SDK and CLI resolve their HTTP target from `DLIGHTRAG_API_URL` and an
 optional bearer from `DLIGHTRAG_API_TOKEN` (or the deployment-only

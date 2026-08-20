@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {bus} from '../events/bus.ts';
-import {csrfHeaders} from '../api/csrf.ts';
+import {csrfHeaders} from '../api/csrf';
 import {isAbortError} from '../lib/errors.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
 import {ingestStore} from '../stores/ingestStore.ts';

@@ -188,7 +188,7 @@ def _reject_web_mutation(request: Request) -> bool:
     """
     if request.method.upper() not in _UNSAFE_METHODS:
         return False
-    if not request.url.path.startswith("/web/"):
+    if not request.url.path.startswith("/web"):
         return False
     if not _csrf_header_matches(request):
         return True
@@ -226,8 +226,8 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/web"):
             return await call_next(request)
         if path in _PUBLIC_WEB_PATHS:
-            # Login CSRF: a browser-driven login POST must be exact same-origin.
-            if path == "/web/login" and request.method.upper() == "POST":
+            # Login/logout CSRF: browser-driven POSTs must be exact same-origin.
+            if path in {"/web/login", "/web/logout"} and request.method.upper() == "POST":
                 origin = request.headers.get("Origin")
                 if origin is not None and not _has_exact_same_origin(request):
                     return PlainTextResponse("Cross-origin request rejected", status_code=403)
@@ -269,10 +269,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         if _reject_web_mutation(request):
             return PlainTextResponse("Cross-origin request rejected", status_code=403)
 
-        response = await call_next(request)
-        if request.method.upper() == "GET":
-            _ensure_csrf_cookie(request, response)
-        return response
+        return await self._finish_web_response(request, call_next)
 
     async def _dispatch_edge_identity(self, cfg, request: Request, call_next) -> Response:
         """Resolve the Web caller from the configured edge credential only."""
@@ -292,6 +289,10 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         )
         if _reject_web_mutation(request):
             return PlainTextResponse("Cross-origin request rejected", status_code=403)
+        return await self._finish_web_response(request, call_next)
+
+    async def _finish_web_response(self, request: Request, call_next) -> Response:
+        """Run the request and issue the double-submit cookie on GET responses."""
         response = await call_next(request)
         if request.method.upper() == "GET":
             _ensure_csrf_cookie(request, response)

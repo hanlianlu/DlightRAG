@@ -208,6 +208,16 @@ web_conversations:
 # jwt_audience: ""
 # jwt_algorithm: "HS256"
 
+## Edge-asserted Web identity (auth_mode: jwt). The browser front door
+## (Cloudflare Access / Azure Easy Auth / AWS Amplify-CloudFront) authenticates
+## the human; the Web surface verifies the edge credential per request. See
+## docs/security.md for the per-edge setup.
+# web_identity:
+#   edge: cloudflare
+#   issuer: ""
+#   audience: ""
+#   jwks_url: ""
+
 ## Resource authorization. Default allow_all lets any authenticated caller use
 ## any workspace. Switch to jwt_claims to map verified JWT claims to workspace
 ## and action permissions; requires auth_mode: jwt and at least one rule.

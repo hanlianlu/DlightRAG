@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {csrfHeaders} from '../api/csrf.ts';
+import {csrfHeaders} from '../api/csrf';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';

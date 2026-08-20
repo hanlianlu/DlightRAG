@@ -427,6 +427,31 @@ class TestAwsEdgeProvider:
                 {"edge": "aws", "issuer": self.COGNITO_ISSUER, "audience": self.COGNITO_AUDIENCE}
             )
 
+    def test_expired_forwarded_token_is_rejected(self, signing_key, bearer_jwks) -> None:
+        provider = self._provider()
+        expired = jwt.encode(
+            {
+                "sub": "cognito-user-uuid",
+                "iss": self.COGNITO_ISSUER,
+                "aud": self.COGNITO_AUDIENCE,
+                "exp": datetime.now(UTC) - timedelta(seconds=60),
+                "iat": datetime.now(UTC) - timedelta(minutes=5),
+            },
+            signing_key,
+            algorithm="RS256",
+            headers={"kid": "test-key"},
+        )
+        with pytest.raises(EdgeIdentityError) as raised:
+            provider.authenticate(_request(headers={"Authorization": f"Bearer {expired}"}))
+        assert raised.value.kind == "expired_credential"
+
+    def test_tampered_forwarded_token_is_rejected(self, signing_key, bearer_jwks) -> None:
+        provider = self._provider()
+        raw = self._forwarded_token(signing_key)
+        tampered = raw[:-4] + ("AAAA" if raw[-4:] != "AAAA" else "BBBB")
+        with pytest.raises(EdgeIdentityError, match="Invalid token"):
+            provider.authenticate(_request(headers={"Authorization": f"Bearer {tampered}"}))
+
     def test_factory_builds_the_aws_provider(self, bearer_jwks) -> None:
         provider = edge_identity_provider(
             WebIdentitySettings.model_validate(

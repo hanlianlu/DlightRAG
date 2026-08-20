@@ -114,3 +114,11 @@ class TestWebCsrfHardening:
             headers={"Origin": "https://evil.example.com"},
         )
         assert response.status_code == 403
+
+    def test_logout_post_rejects_cross_origin_browsers(self) -> None:
+        client = TestClient(_app(_jwt_config()))
+        response = client.post(
+            "/web/logout",
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert response.status_code == 403

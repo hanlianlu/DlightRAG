@@ -15,8 +15,54 @@ host a full identity-provider login system.
 For enterprise deployments, use an external identity provider or gateway to
 authenticate users and issue tokens. DlightRAG verifies those tokens and maps
 verified claims to workspace permissions when access control is enabled.
-The browser still pastes that bearer into an HttpOnly cookie; the later Web
-identity UX is on [roadmap.md](roadmap.md).
+The browser still pastes that bearer into an HttpOnly cookie when no
+`web_identity` edge is configured; the edge-asserted Web identity path is
+described below.
+
+## Edge-Asserted Web Identity
+
+The Web frontend is never bare-exposed: an edge (Cloudflare Access, Azure Easy
+Auth, or AWS Amplify/CloudFront auth) authenticates the human, and the Web
+surface verifies the edge credential per request — statelessly, with no login
+page, no DlightRAG-issued cookie, and no token in any response JSON. REST and
+MCP keep verifying their own bearer JWTs and never accept edge assertions.
+
+```yaml
+auth_mode: jwt
+web_identity:
+  edge: cloudflare        # cloudflare | azure | aws
+  issuer: https://<team>.cloudflareaccess.com
+  audience: <application-aud-tag>
+```
+
+Per edge:
+
+| Edge | Verified credential | Config |
+|---|---|---|
+| Cloudflare Access | `Cf-Access-Jwt-Assertion` header (fallback: `CF_Authorization` cookie JWT) | `issuer` = team domain; `audience` = application AUD tag; team certs derived automatically |
+| Azure Easy Auth | `X-MS-TOKEN-AAD-ID-TOKEN` (a real AAD ID token) | `issuer` = `https://login.microsoftonline.com/<tenant>/v2.0` (or without `/v2.0`); `audience` = App Registration client id; discovery keys derived automatically |
+| AWS Amplify / CloudFront | bearer token the edge forwards in the `Authorization` header | `issuer` = IdP issuer (e.g. Cognito user pool); `jwks_url` required; `audience` = app client id |
+
+The verified token's `iss` and `sub` project the owner exactly like a REST
+bearer: a human who used paste-token login and the same human via the edge are
+**different owners** (different issuers). Migrating from paste to edge starts
+with fresh owner-scoped data.
+
+The unsigned Azure principal header (`X-MS-CLIENT-PRINCIPAL`) is parsed only as
+display enrichment and never influences authorization. A missing, expired, or
+unverifiable edge credential is `401`; the Web surface renders no login page.
+
+### Edge trust and state-changing routes
+
+The origin must only accept connections from the edge (deployment firewalling:
+Cloudflare IP ranges, or the platform's own injection point). Header injection
+is otherwise spoofable — the code verifies cryptography, never trust alone.
+
+State-changing `/web` routes are hardened with a JS-readable double-submit
+cookie (`dlightrag_web_csrf`) that browsers must echo as `X-CSRF-Token`,
+plus exact same-origin `Origin` checks; cookie-authenticated (paste)
+mutations always require an `Origin` header, and login POSTs reject
+cross-origin browsers. `secrets.compare_digest` compares the token.
 
 ## Authentication Modes
 
