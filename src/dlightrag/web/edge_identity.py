@@ -30,13 +30,6 @@ EdgeIdentityErrorKind = Literal[
     "misconfigured",
 ]
 
-_EDGE_ERROR_STATUS: dict[EdgeIdentityErrorKind, int] = {
-    "missing_credential": 401,
-    "invalid_credential": 401,
-    "expired_credential": 401,
-    "misconfigured": 500,
-}
-
 _CLOUDFLARE_CERTS_PATH = "/cdn-cgi/access/certs"
 
 
@@ -47,6 +40,12 @@ class EdgeIdentity:
     issuer: str
     subject: str
     claims: dict[str, Any]
+    display_claims: dict[str, Any] | None = None
+    """Unsigned, platform-injected enrichment (e.g. Azure's principal header).
+
+    Never merged into ``claims``: it is not cryptographically verified and
+    must not influence authorization.
+    """
 
 
 class EdgeIdentityError(RuntimeError):
@@ -55,10 +54,6 @@ class EdgeIdentityError(RuntimeError):
     def __init__(self, kind: EdgeIdentityErrorKind, message: str) -> None:
         super().__init__(message)
         self.kind: EdgeIdentityErrorKind = kind
-
-    @property
-    def http_status(self) -> int:
-        return _EDGE_ERROR_STATUS[self.kind]
 
 
 class EdgeIdentityProvider(Protocol):
@@ -146,13 +141,83 @@ def edge_identity_provider(settings: WebIdentitySettings) -> EdgeIdentityProvide
     """Build the configured edge provider, raising on unknown edges."""
     if settings.edge == "cloudflare":
         return CloudflareAccessProvider(settings)
+    if settings.edge == "azure":
+        return AzureEasyAuthProvider(settings)
     raise EdgeIdentityError(
         "misconfigured",
         f"Unsupported web identity edge: {settings.edge}",
     )
 
 
+class AzureEasyAuthProvider:
+    """Verify the AAD ID token Azure Easy Auth passes through.
+
+    Easy Auth authenticates the browser and forwards the IdP token as
+    ``X-MS-TOKEN-AAD-ID-TOKEN``. That token is a real AAD ID token: it is
+    verified against the tenant discovery keys with the configured tenant
+    issuer and the App Registration client id as audience. The unsigned
+    ``X-MS-CLIENT-PRINCIPAL`` header is parsed only as display enrichment and
+    never influences authorization — a request with a principal header but no
+    verifiable ID token is rejected.
+    """
+
+    def __init__(self, settings: WebIdentitySettings) -> None:
+        issuer = (settings.issuer or "").rstrip("/")
+        if not issuer:
+            raise EdgeIdentityError("misconfigured", "Azure issuer not configured")
+        self._issuer = issuer
+        self._audience = settings.audience or ""
+        self._jwks_url = settings.jwks_url or _azure_discovery_url(issuer)
+
+    def authenticate(self, request: Request) -> EdgeIdentity:
+        raw_token = request.headers.get("X-MS-TOKEN-AAD-ID-TOKEN")
+        if not raw_token:
+            raise EdgeIdentityError(
+                "missing_credential",
+                "Missing Azure Easy Auth ID token",
+            )
+        claims = _decode_edge_jwt(
+            raw_token,
+            jwks_url=self._jwks_url,
+            issuer=self._issuer,
+            audience=self._audience,
+        )
+        identity = _identity_from_claims(claims)
+        return EdgeIdentity(
+            issuer=identity.issuer,
+            subject=identity.subject,
+            claims=identity.claims,
+            display_claims=_parse_principal_header(request.headers.get("X-MS-CLIENT-PRINCIPAL")),
+        )
+
+
+def _azure_discovery_url(issuer: str) -> str:
+    """Derive the AAD v2 discovery keys endpoint from a v2 issuer."""
+    if issuer.endswith("/v2.0"):
+        return f"{issuer[:-5]}/discovery/v2.0/keys"
+    raise EdgeIdentityError(
+        "misconfigured",
+        "Azure issuer is not a v2 issuer; configure web_identity.jwks_url explicitly",
+    )
+
+
+def _parse_principal_header(value: str | None) -> dict[str, Any] | None:
+    """Decode the unsigned principal header for display; never for trust."""
+    if not value:
+        return None
+    import base64
+    import json as _json
+
+    try:
+        padded = value + ("=" * (-len(value) % 4))
+        payload = _json.loads(base64.b64decode(padded, validate=True).decode())
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 __all__ = [
+    "AzureEasyAuthProvider",
     "CloudflareAccessProvider",
     "EdgeIdentity",
     "EdgeIdentityError",

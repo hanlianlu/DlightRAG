@@ -228,9 +228,10 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             provider = edge_identity_provider(cfg.web_identity)
             identity = provider.authenticate(request)
         except EdgeIdentityError as exc:
+            status = 500 if exc.kind == "misconfigured" else 401
             return PlainTextResponse(
-                "Authentication required" if exc.http_status == 401 else str(exc),
-                status_code=exc.http_status,
+                "Authentication required" if status == 401 else str(exc),
+                status_code=status,
             )
         request.state.user_context = UserContext(
             user_id=identity.subject,

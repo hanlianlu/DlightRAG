@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from dlightrag.config import DlightragConfig, WebIdentitySettings
 from dlightrag.web.auth import WebAuthMiddleware
 from dlightrag.web.edge_identity import (
+    AzureEasyAuthProvider,
     CloudflareAccessProvider,
     EdgeIdentityError,
     edge_identity_provider,
@@ -129,7 +130,11 @@ class TestCloudflareAccessProvider:
         with pytest.raises(EdgeIdentityError) as raised:
             provider.authenticate(_request())
         assert raised.value.kind == "missing_credential"
-        assert raised.value.http_status == 401
+        assert raised.value.kind in {
+            "missing_credential",
+            "invalid_credential",
+            "expired_credential",
+        }
 
     def test_wrong_issuer_is_rejected(self, signing_key, jwks) -> None:
         provider = CloudflareAccessProvider(_settings())
@@ -180,7 +185,118 @@ class TestCloudflareAccessProvider:
 
     def test_factory_rejects_unknown_edges(self) -> None:
         with pytest.raises(EdgeIdentityError) as raised:
-            edge_identity_provider(_settings(edge="azure"))  # implemented in a later task
+            edge_identity_provider(_settings(edge="aws"))  # implemented in a later task
+        assert raised.value.kind == "misconfigured"
+
+
+class TestAzureEasyAuthProvider:
+    AAD_ISSUER = "https://login.microsoftonline.com/test-tenant/v2.0"
+    AAD_AUDIENCE = "api-client-id-1234"
+
+    def _provider(self) -> AzureEasyAuthProvider:
+        return AzureEasyAuthProvider(
+            WebIdentitySettings.model_validate(
+                {"edge": "azure", "issuer": self.AAD_ISSUER, "audience": self.AAD_AUDIENCE}
+            )
+        )
+
+    def _id_token(
+        self,
+        key: rsa.RSAPrivateKey,
+        *,
+        issuer: str = AAD_ISSUER,
+        audience: str = AAD_AUDIENCE,
+    ) -> str:
+        return jwt.encode(
+            {
+                "sub": "aad-user-object-id",
+                "iss": issuer,
+                "aud": audience,
+                "name": "Edge User",
+                "exp": datetime.now(UTC) + timedelta(minutes=5),
+                "iat": datetime.now(UTC),
+            },
+            key,
+            algorithm="RS256",
+            headers={"kid": "test-key"},
+        )
+
+    def test_id_token_verifies_and_principal_is_enrichment_only(self, signing_key, jwks) -> None:
+        import base64
+        import json as _json
+
+        provider = self._provider()
+        principal = base64.b64encode(
+            _json.dumps(
+                {"auth_typ": "aad", "claims": [{"typ": "sub", "val": "aad-user-object-id"}]}
+            ).encode()
+        ).decode()
+        identity = provider.authenticate(
+            _request(
+                headers={
+                    "X-MS-TOKEN-AAD-ID-TOKEN": self._id_token(signing_key),
+                    "X-MS-CLIENT-PRINCIPAL": principal,
+                }
+            )
+        )
+        assert identity.subject == "aad-user-object-id"
+        assert identity.issuer == self.AAD_ISSUER
+        assert identity.display_claims == {
+            "auth_typ": "aad",
+            "claims": [{"typ": "sub", "val": "aad-user-object-id"}],
+        }
+        # Enrichment never leaks into the authoritative claims.
+        assert "auth_typ" not in identity.claims
+
+    def test_principal_header_alone_is_rejected(self, jwks) -> None:
+        provider = self._provider()
+        with pytest.raises(EdgeIdentityError) as raised:
+            provider.authenticate(_request(headers={"X-MS-CLIENT-PRINCIPAL": "eyJhIjoxfQ"}))
+        assert raised.value.kind == "missing_credential"
+        assert raised.value.kind in {
+            "missing_credential",
+            "invalid_credential",
+            "expired_credential",
+        }
+
+    def test_wrong_tenant_issuer_is_rejected(self, signing_key, jwks) -> None:
+        provider = self._provider()
+        with pytest.raises(EdgeIdentityError, match="Invalid edge credential"):
+            provider.authenticate(
+                _request(
+                    headers={
+                        "X-MS-TOKEN-AAD-ID-TOKEN": self._id_token(
+                            signing_key,
+                            issuer="https://login.microsoftonline.com/other-tenant/v2.0",
+                        )
+                    }
+                )
+            )
+
+    def test_wrong_audience_is_rejected(self, signing_key, jwks) -> None:
+        provider = self._provider()
+        with pytest.raises(EdgeIdentityError, match="Invalid edge credential"):
+            provider.authenticate(
+                _request(
+                    headers={
+                        "X-MS-TOKEN-AAD-ID-TOKEN": self._id_token(
+                            signing_key, audience="other-client-id"
+                        )
+                    }
+                )
+            )
+
+    def test_non_v2_issuer_requires_explicit_jwks_url(self) -> None:
+        with pytest.raises(EdgeIdentityError) as raised:
+            AzureEasyAuthProvider(
+                WebIdentitySettings.model_validate(
+                    {
+                        "edge": "azure",
+                        "issuer": "https://sts.windows.net/test-tenant/",
+                        "audience": self.AAD_AUDIENCE,
+                    }
+                )
+            )
         assert raised.value.kind == "misconfigured"
 
 
