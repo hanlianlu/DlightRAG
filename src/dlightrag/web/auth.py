@@ -181,14 +181,23 @@ def _reject_web_mutation(request: Request) -> bool:
     """Return True when one unsafe /web request must be rejected.
 
     Browsers that carry the double-submit cookie must echo it in the header;
-    any Origin header must be exact same-origin. Requests without either
-    (scripted clients without cookies) are left to their bearer credentials.
+    cookie-authenticated (paste) mutations must additionally prove exact
+    same-origin via an Origin header, and any Origin header must match.
+    Scripted clients without any web cookie are left to their bearer
+    credentials.
     """
     if request.method.upper() not in _UNSAFE_METHODS:
         return False
     if not request.url.path.startswith("/web/"):
         return False
     if not _csrf_header_matches(request):
+        return True
+    bearer_present = request.headers.get("Authorization", "").startswith("Bearer ")
+    if (
+        WEB_AUTH_COOKIE in request.cookies
+        and not bearer_present
+        and request.headers.get("Origin") is None
+    ):
         return True
     origin = request.headers.get("Origin")
     return origin is not None and not _has_exact_same_origin(request)
