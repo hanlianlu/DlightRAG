@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Authenticated browser bootstrap contract shared by the page and Lit app."""
 
-import logging
 from typing import Literal
 
 from dlightrag_ai.vision import ImageCapabilityStatus
@@ -18,7 +17,6 @@ from dlightrag.web.deps import (
 )
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
 class WebBootstrapUnavailableError(RuntimeError):
@@ -61,8 +59,6 @@ def _workspace_contract(record: WorkspaceRecord) -> WebBootstrapWorkspace:
 async def build_web_bootstrap(
     request: Request,
     workspace: str,
-    *,
-    fallback_to_cookie_workspace: bool = False,
 ) -> WebBootstrap:
     """Build the one authorized startup snapshot consumed by the browser."""
     application = get_application(request)
@@ -71,19 +67,7 @@ async def build_web_bootstrap(
     try:
         records = await application.corpora.alist_workspace_records()
     except Exception as exc:
-        if not fallback_to_cookie_workspace:
-            raise WebBootstrapUnavailableError from exc
-        logger.warning(
-            "Workspace inventory unavailable while rendering the legacy Web shell",
-            exc_info=True,
-        )
-        records = [
-            {
-                "workspace": workspace,
-                "display_name": workspace,
-                "embedding_model": application.config.embedding.model,
-            }
-        ]
+        raise WebBootstrapUnavailableError from exc
     records = await filter_web_workspace_records(
         request,
         AccessAction.WORKSPACE_QUERY,
@@ -129,23 +113,6 @@ async def build_web_bootstrap(
     )
 
 
-def bootstrap_template_context(bootstrap: WebBootstrap) -> dict[str, object]:
-    """Project the typed snapshot into the temporary Jinja shell vocabulary."""
-    attachments = bootstrap.answer_attachments
-    return {
-        "workspaces": [workspace.model_dump() for workspace in bootstrap.workspaces],
-        "primary_workspace": bootstrap.primary_workspace,
-        "active_workspaces": bootstrap.active_workspaces,
-        "query_attachment_count_limit": attachments.count_limit,
-        "query_attachment_image_max_bytes": attachments.image_max_bytes,
-        "query_attachment_document_max_bytes": attachments.document_max_bytes,
-        "query_attachment_extensions": attachments.extensions,
-        "query_attachment_image_capability": attachments.image_capability,
-        "query_attachment_image_limit": attachments.image_limit,
-        "query_attachment_accept": attachments.accept,
-    }
-
-
 @router.get("/bootstrap", response_model=WebBootstrap)
 async def browser_bootstrap(
     request: Request,
@@ -165,7 +132,6 @@ __all__ = [
     "WebBootstrap",
     "WebBootstrapUnavailableError",
     "WebBootstrapWorkspace",
-    "bootstrap_template_context",
     "build_web_bootstrap",
     "router",
 ]

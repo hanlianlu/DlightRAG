@@ -5,10 +5,10 @@ import base64
 import binascii
 import secrets
 from collections.abc import Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
@@ -19,7 +19,7 @@ from dlightrag.access import (
 )
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.model_settings import authentication_settings
-from dlightrag.web.deps import templates
+from dlightrag.web.app_shell import app_html_response
 from dlightrag.web.edge_identity import (
     EdgeIdentityError,
     edge_identity_provider,
@@ -299,22 +299,18 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         return response
 
 
-@router.get("/login", response_class=HTMLResponse)
+@router.get("/login", response_class=FileResponse)
 async def login_page(request: Request, next: str = "/web/"):
-    """Render the web login form when global auth is enabled."""
+    """Serve the static paste-token form when global auth is enabled."""
     cfg = request.app.state.application.config
     target = _safe_next_path(next)
     if cfg.auth_mode == "none" or cfg.web_identity.edge is not None:
         # The edge owns login; the paste form is the no-edge development hatch.
         return RedirectResponse(target, status_code=303)
-    return templates.TemplateResponse(
-        request,
-        "login.html",
-        {"auth_mode": cfg.auth_mode, "next": target, "error": None},
-    )
+    return app_html_response("login.html")
 
 
-@router.post("/login", response_class=HTMLResponse)
+@router.post("/login")
 async def login(
     request: Request,
     token: str = Form(default=""),
@@ -327,17 +323,9 @@ async def login(
         return RedirectResponse(target, status_code=303)
     try:
         _authenticate_bearer(token, cfg)
-    except HTTPException as exc:
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {
-                "auth_mode": cfg.auth_mode,
-                "next": target,
-                "error": str(exc.detail),
-            },
-            status_code=exc.status_code,
-        )
+    except HTTPException:
+        query = urlencode({"next": target, "error": "Authentication failed"})
+        return RedirectResponse(f"/web/login?{query}", status_code=303)
 
     response = RedirectResponse(target, status_code=303)
     _set_auth_cookie(response, request, token)

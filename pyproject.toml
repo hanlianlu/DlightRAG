@@ -104,11 +104,11 @@ dlightrag-rag-core = { workspace = true }
 [tool.hatch.build.targets.wheel]
 packages = ["src/dlightrag"]
 # Built by Vite and gitignored, so hatchling would otherwise leave the UI out.
-artifacts = ["src/dlightrag/web/static/generated/**"]
+artifacts = ["src/dlightrag/web/static/app/**"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/dlightrag", "README.md", "LICENSE", "NOTICE"]
-artifacts = ["src/dlightrag/web/static/generated/**"]
+artifacts = ["src/dlightrag/web/static/app/**"]
 
 [tool.ruff]
 target-version = "py314"

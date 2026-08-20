@@ -2,9 +2,6 @@
 """Tests for WebGUI route endpoints."""
 
 import datetime
-import html
-import json
-import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -133,14 +130,14 @@ async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
     application_double.aclose.assert_awaited_once_with()
 
 
-async def test_web_static_assets_are_not_browser_persistent(client):
-    resp = await client.get("/static/generated/js/main.js")
+async def test_vite_hashed_assets_are_immutable(client):
+    from dlightrag.web.static_files import APP_DIR
 
-    assert resp.status_code == 200
-    assert resp.headers["cache-control"] == "no-cache, no-store, must-revalidate"
-    assert resp.headers["pragma"] == "no-cache"
-    assert resp.headers["expires"] == "0"
-    assert "DOMContentLoaded" in resp.text
+    asset = next((APP_DIR / "assets").glob("app-*.js"))
+    response = await client.get(f"/static/app/assets/{asset.name}")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 async def test_vendored_assets_allow_revalidation_caching(client):
@@ -239,6 +236,43 @@ class TestWebAuth:
             )
 
         assert resp.status_code == 401
+
+    async def test_simple_login_page_is_static_and_no_store(
+        self, test_config: DlightragConfig, mock_application
+    ) -> None:
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_application) as client:
+            response = await client.get(
+                "/web/login",
+                params={"next": f"/web/conversations/{CONVERSATION_ID}"},
+            )
+
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache, no-store, must-revalidate"
+        assert 'action="/web/login"' in response.text
+        assert "/static/app/assets/login-" in response.text
+        assert "secret-token" not in response.text
+
+    async def test_invalid_paste_token_redirects_to_generic_static_error(
+        self, test_config: DlightragConfig, mock_application
+    ) -> None:
+        from urllib.parse import parse_qs, urlsplit
+
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+        target = f"/web/conversations/{CONVERSATION_ID}"
+
+        async with _web_client_for(test_config, mock_application) as client:
+            response = await client.post(
+                "/web/login",
+                data={"token": "wrong-token", "next": target},
+            )
+
+        assert response.status_code == 303
+        query = parse_qs(urlsplit(response.headers["location"]).query)
+        assert query == {"next": [target], "error": ["Authentication failed"]}
 
     async def test_simple_login_sets_cookie_and_grants_access(
         self, test_config: DlightragConfig, mock_application
@@ -380,20 +414,26 @@ class TestWebAuth:
 
 
 class TestWebIndex:
-    """Tests for GET /web/ — main page."""
+    """Tests for the Vite-owned application document."""
 
-    async def test_returns_html(self, client: AsyncClient, test_config: DlightragConfig) -> None:
-        resp = await client.get("/web/")
-        assert resp.status_code == 200
-        assert "text/html" in resp.headers["content-type"]
-
-    async def test_explicit_conversation_route_serves_the_same_authenticated_shell(
-        self, client: AsyncClient
-    ) -> None:
-        response = await client.get(f"/web/conversations/{CONVERSATION_ID}")
+    async def test_returns_no_store_vite_html(self, client: AsyncClient) -> None:
+        response = await client.get("/web/")
 
         assert response.status_code == 200
-        assert 'id="app"' in response.text
+        assert response.headers["content-type"].startswith("text/html")
+        assert response.headers["cache-control"] == "no-cache, no-store, must-revalidate"
+        assert "<dl-app>" in response.text
+        assert "/static/app/assets/app-" in response.text
+        assert "__THEME_INIT__" not in response.text
+
+    async def test_explicit_conversation_route_serves_the_same_application_document(
+        self, client: AsyncClient
+    ) -> None:
+        index = await client.get("/web/")
+        conversation = await client.get(f"/web/conversations/{CONVERSATION_ID}")
+
+        assert conversation.status_code == 200
+        assert conversation.text == index.text
 
     async def test_unknown_web_page_does_not_fall_through_to_the_shell(
         self, client: AsyncClient
@@ -402,157 +442,16 @@ class TestWebIndex:
 
         assert response.status_code == 404
 
-    async def test_contains_workspace_name(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.get("/web/")
-        assert resp.status_code == 200
-        assert "default" in resp.text
-
-    async def test_index_renders_refresh_persistent_workspace_selector(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.get("/web/")
-
-        assert resp.status_code == 200
-        assert 'id="workspace-selector"' in resp.text
-        assert "data-all=" in resp.text
-        assert "data-active=" in resp.text
-        assert "Test Workspace" in resp.text
-        assert 'id="ws-add-btn"' not in resp.text
-
-    async def test_index_renders_primary_workspace_for_last_selected_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        client.cookies.set("dlightrag_workspace", "test_ws")
-        client.cookies.set("dlightrag_workspace_ids", "default,test_ws")
-
-        resp = await client.get("/web/")
-
-        assert resp.status_code == 200
-        assert 'data-primary="test_ws"' in resp.text
-
-    async def test_web_default_search_scope_is_all_authorized_workspaces(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        response = await client.get("/web/")
-
-        assert response.status_code == 200
-        active_match = re.search(r"data-active='([^']+)'", response.text)
-        assert active_match is not None
-        assert json.loads(html.unescape(active_match.group(1))) == ["default", "test_ws"]
-        assert 'data-primary="default"' in response.text
-        assert "Search in:" in response.text
-
-    async def test_web_invalid_saved_scope_falls_back_to_all_authorized_workspaces(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        client.cookies.set("dlightrag_workspace_ids", "deleted")
-
-        response = await client.get("/web/")
-
-        active_match = re.search(r"data-active='([^']+)'", response.text)
-        assert active_match is not None
-        assert json.loads(html.unescape(active_match.group(1))) == ["default", "test_ws"]
-
-    async def test_files_primary_target_remains_independent_of_saved_search_scope(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        client.cookies.set("dlightrag_workspace", "default")
-        client.cookies.set("dlightrag_workspace_ids", "test_ws")
-
-        response = await client.get("/web/")
-
-        assert 'data-primary="default"' in response.text
-        active_match = re.search(r"data-active='([^']+)'", response.text)
-        assert active_match is not None
-        assert json.loads(html.unescape(active_match.group(1))) == ["test_ws"]
-
-    async def test_index_projects_answer_attachment_byte_policy(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
-    ) -> None:
-        test_config.answer.max_attachment_bytes = 12_345
-        web_app.state.application.config = test_config
-
-        resp = await client.get("/web/")
-
-        assert resp.status_code == 200
-        assert 'data-attachment-image-max-bytes="12345"' in resp.text
-
-    async def test_index_projects_supported_capability_effective_limit(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
-    ) -> None:
-        web_app.state.application.config = test_config
-        web_app.state.application.answers.capabilities = answer_capability_view(
-            AnswerImageCapability(
-                status="supported",
-                configured_ceiling=8,
-                effective_max_images=2,
-                provider="test",
-                base_url=None,
-                model="test-model",
-                failure_kind=None,
-            )
-        ).read
-
-        resp = await client.get("/web/")
-
-        assert resp.status_code == 200
-        assert 'data-attachment-image-capability="supported"' in resp.text
-        assert 'data-attachment-image-limit="2"' in resp.text
-
-    async def test_index_reprobes_unknown_capability_before_projecting_uploads(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
-    ) -> None:
-        web_app.state.application.config = test_config
-        web_app.state.application.answers.capabilities = answer_capability_view(
-            AnswerImageCapability(
-                status="supported",
-                configured_ceiling=8,
-                effective_max_images=2,
-                provider="test",
-                base_url=None,
-                model="test-model",
-                failure_kind=None,
-            )
-        ).read
-
-        resp = await client.get("/web/")
-
-        assert resp.status_code == 200
-        assert 'data-attachment-image-capability="supported"' in resp.text
-        assert 'data-attachment-image-limit="2"' in resp.text
-        web_app.state.application.answers.capabilities.assert_awaited_once()
-
-    async def test_chat_template_projects_document_attachment_limits(
-        self, client: AsyncClient
-    ) -> None:
-        resp = await client.get("/web/")
-
-        assert resp.status_code == 200
-        assert 'data-attachment-count-limit="6"' in resp.text
-        assert 'data-attachment-document-max-bytes="104857600"' in resp.text
-        extensions_match = re.search(r"data-attachment-extensions='([^']+)'", resp.text)
-        accept_match = re.search(r'id="attachment-input"[^>]*accept="([^"]+)"', resp.text)
-        assert extensions_match is not None
-        assert accept_match is not None
-
-        expected_extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
-        assert json.loads(html.unescape(extensions_match.group(1))) == expected_extensions
-        assert accept_match.group(1) == ",".join(
-            ["image/*", *(f".{extension}" for extension in expected_extensions)]
-        )
-
-    def test_web_markup_keeps_behavior_in_static_js(self) -> None:
-        web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"
-        checked = list((web_root / "templates").rglob("*.html")) + [web_root / "deps.py"]
+    def test_vite_app_source_keeps_behavior_out_of_static_html(self) -> None:
+        frontend = Path(__file__).parents[2] / "frontend"
+        checked = [frontend / "index.html", frontend / "login.html"]
 
         offenders: list[str] = []
         for path in checked:
             text = path.read_text()
             for marker in ("onclick=", "onchange=", "style="):
                 if marker in text:
-                    offenders.append(f"{path.relative_to(web_root)}:{marker}")
+                    offenders.append(f"{path.name}:{marker}")
 
         assert offenders == []
 
@@ -619,15 +518,15 @@ class TestWebBootstrap:
         mock_application.corpora.alist_workspace_records.side_effect = RuntimeError("database down")
 
         bootstrap = await client.get("/web/api/bootstrap")
-        legacy_page = await client.get("/web/")
+        app_page = await client.get("/web/")
 
         assert bootstrap.status_code == 503
         assert bootstrap.json() == {
             "detail": "Web application bootstrap is unavailable",
             "error_type": "unavailable",
         }
-        assert legacy_page.status_code == 200
-        assert 'data-primary="default"' in legacy_page.text
+        assert app_page.status_code == 200
+        assert "<dl-app>" in app_page.text
 
     @pytest.mark.parametrize(
         "old_path",

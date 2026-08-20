@@ -250,9 +250,8 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
     if include_web_app:
         from dlightrag.web.auth import WebAuthMiddleware
         from dlightrag.web.conversations import WebConversationUnavailableError
-        from dlightrag.web.deps import _TEMPLATE_DIR
         from dlightrag.web.routes import router as web_router
-        from dlightrag.web.static_files import NoCacheStaticFiles
+        from dlightrag.web.static_files import STATIC_DIR, WebStaticFiles
 
         application.state.web_enabled = True
 
@@ -266,11 +265,10 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
 
         application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
         application.include_router(web_router)
-        _static_dir = _TEMPLATE_DIR.parent / "static"
-        if _static_dir.exists():
+        if STATIC_DIR.exists():
             application.mount(
                 "/static",
-                NoCacheStaticFiles(directory=str(_static_dir)),
+                WebStaticFiles(directory=str(STATIC_DIR)),
                 name="static",
             )
 

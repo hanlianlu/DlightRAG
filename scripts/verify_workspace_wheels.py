@@ -341,6 +341,18 @@ def _top_level_from_wheel(names: list[str]) -> frozenset[str]:
     return frozenset(top_level)
 
 
+def _has_vite_frontend(members: set[str], *, prefix: str) -> bool:
+    assets = f"{prefix}/assets/"
+    return (
+        {f"{prefix}/index.html", f"{prefix}/login.html"}.issubset(members)
+        and any(name.startswith(assets + "app-") and name.endswith(".js") for name in members)
+        and any(
+            name.startswith(assets + "theme-init-") and name.endswith(".js") for name in members
+        )
+        and any(name.startswith(assets + "style-") and name.endswith(".css") for name in members)
+    )
+
+
 def _wheel_facts(
     path: Path,
     *,
@@ -363,10 +375,10 @@ def _wheel_facts(
         legal_hashes = _required_member_hashes(legal_members, artifact=path.name)
         expected_package = _EXPECTED_PACKAGES.get(distribution, "")
         has_py_typed = f"{expected_package}/py.typed" in wheel.namelist()
-        has_frontend = {
-            "dlightrag/web/static/generated/style.css",
-            "dlightrag/web/static/generated/js/main.js",
-        }.issubset(wheel.namelist())
+        has_frontend = _has_vite_frontend(
+            set(wheel.namelist()),
+            prefix="dlightrag/web/static/app",
+        )
         has_model_catalog = "dlightrag_ai/model_catalog.json" in wheel.namelist()
         sources = (
             (name, wheel.read(name))
@@ -627,10 +639,10 @@ def _sdist_facts(
         license_files,
         legal_hashes,
         has_py_typed,
-        {
-            "src/dlightrag/web/static/generated/style.css",
-            "src/dlightrag/web/static/generated/js/main.js",
-        }.issubset(frontend_members),
+        _has_vite_frontend(
+            frontend_members,
+            prefix="src/dlightrag/web/static/app",
+        ),
         has_model_catalog,
     )
 

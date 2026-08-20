@@ -63,7 +63,8 @@ async def test_index_page(client):
     resp = await client.get("/web/")
     assert resp.status_code == 200
     assert "DlightRAG" in resp.text
-    assert "query-form" in resp.text
+    assert "<dl-app>" in resp.text
+    assert "/static/app/assets/app-" in resp.text
 
 
 async def test_file_list(client):

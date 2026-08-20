@@ -460,11 +460,13 @@ Frontend checks after editing `frontend/`:
 ```bash
 cd frontend
 npm run typecheck
+npm test
+npm run test:browser
 npm run build
 npm run lint:css
 ```
 
-`npm run build` writes the browser bundle to `src/dlightrag/web/static/generated/`.
+`npm run build` writes Vite-owned HTML and hashed browser assets to `src/dlightrag/web/static/app/`. For HMR, run `npm run dev`; the Vite server proxies authenticated browser APIs and support assets to FastAPI on `127.0.0.1:8100`.
 That directory is gitignored and rebuilt by `make ci`; the wheel and source
 distribution include it through their Hatch artifact settings.
 

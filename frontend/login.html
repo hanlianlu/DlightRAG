@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="system" data-color-mode="dark">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark light">
+    <title>Sign in · DlightRAG</title>
+    <script vite-ignore src="/static/app/__THEME_INIT__"></script>
+    <script type="module" src="/ui/login.ts"></script>
+  </head>
+  <body>
+    <main class="app login-app">
+      <section class="panel open login-panel" aria-labelledby="login-title">
+        <div class="panel-header">
+          <h1 id="login-title">DlightRAG</h1>
+        </div>
+        <form class="panel-content" method="post" action="/web/login">
+          <input type="hidden" name="next" value="/web/">
+          <label for="token">Access token</label>
+          <input id="token" name="token" type="password" autocomplete="current-password" autofocus>
+          <div class="file-error" role="alert" hidden></div>
+          <button class="primary-btn" type="submit">Sign in</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

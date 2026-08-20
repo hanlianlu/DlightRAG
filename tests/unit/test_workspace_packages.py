@@ -55,8 +55,11 @@ def _write_wheel(
             wheel.write(_REPO / "LICENSE", f"{dist_info}/licenses/LICENSE")
             wheel.write(_REPO / "NOTICE", f"{dist_info}/licenses/NOTICE")
         if include_frontend:
-            wheel.writestr(f"{package}/web/static/generated/style.css", "body {}")
-            wheel.writestr(f"{package}/web/static/generated/js/main.js", "export {}")
+            wheel.writestr(f"{package}/web/static/app/index.html", "<dl-app></dl-app>")
+            wheel.writestr(f"{package}/web/static/app/login.html", "<form></form>")
+            wheel.writestr(f"{package}/web/static/app/assets/style-test.css", "body {}")
+            wheel.writestr(f"{package}/web/static/app/assets/app-test.js", "export {}")
+            wheel.writestr(f"{package}/web/static/app/assets/theme-init-test.js", "")
     sdist_root = f"{wheel_name}-{version}"
     packaged_sdist_source = source if sdist_source is None else sdist_source
     with tarfile.open(dist_dir / f"{wheel_name}-{version}.tar.gz", "w:gz") as sdist:
@@ -78,8 +81,11 @@ def _write_wheel(
             ),
             **(
                 {
-                    f"{sdist_root}/src/{package}/web/static/generated/style.css": "body {}",
-                    f"{sdist_root}/src/{package}/web/static/generated/js/main.js": "export {}",
+                    f"{sdist_root}/src/{package}/web/static/app/index.html": "<dl-app></dl-app>",
+                    f"{sdist_root}/src/{package}/web/static/app/login.html": "<form></form>",
+                    f"{sdist_root}/src/{package}/web/static/app/assets/style-test.css": "body {}",
+                    f"{sdist_root}/src/{package}/web/static/app/assets/app-test.js": "export {}",
+                    f"{sdist_root}/src/{package}/web/static/app/assets/theme-init-test.js": "",
                 }
                 if include_frontend
                 else {}

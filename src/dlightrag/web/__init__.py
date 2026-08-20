@@ -1,1 +1,1 @@
-"""DlightRAG web frontend — htmx + Jinja2."""
+"""DlightRAG Vite/Lit browser adapter and temporary rich-fragment renderers."""

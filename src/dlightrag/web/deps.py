@@ -233,28 +233,6 @@ templates.env.filters["basename"] = _basename
 templates.env.filters["public_source_url"] = _public_source_url
 
 
-def _compute_static_hash() -> str:
-    """Compute a short content hash of all static files for cache busting."""
-    import hashlib
-
-    static_dir = Path(__file__).parent / "static"
-    h = hashlib.md5(usedforsecurity=False)
-    for p in sorted(static_dir.rglob("*")):
-        if p.is_file():
-            h.update(p.read_bytes())
-    return h.hexdigest()[:10]
-
-
-_STATIC_HASH: str = _compute_static_hash()
-
-
-def _static_version() -> str:
-    return _STATIC_HASH
-
-
-templates.env.globals["static_version"] = _static_version
-
-
 # ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------

@@ -418,9 +418,9 @@ is the sole client action that requests a terminal `cancelled`.
 The authenticated browser starts from one typed `GET /web/api/bootstrap`
 snapshot. It contains only the authorized workspace records and selected scope,
 the primary Files target, answer-attachment limits, and the current image-input
-capability; it never contains bearer credentials or edge identity tokens. The
-same projection temporarily feeds the Jinja shell while the Vite/Lit app takes
-over startup ownership.
+capability; it never contains bearer credentials or edge identity tokens. A
+Vite-owned static document renders `<dl-app>` immediately; the Lit root stays
+inert until this snapshot succeeds and exposes an explicit retry on failure.
 
 Browser navigation has two explicit page routes: `/web/` is an unpersisted New
 Chat, while `/web/conversations/{conversation_id}` identifies one durable

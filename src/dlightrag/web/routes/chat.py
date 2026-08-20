@@ -9,7 +9,7 @@ from typing import Any
 
 from dlightrag_rag.workspaces import normalize_workspace_ids
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from dlightrag.access import AccessAction, owner_id_from_user
 from dlightrag.answer.runs.results import project_answer_result, project_report_sources
@@ -17,6 +17,7 @@ from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.runtime import IdempotencyKeyConflict
 from dlightrag.web.answer_events import browser_frame
+from dlightrag.web.app_shell import app_html_response
 from dlightrag.web.attachment_requests import parse_web_answer_request
 from dlightrag.web.conversation_models import AnswerRunDescriptor, ConversationTurn
 from dlightrag.web.conversations import (
@@ -32,11 +33,6 @@ from dlightrag.web.deps import (
     get_web_access_gate,
     get_web_conversation_service,
     get_workspace,
-    templates,
-)
-from dlightrag.web.routes.bootstrap import (
-    bootstrap_template_context,
-    build_web_bootstrap,
 )
 from dlightrag.web.safe_html import safe_answer_done
 
@@ -46,29 +42,18 @@ router = APIRouter()
 page_router = APIRouter()
 
 
-@page_router.get("/", response_class=HTMLResponse)
-async def index(request: Request, workspace: str = Depends(get_workspace)):
-    """Render the temporary Jinja shell from the typed browser bootstrap."""
-    bootstrap = await build_web_bootstrap(
-        request,
-        workspace,
-        fallback_to_cookie_workspace=True,
-    )
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {"workspace": workspace, **bootstrap_template_context(bootstrap)},
-    )
+@page_router.get("/", response_class=FileResponse)
+async def index() -> FileResponse:
+    """Serve the Vite-owned application document."""
+    return app_html_response("index.html")
 
 
-@page_router.get("/conversations/{conversation_id}", response_class=HTMLResponse)
+@page_router.get("/conversations/{conversation_id}", response_class=FileResponse)
 async def conversation_page(
     conversation_id: str,  # noqa: ARG001 - the browser router owns selection
-    request: Request,
-    workspace: str = Depends(get_workspace),
-):
-    """Serve the temporary shell for one explicit client-side route."""
-    return await index(request, workspace)
+) -> FileResponse:
+    """Serve the same application document for one explicit client route."""
+    return app_html_response("index.html")
 
 
 @router.post("/answer", status_code=202, response_model=AnswerRunDescriptor)

@@ -451,7 +451,6 @@ async function requestDeleteAll(): Promise<void> {
 export async function initializeConversations(): Promise<void> {
     await conversationStore.loadList();
     await applyRoute(webRouter.current);
-    focusComposer();
 }
 
 export function setupConversations(): void {

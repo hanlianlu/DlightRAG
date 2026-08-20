@@ -25,10 +25,8 @@ def _css_rule(path: Path, selector: str) -> str:
     return match.group("body")
 
 
-def test_index_has_final_conversation_shell() -> None:
-    template = (ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html").read_text(
-        encoding="utf-8"
-    )
+def test_lit_app_owns_the_final_conversation_shell() -> None:
+    app = (FRONTEND_UI / "app.ts").read_text(encoding="utf-8")
 
     for selector in (
         'id="chat-sidebar"',
@@ -41,45 +39,32 @@ def test_index_has_final_conversation_shell() -> None:
         'id="delete-all-conversations-dialog"',
         'id="discard-draft-dialog"',
     ):
-        assert selector in template
-    assert 'aria-label="Conversations"' in template
+        assert selector in app
+    assert 'aria-label="Conversations"' in app
+    assert not (ROOT / "src/dlightrag/web/templates/index.html").exists()
+    assert not (ROOT / "src/dlightrag/web/templates/base.html").exists()
 
 
-def test_index_advertises_one_unified_attachment_policy() -> None:
-    from dlightrag.web.deps import templates
+def test_lit_app_projects_one_unified_attachment_policy() -> None:
+    app = (FRONTEND_UI / "app.ts").read_text(encoding="utf-8")
 
-    html = templates.env.get_template("index.html").render(
-        request=None,
-        workspace="default",
-        workspaces=[],
-        primary_workspace="default",
-        active_workspaces=["default"],
-        query_attachment_count_limit=6,
-        query_attachment_image_max_bytes=15728640,
-        query_attachment_document_max_bytes=104857600,
-        query_attachment_extensions=["md", "pdf"],
-        query_attachment_image_capability="supported",
-        query_attachment_image_limit=3,
-        query_attachment_accept="image/*,.md,.pdf",
-    )
-
-    # One collection: unified count + per-item byte limits + formats + image capability.
-    assert 'data-attachment-count-limit="6"' in html
-    assert 'data-attachment-image-max-bytes="15728640"' in html
-    assert 'data-attachment-document-max-bytes="104857600"' in html
-    assert 'data-attachment-image-capability="supported"' in html
-    assert 'data-attachment-image-limit="3"' in html
-    assert '"md"' in html and '"pdf"' in html
-    assert 'accept="image/*,.md,.pdf"' in html
-
-    # The split image/document admission surface is gone.
+    for field in (
+        "data-attachment-count-limit",
+        "data-attachment-image-max-bytes",
+        "data-attachment-document-max-bytes",
+        "data-attachment-extensions",
+        "data-attachment-image-capability",
+        "data-attachment-image-limit",
+        "attachments.accept",
+    ):
+        assert field in app
     for stale in (
         "data-effective-current-upload-limit",
         "data-document-current-upload-limit",
         "data-max-upload-bytes",
         "data-answer-image-capability",
     ):
-        assert stale not in html
+        assert stale not in app
 
 
 def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
@@ -92,54 +77,53 @@ def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
 
 
 def test_frontend_submits_only_the_unified_attachments_part() -> None:
-    frontend = ROOT / "frontend"
-    request_builder = (frontend / "lib" / "answer_request.ts").read_text(encoding="utf-8")
+    request_builder = (FRONTEND / "lib" / "answer_request.ts").read_text(encoding="utf-8")
 
     assert "form.append('attachments', file, file.name)" in request_builder
-    # No split image/document parts in the submission path.
     for source in ("lib/answer_request.ts", "ui/chat.ts"):
-        text = (frontend / source).read_text(encoding="utf-8")
+        text = (FRONTEND / source).read_text(encoding="utf-8")
         assert "append('images'" not in text
         assert "append('documents'" not in text
 
 
-def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
-    web_root = ROOT / "src/dlightrag/web"
-    base_html = (web_root / "templates" / "base.html").read_text(encoding="utf-8")
+def test_vite_html_has_no_external_script_or_unresolved_theme_placeholder() -> None:
+    for name in ("index.html", "login.html"):
+        source = (FRONTEND / name).read_text(encoding="utf-8")
+        built = (ROOT / "src/dlightrag/web/static/app" / name).read_text(encoding="utf-8")
+        assert 'src="https://' not in source
+        assert "__THEME_INIT__" not in built
+        assert re.search(r'/static/app/assets/theme-init-[^"/]+\.js', built)
 
-    assert 'src="https://' not in base_html
 
+def test_web_shell_bootstraps_theme_preference_before_app_assets() -> None:
+    index = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    theme = (FRONTEND / "theme-init.ts").read_text(encoding="utf-8")
+    built = (ROOT / "src/dlightrag/web/static/app/index.html").read_text(encoding="utf-8")
 
-def test_web_shell_bootstraps_theme_preference_before_stylesheet() -> None:
-    base_html = (ROOT / "src" / "dlightrag" / "web" / "templates" / "base.html").read_text(
-        encoding="utf-8"
-    )
-
-    html_open = re.search(r"<html\b[^>]*>", base_html)
+    html_open = re.search(r"<html\b[^>]*>", index)
     assert html_open is not None
-    html_open_tag = html_open.group(0)
-    assert 'lang="en"' in html_open_tag
-    assert 'data-theme="system"' in html_open_tag
-    assert 'data-color-mode="dark"' in html_open_tag
-    assert '<meta name="color-scheme" content="dark light">' in base_html
-    assert "'dlightrag-theme'" in base_html
-    assert "localStorage.getItem" in base_html
-    assert "matchMedia('(prefers-color-scheme: dark)')" in base_html
+    assert 'lang="en"' in html_open.group(0)
+    assert 'data-theme="system"' in html_open.group(0)
+    assert 'data-color-mode="dark"' in html_open.group(0)
+    assert '<meta name="color-scheme" content="dark light">' in index
+    assert "'dlightrag-theme'" in theme
+    assert "localStorage.getItem" in theme
+    assert "matchMedia('(prefers-color-scheme: dark)')" in theme
 
-    bootstrap = base_html.index("localStorage.getItem")
-    first_stylesheet = base_html.index('<link rel="stylesheet" href="/static/generated/style.css')
-    assert bootstrap < first_stylesheet
+    theme_script = built.index("/assets/theme-init-")
+    app_script = built.index("/assets/app-")
+    stylesheet = built.index('<link rel="stylesheet"')
+    assert theme_script < stylesheet
+    assert theme_script < app_script
 
 
 def test_web_static_css_build_keeps_only_served_bundles() -> None:
     static_root = ROOT / "src/dlightrag/web/static"
-    generated_root = static_root / "generated"
+    assets = static_root / "app" / "assets"
 
-    css_files = {path.name for path in static_root.glob("*.css")}
-    generated_css_files = {path.name for path in generated_root.glob("*.css")}
-
-    assert css_files == {"pygments.css"}
-    assert generated_css_files == {"style.css"}
+    assert {path.name for path in static_root.glob("*.css")} == {"pygments.css"}
+    styles = [path.name for path in assets.glob("style-*.css")]
+    assert len(styles) == 1
 
 
 def test_pygments_css_matches_generator() -> None:
@@ -154,19 +138,26 @@ def test_pygments_css_matches_generator() -> None:
 
 
 def test_web_static_js_build_has_no_orphan_chunks() -> None:
-    static_js = ROOT / "src/dlightrag/web/static/generated/js"
-    import_pattern = re.compile(r"""(?:import\(`\./([^`]+\.js)`\)|from"\./([^"]+\.js)")""")
-
-    expected = {path.name for path in static_js.glob("*.js")}
+    app_root = ROOT / "src/dlightrag/web/static/app"
+    assets = app_root / "assets"
+    import_pattern = re.compile(
+        r"""(?:import\(`\./([^`]+\.js)`\)|import\(["']\./([^"']+\.js)["']\)|from["']\./([^"']+\.js)["'])"""
+    )
+    html = "\n".join(
+        (app_root / filename).read_text(encoding="utf-8")
+        for filename in ("index.html", "login.html")
+    )
+    roots = set(re.findall(r'/static/app/assets/([^"/]+\.js)', html))
+    expected = {path.name for path in assets.glob("*.js")}
     seen: set[str] = set()
-    stack = ["main.js"]
+    stack = list(roots)
 
     while stack:
         filename = stack.pop()
         if filename in seen:
             continue
         seen.add(filename)
-        content = (static_js / filename).read_text(encoding="utf-8")
+        content = (assets / filename).read_text(encoding="utf-8")
         for match in import_pattern.finditer(content):
             child = next(part for part in match.groups() if part)
             if child not in seen:

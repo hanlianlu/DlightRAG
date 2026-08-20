@@ -38,9 +38,9 @@ The root element carries both the stored preference and the effective color mode
 - `data-theme`: `system | light | dark`; this is the user preference.
 - `data-color-mode`: `light | dark`; this is the currently rendered appearance.
 
-The preference is stored in local storage under `dlightrag-theme`. Theme persistence is a browser-only presentation concern; no API endpoint, cookie, database column, or HTMX request state is required.
+The preference is stored in local storage under `dlightrag-theme`. Theme persistence is a browser-only presentation concern; no API endpoint, cookie, database column, or server request state is required.
 
-An inline bootstrap in `<head>` runs before the stylesheet link. It validates the saved preference, resolves `System` with `matchMedia('(prefers-color-scheme: dark)')`, and updates both root attributes. The HTML defaults to `system + dark`, so any bootstrap failure preserves today's safe dark appearance.
+Vite emits `frontend/theme-init.ts` as a dedicated hashed classic script. The static `<head>` loads it before any stylesheet or application module. It validates the saved preference, resolves `System` with `matchMedia('(prefers-color-scheme: dark)')`, and updates both root attributes. The HTML defaults to `system + dark`, so any bootstrap failure preserves today's safe dark appearance.
 
 The document also declares native `color-scheme` support. The effective mode controls form controls, scrollbars, and browser-owned UI consistently with the page.
 
@@ -63,7 +63,7 @@ No nanoevents bus or dedicated store is needed: theme state has one owner and on
 
 ## Theme Control
 
-The topbar trigger is a square, borderless icon button sized with `--size-button`. Both decorative SVGs are present in the server-rendered template; CSS selects the correct one from `data-color-mode`, so the first frame never shows an empty or stale icon.
+The topbar trigger is a square, borderless icon button sized with `--size-button`. Both decorative SVGs are present in the Vite/Lit application shell; CSS selects the correct one from `data-color-mode`, so the first frame never shows an empty or stale icon.
 
 The trigger has:
 
@@ -86,7 +86,7 @@ Interaction behavior:
 - Enter or Space applies a choice and closes the menu;
 - Escape closes and restores trigger focus;
 - outside pointer click closes while preserving the clicked target's natural focus;
-- a choice applies immediately without reload or HTMX activity.
+- a choice applies immediately without reload or a server request.
 
 The generic popover dismissal helper owns the menu lifecycle. The shared
 `installRovingArrowNavigation` helper accepts a role selector and provides the
@@ -174,4 +174,4 @@ Lightbox scrims remain dark in both modes because their purpose is image isolati
 - Missing `matchMedia` or bootstrap failure preserves the dark fallback.
 - System listeners are detached when an explicit preference is selected.
 - Runtime system changes update only the effective mode, not the stored preference.
-- HTMX partial replacement cannot reset the theme because the state lives on `<html>` outside all swap targets.
+- Lit application rerenders cannot reset the theme because the state lives on `<html>` outside `<dl-app>`.

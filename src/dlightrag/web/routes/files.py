@@ -314,7 +314,7 @@ async def upload_files(
 
 
 # ---------------------------------------------------------------------------
-# GET /web/api/ingest-status — htmx polling endpoint
+# GET /web/api/ingest-status — browser polling endpoint
 # ---------------------------------------------------------------------------
 
 
