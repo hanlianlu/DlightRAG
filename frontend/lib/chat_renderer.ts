@@ -274,8 +274,8 @@ export function renderConversationHistory(
 /** Render one stored turn from its run's state: pending, terminal, or answered. */
 export function renderStoredTurn(turn: ChatTurn, stored: ConversationTurn): void {
   clearAnswerReconnect(turn);
+  turn.aiDiv.dataset.runId = stored.answer_run_id;
   if (stored.status === 'succeeded') {
-    turn.aiDiv.dataset.runId = stored.answer_run_id;
     applyFinalAnswerHtml(turn, stored.answer_html);
     bindPrimaryReportControl(turn.aiDiv, stored.answer_run_id, stored.primary_report);
     return;

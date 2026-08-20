@@ -5,6 +5,7 @@ import {renderMath} from '../lib/math.ts';
 import chatStyles from '../styles/chat.module.css';
 import {renderDiagrams} from './mermaid.ts';
 import {openPanel} from './panel.ts';
+import {showToast} from './toast.ts';
 
 function fixExternalLinks(container: ParentNode): void {
     container.querySelectorAll('a[href]').forEach(function(el: Element) {
@@ -33,7 +34,10 @@ export function bindPrimaryReportControl(
 
 export async function openPrimaryReport(runId: string): Promise<void> {
     const response = await fetch(`/web/answer/${encodeURIComponent(runId)}/report`);
-    if (!response.ok) return;
+    if (!response.ok) {
+        showToast('Could not open the report.');
+        return;
+    }
     const html = await response.text();
     const panelContent = document.getElementById('report-panel-content');
     if (!panelContent) return;

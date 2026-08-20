@@ -203,6 +203,7 @@ export async function resumePendingTurn(
     stored: ConversationTurn,
 ): Promise<void> {
     if (queryInFlight) return;
+    turn.aiDiv.dataset.runId = stored.answer_run_id;
     answerRunStore.trackRun(conversationId, stored.answer_run_id);
     const controller = new AbortController();
     beginFollowing(controller, stored.answer_run_id, stored.cancel_requested);
