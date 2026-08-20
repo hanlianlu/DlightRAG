@@ -22,3 +22,10 @@ The upgrade is the browser default, not a second principal:
 
 Owner projection stays `jwt` + issuer + `sub`. Memory and Answer Runs keep
 using that owner. This slice does not invent a cookie-only identity.
+
+## Deferred from the M8 deviation audit
+
+- Durable compaction runtime: Context Projection seeds `summary=None`;
+  `select_compaction_boundary` / `should_compact` are vocabulary only.
+- Measured token anchors: production seeds `TokenAnchor` zeros; live capacity
+  accounting is estimate-only.
