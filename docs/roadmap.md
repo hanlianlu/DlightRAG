@@ -18,9 +18,11 @@ identity**, not a new in-app login flow:
 - For `auth_mode: jwt` behind Cloudflare Access, the Web surface accepts the
   edge-verified assertion (`Cf-Access-Jwt-Assertion` header or the
   `CF_Authorization` cookie JWT) and verifies issuer + audience against the
-  team JWKS. Behind Azure, it accepts the platform-injected principal
-  (`X-MS-CLIENT-PRINCIPAL`). The origin renders no login page and issues no
-  Web token.
+  team JWKS. Behind Azure, it verifies the passed-through AAD ID token
+  (`X-MS-TOKEN-AAD-ID-TOKEN`) against tenant discovery keys; the unsigned
+  `X-MS-CLIENT-PRINCIPAL` header is display-only enrichment, never
+  authorization. The origin renders no active login page and issues no Web
+  token.
 - Owner projection stays `jwt` + issuer + `sub` (the edge token's issuer for
   the Web surface; the external issuer for REST/MCP bearer tokens).
 - Paste-token login shrinks to a local-development hatch, not a production

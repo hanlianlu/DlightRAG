@@ -304,7 +304,8 @@ async def login_page(request: Request, next: str = "/web/"):
     """Render the web login form when global auth is enabled."""
     cfg = request.app.state.application.config
     target = _safe_next_path(next)
-    if cfg.auth_mode == "none":
+    if cfg.auth_mode == "none" or cfg.web_identity.edge is not None:
+        # The edge owns login; the paste form is the no-edge development hatch.
         return RedirectResponse(target, status_code=303)
     return templates.TemplateResponse(
         request,
@@ -322,7 +323,7 @@ async def login(
     """Validate a bearer token and store it in an HttpOnly web cookie."""
     cfg = request.app.state.application.config
     target = _safe_next_path(next)
-    if cfg.auth_mode == "none":
+    if cfg.auth_mode == "none" or cfg.web_identity.edge is not None:
         return RedirectResponse(target, status_code=303)
     try:
         _authenticate_bearer(token, cfg)

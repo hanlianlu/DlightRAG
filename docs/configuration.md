@@ -900,8 +900,19 @@ Use [security.md](security.md) for `simple`, static JWT, JWKS/OIDC issuer, and
 access-control deployment guidance. The related config fields are `auth_mode`,
 `api_auth_token`, `jwt_verification_key`, `jwt_jwks_url`, `jwt_issuer`,
 `jwt_audience`, `jwt_algorithm`, `cors_allow_origins`, `access_control`, and
-`web_identity` (edge-asserted Web identity: `edge` in `cloudflare | azure |
-aws`, plus `issuer`, `audience`, and an optional `jwks_url` required for `aws`).
+`web_identity` (edge-asserted Web identity). Example:
+
+```yaml
+auth_mode: jwt
+web_identity:
+  edge: cloudflare            # cloudflare | azure | aws
+  issuer: https://<team>.cloudflareaccess.com
+  audience: <application-aud-tag>
+  # jwks_url: ...             # required for aws; derived for cloudflare/azure
+```
+
+See security.md for the per-edge credential shapes and the required
+`jwks_url` on `aws`.
 
 The Python SDK and CLI resolve their HTTP target from `DLIGHTRAG_API_URL` and an
 optional bearer from `DLIGHTRAG_API_TOKEN` (or the deployment-only
