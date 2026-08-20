@@ -26,7 +26,7 @@ Clients
   -> Application
        eager composition and lifecycle
        -> AnswerService -> dlightrag.runtime RunCoordinator
-            neutral lifecycle records, store port, leases, events, checkpoints
+            neutral lifecycle records, store port, leases, events, journal
             -> AnswerExecutor -> PGAnswerRunStore adapter
        -> RetrievalService -> WorkspacePool -> WorkspaceRag
        -> CorpusAdmin -> WorkspacePool -> WorkspaceRag
@@ -84,25 +84,17 @@ resources for the lifetime of one answer and are never promoted into a
 workspace, LightRAG storage, or a durable cache:
 
 ```text
-answer request (query + optional attachments)
-  -> request-local ResourceRegistry
-       inline bytes held in memory; HTTPS links fetched lazily and revalidated
-       per read (HTTPS-only, SSRF guard, per/total byte and pixel limits)
-  -> AnswerOrchestrator routes by capability
-       fast path: no resources and no web-search key
-            -> canonical knowledge-base retrieval (including RetrievalPlanner)
-               -> one AnswerSynthesizer final answer
-       research path: resources present or an Exa web-search key is set
-               -> agent selects from peer tools (search_knowledge_base,
-                    read, inspect, optional search_web, optional
-                    delegate_research, optional path grep)
-               -> a selected KB search invokes the same canonical retrieval;
-                    RetrievalPlanner preserves the agent query and derives
-                    lexical/filter/image hints inside that operation
-               -> selected tools write observations into the EvidenceLedger
-               -> each control turn replays the session episode's exchanges
-         -> evidence-growth convergence
-         -> one tools-disabled AnswerSynthesizer final answer
+answer request (query + optional attachments + mode auto|fast|research)
+  -> Access + capability → Valid Mode Set; Prepared Input pins profiles
+  -> Routing Record stores requested / valid / nullable resolved mode
+  -> Fast: planner + retrieval + AnswerSynthesizer
+       JWT owners auto-recall a bounded Memory Record set (non-citable)
+  -> Research: AgentLoop until the model emits no tool call
+       peer tools include search_knowledge_base, read, inspect,
+       optional search_web, optional delegate_research, optional path tools,
+       and parent-only remember / forget / recall_memory
+       a selected KB search uses the same canonical retrieval
+       optional artifacts/report.md publishes as a Primary Report handle
 ```
 
 Resource reads are deterministic first. `read` decodes UTF-8/CSV text
@@ -152,12 +144,10 @@ Workspace resolution stays at each interface's Access boundary. Retrieval starts
 workspace initialization before retrieval planning for retrieve-only, fast-answer,
 and research-answer requests; the later retrieval joins those same services.
 
-Research control and final generation also use separate system prompts. Control
+Research control and final generation use separate system prompts. Control
 turns receive identity, tool-selection policy, trust boundaries, and stopping
-rules, but not the answer/citation contract. The tools-disabled final call swaps
-in the normal `answer_core` prompt while retaining the original request,
-conversation history, resource manifest, latest native tool exchange, and final
-citable evidence.
+rules, but not the answer/citation contract. The last silent turn is the
+answer; citation finalization is programmatic. Fast never enters `AgentLoop`.
 
 When `web_search.api_key` (Exa) is set, Exa Search is an optional peer
 capability. Its passages belong to no workspace and are packed beside corpus
@@ -174,26 +164,24 @@ validates, persists, and returns HTTP 202; the run outlives its creating request
 and a disconnected client only detaches.
 
 ```text
-create (202)  -> dlightrag_answer_runs row + input blobs + references (one txn)
+create (202)  -> run row + routing row + Prepared Input + blobs (one txn)
 claim         -> FOR UPDATE SKIP LOCKED, fencing epoch++, lease heartbeat
-execute       -> phase progress, coalesced token batches, per-turn checkpoint
+execute       -> phase progress, coalesced token batches, journal / Fast stages
 finish        -> canonical result + exactly one terminal event, same txn
-recover       -> expired lease reclaimed, resumed from the latest checkpoint
+recover       -> expired lease reclaimed; journal fold or Fast stage replay
 ```
 
-A process restart resumes from the latest completed control turn; generation
-interrupted mid-stream emits `reset` and regenerates. Four tables own that state:
-`dlightrag_answer_runs`, `dlightrag_answer_run_events`,
-`dlightrag_blobs`/`dlightrag_blob_chunks`, and `dlightrag_answer_run_artifacts`. See
-[durable-answer-runs.md](durable-answer-runs.md) for the full contract and
+A process restart folds the Agent Session journal (Research) or unfinished Fast
+stages. Interrupted generation emits `reset` and regenerates from pinned input.
+See [durable-answer-runs.md](durable-answer-runs.md) for the contract and
 [postgresql.md](postgresql.md#durable-answer-run-state) for the schema.
 
 `dlightrag.runtime` owns the storage-neutral records, store protocol,
-subscription, coordinator, fenced session, checkpoint failures, and caller-wait
-failures. It imports neither Answer policy nor PostgreSQL. The current Answer
-executor classifies product errors into `RunExecutionError` before they cross
-that boundary; `dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore`
-implements the runtime store port.
+subscription, coordinator, fenced session, and caller-wait failures. It imports
+neither Answer policy nor PostgreSQL. The Answer executor classifies product
+errors into `RunExecutionError` before they cross that boundary;
+`dlightrag.adapters.postgres.answer_runs.PGAnswerRunStore` implements the runtime
+store port.
 
 `dlightrag-rag-core` owns the coherent `WorkspaceCorpusBackend` bundle:
 coordination and maintenance, durable ingest jobs, plus a runtime binder for

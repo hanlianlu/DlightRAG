@@ -135,8 +135,8 @@ all execution slots are busy. Only a claim that will start or resume model/tool
 execution reserves a slot.
 
 Fencing and crash recovery use separate counters. The fencing epoch increments
-monotonically on every claim and never resets. Durable progress replaces the
-checkpoint-era turn and recovery counters: `durable_progress_version` advances
+monotonically on every claim and never resets. Durable progress replaced the
+old turn and recovery counters: `durable_progress_version` advances
 only on fenced model turn appends, compaction appends, effect settlements, and
 Fast stage settlements; `reclaims_without_progress` counts consecutive
 expired-lease reclaims without such progress, and four of them abandon the run
@@ -354,8 +354,8 @@ revision; operators drain or owner-cancel those runs before deployment.
 
 The run row is the sole authority for lifecycle status, phase, durable
 progress, stop reason, cancellation, lease, final result, and terminal error.
-Research state lives in the append-only session journal, never in a full-state
-checkpoint. One transaction commits the complete assistant response plus its
+Research state lives in the append-only session journal. One transaction commits
+the complete assistant response plus its
 ordered intents; each effect then settles one at a time in assistant source
 order, and every settlement advances session version and durable progress
 under the live lease/epoch predicate. Recovery folds committed entries into
@@ -459,69 +459,29 @@ Reference checks and deletion occur in one transaction, and the foreign key
 rejects deletion if a concurrent run has adopted the digest. A deferred cleanup
 pass may retry a blob that remained because of that race.
 
-## Checkpoint Contract
+## Journal And Recovery
 
-A checkpoint is written atomically after every completed agent control turn. It
-contains only JSON-safe state:
+Research reconstructs model context by folding the append-only Agent Session
+journal. There is no per-turn checkpoint JSON, no restored exact-call cache, and
+no `checkpoint_*` error kinds.
 
-- `EvidenceLedger` contexts and citation identities;
-- `SessionEpisode` exchanges including provider-native state;
-- completed exact-call cache results;
-- resource catalog plus compact active-cursor state: the original focus-plan
-  budget, rank position, absolute character offset, and the exact continuation
-  token available to a later turn; consumed cursor tokens are not retained;
-- the copied completed-turn number used only to validate it against the run
-  row.
+Image blocks stay as Resource Handle and corpus sidecar identities, never data
+URIs. Claim-time rehydration restores those blocks before the first model call.
+A missing corpus visual drops the image and keeps the text and citation identity;
+a missing attachment blob fails the run.
 
-Episode and evidence image blocks are serialized as stable references rather
-than data URIs or raw bytes. Attachment images use owner, artifact digest, and
-ordinal; corpus images use workspace, chunk, and sidecar identity. Claim-time
-rehydration restores those blocks in place before the first model call while
-preserving provider message, tool-call, and block order. Missing corpus visuals
-follow the degradation rule below; missing attachment blobs fail the run as
-`checkpoint_corrupt` durable state.
+Durable progress advances only on fenced live settlements: journal appends,
+compaction, effect settlement, and Fast stages. Recovery folds committed
+entries, replays unsettled `safe` intents only when the tool contract still
+matches, and settles interrupted `never` intents without executing them.
+Changed tool contracts settle `tool_contract_changed`.
 
-Each checkpoint has a schema version and an 8 MiB bound measured on its compact
-UTF-8 JSON representation after image-reference substitution. Before writing,
-older provider-native reasoning is discarded using the existing `SessionEpisode`
-replay policy. If the compacted state still exceeds the bound, the worker fails
-the run with `checkpoint_too_large`; it does not retry the same deterministic
-turn forever.
-A worker that cannot read a checkpoint version, or whose checkpoint turn number
-does not match the row, fails the run with `checkpoint_incompatible` or
-`checkpoint_corrupt` instead of guessing at state.
+Fast has no Agent Session. Unfinished Fast stages re-execute from immutable
+Prepared Input. Interrupted generation appends `reset` and regenerates from
+pinned input and restored evidence. Subscribers clear the partial draft after
+`reset`. DlightRAG does not claim exactly-once token generation.
 
-Serialization and size validation happen before the checkpoint transaction. A
-definite database rollback leaves the previous checkpoint and authoritative
-turn count intact, so lease recovery may re-execute the uncommitted turn. After
-an indeterminate commit result, the worker opens a new transaction and locks the
-run row with `FOR UPDATE`, which waits for the original transaction to resolve.
-If the authoritative turn count is the expected value plus one and its
-checkpoint has that copied value, the commit succeeded and execution continues.
-If the count is still the expected value and owner, unexpired lease, and fencing
-epoch still match, the worker retries the same compare-and-set transaction. If
-the lease expired or owner/epoch differs, it has lost the lease. Any other
-row/checkpoint combination fails the run as `checkpoint_corrupt`. A compare-and-
-set retry that affects zero rows therefore resolves through this locked reread
-rather than being treated immediately as lease loss.
-
-Large binary image payloads are not copied into checkpoint JSON. Current
-attachments refer to core artifacts; KB visuals refer to workspace/chunk
-identity and are rehydrated from shared sidecars. A KB visual that no longer
-resolves is dropped from the rehydrated image evidence while its text and
-citation identity remain; a missing visual never fails the run.
-
-If the process dies during a read-only tool batch, the batch may execute again.
-The next checkpoint makes completed turns durable.
-
-A resumed run continues from the recorded journal. A fast-path answer has no control turn and
-therefore no intermediate checkpoint; recovery emits `reset` and re-executes it
-from immutable input.
-
-If the process dies during final generation, recovery appends a `reset` event
-and regenerates the final answer from the latest checkpoint. Subscribers clear
-the partial draft after `reset`. DlightRAG does not claim exactly-once token
-generation.
+If the process dies during a read-only tool batch, that batch may run again.
 
 ## Web Conversation Adapter
 
@@ -613,9 +573,9 @@ This contract is held by:
 
 - unit tests for every status transition and recovery boundary named in this
   document;
-- PostgreSQL integration tests for claim, lease loss, checkpoint, event replay,
+- PostgreSQL integration tests for claim, lease loss, journal recovery, event replay,
   cancellation, pruning, and artifact ownership;
 - transport contract tests for REST, MCP, Web, and Python;
-- a process-restart test that resumes after a completed control turn;
+- a process-restart test that resumes from the journal or Fast stages;
 - reconnect tests that replay events without duplicate sequence numbers;
 - the full local GitHub Actions equivalent (`make ci`).

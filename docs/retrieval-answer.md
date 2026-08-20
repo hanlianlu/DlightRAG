@@ -278,31 +278,23 @@ unbounded data URIs.
 
 ## Answer Orchestration
 
-One `AnswerOrchestrator` routes every answer. It reads request capability and
-picks one of two paths:
+One `AnswerOrchestrator` executes the durable Resolved Mode:
 
-- **Fast path** — no attachments and no web-search key. DlightRAG runs fixed
-  knowledge-base retrieval and one `AnswerSynthesizer` answer-generation LLM
-  call, with no control turn. This is the standard-RAG path.
-- **Research path** — the request has attachments (registered as request-local
-  resources) or `web_search.api_key` (Exa) is set. The agent selects from the
-  available peer tools (`search_knowledge_base`, `read`,
-  `inspect`, and `search_web` when enabled); only the selected tools
-  append observations to an `EvidenceLedger`.
-  Every control turn replays the run's `SessionEpisode`: the newest exchanges carry
-  provider-native reasoning so a thinking model resumes its own chain, while
-  older exchanges keep only the call and its result, so a later turn still sees
-  which angles are spent without paying for the thinking behind them.
-  Before acceptance, one shared projector keeps the newest complete
-  user/assistant pairs that fit every reachable planner and generation
-  envelope. The resulting `PriorTurns` is stored by value and reused unchanged;
-  workers never trim history independently.
-  Evidence-producing Web result URLs receive opaque request-local resource ids,
-  allowing a later `read` call to deepen a selected source without a
-  raw-URL tool.
-  A control turn with no tool calls ends research. The last silent turn is the
-  answer; optional `artifacts/report.md` is published as a handle-only Primary
-  Report. Fast Answer still uses `AnswerSynthesizer` and never writes artifacts.
+- **Fast Answer** — requested or routed `fast`. DlightRAG runs retrieval planning,
+  knowledge-base retrieval, and one `AnswerSynthesizer` call. There is no Agent
+  Session, no research workspace, and no publication. JWT owners auto-recall a
+  bounded non-citable Memory Record set.
+- **Research** — requested or routed `research`. `AgentLoop` selects from the
+  composed peer tools (`search_knowledge_base`, `read`, `inspect`, optional
+  `search_web`, optional `delegate_research`, optional path tools, parent-only
+  `remember` / `forget` / `recall_memory`). Selected tools append to an
+  `EvidenceLedger`. Control turns replay the `SessionEpisode`: the newest
+  exchanges keep provider-native reasoning; older exchanges keep the call and
+  result. Acceptance stores one `PriorTurns` projection by value; workers never
+  trim it independently. Evidence-producing Web URLs become opaque request-local
+  resource ids for a later `read`. A turn with no tool calls ends research. The
+  last silent turn is the answer; optional `artifacts/report.md` publishes as a
+  handle-only Primary Report.
 
 Both paths converge on the same `AnswerSynthesizer` generation and deterministic
 finalization, so citation validation, `sources`, `answer_images`, and
@@ -487,8 +479,8 @@ chunks, vectors, BM25, LLM cache, or KG rows, and never enter `/retrieve`. A
 request-local `ResourceRegistry` owns every resource for the lifetime of one
 answer: inline bytes stay in memory, HTTPS links are fetched lazily and
 revalidated on every live read (HTTPS-only, SSRF guard, per/total byte and pixel
-limits). Checkpoint-restored URL bytes already passed that gate and are replayed
-without another network request or DNS lookup. Full bytes never enter model
+limits). Fetched bytes settled on an effect already passed that gate and are
+replayed from the Blob store without another network request. Full bytes never enter model
 context — only bounded text windows, capped observations, and budgeted image
 blocks do.
 
@@ -503,7 +495,7 @@ requests. A cursor is single-use. Its compact durable state records the original
 focus-plan budget, current rank position, and absolute character offset; the
 deterministic focus plan is cached in memory and rebuilt once after recovery.
 Changing a later observation budget therefore neither skips nor repeats text,
-and consumed cursors do not accumulate in checkpoints.
+and consumed cursors do not accumulate in the journal.
 
 `inspect` performs focused visual inspection through the VLM role
 (falling back to the default LLM). Images are bounded through the one canonical

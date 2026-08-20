@@ -385,12 +385,12 @@ ephemeral answer mode and no `stream` request field.
 | Operation | Contract |
 |---|---|
 | `POST /answer` | 202 with the descriptor. An idempotent replay returns 202 with the run's current status. Reusing a key with different normalized input returns 409. |
-| `GET /answer/{run_id}` | `queued` / `running` / `succeeded` / `failed` / `cancelled`, whether cancellation was requested, current phase, completed control turns, the canonical result once succeeded, and one public `error_kind` + `error_message` for a terminal failure. |
+| `GET /answer/{run_id}` | `queued` / `running` / `succeeded` / `failed` / `cancelled`, whether cancellation was requested, current phase (`routing` \| `planning` \| `searching` \| `researching` \| `generating`), `durable_progress_version`, the canonical result once succeeded, and one public `error_kind` + `error_message` for a terminal failure. |
 | `GET /answer/{run_id}/events` | Reconnectable SSE. Each durable sequence is the SSE `id`; resume with `Last-Event-ID` or the integer `after` query parameter. Supplying both with different values returns 400. Without a cursor, replay starts at sequence 1. A quiet run sends a comment keepalive every 10s, which consumes no sequence. |
 | `DELETE /answer/{run_id}` | Requests cancellation. 200 when it completed or found a terminal transition, 202 while a running worker must still observe it. Cancelling a terminal run is an idempotent no-op. |
 
 Durable event types are exactly `progress`, `token`, `reset`, `done`, and
-`error`. `progress` carries the core phases `planning`, `searching`,
+`error`. `progress` carries the core phases `routing`, `planning`, `searching`,
 `researching`, and `generating`. Successful `done` embeds the complete canonical
 result (answer, contexts, references, sources, answer-image metadata, trace,
 image descriptions); cancelled `done` carries `status="cancelled"` with no
@@ -429,8 +429,9 @@ then subscribes to its own owner-scoped `GET /web/answer/{run_id}/events`. That
 stream follows the same durable event log as the REST stream, with the same
 sequence, `Last-Event-ID` resume, 410-on-trim, and detach semantics, and differs
 only in projection: a browser `done` frame carries rendered presentation
-(`html`, `answer`, `answer_images`), not the canonical result payload REST
-serves. The run and its conversation turn are inserted in one transaction before
+(`html`, `answer`, `answer_images`, optional `primary_report` handle), not the
+canonical result payload REST serves. The Web thread shows the terminal answer;
+a Primary Report opens in the document panel. The run and its conversation turn are inserted in one transaction before
 the 202 response, so no subscriber, finalizer, or reconnect commits history
 afterwards. Disconnecting the browser closes that subscriber only, and
 reconnecting resumes from the durable event sequence. Conversation reads return
@@ -460,12 +461,12 @@ bytes. Manual delete, TTL pruning, and window trimming delete the linked runs,
 which cascades their events and references and releases blobs no surviving run
 still references.
 
-`AnswerOrchestrator` owns every answer. A Web turn with attachments or an Exa
-web-search key takes the research path: the agent chooses among the available
-knowledge-base search, Web search, resource read, and resource inspection tools,
-then one additional tools-disabled LLM call generates the final answer. A plain
-query with neither capability takes the fixed knowledge-base fast path and needs
-only its one answer-generation LLM call.
+`AnswerOrchestrator` owns every answer. Callers set `mode` to `auto`, `fast`, or
+`research` (omitted means `auto`). Capability resolves a Valid Mode Set; routing
+writes a durable Resolved Mode. Fast plans, retrieves, and synthesizes with no
+Agent Session. Research runs `AgentLoop` until the model emits no tool call; the
+last silent turn is the answer. Optional `artifacts/report.md` publishes as a
+Primary Report handle.
 Evidence-producing Exa result URLs are registered as opaque request-local
 resources, so the same `read` tool can deepen a search result without
 accepting an arbitrary model-supplied URL. Reading performs no login, cookie
@@ -524,11 +525,11 @@ fixed detail and no schema detail. Terminal run failures carry one stable
 `CURRENT_IMAGE_LIMIT_EXCEEDED`, `CURRENT_DOCUMENT_PARSE_FAILED`,
 `ANSWER_INPUT_OVERFLOW`, `ANSWER_IMAGE_CAPABILITY_UNKNOWN`,
 `MODEL_CAPABILITY_UNAVAILABLE`, `ANSWER_RESOURCE_INVALID`),
-`invalid_tool_configuration`, a checkpoint kind (`checkpoint_too_large`,
-`checkpoint_incompatible`, `checkpoint_corrupt`), `run_abandoned` when a run
-exceeds its crash-recovery bound, `run_execution_failed` when Runtime catches an
-unclassified runtime or executor failure outside the Answer taxonomy, or
-`ANSWER_STREAM_FAILED`.
+`invalid_tool_configuration`, `unsupported_answer_mode`, `routing_failed`,
+`tool_contract_changed`, `run_abandoned` when a run exceeds its crash-recovery
+bound, `run_execution_failed` when Runtime catches an unclassified runtime or
+executor failure outside the Answer taxonomy, or `ANSWER_STREAM_FAILED`. There
+are no checkpoint error kinds.
 
 A saturated service does not refuse an answer: accepted runs queue until an
 execution slot frees or the caller cancels the run, with no queue timeout, queue
@@ -620,6 +621,7 @@ async for event in application.answers.answer_stream(
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `query` | `str` | required | Search query |
+| `mode` | `auto \| fast \| research` | `auto` | Answer Mode. Omitted hashes as `auto`. |
 | `workspace` | `str \| None` | config default | Target workspace |
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
 | `all_workspaces` | `bool` | `false` | Query every workspace visible to the current caller. For REST/MCP this is the existing `workspace.query`-authorized set; for the in-process SDK it is every registered workspace. Mutually exclusive with a non-empty `workspace`/`workspaces` selection. |

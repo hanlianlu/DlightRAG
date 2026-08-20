@@ -588,7 +588,7 @@ postgres_pool_close_timeout: 5.0
 ```
 
 `postgres_pool_max_size` sizes the DlightRAG domain-store pool (BM25, metadata,
-conversations, jobs, checkpoints); `postgres_lightrag_pool_max_size` sizes the
+conversations, jobs, answer runs); `postgres_lightrag_pool_max_size` sizes the
 LightRAG backend pool. Each process opens up to the sum of the two, so multiply
 by the worker count and keep the total under PostgreSQL `max_connections`. Raise
 `postgres_pool_max_size` for high single-worker concurrency; lower it when

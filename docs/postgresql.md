@@ -146,7 +146,7 @@ full development-data reset rather than attempting an old-data migration. See
 [ADR 0001](adr/0001-reset-development-data-for-breaking-schema-changes.md).
 Run `uv run scripts/reset_development.py --mode docker` (or `--mode native`)
 to perform that reset; it also recreates the required PostgreSQL extensions
-and verifies the empty checkpoint. See
+and verifies the empty database. See
 [operations.md](operations.md#full-development-reset).
 
 ## Durable Answer Run State
@@ -156,7 +156,7 @@ under the `answer_runs` migration scope:
 
 | Table | Key | Holds |
 | --- | --- | --- |
-| `dlightrag_answer_runs` | `(owner_id, run_id)` | status, phase, completed turns, stop reason, cancellation request, lease owner/expiry, fencing epoch, consecutive-recovery count, next event sequence, event-trim timestamp, latest checkpoint, canonical result or terminal error |
+| `dlightrag_answer_runs` | `(owner_id, run_id)` | status, phase, durable progress, stop reason, cancellation, lease, fencing epoch, reclaim-without-progress count, event sequence, event-trim timestamp, Prepared Input, canonical result or terminal error |
 | `dlightrag_answer_run_events` | `(owner_id, run_id, event_sequence)` | gap-free `progress` / `token` / `reset` / `done` / `error` events |
 | `dlightrag_blobs` | `(owner_id, digest)` | immutable content-addressed blob metadata within one owner |
 | `dlightrag_answer_run_artifacts` | `(owner_id, run_id, resource_id)` | ordered run inputs and fetched resources, referencing a digest |

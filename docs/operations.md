@@ -22,7 +22,7 @@ uv run scripts/reset_development.py --mode docker --dry-run
 uv run scripts/reset_development.py --mode native --dry-run
 
 # Docker mode: delete both Compose volumes (pg18_data, dlightrag_data),
-# start only PostgreSQL, and verify the empty extension-only checkpoint:
+# start only PostgreSQL, and verify the empty extension-only database:
 uv run scripts/reset_development.py --mode docker
 # or: make dev-reset
 
@@ -34,7 +34,7 @@ uv run scripts/reset_development.py --mode native
 Interactive runs require typing the exact database name; `--yes` skips the
 prompt but never target validation. Native mode refuses a non-loopback host
 without `--allow-remote-reset` and refuses other database sessions without
-`--force-disconnect`. Docker mode returns at the PostgreSQL-only checkpoint:
+`--force-disconnect`. Docker mode returns after PostgreSQL is empty and extensions exist:
 API, MCP, readers, and writers stay stopped; starting one writer is a separate
 explicit step (the writer applies the final baseline schema).
 
@@ -60,8 +60,8 @@ concern rather than a request concern.
   Azure Files); DlightRAG emulates no object store.
 - **Shutdown.** A graceful stop finalizes cancel-pending runs and fenced-requeues
   every other owned run so it is immediately reclaimable. A crash leaves the
-  lease to expire, after which any worker reclaims the run from its latest
-  checkpoint. Four consecutive reclaims without a committed checkpoint fail the
+  lease to expire, after which any worker reclaims the run from the journal or
+  Fast stages. Four consecutive reclaims without durable progress fail the
   run with `run_abandoned`.
 - **Retention.** Every run-owning process trims 30-day-old event logs and prunes
   30-day-old terminal runs hourly in bounded `SKIP LOCKED` batches. There is no

@@ -408,7 +408,7 @@ Admitted bytes become owner-scoped content-addressed artifacts owned by the
 durable run, so deduplication never crosses an owner. Run-scoped fetched web
 bytes are stored only after the HTTPS, redirect, DNS, SSRF, and byte validation
 above passes, and the blob plus its run reference commit in one transaction
-before the tool result may enter a checkpoint — a resumed run therefore reads the
+before the tool result may settle on the journal — a resumed run therefore reads the
 bytes it originally fetched rather than whatever the page serves now. Workspace
 authorization is evaluated once before the run-creation transaction and only the
 resulting workspace set is stored, never a token or mutable claims; a later policy
