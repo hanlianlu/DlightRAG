@@ -424,15 +424,21 @@ over startup ownership.
 
 The Web-only conversation lifecycle is server-owned and principal-scoped. The
 browser creates, lists, selects, renames, deletes, and reloads conversations
-through `/web/api/conversations`; it sends only `conversation_id`, the current query,
-current answer attachments, and the selected search workspaces to `/web/api/answer`.
-Conversation IDs are server-generated UUIDs and are never credentials. History
+through `/web/api/conversations`; it sends the optional `conversation_id`, the
+current query, current answer attachments, and the selected search workspaces to
+`/web/api/answer`. Omitting `conversation_id` denotes the first submission from
+`/web/`: the server derives a stable UUID from the owner-wide submission key and
+creates the conversation, turn, uploaded artifacts, and durable run in one
+transaction. Admission failure leaves no empty conversation, and retrying the
+same submission resolves the same conversation. Conversation IDs are
+server-generated UUIDs and are never credentials. History
 and attachment reads always filter by both the authenticated principal and
 conversation ID, so another principal receives the same 404 as a missing
 conversation.
 
-`POST /web/api/answer` creates a core run and returns its 202 descriptor; the browser
-then subscribes to its own owner-scoped `GET /web/api/answer/{run_id}/events`. That
+`POST /web/api/answer` creates a core run and returns its 202 descriptor, including
+the authoritative conversation summary; the browser then subscribes to its own
+owner-scoped `GET /web/api/answer/{run_id}/events`. That
 stream follows the same durable event log as the REST stream, with the same
 sequence, `Last-Event-ID` resume, 410-on-trim, and detach semantics, and differs
 only in projection: a browser `done` frame carries rendered presentation

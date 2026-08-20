@@ -37,10 +37,16 @@ _MAX_FORM_FIELD_BYTES = 2 * 1024 * 1024
 class ParsedWebAnswerRequest:
     query: str
     workspaces: list[str] | None
-    conversation_id: UUID
+    conversation_id: UUID | None
     submission_id: UUID
     attachments: tuple[ValidatedWebAttachment, ...]
     mode: str | None = None
+
+
+def _optional_uuid(value: Any) -> UUID | None:
+    if value in (None, ""):
+        return None
+    return UUID(str(value))
 
 
 def _optional_mode(value: Any) -> Literal["auto", "fast", "research"] | None:
@@ -152,7 +158,7 @@ async def parse_web_answer_request(
             body = WebAnswerRequest(
                 query=str(form.get("query") or ""),
                 workspaces=[str(item) for item in workspaces_raw] or None,
-                conversation_id=UUID(str(form.get("conversation_id"))),
+                conversation_id=_optional_uuid(form.get("conversation_id")),
                 submission_id=UUID(str(form.get("submission_id"))),
                 mode=_optional_mode(form.get("mode")),
             )

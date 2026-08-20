@@ -9,11 +9,13 @@ stored a second time under the conversation.
 """
 
 import asyncio
+import datetime
 import logging
 from collections.abc import Awaitable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
+from uuid import UUID, uuid5
 
 from dlightrag_ai.media import thumbnail_bytes
 
@@ -104,7 +106,7 @@ class WebConversationStore(Protocol):
         conversation_id: str,
         submission_id: str,
         idempotency_fingerprint: str,
-    ) -> LinkedTurn | None: ...
+    ) -> AnswerTurnCreation | None: ...
 
     async def create_answer_turn(
         self,
@@ -120,6 +122,7 @@ class WebConversationStore(Protocol):
         max_turns: int,
         ttl_days: int,
         routing: RoutingAcceptance | None = None,
+        create_conversation: bool = False,
     ) -> AnswerTurnCreation | None: ...
 
 
@@ -130,6 +133,7 @@ _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
 _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
+_NEW_CONVERSATION_NAMESPACE = UUID("9c0e62a5-a12c-45b2-8aeb-474fc2237cdf")
 
 #: Browser answer sources are served through the Web-scoped download route.
 WEB_SOURCE_DOWNLOAD_BASE = "/web/api/files/raw"
@@ -161,11 +165,11 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
     """Atomically link AnswerService acceptance to one browser conversation."""
 
     store: WebConversationStore
-    snapshot: ConversationSnapshot
     conversation_id: str
     title_hint: str | None
     max_turns: int
     ttl_days: int
+    create_conversation: bool = False
 
     async def replay_run(
         self,
@@ -174,20 +178,13 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
         idempotency_key: str,
         idempotency_fingerprint: str,
     ) -> WebAnswerSubmission | None:
-        turn = await self.store.replay_answer_turn(
+        creation = await self.store.replay_answer_turn(
             principal_id=owner_id,
             conversation_id=self.conversation_id,
             submission_id=idempotency_key,
             idempotency_fingerprint=idempotency_fingerprint,
         )
-        if turn is None:
-            return None
-        return WebAnswerSubmission(
-            run=turn.run,
-            turn_id=turn.turn_id,
-            turn_number=turn.turn_number,
-            conversation=_snapshot_summary(self.snapshot),
-        )
+        return None if creation is None else _submission(creation)
 
     async def create_run(
         self,
@@ -215,6 +212,7 @@ class _WebAnswerAcceptor(AnswerRunAcceptor[WebAnswerSubmission]):
             max_turns=self.max_turns,
             ttl_days=self.ttl_days,
             routing=routing,
+            create_conversation=self.create_conversation,
         )
         return None if creation is None else _submission(creation)
 
@@ -413,7 +411,7 @@ class WebConversationService:
         self,
         user: UserContext | None,
         *,
-        conversation_id: str,
+        conversation_id: str | None,
         submission_id: str,
         query: str,
         workspaces: Sequence[str],
@@ -422,14 +420,20 @@ class WebConversationService:
     ) -> WebAnswerSubmission | None:
         """Create or replay one submission's run and its conversation entry.
 
-        The conversation is validated and locked, and the run, its uploaded
-        bytes, and the linked turn are written in one transaction, so the
-        descriptor returned here is already durable history.
+        An existing conversation is validated and locked. When ``conversation_id``
+        is absent, a stable server-generated id is derived from this owner-wide
+        submission key and the conversation is inserted in the same transaction
+        as its first run, uploaded bytes, and linked turn.
         """
         principal_id = owner_id_from_user(user)
-        snapshot = await self._snapshot(principal_id, conversation_id)
-        if snapshot is None:
-            return None
+        create_conversation = conversation_id is None
+        if create_conversation:
+            conversation_id = _new_conversation_id(principal_id, submission_id)
+            snapshot = _empty_snapshot(principal_id, conversation_id)
+        else:
+            snapshot = await self._snapshot(principal_id, conversation_id)
+            if snapshot is None:
+                return None
         idempotency_fingerprint = _web_answer_request_fingerprint(
             conversation_id=conversation_id,
             query=query,
@@ -453,11 +457,11 @@ class WebConversationService:
             auth_mode=(user.auth_mode if user is not None else "none"),
             acceptor=_WebAnswerAcceptor(
                 store=self._store,
-                snapshot=snapshot,
                 conversation_id=conversation_id,
                 title_hint=_auto_title(query),
                 max_turns=self._max_turns,
                 ttl_days=self._ttl_days,
+                create_conversation=create_conversation,
             ),
         )
 
@@ -482,6 +486,30 @@ class WebConversationService:
 # ---------------------------------------------------------------------------
 # Projection
 # ---------------------------------------------------------------------------
+
+
+def _new_conversation_id(principal_id: str, submission_id: str) -> str:
+    """Return the stable server-owned conversation id for a first submission."""
+    return str(
+        uuid5(
+            _NEW_CONVERSATION_NAMESPACE,
+            f"{principal_id}\0{submission_id}",
+        )
+    )
+
+
+def _empty_snapshot(principal_id: str, conversation_id: str) -> ConversationSnapshot:
+    """Supply empty history while the first conversation row awaits acceptance."""
+    now = datetime.datetime.now(datetime.UTC)
+    return ConversationSnapshot(
+        principal_id=principal_id,
+        conversation_id=conversation_id,
+        content_revision=0,
+        title=None,
+        created_at=now,
+        updated_at=now,
+        turns=(),
+    )
 
 
 def _auto_title(query: str) -> str | None:

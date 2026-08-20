@@ -32,6 +32,14 @@ test('no attachments emits the JSON envelope with the Web form fields only', () 
   assert.ok(!('documents' in parsed));
 });
 
+test('a first JSON submission explicitly carries no conversation', () => {
+  const {body} = buildAnswerRequest({...envelope, conversationId: null}, []);
+
+  const parsed = JSON.parse(body as string) as Record<string, unknown>;
+  assert.equal(parsed.conversation_id, null);
+  assert.equal(parsed.submission_id, 'sub-1');
+});
+
 test('mixed attachments emit one multipart with the envelope plus repeated attachments in order', () => {
   const attachments = [
     file('a.png', 'image/png'),
@@ -58,6 +66,17 @@ test('mixed attachments emit one multipart with the envelope plus repeated attac
     parts.map((part) => (part as File).name),
     ['a.png', 'b.pdf', 'c.png'],
   );
+});
+
+test('a first multipart submission omits the optional conversation field', () => {
+  const {body} = buildAnswerRequest(
+    {...envelope, conversationId: null},
+    [file('report.pdf', 'application/pdf')],
+  );
+
+  const form = body as FormData;
+  assert.equal(form.has('conversation_id'), false);
+  assert.equal(form.get('submission_id'), 'sub-1');
 });
 
 test('a rebuilt request from the same attachments never duplicates the file parts', () => {

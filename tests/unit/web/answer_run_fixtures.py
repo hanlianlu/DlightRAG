@@ -15,7 +15,7 @@ from dlightrag.services.answers import (
     AnswerRunAcceptor,
     AnswerService,
 )
-from dlightrag.web.conversation_models import ConversationSummary, LinkedTurn
+from dlightrag.web.conversation_models import AnswerTurnCreation, ConversationSummary, LinkedTurn
 from dlightrag.web.conversations import WebAnswerSubmission
 
 NOW = datetime.datetime(2026, 8, 12, tzinfo=datetime.UTC)
@@ -188,6 +188,19 @@ def conversation_summary(conversation_id: str) -> ConversationSummary:
         title=None,
         created_at=NOW,
         updated_at=NOW,
+    )
+
+
+def answer_turn_creation(
+    *,
+    conversation_id: str,
+    run: AnswerRunRecord | None = None,
+    replayed: bool = False,
+) -> AnswerTurnCreation:
+    return AnswerTurnCreation(
+        turn=linked_turn(run),
+        summary=conversation_summary(conversation_id).model_dump(),
+        replayed=replayed,
     )
 
 

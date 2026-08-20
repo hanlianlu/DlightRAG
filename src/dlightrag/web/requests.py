@@ -10,7 +10,7 @@ from dlightrag.answer.client_contracts import ClientContractModel
 class WebAnswerRequest(ClientContractModel):
     query: str = ""
     workspaces: list[str] | None = None
-    conversation_id: UUID
+    conversation_id: UUID | None = None
     submission_id: UUID
     mode: Literal["auto", "fast", "research"] | None = None
 

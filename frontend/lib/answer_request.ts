@@ -4,12 +4,12 @@
 // it posts the compact JSON envelope; with attachments it posts one multipart
 // form carrying the same envelope fields plus repeated `attachments` file parts
 // in user order. The server contract (parse_web_answer_request) reads exactly
-// these names: query, workspaces, conversation_id, submission_id, attachments.
+// these names: query, workspaces, optional conversation_id, submission_id, attachments.
 
 export interface AnswerEnvelope {
     query: string;
     workspaces: string[];
-    conversationId: string;
+    conversationId: string | null;
     submissionId: string;
     mode?: 'auto' | 'fast' | 'research';
 }
@@ -38,7 +38,7 @@ export function buildAnswerRequest(
     const form = new FormData();
     form.append('query', envelope.query);
     form.append('workspaces', JSON.stringify(envelope.workspaces));
-    form.append('conversation_id', envelope.conversationId);
+    if (envelope.conversationId) form.append('conversation_id', envelope.conversationId);
     form.append('submission_id', envelope.submissionId);
     if (envelope.mode) form.append('mode', envelope.mode);
     for (const file of attachments) form.append('attachments', file, file.name);

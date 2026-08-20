@@ -111,6 +111,35 @@ async def test_parse_json_web_answer_request_carries_no_attachments() -> None:
 
 
 @pytest.mark.asyncio
+async def test_parse_json_first_submission_allows_no_conversation() -> None:
+    app = FastAPI()
+
+    @app.post("/probe")
+    async def probe(request: Request):
+        body = await parse_web_answer_request(
+            request,
+            max_attachments=6,
+            max_attachment_bytes=_IMAGE_MAX_BYTES,
+            max_total_attachment_bytes=128 * 1024 * 1024,
+            image_max_pixels=40_000_000,
+            answer_image_capability=_supported_capability(),
+        )
+        return {"conversation_id": body.conversation_id}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/probe",
+            json={
+                "query": "hello",
+                "submission_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"conversation_id": None}
+
+
+@pytest.mark.asyncio
 async def test_parse_multipart_web_answer_request_reads_ordered_attachments() -> None:
     app = FastAPI()
 
@@ -154,6 +183,39 @@ async def test_parse_multipart_web_answer_request_reads_ordered_attachments() ->
             {"filename": "report.pdf", "kind": "document"},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_parse_multipart_first_submission_allows_no_conversation() -> None:
+    app = FastAPI()
+
+    @app.post("/probe")
+    async def probe(request: Request):
+        body = await parse_web_answer_request(
+            request,
+            max_attachments=6,
+            max_attachment_bytes=_IMAGE_MAX_BYTES,
+            max_total_attachment_bytes=128 * 1024 * 1024,
+            image_max_pixels=40_000_000,
+            answer_image_capability=_supported_capability(),
+        )
+        return {
+            "conversation_id": body.conversation_id,
+            "attachments": len(body.attachments),
+        }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/probe",
+            data={
+                "query": "compare this",
+                "submission_id": str(uuid4()),
+            },
+            files=[("attachments", ("report.pdf", b"%PDF-test", "application/pdf"))],
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"conversation_id": None, "attachments": 1}
 
 
 @pytest.mark.asyncio

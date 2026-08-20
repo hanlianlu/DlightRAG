@@ -35,6 +35,7 @@ from tests.unit.web.answer_run_fixtures import (
     TURN_ID,
     FakeAnswers,
     answer_run,
+    answer_turn_creation,
     input_artifact,
     linked_turn,
     run_request,
@@ -126,6 +127,24 @@ async def test_submission_passes_the_submission_id_as_the_run_key(
     assert list(kwargs["workspaces"]) == ["default"]
 
 
+async def test_first_submission_can_atomically_create_its_conversation(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    created_conversation_id = "00000000-0000-4000-8000-000000000099"
+    service.start_answer.return_value = web_answer_submission(
+        conversation_id=created_conversation_id
+    )
+
+    response = await client.post(
+        "/web/api/answer",
+        json={key: value for key, value in _BODY.items() if key != "conversation_id"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["conversation"]["conversation_id"] == created_conversation_id
+    assert service.start_answer.await_args.kwargs["conversation_id"] is None
+
+
 async def test_submission_canonicalizes_display_workspaces_before_access_and_service(
     client: AsyncClient,
     service: AsyncMock,
@@ -174,7 +193,11 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
         updated_at=now,
         turns=(),
     )
-    existing = linked_turn(answer_run(status="running"))
+    existing = answer_turn_creation(
+        conversation_id=_CID,
+        run=answer_run(status="running"),
+        replayed=True,
+    )
     store.replay_answer_turn.return_value = existing
     answers = FakeAnswers()
     service = WebConversationService(
@@ -196,6 +219,82 @@ async def test_service_replays_before_preparing_resolved_run_input() -> None:
     assert submission is not None
     assert submission.run.status == "running"
     assert answers.prepared == []
+    store.create_answer_turn.assert_not_awaited()
+
+
+async def test_first_submission_uses_one_stable_server_conversation_and_atomic_store_write() -> (
+    None
+):
+    store = AsyncMock()
+    store.replay_answer_turn.return_value = None
+
+    async def create_turn(**kwargs):
+        return answer_turn_creation(conversation_id=kwargs["conversation_id"])
+
+    store.create_answer_turn.side_effect = create_turn
+    answers = FakeAnswers()
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_turns=100,
+        ttl_days=30,
+        max_attachments=6,
+    )
+
+    submission = await service.start_answer(
+        None,
+        conversation_id=None,
+        submission_id=SUBMISSION_ID,
+        query="What changed?",
+        workspaces=["default"],
+    )
+
+    assert submission is not None
+    generated_id = submission.conversation.conversation_id
+    assert generated_id
+    store.snapshot.assert_not_awaited()
+    assert store.replay_answer_turn.await_args.kwargs["conversation_id"] == generated_id
+    assert store.create_answer_turn.await_args.kwargs["conversation_id"] == generated_id
+    assert store.create_answer_turn.await_args.kwargs["create_conversation"] is True
+
+
+async def test_replaying_first_submission_returns_its_created_conversation_before_preparation() -> (
+    None
+):
+    store = AsyncMock()
+
+    async def replay_turn(**kwargs):
+        return answer_turn_creation(
+            conversation_id=kwargs["conversation_id"],
+            run=answer_run(status="running"),
+            replayed=True,
+        )
+
+    store.replay_answer_turn.side_effect = replay_turn
+    answers = FakeAnswers()
+    service = WebConversationService(
+        store=store,
+        answers=answers,
+        max_turns=100,
+        ttl_days=30,
+        max_attachments=6,
+    )
+
+    submission = await service.start_answer(
+        None,
+        conversation_id=None,
+        submission_id=SUBMISSION_ID,
+        query="What changed?",
+        workspaces=["default"],
+    )
+
+    assert submission is not None
+    assert (
+        submission.conversation.conversation_id
+        == (store.replay_answer_turn.await_args.kwargs["conversation_id"])
+    )
+    assert answers.prepared == []
+    store.snapshot.assert_not_awaited()
     store.create_answer_turn.assert_not_awaited()
 
 

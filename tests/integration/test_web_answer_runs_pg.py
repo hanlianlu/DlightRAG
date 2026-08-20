@@ -140,6 +140,7 @@ async def _submit(
     artifacts: list[PendingArtifact] | None = None,
     references: list[PendingArtifactReference] | None = None,
     idempotency_fingerprint: str | None = None,
+    create_conversation: bool = False,
 ):
     effective_request = request if request is not None else _request()
     return await store.create_answer_turn(
@@ -157,6 +158,7 @@ async def _submit(
         title_hint="why",
         max_turns=_MAX_TURNS,
         ttl_days=_TTL_DAYS,
+        create_conversation=create_conversation,
     )
 
 
@@ -242,6 +244,52 @@ async def test_a_submission_commits_the_run_bytes_and_turn_together(
     assert row["status"] == "queued"
     assert await _count(pool, "dlightrag_blobs", owner_id=_OWNER, digest=digest) == 1
     assert await _count(pool, "dlightrag_answer_run_artifacts", owner_id=_OWNER) == 1
+
+
+async def test_first_submission_creates_conversation_run_and_turn_together(
+    store: PGWebConversationStore, pool: Any
+) -> None:
+    conversation_id = str(uuid.uuid4())
+
+    creation = await _submit(
+        store,
+        conversation_id,
+        create_conversation=True,
+    )
+
+    assert creation is not None
+    assert creation.summary["conversation_id"] == conversation_id
+    assert creation.turn.turn_number == 1
+    assert await _count(pool, "web_conversations") == 1
+    assert await _count(pool, "dlightrag_answer_runs") == 1
+    assert await _count(pool, "web_conversation_turns") == 1
+
+
+async def test_concurrent_first_submission_replays_one_atomic_conversation(
+    store: PGWebConversationStore, pool: Any
+) -> None:
+    conversation_id = str(uuid.uuid4())
+    submission_id = str(uuid.uuid4())
+
+    results = await asyncio.gather(
+        *(
+            _submit(
+                store,
+                conversation_id,
+                submission_id=submission_id,
+                create_conversation=True,
+            )
+            for _ in range(5)
+        )
+    )
+
+    accepted = [result for result in results if result is not None]
+    assert len(accepted) == 5
+    assert {result.summary["conversation_id"] for result in accepted} == {conversation_id}
+    assert len({result.turn.answer_run_id for result in accepted}) == 1
+    assert await _count(pool, "web_conversations") == 1
+    assert await _count(pool, "dlightrag_answer_runs") == 1
+    assert await _count(pool, "web_conversation_turns") == 1
 
 
 async def test_a_submission_to_an_unknown_conversation_writes_nothing(

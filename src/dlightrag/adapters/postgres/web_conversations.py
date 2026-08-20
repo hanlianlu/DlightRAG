@@ -181,6 +181,13 @@ VALUES ($1, $2::text::uuid)
 RETURNING {_SUMMARY_COLUMNS}
 """  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
+_CREATE_CONVERSATION_IF_MISSING = f"""
+INSERT INTO web_conversations (principal_id, conversation_id)
+VALUES ($1, $2::text::uuid)
+ON CONFLICT (principal_id, conversation_id) DO NOTHING
+RETURNING {_SUMMARY_COLUMNS}
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
+
 _LIST_CONVERSATIONS = f"""
 SELECT {_SUMMARY_COLUMNS}
 FROM web_conversations
@@ -271,6 +278,14 @@ t.conversation_id::text AS turn_conversation_id,
 t.created_at AS turn_created_at
 """
 
+_TURN_CONVERSATION_SUMMARY_COLUMNS = """
+c.conversation_id::text AS conversation_id,
+c.title,
+c.content_revision,
+c.created_at,
+c.updated_at
+"""
+
 _GET_TURNS = f"""
 SELECT
 {_TURN_COLUMNS},
@@ -293,11 +308,15 @@ _GET_TURN_BY_SUBMISSION = f"""
 SELECT
 {_TURN_COLUMNS},
 r.request_fingerprint,
-{answer_run_columns("r")}
+{answer_run_columns("r")},
+{_TURN_CONVERSATION_SUMMARY_COLUMNS}
 FROM web_conversation_turns AS t
 JOIN dlightrag_answer_runs AS r
   ON r.owner_id = t.principal_id
  AND r.run_id = t.answer_run_id
+JOIN web_conversations AS c
+  ON c.principal_id = t.principal_id
+ AND c.conversation_id = t.conversation_id
 WHERE t.principal_id = $1
   AND t.submission_id = $2::text::uuid
 """  # noqa: S608 - interpolates only trusted column-projection constants
@@ -655,15 +674,16 @@ class PGWebConversationStore(PostgresOperationRunner):
         max_turns: int,
         ttl_days: int,
         routing: RoutingAcceptance | None = None,
+        create_conversation: bool = False,
     ) -> AnswerTurnCreation | None:
         """Accept one submission as a run plus its conversation entry, atomically.
 
-        The owned conversation is locked, the run and its uploaded bytes are
-        created or replayed under the submission id, and the linked turn is
-        inserted before this transaction commits. Replaying the same submission
-        returns the authoritative run and turn; reusing it for a different
-        conversation or different normalized input is a conflict. ``None`` means
-        the conversation does not exist for this principal or has expired.
+        The owned conversation is locked, or inserted when this is its first
+        submission. The run, uploaded bytes, and linked turn are committed in
+        that same transaction. Replaying the same submission returns the
+        authoritative run and turn; reusing it for a different conversation or
+        different normalized input is a conflict. ``None`` means a required
+        existing conversation does not exist for this principal or has expired.
         """
         await self._ensure_initialized()
         turn_id = str(uuid4())
@@ -674,6 +694,19 @@ class PGWebConversationStore(PostgresOperationRunner):
                 summary_row = await conn.fetchrow(
                     _LOCK_CONVERSATION, principal_id, conversation_id, ttl_days
                 )
+                if summary_row is None and create_conversation:
+                    summary_row = await conn.fetchrow(
+                        _CREATE_CONVERSATION_IF_MISSING,
+                        principal_id,
+                        conversation_id,
+                    )
+                    if summary_row is None:
+                        summary_row = await conn.fetchrow(
+                            _LOCK_CONVERSATION,
+                            principal_id,
+                            conversation_id,
+                            ttl_days,
+                        )
                 if summary_row is None:
                     return None
                 existing = await conn.fetchrow(_GET_TURN_BY_SUBMISSION, principal_id, submission_id)
@@ -688,7 +721,7 @@ class PGWebConversationStore(PostgresOperationRunner):
                         )
                     return AnswerTurnCreation(
                         turn=_linked_turn(existing),
-                        summary=_row_dict(summary_row),
+                        summary=_row_dict(existing),
                         replayed=True,
                     )
                 creation = await self._run_store.create_run_in(
@@ -753,11 +786,11 @@ class PGWebConversationStore(PostgresOperationRunner):
         conversation_id: str,
         submission_id: str,
         idempotency_fingerprint: str,
-    ) -> LinkedTurn | None:
+    ) -> AnswerTurnCreation | None:
         """Return an accepted browser submission before resolved input is rebuilt."""
         await self._ensure_initialized()
 
-        async def _operation(conn: Any) -> LinkedTurn | None:
+        async def _operation(conn: Any) -> AnswerTurnCreation | None:
             existing = await conn.fetchrow(_GET_TURN_BY_SUBMISSION, principal_id, submission_id)
             if existing is None:
                 return None
@@ -769,7 +802,11 @@ class PGWebConversationStore(PostgresOperationRunner):
                 raise ConversationSubmissionConflict(
                     "submission id was reused with different request input"
                 )
-            return _linked_turn(existing)
+            return AnswerTurnCreation(
+                turn=_linked_turn(existing),
+                summary=_row_dict(existing),
+                replayed=True,
+            )
 
         return await self._run_read(_operation)
 

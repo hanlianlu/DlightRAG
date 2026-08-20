@@ -96,7 +96,9 @@ async def start_answer_run(
     try:
         submission = await conversation_service.start_answer(
             getattr(request.state, "user_context", None),
-            conversation_id=str(body.conversation_id),
+            conversation_id=(
+                str(body.conversation_id) if body.conversation_id is not None else None
+            ),
             submission_id=str(body.submission_id),
             query=query,
             workspaces=target_workspaces,
