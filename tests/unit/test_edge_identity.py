@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from dlightrag.config import DlightragConfig, WebIdentitySettings
 from dlightrag.web.auth import WebAuthMiddleware
 from dlightrag.web.edge_identity import (
+    AwsEdgeProvider,
     AzureEasyAuthProvider,
     CloudflareAccessProvider,
     EdgeIdentityError,
@@ -130,11 +131,6 @@ class TestCloudflareAccessProvider:
         with pytest.raises(EdgeIdentityError) as raised:
             provider.authenticate(_request())
         assert raised.value.kind == "missing_credential"
-        assert raised.value.kind in {
-            "missing_credential",
-            "invalid_credential",
-            "expired_credential",
-        }
 
     def test_wrong_issuer_is_rejected(self, signing_key, jwks) -> None:
         provider = CloudflareAccessProvider(_settings())
@@ -184,8 +180,17 @@ class TestCloudflareAccessProvider:
             provider.authenticate(_request(headers={"Cf-Access-Jwt-Assertion": tampered}))
 
     def test_factory_rejects_unknown_edges(self) -> None:
+        from pydantic import ValidationError
+
+        # The config Literal rejects unknown edges before any provider builds.
+        with pytest.raises(ValidationError):
+            _settings(edge="gcp")
+        # A provider forced through the factory with a bad edge still fails closed.
+        bogus = WebIdentitySettings.model_validate(
+            {"edge": "cloudflare", "issuer": TEAM_ISSUER, "audience": AUD_TAG}
+        ).model_copy(update={"edge": "gcp"})
         with pytest.raises(EdgeIdentityError) as raised:
-            edge_identity_provider(_settings(edge="aws"))  # implemented in a later task
+            edge_identity_provider(bogus)  # type: ignore[arg-type]
         assert raised.value.kind == "misconfigured"
 
 
@@ -253,11 +258,6 @@ class TestAzureEasyAuthProvider:
         with pytest.raises(EdgeIdentityError) as raised:
             provider.authenticate(_request(headers={"X-MS-CLIENT-PRINCIPAL": "eyJhIjoxfQ"}))
         assert raised.value.kind == "missing_credential"
-        assert raised.value.kind in {
-            "missing_credential",
-            "invalid_credential",
-            "expired_credential",
-        }
 
     def test_wrong_tenant_issuer_is_rejected(self, signing_key, jwks) -> None:
         provider = self._provider()
@@ -298,6 +298,147 @@ class TestAzureEasyAuthProvider:
                 )
             )
         assert raised.value.kind == "misconfigured"
+
+    def test_plain_tenant_issuer_derives_the_v2_discovery_endpoint(self, signing_key, jwks) -> None:
+        provider = AzureEasyAuthProvider(
+            WebIdentitySettings.model_validate(
+                {
+                    "edge": "azure",
+                    "issuer": "https://login.microsoftonline.com/test-tenant",
+                    "audience": self.AAD_AUDIENCE,
+                }
+            )
+        )
+        assert provider._jwks_url == (
+            "https://login.microsoftonline.com/test-tenant/discovery/v2.0/keys"
+        )
+
+    def test_expired_id_token_is_rejected(self, signing_key, jwks) -> None:
+        provider = self._provider()
+        expired = jwt.encode(
+            {
+                "sub": "aad-user-object-id",
+                "iss": self.AAD_ISSUER,
+                "aud": self.AAD_AUDIENCE,
+                "exp": datetime.now(UTC) - timedelta(seconds=60),
+                "iat": datetime.now(UTC) - timedelta(minutes=5),
+            },
+            signing_key,
+            algorithm="RS256",
+            headers={"kid": "test-key"},
+        )
+        with pytest.raises(EdgeIdentityError) as raised:
+            provider.authenticate(_request(headers={"X-MS-TOKEN-AAD-ID-TOKEN": expired}))
+        assert raised.value.kind == "expired_credential"
+
+    def test_tampered_id_token_is_rejected(self, signing_key, jwks) -> None:
+        provider = self._provider()
+        raw = self._id_token(signing_key)
+        tampered = raw[:-4] + ("AAAA" if raw[-4:] != "AAAA" else "BBBB")
+        with pytest.raises(EdgeIdentityError, match="Invalid edge credential"):
+            provider.authenticate(_request(headers={"X-MS-TOKEN-AAD-ID-TOKEN": tampered}))
+
+
+class TestAwsEdgeProvider:
+    COGNITO_ISSUER = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool"
+    COGNITO_AUDIENCE = "amplify-app-client-id"
+
+    def _provider(self) -> AwsEdgeProvider:
+        return AwsEdgeProvider(
+            WebIdentitySettings.model_validate(
+                {
+                    "edge": "aws",
+                    "issuer": self.COGNITO_ISSUER,
+                    "audience": self.COGNITO_AUDIENCE,
+                    "jwks_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool/.well-known/jwks.json",
+                }
+            )
+        )
+
+    def _forwarded_token(
+        self,
+        key: rsa.RSAPrivateKey,
+        *,
+        issuer: str = COGNITO_ISSUER,
+        audience: str = COGNITO_AUDIENCE,
+    ) -> str:
+        return jwt.encode(
+            {
+                "sub": "cognito-user-uuid",
+                "iss": issuer,
+                "aud": audience,
+                "cognito:username": "edge-user",
+                "exp": datetime.now(UTC) + timedelta(minutes=5),
+                "iat": datetime.now(UTC),
+            },
+            key,
+            algorithm="RS256",
+            headers={"kid": "test-key"},
+        )
+
+    @pytest.fixture
+    def bearer_jwks(self, monkeypatch: pytest.MonkeyPatch, signing_key: rsa.RSAPrivateKey) -> None:
+        public_pem = (
+            signing_key.public_key()
+            .public_bytes(
+                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            .decode()
+        )
+        public_key = serialization.load_pem_public_key(public_pem.encode())
+
+        class FakeJWKSClient:
+            def get_signing_key_from_jwt(self, raw_token: str):
+                return SimpleNamespace(key=public_key)
+
+        monkeypatch.setattr(
+            "dlightrag.access.authentication._jwks_client",
+            lambda _url: FakeJWKSClient(),
+        )
+
+    def test_forwarded_bearer_verifies(self, signing_key, bearer_jwks) -> None:
+        provider = self._provider()
+        identity = provider.authenticate(
+            _request(headers={"Authorization": f"Bearer {self._forwarded_token(signing_key)}"})
+        )
+        assert identity.subject == "cognito-user-uuid"
+        assert identity.issuer == self.COGNITO_ISSUER
+
+    def test_missing_bearer_is_rejected(self, bearer_jwks) -> None:
+        provider = self._provider()
+        with pytest.raises(EdgeIdentityError) as raised:
+            provider.authenticate(_request())
+        assert raised.value.kind == "missing_credential"
+
+    def test_wrong_issuer_is_rejected(self, signing_key, bearer_jwks) -> None:
+        provider = self._provider()
+        with pytest.raises(EdgeIdentityError, match="Invalid token"):
+            provider.authenticate(
+                _request(
+                    headers={
+                        "Authorization": f"Bearer {self._forwarded_token(signing_key, issuer='https://other-pool.amazonaws.com/pool')}"
+                    }
+                )
+            )
+
+    def test_aws_requires_jwks_url(self) -> None:
+        with pytest.raises(ValueError, match="requires web_identity.jwks_url"):
+            WebIdentitySettings.model_validate(
+                {"edge": "aws", "issuer": self.COGNITO_ISSUER, "audience": self.COGNITO_AUDIENCE}
+            )
+
+    def test_factory_builds_the_aws_provider(self, bearer_jwks) -> None:
+        provider = edge_identity_provider(
+            WebIdentitySettings.model_validate(
+                {
+                    "edge": "aws",
+                    "issuer": self.COGNITO_ISSUER,
+                    "audience": self.COGNITO_AUDIENCE,
+                    "jwks_url": "https://example.com/.well-known/jwks.json",
+                }
+            )
+        )
+        assert isinstance(provider, AwsEdgeProvider)
 
 
 class TestEdgeIdentityConfig:
@@ -361,6 +502,22 @@ class TestWebEdgeMiddleware:
         response = client.get("/web/")
         assert response.status_code == 401
         assert response.text == "Authentication required"
+
+    def test_azure_missing_id_token_is_401_through_the_middleware(self, jwks) -> None:
+        cfg = DlightragConfig(
+            auth_mode="jwt",
+            jwt_verification_key="some-key-for-rest-bearers",
+            web_identity=WebIdentitySettings.model_validate(
+                {
+                    "edge": "azure",
+                    "issuer": "https://login.microsoftonline.com/test-tenant/v2.0",
+                    "audience": "api-client-id",
+                }
+            ),
+        )
+        client = TestClient(self._app(cfg))
+        response = client.get("/web/")
+        assert response.status_code == 401
 
     def test_paste_cookie_is_ignored_when_edge_is_configured(self, signing_key, jwks) -> None:
         import base64

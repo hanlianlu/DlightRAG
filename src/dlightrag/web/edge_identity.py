@@ -21,6 +21,11 @@ from typing import Any, Literal, Protocol
 import jwt
 from starlette.requests import Request
 
+from dlightrag.access.authentication import (
+    AuthenticationError,
+    AuthenticationSettings,
+    authenticate_bearer_token,
+)
 from dlightrag.config import WebIdentitySettings
 
 EdgeIdentityErrorKind = Literal[
@@ -101,6 +106,14 @@ def _identity_from_claims(claims: dict[str, Any]) -> EdgeIdentity:
     return EdgeIdentity(issuer=issuer, subject=subject, claims=dict(claims))
 
 
+def _require_issuer(settings: WebIdentitySettings, *, edge: str) -> str:
+    """Return the normalized edge issuer or raise a misconfiguration."""
+    issuer = (settings.issuer or "").rstrip("/")
+    if not issuer:
+        raise EdgeIdentityError("misconfigured", f"{edge} issuer not configured")
+    return issuer
+
+
 class CloudflareAccessProvider:
     """Verify the Cloudflare Access JWT injected on every proxied request.
 
@@ -112,9 +125,7 @@ class CloudflareAccessProvider:
     """
 
     def __init__(self, settings: WebIdentitySettings) -> None:
-        issuer = (settings.issuer or "").rstrip("/")
-        if not issuer:
-            raise EdgeIdentityError("misconfigured", "Cloudflare Access issuer not configured")
+        issuer = _require_issuer(settings, edge="Cloudflare Access")
         self._issuer = issuer
         self._audience = settings.audience or ""
         self._jwks_url = settings.jwks_url or f"{issuer}{_CLOUDFLARE_CERTS_PATH}"
@@ -143,6 +154,8 @@ def edge_identity_provider(settings: WebIdentitySettings) -> EdgeIdentityProvide
         return CloudflareAccessProvider(settings)
     if settings.edge == "azure":
         return AzureEasyAuthProvider(settings)
+    if settings.edge == "aws":
+        return AwsEdgeProvider(settings)
     raise EdgeIdentityError(
         "misconfigured",
         f"Unsupported web identity edge: {settings.edge}",
@@ -162,9 +175,7 @@ class AzureEasyAuthProvider:
     """
 
     def __init__(self, settings: WebIdentitySettings) -> None:
-        issuer = (settings.issuer or "").rstrip("/")
-        if not issuer:
-            raise EdgeIdentityError("misconfigured", "Azure issuer not configured")
+        issuer = _require_issuer(settings, edge="Azure")
         self._issuer = issuer
         self._audience = settings.audience or ""
         self._jwks_url = settings.jwks_url or _azure_discovery_url(issuer)
@@ -192,13 +203,19 @@ class AzureEasyAuthProvider:
 
 
 def _azure_discovery_url(issuer: str) -> str:
-    """Derive the AAD v2 discovery keys endpoint from a v2 issuer."""
-    if issuer.endswith("/v2.0"):
-        return f"{issuer[:-5]}/discovery/v2.0/keys"
-    raise EdgeIdentityError(
-        "misconfigured",
-        "Azure issuer is not a v2 issuer; configure web_identity.jwks_url explicitly",
-    )
+    """Derive the AAD v2 discovery keys endpoint from a v2 issuer.
+
+    Accepts the issuer with or without the trailing ``/v2.0``; the token's
+    ``iss`` must match whatever the operator configures exactly.
+    """
+    base = issuer[:-5] if issuer.endswith("/v2.0") else issuer
+    if "login.microsoftonline.com" not in base:
+        raise EdgeIdentityError(
+            "misconfigured",
+            "Azure issuer is not a login.microsoftonline.com issuer; "
+            "configure web_identity.jwks_url explicitly",
+        )
+    return f"{base}/discovery/v2.0/keys"
 
 
 def _parse_principal_header(value: str | None) -> dict[str, Any] | None:
@@ -216,7 +233,58 @@ def _parse_principal_header(value: str | None) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+class AwsEdgeProvider:
+    """Verify the IdP bearer token an AWS edge forwards.
+
+    Amplify Hosting auth and CloudFront Authorization@Edge complete the login
+    at the edge and forward the IdP JWT to the origin in the ``Authorization``
+    header. The origin verifies it with the same bearer machinery REST uses,
+    against the configured issuer/JWKS (typically the Cognito user pool's
+    well-known JWKS endpoint); nothing AWS-specific is trusted on its own.
+    """
+
+    def __init__(self, settings: WebIdentitySettings) -> None:
+        if not settings.jwks_url:
+            raise EdgeIdentityError(
+                "misconfigured",
+                "AWS edge identity requires web_identity.jwks_url",
+            )
+        audience = settings.audience
+        self._bearer_settings = AuthenticationSettings(
+            mode="jwt",
+            jwt_jwks_url=settings.jwks_url,
+            jwt_issuer=settings.issuer,
+            jwt_audience=tuple(audience) if isinstance(audience, list) else audience,
+            jwt_algorithm="RS256",
+        )
+
+    def authenticate(self, request: Request) -> EdgeIdentity:
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            raise EdgeIdentityError(
+                "missing_credential",
+                "Missing AWS edge-forwarded bearer token",
+            )
+        try:
+            user = authenticate_bearer_token(auth_header[7:], self._bearer_settings)
+        except AuthenticationError as exc:
+            kind: EdgeIdentityErrorKind
+            if exc.kind == "token_expired":
+                kind = "expired_credential"
+            elif exc.kind == "verifier_misconfigured":
+                kind = "misconfigured"
+            else:
+                kind = "invalid_credential"
+            raise EdgeIdentityError(kind, str(exc)) from None
+        return EdgeIdentity(
+            issuer=str(user.claims.get("iss") or ""),
+            subject=user.user_id,
+            claims=dict(user.claims),
+        )
+
+
 __all__ = [
+    "AwsEdgeProvider",
     "AzureEasyAuthProvider",
     "CloudflareAccessProvider",
     "EdgeIdentity",

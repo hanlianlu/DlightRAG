@@ -728,6 +728,8 @@ class WebIdentitySettings(BaseModel):
             raise ValueError("web_identity.edge requires web_identity.issuer")
         if not self.audience:
             raise ValueError("web_identity.edge requires web_identity.audience")
+        if self.edge == "aws" and not self.jwks_url:
+            raise ValueError("web_identity.edge='aws' requires web_identity.jwks_url")
         return self
 
 
