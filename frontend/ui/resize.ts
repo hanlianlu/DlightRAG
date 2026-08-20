@@ -81,13 +81,23 @@ export function syncPanelEffectiveWidth(): number {
     const report = px('--report-panel-width', reportPreferred);
     document.documentElement.style.setProperty('--panel-width', main + 'px');
     document.documentElement.style.setProperty('--report-panel-width', report + 'px');
+    syncLayoutSideWidth();
+    return main;
+}
+
+export function syncLayoutSideWidth(): void {
     let side = 0;
     if (!isDrawer()) {
-        if (document.getElementById('panel')?.classList.contains('open')) side += main;
-        if (document.getElementById('report-panel')?.classList.contains('open')) side += report;
+        const mainWidth = parseFloat(
+            getComputedStyle(document.documentElement).getPropertyValue('--panel-width')
+        ) || 0;
+        const reportWidth = parseFloat(
+            getComputedStyle(document.documentElement).getPropertyValue('--report-panel-width')
+        ) || 0;
+        if (document.getElementById('panel')?.classList.contains('open')) side += mainWidth;
+        if (document.getElementById('report-panel')?.classList.contains('open')) side += reportWidth;
     }
     document.documentElement.style.setProperty('--layout-side-width', side + 'px');
-    return main;
 }
 
 function bindHandle(
@@ -144,7 +154,7 @@ function bindHandle(
             const deltaX = startX - clientX;
             const newWidth = clampWidth(startWidth + deltaX, widthVar);
             document.documentElement.style.setProperty(widthVar, newWidth + 'px');
-            syncPanelEffectiveWidth();
+            syncLayoutSideWidth();
         });
     }
 
