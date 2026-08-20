@@ -20,7 +20,7 @@ from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entrie
 from dlightrag_agent.session.ids import SessionId
 from dlightrag_agent.session.projection import (
     AgentInputOverflowError,
-    TokenAnchor,
+    ContextProjection,
     require_compactable,
     should_compact,
 )
@@ -84,10 +84,7 @@ class RunBoundaries(Protocol):
     async def commit_compaction(
         self,
         *,
-        covered_through_sequence: int,
-        first_retained_sequence: int,
-        summary_json: str,
-        token_anchors: tuple[TokenAnchor, ...],
+        projection: ContextProjection,
     ) -> Any: ...
 
 
@@ -109,7 +106,7 @@ class _NoBoundaries:
     async def load_snapshot(self) -> Any:
         raise AssertionError("no journal behind in-process boundaries")
 
-    async def commit_compaction(self, **kwargs: Any) -> Any:
+    async def commit_compaction(self, *, projection: Any) -> Any:
         raise AssertionError("no journal behind in-process boundaries")
 
 
@@ -630,12 +627,9 @@ class AnswerOrchestrator:
         """Compact-and-retry one genuine provider overflow, then fail loudly."""
         if not is_provider_context_overflow(exc):
             raise exc
+        accounted = self._accounted_control_input(run, boundaries)
         if run.compaction_overflow_retried:
-            raise AnswerInputOverflowError(
-                "Research overflowed the model context window again after one "
-                "compact-and-retry. Correct the pinned model profile or use a "
-                "larger-context model."
-            ) from exc
+            raise _overflow_retry_error(accounted) from exc
         run.compaction_overflow_retried = True
         tool_schema_tokens = _tool_schema_tokens(run.tools)
         self._require_compactable_floor(run, tool_schema_tokens)
@@ -649,13 +643,26 @@ class AnswerOrchestrator:
             executed, _changed = await self._execute_control_turn(run, boundaries)
         except Exception as retry_exc:
             if is_provider_context_overflow(retry_exc):
-                raise AnswerInputOverflowError(
-                    "Research overflowed the model context window again after one "
-                    "compact-and-retry. Correct the pinned model profile or use a "
-                    "larger-context model."
+                raise _overflow_retry_error(
+                    self._accounted_control_input(run, boundaries)
                 ) from retry_exc
             raise
+        run.compaction_overflow_retried = False
         return executed
+
+    def _accounted_control_input(self, run: PreparedRun, boundaries: RunBoundaries) -> int:
+        estimated = run.context.measure_control_input(
+            evidence=run.evidence, episode=run.episode
+        ) + _tool_schema_tokens(run.tools)
+        return boundaries.accounted_input(estimated)
+
+
+def _overflow_retry_error(accounted: int) -> AnswerInputOverflowError:
+    return AnswerInputOverflowError(
+        "Research overflowed the model context window again after one "
+        f"compact-and-retry ({accounted} accounted input tokens). "
+        "Use a larger-context model or shorten the request."
+    )
 
 
 def _fresh_research_trace() -> dict[str, Any]:

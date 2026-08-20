@@ -1119,32 +1119,18 @@ class JournalRunBoundaries:
     async def load_snapshot(self) -> Any:
         return await self._journal.load(self._session_id)
 
-    async def commit_compaction(
-        self,
-        *,
-        covered_through_sequence: int,
-        first_retained_sequence: int,
-        summary_json: str,
-        token_anchors: tuple[TokenAnchor, ...],
-    ) -> SessionCommit:
-        """Commit one compaction entry and its immutable projection atomically."""
+    async def commit_compaction(self, *, projection: ContextProjection) -> SessionCommit:
+        """Commit the validated compaction projection and its entry atomically."""
         if self._active_projection is None:
             raise RunExecutionError("run_execution_failed", "No active projection to compact from.")
-        projection = ContextProjection(
-            projection_id=ProjectionId.new(),
-            first_retained_sequence=first_retained_sequence,
-            covered_through_sequence=covered_through_sequence,
-            summary=summary_json,
-            token_anchors=tuple(token_anchors),
-        )
         entry = CompactionEntry(
             entry_id=EntryId.new(),
             session_id=self._session_id,
             timestamp=_entry_timestamp(),
             projection_id=projection.projection_id,
-            summary=summary_json,
-            covered_through_sequence=covered_through_sequence,
-            first_retained_sequence=first_retained_sequence,
+            summary=projection.summary,
+            covered_through_sequence=projection.covered_through_sequence,
+            first_retained_sequence=projection.first_retained_sequence,
         )
         commit = await self._journal.append(
             session_id=self._session_id,
@@ -1799,7 +1785,7 @@ class FastRunBoundaries:
     async def load_snapshot(self) -> Any:
         raise AssertionError("Fast Answers have no agent session journal")
 
-    async def commit_compaction(self, **kwargs: Any) -> Any:
+    async def commit_compaction(self, *, projection: ContextProjection) -> Any:
         raise AssertionError("Fast Answers never compact")
 
     async def settle_planner(self) -> None:

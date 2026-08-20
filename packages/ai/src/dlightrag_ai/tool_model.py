@@ -109,14 +109,24 @@ class ToolModel:
         self,
         *,
         messages: list[dict[str, Any]],
+        model_kwargs: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:
-        """Stream a tools-disabled final answer from a rich tool transcript."""
-        return self._scheduler.stream(lambda: self._stream_text(messages=messages))
+        """Stream a tools-disabled final answer from a rich tool transcript.
+
+        An explicit ``model_kwargs`` replaces the agentic-then-ordinary retry
+        sequence with one single attempt using exactly those kwargs: the
+        compaction summarizer uses this to force thinking off and a profile
+        output cap, with no silent empty-output retry.
+        """
+        return self._scheduler.stream(
+            lambda: self._stream_text(messages=messages, model_kwargs=model_kwargs)
+        )
 
     async def _stream_text(
         self,
         *,
         messages: list[dict[str, Any]],
+        model_kwargs: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:
         record_text = self._telemetry.capture_sensitive_data
         streamed: list[str] = []
@@ -136,7 +146,10 @@ class ToolModel:
             model=self.settings.model,
         ) as observation:
             try:
-                for model_kwargs in self._final_attempt_kwargs():
+                attempts_kwargs = (
+                    (model_kwargs,) if model_kwargs is not None else self._final_attempt_kwargs()
+                )
+                for attempt_kwargs in attempts_kwargs:
                     attempts += 1
                     attempt_usage: dict[str, Any] = {}
                     substantive_text = False
@@ -144,7 +157,7 @@ class ToolModel:
                         messages,
                         self.settings.model,
                         temperature=self.settings.temperature,
-                        model_kwargs=model_kwargs,
+                        model_kwargs=attempt_kwargs,
                         usage_holder=attempt_usage,
                     )
                     async with aclosing(stream):

@@ -147,26 +147,27 @@ async def test_accounted_input_falls_back_to_the_estimate_without_usage() -> Non
 async def test_commit_compaction_writes_entry_and_projection_atomically() -> None:
     store, session_id, bounds = await _seeded_boundaries()
     summary = CompactionSummary(goal="answer", progress="three sources read").canonical_json()
-    commit = await bounds.commit_compaction(
-        covered_through_sequence=1,
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
         first_retained_sequence=2,
-        summary_json=summary,
+        covered_through_sequence=1,
+        summary=summary,
         token_anchors=(),
     )
+    commit = await bounds.commit_compaction(projection=projection)
     assert commit.version == 2
     snapshot = await store.load(session_id)
     compaction_entries = [entry for entry in snapshot.entries if entry.entry_type == "compaction"]
     assert len(compaction_entries) == 1
     assert compaction_entries[0].sequence == 2
-    assert snapshot.active_projection is not None
-    assert snapshot.active_projection.summary == summary
-    assert snapshot.active_projection.covered_through_sequence == 1
-    assert snapshot.active_projection.first_retained_sequence == 2
+    assert snapshot.active_projection == projection
     # A second compaction keeps the chain going without a version conflict.
-    second = await bounds.commit_compaction(
-        covered_through_sequence=2,
+    second_projection = ContextProjection(
+        projection_id=ProjectionId.new(),
         first_retained_sequence=3,
-        summary_json=summary,
+        covered_through_sequence=2,
+        summary=summary,
         token_anchors=(),
     )
+    second = await bounds.commit_compaction(projection=second_projection)
     assert second.version == 3

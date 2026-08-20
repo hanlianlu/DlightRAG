@@ -139,37 +139,23 @@ class _FakeBoundary:
     async def load_snapshot(self) -> Any:
         return await self.store.load(self.session_id)
 
-    async def commit_compaction(
-        self,
-        *,
-        covered_through_sequence: int,
-        first_retained_sequence: int,
-        summary_json: str,
-        token_anchors: tuple[TokenAnchor, ...],
-    ) -> Any:
+    async def commit_compaction(self, *, projection: ContextProjection) -> Any:
         self.commits.append(
             {
-                "covered_through_sequence": covered_through_sequence,
-                "first_retained_sequence": first_retained_sequence,
-                "summary_json": summary_json,
-                "token_anchors": token_anchors,
+                "covered_through_sequence": projection.covered_through_sequence,
+                "first_retained_sequence": projection.first_retained_sequence,
+                "summary_json": projection.summary,
+                "token_anchors": projection.token_anchors,
             }
-        )
-        projection = ContextProjection(
-            projection_id=ProjectionId.new(),
-            first_retained_sequence=first_retained_sequence,
-            covered_through_sequence=covered_through_sequence,
-            summary=summary_json,
-            token_anchors=token_anchors,
         )
         entry = CompactionEntry(
             entry_id=EntryId.new(),
             session_id=self.session_id,
             timestamp=datetime.now(UTC),
             projection_id=projection.projection_id,
-            summary=summary_json,
-            covered_through_sequence=covered_through_sequence,
-            first_retained_sequence=first_retained_sequence,
+            summary=projection.summary,
+            covered_through_sequence=projection.covered_through_sequence,
+            first_retained_sequence=projection.first_retained_sequence,
         )
         snapshot = await self.store.load(self.session_id)
         return await self.store.append(
@@ -181,7 +167,7 @@ class _FakeBoundary:
 
 
 def _stream_once(text: str) -> Any:
-    async def stream(*, messages: list[dict[str, Any]]):
+    async def stream(*, messages: list[dict[str, Any]], **kwargs: Any):
         yield text
 
     return stream
@@ -291,12 +277,52 @@ class TestCoordinatorLoop:
         trace: dict[str, Any] = {}
 
         async def remeasure() -> int:
-            return 40_000
+            return 80_000  # over the trigger
 
         with pytest.raises(AnswerInputOverflowError, match="larger-context model"):
             await coordinator.ensure_fits(
                 boundaries=boundary, remeasure=remeasure, trace=trace, force=True
             )
+
+    async def test_forced_failed_attempts_return_none_when_under_the_trigger(self) -> None:
+        boundary = _FakeBoundary([_user(SessionId.new(), "question")])
+        coordinator = CompactionCoordinator(
+            model_profile=_profile(),
+            context_policy=CONTEXT_POLICY,
+            stream_model=_stream_once(_MARKDOWN),
+            max_attempts=2,
+        )
+        trace: dict[str, Any] = {}
+
+        async def remeasure() -> int:
+            return 40_000  # under the trigger
+
+        outcome = await coordinator.ensure_fits(
+            boundaries=boundary, remeasure=remeasure, trace=trace, force=True
+        )
+        assert outcome is None
+
+    async def test_a_final_reading_under_the_trigger_is_not_a_failure(self) -> None:
+        # Regression: the loop must re-check the gate after the last attempt
+        # instead of raising unconditionally, even when every attempt failed.
+        boundary = _FakeBoundary([_user(SessionId.new(), "question")])
+        coordinator = CompactionCoordinator(
+            model_profile=_profile(),
+            context_policy=CONTEXT_POLICY,
+            stream_model=_stream_once(_MARKDOWN),
+            max_attempts=3,
+        )
+        trace: dict[str, Any] = {}
+        readings = iter([80_000, 80_000, 80_000, 10_000])
+
+        async def remeasure() -> int:
+            return next(readings)
+
+        outcome = await coordinator.ensure_fits(
+            boundaries=boundary, remeasure=remeasure, trace=trace, force=True
+        )
+        assert outcome is None
+        assert boundary.commits == []
 
     async def test_invalid_summary_is_a_failed_attempt_that_never_commits(self) -> None:
         session_id, entries = _two_exchange_entries()
@@ -311,7 +337,7 @@ class TestCoordinatorLoop:
         trace: dict[str, Any] = {}
 
         async def remeasure() -> int:
-            return 40_000
+            return 80_000  # over the trigger
 
         with pytest.raises(AnswerInputOverflowError):
             await coordinator.ensure_fits(
@@ -340,7 +366,7 @@ class TestCoordinatorLoop:
         trace: dict[str, Any] = {}
 
         async def remeasure() -> int:
-            return 40_000
+            return 80_000  # over the trigger
 
         with pytest.raises(AnswerInputOverflowError):
             await coordinator.ensure_fits(

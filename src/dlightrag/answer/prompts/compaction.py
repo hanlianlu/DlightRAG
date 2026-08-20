@@ -5,10 +5,9 @@ The summarizer writes one structured markdown document whose headings map
 onto :class:`~dlightrag_agent.session.projection.CompactionSummary` fields.
 The framework parses the headings back into the typed summary; the model is
 never asked to invent paths or durable handles — those are extracted from the
-covered journal prefix by the framework.
+covered journal prefix by the framework. Prompts modules stay import-free:
+the caller passes the pre-rendered previous summary text.
 """
-
-from dlightrag_agent.session.projection import render_compaction_summary
 
 COMPACTION_SYSTEM_PROMPT = """\
 You are a context summarization assistant. You read one research transcript \
@@ -52,7 +51,10 @@ every fact the next turn cannot cheaply re-derive.
 
 
 def compaction_user_prompt(*, previous_summary: str | None, transcript: str) -> str:
-    """Build the summarizer user turn with the covered-prefix transcript."""
+    """Build the summarizer user turn with the covered-prefix transcript.
+
+    ``previous_summary`` is the caller-rendered earlier summary text.
+    """
     blocks = [
         "The transcript below is the research so far. It will be removed "
         "from context. Write the continuation summary.",
@@ -62,7 +64,7 @@ def compaction_user_prompt(*, previous_summary: str | None, transcript: str) -> 
             "An earlier compaction already summarized older work. Preserve its "
             "information while adding what the new transcript adds:\n\n"
             "<previous-summary>\n"
-            f"{render_compaction_summary(previous_summary)}\n"
+            f"{previous_summary}\n"
             "</previous-summary>"
         )
     blocks.append(f"<transcript>\n{transcript}\n</transcript>")

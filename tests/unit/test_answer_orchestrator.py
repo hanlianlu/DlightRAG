@@ -446,7 +446,9 @@ async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> N
     await orchestrator.research_until_stopped(run, boundaries=boundaries)  # type: ignore[arg-type]
 
     assert agent.calls == 2
-    assert run.compaction_overflow_retried is True
+    # The retried marker resets after a successful compact-and-retry so a
+    # later genuine overflow in the same run can retry again.
+    assert run.compaction_overflow_retried is False
     final_snapshot = await journal.load(session_id)
     assert any(entry.entry_type == "compaction" for entry in final_snapshot.entries)
     assert final_snapshot.active_projection is not None

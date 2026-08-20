@@ -27,7 +27,6 @@ from dlightrag_agent.session.ids import ProjectionId
 from dlightrag_agent.session.projection import (
     CompactionSummary,
     ContextProjection,
-    TokenAnchor,
     render_compaction_summary,
     should_compact,
     validate_projection_commit,
@@ -45,6 +44,9 @@ _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _FENCE_RE = re.compile(r"^```(?:markdown|md)?\s*\n(.*)\n```\s*$", re.DOTALL)
 _PATH_LIKE_RE = re.compile(r"^(?:\.{0,2}/|/|[A-Za-z]:[\\/]|~)[^\s]*$")
 _URL_RE = re.compile(r"^https?://\S+$")
+
+#: Fixed envelope margin over the rendered prompt texts for one summarizer call.
+_SUMMARIZER_ENVELOPE_MARGIN = 16
 
 _KNOWN_HEADINGS = {
     "goal": "goal",
@@ -75,14 +77,7 @@ class CompactionBoundary(Protocol):
 
     async def load_snapshot(self) -> AgentSessionSnapshot: ...
 
-    async def commit_compaction(
-        self,
-        *,
-        covered_through_sequence: int,
-        first_retained_sequence: int,
-        summary_json: str,
-        token_anchors: tuple[TokenAnchor, ...],
-    ) -> SessionCommit: ...
+    async def commit_compaction(self, *, projection: ContextProjection) -> SessionCommit: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,8 +255,8 @@ class CompactionCoordinator:
         a dead model.
         """
         outcome: CompactionOutcome | None = None
-        accounted = await remeasure()
         for attempt in range(self._max_attempts):
+            accounted = await remeasure()
             over = should_compact(
                 self._model_profile,
                 input_tokens=accounted,
@@ -281,7 +276,14 @@ class CompactionCoordinator:
                 )
             except _CompactionAttemptFailed:
                 outcome = None
-            accounted = await remeasure()
+        # The final attempt may have just brought the reading under the trigger.
+        accounted = await remeasure()
+        if not should_compact(
+            self._model_profile,
+            input_tokens=accounted,
+            context_policy=self._context_policy,
+        ):
+            return outcome
         trigger = self._context_policy.compaction_trigger(self._model_profile)
         raise AnswerInputOverflowError(
             "Research input still exceeds the proactive compaction threshold after "
@@ -346,21 +348,23 @@ class CompactionCoordinator:
         # The previous CompactionEntry (sequence == previous.first_retained) is
         # still in the retained set and its fold already renders the old summary.
         estimated_before = self._estimate_retained(entries, previous.first_retained_sequence, None)
+        candidate = ContextProjection(
+            projection_id=ProjectionId.new(),
+            first_retained_sequence=first_retained,
+            covered_through_sequence=covered_through,
+            summary=summary_json,
+            token_anchors=anchors,
+        )
         violation = validate_projection_commit(
             previous,
-            _candidate_projection(first_retained, covered_through, summary_json, anchors),
+            candidate,
             accounted_input_before=estimated_before,
             accounted_input_after=accounted_after,
         )
         if violation is not None:
             raise _CompactionAttemptFailed(violation)
 
-        await boundaries.commit_compaction(
-            covered_through_sequence=covered_through,
-            first_retained_sequence=first_retained,
-            summary_json=summary_json,
-            token_anchors=anchors,
-        )
+        await boundaries.commit_compaction(projection=candidate)
         outcome = CompactionOutcome(
             covered_through_sequence=covered_through,
             first_retained_sequence=first_retained,
@@ -389,17 +393,24 @@ class CompactionCoordinator:
         *,
         previous_summary: str | None,
     ) -> str:
+        rendered_previous = (
+            render_compaction_summary(previous_summary) if previous_summary is not None else None
+        )
         messages = [
             {"role": "system", "content": COMPACTION_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": compaction_user_prompt(
-                    previous_summary=previous_summary,
+                    previous_summary=rendered_previous,
                     transcript=_transcript(fold_entries(covered)),
                 ),
             },
         ]
-        stream = self._stream_model(messages=messages)  # type: ignore[call-arg]
+        # One single-attempt, thinking-off call capped at the profile output.
+        kwargs: dict[str, Any] = {}
+        if self._model_profile.max_output_tokens is not None:
+            kwargs["max_tokens"] = self._model_profile.max_output_tokens
+        stream = self._stream_model(messages=messages, model_kwargs=kwargs)  # type: ignore[call-arg]
         chunks: list[str] = []
         async for chunk in stream:
             chunks.append(chunk)
@@ -421,11 +432,21 @@ class CompactionCoordinator:
         fixed = (
             estimate_tokens(COMPACTION_SYSTEM_PROMPT)
             + estimate_tokens(
-                compaction_user_prompt(previous_summary=previous_summary, transcript="")
+                compaction_user_prompt(
+                    previous_summary=(
+                        render_compaction_summary(previous_summary)
+                        if previous_summary is not None
+                        else None
+                    ),
+                    transcript="",
+                )
             )
-            + 16
+            + _SUMMARIZER_ENVELOPE_MARGIN
         )
-        budget = self._context_policy.hard_input_limit(self._model_profile)
+        # The summarizer input fits below the proactive trigger for the pinned
+        # role, never just below the hard limit (living spec Proactive
+        # Compaction).
+        budget = self._context_policy.compaction_trigger(self._model_profile)
         starts = exchange_starts(target)
         if not starts:
             return tuple(target)
@@ -462,21 +483,6 @@ class CompactionCoordinator:
                 ]
             )
         return total
-
-
-def _candidate_projection(
-    first_retained: int,
-    covered_through: int,
-    summary_json: str,
-    anchors: tuple[TokenAnchor, ...],
-) -> ContextProjection:
-    return ContextProjection(
-        projection_id=ProjectionId.new(),
-        first_retained_sequence=first_retained,
-        covered_through_sequence=covered_through,
-        summary=summary_json,
-        token_anchors=anchors,
-    )
 
 
 def _with_framework_fields(
