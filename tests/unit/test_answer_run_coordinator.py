@@ -9,7 +9,7 @@ event. Subscribers replay durable events and detach without touching the run.
 
 import asyncio
 import datetime
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, cast
 
 import pytest
@@ -362,8 +362,17 @@ class _MemoryStore:
         self.runs[run_id]["cancel_requested"] = True
         return None
 
-    async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None:
-        return None
+    async def stream_artifact(
+        self,
+        *,
+        owner_id: str,
+        digest: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes]:
+        del owner_id, digest, offset, length
+        if False:  # pragma: no cover - never yields for this double
+            yield b""
 
 
 class _Executor:

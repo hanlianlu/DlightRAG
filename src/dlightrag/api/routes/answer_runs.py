@@ -315,7 +315,7 @@ async def read_answer_artifact(
     resource_id: str,
     request: Request,
     user: UserContext = Depends(get_current_user),
-) -> Response:
+) -> StreamingResponse:
     application = get_application(request)
     header = request.headers.get("range", "")
     offset = 0
@@ -329,17 +329,17 @@ async def read_answer_artifact(
             length = max(0, int(end_s) - offset + 1)
         else:
             length = 1_048_576
-    payload = await application.answers.read_artifact(
+    stream = await application.answers.open_artifact(
         owner_id=owner_id_from_user(user),
         run_id=run_id,
         resource_id=resource_id,
         offset=offset,
         length=length,
     )
-    if payload is None:
+    if stream is None:
         raise HTTPException(status_code=404, detail="artifact not found")
-    return Response(
-        content=payload,
+    return StreamingResponse(
+        stream,
         media_type="application/octet-stream",
         headers={
             "Accept-Ranges": "bytes",

@@ -160,11 +160,20 @@ class _Store:
             return ()
         return self._references
 
-    async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None:
+    async def stream_artifact(
+        self,
+        *,
+        owner_id: str,
+        digest: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes]:
         self.artifact_reads.append((owner_id, digest))
         if owner_id != _OWNER:
-            return None
-        return self._blobs.get(digest)
+            return
+        blob = self._blobs.get(digest)
+        if blob is not None:
+            yield blob[max(0, offset) :]
 
 
 class _Coordinator:

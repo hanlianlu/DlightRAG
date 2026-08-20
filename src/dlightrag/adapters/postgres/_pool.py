@@ -17,7 +17,7 @@ Usage::
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, TypeVar
 
 import asyncpg
@@ -183,6 +183,17 @@ class PGPool:
         pool = await self.get()
         async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
             return await operation(conn)
+
+    async def stream(
+        self,
+        operation: Callable[[Any], AsyncIterator[T]],
+    ) -> AsyncIterator[T]:
+        """Stream a read through one pooled connection without retry."""
+        config = self._active_config()
+        pool = await self.get()
+        async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
+            async for piece in operation(conn):
+                yield piece
 
     async def close(
         self,

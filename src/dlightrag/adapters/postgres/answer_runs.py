@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 import asyncpg
@@ -2111,8 +2111,46 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         return await self._run_read(_operation)
 
+    async def stream_artifact(
+        self,
+        *,
+        owner_id: str,
+        digest: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Yield one blob's 1 MiB chunks, windowed, without materializing it."""
+        owner = _require_owner(owner_id)
+
+        async def _operation(conn: Any) -> AsyncIterator[bytes]:
+            size = await conn.fetchval(_SELECT_BLOB_SIZE, owner, digest)
+            if size is None:
+                return
+            skipped = 0
+            remaining = length
+            async for record in conn.cursor(_SELECT_BLOB_CHUNKS, owner, digest):
+                content = bytes(record["content"])
+                end = skipped + len(content)
+                if end <= offset:
+                    skipped = end
+                    continue
+                start = offset - skipped if offset > skipped else 0
+                piece = content[start:]
+                if remaining is not None:
+                    if len(piece) > remaining:
+                        piece = piece[:remaining]
+                    remaining -= len(piece)
+                skipped = end
+                if piece:
+                    yield piece
+                if remaining is not None and remaining <= 0:
+                    return
+
+        async for piece in self._stream(_operation):
+            yield piece
+
     async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None:
-        """Reassemble one complete blob from its 1 MiB chunks."""
+        """Reassemble one complete blob for bounded reads and tests."""
         owner = _require_owner(owner_id)
 
         async def _operation(conn: Any) -> bytes | None:

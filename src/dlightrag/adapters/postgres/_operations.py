@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared execution plumbing for PostgreSQL adapters."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TypeVar
 
 from dlightrag.adapters.postgres._pool import pg_pool
@@ -33,6 +33,16 @@ class PostgresOperationRunner:
             return await pg_pool.run_once(operation)
         async with self._operation_pool.acquire() as connection:
             return await operation(connection)
+
+    async def _stream(self, operation: Callable[[Any], AsyncIterator[T]]) -> AsyncIterator[T]:
+        """Stream a read through one connection; the caller drains the iterator."""
+        if self._operation_pool is None:
+            async for piece in pg_pool.stream(operation):
+                yield piece
+            return
+        async with self._operation_pool.acquire() as connection:
+            async for piece in operation(connection):
+                yield piece
 
 
 __all__ = ["ConnectionPool", "PostgresOperationRunner"]

@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable answer runs over already-authorized canonical workspaces."""
 
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -166,7 +166,14 @@ class _AnswerRunRepository(AnswerRunAcceptor[RunCreation], Protocol):
         self, *, owner_id: str, run_id: str
     ) -> tuple[RunArtifactReference, ...]: ...
 
-    async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None: ...
+    def stream_artifact(
+        self,
+        *,
+        owner_id: str,
+        digest: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes]: ...
 
 
 class _RunScheduler(Protocol):
@@ -615,18 +622,43 @@ class AnswerService:
         offset: int = 0,
         length: int | None = None,
     ) -> bytes | None:
-        """Read a published artifact; omit length to return the remainder."""
+        """Read a bounded artifact window; unknown artifacts return ``None``."""
+        stream = await self.open_artifact(
+            owner_id=owner_id,
+            run_id=run_id,
+            resource_id=resource_id,
+            offset=offset,
+            length=length,
+        )
+        if stream is None:
+            return None
+        pieces = [piece async for piece in stream]
+        return b"".join(pieces)
+
+    async def open_artifact(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        resource_id: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes] | None:
+        """Open one artifact as a chunk iterator; unknown artifacts return ``None``.
+
+        Callers that serve large published artifacts stream these chunks; no
+        complete-blob materialization happens on this path.
+        """
         refs = await self._store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
         match = next((item for item in refs if item.resource_id == resource_id), None)
         if match is None:
             return None
-        blob = await self._store.load_artifact(owner_id=owner_id, digest=match.digest)
-        if blob is None:
-            return None
-        start = max(0, offset)
-        if length is None:
-            return blob[start:]
-        return blob[start : start + max(0, length)]
+        return self._store.stream_artifact(
+            owner_id=owner_id,
+            digest=match.digest,
+            offset=max(0, offset),
+            length=length,
+        )
 
     async def get(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Read one owned run; unknown and foreign identifiers both return ``None``."""
@@ -734,9 +766,15 @@ class AnswerService:
         )
         if reference is None:
             return None
-        content = await self._store.load_artifact(owner_id=owner_id, digest=reference.digest)
-        if content is None:
+        pieces = [
+            piece
+            async for piece in self._store.stream_artifact(
+                owner_id=owner_id, digest=reference.digest
+            )
+        ]
+        if not pieces:
             return None
+        content = b"".join(pieces)
         return AnswerInputArtifact(
             reference_kind=reference.reference_kind,
             ordinal=reference.ordinal,

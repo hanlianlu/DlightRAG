@@ -128,9 +128,16 @@ logger = logging.getLogger(__name__)
 
 
 class ArtifactReader(Protocol):
-    """Read one owner-scoped complete blob by digest (executor store surface)."""
+    """Stream one owner-scoped blob by digest (executor store surface)."""
 
-    async def load_artifact(self, *, owner_id: str, digest: str) -> bytes | None: ...
+    def stream_artifact(
+        self,
+        *,
+        owner_id: str,
+        digest: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes]: ...
     async def list_run_artifacts(self, *, owner_id: str, run_id: str) -> tuple[Any, ...]: ...
 
 
@@ -982,13 +989,15 @@ class AnswerExecutor:
             return None
 
         async def load(digest: str) -> bytes:
-            content = await self._store.load_artifact(owner_id=owner_id, digest=digest)
-            if content is None:
+            pieces: list[bytes] = []
+            async for piece in self._store.stream_artifact(owner_id=owner_id, digest=digest):
+                pieces.append(piece)
+            if not pieces:
                 raise RunExecutionError(
                     "run_execution_failed",
                     "Answer run attachment bytes no longer exist.",
                 )
-            return content
+            return b"".join(pieces)
 
         def loader(digest: str) -> Callable[[], Awaitable[bytes]]:
             async def read() -> bytes:
