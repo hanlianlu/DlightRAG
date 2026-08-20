@@ -29,7 +29,12 @@ from dlightrag_agent.session.entries import (
 )
 from dlightrag_agent.session.fold import PriorTurns
 from dlightrag_agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
-from dlightrag_agent.session.projection import ContextProjection, TokenAnchor
+from dlightrag_agent.session.projection import (
+    ContextProjection,
+    TokenAnchor,
+    projection_with_anchor,
+    token_anchor_from_usage,
+)
 from dlightrag_agent.session.store import (
     AgentSessionStore,
     EffectAlreadySettled,
@@ -720,6 +725,8 @@ class AnswerExecutor:
                     fetched_buffer=fetched_buffer,
                     run_id=session.run_id,
                     initial_version=snapshot.version,
+                    last_sequence=_last_entry_sequence(snapshot),
+                    active_projection=snapshot.active_projection,
                     link_delegate_intent=_fenced_child_writer(
                         store, "bind_child_parent_intent", session
                     ),
@@ -1083,6 +1090,8 @@ class JournalRunBoundaries:
         fetched_buffer: list[FetchedResourceBytes],
         run_id: str,
         initial_version: int = 0,
+        last_sequence: int = 0,
+        active_projection: ContextProjection | None = None,
         link_delegate_intent: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
         self._session = session
@@ -1093,6 +1102,8 @@ class JournalRunBoundaries:
         self._fetched_buffer = fetched_buffer
         self._run_id = run_id
         self._version = initial_version
+        self._last_sequence = last_sequence
+        self._active_projection = active_projection
         self._link_delegate_intent = link_delegate_intent
 
     async def recover_pending_intents(self, snapshot: Any) -> None:
@@ -1249,14 +1260,26 @@ class JournalRunBoundaries:
             )
             for result in executed.validation_results
         )
+        next_projection = None
+        if self._active_projection is not None:
+            anchor = token_anchor_from_usage(
+                self._last_sequence + 1,
+                executed.assistant.usage_details,
+            )
+            if anchor is not None:
+                next_projection = projection_with_anchor(self._active_projection, anchor)
         commit = await self._journal.append(
             session_id=self._session_id,
             expected_version=self._version,
             entries=(assistant, *intents, *validation),
+            projection=next_projection,
         )
         if isinstance(commit, (VersionConflict, LeaseLost)):
             raise LeaseLostError
         self._version = commit.version
+        self._last_sequence = commit.appended_sequences[-1]
+        if next_projection is not None:
+            self._active_projection = next_projection
         await self._bind_delegate_parent_intents(executed.intents)
 
         intent_list = list(executed.intents)
@@ -1374,6 +1397,8 @@ class JournalRunBoundaries:
     async def _handle_settlement(self, committed: SettleCommit, intent: EffectIntent) -> None:
         if isinstance(committed, EffectCommit):
             self._version = committed.version
+            if committed.appended_sequences:
+                self._last_sequence = committed.appended_sequences[-1]
             return
         if isinstance(committed, (VersionConflict, LeaseLost)):
             raise LeaseLostError
@@ -1381,6 +1406,8 @@ class JournalRunBoundaries:
             # Load and fold the committed settlement; never re-execute.
             snapshot = await self._journal.load(self._session_id)
             self._version = snapshot.version
+            self._last_sequence = _last_entry_sequence(snapshot)
+            self._active_projection = snapshot.active_projection
             return
         if isinstance(committed, EffectContractChanged):
             settled = await self._journal.settle_effect(
@@ -1414,6 +1441,8 @@ class JournalRunBoundaries:
             )
             if isinstance(settled, EffectCommit):
                 self._version = settled.version
+                if settled.appended_sequences:
+                    self._last_sequence = settled.appended_sequences[-1]
                 return
             raise LeaseLostError
         if isinstance(committed, EvidenceConflict):
@@ -1488,6 +1517,8 @@ async def run_child_session(
         fetched_buffer=fetched_buffer,
         run_id=session.run_id,
         initial_version=snapshot.version,
+        last_sequence=_last_entry_sequence(snapshot),
+        active_projection=snapshot.active_projection,
     )
     if snapshot.version > 0:
         await boundaries.recover_pending_intents(snapshot)
@@ -1736,6 +1767,11 @@ class FastRunBoundaries:
             self._progress_version = committed.progress_version
             return
         raise LeaseLostError
+
+
+def _last_entry_sequence(snapshot: Any) -> int:
+    sequences = [entry.sequence for entry in snapshot.entries]
+    return max(sequences) if sequences else 0
 
 
 def _assistant_entry(executed: ExecutedTurn, session_id: SessionId) -> AssistantMessageEntry:

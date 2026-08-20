@@ -8,10 +8,14 @@ from dlightrag_agent.session.projection import (
     CompactionSummary,
     ContextProjection,
     TokenAnchor,
+    accounted_input_tokens,
+    live_anchor,
     projection_strictly_reduces,
+    projection_with_anchor,
     render_compaction_summary,
     require_compactable,
     should_compact,
+    token_anchor_from_usage,
     validate_projection_commit,
 )
 from dlightrag_ai.capacity import CONTEXT_POLICY, ModelProfile
@@ -195,4 +199,111 @@ class TestCompactionValidity:
                 PROFILE,
                 input_tokens=hard - 1,
                 fixed_input_tokens=hard + 1,
+            )
+
+
+class TestMeasuredAnchors:
+    def test_usage_maps_openai_and_anthropic_keys(self) -> None:
+        openai = token_anchor_from_usage(4, {"prompt_tokens": 100, "completion_tokens": 20})
+        anthropic = token_anchor_from_usage(4, {"input_tokens": 100, "output_tokens": 20})
+        assert openai == TokenAnchor(
+            through_sequence=4, measured_input_tokens=100, measured_output_tokens=20
+        )
+        assert anthropic == openai
+
+    def test_missing_usage_is_not_a_zero_anchor(self) -> None:
+        assert token_anchor_from_usage(4, None) is None
+        assert token_anchor_from_usage(4, {"completion_tokens": 20}) is None
+        assert token_anchor_from_usage(4, {"prompt_tokens": -1}) is None
+
+    def test_cache_and_reasoning_tokens_join_the_measurement(self) -> None:
+        anchor = token_anchor_from_usage(
+            7,
+            {
+                "prompt_tokens": 50,
+                "completion_tokens": 10,
+                "cache_read_input_tokens": 5,
+                "thoughts_token_count": 3,
+            },
+        )
+        assert anchor == TokenAnchor(
+            through_sequence=7, measured_input_tokens=55, measured_output_tokens=13
+        )
+
+    def test_projection_keeps_coverage_when_recording_an_anchor(self) -> None:
+        previous = _initial_projection()
+        previous = ContextProjection(
+            projection_id=previous.projection_id,
+            first_retained_sequence=1,
+            covered_through_sequence=0,
+            summary=None,
+            token_anchors=(
+                TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
+            ),
+        )
+        updated = projection_with_anchor(
+            previous,
+            TokenAnchor(through_sequence=3, measured_input_tokens=80, measured_output_tokens=9),
+        )
+        assert updated.projection_id != previous.projection_id
+        assert updated.covered_through_sequence == 0
+        assert updated.summary is None
+        assert updated.token_anchors[-1].measured_input_tokens == 80
+
+    def test_seed_anchor_is_not_live(self) -> None:
+        projection = ContextProjection(
+            projection_id=ProjectionId.new(),
+            first_retained_sequence=1,
+            covered_through_sequence=0,
+            summary=None,
+            token_anchors=(
+                TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
+            ),
+        )
+        assert live_anchor(projection, last_retained_sequence=4) is None
+
+    def test_live_anchor_is_the_newest_in_the_suffix(self) -> None:
+        projection = ContextProjection(
+            projection_id=ProjectionId.new(),
+            first_retained_sequence=4,
+            covered_through_sequence=3,
+            summary='{"goal":"g"}',
+            token_anchors=(
+                TokenAnchor(
+                    through_sequence=2, measured_input_tokens=900, measured_output_tokens=1
+                ),
+                TokenAnchor(through_sequence=5, measured_input_tokens=40, measured_output_tokens=2),
+                TokenAnchor(through_sequence=8, measured_input_tokens=70, measured_output_tokens=3),
+            ),
+        )
+        assert live_anchor(projection, last_retained_sequence=6) == TokenAnchor(
+            through_sequence=5, measured_input_tokens=40, measured_output_tokens=2
+        )
+
+    def test_accounted_input_uses_estimate_until_a_live_anchor_exists(self) -> None:
+        assert (
+            accounted_input_tokens(
+                estimated_input_tokens=120,
+                live_anchor=None,
+                unanchored_tail_tokens=15,
+            )
+            == 120
+        )
+        assert (
+            accounted_input_tokens(
+                estimated_input_tokens=120,
+                live_anchor=TokenAnchor(
+                    through_sequence=3, measured_input_tokens=80, measured_output_tokens=4
+                ),
+                unanchored_tail_tokens=15,
+            )
+            == 95
+        )
+
+    def test_accounted_input_rejects_negative_estimates(self) -> None:
+        with pytest.raises(ValueError):
+            accounted_input_tokens(
+                estimated_input_tokens=-1,
+                live_anchor=None,
+                unanchored_tail_tokens=0,
             )

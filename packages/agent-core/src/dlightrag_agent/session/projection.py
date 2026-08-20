@@ -8,6 +8,7 @@ classify candidate projections against ``ContextPolicy`` numbers without
 calling a provider or opening a store.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -252,6 +253,116 @@ def validate_projection_commit(
     return None
 
 
+_INPUT_USAGE_KEYS = ("prompt_tokens", "input_tokens", "prompt_token_count")
+_OUTPUT_USAGE_KEYS = ("completion_tokens", "output_tokens", "candidates_token_count")
+_INPUT_USAGE_EXTRAS = ("cache_read_input_tokens", "cache_creation_input_tokens")
+_OUTPUT_USAGE_EXTRAS = ("thoughts_token_count", "reasoning_tokens")
+
+
+def _usage_int(usage: Mapping[str, object], key: str) -> int | None:
+    value = usage.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _first_usage_int(usage: Mapping[str, object], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        value = _usage_int(usage, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _extra_usage_int(usage: Mapping[str, object], keys: tuple[str, ...]) -> int:
+    total = 0
+    for key in keys:
+        value = _usage_int(usage, key)
+        if value is not None:
+            total += value
+    return total
+
+
+def token_anchor_from_usage(
+    through_sequence: int,
+    usage: Mapping[str, object] | None,
+) -> TokenAnchor | None:
+    """Return a measured anchor, or None when the provider omitted input usage."""
+    if usage is None:
+        return None
+    measured_input = _first_usage_int(usage, _INPUT_USAGE_KEYS)
+    if measured_input is None:
+        return None
+    measured_output = _first_usage_int(usage, _OUTPUT_USAGE_KEYS) or 0
+    return TokenAnchor(
+        through_sequence=through_sequence,
+        measured_input_tokens=measured_input + _extra_usage_int(usage, _INPUT_USAGE_EXTRAS),
+        measured_output_tokens=measured_output + _extra_usage_int(usage, _OUTPUT_USAGE_EXTRAS),
+    )
+
+
+def projection_with_anchor(
+    previous: ContextProjection,
+    anchor: TokenAnchor,
+) -> ContextProjection:
+    """Return a new projection that records one additional measured call.
+
+    Coverage and summary stay the same; the session row will point at the new
+    immutable projection id. An anchor at an existing sequence replaces it.
+    """
+    kept = tuple(
+        existing
+        for existing in previous.token_anchors
+        if existing.through_sequence != anchor.through_sequence
+    )
+    anchors = tuple(sorted((*kept, anchor), key=lambda item: item.through_sequence))
+    return ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=previous.first_retained_sequence,
+        covered_through_sequence=previous.covered_through_sequence,
+        summary=previous.summary,
+        token_anchors=anchors,
+        schema_version=previous.schema_version,
+    )
+
+
+def live_anchor(
+    projection: ContextProjection,
+    *,
+    last_retained_sequence: int,
+) -> TokenAnchor | None:
+    """Return the newest measured anchor still inside the live journal suffix.
+
+    The seed ``through_sequence=0`` placeholder is never live.
+    """
+    start = projection.first_retained_sequence
+    found = [
+        anchor
+        for anchor in projection.token_anchors
+        if start <= anchor.through_sequence <= last_retained_sequence
+    ]
+    return found[-1] if found else None
+
+
+def accounted_input_tokens(
+    *,
+    estimated_input_tokens: int,
+    live_anchor: TokenAnchor | None,
+    unanchored_tail_tokens: int,
+) -> int:
+    """Combine one live measured anchor with the not-yet-anchored tail.
+
+    No live anchor means the whole accounted input is the estimate. A live
+    anchor supplies the provider reading through that sequence; add only the
+    estimated tokens of messages after it.
+    """
+    if estimated_input_tokens < 0 or unanchored_tail_tokens < 0:
+        raise ValueError("token estimates cannot be negative")
+    if live_anchor is None:
+        return estimated_input_tokens
+    return live_anchor.measured_input_tokens + unanchored_tail_tokens
+
+
 __all__ = [
     "COMPACTION_SUMMARY_FIELDS",
     "PROJECTION_SCHEMA_VERSION",
@@ -260,9 +371,13 @@ __all__ = [
     "ContextProjection",
     "InputOverflowKind",
     "TokenAnchor",
+    "accounted_input_tokens",
+    "live_anchor",
     "projection_strictly_reduces",
+    "projection_with_anchor",
     "render_compaction_summary",
     "require_compactable",
     "should_compact",
+    "token_anchor_from_usage",
     "validate_projection_commit",
 ]
