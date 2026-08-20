@@ -7,26 +7,21 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag_ai.telemetry import safe_log_text
-from dlightrag_rag.ingestion.uploads import (
-    UploadTooLargeError,
-    ignored_upload,
-    safe_upload_destination,
-    upload_batch_dir,
-    write_upload_stream,
-)
-from dlightrag_rag.source_download import (
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+
+from dlightrag.access import AccessAction
+from dlightrag.services.corpora import IngestSpec
+from dlightrag.services.errors import (
     LocalDownloadTarget,
     RedirectDownloadTarget,
     SourceDownloadInvalidError,
     SourceDownloadNotFoundError,
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
+    UnsafeUploadNameError,
+    UploadTooLargeError,
 )
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-
-from dlightrag.access import AccessAction
-from dlightrag.services.corpora import IngestSpec
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,
@@ -255,44 +250,27 @@ async def upload_files(
             exc_info=True,
         )
 
-    bytes_written = 0
     upload_dir: Path | None = None
     try:
-        upload_dir = upload_batch_dir(cfg.input_dir_path / selected_workspace)
-        saved_paths: list[Path] = []
-
-        for f in files:
-            if not f.filename:
-                continue
-            if ignored_upload(f.filename):
-                continue
-            try:
-                dest = safe_upload_destination(upload_dir, f.filename)
-            except ValueError:
-                logger.warning("Rejected upload with unsafe filename: %r", f.filename)
-                continue
-            try:
-                bytes_written = await write_upload_stream(
-                    f,
-                    dest,
-                    max_bytes=min(batch_max_bytes, bytes_written + per_file_max_bytes),
-                    bytes_written=bytes_written,
-                )
-            except UploadTooLargeError:
-                if upload_dir is not None:
-                    shutil.rmtree(upload_dir, ignore_errors=True)
-                return error_response(
-                    f"Upload exceeds limit ({per_file_max_mb} MB per file, "
-                    f"{cfg.max_upload_size_mb} MB per request)",
-                    status_code=413,
-                )
-            saved_paths.append(dest)
-
+        upload_dir, saved_paths = await application.corpora.stage_upload_batch(
+            selected_workspace,
+            [(f.filename or "", f) for f in files],
+            per_file_max_bytes=per_file_max_bytes,
+            batch_max_bytes=batch_max_bytes,
+        )
         if not saved_paths:
             if upload_dir is not None:
                 shutil.rmtree(upload_dir, ignore_errors=True)
             return error_response("No valid files selected")
-
+    except UnsafeUploadNameError as exc:
+        logger.warning("Rejected upload with unsafe filename: %s", exc)
+        return error_response("Upload contains an unsafe filename", status_code=400)
+    except UploadTooLargeError:
+        return error_response(
+            f"Upload exceeds limit ({per_file_max_mb} MB per file, "
+            f"{cfg.max_upload_size_mb} MB per request)",
+            status_code=413,
+        )
     except Exception:
         logger.exception("Upload staging failed")
         if upload_dir is not None:

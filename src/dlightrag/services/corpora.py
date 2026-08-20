@@ -3,6 +3,7 @@
 
 import logging
 import re
+import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -11,19 +12,82 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict
 from dlightrag_ai.telemetry import safe_log_text
 from dlightrag_rag.contracts import IngestDocument, SourceType, VisualAssetSize
 from dlightrag_rag.ingestion.paths import is_explicit_upload_batch_dir
-from dlightrag_rag.pool import WorkspacePool
-from dlightrag_rag.ports import JOB_STATES_WITH_RESULT, CorpusMaintenanceStore
+from dlightrag_rag.ingestion.uploads import (
+    UploadTooLargeError as RagUploadTooLargeError,
+)
+from dlightrag_rag.ingestion.uploads import (
+    ignored_upload,
+    safe_upload_basename,
+    safe_upload_destination,
+    upload_batch_dir,
+    write_upload_stream,
+)
+from dlightrag_rag.pool import WorkspacePool, WorkspaceUnavailableError
+from dlightrag_rag.ports import (
+    JOB_STATES_WITH_RESULT,
+    CorpusMaintenanceStore,
+    CorpusSchemaError,
+    IngestJobSchemaError,
+)
 from dlightrag_rag.reset import areset_orphaned_workspace
 from dlightrag_rag.retrieval import MetadataFilter
-from dlightrag_rag.source_download import SourceDownloadTarget
+from dlightrag_rag.retrieval.metadata_fields import (
+    MetadataValidationError as RagMetadataValidationError,
+)
+from dlightrag_rag.source_download import (
+    LocalDownloadTarget as RagLocalDownloadTarget,
+)
+from dlightrag_rag.source_download import (
+    RedirectDownloadTarget as RagRedirectDownloadTarget,
+)
+from dlightrag_rag.source_download import (
+    SourceDownloadInvalidError as RagSourceDownloadInvalidError,
+)
+from dlightrag_rag.source_download import (
+    SourceDownloadNotFoundError as RagSourceDownloadNotFoundError,
+)
+from dlightrag_rag.source_download import (
+    SourceDownloadTarget as RagSourceDownloadTarget,
+)
+from dlightrag_rag.source_download import (
+    SourceDownloadUnavailableError as RagSourceDownloadUnavailableError,
+)
+from dlightrag_rag.workspace_rag import WorkspaceRag
 from dlightrag_rag.workspaces import normalize_workspace, require_canonical_workspace_id
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dlightrag.access import WorkspaceRecord
+from dlightrag.services.errors import (
+    CorpusUnavailableError,
+    LocalDownloadTarget,
+    MetadataValidationError,
+    RedirectDownloadTarget,
+    SourceDownloadInvalidError,
+    SourceDownloadNotFoundError,
+    SourceDownloadTarget,
+    SourceDownloadUnavailableError,
+    StorageSchemaError,
+    UnsafeUploadNameError,
+    UploadTooLargeError,
+)
 
 logger = logging.getLogger(__name__)
 
 _WORKSPACE_FORBIDDEN_RE = re.compile(r'[/\\<>"\']')
+
+
+async def _acquire_workspace(pool: WorkspacePool, workspace: str) -> WorkspaceRag:
+    """Acquire one runtime with rag-core errors translated to product types."""
+    try:
+        return await pool.acquire(workspace)
+    except CorpusSchemaError as exc:
+        raise StorageSchemaError(str(exc)) from exc
+    except WorkspaceUnavailableError as exc:
+        raise CorpusUnavailableError(str(exc)) from exc
+
+
+def _product_metadata_error(exc: RagMetadataValidationError) -> MetadataValidationError:
+    return MetadataValidationError(str(exc))
 
 
 def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
@@ -329,8 +393,14 @@ class FilePanelStore(Protocol):
     async def list_processed_files(self, workspace: str) -> list[dict[str, Any]]: ...
 
 
+class UploadReader(Protocol):
+    """Minimal async reader contract for one streamed upload."""
+
+    async def read(self, size: int = -1) -> bytes: ...
+
+
 class SourceDownloadPreparer(Protocol):
-    async def prepare(self, document_id: str) -> SourceDownloadTarget: ...
+    async def prepare(self, document_id: str) -> RagSourceDownloadTarget: ...
 
 
 type SourceDownloadFactory = Callable[[str], SourceDownloadPreparer]
@@ -358,18 +428,24 @@ class CorpusAdmin:
 
     async def initialize(self) -> None:
         default_workspace = require_canonical_workspace_id(self._settings.default_workspace_id)
-        await self._maintenance.initialize(validate_only=self._settings.read_only)
-        if not self._settings.read_only:
-            await self._maintenance.register_workspace(
-                workspace=default_workspace,
-                display_name=self._settings.default_display_name,
-                embedding_model=self._settings.default_embedding_model,
-            )
+        try:
+            await self._maintenance.initialize(validate_only=self._settings.read_only)
+            if not self._settings.read_only:
+                await self._maintenance.register_workspace(
+                    workspace=default_workspace,
+                    display_name=self._settings.default_display_name,
+                    embedding_model=self._settings.default_embedding_model,
+                )
+        except CorpusSchemaError as exc:
+            raise StorageSchemaError(str(exc)) from exc
 
     async def start_recovery(self) -> None:
         if self._settings.read_only:
             return
-        await self._ingest_jobs.start_recovery()
+        try:
+            await self._ingest_jobs.start_recovery()
+        except IngestJobSchemaError as exc:
+            raise StorageSchemaError(str(exc)) from exc
 
     async def aclose(self) -> None:
         await self._ingest_jobs.close()
@@ -407,7 +483,7 @@ class CorpusAdmin:
     ) -> None:
         self._require_writer("workspace creation")
         workspace = require_canonical_workspace_id(workspace_id)
-        runtime = await self._pool.acquire(workspace)
+        runtime = await _acquire_workspace(self._pool, workspace)
         await runtime.aregister_workspace(display_name=display_name)
 
     async def ingest(self, workspace_id: str, spec: IngestSpec) -> dict[str, Any]:
@@ -437,12 +513,15 @@ class CorpusAdmin:
     ) -> dict[str, Any]:
         self._require_writer("ingestion")
         workspace = require_canonical_workspace_id(workspace_id)
-        return await self._ingest_jobs.start_job(
-            workspace,
-            spec.source_type,
-            cleanup_paths=_cleanup_paths_for_local_ingest(spec),
-            **ingest_kwargs_from_spec(spec),
-        )
+        try:
+            return await self._ingest_jobs.start_job(
+                workspace,
+                spec.source_type,
+                cleanup_paths=_cleanup_paths_for_local_ingest(spec),
+                **ingest_kwargs_from_spec(spec),
+            )
+        except IngestJobSchemaError as exc:
+            raise StorageSchemaError(str(exc)) from exc
 
     async def get_ingest_job(self, job_id: str) -> dict[str, Any] | None:
         self._require_writer("ingest job access")
@@ -482,15 +561,99 @@ class CorpusAdmin:
         workspace_id: str,
         document_id: str,
     ) -> SourceDownloadTarget:
+        """Resolve one source download into a product target type."""
         workspace = require_canonical_workspace_id(workspace_id)
-        return await self._source_download_for(workspace).prepare(document_id)
+        try:
+            target = await self._source_download_for(workspace).prepare(document_id)
+        except RagSourceDownloadInvalidError as exc:
+            raise SourceDownloadInvalidError(str(exc)) from exc
+        except RagSourceDownloadNotFoundError as exc:
+            raise SourceDownloadNotFoundError(str(exc)) from exc
+        except RagSourceDownloadUnavailableError as exc:
+            raise SourceDownloadUnavailableError(str(exc)) from exc
+        if isinstance(target, RagLocalDownloadTarget):
+            return LocalDownloadTarget(
+                path=target.path,
+                media_type=target.media_type,
+                filename=target.filename,
+            )
+        if isinstance(target, RagRedirectDownloadTarget):
+            return RedirectDownloadTarget(url=target.url)
+        raise TypeError("Unsupported source download target")
+
+    async def stage_upload_stream(
+        self,
+        workspace_id: str,
+        *,
+        filename: str,
+        reader: UploadReader,
+        max_bytes: int,
+    ) -> tuple[Path, str]:
+        """Stage one streamed upload under the workspace input root.
+
+        Returns the saved path and the safe basename; raises product errors for
+        unsafe names and oversized payloads.
+        """
+        workspace = require_canonical_workspace_id(workspace_id)
+        try:
+            safe_name = safe_upload_basename(filename)
+        except ValueError:
+            raise UnsafeUploadNameError(f"Unsafe filename: {filename!r}") from None
+        target_dir = Path(self._settings.input_root) / workspace
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / safe_name
+        try:
+            await write_upload_stream(reader, target_path, max_bytes=max_bytes)
+        except RagUploadTooLargeError as exc:
+            raise UploadTooLargeError(str(exc)) from exc
+        return target_path, safe_name
+
+    async def stage_upload_batch(
+        self,
+        workspace_id: str,
+        files: Sequence[tuple[str, UploadReader]],
+        *,
+        per_file_max_bytes: int,
+        batch_max_bytes: int,
+    ) -> tuple[Path, list[Path]]:
+        """Stage a multi-file upload batch and return its directory and saved paths.
+
+        Ignored OS-junk names are skipped. Oversized payloads raise
+        ``UploadTooLargeError`` after removing the batch directory.
+        """
+        workspace = require_canonical_workspace_id(workspace_id)
+        upload_dir = upload_batch_dir(Path(self._settings.input_root) / workspace)
+        saved_paths: list[Path] = []
+        bytes_written = 0
+        try:
+            for filename, reader in files:
+                if not filename or ignored_upload(filename):
+                    continue
+                try:
+                    dest = safe_upload_destination(upload_dir, filename)
+                except ValueError as exc:
+                    raise UnsafeUploadNameError(f"Unsafe filename: {filename!r}") from exc
+                bytes_written = await write_upload_stream(
+                    reader,
+                    dest,
+                    max_bytes=min(batch_max_bytes, bytes_written + per_file_max_bytes),
+                    bytes_written=bytes_written,
+                )
+                saved_paths.append(dest)
+        except RagUploadTooLargeError as exc:
+            shutil.rmtree(upload_dir, ignore_errors=True)
+            raise UploadTooLargeError(str(exc)) from exc
+        except BaseException:
+            shutil.rmtree(upload_dir, ignore_errors=True)
+            raise
+        return upload_dir, saved_paths
 
     async def list_ingested_files(self, workspace_id: str) -> list[dict[str, Any]]:
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.alist_ingested_files()
 
     async def get_pipeline_status(self, workspace_id: str) -> dict[str, Any]:
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.aget_pipeline_status()
 
     async def delete_files(
@@ -502,7 +665,7 @@ class CorpusAdmin:
         dry_run: bool = False,
     ) -> list[dict[str, Any]]:
         self._require_writer("file deletion")
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.adelete_files(
             file_paths=file_paths,
             filenames=filenames,
@@ -510,7 +673,7 @@ class CorpusAdmin:
         )
 
     async def list_failed_docs(self, workspace_id: str) -> list[dict[str, Any]]:
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.alist_failed_docs()
 
     async def get_visual_asset(
@@ -520,17 +683,20 @@ class CorpusAdmin:
         *,
         size: VisualAssetSize = "full",
     ) -> Any:
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.aget_visual_asset(chunk_id, size=size)
 
     async def retry_failed_docs(self, workspace_id: str) -> dict[str, Any]:
         self._require_writer("failed document retry")
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
         return await runtime.aretry_failed_docs()
 
     async def get_metadata(self, workspace_id: str, document_id: str) -> dict[str, Any]:
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
-        return await runtime.aget_metadata(document_id)
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
+        try:
+            return await runtime.aget_metadata(document_id)
+        except RagMetadataValidationError as exc:
+            raise _product_metadata_error(exc) from exc
 
     async def update_metadata(
         self,
@@ -539,16 +705,22 @@ class CorpusAdmin:
         data: dict[str, Any],
     ) -> None:
         self._require_writer("metadata update")
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
-        await runtime.aupdate_metadata(document_id, data)
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
+        try:
+            await runtime.aupdate_metadata(document_id, data)
+        except RagMetadataValidationError as exc:
+            raise _product_metadata_error(exc) from exc
 
     async def search_metadata(
         self,
         workspace_id: str,
         filters: MetadataFilter,
     ) -> list[str]:
-        runtime = await self._pool.acquire(require_canonical_workspace_id(workspace_id))
-        return await runtime.asearch_metadata(filters)
+        runtime = await _acquire_workspace(self._pool, require_canonical_workspace_id(workspace_id))
+        try:
+            return await runtime.asearch_metadata(filters)
+        except RagMetadataValidationError as exc:
+            raise _product_metadata_error(exc) from exc
 
     async def reset(
         self,
@@ -616,7 +788,7 @@ class CorpusAdmin:
     ) -> dict[str, Any]:
         cancelled = 0 if dry_run else await self._ingest_jobs.cancel_for_workspace(workspace)
         try:
-            runtime = await self._pool.acquire(workspace)
+            runtime = await _acquire_workspace(self._pool, workspace)
             result = await runtime.areset(keep_files=keep_files, dry_run=dry_run)
             result["ingest_jobs_cancelled"] = cancelled
             await self._ingest_jobs.attach_reset_result(
@@ -731,9 +903,11 @@ __all__ = [
     "IngestJobs",
     "SourceDownloadFactory",
     "SourceDownloadPreparer",
+    "UploadReader",
     "ingest_kwargs_from_spec",
     "ingest_spec_from_payload",
     "managed_local_ingest_documents",
     "managed_local_ingest_path",
+    "safe_upload_basename",
     "validate_workspace_name",
 ]

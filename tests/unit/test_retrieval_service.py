@@ -9,9 +9,9 @@ from unittest.mock import ANY, AsyncMock, Mock, patch
 import pytest
 from dlightrag_ai.capacity import ModelProfile
 from dlightrag_ai.telemetry import NoopTelemetry
-from dlightrag_rag.pool import WorkspaceUnavailableError
 from dlightrag_rag.retrieval import MetadataFilter, RetrievalResult
 
+from dlightrag.services.errors import CorpusUnavailableError
 from dlightrag.services.retrieval import (
     ProjectedRetrieval,
     RetrievalPlannerRuntime,
@@ -468,11 +468,11 @@ async def test_close_cancels_warmups_and_closed_service_starts_no_new_warmup() -
     pool.warm.assert_awaited_once_with(("reports",))
 
     request = RetrieveRequest(query="closed", workspaces=("reports",), projection=_PROJECTION)
-    with pytest.raises(WorkspaceUnavailableError, match="Retrieval service is closed"):
+    with pytest.raises(CorpusUnavailableError, match="Retrieval service is closed"):
         await service.retrieve(request)
-    with pytest.raises(WorkspaceUnavailableError, match="Retrieval service is closed"):
+    with pytest.raises(CorpusUnavailableError, match="Retrieval service is closed"):
         await service.retrieve_result("closed", workspaces=("reports",))
-    with pytest.raises(WorkspaceUnavailableError, match="Retrieval service is closed"):
+    with pytest.raises(CorpusUnavailableError, match="Retrieval service is closed"):
         service.planner_for()
 
 
@@ -593,7 +593,8 @@ async def test_multiple_workspaces_use_federated_retrieval() -> None:
     federated.assert_awaited_once()
     assert federated.await_args is not None
     assert federated.await_args.args[:2] == ("query", ["reports", "legal"])
-    assert federated.await_args.args[2] is pool.acquire
+    acquire = federated.await_args.args[2]
+    assert acquire is not pool.acquire  # the service wraps acquire to translate pool errors
     assert federated.await_args.kwargs["max_concurrency"] == 3
     pool.acquire.assert_not_awaited()
 

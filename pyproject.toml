@@ -192,6 +192,28 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "transport-corpus-implementation-direction"
+name = "Transports depend on typed application services, not corpus implementations"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["dlightrag.api", "dlightrag.mcp", "dlightrag.web"]
+forbidden_modules = [
+    "dlightrag_rag.pool",
+    "dlightrag_rag.ports",
+    "dlightrag_rag.ingestion",
+    "dlightrag_rag.source_download",
+    "dlightrag_rag.federation",
+    "dlightrag_rag.lightrag_contract",
+    "dlightrag_rag.lightrag_models",
+    "dlightrag_rag.lightrag_stores",
+    "dlightrag_rag.rerank",
+    "dlightrag_rag.reset",
+    "dlightrag_rag.settings",
+    "dlightrag_rag.visual_assets",
+    "dlightrag_rag.workspace_rag",
+]
+
+[[tool.importlinter.contracts]]
 id = "answer-independence"
 name = "Answer owns product policy without access, service, adapter, or transport dependencies"
 type = "forbidden"

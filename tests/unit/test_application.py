@@ -28,6 +28,7 @@ from dlightrag.model_settings import model_settings_for_role
 from dlightrag.runtime import RunCoordinator, RunSchemaError
 from dlightrag.services.answers import AnswerService
 from dlightrag.services.corpora import CorpusAdmin
+from dlightrag.services.errors import StorageSchemaError
 from dlightrag.services.retrieval import RetrievalService
 from dlightrag.web.conversation_models import WebConversationSchemaError
 from dlightrag.web.conversations import WebConversationService
@@ -338,18 +339,28 @@ async def test_a_non_web_process_does_not_start_conversation_retention(
 
 
 @pytest.mark.parametrize(
-    ("failure", "error"),
+    ("failure", "error", "expected"),
     [
-        pytest.param("run_store", RunSchemaError("run schema missing"), id="run-schema"),
+        pytest.param("run_store", RunSchemaError("run schema missing"), None, id="run-schema"),
         pytest.param(
-            "web_store", WebConversationSchemaError("web schema missing"), id="web-schema"
+            "web_store", WebConversationSchemaError("web schema missing"), None, id="web-schema"
         ),
-        pytest.param("corpora", CorpusSchemaError("corpus schema missing"), id="corpus-schema"),
-        pytest.param("workspace", CorpusSchemaError("workspace schema missing"), id="workspace"),
+        pytest.param(
+            "corpora",
+            StorageSchemaError("corpus schema missing"),
+            StorageSchemaError,
+            id="corpus-schema",
+        ),
+        pytest.param(
+            "workspace",
+            CorpusSchemaError("workspace schema missing"),
+            StorageSchemaError,
+            id="workspace",
+        ),
     ],
 )
 async def test_a_startup_schema_failure_closes_the_application(
-    test_config: DlightragConfig, failure: str, error: Exception
+    test_config: DlightragConfig, failure: str, error: Exception, expected: type | None
 ) -> None:
     parts = _Parts()
     match failure:
@@ -363,7 +374,7 @@ async def test_a_startup_schema_failure_closes_the_application(
             parts.pool.acquire_error = error
     application = parts.application(test_config)
 
-    with pytest.raises(type(error)):
+    with pytest.raises(expected or type(error)):
         await application.astart()
 
     assert parts.recorder.closed() == _CLOSE_ORDER

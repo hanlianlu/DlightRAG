@@ -11,9 +11,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from dlightrag_rag.pool import WorkspaceUnavailableError
-from dlightrag_rag.ports import CorpusSchemaError, IngestJobSchemaError
-from dlightrag_rag.retrieval.metadata_fields import MetadataValidationError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -30,6 +27,11 @@ from dlightrag.api.routes import router
 from dlightrag.application import Application, ApplicationClosedError
 from dlightrag.runtime import RunSchemaError
 from dlightrag.services.answers import AnswerRuntimeUnavailableError
+from dlightrag.services.errors import (
+    CorpusUnavailableError,
+    MetadataValidationError,
+    StorageSchemaError,
+)
 from dlightrag.services.retrieval import RetrievalTimeoutError
 from dlightrag.web.conversation_models import WebConversationSchemaError
 
@@ -161,11 +163,11 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         return JSONResponse(status_code=status, content=body.model_dump())
 
     @application.exception_handler(ApplicationClosedError)
-    @application.exception_handler(WorkspaceUnavailableError)
+    @application.exception_handler(CorpusUnavailableError)
     @application.exception_handler(AnswerRuntimeUnavailableError)
     async def rag_unavailable_handler(
         request: Request,  # noqa: ARG001
-        exc: ApplicationClosedError | WorkspaceUnavailableError | AnswerRuntimeUnavailableError,
+        exc: ApplicationClosedError | CorpusUnavailableError | AnswerRuntimeUnavailableError,
     ) -> JSONResponse:
         body = ErrorDetail(detail=str(exc), error_type="unavailable")
         return JSONResponse(status_code=503, content=body.model_dump())
@@ -231,8 +233,7 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         return JSONResponse(status_code=503, content=body.model_dump())
 
     for schema_error in (
-        CorpusSchemaError,
-        IngestJobSchemaError,
+        StorageSchemaError,
         RunSchemaError,
         WebConversationSchemaError,
     ):

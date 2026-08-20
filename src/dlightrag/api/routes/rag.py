@@ -4,11 +4,6 @@
 import logging
 from typing import Any
 
-from dlightrag_rag.ingestion.uploads import (
-    UploadTooLargeError,
-    safe_upload_basename,
-    write_upload_stream,
-)
 from dlightrag_rag.workspaces import normalize_workspace
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -33,6 +28,7 @@ from dlightrag.services.corpora import (
     managed_local_ingest_documents,
     managed_local_ingest_path,
 )
+from dlightrag.services.errors import UnsafeUploadNameError, UploadTooLargeError
 from dlightrag.services.retrieval import RetrieveProjection
 from dlightrag.services.retrieval import RetrieveRequest as ServiceRequest
 
@@ -250,21 +246,19 @@ async def ingest_blob(
         await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
 
         try:
-            safe_name = safe_upload_basename(file.filename)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid filename") from None
-
-        target_dir = cfg.input_dir_path / ws
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / safe_name
-
-        try:
-            await write_upload_stream(file, target_path, max_bytes=cfg.max_upload_bytes)
-        except UploadTooLargeError:
+            target_path, safe_name = await application.corpora.stage_upload_stream(
+                ws,
+                filename=file.filename,
+                reader=file,
+                max_bytes=cfg.max_upload_bytes,
+            )
+        except UnsafeUploadNameError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except UploadTooLargeError as exc:
             raise HTTPException(
                 status_code=413,
                 detail=f"File exceeds maximum size of {cfg.max_upload_bytes} bytes",
-            ) from None
+            ) from exc
     finally:
         await form.close()
 

@@ -20,6 +20,8 @@ from dlightrag_rag.pool import WorkspacePool, WorkspaceUnavailableError
 from dlightrag_rag.retrieval import MetadataFilter, RetrievalContexts, RetrievalResult
 from dlightrag_rag.retrieval.planner import RetrievalPlan, RetrievalPlanner
 
+from dlightrag.services.errors import CorpusUnavailableError
+
 logger = logging.getLogger(__name__)
 
 type SchemaLookup = Callable[[Sequence[str]], Awaitable[dict[str, Any]]]
@@ -180,9 +182,16 @@ class RetrievalService:
     def closed(self) -> bool:
         return self._closed
 
+    async def _acquire(self, workspace: str) -> Any:
+        """Acquire one runtime with the pool error translated to a product type."""
+        try:
+            return await self._pool.acquire(workspace)
+        except WorkspaceUnavailableError as exc:
+            raise CorpusUnavailableError(str(exc)) from exc
+
     def planner_for(self, model_profile: ModelProfile | None = None) -> RetrievalPlanner:
         if self._closed:
-            raise WorkspaceUnavailableError("Retrieval service is closed")
+            raise CorpusUnavailableError("Retrieval service is closed")
         return self._planners.planner_for(model_profile)
 
     async def schema_for(self, workspaces: Sequence[str]) -> dict[str, Any]:
@@ -225,7 +234,7 @@ class RetrievalService:
 
     async def retrieve(self, request: RetrieveRequest) -> RetrieveResponse:
         if self._closed:
-            raise WorkspaceUnavailableError("Retrieval service is closed")
+            raise CorpusUnavailableError("Retrieval service is closed")
         if not request.workspaces:
             raise ValueError("At least one canonical workspace is required")
         if len(request.query_images) > self._settings.query_image_limit:
@@ -289,7 +298,7 @@ class RetrievalService:
     ) -> RetrievalResult:
         """Plan and execute raw retrieval without inline timeout or reader projection."""
         if self._closed:
-            raise WorkspaceUnavailableError("Retrieval service is closed")
+            raise CorpusUnavailableError("Retrieval service is closed")
         if not workspaces:
             raise ValueError("At least one canonical workspace is required")
         active_planner = planner or self.planner_for(model_profile)
@@ -349,17 +358,20 @@ class RetrievalService:
                 "has_filters": effective_filters is not None,
             },
         ) as observation:
-            if len(workspaces) == 1:
-                runtime = await self._pool.acquire(workspaces[0])
-                result = await runtime.aretrieve(plan.standalone_query, **kwargs)
-            else:
-                result = await federated_retrieve(
-                    plan.standalone_query,
-                    list(workspaces),
-                    self._pool.acquire,
-                    max_concurrency=self._settings.workspace_fanout_concurrency,
-                    **kwargs,
-                )
+            try:
+                if len(workspaces) == 1:
+                    runtime = await self._pool.acquire(workspaces[0])
+                    result = await runtime.aretrieve(plan.standalone_query, **kwargs)
+                else:
+                    result = await federated_retrieve(
+                        plan.standalone_query,
+                        list(workspaces),
+                        self._acquire,
+                        max_concurrency=self._settings.workspace_fanout_concurrency,
+                        **kwargs,
+                    )
+            except WorkspaceUnavailableError as exc:
+                raise CorpusUnavailableError(str(exc)) from exc
             result.image_descriptions = list(image_descriptions)
             result.trace["query_image_description_count"] = len(image_descriptions)
             observation.update(

@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
 from dlightrag_rag.contracts import SourceType
-from dlightrag_rag.pool import WorkspaceUnavailableError
 from dlightrag_rag.retrieval import MetadataFilter
 from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
 from mcp import MCPError
@@ -79,6 +78,7 @@ from dlightrag.services.corpora import (
     managed_local_ingest_documents,
     managed_local_ingest_path,
 )
+from dlightrag.services.errors import CorpusUnavailableError
 from dlightrag.services.retrieval import (
     RetrievalTimeoutError,
     RetrieveProjection,
@@ -173,7 +173,7 @@ class DlightRAGMCPServer(MCPServer):
                 PermissionError,
                 InvalidToolConfigurationError,
                 RetrievalTimeoutError,
-                WorkspaceUnavailableError,
+                CorpusUnavailableError,
                 AnswerRuntimeUnavailableError,
             )
             inner = exc if isinstance(exc, surfaced) else exc.__cause__
@@ -185,7 +185,7 @@ class DlightRAGMCPServer(MCPServer):
                 ValueError
                 | PermissionError
                 | RetrievalTimeoutError
-                | WorkspaceUnavailableError
+                | CorpusUnavailableError
                 | AnswerRuntimeUnavailableError,
             ):
                 logger.warning("MCP tool '%s' rejected: %s", name, inner)

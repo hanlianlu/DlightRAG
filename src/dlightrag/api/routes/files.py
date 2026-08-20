@@ -5,14 +5,6 @@ import logging
 from typing import Any
 
 from dlightrag_ai.telemetry import safe_log_text
-from dlightrag_rag.source_download import (
-    LocalDownloadTarget,
-    RedirectDownloadTarget,
-    SourceDownloadInvalidError,
-    SourceDownloadNotFoundError,
-    SourceDownloadTarget,
-    SourceDownloadUnavailableError,
-)
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import FileResponse, RedirectResponse
 
@@ -23,6 +15,14 @@ from dlightrag.api.models import (
     DeleteRequest,
     FailedFilesResponse,
     FileListResponse,
+)
+from dlightrag.services.errors import (
+    LocalDownloadTarget,
+    RedirectDownloadTarget,
+    SourceDownloadInvalidError,
+    SourceDownloadNotFoundError,
+    SourceDownloadTarget,
+    SourceDownloadUnavailableError,
 )
 
 from .deps import enforce_access, get_application, resolve_workspace

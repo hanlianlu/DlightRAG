@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import jwt
 import pytest
-from dlightrag_rag.pool import WorkspaceUnavailableError
 from dlightrag_rag.retrieval import RetrievalResult
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
@@ -35,6 +34,7 @@ from dlightrag.model_settings import authentication_settings
 from dlightrag.runtime import AnswerRunRecord, RunCreation
 from dlightrag.services.answers import AnswerRuntimeUnavailableError
 from dlightrag.services.corpora import IngestSpec
+from dlightrag.services.errors import CorpusUnavailableError, MetadataValidationError
 from dlightrag.services.retrieval import RetrievalTimeoutError
 from dlightrag.services.retrieval import RetrieveResponse as ServiceResponse
 
@@ -915,6 +915,15 @@ class TestIngestEndpoint:
             "lease_owner": None,
             "lease_expires_at": None,
         }
+
+        async def fake_stage_upload(workspace, *, filename, reader, max_bytes):
+            del reader
+            path = mock_config.input_dir_path / workspace / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"%PDF-fake")
+            return path, filename
+
+        mock_application.corpora.stage_upload_stream = fake_stage_upload
         app.state.application = mock_application
 
         resp = await client.post(
@@ -1064,7 +1073,7 @@ class TestIngestEndpoint:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         mock_application.corpora.start_ingest_job = AsyncMock(
-            side_effect=WorkspaceUnavailableError("RAG not ready")
+            side_effect=CorpusUnavailableError("RAG not ready")
         )
         app.state.application = mock_application
         resp = await client.post(
@@ -1108,7 +1117,7 @@ class TestRetrieveEndpoint:
     async def test_retrieve_closed_service_is_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
-        mock_application.retrieval.retrieve.side_effect = WorkspaceUnavailableError(
+        mock_application.retrieval.retrieve.side_effect = CorpusUnavailableError(
             "Retrieval service is closed"
         )
         app.state.application = mock_application
@@ -2036,8 +2045,6 @@ class TestAnswerStreamMode:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_application
     ) -> None:
         """Metadata validation happens below the request model, so it needs its own mapping."""
-        from dlightrag_rag.retrieval.metadata_fields import MetadataValidationError
-
         mock_application.corpora.update_metadata = AsyncMock(
             side_effect=MetadataValidationError("title is a built-in metadata field")
         )

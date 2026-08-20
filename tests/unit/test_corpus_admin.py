@@ -8,7 +8,6 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from dlightrag_rag.source_download import RedirectDownloadTarget
 from pydantic import ValidationError
 
 from dlightrag.services.corpora import (
@@ -17,6 +16,7 @@ from dlightrag.services.corpora import (
     CorpusIngestError,
     IngestSpec,
 )
+from dlightrag.services.errors import RedirectDownloadTarget
 
 
 def _settings(
@@ -418,10 +418,12 @@ async def test_cancel_ingest_job_uses_stored_canonical_workspace_and_returns_lat
 
 
 async def test_file_panel_and_source_download_do_not_warm_cold_runtime() -> None:
+    from dlightrag_rag.source_download import RedirectDownloadTarget as RagRedirectDownloadTarget
+
     admin, pool, _, jobs, file_panel, download = _admin()
     file_panel.list_processed_files.return_value = [{"doc_id": "doc-1"}]
     jobs.has_active_workspace_job.return_value = True
-    target = RedirectDownloadTarget(url="https://cdn.example.com/report.pdf")
+    target = RagRedirectDownloadTarget(url="https://cdn.example.com/report.pdf")
     download.prepare.return_value = target
 
     snapshot = await admin.file_panel_snapshot("finance")
@@ -435,5 +437,6 @@ async def test_file_panel_and_source_download_do_not_warm_cold_runtime() -> None
             "latest_message": "Starting ingest...",
         },
     }
-    assert prepared is target
+    assert isinstance(prepared, RedirectDownloadTarget)
+    assert prepared.url == "https://cdn.example.com/report.pdf"
     pool.acquire.assert_not_awaited()

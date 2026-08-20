@@ -244,7 +244,7 @@ class TestWebAuth:
     async def test_simple_login_cookie_downloads_source_without_bearer(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
-        from dlightrag_rag.source_download import LocalDownloadTarget
+        from dlightrag.services.errors import LocalDownloadTarget
 
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
@@ -654,8 +654,18 @@ class TestWebFiles:
         assert resp.headers["hx-reswap"] == "innerHTML"
 
     async def test_upload_preserves_filename_for_directory_ingest(
-        self, client: AsyncClient, test_config: DlightragConfig, mock_application
+        self, client: AsyncClient, test_config: DlightragConfig, mock_application, tmp_path: Path
     ) -> None:
+        upload_dir = tmp_path / "uploads"
+        upload_dir.mkdir()
+        saved = upload_dir / "report.pdf"
+        saved.write_bytes(b"%PDF-fake")
+
+        async def fake_stage_batch(workspace, files, *, per_file_max_bytes, batch_max_bytes):
+            del workspace, files, per_file_max_bytes, batch_max_bytes
+            return upload_dir, [saved]
+
+        mock_application.corpora.stage_upload_batch = fake_stage_batch
         resp = await client.post(
             "/web/files/upload",
             files=[("files", ("report.pdf", b"%PDF-fake", "application/pdf"))],

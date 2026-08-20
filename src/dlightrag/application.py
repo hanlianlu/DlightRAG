@@ -466,11 +466,11 @@ class Application:
             _require_compatible_run(requirement, current_fingerprints)
 
     async def _initialize_corpora(self) -> bool:
-        from dlightrag_rag.ports import CorpusSchemaError
+        from dlightrag.services.errors import StorageSchemaError
 
         try:
             await self._components.corpora.initialize()
-        except CorpusSchemaError:
+        except StorageSchemaError:
             raise
         except Exception as exc:
             self._components.health.add_warning("Workspace registry unavailable")
@@ -480,14 +480,19 @@ class Application:
 
     async def _warm_default_workspace(self) -> str | None:
         """Warm the default workspace; return the detail that degrades startup."""
+        from dlightrag_rag.pool import WorkspaceUnavailableError
         from dlightrag_rag.ports import CorpusSchemaError
         from dlightrag_rag.workspaces import normalize_workspace
+
+        from dlightrag.services.errors import CorpusUnavailableError, StorageSchemaError
 
         workspace = normalize_workspace(self._config.workspace)
         try:
             await self._components.pool.acquire(workspace)
-        except CorpusSchemaError:
-            raise
+        except CorpusSchemaError as exc:
+            raise StorageSchemaError(str(exc)) from exc
+        except WorkspaceUnavailableError as exc:
+            raise CorpusUnavailableError(str(exc)) from exc
         except Exception as exc:
             logger.warning("Failed to warm up default workspace '%s'", workspace, exc_info=True)
             return str(getattr(exc, "detail", None) or exc) or "unknown"
