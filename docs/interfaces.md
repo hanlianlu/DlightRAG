@@ -804,8 +804,8 @@ remain JSON-RPC errors. The server exposes these tools:
 
 `retrieve`, `answer`, `get_answer_run`, `cancel_answer_run`, `ingest`,
 `get_ingest_job`, `cancel_ingest_job`, `list_files`, `delete_files`,
-`list_workspaces`, `create_workspace`, `delete_workspace`, and
-`get_capabilities`.
+`list_workspaces`, `create_workspace`, `delete_workspace`, `list_memories`,
+`forget_memory`, and `get_capabilities`.
 
 MCP `answer` is deliberately descriptor-only: it creates the durable run and
 returns immediately rather than holding one tool call open for a run that may

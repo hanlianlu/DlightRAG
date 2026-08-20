@@ -13,7 +13,6 @@ from dlightrag.answer.memory import (
     MemoryRecord,
     MemoryWrite,
     evaluate_memory_write,
-    select_auto_recall,
 )
 
 
@@ -44,8 +43,6 @@ class AnswerMemoryStore(Protocol):
     async def get(self, *, owner_id: str, memory_id: str) -> MemoryRecord | None: ...
 
     async def list_active(self, *, owner_id: str) -> tuple[MemoryRecord, ...]: ...
-
-    async def list_for_recall(self, *, owner_id: str) -> tuple[MemoryRecord, ...]: ...
 
     async def purge_superseded(self, *, older_than: datetime) -> int: ...
 
@@ -128,9 +125,6 @@ class InMemoryAnswerMemoryStore:
         ]
         rows.sort(key=_recency, reverse=True)
         return tuple(rows)
-
-    async def list_for_recall(self, *, owner_id: str) -> tuple[MemoryRecord, ...]:
-        return select_auto_recall(await self.list_active(owner_id=owner_id))
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
         victims = [

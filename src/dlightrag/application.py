@@ -103,11 +103,11 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
     from dlightrag.adapters.postgres.memory import PGAnswerMemoryStore
     from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
+    from dlightrag.adapters.postgres.retrieval import PGWorkspaceSchemaLookup
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
     from dlightrag.adapters.retrieval import (
         AnswerQueryImagePreparer,
         AnswerRetrievalProjector,
-        PGWorkspaceSchemaLookup,
     )
     from dlightrag.answer.capabilities import (
         AnswerCapabilityCoordinator,

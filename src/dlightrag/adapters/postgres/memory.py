@@ -9,7 +9,7 @@ from typing import Any
 
 from dlightrag.adapters.postgres._migrations import TableRequirement
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.answer.memory import MemoryProvenance, MemoryRecord, select_auto_recall
+from dlightrag.answer.memory import MemoryProvenance, MemoryRecord
 
 _CREATE_MEMORY_RECORDS = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_memory_records (
@@ -282,9 +282,6 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
             return tuple(_row(row) for row in rows)
 
         return await self._run(_operation)
-
-    async def list_for_recall(self, *, owner_id: str) -> tuple[MemoryRecord, ...]:
-        return select_auto_recall(await self.list_active(owner_id=owner_id))
 
     async def purge_superseded(self, *, older_than: datetime) -> int:
         async def _operation(conn: Any) -> int:
