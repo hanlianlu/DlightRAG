@@ -217,7 +217,6 @@ forbidden_modules = [
     "dlightrag.adapters.postgres",
     "dlightrag.api",
     "dlightrag.config",
-    "dlightrag.core",
     "dlightrag.mcp",
     "dlightrag.model_settings",
     "dlightrag.web",
@@ -235,7 +234,6 @@ source_modules = ["dlightrag.sdk"]
 forbidden_modules = [
     "dlightrag.adapters.postgres",
     "dlightrag.api",
-    "dlightrag.core",
     "dlightrag.mcp",
     "dlightrag.web",
     "dlightrag_rag",
@@ -257,7 +255,6 @@ forbidden_modules = [
     "dlightrag.answer",
     "dlightrag.api",
     "dlightrag.config",
-    "dlightrag.core",
     "dlightrag.mcp",
     "dlightrag.model_settings",
     "dlightrag.web",
@@ -298,7 +295,6 @@ name = "Durable runtime must remain storage and product-policy neutral"
 type = "forbidden"
 source_modules = ["dlightrag.runtime"]
 forbidden_modules = [
-    "dlightrag.core",
     "dlightrag.adapters.postgres",
     "dlightrag.api",
     "dlightrag.mcp",
@@ -321,7 +317,6 @@ forbidden_modules = [
     "dlightrag.model_settings",
     "dlightrag.api",
     "dlightrag.config",
-    "dlightrag.core",
     "dlightrag.mcp",
     "dlightrag.web",
     "asyncpg",
@@ -342,7 +337,6 @@ name = "Application health must remain composition and adapter neutral"
 type = "forbidden"
 source_modules = ["dlightrag.health"]
 forbidden_modules = [
-    "dlightrag.core",
     "dlightrag.adapters.postgres",
     "dlightrag.api",
     "dlightrag.mcp",
@@ -372,7 +366,6 @@ source_modules = [
 ]
 forbidden_modules = [
     "dlightrag.model_settings",
-    "dlightrag.core",
     "dlightrag.adapters.postgres",
     "dlightrag.observability",
     "dlightrag.answer",

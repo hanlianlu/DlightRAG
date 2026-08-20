@@ -529,7 +529,7 @@ async def test_current_image_manifest_binds_resources_and_marks_images_visible()
 
 async def test_current_image_only_research_answer_is_grounded() -> None:
     agent = ScriptedAgent(
-        _answer("READY"),
+        _answer("No tools needed."),
         final_text="The image contains a chart.",
     )
     orchestrator = _research(
@@ -1028,7 +1028,7 @@ async def test_control_turns_replay_the_exchanges_this_run_produced() -> None:
     agent = ScriptedAgent(
         _tool(_call(query="savings rate", source="knowledge_base")),
         _tool(_call(query="second angle", source="web", call_id="b")),
-        _answer("READY"),
+        _answer("No tools needed."),
         final_text="Answer [1-1].",
     )
     await _research(agent, retrieve, search).answer("Question")
@@ -1052,7 +1052,7 @@ async def test_research_trace_keeps_each_knowledge_base_retrieval() -> None:
     agent = ScriptedAgent(
         _tool(_call(query="first", source="knowledge_base", call_id="first")),
         _tool(_call(query="second", source="knowledge_base", call_id="second")),
-        _answer("READY"),
+        _answer("No tools needed."),
         final_text="Answer [1-1].",
     )
 
@@ -1090,7 +1090,7 @@ async def test_research_control_turn_receives_retrieved_evidence_images() -> Non
     )
     agent = ScriptedAgent(
         _tool(_call(query="chart", source="knowledge_base")),
-        _answer("READY"),
+        _answer("No tools needed."),
         final_text="The chart says so [1-1].",
     )
 
@@ -1268,7 +1268,7 @@ async def test_research_final_answer_is_a_distinct_tools_disabled_synthesis() ->
             _call(query="Question", source="knowledge_base", call_id="kb"),
             _call(query="Question", source="web", call_id="web"),
         ),
-        _answer("READY"),
+        _answer("No tools needed."),
         final_text="Synthesized final [1-1][2-1].",
     )
     result = await _research(agent, retrieve, search).answer("Question")
@@ -1292,7 +1292,7 @@ async def test_research_stream_final_flows_through_synthesizer_no_context() -> N
         max_tokens_seen.append(max_tokens)
         return tokens()
 
-    agent = ScriptedAgent(_answer("READY"), final_text="Best-effort answer.")
+    agent = ScriptedAgent(_answer("No tools needed."), final_text="Best-effort answer.")
     contexts, stream = await _research(
         agent,
         retrieve,

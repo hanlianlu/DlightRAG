@@ -80,7 +80,7 @@ class FetchedResourceBytes:
     content: bytes
 
 
-# Persist validated fetched bytes before their tool result may be checkpointed.
+# Persist validated fetched bytes before their tool result settles on the journal.
 FetchedBytesSink = Callable[[FetchedResourceBytes], Awaitable[None]]
 
 
@@ -159,10 +159,10 @@ class ResourceRegistry:
         self._closed = False
         # Durable replay slots for run-scoped fetched bytes. An ordinal is minted
         # once per fetched resource and never reused, so a later turn cannot
-        # rebind a slot a previous checkpoint already made durable.
+        # rebind a slot a previous settlement already made durable.
         self._fetched_ordinals: dict[str, int] = {}
         self._next_fetched_ordinal = 0
-        # Fetched bytes a checkpoint restored. They are already durable, so they
+        # Fetched bytes a recovery restored. They are already durable, so they
         # are never refetched, revalidated, or persisted again.
         self._durable_fetched: set[str] = set()
         # Fetched (url/loader) bytes are materialized exactly once per resource
@@ -267,9 +267,9 @@ class ResourceRegistry:
     def allocate_fetched_ordinal(self, resource_id: str) -> int:
         """Return this fetched resource's durable replay slot, minting it once.
 
-        Slots are never handed out twice, and the next slot is checkpointed, so a
-        later turn cannot rebind bytes a committed checkpoint already made
-        durable. Re-executing the same uncheckpointed turn reuses its own slots.
+        Slots are never handed out twice, and the next slot is settled durably, so a
+        later turn cannot rebind bytes a committed settlement already made
+        durable. Re-executing the same unsettled turn reuses its own slots.
         """
         existing = self._fetched_ordinals.get(resource_id)
         if existing is not None:
@@ -284,17 +284,17 @@ class ResourceRegistry:
         return dict(self._fetched_ordinals)
 
     def restore_fetched_bytes(self, resource_id: str, content: bytes) -> None:
-        """Adopt one checkpointed fetch so a resumed read never repeats it.
+        """Adopt one settled fetch so a resumed read never repeats it.
 
         These bytes are durable run state, not a cache: they are charged once
         against the request total and their replay slot is frozen, so a resumed
         run can neither read a page that changed underneath it nor rebind the
-        slot a committed checkpoint depends on.
+        slot a committed settlement depends on.
         """
         self._ensure_open()
         if resource_id not in self._resources:
             raise ResourceStateMismatchError(
-                "checkpointed fetched bytes name a resource the catalog does not describe"
+                "settled fetched bytes name a resource the catalog does not describe"
             )
         self._durable_fetched.add(resource_id)
         if resource_id in self._fetched:
@@ -619,7 +619,7 @@ class ResourceRegistry:
         return await self._materialize_fetched(resource.resource_id, lambda: self._fetch_link(url))
 
     def _restored_bytes(self, resource_id: str) -> bytes | None:
-        """Return checkpointed bytes, which never re-enter the network path.
+        """Return settled bytes, which never re-enter the network path.
 
         Revalidation guards a fetch; a restored read makes no request at all, so
         a host that stopped resolving cannot fail a run whose bytes are durable.
@@ -687,14 +687,14 @@ class ResourceRegistry:
         """Bind validated web bytes to a durable replay slot before they are used.
 
         The sink runs after every HTTPS, redirect, DNS, SSRF, and byte check has
-        passed and before the tool result can enter a checkpoint, so a resumed
+        passed and before the tool result can settle on the journal, so a resumed
         run never silently re-fetches a page that changed underneath it.
         """
         resource = self._resources.get(resource_id)
         if self._fetched_bytes_sink is None or resource is None or not resource.url:
             return
         if resource_id in self._durable_fetched:
-            # Rebinding a checkpointed slot could delete the bytes it depends on.
+            # Rebinding a settled slot could delete the bytes it depends on.
             return
         await self._fetched_bytes_sink(
             FetchedResourceBytes(
@@ -810,7 +810,7 @@ class ResourceRegistryClosedError(RuntimeError):
 
 
 class ResourceStateMismatchError(RuntimeError):
-    """Raised when a checkpointed catalog cannot describe the replayed request."""
+    """Raised when a settled catalog cannot describe the replayed request."""
 
 
 def _link_filename(url: str, explicit: str | None) -> str:

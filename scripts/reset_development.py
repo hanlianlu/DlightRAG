@@ -5,7 +5,7 @@
 Two explicit modes, never auto-detected:
 
     docker  docker compose down -v on both DlightRAG volumes, then start only
-            PostgreSQL and verify the empty extension-only checkpoint.
+            PostgreSQL and verify the empty extension-only database.
     native  replace the dedicated development database's ``public`` schema,
             recreate the required extensions, and clear only the children of
             the verified working-directory root.
@@ -278,7 +278,7 @@ def _compose(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def run_docker_reset(target: PostgresTarget, report: ResetReport) -> None:
-    """Delete both DlightRAG volumes, start only PostgreSQL, verify the checkpoint."""
+    """Delete both DlightRAG volumes, start only PostgreSQL, verify the empty database."""
     report.record("compose", f"project {_COMPOSE_PROJECT}, file {_COMPOSE_FILE}")
     down = _compose("down", "-v")
     if down.returncode != 0:

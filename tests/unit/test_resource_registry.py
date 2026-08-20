@@ -274,11 +274,11 @@ async def test_read_revalidates_host_resolution_each_read(
         await registry.read(resource_id)
 
 
-async def test_read_uses_checkpointed_bytes_without_live_dns_validation(
+async def test_read_uses_settled_bytes_without_live_dns_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def reject_validation(_url: str) -> None:
-        raise AssertionError("checkpointed bytes must not re-enter the network gate")
+        raise AssertionError("settled bytes must not re-enter the network gate")
 
     monkeypatch.setattr(
         "dlightrag.answer.resources.registry.avalidate_public_https_url",

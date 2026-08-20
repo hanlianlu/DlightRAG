@@ -853,7 +853,7 @@ async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
     )
 
     mock_mcp_application.answers.create.side_effect = InvalidToolConfigurationError(
-        ("read_resource",)
+        ("nonexistent_tool",)
     )
 
     with caplog.at_level(logging.WARNING):
@@ -864,7 +864,7 @@ async def test_mcp_answer_reports_tool_misconfiguration_as_a_server_failure(
     assert _tool_text(result) == (
         f"Error [{INVALID_TOOL_CONFIGURATION}]: Answer tooling is misconfigured."
     )
-    assert "read_resource" not in _tool_text(result)
+    assert "nonexistent_tool" not in _tool_text(result)
     assert [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 

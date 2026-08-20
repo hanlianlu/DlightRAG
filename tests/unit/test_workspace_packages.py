@@ -281,8 +281,8 @@ def test_workspace_wheel_verifier_rejects_answer_import_of_postgres_adapter(
 @pytest.mark.parametrize(
     "config_source",
     [
-        "import dlightrag.core\n",
-        "from . import core\n",
+        "import dlightrag.answer\n",
+        "from dlightrag import answer\n",
     ],
 )
 def test_workspace_wheel_verifier_enforces_root_source_contract(
@@ -297,7 +297,7 @@ def test_workspace_wheel_verifier_enforces_root_source_contract(
     completed = _verify_wheels(tmp_path)
 
     assert completed.returncode == 1
-    assert "forbidden import dlightrag.core in dlightrag/config.py" in completed.stderr
+    assert "forbidden import dlightrag.answer in dlightrag/config.py" in completed.stderr
 
 
 def test_workspace_wheel_verifier_rejects_mismatched_sdist_set(tmp_path: Path) -> None:

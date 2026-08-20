@@ -211,7 +211,7 @@ class TestSettingsResolution:
 
 
 class TestDockerMode:
-    def test_docker_reset_verifies_empty_checkpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_docker_reset_verifies_empty_database(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
 
         def fake_compose(*args: str):

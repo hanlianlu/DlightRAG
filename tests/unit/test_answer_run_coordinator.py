@@ -2,7 +2,7 @@
 """Contract tests for the local Answer run coordinator and its subscribers.
 
 The coordinator is the only local owner of accepted-run execution: it reserves
-an execution slot before it claims a row, heartbeats a fenced lease, checkpoints
+an execution slot before it claims a row, heartbeats a fenced lease, journals
 completed control turns, coalesces tokens, and writes exactly one terminal
 event. Subscribers replay durable events and detach without touching the run.
 """

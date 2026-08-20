@@ -3,7 +3,7 @@
 
 Exercises the real contract against a live database: the declared schema and its
 constraints, owner-scoped creation and idempotency, queued cancellation, slot-safe
-claiming across workers, lease fencing, gap-free event sequences, checkpoint
+claiming across workers, lease fencing, gap-free event sequences, journal
 compare-and-set, terminal transitions, graceful requeue, the crash-recovery bound,
 event trimming, retention pruning, and ownership-safe artifact cleanup.
 
@@ -800,7 +800,7 @@ class TestTerminalTransitions:
         assert record.durable_progress_version == 0
         assert record.result == {"answer": "final"}
 
-    async def test_an_unleased_finalization_drops_the_checkpoint(self, store, pool) -> None:
+    async def test_an_unleased_finalization_clears_the_prepared_input(self, store, pool) -> None:
         creation = await store.create_run(owner_id=_OWNER, request=_request())
         claim = await _claimed(store)
         await store.record_phase(
