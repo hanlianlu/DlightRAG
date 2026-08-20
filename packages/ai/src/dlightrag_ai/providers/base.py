@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Abstract base for LLM completion providers."""
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
@@ -12,6 +13,61 @@ from dlightrag_ai.messages import (
     ToolChoice,
     ToolDefinition,
 )
+
+#: Provider rejection texts that mean the request exceeded the model's
+#: context window. Kept provider-generic: the classifier walks the full
+#: exception cause chain and matches either an HTTP status or this text.
+_OVERFLOW_MESSAGE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"prompt is too long",
+        r"request_too_large",
+        r"exceeds the context window",
+        r"exceeds (?:the )?(?:model'?s )?maximum context length",
+        r"input token count.*exceeds the maximum",
+        r"maximum prompt length is \d+",
+        r"reduce the length of the messages",
+        r"maximum context length is \d+ tokens",
+        r"input \(\d+ tokens\) is longer than",
+        r"exceeds the available context size",
+        r"context window exceeds limit",
+        r"exceeded model token limit",
+        r"too large for model with \d+ maximum context length",
+        r"prompt has [\d,]+ tokens?, but the configured context size is",
+        r"model_context_window_exceeded",
+        r"prompt too long; exceeded (?:max )?context length",
+        r"range of input length should be",
+        r"context[_ ]length[_ ]exceeded",
+        r"too many tokens",
+    )
+)
+
+
+def is_provider_context_overflow(exc: BaseException) -> bool:
+    """Return whether one exception chain is a provider context-window rejection.
+
+    Matches both explicit API error surfaces (a ``status_code`` of 400/413
+    on the same object) and provider text in any cause, so OpenAI-compatible,
+    Anthropic, and Gemini-shaped failures classify the same way.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current)
+        if any(pattern.search(message) for pattern in _OVERFLOW_MESSAGE_PATTERNS):
+            return True
+        status = getattr(current, "status_code", None)
+        if status in {400, 413} and _overflow_status_message(message):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _overflow_status_message(message: str) -> bool:
+    lowered = message.lower()
+    markers = ("token", "context", "prompt", "input")
+    return any(marker in lowered for marker in markers)
 
 
 def usage_mapping(usage: Any) -> dict[str, Any]:
@@ -228,3 +284,13 @@ class CompletionProvider(ABC):
         (OpenAI, Anthropic, Gemini, etc.) override this.
         """
         return
+
+
+__all__ = [
+    "CompletionOutput",
+    "CompletionProvider",
+    "capture_stream_usage",
+    "is_provider_context_overflow",
+    "usage_mapping",
+    "usage_to_dict",
+]

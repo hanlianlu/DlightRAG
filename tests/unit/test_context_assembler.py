@@ -61,14 +61,17 @@ def _ledger(passages: int, *, chars: int = 2_000) -> EvidenceLedger:
 
 
 async def test_a_long_pinned_conversation_is_not_locally_trimmed() -> None:
+    # The assembler composes the full pinned history; the proactive compaction
+    # trigger belongs to the orchestrator, not the composition.
     history = _long_history(40)
-
-    with pytest.raises(AnswerInputOverflowError, match="proactive compaction threshold"):
-        await _assembler(history).control_turn(
-            evidence=_ledger(0),
-            episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
-            tool_schema_tokens=0,
-        )
+    messages = await _assembler(history).control_turn(
+        evidence=_ledger(0),
+        episode=SessionEpisode(retained_tail_tokens=_RETAINED_TAIL),
+        tool_schema_tokens=0,
+    )
+    rendered = str(messages)
+    assert "ask 39" in rendered
+    assert "ask 0" in rendered
 
 
 async def test_evidence_uses_the_residual_after_pinned_conversation_history() -> None:

@@ -146,18 +146,14 @@ class ContextAssembler:
         episode: SessionEpisode,
         tool_schema_tokens: int,
     ) -> list[dict[str, Any]]:
-        messages = self._compose_control_turn(
+        # The orchestrator owns the proactive H trigger and compacts before
+        # composing; this assembler enforces only the hard L limit later via
+        # ``output_allowance`` / ``control_output_allowance``.
+        return self._compose_control_turn(
             evidence,
             episode,
             tool_schema_tokens=tool_schema_tokens,
         )
-        input_tokens = estimate_messages_tokens(messages) + tool_schema_tokens
-        if input_tokens > self._control_target:
-            raise AnswerInputOverflowError(
-                "Research control input exceeds the proactive compaction threshold: "
-                f"{input_tokens} > {self._control_target} estimated input tokens"
-            )
-        return messages
 
     def _compose_control_turn(
         self,

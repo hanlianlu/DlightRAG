@@ -316,6 +316,143 @@ async def test_tool_schema_overflow_fails_before_research_model_call() -> None:
     assert agent.turn_calls == []
 
 
+class _OverflowOnceAgent:
+    """First control turn overflows the provider, then answers normally."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.turn_calls: list[dict[str, Any]] = []
+
+    async def turn(self, **kwargs: Any) -> AssistantTurn:
+        self.turn_calls.append(kwargs)
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("prompt is too long: 300000 tokens > 200000 maximum")
+        return AssistantTurn(text="done", tool_calls=(), stop_reason="stop")
+
+    def stream(self, *, messages: list[dict[str, Any]], **kwargs: Any) -> AsyncIterator[str]:
+        async def tokens() -> AsyncIterator[str]:
+            yield "## Goal\nContinue the research.\n## Next Steps\n1. Wrap up."
+
+        return tokens()
+
+
+async def test_provider_overflow_compacts_then_retries_the_same_turn_once() -> None:
+    from datetime import UTC, datetime
+
+    from dlightrag_agent.session.effects import EffectIntent, ToolResultEntry
+    from dlightrag_agent.session.entries import (
+        AssistantMessageEntry,
+        EffectIntentEntry,
+        EffectResultEntry,
+        UserMessageEntry,
+    )
+    from dlightrag_agent.session.ids import EntryId, IntentId, ProjectionId, SessionId
+    from dlightrag_agent.session.memory import InMemoryAgentSessionStore
+    from dlightrag_agent.session.projection import ContextProjection, TokenAnchor
+    from dlightrag_agent.session.store import SessionCommit
+
+    from dlightrag.answer.executor import JournalRunBoundaries
+
+    class _FakeSession:
+        run_id = "run-1"
+        owner_id = "owner"
+
+        async def check_cancelled(self) -> None:
+            return None
+
+        async def enter_phase(self, _phase: str) -> None:
+            return None
+
+    session_id = SessionId.new()
+    now = datetime.now(UTC)
+    entries = [
+        UserMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=now,
+            content="Big question " + "x" * 8_000,
+        ),
+        AssistantMessageEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=now,
+            content="checking",
+            stop_reason="tool_use",
+            tool_calls=(ToolCall(id="c1", name="search_knowledge_base", arguments={"query": "q"}),),
+        ),
+        EffectIntentEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=now,
+            intent=EffectIntent(
+                intent_id=IntentId.new(),
+                tool_name="search_knowledge_base",
+                replay_policy="safe",
+                contract_version=1,
+                input_schema_digest="a" * 64,
+                canonical_input='{"query":"q"}',
+                source_call_id="c1",
+            ),
+        ),
+        EffectResultEntry(
+            entry_id=EntryId.new(),
+            session_id=session_id,
+            timestamp=now,
+            intent_id=IntentId.new(),
+            result=ToolResultEntry(
+                tool_name="search_knowledge_base",
+                call_id="c1",
+                outcome="succeeded",
+                content="found",
+            ),
+        ),
+    ]
+    projection = ContextProjection(
+        projection_id=ProjectionId.new(),
+        first_retained_sequence=1,
+        covered_through_sequence=0,
+        summary=None,
+        token_anchors=(
+            TokenAnchor(through_sequence=0, measured_input_tokens=0, measured_output_tokens=0),
+        ),
+    )
+    journal = InMemoryAgentSessionStore()
+    commit = await journal.append(
+        session_id=session_id, expected_version=0, entries=entries, projection=projection
+    )
+    assert isinstance(commit, SessionCommit)
+    snapshot = await journal.load(session_id)
+    boundaries = JournalRunBoundaries(
+        session=_FakeSession(),  # type: ignore[arg-type]
+        journal=journal,  # type: ignore[arg-type]
+        session_id=session_id,
+        tools_by_name={},
+        ledger_state=lambda: "{}",
+        fetched_buffer=[],
+        run_id="run-1",
+        initial_version=snapshot.version,
+        last_sequence=snapshot.entries[-1].sequence,
+        active_projection=snapshot.active_projection,
+        entries=snapshot.entries,
+    )
+
+    async def retrieve(_query: str) -> RetrievalResult:
+        return _corpus_result()
+
+    agent = _OverflowOnceAgent()
+    orchestrator = _research(agent, retrieve, None, stream_model_func=agent.stream)  # type: ignore[arg-type]
+    run = orchestrator.prepare_run("Big question " + "x" * 8_000)
+    await orchestrator.research_until_stopped(run, boundaries=boundaries)  # type: ignore[arg-type]
+
+    assert agent.calls == 2
+    assert run.compaction_overflow_retried is True
+    final_snapshot = await journal.load(session_id)
+    assert any(entry.entry_type == "compaction" for entry in final_snapshot.entries)
+    assert final_snapshot.active_projection is not None
+    assert final_snapshot.active_projection.summary is not None
+
+
 async def test_fast_path_streams_one_synthesis() -> None:
     async def retrieve(_query: str) -> RetrievalResult:
         return _corpus_result()

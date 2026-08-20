@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from dlightrag_agent.session.entries import UserMessageEntry
 from dlightrag_agent.session.ids import EntryId, ProjectionId, SessionId
 from dlightrag_agent.session.memory import InMemoryAgentSessionStore
-from dlightrag_agent.session.projection import ContextProjection, TokenAnchor, live_anchor
+from dlightrag_agent.session.projection import (
+    CompactionSummary,
+    ContextProjection,
+    TokenAnchor,
+    live_anchor,
+)
 from dlightrag_agent.session.store import SessionCommit
 from dlightrag_agent.tools.contracts import ExecutedTurn
 from dlightrag_ai.messages import AssistantTurn
@@ -119,3 +124,49 @@ async def test_commit_turn_without_usage_keeps_the_seed_projection() -> None:
     projection = snapshot.active_projection
     assert projection is not None
     assert live_anchor(projection, last_retained_sequence=9) is None
+
+
+async def test_accounted_input_prefers_the_live_measured_anchor() -> None:
+    store, session_id, bounds = await _seeded_boundaries()
+    await bounds.commit_turn(
+        _turn(usage={"prompt_tokens": 80, "completion_tokens": 12}),
+        turn_number=1,
+    )
+    # No tail entries follow the anchor, so the measured reading stands alone.
+    assert bounds.accounted_input(1_000) == 80
+    snapshot = await store.load(session_id)
+    assert snapshot.active_projection is not None
+
+
+async def test_accounted_input_falls_back_to_the_estimate_without_usage() -> None:
+    store, session_id, bounds = await _seeded_boundaries()
+    await bounds.commit_turn(_turn(usage=None), turn_number=1)
+    assert bounds.accounted_input(1_000) == 1_000
+
+
+async def test_commit_compaction_writes_entry_and_projection_atomically() -> None:
+    store, session_id, bounds = await _seeded_boundaries()
+    summary = CompactionSummary(goal="answer", progress="three sources read").canonical_json()
+    commit = await bounds.commit_compaction(
+        covered_through_sequence=1,
+        first_retained_sequence=2,
+        summary_json=summary,
+        token_anchors=(),
+    )
+    assert commit.version == 2
+    snapshot = await store.load(session_id)
+    compaction_entries = [entry for entry in snapshot.entries if entry.entry_type == "compaction"]
+    assert len(compaction_entries) == 1
+    assert compaction_entries[0].sequence == 2
+    assert snapshot.active_projection is not None
+    assert snapshot.active_projection.summary == summary
+    assert snapshot.active_projection.covered_through_sequence == 1
+    assert snapshot.active_projection.first_retained_sequence == 2
+    # A second compaction keeps the chain going without a version conflict.
+    second = await bounds.commit_compaction(
+        covered_through_sequence=2,
+        first_retained_sequence=3,
+        summary_json=summary,
+        token_anchors=(),
+    )
+    assert second.version == 3

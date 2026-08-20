@@ -20,6 +20,7 @@ from dlightrag_agent.session.effects import (
 )
 from dlightrag_agent.session.entries import (
     AssistantMessageEntry,
+    CompactionEntry,
     EffectIntentEntry,
     EffectResultEntry,
     ProfileFactEntry,
@@ -27,11 +28,13 @@ from dlightrag_agent.session.entries import (
     SessionTerminalEntry,
     UserMessageEntry,
 )
-from dlightrag_agent.session.fold import PriorTurns
+from dlightrag_agent.session.fold import PriorTurns, fold_entries
 from dlightrag_agent.session.ids import EntryId, ProjectionId, SessionId, StageIntentId
 from dlightrag_agent.session.projection import (
     ContextProjection,
     TokenAnchor,
+    accounted_input_tokens,
+    live_anchor,
     projection_with_anchor,
     token_anchor_from_usage,
 )
@@ -52,6 +55,7 @@ from dlightrag_ai.capacity import CONTEXT_POLICY, CONTEXT_POLICY_REVISION, Model
 from dlightrag_ai.scheduler import model_call_scope
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import Telemetry, safe_log_text
+from dlightrag_ai.tokens import estimate_messages_tokens
 from dlightrag_rag.lifecycle import defer_cancellation
 from dlightrag_rag.pool import WorkspacePool
 from dlightrag_rag.retrieval import (
@@ -727,6 +731,7 @@ class AnswerExecutor:
                     initial_version=snapshot.version,
                     last_sequence=_last_entry_sequence(snapshot),
                     active_projection=snapshot.active_projection,
+                    entries=snapshot.entries,
                     link_delegate_intent=_fenced_child_writer(
                         store, "bind_child_parent_intent", session
                     ),
@@ -1084,6 +1089,7 @@ class JournalRunBoundaries:
         initial_version: int = 0,
         last_sequence: int = 0,
         active_projection: ContextProjection | None = None,
+        entries: Sequence[SessionEntry] = (),
         link_delegate_intent: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
         self._session = session
@@ -1097,6 +1103,65 @@ class JournalRunBoundaries:
         self._last_sequence = last_sequence
         self._active_projection = active_projection
         self._link_delegate_intent = link_delegate_intent
+        self._tail_tokens = _initial_tail_tokens(entries, active_projection, last_sequence)
+
+    def accounted_input(self, estimated_input_tokens: int) -> int:
+        """Correct a full estimate with the newest live measured anchor."""
+        if self._active_projection is None:
+            return estimated_input_tokens
+        live = live_anchor(self._active_projection, last_retained_sequence=self._last_sequence)
+        return accounted_input_tokens(
+            estimated_input_tokens=estimated_input_tokens,
+            measured_anchor=live,
+            unanchored_tail_tokens=self._tail_tokens,
+        )
+
+    async def load_snapshot(self) -> Any:
+        return await self._journal.load(self._session_id)
+
+    async def commit_compaction(
+        self,
+        *,
+        covered_through_sequence: int,
+        first_retained_sequence: int,
+        summary_json: str,
+        token_anchors: tuple[TokenAnchor, ...],
+    ) -> SessionCommit:
+        """Commit one compaction entry and its immutable projection atomically."""
+        if self._active_projection is None:
+            raise RunExecutionError("run_execution_failed", "No active projection to compact from.")
+        projection = ContextProjection(
+            projection_id=ProjectionId.new(),
+            first_retained_sequence=first_retained_sequence,
+            covered_through_sequence=covered_through_sequence,
+            summary=summary_json,
+            token_anchors=tuple(token_anchors),
+        )
+        entry = CompactionEntry(
+            entry_id=EntryId.new(),
+            session_id=self._session_id,
+            timestamp=_entry_timestamp(),
+            projection_id=projection.projection_id,
+            summary=summary_json,
+            covered_through_sequence=covered_through_sequence,
+            first_retained_sequence=first_retained_sequence,
+        )
+        commit = await self._journal.append(
+            session_id=self._session_id,
+            expected_version=self._version,
+            entries=[entry],
+            projection=projection,
+        )
+        if isinstance(commit, (VersionConflict, LeaseLost)):
+            raise LeaseLostError
+        self._version = commit.version
+        self._last_sequence = commit.appended_sequences[-1]
+        self._active_projection = projection
+        snapshot = await self._journal.load(self._session_id)
+        self._tail_tokens = _initial_tail_tokens(
+            snapshot.entries, snapshot.active_projection, self._last_sequence
+        )
+        return commit
 
     async def recover_pending_intents(self, snapshot: Any) -> None:
         """Settle intents a crash left unsettled, per their pinned policy.
@@ -1200,7 +1265,11 @@ class JournalRunBoundaries:
             entries=[result_entry],
             progress=progress,
         )
-        await self._handle_settlement(committed, intent)
+        await self._handle_settlement(
+            committed,
+            intent,
+            appended_tokens=estimate_messages_tokens(fold_entries([result_entry])),
+        )
 
     async def _bind_delegate_parent_intents(self, intents: Sequence[EffectIntent]) -> None:
         if self._link_delegate_intent is None:
@@ -1272,6 +1341,11 @@ class JournalRunBoundaries:
         self._last_sequence = commit.appended_sequences[-1]
         if next_projection is not None:
             self._active_projection = next_projection
+            tail_messages = fold_entries((*intents, *validation))
+            self._tail_tokens = estimate_messages_tokens(tail_messages) if tail_messages else 0
+        else:
+            batch_messages = fold_entries((assistant, *intents, *validation))
+            self._tail_tokens += estimate_messages_tokens(batch_messages) if batch_messages else 0
         await self._bind_delegate_parent_intents(executed.intents)
 
         intent_list = list(executed.intents)
@@ -1329,7 +1403,11 @@ class JournalRunBoundaries:
             settlement=settlement,
             entries=[result_entry],
         )
-        await self._handle_settlement(committed, intent)
+        await self._handle_settlement(
+            committed,
+            intent,
+            appended_tokens=estimate_messages_tokens(fold_entries([result_entry])),
+        )
 
     def _host_update(self, intent: EffectIntent, *, is_last: bool) -> M3HostUpdate:
         if not is_last:
@@ -1386,11 +1464,18 @@ class JournalRunBoundaries:
             )
         return EvidenceSettlementUpdate()
 
-    async def _handle_settlement(self, committed: SettleCommit, intent: EffectIntent) -> None:
+    async def _handle_settlement(
+        self,
+        committed: SettleCommit,
+        intent: EffectIntent,
+        *,
+        appended_tokens: int = 0,
+    ) -> None:
         if isinstance(committed, EffectCommit):
             self._version = committed.version
             if committed.appended_sequences:
                 self._last_sequence = committed.appended_sequences[-1]
+            self._tail_tokens += appended_tokens
             return
         if isinstance(committed, (VersionConflict, LeaseLost)):
             raise LeaseLostError
@@ -1400,6 +1485,9 @@ class JournalRunBoundaries:
             self._version = snapshot.version
             self._last_sequence = _last_entry_sequence(snapshot)
             self._active_projection = snapshot.active_projection
+            self._tail_tokens = _initial_tail_tokens(
+                snapshot.entries, snapshot.active_projection, self._last_sequence
+            )
             return
         if isinstance(committed, EffectContractChanged):
             settled = await self._journal.settle_effect(
@@ -1435,6 +1523,7 @@ class JournalRunBoundaries:
                 self._version = settled.version
                 if settled.appended_sequences:
                     self._last_sequence = settled.appended_sequences[-1]
+                self._tail_tokens += appended_tokens
                 return
             raise LeaseLostError
         if isinstance(committed, EvidenceConflict):
@@ -1511,6 +1600,7 @@ async def run_child_session(
         initial_version=snapshot.version,
         last_sequence=_last_entry_sequence(snapshot),
         active_projection=snapshot.active_projection,
+        entries=snapshot.entries,
     )
     if snapshot.version > 0:
         await boundaries.recover_pending_intents(snapshot)
@@ -1703,6 +1793,15 @@ class FastRunBoundaries:
     async def commit_turn(self, executed: ExecutedTurn, *, turn_number: int) -> None:
         raise AssertionError("Fast Answers never commit agent turns")
 
+    def accounted_input(self, estimated_input_tokens: int) -> int:
+        return estimated_input_tokens
+
+    async def load_snapshot(self) -> Any:
+        raise AssertionError("Fast Answers have no agent session journal")
+
+    async def commit_compaction(self, **kwargs: Any) -> Any:
+        raise AssertionError("Fast Answers never compact")
+
     async def settle_planner(self) -> None:
         stage_id = StageIntentId.deterministic(run_id=self._run_id, name="fast:planner:0")
         committed = await self._progress.settle_stage(
@@ -1769,6 +1868,22 @@ def _initial_projection() -> ContextProjection:
 def _last_entry_sequence(snapshot: Any) -> int:
     sequences = [entry.sequence for entry in snapshot.entries]
     return max(sequences) if sequences else 0
+
+
+def _initial_tail_tokens(
+    entries: Sequence[SessionEntry],
+    projection: ContextProjection | None,
+    last_sequence: int,
+) -> int:
+    """Estimate the unanchored tail a resumed run will still send verbatim."""
+    if projection is None:
+        return 0
+    live = live_anchor(projection, last_retained_sequence=last_sequence)
+    if live is None:
+        return 0
+    after = [entry for entry in entries if entry.sequence > live.through_sequence]
+    folded = fold_entries(after)
+    return estimate_messages_tokens(folded) if folded else 0
 
 
 def _assistant_entry(executed: ExecutedTurn, session_id: SessionId) -> AssistantMessageEntry:

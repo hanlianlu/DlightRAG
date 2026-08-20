@@ -18,6 +18,12 @@ from dlightrag_agent.environment.access import AccessScheduler, PathAccess
 from dlightrag_agent.loop import AgentLoop, LoopCancelled
 from dlightrag_agent.session.fold import PriorTurns, SessionEpisode, fold_entries
 from dlightrag_agent.session.ids import SessionId
+from dlightrag_agent.session.projection import (
+    AgentInputOverflowError,
+    TokenAnchor,
+    require_compactable,
+    should_compact,
+)
 from dlightrag_agent.tools import (
     AgentTool,
     ExecutedTurn,
@@ -30,10 +36,12 @@ from dlightrag_ai.capacity import (
     ModelProfile,
 )
 from dlightrag_ai.messages import AssistantTurn
+from dlightrag_ai.providers.base import is_provider_context_overflow
 from dlightrag_ai.telemetry import Telemetry
 from dlightrag_ai.tokens import estimate_tokens
 from dlightrag_rag.retrieval import RetrievalContexts
 
+from dlightrag.answer.agent.compaction import CompactionCoordinator
 from dlightrag.answer.agent.context import ContextAssembler
 from dlightrag.answer.citations.streaming import AnswerStream
 from dlightrag.answer.errors import AnswerInputOverflowError
@@ -69,6 +77,19 @@ class RunBoundaries(Protocol):
 
     async def check_cancelled(self) -> None: ...
 
+    def accounted_input(self, estimated_input_tokens: int) -> int: ...
+
+    async def load_snapshot(self) -> Any: ...
+
+    async def commit_compaction(
+        self,
+        *,
+        covered_through_sequence: int,
+        first_retained_sequence: int,
+        summary_json: str,
+        token_anchors: tuple[TokenAnchor, ...],
+    ) -> Any: ...
+
 
 class _NoBoundaries:
     """An in-process answer observes no durable boundary."""
@@ -81,6 +102,15 @@ class _NoBoundaries:
 
     async def check_cancelled(self) -> None:
         return None
+
+    def accounted_input(self, estimated_input_tokens: int) -> int:
+        return estimated_input_tokens
+
+    async def load_snapshot(self) -> Any:
+        raise AssertionError("no journal behind in-process boundaries")
+
+    async def commit_compaction(self, **kwargs: Any) -> Any:
+        raise AssertionError("no journal behind in-process boundaries")
 
 
 @dataclass(slots=True)
@@ -100,6 +130,7 @@ class PreparedRun:
     agent_turn_count: int = 0
     stop_reason: str = "model_stop"
     last_turn: ExecutedTurn | None = None
+    compaction_overflow_retried: bool = False
 
 
 class AnswerOrchestrator:
@@ -148,6 +179,7 @@ class AnswerOrchestrator:
         self._memory_host = memory_host
         self._memory_text = ""
         self._access = AccessScheduler()
+        self._compaction: CompactionCoordinator | None = None
 
     def bind_delegate(
         self,
@@ -303,7 +335,10 @@ class AnswerOrchestrator:
 
             async def run_turn(self) -> ExecutedTurn:
                 await boundaries.enter_phase("researching")
-                executed, _changed = await self_outer._execute_control_turn(run)
+                try:
+                    executed, _changed = await self_outer._execute_control_turn(run, boundaries)
+                except Exception as exc:
+                    executed = await self_outer._handle_overflow_retry(exc, run, boundaries)
                 run.agent_turn_count += 1
                 run.trace["agent_turns"] = run.agent_turn_count
                 await boundaries.commit_turn(executed, turn_number=run.agent_turn_count)
@@ -387,8 +422,38 @@ class AnswerOrchestrator:
         run.trace["agent_turns"] = run.agent_turn_count
 
     async def recover_from_fold(self, run: PreparedRun, snapshot: Any) -> None:
-        """Rebuild the live episode from the folded journal exchanges."""
-        messages = fold_entries(snapshot.entries)
+        """Rebuild the live episode from the folded journal suffix."""
+        self._record_episode_fold(run, snapshot)
+        self.adopt_agent_turn_count(
+            run,
+            sum(
+                1
+                for entry in snapshot.entries
+                if entry.__class__.__name__ == "AssistantMessageEntry"
+            ),
+        )
+
+    def _record_episode_fold(self, run: PreparedRun, snapshot: Any) -> None:
+        """Replace the episode with the projection-retained fold plus its summary."""
+        projection = snapshot.active_projection
+        retained = (
+            snapshot.entries
+            if projection is None
+            else [
+                entry
+                for entry in snapshot.entries
+                if entry.sequence >= projection.first_retained_sequence
+            ]
+        )
+        messages = fold_entries(retained)
+        episode = SessionEpisode(
+            retained_tail_tokens=self._context_policy.retained_tail_target(self._model_profile)
+        )
+        self._record_exchanges(episode, messages)
+        run.episode = episode
+
+    @staticmethod
+    def _record_exchanges(episode: SessionEpisode, messages: list[dict[str, Any]]) -> None:
         exchanges: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
         for message in messages:
@@ -400,15 +465,7 @@ class AnswerOrchestrator:
         if current:
             exchanges.append(current)
         for exchange in exchanges:
-            run.episode.record(exchange)
-        self.adopt_agent_turn_count(
-            run,
-            sum(
-                1
-                for entry in snapshot.entries
-                if entry.__class__.__name__ == "AssistantMessageEntry"
-            ),
-        )
+            episode.record(exchange)
 
     def _compose_tools(
         self,
@@ -450,12 +507,29 @@ class AnswerOrchestrator:
     async def _execute_control_turn(
         self,
         run: PreparedRun,
+        boundaries: RunBoundaries,
     ) -> tuple[ExecutedTurn, bool]:
         executor = ToolTurnExecutor(
             cast(ToolModel, self._model_func),
             telemetry=self._telemetry,
         )
         tool_schema_tokens = _tool_schema_tokens(run.tools)
+        estimated = (
+            run.context.measure_control_input(evidence=run.evidence, episode=run.episode)
+            + tool_schema_tokens
+        )
+        accounted = boundaries.accounted_input(estimated)
+        if should_compact(
+            self._model_profile,
+            input_tokens=accounted,
+            context_policy=self._context_policy,
+        ):
+            self._require_compactable_floor(run, tool_schema_tokens)
+            await self._compaction_coordinator().ensure_fits(
+                boundaries=boundaries,
+                remeasure=self._remeasure_closure(run, boundaries, tool_schema_tokens),
+                trace=run.trace,
+            )
         call_messages = await run.context.control_turn(
             evidence=run.evidence,
             episode=run.episode,
@@ -495,6 +569,93 @@ class AnswerOrchestrator:
         )
         run.episode.record(executed.messages[len(call_messages) :])
         return executed, run.evidence.row_count != previous_rows
+
+    def _compaction_coordinator(self) -> CompactionCoordinator:
+        if self._compaction is None:
+            if self._stream_model_func is None:
+                raise RuntimeError("Research compaction requires a streaming model")
+            self._compaction = CompactionCoordinator(
+                model_profile=self._model_profile,
+                context_policy=self._context_policy,
+                stream_model=self._stream_model_func,  # type: ignore[arg-type]
+            )
+        return self._compaction
+
+    def _require_compactable_floor(self, run: PreparedRun, tool_schema_tokens: int) -> None:
+        """Fail before any compaction or model call when the fixed envelope alone
+        cannot fit the hard limit — shrinking the journal can never help."""
+        fixed = (
+            run.context.measure_control_input(
+                evidence=EvidenceLedger(),
+                episode=SessionEpisode(retained_tail_tokens=0),
+            )
+            + tool_schema_tokens
+        )
+        try:
+            require_compactable(
+                self._model_profile,
+                input_tokens=fixed,
+                fixed_input_tokens=fixed,
+                context_policy=self._context_policy,
+            )
+        except AgentInputOverflowError as exc:
+            raise AnswerInputOverflowError(str(exc)) from exc
+
+    def _remeasure_closure(
+        self,
+        run: PreparedRun,
+        boundaries: RunBoundaries,
+        tool_schema_tokens: int,
+    ) -> Callable[[], Awaitable[int]]:
+        async def remeasure() -> int:
+            await self._rebuild_episode(run, boundaries)
+            estimated = (
+                run.context.measure_control_input(evidence=run.evidence, episode=run.episode)
+                + tool_schema_tokens
+            )
+            return boundaries.accounted_input(estimated)
+
+        return remeasure
+
+    async def _rebuild_episode(self, run: PreparedRun, boundaries: RunBoundaries) -> None:
+        snapshot = await boundaries.load_snapshot()
+        self._record_episode_fold(run, snapshot)
+
+    async def _handle_overflow_retry(
+        self,
+        exc: BaseException,
+        run: PreparedRun,
+        boundaries: RunBoundaries,
+    ) -> ExecutedTurn:
+        """Compact-and-retry one genuine provider overflow, then fail loudly."""
+        if not is_provider_context_overflow(exc):
+            raise exc
+        if run.compaction_overflow_retried:
+            raise AnswerInputOverflowError(
+                "Research overflowed the model context window again after one "
+                "compact-and-retry. Correct the pinned model profile or use a "
+                "larger-context model."
+            ) from exc
+        run.compaction_overflow_retried = True
+        tool_schema_tokens = _tool_schema_tokens(run.tools)
+        self._require_compactable_floor(run, tool_schema_tokens)
+        await self._compaction_coordinator().ensure_fits(
+            boundaries=boundaries,
+            remeasure=self._remeasure_closure(run, boundaries, tool_schema_tokens),
+            trace=run.trace,
+            force=True,
+        )
+        try:
+            executed, _changed = await self._execute_control_turn(run, boundaries)
+        except Exception as retry_exc:
+            if is_provider_context_overflow(retry_exc):
+                raise AnswerInputOverflowError(
+                    "Research overflowed the model context window again after one "
+                    "compact-and-retry. Correct the pinned model profile or use a "
+                    "larger-context model."
+                ) from retry_exc
+            raise
+        return executed
 
 
 def _fresh_research_trace() -> dict[str, Any]:
