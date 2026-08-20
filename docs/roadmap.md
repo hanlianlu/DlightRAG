@@ -22,7 +22,3 @@ The upgrade is the browser default, not a second principal:
 
 Owner projection stays `jwt` + issuer + `sub`. Memory and Answer Runs keep
 using that owner. This slice does not invent a cookie-only identity.
-
-## Deferred from earlier grills
-
-- Spec Web-report-as-main-answer (M6-D5).
