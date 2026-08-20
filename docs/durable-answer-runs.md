@@ -235,8 +235,10 @@ failed admission leaves no empty conversation. The browser then subscribes to
 its own owner-scoped `/web/api/answer/{run_id}/events`. That
 stream follows the same durable event log with the same sequence, resume, 410,
 and detach semantics as the REST stream, and differs only in projection: a
-browser `done` frame carries rendered presentation (`html`, `answer`,
-`answer_images`) instead of the canonical stored result REST serves.
+browser `done` frame embeds the same typed `AnswerPresentation` used by
+conversation history and Primary Report reads. It contains sanitized semantic
+answer HTML plus structured sources/images rather than the canonical stored
+result REST serves.
 Disconnecting the browser only closes that subscriber, and reconnecting resumes
 from the durable event sequence.
 

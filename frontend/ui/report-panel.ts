@@ -1,76 +1,51 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {llmFragmentFromSanitizedHtml} from '../lib/safe_html.ts';
-import {renderMath} from '../lib/math.ts';
+import {getAnswerReport, type AnswerPresentation} from '../api/conversations.ts';
 import chatStyles from '../styles/chat.module.css';
-import {renderDiagrams} from './mermaid.ts';
+import type {AnswerPresentationElement} from './answer_presentation.ts';
+import './answer_presentation.ts';
 import {openPanel} from './panel.ts';
 import {showToast} from './toast.ts';
 
-function fixExternalLinks(container: ParentNode): void {
-    container.querySelectorAll('a[href]').forEach(function(el: Element) {
-        const a = el as HTMLAnchorElement;
-        if (a.hasAttribute('download')) return;
-        a.setAttribute('target', '_blank');
-        a.setAttribute('rel', 'noopener noreferrer');
-    });
-}
-
 export function bindPrimaryReportControl(
-    aiDiv: HTMLElement,
-    runId: string,
-    handle: string | null | undefined,
+  aiDiv: HTMLElement,
+  runId: string,
+  handle: string | null | undefined,
 ): void {
-    aiDiv.querySelectorAll('[data-action="open-primary-report"]').forEach((node) => node.remove());
-    if (!handle || !runId) return;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = chatStyles.reportControl;
-    button.dataset.action = 'open-primary-report';
-    button.dataset.runId = runId;
-    button.textContent = 'View report';
-    aiDiv.appendChild(button);
+  aiDiv.querySelectorAll('[data-action="open-primary-report"]').forEach((node) => node.remove());
+  if (!handle || !runId) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = chatStyles.reportControl;
+  button.dataset.action = 'open-primary-report';
+  button.dataset.runId = runId;
+  button.textContent = 'View report';
+  aiDiv.appendChild(button);
 }
 
 export async function openPrimaryReport(runId: string): Promise<void> {
-    const response = await fetch(`/web/api/answer/${encodeURIComponent(runId)}/report`);
-    if (!response.ok) {
-        showToast('Could not open the report.');
-        return;
-    }
-    const html = await response.text();
-    const panelContent = document.getElementById('report-panel-content');
-    if (!panelContent) return;
-    const fragment = llmFragmentFromSanitizedHtml(html);
-    const answerContent = fragment.querySelector('#answer-content');
-    panelContent.replaceChildren();
-    if (answerContent) {
-        panelContent.append(
-            ...Array.from(answerContent.childNodes).map((node) => node.cloneNode(true)),
-        );
-    }
-    const sourceData = fragment.querySelector('#source-data, .source-data');
-    if (sourceData) {
-        const copy = sourceData.cloneNode(true) as HTMLElement;
-        copy.className = 'source-data hidden';
-        copy.removeAttribute('id');
-        panelContent.appendChild(copy);
-    }
-    const references = fragment.querySelector('.answer-references');
-    if (references) panelContent.appendChild(references.cloneNode(true));
-    renderMath(panelContent);
-    renderDiagrams(panelContent);
-    fixExternalLinks(panelContent);
-    openPanel('REPORT');
+  let presentation: AnswerPresentation;
+  try {
+    presentation = await getAnswerReport(runId);
+  } catch {
+    showToast('Could not open the report.');
+    return;
+  }
+  const panelContent = document.getElementById('report-panel-content');
+  if (!panelContent) return;
+  const element = document.createElement('answer-presentation') as AnswerPresentationElement;
+  element.presentation = presentation;
+  panelContent.replaceChildren(element);
+  openPanel('REPORT');
 }
 
 export function setupReportPanel(): void {
-    document.body.addEventListener('click', function(event: MouseEvent) {
-        const target = event.target;
-        if (!(target instanceof Element)) return;
-        const button = target.closest('[data-action="open-primary-report"]');
-        if (!(button instanceof HTMLElement)) return;
-        const runId = button.dataset.runId;
-        if (runId) void openPrimaryReport(runId);
-    });
+  document.body.addEventListener('click', function(event: MouseEvent) {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const button = target.closest('[data-action="open-primary-report"]');
+    if (!(button instanceof HTMLElement)) return;
+    const runId = button.dataset.runId;
+    if (runId) void openPrimaryReport(runId);
+  });
 }

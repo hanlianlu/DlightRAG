@@ -11,7 +11,8 @@
 /* ── Universal reset ── */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-dl-app { display: contents; }
+dl-app,
+answer-presentation { display: contents; }
 
 /* ── Visibility helpers ── */
 .hidden {

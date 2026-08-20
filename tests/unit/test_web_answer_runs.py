@@ -361,7 +361,7 @@ async def test_a_run_this_principal_does_not_own_is_404(
     assert response.status_code == 404
 
 
-async def test_the_report_route_returns_sanitized_markdown(
+async def test_the_report_route_returns_structured_safe_presentation(
     client: AsyncClient, service: AsyncMock, application_double: AsyncMock
 ) -> None:
     result = stored_result(answer="")
@@ -372,9 +372,10 @@ async def test_the_report_route_returns_sanitized_markdown(
     response = await client.get(f"/web/api/answer/{RUN_ID}/report")
 
     assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
-    assert "Title" in response.text
-    assert "Body" in response.text
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["answer_text"] == "# Title\n\nBody"
+    assert "<h1>Title</h1>" in response.json()["answer_html"]
+    assert "<p>Body</p>" in response.json()["answer_html"]
     application_double.answers.read_artifact.assert_awaited_once()
 
 
@@ -638,17 +639,32 @@ async def test_a_failed_run_becomes_a_public_browser_error() -> None:
 
 
 def test_the_done_event_is_derived_from_the_canonical_result() -> None:
+    result = stored_result()
+    result["answer_images"] = [
+        {
+            "id": "chart",
+            "chunk_id": "chunk-1",
+            "workspace": "default",
+            "source_ref": "1",
+            "label": "Chart",
+            "answer_image_sent": True,
+        }
+    ]
     done = render_done_event(
-        {"status": "succeeded", "result": stored_result()},
+        {"status": "succeeded", "result": result},
         downloadable_workspaces={"default"},
         visual_workspaces={"default"},
     )
 
     assert done.status == "succeeded"
-    assert done.answer == "Revenue increased [1]."
-    assert done.primary_report is None
-    assert "/web/api/files/raw/report?workspace=default" in done.html
-    assert "citation-badge" in done.html
+    assert done.presentation is not None
+    assert done.presentation.answer_text == "Revenue increased [1]."
+    assert done.presentation.primary_report is None
+    assert done.presentation.sources[0].download_url == (
+        "/web/api/files/raw/report?workspace=default"
+    )
+    assert "citation-badge" in done.presentation.answer_html
+    assert done.presentation.answer_images[0].url.startswith("/web/api/images/default/chunk-1")
 
 
 def test_a_cancelled_run_carries_no_answer() -> None:
@@ -657,8 +673,7 @@ def test_a_cancelled_run_carries_no_answer() -> None:
     )
 
     assert done.status == "cancelled"
-    assert done.html == ""
-    assert done.answer == ""
+    assert done.presentation is None
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +689,7 @@ def test_a_pending_turn_is_visible_without_an_answer(status: str) -> None:
     assert turn.answer_run_id == RUN_ID
     assert turn.user_text == "What changed?"
     assert turn.assistant_text == ""
-    assert turn.answer_html == ""
+    assert turn.presentation is None
     assert turn.cancel_requested is False
 
 
@@ -702,7 +717,7 @@ def test_a_failed_turn_stays_visible_with_its_public_error() -> None:
     assert turn.status == "failed"
     assert turn.error_kind == "answer_stream_failed"
     assert turn.error_message == "Service error."
-    assert turn.answer_html == ""
+    assert turn.presentation is None
 
 
 def test_a_succeeded_turn_renders_from_the_run_result() -> None:
@@ -713,8 +728,11 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
     )
 
     assert turn.assistant_text == "Revenue increased [1]."
-    assert turn.primary_report is None
-    assert "/web/api/files/raw/report?workspace=default" in turn.answer_html
+    assert turn.presentation is not None
+    assert turn.presentation.primary_report is None
+    assert turn.presentation.sources[0].download_url == (
+        "/web/api/files/raw/report?workspace=default"
+    )
     # The turn model never re-exposes stored source or principal state.
     assert "answer_sources" not in turn.model_dump()
     assert "principal_id" not in turn.model_dump_json()
@@ -727,7 +745,8 @@ def test_a_succeeded_turn_exposes_the_primary_report_handle() -> None:
         linked_turn(answer_run(status="succeeded", result=result)),
     )
 
-    assert turn.primary_report == "primary_report"
+    assert turn.presentation is not None
+    assert turn.presentation.primary_report == "primary_report"
     assert turn.assistant_text == "Revenue increased [1]."
 
 
@@ -740,8 +759,9 @@ def test_the_done_event_carries_the_primary_report_handle() -> None:
         visual_workspaces=None,
     )
 
-    assert done.primary_report == "primary_report"
-    assert "primary_report" not in done.html
+    assert done.presentation is not None
+    assert done.presentation.primary_report == "primary_report"
+    assert "primary_report" not in done.presentation.answer_html
 
 
 async def test_terminal_attachment_is_read_through_the_answer_service() -> None:

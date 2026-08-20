@@ -2,13 +2,9 @@
 """Safe HTML fragment rendering for browser-inserted web UI payloads."""
 
 import re
-from typing import Any
 from urllib.parse import urlparse
 
 import nh3
-
-from dlightrag.answer.citations.schemas import SourceReferencePayload
-from dlightrag.web.deps import render_partial
 
 _ALLOWED_TAGS = {
     "a",
@@ -18,6 +14,7 @@ _ALLOWED_TAGS = {
     "br",
     "button",
     "caption",
+    "cite",
     "code",
     "col",
     "colgroup",
@@ -91,6 +88,7 @@ _ALLOWED_ATTRS: dict[str, set[str]] = {
     },
     "a": {"aria-label", "download", "href", "target", "title"},
     "button": {"type"},
+    "cite": {"aria-label"},
     "col": {"span"},
     "colgroup": {"span"},
     "img": {"alt", "loading", "src"},
@@ -104,7 +102,7 @@ _DATA_ACTIONS = {
     "open-ref-source",
     "toggle-doc",
 }
-_ALLOWED_IDS = {"answer-content", "source-data"}
+_ALLOWED_IDS: set[str] = set()
 _CLEAN_CONTENT_TAGS = {"iframe", "object", "script", "style", "template"}
 _URL_SCHEMES = {"http", "https", "data", "blob"}
 _DATA_IMAGE_RE = re.compile(r"^data:image/(?:gif|jpe?g|png|webp);base64,", re.IGNORECASE)
@@ -153,23 +151,4 @@ def sanitize_html_fragment(html: str) -> str:
     )
 
 
-def safe_answer_done(
-    *,
-    answer: str,
-    sources: list[SourceReferencePayload],
-    answer_images: list[dict[str, Any]],
-) -> str:
-    """Render and sanitize the final answer partial, source panel included."""
-    html = render_partial(
-        "partials/answer_done.html",
-        answer=answer,
-        sources=sources,
-        answer_images=answer_images,
-    )
-    return sanitize_html_fragment(html)
-
-
-__all__ = [
-    "safe_answer_done",
-    "sanitize_html_fragment",
-]
+__all__ = ["sanitize_html_fragment"]

@@ -32,144 +32,74 @@ def _open_ready_page(page) -> None:
     page.wait_for_selector(".composer-input", timeout=10000)
 
 
+def _source_presentation(*, source_url: str | None = None) -> dict:
+    return {
+        "answer_text": "DlightRAG cited answer [1-1].",
+        "answer_html": (
+            "<p>DlightRAG cited answer "
+            '<cite class="citation-badge" data-ref="1" data-chunk="1" '
+            'role="button" tabindex="0" aria-label="Source 1, chunk 1">1-1</cite>.</p>'
+        ),
+        "sources": [
+            {
+                "id": "1",
+                "title": "report.pdf",
+                "source_url": source_url,
+                "download_url": "/web/api/files/raw/doc-report?workspace=default",
+                "chunks": [
+                    {
+                        "chunk_idx": 1,
+                        "page_number": 1,
+                        "content_html": "<p>Evidence text</p>",
+                        "image_url": None,
+                        "thumbnail_url": None,
+                    }
+                ],
+            }
+        ],
+        "answer_images": [],
+        "primary_report": None,
+    }
+
+
 def _inject_answer_with_sources(page) -> None:
     page.wait_for_selector("[aria-current='page']", timeout=10000)
-    page.wait_for_function(
-        "!document.querySelector('#chat-messages [role=\"status\"]')",
-        timeout=10000,
-    )
-    conversation_id = page.locator("[aria-current='page']").get_attribute("data-conversation-id")
-    assert conversation_id
-    ai_selector = '[class*="aiMessage"]:not([class*="Content"]):not([class*="Header"])'
-    initial_ai_count = page.locator(ai_selector).count()
     page.locator(".composer-input").fill("show cited source")
-    with page.expect_response(
-        lambda response: (
-            response.request.method == "GET"
-            and response.url.endswith(f"/web/api/conversations/{conversation_id}/history")
-            and response.ok
-        ),
-        timeout=10000,
-    ) as history_response:
-        page.click(".composer-send")
-        page.wait_for_function(
-            "([selector, count]) => document.querySelectorAll(selector).length > count",
-            arg=[ai_selector, initial_ai_count],
-            timeout=10000,
-        )
-    history_response.value.finished()
-    page.evaluate(
-        """
-        () => new Promise((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(resolve));
-        })
-        """
-    )
-    page.wait_for_function(
-        """
-        () => {
-          const messages = document.querySelectorAll('[class*="aiMessageContent"]');
-          const latest = messages[messages.length - 1];
-          return latest?.textContent.includes('DlightRAG');
-        }
-        """,
-        timeout=10000,
-    )
-    page.evaluate(
-        """
-        () => {
-          const messages = document.querySelectorAll(
-            '[class*="aiMessage"]:not([class*="Content"]):not([class*="Header"])'
-          );
-          const ai = messages[messages.length - 1];
-          const content = ai?.querySelector('[class*="aiMessageContent"]');
-          if (!ai || !content) throw new Error('AI message not rendered');
-          content.insertAdjacentHTML('beforeend', `
-            <div class="source-data hidden">
-              <div class="source-doc" data-ref="1">
-                <div class="source-doc-chunks">
-                  <div class="source-chunk-content">Wrong decoy</div>
-                </div>
-              </div>
-            </div>
-            <div class="answer-references">
-              <div class="answer-references-title">References</div>
-              <div class="answer-ref-item" data-action="open-ref-source" data-ref="1" role="button" tabindex="0">
-                <span class="answer-ref-id">1</span>
-                <span class="answer-ref-title">report.pdf</span>
-              </div>
-            </div>
-          `);
-          let sourceData = Array.from(ai.children).find((child) => child.classList.contains('source-data'));
-          if (!sourceData) {
-            sourceData = document.createElement('div');
-            sourceData.className = 'source-data hidden';
-            ai.appendChild(sourceData);
-          }
-          sourceData.innerHTML = `
-              <div class="source-doc" data-ref="1">
-                <div class="source-doc-header">
-                  <button class="source-doc-toggle" type="button" data-action="toggle-doc">
-                    <span class="collapse-icon">▶</span>
-                    <span class="source-doc-title">report.pdf</span>
-                    <span class="source-doc-badge">1</span>
-                    <span class="source-doc-count">1</span>
-                  </button>
-                  <a href="/web/api/files/raw/doc-report?workspace=default"
-                     class="source-action-icon"
-                     title="Download source"
-                     aria-label="Download source"
-                     download>
-                    <svg class="source-action-icon-svg" viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                         stroke-linejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="7 10 12 15 17 10"/>
-                      <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                  </a>
-                </div>
-                <div class="source-doc-chunks" hidden>
-                  <div class="source-chunk" data-ref="1" data-chunk="1">
-                    <div class="source-chunk-content">Evidence text</div>
-                  </div>
-                </div>
-              </div>
-          `;
-        }
-        """
+    page.click(".composer-send")
+    page.wait_for_selector(".composer-send:not(.is-stop)", timeout=10000)
+    page.locator("answer-presentation").last.evaluate(
+        """(element, presentation) => {
+          element.presentation = presentation;
+          return element.updateComplete;
+        }""",
+        _source_presentation(),
     )
 
 
 def _inject_static_source_answer(page) -> None:
     page.evaluate(
-        r"""
-        () => {
+        r"""(presentation) => {
           const aiMessageClass = Array.from(document.styleSheets)
             .flatMap((sheet) => Array.from(sheet.cssRules))
             .flatMap((rule) => Array.from(rule.selectorText?.matchAll(/\.([\w-]*aiMessage[\w-]*)/g) ?? []))
             .map((match) => match[1])
             .find((className) => !className.includes('Content') && !className.includes('Header'));
-          if (!aiMessageClass) throw new Error('AI message class not found');
+          const contentClass = Array.from(document.styleSheets)
+            .flatMap((sheet) => Array.from(sheet.cssRules))
+            .flatMap((rule) => Array.from(rule.selectorText?.matchAll(/\.([\w-]*aiMessageContent[\w-]*)/g) ?? []))
+            .map((match) => match[1])[0];
+          if (!aiMessageClass || !contentClass) throw new Error('AI message classes not found');
           const answer = document.createElement('div');
           answer.className = aiMessageClass;
-          answer.innerHTML = `
-            <div class="source-data hidden">
-              <div class="source-doc" data-ref="1">
-                <div class="source-doc-chunks" hidden>
-                  <div class="source-chunk" data-ref="1" data-chunk="1">
-                    <div class="source-chunk-content">Evidence text</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div data-action="open-ref-source" data-ref="1" role="button" tabindex="0">
-              Open report.pdf
-            </div>
-          `;
+          const content = document.createElement('div');
+          content.className = contentClass;
+          const element = document.createElement('answer-presentation');
+          element.presentation = presentation;
+          content.appendChild(element);
+          answer.appendChild(content);
           document.querySelector('#chat-messages')?.appendChild(answer);
-        }
-        """
+        }""",
+        _source_presentation(),
     )
 
 
@@ -191,7 +121,7 @@ def test_reference_item_keyboard_opens_source_panel(page):
 def test_conversation_route_change_closes_sources_panel(page):
     _open_ready_page(page)
     _inject_static_source_answer(page)
-    page.get_by_role("button", name="Open report.pdf").click()
+    page.locator(".answer-ref-item").last.click()
     page.wait_for_selector('#panel.open[data-panel-kind="sources"]')
 
     page.get_by_role("button", name="New chat").click()
@@ -205,7 +135,7 @@ def test_composer_attachment_picker_keeps_sources_panel_open(page):
     _open_ready_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
     _inject_static_source_answer(page)
-    page.get_by_role("button", name="Open report.pdf").click()
+    page.locator(".answer-ref-item").last.click()
 
     panel = page.locator("#panel")
     page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
@@ -228,7 +158,7 @@ def test_theme_menu_and_selection_keep_sources_panel_open(page):
     _open_ready_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
     _inject_static_source_answer(page)
-    page.get_by_role("button", name="Open report.pdf").click()
+    page.locator(".answer-ref-item").last.click()
     panel = page.locator("#panel")
     page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
 
@@ -271,28 +201,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
         "updated_at": timestamp,
     }
     source_url = "http://www.sgas.ruc.edu.cn/xwgg/yjyxw/f1a3ff59a5894391b7b0db77951c08b4.htm"
-    answer_html = f"""
-      <div id="answer-content"><p>Cited answer.</p></div>
-      <div id="source-data" class="source-data hidden">
-        <div class="source-doc" data-ref="1">
-          <div class="source-doc-header">
-            <button class="source-doc-toggle" type="button" data-action="toggle-doc">
-              <span class="source-doc-title">RUC source</span>
-              <span class="source-doc-badge">1</span>
-            </button>
-            <a href="{source_url}" aria-label="Open source"
-               target="_blank" rel="noopener noreferrer">Open</a>
-          </div>
-          <div class="source-doc-chunks" hidden>
-            <div class="source-chunk" data-ref="1" data-chunk="1">Evidence</div>
-          </div>
-        </div>
-      </div>
-      <div class="answer-references">
-        <div class="answer-ref-item" data-action="open-ref-source" data-ref="1"
-             role="button" tabindex="0">RUC source</div>
-      </div>
-    """
+    presentation = _source_presentation(source_url=source_url)
 
     def handle_conversations(route):
         path = urlparse(route.request.url).path
@@ -314,7 +223,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
                             "user_text": "Show the source",
                             "assistant_text": "Cited answer.",
                             "user_attachments": [],
-                            "answer_html": answer_html,
+                            "presentation": presentation,
                             "error_kind": None,
                             "error_message": None,
                             "created_at": timestamp,
@@ -331,8 +240,6 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
     ) as history_response:
         page.goto("/web/conversations/public-source-history")
     history_response.value.finished()
-    hidden_link = page.locator('.source-data a[aria-label="Open source"]')
-    assert hidden_link.get_attribute("target") == "_blank"
     page.locator(".answer-ref-item").press("Enter")
 
     link = page.get_by_role("link", name="Open source")

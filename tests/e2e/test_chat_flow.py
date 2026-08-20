@@ -187,17 +187,12 @@ _TOKENS = [_frame(2, "token", '"DlightRAG is a "'), _frame(3, "token", '"multimo
 _DONE = _frame(
     4,
     "done",
-    '{"status": "succeeded", "html": "<p>DlightRAG is a multimodal RAG system.</p>",'
-    ' "answer": "DlightRAG is a multimodal RAG system.", "answer_images": []}',
+    '{"status":"succeeded","presentation":{'
+    '"answer_text":"DlightRAG is a multimodal RAG system.",'
+    '"answer_html":"<p>DlightRAG is a multimodal RAG system.</p>",'
+    '"sources":[],"answer_images":[],"primary_report":null}}',
 )
-#: What the server actually renders: the answer inside its ``#answer-content`` host.
-_DONE_RENDERED = _frame(
-    4,
-    "done",
-    '{"status": "succeeded", "html": "<div id=\\"answer-content\\">'
-    '<p>DlightRAG is a multimodal RAG system.</p></div>",'
-    ' "answer": "DlightRAG is a multimodal RAG system.", "answer_images": []}',
-)
+_DONE_RENDERED = _DONE
 
 
 def _install_event_transport(

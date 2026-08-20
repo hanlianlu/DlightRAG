@@ -9,6 +9,7 @@ from pydantic import Field, field_validator
 
 from dlightrag.answer.client_contracts import ClientContractModel
 from dlightrag.runtime import AnswerRunRecord, AnswerRunStatus
+from dlightrag.web.presentation import AnswerPresentation
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +90,7 @@ class ConversationTurn(ClientContractModel):
     user_text: str
     assistant_text: str
     user_attachments: list[ConversationAttachmentReference] = Field(default_factory=list)
-    answer_html: str
-    primary_report: str | None = None
+    presentation: AnswerPresentation | None = None
     error_kind: str | None = None
     error_message: str | None = None
     created_at: datetime.datetime

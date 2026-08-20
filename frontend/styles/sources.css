@@ -4,7 +4,7 @@
  * On phones (390px) → compact but readable.
  * On laptops (1440px) → slightly more relaxed without changing UI character.
  *
- * sources.css — Server-rendered answer sources: document grouping, chunk
+ * sources.css — Lit-rendered answer sources: document grouping, chunk
  * display, semantic highlights, citation badges, answer references, image
  * gallery, and source download icons.
  */
@@ -17,6 +17,7 @@
     background: transparent;
     color: var(--color-accent-emphasis);
     font-size: var(--font-size-caption);
+    font-style: normal;
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1;
     padding: 0 0.16em;
@@ -227,7 +228,13 @@
 }
 
 .answer-ref-item {
+    background: transparent;
+    border: 0;
+    color: inherit;
     display: flex;
+    font-family: inherit;
+    text-align: left;
+    width: 100%;
     gap: var(--space-tight);
     padding: var(--space-inline) 0;
     font-size: var(--font-size-detail);
@@ -269,7 +276,10 @@
 }
 
 .answer-image-item {
+    background: transparent;
     flex-shrink: 0;
+    font-family: inherit;
+    padding: 0;
     height: clamp(100px, 10vw, 140px);
     width: clamp(130px, 13vw, 180px);
     border-radius: var(--radius-md);

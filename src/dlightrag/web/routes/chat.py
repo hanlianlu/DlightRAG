@@ -9,7 +9,7 @@ from typing import Any
 
 from dlightrag_rag.workspaces import normalize_workspace_ids
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from dlightrag.access import AccessAction, owner_id_from_user
 from dlightrag.answer.runs.results import project_answer_result, project_report_sources
@@ -21,6 +21,7 @@ from dlightrag.web.app_shell import app_html_response
 from dlightrag.web.attachment_requests import parse_web_answer_request
 from dlightrag.web.conversation_models import AnswerRunDescriptor, ConversationTurn
 from dlightrag.web.conversations import (
+    WEB_IMAGE_URL_BASE,
     WEB_SOURCE_DOWNLOAD_BASE,
     ConversationSubmissionConflict,
     WebAnswerSubmission,
@@ -34,7 +35,7 @@ from dlightrag.web.deps import (
     get_web_conversation_service,
     get_workspace,
 )
-from dlightrag.web.safe_html import safe_answer_done
+from dlightrag.web.presentation import AnswerPresentation, build_answer_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -155,13 +156,13 @@ async def cancel_answer_run(
     )
 
 
-@router.get("/answer/{run_id}/report", response_class=HTMLResponse)
+@router.get("/answer/{run_id}/report", response_model=AnswerPresentation)
 async def answer_run_report(
     run_id: str,
     request: Request,
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
-) -> HTMLResponse:
-    """Return the sanitized Primary Report HTML for the document panel."""
+) -> AnswerPresentation:
+    """Return the safe structured Primary Report presentation."""
     user = getattr(request.state, "user_context", None)
     turn = await conversation_service.turn_for_run(user, run_id)
     if turn is None or turn.run.status != "succeeded" or turn.run.result is None:
@@ -172,6 +173,7 @@ async def answer_run_report(
         source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
         downloadable_workspaces=downloadable,
         visual_workspaces=visual,
+        image_url_prefix=WEB_IMAGE_URL_BASE,
     )
     handle = projected.get("primary_report")
     if not isinstance(handle, str) or not handle:
@@ -187,17 +189,16 @@ async def answer_run_report(
         markdown = blob.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=422, detail="Primary report is not UTF-8") from exc
-    return HTMLResponse(
-        safe_answer_done(
-            answer=markdown,
-            sources=project_report_sources(
-                turn.run.result,
-                source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
-                downloadable_workspaces=downloadable,
-                visual_workspaces=visual,
-            ),
-            answer_images=[],
-        )
+    return build_answer_presentation(
+        answer=markdown,
+        sources=project_report_sources(
+            turn.run.result,
+            source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
+            downloadable_workspaces=downloadable,
+            visual_workspaces=visual,
+            image_url_prefix=WEB_IMAGE_URL_BASE,
+        ),
+        answer_images=[],
     )
 
 

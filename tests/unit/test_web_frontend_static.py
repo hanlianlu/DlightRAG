@@ -8,7 +8,6 @@ avoid pinning exact visual token values or module decomposition details.
 import importlib.util
 import re
 from pathlib import Path
-from typing import get_type_hints
 
 import pytest
 
@@ -180,55 +179,42 @@ def test_chat_message_bubbles_wrap_unbroken_queries() -> None:
     assert "overflow-wrap: anywhere;" in ai_message
 
 
-def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> None:
-    source_panel = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
-        encoding="utf-8"
-    )
-
-    button_start = source_panel.index('data-action="toggle-doc"')
-    download_link = source_panel.index('class="source-action-icon"')
-    button_end = source_panel.index("</button>", button_start)
-
-    assert not button_start < download_link < button_end
-
-
-def test_source_panel_requires_download_for_every_authorized_source() -> None:
+def _presentation_source(*, source_uri: str, download_url: str | None = None):
     from dlightrag.answer.citations.schemas import SourceReferencePayload
-    from dlightrag.web.deps import templates
+    from dlightrag.web.presentation import build_answer_presentation
 
     source = SourceReferencePayload(
         id="1",
-        title="notes.md",
+        title=None,
+        source_uri=source_uri,
+        download_url=download_url,
+        chunks=[],
+    )
+    return build_answer_presentation(
+        answer="Cited [1].",
+        sources=[source],
+        answer_images=[],
+    ).sources[0]
+
+
+def test_presentation_preserves_authorized_download_without_nesting_markup() -> None:
+    source = _presentation_source(
         source_uri="local://default/notes.md",
         download_url="/web/api/files/raw/doc-notes?workspace=default",
-        chunks=[],
     )
+    source_view = (FRONTEND_UI / "source_panel_view.ts").read_text(encoding="utf-8")
 
-    html = templates.env.get_template("partials/source_panel.html").render(sources=[source])
-    source_panel_text = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
-        encoding="utf-8"
-    )
-
-    assert html.count('class="source-action-icon"') == 1
-    assert 'href="/web/api/files/raw/doc-notes?workspace=default"' in html
-    assert "{% if src.download_url %}" in source_panel_text
+    assert source.download_url == "/web/api/files/raw/doc-notes?workspace=default"
+    assert source.title == "Source"
+    assert "safeSameOriginHref(source.download_url)" in source_view
+    assert 'aria-label="Download source"' in source_view
+    assert "<a href=${download}" in source_view
 
 
-def test_source_panel_hides_download_without_caller_permission() -> None:
-    from dlightrag.answer.citations.schemas import SourceReferencePayload
-    from dlightrag.web.deps import templates
+def test_presentation_hides_download_without_caller_permission() -> None:
+    source = _presentation_source(source_uri="local://default/notes.md")
 
-    source = SourceReferencePayload(
-        id="1",
-        title="notes.md",
-        source_uri="local://default/notes.md",
-        download_url=None,
-        chunks=[],
-    )
-
-    html = templates.env.get_template("partials/source_panel.html").render(sources=[source])
-
-    assert 'class="source-action-icon"' not in html
+    assert source.download_url is None
 
 
 @pytest.mark.parametrize(
@@ -238,103 +224,37 @@ def test_source_panel_hides_download_without_caller_permission() -> None:
         "http://www.sgas.ruc.edu.cn/xwgg/yjyxw/f1a3ff59a5894391b7b0db77951c08b4.htm",
     ],
 )
-def test_source_panel_links_public_web_provenance_without_download_permission(
-    source_uri: str,
-) -> None:
-    from dlightrag.answer.citations.schemas import SourceReferencePayload
-    from dlightrag.web.safe_html import safe_answer_done
+def test_presentation_projects_public_web_provenance(source_uri: str) -> None:
+    source = _presentation_source(source_uri=source_uri)
 
-    source = SourceReferencePayload(
-        id="1",
-        title="Gothenburg weather",
-        source_uri=source_uri,
-        download_url=None,
-        chunks=[],
-    )
-
-    html = safe_answer_done(answer="Cited.", sources=[source], answer_images=[])
-
-    assert 'aria-label="Open source"' in html
-    assert source_uri.split("?", 1)[0] in html
-    assert 'target="_blank"' in html
-    assert 'rel="noopener noreferrer"' in html
-    assert " download" not in html
+    assert source.source_url == source_uri
 
 
-def test_source_panel_does_not_link_non_public_provenance() -> None:
-    from dlightrag.answer.citations.schemas import SourceReferencePayload
-    from dlightrag.web.safe_html import safe_answer_done
-
-    sources = [
-        SourceReferencePayload(id="1", source_uri="local://default/report.pdf", chunks=[]),
-        SourceReferencePayload(id="2", source_uri="https://127.0.0.1/private", chunks=[]),
-        SourceReferencePayload(id="3", source_uri="res-opaque", chunks=[]),
-    ]
-
-    html = safe_answer_done(answer="Cited.", sources=sources, answer_images=[])
-
-    assert 'aria-label="Open source"' not in html
-    assert "https://127.0.0.1/private" not in html
+def test_presentation_rejects_non_public_provenance() -> None:
+    for value in (
+        "local://default/report.pdf",
+        "https://127.0.0.1/private",
+        "res-opaque",
+    ):
+        assert _presentation_source(source_uri=value).source_url is None
 
 
-def test_source_templates_use_the_public_source_contract() -> None:
-    from dlightrag.answer.citations.schemas import SourceReferencePayload
-    from dlightrag.web.safe_html import safe_answer_done
+def test_answer_presentation_uses_semantic_citations_and_no_legacy_paths() -> None:
+    from dlightrag.web.presentation import build_answer_presentation
 
-    partials = ROOT / "src/dlightrag/web/templates/partials"
-    template_text = "\n".join(
-        (partials / name).read_text(encoding="utf-8")
-        for name in ("source_panel.html", "answer_done.html")
-    )
-
-    assert "src.url" not in template_text
-    assert "src.path" not in template_text
-    assert "src.download_url" in template_text
-    assert "src.source_uri" in template_text
-    assert get_type_hints(safe_answer_done)["sources"] == list[SourceReferencePayload]
-
-
-def test_sanitized_source_download_preserves_accessible_name() -> None:
-    from dlightrag.answer.citations.schemas import SourceReferencePayload
-    from dlightrag.web.safe_html import safe_answer_done
-
-    source = SourceReferencePayload(
-        id="1",
-        title="notes.md",
-        source_uri="local://default/notes.md",
-        download_url="/web/api/files/raw/doc-notes?workspace=default",
-        chunks=[],
-    )
-
-    html = safe_answer_done(answer="Cited.", sources=[source], answer_images=[])
-
-    assert 'aria-label="Download source"' in html
-    assert 'download=""' in html or " download" in html
-
-
-def test_source_titles_fall_back_without_legacy_paths() -> None:
-    from dlightrag.answer.citations.schemas import SourceReferencePayload
-    from dlightrag.web.deps import templates
-
-    source = SourceReferencePayload(
-        id="1",
-        source_uri="local://default/notes.md",
-        download_url="/web/api/files/raw/doc-notes?workspace=default",
-        chunks=[],
-    )
-    partials = ROOT / "src/dlightrag/web/templates/partials"
-
-    answer_html = templates.env.get_template("partials/answer_done.html").render(
+    presentation = build_answer_presentation(
         answer="Answer [1].",
-        sources=[source],
+        sources=[],
         answer_images=[],
     )
-    source_html = templates.env.get_template("partials/source_panel.html").render(sources=[source])
+    source_view = (FRONTEND_UI / "source_panel_view.ts").read_text(encoding="utf-8")
+    answer_view = (FRONTEND_UI / "answer_presentation.ts").read_text(encoding="utf-8")
 
-    assert '<span class="answer-ref-title">Source</span>' in answer_html
-    assert '<span class="source-doc-title">Source</span>' in source_html
-    assert "src.path" not in (partials / "answer_done.html").read_text(encoding="utf-8")
-    assert "src.path" not in (partials / "source_panel.html").read_text(encoding="utf-8")
+    assert '<cite class="citation-badge"' in presentation.answer_html
+    assert "src.path" not in source_view
+    assert "answer-ref-item" in answer_view
+    assert "source-doc-badge" in source_view
+    assert "{{" not in source_view + answer_view
 
 
 def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None:
@@ -353,9 +273,7 @@ def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None
 
 def test_panel_action_icons_are_accessible_svg_buttons() -> None:
     file_panel = (FRONTEND_UI / "files-panel.ts").read_text(encoding="utf-8")
-    source_panel = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
-        encoding="utf-8"
-    )
+    source_panel = (FRONTEND_UI / "source_panel_view.ts").read_text(encoding="utf-8")
 
     assert "&#10005;" not in file_panel
     assert "&#x2B07;" not in source_panel
@@ -363,21 +281,6 @@ def test_panel_action_icons_are_accessible_svg_buttons() -> None:
     assert 'class="file-delete-icon"' in file_panel
     assert 'class="source-action-icon-svg"' in source_panel
     assert 'stroke="currentColor"' in source_panel
-
-
-def test_reference_labels_do_not_render_square_brackets() -> None:
-    partials = ROOT / "src/dlightrag/web/templates/partials"
-    answer_done = (partials / "answer_done.html").read_text(encoding="utf-8")
-    source_panel = (partials / "source_panel.html").read_text(encoding="utf-8")
-
-    assert "[{{ src.id }}]" not in answer_done
-    assert "[{{ src.id }}]" not in source_panel
-    assert 'class="answer-ref-item"' in answer_done
-    assert 'data-action="open-ref-source"' in answer_done
-    assert 'role="button"' in answer_done
-    assert 'tabindex="0"' in answer_done
-    assert '<span class="answer-ref-id">{{ src.id | reference_label }}</span>' in answer_done
-    assert '<span class="source-doc-badge">{{ src.id | reference_label }}</span>' in source_panel
 
 
 def test_history_images_are_lazy_async_thumbnails_with_on_demand_originals() -> None:
@@ -423,19 +326,8 @@ def _declarations(body: str) -> dict[str, str]:
     return decls
 
 
-def test_every_template_button_has_a_hover_rule() -> None:
-    """A control with no hover feedback reads as inert."""
-    templates = ROOT / "src" / "dlightrag" / "web" / "templates"
-    hover_selectors = [sel for sel, _ in _css_blocks() if ":hover" in sel]
-
-    for template in sorted(templates.rglob("*.html")):
-        for tag in re.findall(r"<button\b[^>]*>", template.read_text(encoding="utf-8")):
-            classes = re.search(r'class="([^"]*)"', tag)
-            names = classes.group(1).split() if classes else []
-            covered = any(
-                f".{name}" in selector for name in names for selector in hover_selectors
-            ) or any("button:hover" in selector for selector in hover_selectors)
-            assert covered, f"{template.name}: button {tag} has no hover rule"
+def test_jinja_template_tree_is_deleted() -> None:
+    assert not (ROOT / "src/dlightrag/web/templates").exists()
 
 
 def test_button_hover_rules_change_something() -> None:

@@ -54,7 +54,7 @@ from dlightrag.web.conversation_models import (
     LinkedTurn,
     WebConversationUnavailableError,
 )
-from dlightrag.web.safe_html import safe_answer_done
+from dlightrag.web.presentation import build_answer_presentation
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -135,8 +135,9 @@ _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
 _NEW_CONVERSATION_NAMESPACE = UUID("9c0e62a5-a12c-45b2-8aeb-474fc2237cdf")
 
-#: Browser answer sources are served through the Web-scoped download route.
+#: Browser answer sources and images are served through Web-scoped routes.
 WEB_SOURCE_DOWNLOAD_BASE = "/web/api/files/raw"
+WEB_IMAGE_URL_BASE = "/web/api/images"
 
 
 def _is_image_mime(mime_type: str | None) -> bool:
@@ -630,23 +631,23 @@ def project_conversation_turn(
     run = turn.run
     request = AnswerRunRequest.from_request(run.prepared_input or {})
     answer = ""
-    answer_html = ""
-    primary_report: str | None = None
+    presentation = None
     if run.status == "succeeded" and run.result is not None:
         projected = project_answer_result(
             run.result,
             source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
             downloadable_workspaces=downloadable_workspaces,
             visual_workspaces=visual_workspaces,
+            image_url_prefix=WEB_IMAGE_URL_BASE,
         )
         answer = str(projected["answer"])
-        answer_html = safe_answer_done(
+        handle = projected.get("primary_report")
+        presentation = build_answer_presentation(
             answer=answer,
             sources=projected["sources"],
             answer_images=projected["answer_images"],
+            primary_report=handle if isinstance(handle, str) and handle else None,
         )
-        handle = projected.get("primary_report")
-        primary_report = handle if isinstance(handle, str) and handle else None
     return ConversationTurn(
         turn_id=turn.turn_id,
         turn_number=turn.turn_number,
@@ -660,8 +661,7 @@ def project_conversation_turn(
             _attachment_reference(run.run_id, turn.turn_number, attachment)
             for attachment in request.attachments
         ],
-        answer_html=answer_html,
-        primary_report=primary_report,
+        presentation=presentation,
         error_kind=run.error_kind,
         error_message=run.error_message,
         created_at=turn.created_at,
@@ -707,6 +707,7 @@ def _attachment_reference(
 
 
 __all__ = [
+    "WEB_IMAGE_URL_BASE",
     "WEB_SOURCE_DOWNLOAD_BASE",
     "ConversationSubmissionConflict",
     "WebAnswerSubmission",

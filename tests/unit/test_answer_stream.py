@@ -198,7 +198,15 @@ def test_rest_serves_the_canonical_result_and_the_browser_serves_presentation() 
     browser = _done_data(_RENDERERS["web"])
 
     assert set(canonical) == {"status", "result"}
-    assert canonical["result"]["answer"] == browser["answer"]
-    assert set(browser) == {"status", "html", "answer", "answer_images"}
-    assert "<" in browser["html"]
+    presentation = browser["presentation"]
+    assert canonical["result"]["answer"] == presentation["answer_text"]
+    assert set(browser) == {"status", "presentation"}
+    assert "<" in presentation["answer_html"]
+    assert set(presentation) == {
+        "answer_text",
+        "answer_html",
+        "sources",
+        "answer_images",
+    }
+    assert presentation.get("primary_report") is None
     assert "result" not in browser

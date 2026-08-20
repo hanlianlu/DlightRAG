@@ -42,7 +42,6 @@ dependencies = [
     "uvicorn[standard]>=0.52.1",
     "python-multipart>=0.0.22",
     # Web frontend
-    "jinja2>=3.1",
     "markdown-it-py[plugins]>=3.0",
     "nh3>=0.2",
     "pygments>=2.17",

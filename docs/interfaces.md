@@ -451,10 +451,15 @@ the authoritative conversation summary; the browser then subscribes to its own
 owner-scoped `GET /web/api/answer/{run_id}/events`. That
 stream follows the same durable event log as the REST stream, with the same
 sequence, `Last-Event-ID` resume, 410-on-trim, and detach semantics, and differs
-only in projection: a browser `done` frame carries rendered presentation
-(`html`, `answer`, `answer_images`, optional `primary_report` handle), not the
-canonical result payload REST serves. The Web thread shows the terminal answer;
-a Primary Report opens in the document panel. The run and its conversation turn are inserted in one transaction before
+only in projection: a browser `done` frame embeds one typed
+`AnswerPresentation` (`answer_text`, sanitized semantic `answer_html`, structured
+`sources`, `answer_images`, and optional `primary_report` handle), not the
+canonical result payload REST serves. Conversation history embeds that same
+presentation shape, and the Primary Report endpoint returns it too, so live,
+reload, and report paths share one Lit renderer. Source chunks carry separately
+sanitized `content_html`; filenames, links, source controls, galleries, and
+panel structure remain ordinary typed fields rendered by Lit. The run and its
+conversation turn are inserted in one transaction before
 the 202 response, so no subscriber, finalizer, or reconnect commits history
 afterwards. Disconnecting the browser closes that subscriber only, and
 reconnecting resumes from the durable event sequence. Conversation reads return
@@ -510,11 +515,12 @@ accept a server `conversation_id`; historical files are re-sent as current
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 `DELETE /workspaces/{workspace}`), while the internal `/web/api/*` surface serves
 the browser (for example `POST /web/api/workspaces/create`,
-`POST /web/api/workspaces/delete`) and returns typed JSON for browser-owned state. The Files snapshot, upload,
-delete, and two-second ingest poll are JSON contracts rendered by the Lit
-`<file-panel>`; only the temporary rich answer/report projection still carries
-sanitized HTML until the AnswerPresentation migration. These browser routes
-have no compatibility aliases at their old
+`POST /web/api/workspaces/delete`) and returns typed JSON for browser-owned
+state. The Files snapshot, upload, delete, and two-second ingest poll are JSON
+contracts rendered by the Lit `<file-panel>`; answer, source, and report
+surfaces use the shared `AnswerPresentation` contract. Sanitized rich-content
+strings are the only deliberate browser HTML sinks. These browser routes have
+no compatibility aliases at their old
 `/web/*` paths. Prefer REST or the SDK for programmatic access.
 
 Image support is a deployment capability, not a per-request negotiation, so callers

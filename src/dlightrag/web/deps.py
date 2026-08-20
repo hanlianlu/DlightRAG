@@ -1,15 +1,9 @@
-"""FastAPI dependency injection and Jinja2 environment for web routes."""
+"""FastAPI dependency injection for authenticated browser routes."""
 
-import re
 from collections.abc import Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import nh3
-from dlightrag_rag.sourcing.url import validate_public_web_url
 from fastapi import Cookie, HTTPException, Request
-from fastapi.templating import Jinja2Templates
-from markupsafe import Markup
 
 from dlightrag.access import (
     AccessControl,
@@ -18,232 +12,17 @@ from dlightrag.access import (
     WorkspaceRecord,
     access_control_from_settings,
 )
-from dlightrag.answer.citations.parser import CITATION_PATTERN
 from dlightrag.model_settings import access_settings
-from dlightrag.web.markdown import (
-    inject_highlights,
-    normalize_chunk_source,
-    render_chunk_content,
-    render_markdown,
-)
 
 if TYPE_CHECKING:
     from dlightrag.application import Application
     from dlightrag.web.conversations import WebConversationService
 
-_TEMPLATE_DIR = Path(__file__).parent / "templates"
-templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
-
 DEFAULT_WORKSPACE = "default"
-
-# Allowlist for nh3 sanitisation of source chunk content.
-_CHUNK_ALLOWED_TAGS = {
-    # table
-    "table",
-    "thead",
-    "tbody",
-    "tfoot",
-    "tr",
-    "th",
-    "td",
-    "caption",
-    "colgroup",
-    "col",
-    # text formatting
-    "p",
-    "br",
-    "hr",
-    "b",
-    "i",
-    "em",
-    "strong",
-    "u",
-    "s",
-    "del",
-    "sub",
-    "sup",
-    "mark",
-    # structure
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "div",
-    "span",
-    # lists
-    "ul",
-    "ol",
-    "li",
-    "dl",
-    "dt",
-    "dd",
-    # code
-    "pre",
-    "code",
-    # links
-    "a",
-    # misc
-    "blockquote",
-    "abbr",
-    "details",
-    "summary",
-}
-_CHUNK_ALLOWED_ATTRS: dict[str, set[str]] = {
-    "*": {"class"},
-    "a": {"href", "title"},
-    "td": {"colspan", "rowspan"},
-    "th": {"colspan", "rowspan", "scope"},
-    "col": {"span"},
-    "colgroup": {"span"},
-}
-
-
-# ---------------------------------------------------------------------------
-# Custom Jinja2 filters
-# ---------------------------------------------------------------------------
-
-
-def _protect_code_blocks(html: str) -> tuple[str, list[str]]:
-    """Replace <pre>...</pre> and <code>...</code> with indexed placeholders.
-
-    Protects code content from citation regex replacement.
-    """
-    protected: list[str] = []
-
-    def _replace(m: re.Match) -> str:
-        idx = len(protected)
-        protected.append(m.group(0))
-        return f"\x00CODE{idx}\x00"
-
-    # Protect <pre> blocks first (they contain <code>)
-    html = re.sub(r"<pre[^>]*>.*?</pre>", _replace, html, flags=re.DOTALL)
-    # Then protect remaining inline <code>
-    html = re.sub(r"<code[^>]*>.*?</code>", _replace, html, flags=re.DOTALL)
-    return html, protected
-
-
-def _restore_code_blocks(html: str, protected: list[str]) -> str:
-    """Restore code block placeholders with original content."""
-    for idx in range(len(protected) - 1, -1, -1):
-        html = html.replace(f"\x00CODE{idx}\x00", protected[idx])
-    return html
-
-
-def _reference_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
-    """Return the compact visible label for citation/reference surfaces."""
-    ref = str(ref_id)
-    if chunk_idx is None or chunk_idx == "":
-        return ref
-    return f"{ref}-{chunk_idx}"
-
-
-def _reference_aria_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
-    """Return the accessible label for citation/reference controls."""
-    ref = str(ref_id)
-    if chunk_idx is None or chunk_idx == "":
-        return f"Source {ref}"
-    return f"Source {ref}, chunk {chunk_idx}"
-
-
-def _citation_badges(text: str) -> Markup:
-    """Replace citation patterns with clickable badge HTML.
-
-    Handles both [ref_id-chunk_idx] and [n] doc-level formats.
-    Renders Markdown first, then injects badges while protecting code blocks.
-
-    Source data is rendered separately in the hidden source panel; the answer
-    body should only contain validated inline citation markers.
-    """
-    from dlightrag.answer.citations.parser import DOC_CITATION_PATTERN
-
-    # Render Markdown to HTML (replaces Markup.escape)
-    html = render_markdown(str(text))
-
-    # Protect code blocks from citation regex
-    html, protected = _protect_code_blocks(html)
-
-    # First pass: replace chunk-level [ref-chunk] with badges
-    def _chunk_badge(m: re.Match) -> str:
-        ref_id = m.group(1)
-        chunk_idx = m.group(2)
-        label = _reference_label(ref_id, chunk_idx)
-        aria_label = _reference_aria_label(ref_id, chunk_idx)
-        return (
-            f'<span class="citation-badge" data-ref="{ref_id}" '
-            f'data-chunk="{chunk_idx}" data-action="filter-source" '
-            f'role="button" tabindex="0" '
-            f'aria-label="{aria_label}">'
-            f"{label}</span>"
-        )
-
-    result = CITATION_PATTERN.sub(_chunk_badge, html)
-
-    # Second pass: replace doc-level [n] with badges
-    def _doc_badge(m: re.Match) -> str:
-        ref_id = m.group(1)
-        label = _reference_label(ref_id)
-        aria_label = _reference_aria_label(ref_id)
-        return (
-            f'<span class="citation-badge" data-ref="{ref_id}" '
-            f'data-action="filter-source" role="button" tabindex="0" '
-            f'aria-label="{aria_label}">{label}</span>'
-        )
-
-    result = DOC_CITATION_PATTERN.sub(_doc_badge, result)
-
-    # Restore code blocks
-    result = _restore_code_blocks(result, protected)
-
-    return Markup(result)  # noqa: S704 - markdown escapes raw HTML; final partial is nh3-cleaned
-
-
-def _highlight_content(text: str, phrases: list[str] | None = None) -> Markup:
-    """Render chunk content as HTML, sanitize, then inject highlight spans."""
-    text = normalize_chunk_source(text)  # the offsets highlights use must match the render
-    html = render_chunk_content(text)
-    html = nh3.clean(html, tags=_CHUNK_ALLOWED_TAGS, attributes=_CHUNK_ALLOWED_ATTRS)
-
-    if phrases:
-        html = inject_highlights(html, text, phrases)
-
-    return Markup(html)  # noqa: S704 - chunk HTML is nh3-cleaned before marking safe
-
-
-def _basename(path: str) -> str:
-    """Extract filename from a path string."""
-    return Path(path).name
-
-
-def _public_source_url(value: Any) -> str | None:
-    """Return credential-free public HTTP(S) provenance, otherwise None."""
-    try:
-        return validate_public_web_url(str(value).strip())
-    except ValueError:
-        return None
-
-
-# Register filters on the Jinja2 environment
-templates.env.filters["citation_badges"] = _citation_badges
-templates.env.filters["highlight_content"] = _highlight_content
-templates.env.filters["reference_label"] = _reference_label
-templates.env.filters["basename"] = _basename
-templates.env.filters["public_source_url"] = _public_source_url
-
-
-# ---------------------------------------------------------------------------
-# FastAPI dependencies
-# ---------------------------------------------------------------------------
-
-
-def render_partial(name: str, **ctx: Any) -> str:
-    """Render a Jinja2 partial template to string."""
-    return templates.env.get_template(name).render(**ctx)
 
 
 def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) -> str:
-    """Read current workspace from cookie, normalized to safe PG identifier."""
+    """Read current workspace from cookie, normalized to a safe identifier."""
     from dlightrag_rag.workspaces import normalize_workspace
 
     return normalize_workspace(dlightrag_workspace)

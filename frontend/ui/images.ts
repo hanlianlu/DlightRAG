@@ -4,8 +4,7 @@ import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
 import type {ConversationAttachmentReference} from '../api/conversations.ts';
 import {closestElement, wrapTabFocus} from '../lib/dom.ts';
-
-const SAFE_DATA_IMAGE_SRC_RE = /^data:image\/(?:avif|bmp|gif|jpeg|jpg|png|webp);base64,[a-z0-9+/=]+$/i;
+import {safeImageSrc} from '../lib/urls.ts';
 
 type LightboxElement = HTMLDivElement & {
     __lightboxPrev?: HTMLButtonElement;
@@ -50,8 +49,8 @@ export function renderMessageAttachmentImages(
         imgEl.alt = reference.label;
         imgEl.loading = 'lazy';
         imgEl.decoding = 'async';
-        const thumbnailSrc = _safeImageSrc(reference.thumbnail_url || reference.url);
-        const fullSrc = _safeImageSrc(reference.url);
+        const thumbnailSrc = safeImageSrc(reference.thumbnail_url || reference.url);
+        const fullSrc = safeImageSrc(reference.url);
 
         const showError = (): void => {
             imgEl.hidden = true;
@@ -103,36 +102,9 @@ export function releaseMessageAttachmentObjectUrls(root: ParentNode): void {
     for (const url of urls) URL.revokeObjectURL(url);
 }
 
-function _safeImageUrl(src: unknown): URL | null {
-    if (typeof src !== 'string') return null;
-    const value = src.trim();
-    if (!value) return null;
-
-    let url: URL;
-    try {
-        url = new URL(value, window.location.origin);
-    } catch {
-        return null;
-    }
-
-    if (
-        (url.protocol === 'http:' || url.protocol === 'https:') &&
-        url.origin === window.location.origin
-    ) {
-        return url;
-    }
-    if (url.protocol === 'blob:' && url.origin === window.location.origin) return url;
-    if (url.protocol === 'data:' && SAFE_DATA_IMAGE_SRC_RE.test(value)) return url;
-    return null;
-}
-
-function _safeImageSrc(src: unknown): string {
-    return _safeImageUrl(src)?.href || '';
-}
-
 function _getLightboxImageSrc(el: Element): string {
     const s = el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
-    return _safeImageSrc(s);
+    return safeImageSrc(s);
 }
 
 function _collectGalleryImages(): string[] {
@@ -166,12 +138,12 @@ function _updateNavButtons(box: LightboxElement): void {
 }
 
 function _showLightboxImage(box: LightboxElement, src: string): void {
-    const safeUrl = _safeImageUrl(src);
+    const safeUrl = safeImageSrc(src);
     if (!safeUrl) return;
     const img = box.__lightboxImg;
     if (!img) return;
-    img.src = safeUrl.href;
-    box.setAttribute('data-current-src', safeUrl.href);
+    img.src = safeUrl;
+    box.setAttribute('data-current-src', safeUrl);
     _updateNavButtons(box);
 }
 
@@ -253,15 +225,15 @@ function ensureLightbox(): LightboxElement {
 }
 
 export function openLightbox(src: unknown): void {
-    const safeUrl = _safeImageUrl(src);
+    const safeUrl = safeImageSrc(src);
     if (!safeUrl) return;
     _lightboxReturnFocus =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const box = ensureLightbox();
-    box.setAttribute('data-current-src', safeUrl.href);
+    box.setAttribute('data-current-src', safeUrl);
     const img = box.__lightboxImg;
     if (!img) return;
-    img.src = safeUrl.href;
+    img.src = safeUrl;
     box.classList.add(lightboxStyles.open);
     box.setAttribute('aria-hidden', 'false');
     _updateNavButtons(box);

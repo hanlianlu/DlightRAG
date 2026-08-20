@@ -4,22 +4,20 @@ import {
   releaseMessageAttachmentObjectUrls,
   renderMessageAttachmentImages,
 } from '../ui/images.ts';
-import {renderMath} from './math.ts';
-import {renderDiagrams} from '../ui/mermaid.ts';
 import {bindPrimaryReportControl} from '../ui/report-panel.ts';
+import type {AnswerPresentationElement} from '../ui/answer_presentation.ts';
+import '../ui/answer_presentation.ts';
 import {createDocumentChip} from './document_chip.ts';
 import {answerErrorMessage} from './errors.ts';
-import {llmFragmentFromSanitizedHtml} from './safe_html.ts';
 import {parseData} from './sse.ts';
+import {safeSameOriginHref} from './urls.ts';
 import chatStyles from '../styles/chat.module.css';
 import type {
+  AnswerPresentation,
   ConversationAttachmentReference,
   ConversationHistory,
   ConversationTurn,
 } from '../api/conversations.ts';
-
-// SSE HTML payloads are sanitized server-side by nh3 and again here before
-// browser insertion. Keep new HTML sinks behind frontend/lib/safe_html.ts.
 
 // ── types ────────────────────────────────────────────────────────────
 
@@ -31,9 +29,7 @@ export interface ChatTurn {
 
 export interface DonePayload {
   status: 'succeeded' | 'cancelled';
-  html: string;
-  answer: string;
-  primary_report?: string | null;
+  presentation: AnswerPresentation | null;
 }
 
 interface ProgressPayload {
@@ -57,15 +53,6 @@ function activateChatMode(): void {
   if (app && !app.classList.contains('has-messages')) app.classList.add('has-messages');
 }
 
-function fixExternalLinks(container: ParentNode): void {
-  container.querySelectorAll('a[href]').forEach(function (el: Element) {
-    const a = el as HTMLAnchorElement;
-    if (a.hasAttribute('download')) return;
-    a.setAttribute('target', '_blank');
-    a.setAttribute('rel', 'noopener noreferrer');
-  });
-}
-
 function scrollToBottom(turn: ChatTurn): void {
   if (turn.chatArea) turn.chatArea.scrollTop = turn.chatArea.scrollHeight;
 }
@@ -79,11 +66,6 @@ const MAX_CHAT_MESSAGE_NODES = 200;
 // Auto-scroll sticks to the bottom only while the reader is already near it, so
 // scrolling up to re-read earlier text is not fought by incoming tokens.
 const STICK_TO_BOTTOM_PX = 160;
-
-// Presence check only: MathJax typesetting is skipped while streaming a preview
-// that has no math delimiters, avoiding a full re-typeset of the whole growing
-// answer on every 0.3s snapshot.
-const MATH_DELIMITER = /\$|\\\(|\\\[/;
 
 // Marks the raw-token tail appended while the answer streams. The rendered
 // answer is derived once, from the run's canonical result, when it finishes.
@@ -113,28 +95,6 @@ function pruneOldMessages(chatMessages: HTMLElement): void {
   }
 }
 
-// Same-origin http(s) guard for stored document download links, mirroring the
-// image src admission in ui/images.ts so a poisoned reference cannot inject a
-// javascript: or cross-origin href into the history view.
-function _safeDocumentHref(src: unknown): string {
-  if (typeof src !== 'string') return '';
-  const value = src.trim();
-  if (!value) return '';
-  let url: URL;
-  try {
-    url = new URL(value, window.location.origin);
-  } catch {
-    return '';
-  }
-  if (
-    (url.protocol === 'http:' || url.protocol === 'https:') &&
-    url.origin === window.location.origin
-  ) {
-    return url.href;
-  }
-  return '';
-}
-
 // Render document attachments as compact chips (filename + size) that download
 // the original via a same-origin link, using the shared chip component.
 function renderMessageDocuments(
@@ -149,7 +109,7 @@ function renderMessageDocuments(
       createDocumentChip({
         filename: reference.filename,
         byteSize: reference.byte_size,
-        href: _safeDocumentHref(reference.url) || undefined,
+        href: safeSameOriginHref(reference.url) || undefined,
       }),
     );
   });
@@ -217,29 +177,18 @@ export function createChatTurn(
   return turn;
 }
 
-function applyFinalAnswerHtml(turn: ChatTurn, html: string): void {
-  const fragment = llmFragmentFromSanitizedHtml(html);
-  const answerContent = fragment.querySelector('#answer-content');
-  const sourceData = fragment.querySelector('#source-data');
-  const imageStrip = fragment.querySelector('.answer-image-strip');
-  const refList = fragment.querySelector('.answer-references');
-
-  if (answerContent) {
-    const answerNodes = Array.from(answerContent.childNodes).map((node) => node.cloneNode(true));
-    turn.contentDiv.replaceChildren(...answerNodes);
-  }
-  if (imageStrip) turn.contentDiv.appendChild(imageStrip.cloneNode(true));
-  if (refList) turn.contentDiv.appendChild(refList.cloneNode(true));
-  if (sourceData) {
-    (sourceData as HTMLElement).className = 'source-data hidden';
-    sourceData.removeAttribute('id');
-    fixExternalLinks(sourceData);
-    turn.aiDiv.appendChild(sourceData);
-  }
-
-  renderMath(turn.contentDiv);
-  renderDiagrams(turn.contentDiv);
-  fixExternalLinks(turn.contentDiv);
+function applyFinalAnswer(
+  turn: ChatTurn,
+  presentation: AnswerPresentation,
+): void {
+  const element = document.createElement('answer-presentation') as AnswerPresentationElement;
+  element.presentation = presentation;
+  turn.contentDiv.replaceChildren(element);
+  bindPrimaryReportControl(
+    turn.aiDiv,
+    turn.aiDiv.dataset.runId || '',
+    presentation.primary_report,
+  );
 }
 
 
@@ -283,8 +232,8 @@ export function renderStoredTurn(turn: ChatTurn, stored: ConversationTurn): void
   clearAnswerReconnect(turn);
   turn.aiDiv.dataset.runId = stored.answer_run_id;
   if (stored.status === 'succeeded') {
-    applyFinalAnswerHtml(turn, stored.answer_html);
-    bindPrimaryReportControl(turn.aiDiv, stored.answer_run_id, stored.primary_report);
+    if (stored.presentation) applyFinalAnswer(turn, stored.presentation);
+    else setAnswerError(turn, 'Stored answer presentation is unavailable.');
     return;
   }
   if (stored.status === 'failed') {
@@ -470,13 +419,13 @@ export function createAnswerRenderer(turn: ChatTurn) {
       markAnswerStopped(turn);
       return;
     }
-    fullAnswer = payload.answer;
-    applyFinalAnswerHtml(turn, payload.html);
-    bindPrimaryReportControl(
-      turn.aiDiv,
-      turn.aiDiv.dataset.runId || '',
-      payload.primary_report,
-    );
+    if (!payload.presentation) {
+      failed = true;
+      setAnswerError(turn, 'Service error. Please try again.');
+      return;
+    }
+    fullAnswer = payload.presentation.answer_text;
+    applyFinalAnswer(turn, payload.presentation);
     const live = turn.aiDiv.querySelector('.sr-only');
     if (live) live.textContent = 'Answer ready';
   }

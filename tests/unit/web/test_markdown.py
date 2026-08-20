@@ -77,11 +77,11 @@ def test_render_markdown_mermaid_source_escaped():
 
 def test_mermaid_marker_survives_nh3():
     """The mermaid marker must survive server-side nh3 sanitization."""
-    from dlightrag.web.safe_html import safe_answer_done
+    from dlightrag.web.presentation import build_answer_presentation
 
-    result = safe_answer_done(
+    result = build_answer_presentation(
         answer="```mermaid\ngraph TD\n  A-->B\n```", sources=[], answer_images=[]
-    )
+    ).answer_html
     assert 'class="mermaid-source"' in result
     assert 'data-lang="mermaid"' in result
     assert "graph TD" in result
@@ -128,45 +128,44 @@ def test_render_markdown_lists():
 
 
 def test_reference_label_helpers_are_shared_across_citation_surfaces():
-    from dlightrag.web.deps import _reference_aria_label, _reference_label, templates
+    from dlightrag.web.presentation import _reference_aria_label, _reference_label
 
     assert _reference_label("1") == "1"
     assert _reference_label("1", "2") == "1-2"
     assert _reference_aria_label("1") == "Source 1"
     assert _reference_aria_label("1", "2") == "Source 1, chunk 2"
-    assert templates.env.filters["reference_label"] is _reference_label
 
 
 def test_citation_badges_basic():
     """[1-2] in plain text becomes a citation badge."""
-    from dlightrag.web.deps import _citation_badges
+    from dlightrag.web.presentation import render_answer_html
 
-    result = str(_citation_badges("See [1-2] for details."))
+    result = render_answer_html("See [1-2] for details.")
     assert 'class="citation-badge"' in result
     assert 'data-ref="1"' in result
     assert 'data-chunk="2"' in result
     assert 'aria-label="Source 1, chunk 2"' in result
-    assert ">1-2</span>" in result
-    assert "[1-2]</span>" not in result
+    assert ">1-2</cite>" in result
+    assert "[1-2]</cite>" not in result
 
 
 def test_citation_badges_doc_level():
     """[3] doc-level citation becomes a badge."""
-    from dlightrag.web.deps import _citation_badges
+    from dlightrag.web.presentation import render_answer_html
 
-    result = str(_citation_badges("See [3] for details."))
+    result = render_answer_html("See [3] for details.")
     assert 'class="citation-badge"' in result
     assert 'data-ref="3"' in result
     assert 'aria-label="Source 3"' in result
-    assert ">3</span>" in result
-    assert "[3]</span>" not in result
+    assert ">3</cite>" in result
+    assert "[3]</cite>" not in result
 
 
 def test_citation_badges_in_inline_code_skipped():
     """[1-2] inside inline code must NOT become a badge."""
-    from dlightrag.web.deps import _citation_badges
+    from dlightrag.web.presentation import render_answer_html
 
-    result = str(_citation_badges("Use `array[1-2]` in code."))
+    result = render_answer_html("Use `array[1-2]` in code.")
     # The [1-2] is inside <code>, should not be a badge
     assert "<code>" in result
     assert result.count('class="citation-badge"') == 0
@@ -174,28 +173,28 @@ def test_citation_badges_in_inline_code_skipped():
 
 def test_citation_badges_in_fenced_code_skipped():
     """[1-2] inside fenced code must NOT become a badge."""
-    from dlightrag.web.deps import _citation_badges
+    from dlightrag.web.presentation import render_answer_html
 
     md = "```\narray[1-2] = value\n```\n\nSee [1-2] for info."
-    result = str(_citation_badges(md))
+    result = render_answer_html(md)
     # Only the [1-2] outside code should be a badge
     assert result.count('class="citation-badge"') == 1
 
 
 def test_citation_badges_in_table():
     """[1-2] in a table cell should become a badge."""
-    from dlightrag.web.deps import _citation_badges
+    from dlightrag.web.presentation import render_answer_html
 
     md = "| Source | Note |\n|---|---|\n| [1-2] | data |"
-    result = str(_citation_badges(md))
+    result = render_answer_html(md)
     assert 'class="citation-badge"' in result
 
 
 def test_citation_badges_markdown_rendering():
     """Verify markdown is actually rendered (not just escaped)."""
-    from dlightrag.web.deps import _citation_badges
+    from dlightrag.web.presentation import render_answer_html
 
-    result = str(_citation_badges("**bold** text [1-1]"))
+    result = render_answer_html("**bold** text [1-1]")
     assert "<strong>bold</strong>" in result
     assert 'class="citation-badge"' in result
 
@@ -241,10 +240,10 @@ def test_render_markdown_still_escapes_html():
 
 def test_highlight_content_renders_html_table():
     """HTML table in chunk content should render, not show raw tags."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
     html = "<table><tr><td>Support</td><td>Zoe</td></tr></table>"
-    result = str(_highlight_content(html))
+    result = render_source_chunk_html(html)
     assert "<table>" in result
     assert "<td>Support</td>" in result
     assert "&lt;table&gt;" not in result
@@ -252,86 +251,87 @@ def test_highlight_content_renders_html_table():
 
 def test_highlight_content_xss_stripped():
     """Script tags must be stripped by nh3 sanitization."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content('<script>alert("xss")</script>Normal text'))
+    result = render_source_chunk_html('<script>alert("xss")</script>Normal text')
     assert "<script>" not in result
     assert "Normal text" in result
 
 
 def test_highlight_content_phrase_in_table():
     """Highlight phrase inside a table cell should work."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
     html = "<table><tr><td>Revenue grew 15%</td></tr></table>"
-    result = str(_highlight_content(html, ["Revenue grew 15%"]))
+    result = render_source_chunk_html(html, ["Revenue grew 15%"])
     assert '<span class="highlight">' in result
     assert "Revenue grew 15%" in result
 
 
 def test_highlight_content_phrase_skips_tag_attrs():
     """Highlight should not match text inside HTML tag attributes."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
     html = '<a href="class-info">class info link</a>'
-    result = str(_highlight_content(html, ["class info"]))
+    result = render_source_chunk_html(html, ["class info"])
     assert 'href="class-info"' in result
     assert '<span class="highlight">class info</span>' in result
 
 
 def test_highlight_content_plain_text():
     """Plain text (no HTML, no markdown) still renders correctly."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("Just a simple text chunk."))
+    result = render_source_chunk_html("Just a simple text chunk.")
     assert "Just a simple text chunk." in result
 
 
 def test_highlight_content_markdown_formatting():
     """Markdown in chunk content should be rendered."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("**bold** text"))
+    result = render_source_chunk_html("**bold** text")
     assert "<strong>bold</strong>" in result
 
 
 def test_highlight_content_phrase_with_quotes():
     """Apostrophes and double quotes must not defeat phrase matching."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("The company's revenue rose.", ["company's revenue"]))
+    result = render_source_chunk_html("The company's revenue rose.", ["company's revenue"])
     assert '<span class="highlight">company\'s revenue</span>' in result
 
 
 def test_highlight_content_phrase_with_escaped_entity():
     """Phrases containing characters that render as entities still match."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("Total was 5 < 10 always", ["5 < 10"]))
+    result = render_source_chunk_html("Total was 5 < 10 always", ["5 < 10"])
     assert '<span class="highlight">5 &lt; 10</span>' in result
 
 
 def test_highlight_content_overlapping_phrases_not_nested():
     """Overlapping phrases must not produce nested highlight spans."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("Revenue grew 15% last year", ["Revenue grew", "grew 15%"]))
+    result = render_source_chunk_html("Revenue grew 15% last year", ["Revenue grew", "grew 15%"])
     assert result.count('<span class="highlight">') == 1
 
 
 def test_highlight_content_phrase_carrying_markdown_syntax():
     """Phrases quoted verbatim from raw Markdown still match the rendered text."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    emphasis = str(_highlight_content("**Revenue** grew 15% in 2024", ["**Revenue** grew 15%"]))
+    emphasis = render_source_chunk_html("**Revenue** grew 15% in 2024", ["**Revenue** grew 15%"])
     assert '<strong><span class="highlight">Revenue</span></strong>' in emphasis
     assert '<span class="highlight"> grew 15%</span>' in emphasis
 
-    heading = str(_highlight_content("## Key findings\nBody.", ["## Key findings"]))
+    heading = render_source_chunk_html("## Key findings\nBody.", ["## Key findings"])
     assert '<h2><span class="highlight">Key findings</span></h2>' in heading
 
-    table = str(
-        _highlight_content("| Region | Sales |\n| --- | --- |\n| EMEA | 12% |", ["| EMEA | 12% |"])
+    table = render_source_chunk_html(
+        "| Region | Sales |\n| --- | --- |\n| EMEA | 12% |",
+        ["| EMEA | 12% |"],
     )
     assert '<td><span class="highlight">EMEA</span></td>' in table
     assert '<td><span class="highlight">12%</span></td>' in table
@@ -341,25 +341,25 @@ def test_highlight_content_phrase_carrying_markdown_syntax():
 
 def test_highlight_content_phrase_inside_code_span():
     """A phrase crossing a code span keeps the identifier intact."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("Use the `render_chunk` helper", ["`render_chunk` helper"]))
+    result = render_source_chunk_html("Use the `render_chunk` helper", ["`render_chunk` helper"])
     assert '<code><span class="highlight">render_chunk</span></code>' in result
 
 
 def test_highlight_content_anchors_the_cited_occurrence():
     """Positional anchoring highlights the occurrence the phrase came from."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("cost 5%. Later the cost 5% again.", ["cost 5%"]))
+    result = render_source_chunk_html("cost 5%. Later the cost 5% again.", ["cost 5%"])
     assert result.startswith('<p><span class="highlight">cost 5%</span>. Later')
 
 
 def test_highlight_content_ignores_phrase_only_present_in_markup():
     """A phrase that resolves to non-visible source text must not be highlighted."""
-    from dlightrag.web.deps import _highlight_content
+    from dlightrag.web.presentation import render_source_chunk_html
 
-    result = str(_highlight_content("See [report](https://example.com/q3) now", ["example.com"]))
+    result = render_source_chunk_html("See [report](https://example.com/q3) now", ["example.com"])
     assert 'class="highlight"' not in result
 
 

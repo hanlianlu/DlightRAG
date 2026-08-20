@@ -114,10 +114,11 @@ def project_answer_result(
     source_link_builder: SourceDownloadLinkBuilder | None = None,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
+    image_url_prefix: str = IMAGE_URL_PREFIX,
 ) -> dict[str, Any]:
     """Project a stored result for one authenticated reader."""
     sources = load_answer_snapshot(
-        {"sources": stored.get("sources") or []}, image_url_prefix=IMAGE_URL_PREFIX
+        {"sources": stored.get("sources") or []}, image_url_prefix=image_url_prefix
     )
     source_payloads = project_source_payloads(
         sources,
@@ -131,7 +132,7 @@ def project_answer_result(
     if not primary_report:
         primary_report = None
     images = [
-        _public_answer_image(image)
+        _public_answer_image(image, image_url_prefix=image_url_prefix)
         for image in stored.get("answer_images") or ()
         if image and can_project_workspace_visual(image.get("workspace"), visual_workspaces)
     ]
@@ -139,7 +140,7 @@ def project_answer_result(
         "answer": answer,
         "contexts": project_contexts_for_client(
             dict(stored.get("contexts") or {}),
-            image_url_prefix=IMAGE_URL_PREFIX,
+            image_url_prefix=image_url_prefix,
             visual_workspaces=visual_workspaces,
         ),
         "references": [
@@ -190,9 +191,13 @@ def _store_answer_image(image: Mapping[str, Any], *, workspaces: dict[str, str])
     }
 
 
-def _public_answer_image(image: Mapping[str, Any]) -> dict[str, Any]:
+def _public_answer_image(
+    image: Mapping[str, Any],
+    *,
+    image_url_prefix: str = IMAGE_URL_PREFIX,
+) -> dict[str, Any]:
     base = (
-        f"{IMAGE_URL_PREFIX}/"
+        f"{image_url_prefix.rstrip('/')}/"
         f"{quote(str(image.get('workspace') or ''), safe='')}/"
         f"{quote(str(image.get('chunk_id') or ''), safe='')}"
     )
@@ -213,12 +218,13 @@ def project_report_sources(
     source_link_builder: SourceDownloadLinkBuilder | None = None,
     downloadable_workspaces: set[str] | None = None,
     visual_workspaces: set[str] | None = None,
+    image_url_prefix: str = IMAGE_URL_PREFIX,
 ) -> list[SourceReferencePayload]:
     """Project citation sources for the Primary Report without leaking them on REST."""
     return project_source_payloads(
         load_answer_snapshot(
             {"sources": stored.get("report_sources") or []},
-            image_url_prefix=IMAGE_URL_PREFIX,
+            image_url_prefix=image_url_prefix,
         ),
         resolver=source_link_builder,
         downloadable_workspaces=downloadable_workspaces,

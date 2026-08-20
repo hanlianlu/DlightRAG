@@ -969,46 +969,36 @@ class TestWebWorkspaceDelete:
         assert resp.status_code == 400
 
 
-class TestSourcePanelTemplate:
-    """Tests for source panel rendering contracts."""
+class TestSourcePresentation:
+    """Tests for structured source presentation contracts."""
 
-    def test_page_number_is_rendered(self) -> None:
-        from dlightrag.web.deps import templates
+    def test_page_number_and_download_are_projected(self) -> None:
+        from dlightrag.answer.citations.schemas import ChunkSnippet, SourceReferencePayload
+        from dlightrag.web.presentation import build_answer_presentation
 
-        html = templates.env.get_template("partials/source_panel.html").render(
+        presentation = build_answer_presentation(
+            answer="Answer [1].",
             sources=[
-                {
-                    "id": "1",
-                    "title": "Doc",
-                    "path": "/tmp/doc.pdf",
-                    "chunks": [
-                        {
-                            "chunk_idx": 1,
-                            "page_number": 1,
-                            "content": "first page",
-                        }
+                SourceReferencePayload(
+                    id="1",
+                    title="notes.md",
+                    source_uri="local://default/notes.md",
+                    download_url="/web/api/files/raw/doc-notes?workspace=default",
+                    chunks=[
+                        ChunkSnippet(
+                            chunk_id="chunk-1",
+                            chunk_idx=1,
+                            page_number=1,
+                            content="first page",
+                        )
                     ],
-                }
-            ]
+                )
+            ],
+            answer_images=[],
         )
 
-        assert "p.1" in html
-        assert "#1" not in html
-
-    def test_markdown_source_keeps_visible_download_action_when_url_exists(self) -> None:
-        from dlightrag.web.deps import templates
-
-        rendered = templates.env.get_template("partials/source_panel.html").render(
-            sources=[
-                {
-                    "id": "1",
-                    "title": "notes.md",
-                    "download_url": "/web/api/files/raw/doc-notes?workspace=default",
-                    "chunks": [],
-                }
-            ]
-        )
-
-        assert "notes.md" in rendered
-        assert 'href="/web/api/files/raw/doc-notes?workspace=default"' in rendered
-        assert 'aria-label="Download source"' in rendered
+        source = presentation.sources[0]
+        assert source.title == "notes.md"
+        assert source.download_url == "/web/api/files/raw/doc-notes?workspace=default"
+        assert source.chunks[0].page_number == 1
+        assert "first page" in source.chunks[0].content_html

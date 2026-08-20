@@ -19,9 +19,9 @@ from dlightrag.answer.runs.results import project_answer_result
 from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import sse_frame
 from dlightrag.runtime import AnswerRunEvent
-from dlightrag.web.conversations import WEB_SOURCE_DOWNLOAD_BASE
+from dlightrag.web.conversations import WEB_IMAGE_URL_BASE, WEB_SOURCE_DOWNLOAD_BASE
 from dlightrag.web.events import AnswerDoneEvent, AnswerErrorEvent, AnswerProgressEvent
-from dlightrag.web.safe_html import safe_answer_done
+from dlightrag.web.presentation import build_answer_presentation
 
 
 def render_done_event(
@@ -38,19 +38,18 @@ def render_done_event(
         source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
         downloadable_workspaces=downloadable_workspaces,
         visual_workspaces=visual_workspaces,
+        image_url_prefix=WEB_IMAGE_URL_BASE,
     )
     answer = str(projected["answer"])
     handle = projected.get("primary_report")
     return AnswerDoneEvent(
         status="succeeded",
-        html=safe_answer_done(
+        presentation=build_answer_presentation(
             answer=answer,
             sources=projected["sources"],
             answer_images=projected["answer_images"],
+            primary_report=handle if isinstance(handle, str) and handle else None,
         ),
-        answer=answer,
-        answer_images=projected["answer_images"],
-        primary_report=handle if isinstance(handle, str) and handle else None,
     )
 
 

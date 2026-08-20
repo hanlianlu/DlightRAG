@@ -23,6 +23,40 @@ export interface ConversationAttachmentReference {
 
 export type AnswerRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
+export interface PresentationImage {
+  id: string;
+  chunk_id: string;
+  source_ref: string;
+  url: string;
+  thumbnail_url: string;
+  label: string;
+  answer_image_sent: boolean;
+}
+
+export interface PresentationSourceChunk {
+  chunk_idx: number | null;
+  page_number: number | null;
+  content_html: string;
+  image_url: string | null;
+  thumbnail_url: string | null;
+}
+
+export interface PresentationSource {
+  id: string;
+  title: string;
+  source_url: string | null;
+  download_url: string | null;
+  chunks: PresentationSourceChunk[];
+}
+
+export interface AnswerPresentation {
+  answer_text: string;
+  answer_html: string;
+  sources: PresentationSource[];
+  answer_images: PresentationImage[];
+  primary_report?: string | null;
+}
+
 export interface ConversationTurn {
   turn_id: string;
   turn_number: number;
@@ -33,8 +67,7 @@ export interface ConversationTurn {
   user_text: string;
   assistant_text: string;
   user_attachments: ConversationAttachmentReference[];
-  answer_html: string;
-  primary_report: string | null;
+  presentation: AnswerPresentation | null;
   error_kind: string | null;
   error_message: string | null;
   created_at: string;
@@ -135,6 +168,15 @@ export async function deleteAllConversations(signal?: AbortSignal): Promise<void
   if (!response.ok) {
     throw new ConversationApiError(response.status, 'Failed to delete conversations');
   }
+}
+
+export async function getAnswerReport(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<AnswerPresentation> {
+  const id = encodeURIComponent(runId);
+  const response = await fetch(`/web/api/answer/${id}/report`, {signal});
+  return responseJson<AnswerPresentation>(response, 'Failed to load the report');
 }
 
 export async function getAnswerRun(
