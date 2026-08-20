@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.access import AccessAction, WorkspaceRecord, owner_id_from_user
-from dlightrag.answer.runs.results import project_answer_result
+from dlightrag.answer.runs.results import project_answer_result, project_report_sources
 from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.runtime import IdempotencyKeyConflict
@@ -242,7 +242,12 @@ async def answer_run_report(
     return HTMLResponse(
         safe_answer_done(
             answer=markdown,
-            sources=projected["report_sources"],
+            sources=project_report_sources(
+                turn.run.result,
+                source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
+                downloadable_workspaces=downloadable,
+                visual_workspaces=visual,
+            ),
             answer_images=[],
         )
     )

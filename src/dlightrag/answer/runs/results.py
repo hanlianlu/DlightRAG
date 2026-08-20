@@ -20,7 +20,7 @@ from urllib.parse import quote
 from dlightrag_rag.contracts import Reference
 from dlightrag_rag.retrieval import RetrievalContexts
 
-from dlightrag.answer.citations.schemas import SourceReference
+from dlightrag.answer.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.answer.citations.utils import context_chunk_key
 from dlightrag.answer.media import answer_blocks_from_markdown
 from dlightrag.answer.runs.snapshots import dump_answer_snapshot, load_answer_snapshot
@@ -125,15 +125,6 @@ def project_answer_result(
         downloadable_workspaces=downloadable_workspaces,
         visual_workspaces=visual_workspaces,
     )
-    report_source_payloads = project_source_payloads(
-        load_answer_snapshot(
-            {"sources": stored.get("report_sources") or []},
-            image_url_prefix=IMAGE_URL_PREFIX,
-        ),
-        resolver=source_link_builder,
-        downloadable_workspaces=downloadable_workspaces,
-        visual_workspaces=visual_workspaces,
-    )
     answer = str(stored.get("answer") or "")
     report_handle = stored.get("primary_report")
     primary_report = report_handle.strip() if isinstance(report_handle, str) else None
@@ -160,7 +151,6 @@ def project_answer_result(
         "trace": dict(stored.get("trace") or {}),
         "image_descriptions": list(stored.get("image_descriptions") or ()),
         "primary_report": primary_report,
-        "report_sources": [source.model_dump() for source in report_source_payloads],
         "artifacts": [
             {
                 "resource_id": item.get("resource_id"),
@@ -217,10 +207,30 @@ def _public_answer_image(image: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def project_report_sources(
+    stored: Mapping[str, Any],
+    *,
+    source_link_builder: SourceDownloadLinkBuilder | None = None,
+    downloadable_workspaces: set[str] | None = None,
+    visual_workspaces: set[str] | None = None,
+) -> list[SourceReferencePayload]:
+    """Project citation sources for the Primary Report without leaking them on REST."""
+    return project_source_payloads(
+        load_answer_snapshot(
+            {"sources": stored.get("report_sources") or []},
+            image_url_prefix=IMAGE_URL_PREFIX,
+        ),
+        resolver=source_link_builder,
+        downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
+    )
+
+
 __all__ = [
     "AnswerResult",
     "IMAGE_URL_PREFIX",
     "project_answer_result",
+    "project_report_sources",
     "restore_answer_result",
     "store_answer_result",
 ]
