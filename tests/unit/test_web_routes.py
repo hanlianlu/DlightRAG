@@ -554,12 +554,29 @@ class TestWebBootstrap:
 class TestWebFiles:
     """Tests for GET /web/api/files and DELETE /web/api/files."""
 
-    async def test_file_list_returns_html(
+    async def test_file_list_returns_typed_json(
         self, client: AsyncClient, test_config: DlightragConfig
     ) -> None:
         resp = await client.get("/web/api/files")
+
         assert resp.status_code == 200
-        assert "text/html" in resp.headers["content-type"]
+        assert resp.headers["content-type"].startswith("application/json")
+        assert resp.json()["workspace"] == "default"
+        assert resp.json()["files"] == [{"file_name": "test.pdf", "file_path": "/tmp/test.pdf"}]
+        assert resp.json()["ingest"]["busy"] is False
+
+    async def test_file_list_fails_closed_when_snapshot_is_unavailable(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpora.file_panel_snapshot.side_effect = RuntimeError("database down")
+
+        response = await client.get("/web/api/files")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": "Files are temporarily unavailable",
+            "error_type": "unavailable",
+        }
 
     async def test_file_list_derives_display_name_from_path(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
@@ -576,8 +593,7 @@ class TestWebFiles:
         resp = await client.get("/web/api/files")
 
         assert resp.status_code == 200
-        assert ">q4.pdf</span>" in resp.text
-        assert 'title="/tmp/reports/q4.pdf"' in resp.text
+        assert resp.json()["files"] == [{"file_name": "q4.pdf", "file_path": "/tmp/reports/q4.pdf"}]
 
     async def test_file_list_uses_file_panel_snapshot_for_cold_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
@@ -597,7 +613,9 @@ class TestWebFiles:
         resp = await client.get("/web/api/files", params={"workspace": "cold-ws"})
 
         assert resp.status_code == 200
-        assert ">report.pdf</span>" in resp.text
+        assert resp.json()["files"] == [
+            {"file_name": "report.pdf", "file_path": "/tmp/cold/report.pdf"}
+        ]
         mock_application.corpora.file_panel_snapshot.assert_awaited_once_with("cold_ws")
         mock_application.corpora.list_ingested_files.assert_not_awaited()
         mock_application.corpora.get_pipeline_status.assert_not_awaited()
@@ -664,14 +682,50 @@ class TestWebFiles:
         assert "Workspace no longer exists" in resp.text
         mock_application.corpora.get_pipeline_status.assert_not_awaited()
 
-    async def test_ingest_status_done_preserves_panel_content_container(
+    async def test_ingest_status_returns_typed_idle_state(
         self, client: AsyncClient, test_config: DlightragConfig
     ) -> None:
         resp = await client.get("/web/api/ingest-status", params={"workspace": "default"})
 
         assert resp.status_code == 200
-        assert resp.headers["hx-retarget"] == "#panel-content"
-        assert resp.headers["hx-reswap"] == "innerHTML"
+        assert resp.json() == {
+            "busy": False,
+            "message": "",
+            "progress_percent": None,
+            "current_batch": None,
+            "total_batches": None,
+            "documents": None,
+            "pending_enqueues": 0,
+        }
+        assert "hx-retarget" not in resp.headers
+        assert "hx-reswap" not in resp.headers
+
+    async def test_ingest_status_normalizes_progress_and_queue(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpora.get_pipeline_status = AsyncMock(
+            return_value={
+                "busy": True,
+                "latest_message": "Embedding",
+                "docs": 9,
+                "batchs": 4,
+                "cur_batch": 2,
+                "pending_enqueues": 3,
+            }
+        )
+
+        response = await client.get("/web/api/ingest-status", params={"workspace": "default"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "busy": True,
+            "message": "Embedding",
+            "progress_percent": 50,
+            "current_batch": 2,
+            "total_batches": 4,
+            "documents": 9,
+            "pending_enqueues": 3,
+        }
 
     async def test_upload_preserves_filename_for_directory_ingest(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application, tmp_path: Path
@@ -692,6 +746,18 @@ class TestWebFiles:
         )
 
         assert resp.status_code == 200
+        assert resp.json()["workspace"] == "default"
+        assert resp.json()["file_count"] == 1
+        assert resp.json()["queued"] is False
+        assert resp.json()["ingest"] == {
+            "busy": True,
+            "message": "Starting ingest...",
+            "progress_percent": None,
+            "current_batch": None,
+            "total_batches": None,
+            "documents": None,
+            "pending_enqueues": 0,
+        }
         mock_application.corpora.start_ingest_job.assert_awaited_once()
         call = mock_application.corpora.start_ingest_job.await_args
         assert call.args[0] == "default"
@@ -741,6 +807,8 @@ class TestWebFiles:
             params={"file_path": "/tmp/test.pdf"},
         )
         assert resp.status_code == 200
+        assert resp.json()["workspace"] == "default"
+        assert resp.json()["files"] == [{"file_name": "test.pdf", "file_path": "/tmp/test.pdf"}]
         mock_application.corpora.delete_files.assert_awaited_once()
 
     async def test_delete_files_rejects_stale_workspace(

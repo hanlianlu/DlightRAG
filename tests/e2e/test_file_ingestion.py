@@ -49,7 +49,9 @@ def test_file_panel_workspace_switch_replaces_loading_state(page):
     page.click(".ingest-target-pill")
     page.locator(".ui-popover--ingest .ui-popover-item", has_text="Research").click()
 
-    page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
+    page.wait_for_function(
+        "!document.querySelector('#panel-content')?.textContent.includes('Loading files...')"
+    )
     assert "Loading files..." not in page.locator("#panel-content").text_content()
     assert page.locator(".ingest-target-name").text_content() == "Research"
 

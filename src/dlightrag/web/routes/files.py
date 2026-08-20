@@ -4,11 +4,11 @@
 import logging
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from dlightrag_ai.telemetry import safe_log_text
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from dlightrag.access import AccessAction
 from dlightrag.services.corpora import IngestSpec
@@ -22,13 +22,12 @@ from dlightrag.services.errors import (
     UnsafeUploadNameError,
     UploadTooLargeError,
 )
-from dlightrag.web.deps import (
-    enforce_web_access,
-    error_response,
-    get_application,
-    get_workspace,
-    render_partial,
-    templates,
+from dlightrag.web.deps import enforce_web_access, get_application, get_workspace
+from dlightrag.web.file_models import (
+    WebFileItem,
+    WebFilePanelSnapshot,
+    WebIngestStatus,
+    WebUploadReceipt,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,27 +133,42 @@ async def _workspace_is_registered(request: Request, workspace: str) -> bool:
     return workspace in known
 
 
-def _stale_workspace_response() -> HTMLResponse:
-    return error_response(
-        "Workspace no longer exists. Refresh and choose an existing workspace.",
+def _stale_workspace() -> NoReturn:
+    raise HTTPException(
         status_code=409,
+        detail="Workspace no longer exists. Refresh and choose an existing workspace.",
     )
 
 
-def _file_view_models(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _file_view_models(files: list[dict[str, Any]]) -> list[WebFileItem]:
+    rows: list[WebFileItem] = []
     for item in files:
-        row = dict(item)
-        file_path = str(row.get("file_path") or "")
-        file_name = str(row.get("file_name") or row.get("filename") or "")
+        file_path = str(item.get("file_path") or "")
+        file_name = str(item.get("file_name") or item.get("filename") or "")
         if not file_name and file_path:
             file_name = Path(file_path).name
         if not file_name:
-            file_name = str(row.get("doc_id") or "Untitled file")
-        row["file_name"] = file_name
-        row["file_path"] = file_path
-        rows.append(row)
+            file_name = str(item.get("doc_id") or "Untitled file")
+        rows.append(WebFileItem(file_name=file_name, file_path=file_path))
     return rows
+
+
+def _ingest_status(status: dict[str, Any], *, message: str = "") -> WebIngestStatus:
+    pending = max(0, int(status.get("pending_enqueues") or 0))
+    busy = bool(status.get("busy")) or pending > 0
+    batches = max(0, int(status.get("batchs") or 0))
+    current = max(0, int(status.get("cur_batch") or 0))
+    documents = max(0, int(status.get("docs") or 0))
+    progress = min(100, int(current / batches * 100)) if documents and batches else None
+    return WebIngestStatus(
+        busy=busy,
+        message=str(status.get("latest_message") or message or ("Ingesting..." if busy else "")),
+        progress_percent=progress,
+        current_batch=current if documents and batches else None,
+        total_batches=batches if documents and batches else None,
+        documents=documents if documents and batches else None,
+        pending_enqueues=pending,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -162,49 +176,34 @@ def _file_view_models(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/files", response_class=HTMLResponse)
+@router.get("/files", response_model=WebFilePanelSnapshot)
 async def file_list(
     request: Request,
     workspace: str = Depends(get_workspace),
     workspace_name: str | None = Query(default=None, alias="workspace"),
-):
-    """Return file list HTML fragment for panel."""
+) -> WebFilePanelSnapshot:
+    """Return one typed Files panel snapshot."""
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
     if selected_workspace is None:
-        return _stale_workspace_response()
+        _stale_workspace()
     await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
-    return await _file_list_response(request, selected_workspace)
+    return await _file_panel_snapshot(request, selected_workspace)
 
 
-async def _file_list_response(request: Request, workspace: str):
-    application = get_application(request)
-    status: dict[str, Any] = {}
+async def _file_panel_snapshot(request: Request, workspace: str) -> WebFilePanelSnapshot:
     try:
-        snapshot = await application.corpora.file_panel_snapshot(workspace)
-        files = _file_view_models(list(snapshot.get("files") or []))
-        status = dict(snapshot.get("pipeline_status") or {})
+        snapshot = await get_application(request).corpora.file_panel_snapshot(workspace)
     except Exception:
-        logger.debug(
-            "Could not read files panel snapshot for workspace %s",
+        logger.exception(
+            "Could not read Files panel snapshot for workspace %s",
             safe_log_text(workspace),
-            exc_info=True,
         )
-        files = []
-
-    ingest_busy = status.get("busy", False) or status.get("pending_enqueues", 0) > 0
-    if not ingest_busy:
-        status = {}
-
-    return templates.TemplateResponse(
-        request,
-        "partials/file_list.html",
-        {
-            "files": files,
-            "workspace": workspace,
-            "ingest_busy": ingest_busy,
-            "status": status,
-        },
+        raise HTTPException(status_code=503, detail="Files are temporarily unavailable") from None
+    return WebFilePanelSnapshot(
+        workspace=workspace,
+        files=_file_view_models(list(snapshot.get("files") or [])),
+        ingest=_ingest_status(dict(snapshot.get("pipeline_status") or {})),
     )
 
 
@@ -213,7 +212,7 @@ async def _file_list_response(request: Request, workspace: str):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/files/upload", response_class=HTMLResponse)
+@router.post("/files/upload", response_model=WebUploadReceipt)
 async def upload_files(
     request: Request,
     files: list[UploadFile] = File(...),
@@ -233,7 +232,7 @@ async def upload_files(
 
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     if not await _workspace_is_registered(request, selected_workspace):
-        return _stale_workspace_response()
+        _stale_workspace()
     await enforce_web_access(request, AccessAction.WORKSPACE_INGEST, selected_workspace)
 
     # Detect whether the pipeline is already busy so the UI can show a
@@ -261,21 +260,23 @@ async def upload_files(
         if not saved_paths:
             if upload_dir is not None:
                 shutil.rmtree(upload_dir, ignore_errors=True)
-            return error_response("No valid files selected")
+            raise HTTPException(status_code=400, detail="No valid files selected")
     except UnsafeUploadNameError as exc:
         logger.warning("Rejected upload with unsafe filename: %s", exc)
-        return error_response("Upload contains an unsafe filename", status_code=400)
+        raise HTTPException(status_code=400, detail="Upload contains an unsafe filename") from None
     except UploadTooLargeError:
-        return error_response(
-            f"Upload exceeds limit ({per_file_max_mb} MB per file, "
-            f"{cfg.max_upload_size_mb} MB per request)",
+        raise HTTPException(
             status_code=413,
-        )
+            detail=(
+                f"Upload exceeds limit ({per_file_max_mb} MB per file, "
+                f"{cfg.max_upload_size_mb} MB per request)"
+            ),
+        ) from None
     except Exception:
         logger.exception("Upload staging failed")
         if upload_dir is not None:
             shutil.rmtree(upload_dir, ignore_errors=True)
-        return error_response("Upload failed. Please try again.", status_code=500)
+        raise HTTPException(status_code=500, detail="Upload failed. Please try again.") from None
 
     try:
         await application.corpora.start_ingest_job(
@@ -289,27 +290,21 @@ async def upload_files(
         )
         if upload_dir is not None:
             shutil.rmtree(upload_dir, ignore_errors=True)
-        return error_response(
-            "Upload staged but ingest did not start. Please retry.", status_code=500
-        )
+        raise HTTPException(
+            status_code=500,
+            detail="Upload staged but ingest did not start. Please retry.",
+        ) from None
 
-    return templates.TemplateResponse(
-        request,
-        "partials/file_list.html",
-        {
-            "files": [],
-            "workspace": selected_workspace,
-            "ingest_busy": True,
-            "is_queued": already_busy,
-            "file_count": len(saved_paths),
-            "status": {
-                "latest_message": (
-                    "Queued — processing after current batch"
-                    if already_busy
-                    else "Starting ingest..."
-                ),
-            },
-        },
+    return WebUploadReceipt(
+        workspace=selected_workspace,
+        file_count=len(saved_paths),
+        queued=already_busy,
+        ingest=WebIngestStatus(
+            busy=True,
+            message=(
+                "Queued — processing after current batch" if already_busy else "Starting ingest..."
+            ),
+        ),
     )
 
 
@@ -318,41 +313,27 @@ async def upload_files(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/ingest-status", response_class=HTMLResponse)
+@router.get("/ingest-status", response_model=WebIngestStatus)
 async def ingest_status(
     request: Request,
     workspace: str = Depends(get_workspace),
     workspace_name: str | None = Query(default=None, alias="workspace"),
-):
-    """Return either a progress partial (while busy) or the file list (done)."""
+) -> WebIngestStatus:
+    """Return one typed ingest status for browser polling."""
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
     if selected_workspace is None:
-        return _stale_workspace_response()
+        _stale_workspace()
     await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
-    application = get_application(request)
-
     try:
-        ps = await application.corpora.get_pipeline_status(selected_workspace)
+        status = await get_application(request).corpora.get_pipeline_status(selected_workspace)
     except Exception:
-        ps = {"busy": False, "latest_message": "Status unavailable"}
-
-    still_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
-
-    if still_busy:
-        return HTMLResponse(
-            render_partial(
-                "partials/ingest_progress.html",
-                workspace=selected_workspace,
-                status=ps,
-            )
+        logger.exception(
+            "Could not read ingest status for workspace %s",
+            safe_log_text(selected_workspace),
         )
-
-    # Ingest finished -- reload the full file list into the panel.
-    response = await _file_list_response(request, selected_workspace)
-    response.headers["HX-Retarget"] = "#panel-content"
-    response.headers["HX-Reswap"] = "innerHTML"
-    return response
+        raise HTTPException(status_code=503, detail="Ingest status is unavailable") from None
+    return _ingest_status(dict(status or {}))
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +341,7 @@ async def ingest_status(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/files", response_class=HTMLResponse)
+@router.delete("/files", response_model=WebFilePanelSnapshot)
 async def delete_files(
     request: Request,
     workspace: str = Depends(get_workspace),
@@ -371,13 +352,13 @@ async def delete_files(
     application = get_application(request)
     selected_workspace = _resolve_workspace(request.query_params.get("workspace"), workspace)
     if not await _workspace_is_registered(request, selected_workspace):
-        return _stale_workspace_response()
+        _stale_workspace()
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE_FILES, selected_workspace)
 
     try:
         await application.corpora.delete_files(selected_workspace, file_paths=file_paths)
     except Exception:
         logger.exception("Delete failed")
-        return error_response("Delete failed. Please try again.", status_code=500)
+        raise HTTPException(status_code=500, detail="Delete failed. Please try again.") from None
 
-    return await _file_list_response(request, selected_workspace)
+    return await _file_panel_snapshot(request, selected_workspace)

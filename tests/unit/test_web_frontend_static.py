@@ -352,17 +352,15 @@ def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None
 
 
 def test_panel_action_icons_are_accessible_svg_buttons() -> None:
-    file_list = (ROOT / "src/dlightrag/web/templates/partials/file_list.html").read_text(
-        encoding="utf-8"
-    )
+    file_panel = (FRONTEND_UI / "files-panel.ts").read_text(encoding="utf-8")
     source_panel = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
         encoding="utf-8"
     )
 
-    assert "&#10005;" not in file_list
+    assert "&#10005;" not in file_panel
     assert "&#x2B07;" not in source_panel
-    assert 'aria-label="Delete {{ file.file_name }}"' in file_list
-    assert 'class="file-delete-icon"' in file_list
+    assert "aria-label=${`Delete ${file.file_name}`}" in file_panel
+    assert 'class="file-delete-icon"' in file_panel
     assert 'class="source-action-icon-svg"' in source_panel
     assert 'stroke="currentColor"' in source_panel
 

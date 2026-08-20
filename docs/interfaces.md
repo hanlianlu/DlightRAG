@@ -510,9 +510,11 @@ accept a server `conversation_id`; historical files are re-sent as current
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
 `DELETE /workspaces/{workspace}`), while the internal `/web/api/*` surface serves
 the browser (for example `POST /web/api/workspaces/create`,
-`POST /web/api/workspaces/delete`) and answers with whatever that page needs —
-temporarily an HTML fragment for legacy panels, otherwise JSON for state the
-browser owns. These browser routes have no compatibility aliases at their old
+`POST /web/api/workspaces/delete`) and returns typed JSON for browser-owned state. The Files snapshot, upload,
+delete, and two-second ingest poll are JSON contracts rendered by the Lit
+`<file-panel>`; only the temporary rich answer/report projection still carries
+sanitized HTML until the AnswerPresentation migration. These browser routes
+have no compatibility aliases at their old
 `/web/*` paths. Prefer REST or the SDK for programmatic access.
 
 Image support is a deployment capability, not a per-request negotiation, so callers

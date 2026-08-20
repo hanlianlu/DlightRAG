@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 import nh3
 from dlightrag_rag.sourcing.url import validate_public_web_url
 from fastapi import Cookie, HTTPException, Request
-from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
@@ -241,14 +240,6 @@ templates.env.filters["public_source_url"] = _public_source_url
 def render_partial(name: str, **ctx: Any) -> str:
     """Render a Jinja2 partial template to string."""
     return templates.env.get_template(name).render(**ctx)
-
-
-def error_response(message: str, status_code: int = 400) -> HTMLResponse:
-    """Return an HTML error fragment with the given status code."""
-    return HTMLResponse(
-        render_partial("partials/error.html", message=message),
-        status_code=status_code,
-    )
 
 
 def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) -> str:

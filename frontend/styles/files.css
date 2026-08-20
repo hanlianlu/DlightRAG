@@ -4,7 +4,7 @@
  * On phones (390px) → compact but readable.
  * On laptops (1440px) → slightly more relaxed without changing UI character.
  *
- * files.css — Server-rendered file management: file list items, upload zone,
+ * files.css — Lit-rendered file management: file list items, upload zone,
  * ingest target (pill + popover), and progress bar styles.
  */
 

@@ -27,14 +27,6 @@ const BASE_ADD_ATTR = [
   'y2',
 ];
 
-// Permissive profile — trusted server fragments.
-const SANITIZE_CONFIG: Config = {
-  USE_PROFILES: {html: true, svg: true},
-  ALLOW_DATA_ATTR: true,
-  ADD_TAGS: ['line', 'polyline'],
-  ADD_ATTR: [...BASE_ADD_ATTR],
-};
-
 // Strict profile — untrusted LLM answer/preview/highlight content.
 const LLM_SANITIZE_CONFIG: Config = {
   USE_PROFILES: {html: true, svg: true},
@@ -42,14 +34,6 @@ const LLM_SANITIZE_CONFIG: Config = {
   ADD_TAGS: ['line', 'polyline'],
   ADD_ATTR: [...BASE_ADD_ATTR],
 };
-
-export function sanitizeHtml(html: string): string {
-  return DOMPurify.sanitize(html, SANITIZE_CONFIG) as string;
-}
-
-export function setSanitizedHtml(element: Element, html: string): void {
-  element.innerHTML = sanitizeHtml(html);
-}
 
 export function setSanitizedLlmHtml(element: Element, html: string): void {
   element.innerHTML = DOMPurify.sanitize(html, LLM_SANITIZE_CONFIG) as string;
