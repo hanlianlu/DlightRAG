@@ -20,6 +20,21 @@ The upgrade is the browser default, not a second principal:
 - `none` and `simple` do not grow a login product. Operators who want a hosted
   login page in front of every surface keep using a gateway or IAP.
 
+Session hardening ships with the PKCE slice, not as a separate product
+(reference: DeerFlow 2.0 auth audit, `docs/plans/2026-08-20-pkce-deerflow-research.md`;
+DeerFlow has no OAuth/PKCE of its own, so nothing there is copied for the flow):
+
+- a `token_version` claim lets a password change or operator reset revoke
+  existing cookies immediately instead of waiting out `exp`;
+- CSRF double-submit cookie plus an Origin check on state-changing and login
+  routes; `secrets.compare_digest` comparisons;
+- the access token lives only in the HttpOnly cookie and never appears in
+  response JSON;
+- auth middleware stays fail-closed behind an explicit public-path allowlist;
+- rate limiting for login uses shared storage, not in-process counters;
+- no OAuth config fields or callback shapes are declared before the flow
+  exists (dead scaffolding).
+
 Owner projection stays `jwt` + issuer + `sub`. Memory and Answer Runs keep
 using that owner. This slice does not invent a cookie-only identity.
 
