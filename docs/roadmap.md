@@ -25,7 +25,7 @@ using that owner. This slice does not invent a cookie-only identity.
 
 ## Deferred from the M8 deviation audit
 
-- Durable compaction runtime: Context Projection seeds `summary=None`;
-  `select_compaction_boundary` / `should_compact` are vocabulary only.
-- Measured token anchors: production seeds `TokenAnchor` zeros; live capacity
-  accounting is estimate-only.
+Both M8-D13 items shipped after Milestone 8: the durable compaction runtime
+commits `CompactionEntry` projections at the proactive `H` trigger, and
+provider-measured token anchors feed live capacity accounting. Nothing from
+the audit remains deferred.
