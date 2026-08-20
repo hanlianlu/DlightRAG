@@ -2162,6 +2162,16 @@ class PGAnswerRunStore(PostgresOperationRunner):
 
         return await self._run_read(_operation)
 
+    async def blob_size(self, *, owner_id: str, digest: str) -> int | None:
+        """Return one blob's byte size; unknown digests return ``None``."""
+        owner = _require_owner(owner_id)
+
+        async def _operation(conn: Any) -> int | None:
+            size = await conn.fetchval(_SELECT_BLOB_SIZE, owner, digest)
+            return None if size is None else int(size)
+
+        return await self._run_read(_operation)
+
     # -- cancellation -------------------------------------------------
     async def rescan_cancel_pending(self, *, worker_id: str) -> list[tuple[str, str]]:
         """Return locally leased cancel-pending runs for this worker.

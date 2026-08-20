@@ -87,6 +87,32 @@ class _RunApplication:
         self.replay_record: AnswerRunRecord | None = None
         self.cancellation = CancellationOutcome(outcome="pending", run=_record(status="running"))
         self.closed_subscribers = 0
+        self.artifact_bytes: bytes | None = None
+
+    async def artifact_size(self, *, owner_id: str, run_id: str, resource_id: str) -> int | None:
+        del owner_id, run_id, resource_id
+        return None if self.artifact_bytes is None else len(self.artifact_bytes)
+
+    async def open_artifact(
+        self,
+        *,
+        owner_id: str,
+        run_id: str,
+        resource_id: str,
+        offset: int = 0,
+        length: int | None = None,
+    ) -> AsyncIterator[bytes] | None:
+        del owner_id, run_id, resource_id
+        if self.artifact_bytes is None:
+            return None
+        blob = self.artifact_bytes[max(0, offset) :]
+        if length is not None:
+            blob = blob[: max(0, length)]
+
+        async def _iterate() -> AsyncIterator[bytes]:
+            yield blob
+
+        return _iterate()
 
     async def create(
         self,
@@ -694,3 +720,87 @@ async def test_schema_validation_error_is_a_safe_503(
 
     assert response.status_code == 503
     assert "dlightrag_answer_runs" not in response.text
+
+
+# ---------------------------------------------------------------------------
+# Artifact reads
+# ---------------------------------------------------------------------------
+
+
+async def test_full_artifact_read_streams_without_a_range(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    run_application.artifact_bytes = b"0123456789"
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/primary_report")
+
+    assert response.status_code == 200
+    assert response.content == b"0123456789"
+    assert response.headers["content-type"].startswith("application/octet-stream")
+    assert response.headers["accept-ranges"] == "bytes"
+    assert "content-range" not in response.headers
+
+
+async def test_open_ended_range_returns_206_with_a_content_range(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    run_application.artifact_bytes = b"0123456789"
+
+    response = await client.get(
+        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=5-"}
+    )
+
+    assert response.status_code == 206
+    assert response.content == b"56789"
+    assert response.headers["content-range"] == "bytes 5-9/10"
+
+
+async def test_suffix_range_returns_the_last_bytes(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    run_application.artifact_bytes = b"0123456789"
+
+    response = await client.get(
+        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=-4"}
+    )
+
+    assert response.status_code == 206
+    assert response.content == b"6789"
+    assert response.headers["content-range"] == "bytes 6-9/10"
+
+
+async def test_closed_range_returns_exactly_the_window(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    run_application.artifact_bytes = b"0123456789"
+
+    response = await client.get(
+        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=2-5"}
+    )
+
+    assert response.status_code == 206
+    assert response.content == b"2345"
+    assert response.headers["content-range"] == "bytes 2-5/10"
+
+
+async def test_unsatisfiable_range_is_416_with_the_total(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    run_application.artifact_bytes = b"0123456789"
+
+    response = await client.get(
+        f"/answer/{_RUN_ID}/artifacts/primary_report", headers={"Range": "bytes=20-"}
+    )
+
+    assert response.status_code == 416
+    assert response.headers["content-range"] == "bytes */10"
+
+
+async def test_unknown_artifact_is_404(
+    client: AsyncClient, run_application: _RunApplication
+) -> None:
+    run_application.artifact_bytes = None
+
+    response = await client.get(f"/answer/{_RUN_ID}/artifacts/missing")
+
+    assert response.status_code == 404

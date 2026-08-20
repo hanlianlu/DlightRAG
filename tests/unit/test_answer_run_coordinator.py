@@ -374,6 +374,10 @@ class _MemoryStore:
         if False:  # pragma: no cover - never yields for this double
             yield b""
 
+    async def blob_size(self, *, owner_id: str, digest: str) -> int | None:
+        del owner_id, digest
+        return None
+
 
 class _Executor:
     """A deterministic stand-in for AnswerExecutor."""

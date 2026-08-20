@@ -317,18 +317,50 @@ async def read_answer_artifact(
     user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
     application = get_application(request)
-    header = request.headers.get("range", "")
+    header = request.headers.get("range", "").strip()
+    total = await application.answers.artifact_size(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        resource_id=resource_id,
+    )
+    if total is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
     offset = 0
     length = None
-    if header.lower().startswith("bytes="):
+    status_code = 200
+    content_range = None
+    if header:
+        if not header.lower().startswith("bytes=") or "," in header:
+            raise HTTPException(
+                status_code=416,
+                detail="range not satisfiable",
+                headers={"Content-Range": f"bytes */{total}"},
+            )
         spec = header.split("=", 1)[1]
         start_s, _, end_s = spec.partition("-")
-        if start_s.isdigit():
-            offset = int(start_s)
-        if end_s.isdigit():
-            length = max(0, int(end_s) - offset + 1)
-        else:
-            length = 1_048_576
+        try:
+            if start_s == "":
+                suffix = int(end_s)
+                if suffix <= 0 or total == 0:
+                    raise ValueError
+                suffix = min(suffix, total)
+                offset = total - suffix
+                length = suffix
+            else:
+                start = int(start_s)
+                end = int(end_s) if end_s else total - 1
+                if start >= total or end < start:
+                    raise ValueError
+                offset = start
+                length = min(end, total - 1) - start + 1
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=416,
+                detail="range not satisfiable",
+                headers={"Content-Range": f"bytes */{total}"},
+            ) from exc
+        status_code = 206
+        content_range = f"bytes {offset}-{offset + length - 1}/{total}"
     stream = await application.answers.open_artifact(
         owner_id=owner_id_from_user(user),
         run_id=run_id,
@@ -345,8 +377,9 @@ async def read_answer_artifact(
             "Accept-Ranges": "bytes",
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="download"',
+            **({"Content-Range": content_range} if content_range else {}),
         },
-        status_code=206 if header else 200,
+        status_code=status_code,
     )
 
 

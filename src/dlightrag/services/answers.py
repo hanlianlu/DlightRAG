@@ -175,6 +175,8 @@ class _AnswerRunRepository(AnswerRunAcceptor[RunCreation], Protocol):
         length: int | None = None,
     ) -> AsyncIterator[bytes]: ...
 
+    async def blob_size(self, *, owner_id: str, digest: str) -> int | None: ...
+
 
 class _RunScheduler(Protocol):
     """The started coordinator accepted runs execute and stream through."""
@@ -659,6 +661,14 @@ class AnswerService:
             offset=max(0, offset),
             length=length,
         )
+
+    async def artifact_size(self, *, owner_id: str, run_id: str, resource_id: str) -> int | None:
+        """Return one artifact's byte size; unknown artifacts return ``None``."""
+        refs = await self._store.list_run_artifacts(owner_id=owner_id, run_id=run_id)
+        match = next((item for item in refs if item.resource_id == resource_id), None)
+        if match is None:
+            return None
+        return await self._store.blob_size(owner_id=owner_id, digest=match.digest)
 
     async def get(self, *, owner_id: str, run_id: str) -> AnswerRunRecord | None:
         """Read one owned run; unknown and foreign identifiers both return ``None``."""

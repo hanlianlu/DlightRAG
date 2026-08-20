@@ -175,6 +175,12 @@ class _Store:
         if blob is not None:
             yield blob[max(0, offset) :]
 
+    async def blob_size(self, *, owner_id: str, digest: str) -> int | None:
+        if owner_id != _OWNER:
+            return None
+        blob = self._blobs.get(digest)
+        return None if blob is None else len(blob)
+
 
 class _Coordinator:
     """The started coordinator, replaying a scripted event stream."""

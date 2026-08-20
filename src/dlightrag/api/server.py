@@ -160,7 +160,11 @@ def create_app(*, include_web_app: bool = True) -> FastAPI:
         else:
             error_type = "internal"
         body = ErrorDetail(detail=str(exc.detail), error_type=error_type)
-        return JSONResponse(status_code=status, content=body.model_dump())
+        return JSONResponse(
+            status_code=status,
+            content=body.model_dump(),
+            headers=exc.headers,
+        )
 
     @application.exception_handler(ApplicationClosedError)
     @application.exception_handler(CorpusUnavailableError)
