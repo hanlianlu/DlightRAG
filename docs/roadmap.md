@@ -10,30 +10,40 @@ Web today stores a pasted bearer token in an HttpOnly cookie. REST and MCP
 already use the same JWT. That identity model stays: DlightRAG is a resource
 server. It does not become an IdP, store passwords, or keep a user directory.
 
-The upgrade is the browser default, not a second principal:
+The Web frontend is never bare-exposed: every deployment fronts it with an
+edge that already authenticates humans (Cloudflare Access / Zero Trust, or
+Azure Easy Auth / Entra front door). So the browser upgrade is **edge-asserted
+identity**, not a new in-app login flow:
 
-- For `auth_mode: jwt` with an issuer/JWKS, the Web login default is
-  Authorization Code + PKCE against that issuer. Tokens remain in the existing
-  HttpOnly cookie. Refresh is the issuer's job.
-- Paste-token login stays as an operator and development hatch, not the human
-  default.
-- `none` and `simple` do not grow a login product. Operators who want a hosted
-  login page in front of every surface keep using a gateway or IAP.
+- For `auth_mode: jwt` behind Cloudflare Access, the Web surface accepts the
+  edge-verified assertion (`Cf-Access-Jwt-Assertion` header or the
+  `CF_Authorization` cookie JWT) and verifies issuer + audience against the
+  team JWKS. Behind Azure, it accepts the platform-injected principal
+  (`X-MS-CLIENT-PRINCIPAL`). The origin renders no login page and issues no
+  Web token.
+- Owner projection stays `jwt` + issuer + `sub` (the edge token's issuer for
+  the Web surface; the external issuer for REST/MCP bearer tokens).
+- Paste-token login shrinks to a local-development hatch, not a production
+  surface.
+- **PKCE is dropped** (decided 2026-08-20): with an always-edge-fronted
+  browser surface the edge owns login, so an in-app authorization-code flow
+  has no deployment to run in.
+- `none` and `simple` do not grow a login product. Operators who want a
+  hosted login page in front of every surface keep using a gateway or IAP.
 
-Session hardening ships with the PKCE slice, not as a separate product
-(reference: DeerFlow 2.0 auth audit, `docs/plans/2026-08-20-pkce-deerflow-research.md`;
-DeerFlow has no OAuth/PKCE of its own, so nothing there is copied for the flow):
+Session hardening ships with the edge-identity slice (reference: DeerFlow 2.0
+auth audit, `docs/plans/2026-08-20-pkce-deerflow-research.md`):
 
-- a `token_version` claim lets a password change or operator reset revoke
-  existing cookies immediately instead of waiting out `exp`;
-- CSRF double-submit cookie plus an Origin check on state-changing and login
-  routes; `secrets.compare_digest` comparisons;
-- the access token lives only in the HttpOnly cookie and never appears in
-  response JSON;
+- CSRF double-submit cookie plus an Origin check on state-changing routes;
+  `secrets.compare_digest` comparisons;
 - auth middleware stays fail-closed behind an explicit public-path allowlist;
-- rate limiting for login uses shared storage, not in-process counters;
-- no OAuth config fields or callback shapes are declared before the flow
-  exists (dead scaffolding).
+- edge-injected identity is always verified (issuer/audience/JWKS) and never
+  trusted as a plaintext header;
+- no access token is ever issued in response JSON.
+
+For the bare-exposed or no-edge case, the answer stays a gateway or IAP in
+front of every surface — DlightRAG does not grow its own login product there
+either.
 
 Owner projection stays `jwt` + issuer + `sub`. Memory and Answer Runs keep
 using that owner. This slice does not invent a cookie-only identity.
