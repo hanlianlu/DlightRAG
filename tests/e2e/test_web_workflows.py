@@ -7,19 +7,16 @@ from playwright.sync_api import Locator, Page, expect
 pytestmark = pytest.mark.e2e
 
 
-def _open_ready_chat(page: Page) -> tuple[str, Locator]:
+def _open_ready_chat(page: Page) -> Locator:
     page.goto("/web/")
-    active_conversation = page.locator('[data-conversation-id][aria-current="page"]')
-    expect(active_conversation).to_have_count(1)
-    conversation_id = active_conversation.get_attribute("data-conversation-id")
-    assert conversation_id
     composer = page.get_by_label("Message")
     expect(composer).to_be_visible()
-    return conversation_id, composer
+    expect(page.locator('[data-conversation-id][aria-current="page"]')).to_have_count(0)
+    return composer
 
 
 def test_answer_submission_uses_active_conversation_and_restores_saved_history(page: Page) -> None:
-    conversation_id, composer = _open_ready_chat(page)
+    composer = _open_ready_chat(page)
     query = "How does DlightRAG work?"
     composer.fill(query)
 
@@ -38,9 +35,11 @@ def test_answer_submission_uses_active_conversation_and_restores_saved_history(p
     workspaces = payload["workspaces"]
     assert isinstance(workspaces, list)
     assert set(workspaces) == {"default", "research"}
-    assert payload["conversation_id"] == conversation_id
+    assert payload["conversation_id"] is None
     assert payload["submission_id"]
     expect(page.get_by_text("DlightRAG is a multimodal RAG system.", exact=True)).to_be_visible()
+    page.wait_for_url("**/web/conversations/*")
+    expect(page.locator('[data-conversation-id][aria-current="page"]')).to_have_count(1)
 
     page.reload()
 
@@ -52,7 +51,7 @@ def test_answer_submission_uses_active_conversation_and_restores_saved_history(p
 
 
 def test_composing_line_break_does_not_submit_but_plain_line_break_does(page: Page) -> None:
-    _conversation_id, composer = _open_ready_chat(page)
+    composer = _open_ready_chat(page)
     composer.fill("IME draft")
     answer_requests: list[str] = []
     page.on(

@@ -65,7 +65,7 @@ def _open_ready_page(page: Page) -> None:
         ),
         timeout=10000,
     ) as history_response:
-        page.goto("/web/")
+        page.goto(f"/web/conversations/{_CONVERSATION['conversation_id']}")
     history_response.value.finished()
     page.wait_for_selector(".composer-input", timeout=10000)
 

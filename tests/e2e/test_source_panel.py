@@ -7,13 +7,27 @@ import pytest
 
 
 def _open_ready_page(page) -> None:
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+    conversation = page.evaluate(
+        """async () => {
+            const token = document.cookie.split('; ')
+                .find(value => value.startsWith('dlightrag_web_csrf='))?.split('=')[1] || '';
+            const response = await fetch('/web/api/conversations', {
+                method: 'POST',
+                headers: {'X-CSRF-Token': decodeURIComponent(token)},
+            });
+            return await response.json();
+        }"""
+    )
+    conversation_id = str(conversation["conversation_id"])
     with page.expect_response(
         lambda response: (
             response.request.method == "GET" and response.url.endswith("/history") and response.ok
         ),
         timeout=10000,
     ) as history_response:
-        page.goto("/web/")
+        page.goto(f"/web/conversations/{conversation_id}")
     history_response.value.finished()
     page.wait_for_selector(".composer-input", timeout=10000)
 
@@ -174,6 +188,19 @@ def test_reference_item_keyboard_opens_source_panel(page):
 
 
 @pytest.mark.e2e
+def test_conversation_route_change_closes_sources_panel(page):
+    _open_ready_page(page)
+    _inject_static_source_answer(page)
+    page.get_by_role("button", name="Open report.pdf").click()
+    page.wait_for_selector('#panel.open[data-panel-kind="sources"]')
+
+    page.get_by_role("button", name="New chat").click()
+
+    page.wait_for_url("**/web/")
+    assert page.locator("#panel").evaluate("element => !element.classList.contains('open')")
+
+
+@pytest.mark.e2e
 def test_composer_attachment_picker_keeps_sources_panel_open(page):
     _open_ready_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
@@ -299,7 +326,11 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
         route.continue_()
 
     page.route("**/web/api/conversations**", handle_conversations)
-    _open_ready_page(page)
+    with page.expect_response(
+        lambda response: response.url.endswith("/public-source-history/history") and response.ok
+    ) as history_response:
+        page.goto("/web/conversations/public-source-history")
+    history_response.value.finished()
     hidden_link = page.locator('.source-data a[aria-label="Open source"]')
     assert hidden_link.get_attribute("target") == "_blank"
     page.locator(".answer-ref-item").press("Enter")

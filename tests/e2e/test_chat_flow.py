@@ -22,8 +22,11 @@ def test_chat_submit_streams_answer(page):
     composer.fill("What is DlightRAG?")
     page.click(".composer-send")
 
-    # After submission the composer clears
+    # After acceptance the composer clears and the unpersisted root route adopts
+    # the server-created conversation without replacing the live viewport.
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
+    page.wait_for_url("**/web/conversations/*")
+    assert page.locator("[aria-current='page']").count() == 1
 
     # AI message container should appear with progressive content
     page.wait_for_selector(".app.has-messages", timeout=10000)
@@ -254,35 +257,25 @@ def test_navigating_away_from_a_pending_run_detaches_instead_of_blocking(page: P
         [[_frame(index + 1, "progress", '{"phase": "planning"}')] for index in range(200)],
     )
 
-    first = page.locator("[aria-current='page']").get_attribute("data-conversation-id")
-    page.locator("#new-conversation-btn").click()
-    page.wait_for_function(
-        "id => document.querySelector('[aria-current=\"page\"]')?.dataset.conversationId !== id",
-        arg=first,
-    )
-    second = page.locator("[aria-current='page']").get_attribute("data-conversation-id")
     _submit(page, "What is DlightRAG?")
     page.wait_for_selector(".composer-send.is-stop", timeout=10000)
+    conversation_id = page.locator("[aria-current='page']").get_attribute("data-conversation-id")
+    assert conversation_id
 
-    # Following must leave the conversation shell usable.
+    # Following must leave the conversation shell usable. New Chat is a route,
+    # not an eager database row, and leaving only detaches this tab's reader.
     assert page.locator("#new-conversation-btn").is_enabled()
-    page.locator(f'[data-conversation-id="{first}"]').get_by_role("button").first.click(
-        timeout=2000
-    )
-
-    page.wait_for_function(
-        "id => document.querySelector('[aria-current=\"page\"]')?.dataset.conversationId === id",
-        arg=first,
-        timeout=5000,
-    )
+    page.locator("#new-conversation-btn").click()
+    page.wait_for_url("**/web/")
     page.wait_for_selector(".composer-send:not(.is-stop)", timeout=5000)
+    assert page.locator("[aria-current='page']").count() == 0
     assert page.locator('[class*="userMessageWrapper"]').count() == 0
     assert transport["cancelled"] == 0
-    # The run the other conversation owns is untouched and still pending.
+    # The run the conversation owns is untouched and still pending.
     status = page.evaluate(
         "id => fetch(`/web/api/conversations/${id}/history`)"
         ".then(r => r.json()).then(h => h.turns[0].status)",
-        second,
+        conversation_id,
     )
     assert status in ("queued", "running")
 

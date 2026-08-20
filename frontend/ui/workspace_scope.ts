@@ -3,7 +3,7 @@
 import {html, nothing, svg, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {WorkspaceRecord} from '../events/bus.ts';
-import {BusController, LightElement} from '../lib/lit_host.ts';
+import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
@@ -30,7 +30,7 @@ export class WorkspaceScope extends LightElement {
     constructor() {
         super();
         this.open = false;
-        new BusController(this, 'workspaceCreated', 'workspaceDeleted', 'workspaceToggled');
+        new StoreController(this, workspaceStore);
         this.addEventListener('click', (event) => { this.#toggleFromChrome(event); });
         this.addEventListener('keydown', (event) => {
             if (event.key !== 'Enter' && event.key !== ' ') return;

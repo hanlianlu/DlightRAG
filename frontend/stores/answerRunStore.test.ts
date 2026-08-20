@@ -93,6 +93,19 @@ test('tracking the run already followed keeps its cursor', () => {
   assert.equal(store.lastSequence('c1', 'run-9'), 3);
 });
 
+test('an accepted new chat transfers its idempotency state to the server conversation', () => {
+  const store = new AnswerRunStore(() => 'submission-new');
+  store.getOrCreateSubmissionId('__new_chat__', 'fingerprint');
+  store.attachRun('__new_chat__', 'run-created');
+  store.recordSequence('__new_chat__', 'run-created', 4);
+
+  store.transfer('__new_chat__', 'conversation-created');
+
+  assert.equal(store.runId('__new_chat__'), null);
+  assert.equal(store.runId('conversation-created'), 'run-created');
+  assert.equal(store.lastSequence('conversation-created', 'run-created'), 4);
+});
+
 test('clearing a conversation forgets its run', () => {
   const store = new AnswerRunStore(ids());
   store.trackRun('c1', 'run-9');

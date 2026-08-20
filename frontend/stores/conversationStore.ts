@@ -1,69 +1,62 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import type {ConversationHistory, ConversationSummary} from '../api/conversations.ts';
+import {
+  ConversationApiError,
+  deleteAllConversations,
+  deleteConversation,
+  getConversationHistory,
+  listConversations,
+  renameConversation,
+  type ConversationHistory,
+  type ConversationSummary,
+} from '../api/conversations.ts';
+import {isAbortError} from '../lib/errors.ts';
 import {Store} from './base.ts';
 
-const ACTIVE_KEY = 'dlightrag.active_conversation_id';
+export type ConversationListState = 'loading' | 'ready' | 'error' | 'empty-error';
+export type ConversationViewState = 'new' | 'loading' | 'ready' | 'unavailable' | 'error';
+export type ConversationOpenResult = 'ready' | 'unavailable' | 'error' | 'stale';
+export type ConversationMutationResult = 'ok' | 'missing' | 'error';
 
-function storedActiveConversationId(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(ACTIVE_KEY);
-  } catch (_error) {
-    return null;
-  }
+export interface ConversationApi {
+  list(signal?: AbortSignal): Promise<ConversationSummary[]>;
+  history(conversationId: string, signal?: AbortSignal): Promise<ConversationHistory>;
+  rename(
+    conversationId: string,
+    title: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationSummary>;
+  delete(conversationId: string, signal?: AbortSignal): Promise<void>;
+  deleteAll(signal?: AbortSignal): Promise<void>;
 }
 
-function storeActiveConversationId(conversationId: string): void {
-  try {
-    window.localStorage.setItem(ACTIVE_KEY, conversationId);
-  } catch (_error) {
-    // Ignore unavailable or blocked storage.
-  }
-}
+const browserConversationApi: ConversationApi = {
+  list: listConversations,
+  history: getConversationHistory,
+  rename: renameConversation,
+  delete: deleteConversation,
+  deleteAll: deleteAllConversations,
+};
 
-function clearStoredActiveConversationId(): void {
-  try {
-    window.localStorage.removeItem(ACTIVE_KEY);
-  } catch (_error) {
-    // Ignore unavailable or blocked storage.
-  }
-}
-
+/** Route-selected conversation data and its async lifecycle. */
 export class ConversationStore extends Store {
+  readonly #api: ConversationApi;
   #conversations: ConversationSummary[] = [];
-  #activeConversationId: string | null = storedActiveConversationId();
+  #activeConversationId: string | null = null;
   #history: ConversationHistory | null = null;
-  /**
-   * Monotonic request counter and the store's concurrency guard. Bumped at
-   * every lifecycle boundary (`beginRequest`, `beginLiveAnswer`,
-   * `finishLiveAnswer`, and active-conversation `remove`). Async callers
-   * capture the value they started with and re-check it via `isCurrentRequest`
-   * / `canRenderHistory`, so results from a superseded request are dropped
-   * instead of clobbering newer state.
-   */
-  #generation = 0;
-  /**
-   * Conversation currently receiving a streamed answer, or `null` when idle.
-   * While non-null it acts as a lock: `select()` of a *different* conversation
-   * is deferred into `#pendingSelectionId` instead of switching, and
-   * `canRenderHistory` returns false so a history load cannot overwrite the
-   * in-progress answer. Cleared only by `finishLiveAnswer`.
-   */
-  #liveAnswerConversationId: string | null = null;
-  /**
-   * A selection requested *during* a live answer, held until it ends.
-   * `finishLiveAnswer` returns it (unless discarded) so the caller can apply
-   * the deferred switch; also cleared if its target conversation is removed.
-   */
-  #pendingSelectionId: string | null = null;
-  /**
-   * Whether `#activeConversationId`'s history is loaded and thus answerable.
-   * Gates `answerConversationId`; set true by `setHistory`, reset to false when
-   * switching conversations (before history arrives) or when the active
-   * conversation is removed.
-   */
-  #answerReady = this.#activeConversationId !== null;
+  #listState: ConversationListState = 'loading';
+  #viewState: ConversationViewState = 'new';
+  #viewRevision = 0;
+  #mutationPending = false;
+  #listGeneration = 0;
+  #viewGeneration = 0;
+  #listController: AbortController | null = null;
+  #viewController: AbortController | null = null;
+
+  constructor(api: ConversationApi = browserConversationApi) {
+    super();
+    this.#api = api;
+  }
 
   get conversations(): readonly ConversationSummary[] {
     return this.#conversations;
@@ -77,109 +70,231 @@ export class ConversationStore extends Store {
     return this.#history;
   }
 
+  get listState(): ConversationListState {
+    return this.#listState;
+  }
+
+  get viewState(): ConversationViewState {
+    return this.#viewState;
+  }
+
+  get viewRevision(): number {
+    return this.#viewRevision;
+  }
+
+  get mutationPending(): boolean {
+    return this.#mutationPending;
+  }
+
+  get canAnswer(): boolean {
+    return this.#viewState === 'new' || this.#viewState === 'ready';
+  }
 
   get answerConversationId(): string | null {
-    return this.#answerReady ? this.#activeConversationId : null;
+    return this.#viewState === 'ready' ? this.#activeConversationId : null;
   }
 
-  replaceList(conversations: ConversationSummary[]): void {
-    this.#conversations = [...conversations];
-    this.emit('conversationListChanged', {conversations: this.#conversations});
+  get fallbackConversationId(): string | null {
+    return this.#conversations[0]?.conversation_id ?? null;
   }
 
-  initialSelection(): ConversationSummary | null {
-    const stored = this.#activeConversationId;
-    return this.#conversations.find(
-      (conversation) => conversation.conversation_id === stored,
-    ) ?? this.#conversations[0] ?? null;
-  }
-
-  select(conversationId: string): boolean {
-    if (
-      this.#liveAnswerConversationId !== null
-      && this.#liveAnswerConversationId !== conversationId
-    ) {
-      this.#pendingSelectionId = conversationId;
-      return false;
+  async loadList(): Promise<void> {
+    this.#listController?.abort();
+    const controller = new AbortController();
+    const generation = ++this.#listGeneration;
+    this.#listController = controller;
+    this.#listState = 'loading';
+    this.changed();
+    try {
+      const conversations = await this.#api.list(controller.signal);
+      if (generation !== this.#listGeneration) return;
+      this.#conversations = this.#sort(conversations);
+      this.#listState = 'ready';
+      this.changed();
+    } catch (error) {
+      if (isAbortError(error) || generation !== this.#listGeneration) return;
+      this.#listState = this.#conversations.length > 0 ? 'error' : 'empty-error';
+      this.changed();
+    } finally {
+      if (this.#listController === controller) this.#listController = null;
     }
-    if (this.#activeConversationId !== conversationId) {
-      this.#history = null;
-      this.#answerReady = false;
-    }
+  }
+
+  openNew(): void {
+    this.#abortView();
+    this.#activeConversationId = null;
+    this.#history = null;
+    this.#viewState = 'new';
+    this.#publishView();
+  }
+
+  async open(
+    conversationId: string,
+    options: {showLoading?: boolean; preserveOnError?: boolean} = {},
+  ): Promise<ConversationOpenResult> {
+    this.#viewController?.abort();
+    const controller = new AbortController();
+    const generation = ++this.#viewGeneration;
+    const sameConversation = this.#activeConversationId === conversationId;
+    this.#viewController = controller;
     this.#activeConversationId = conversationId;
-    storeActiveConversationId(conversationId);
-    this.emit('conversationSelected', {conversationId});
-    return true;
+    if (!sameConversation) this.#history = null;
+    if (options.showLoading !== false) {
+      this.#viewState = 'loading';
+      this.#publishView();
+    }
+
+    try {
+      const history = await this.#api.history(conversationId, controller.signal);
+      if (generation !== this.#viewGeneration) return 'stale';
+      this.#history = history;
+      this.#activeConversationId = conversationId;
+      this.#upsert(history.conversation);
+      this.#viewState = 'ready';
+      this.#publishView();
+      return 'ready';
+    } catch (error) {
+      if (isAbortError(error) || generation !== this.#viewGeneration) return 'stale';
+      if (this.#isRouteUnavailable(error)) {
+        this.#removeSummary(conversationId);
+        this.#history = null;
+        this.#activeConversationId = conversationId;
+        this.#viewState = 'unavailable';
+        this.#publishView();
+        return 'unavailable';
+      }
+      if (options.preserveOnError && sameConversation && this.#history !== null) {
+        return 'error';
+      }
+      this.#history = null;
+      this.#viewState = 'error';
+      this.#publishView();
+      return 'error';
+    } finally {
+      if (this.#viewController === controller) this.#viewController = null;
+    }
   }
 
-  setHistory(history: ConversationHistory, generation: number): boolean {
-    if (
-      !this.canRenderHistory(generation)
-      || history.conversation.conversation_id !== this.#activeConversationId
-    ) {
-      return false;
-    }
-    this.#history = history;
-    this.#answerReady = true;
-    this.upsertSummary(history.conversation);
-    return true;
+  async refreshActive(): Promise<ConversationOpenResult> {
+    const conversationId = this.#activeConversationId;
+    if (!conversationId) return 'stale';
+    return this.open(conversationId, {showLoading: false, preserveOnError: true});
+  }
+
+  adoptCreatedConversation(summary: ConversationSummary): void {
+    this.#abortView();
+    this.#upsert(summary);
+    this.#activeConversationId = summary.conversation_id;
+    this.#history = null;
+    this.#viewState = 'ready';
+    // The live answer already owns the viewport; only list consumers update.
+    this.changed();
   }
 
   upsertSummary(summary: ConversationSummary): void {
+    this.#upsert(summary);
+    this.changed();
+  }
+
+  async rename(conversationId: string, title: string): Promise<ConversationMutationResult> {
+    return this.#mutate(async () => {
+      try {
+        this.#upsert(await this.#api.rename(conversationId, title));
+        return 'ok';
+      } catch (error) {
+        if (!this.#isMissing(error)) return 'error';
+        this.#removeSummary(conversationId);
+        if (this.#activeConversationId === conversationId) {
+          this.#history = null;
+          this.#viewState = 'unavailable';
+          this.#publishView();
+        }
+        return 'missing';
+      }
+    });
+  }
+
+  async delete(conversationId: string): Promise<ConversationMutationResult> {
+    return this.#mutate(async () => {
+      let result: ConversationMutationResult = 'ok';
+      try {
+        await this.#api.delete(conversationId);
+      } catch (error) {
+        if (!this.#isMissing(error)) return 'error';
+        result = 'missing';
+      }
+      this.#removeSummary(conversationId);
+      return result;
+    });
+  }
+
+  async deleteAll(): Promise<ConversationMutationResult> {
+    return this.#mutate(async () => {
+      try {
+        await this.#api.deleteAll();
+      } catch {
+        return 'error';
+      }
+      this.#conversations = [];
+      return 'ok';
+    });
+  }
+
+  dispose(): void {
+    this.#listController?.abort();
+    this.#abortView();
+  }
+
+  async #mutate(
+    operation: () => Promise<ConversationMutationResult>,
+  ): Promise<ConversationMutationResult> {
+    if (this.#mutationPending) return 'error';
+    this.#mutationPending = true;
+    this.changed();
+    try {
+      return await operation();
+    } finally {
+      this.#mutationPending = false;
+      this.changed();
+    }
+  }
+
+  #publishView(): void {
+    this.#viewRevision += 1;
+    this.changed();
+  }
+
+  #abortView(): void {
+    this.#viewController?.abort();
+    this.#viewController = null;
+    this.#viewGeneration += 1;
+  }
+
+  #upsert(summary: ConversationSummary): void {
     const next = this.#conversations.filter(
       (conversation) => conversation.conversation_id !== summary.conversation_id,
     );
     next.push(summary);
-    next.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
-    this.#conversations = next;
-    this.emit('conversationListChanged', {conversations: this.#conversations});
+    this.#conversations = this.#sort(next);
   }
 
-  remove(conversationId: string): boolean {
-    const next = this.#conversations.filter(
+  #removeSummary(conversationId: string): void {
+    this.#conversations = this.#conversations.filter(
       (conversation) => conversation.conversation_id !== conversationId,
     );
-    if (next.length === this.#conversations.length) return false;
-    this.#conversations = next;
-    if (this.#activeConversationId === conversationId) {
-      this.#activeConversationId = null;
-      this.#history = null;
-      this.#generation += 1;
-      this.#answerReady = false;
-      clearStoredActiveConversationId();
-      this.emit('conversationSelected', {conversationId: null});
-    }
-    if (this.#pendingSelectionId === conversationId) this.#pendingSelectionId = null;
-    this.emit('conversationListChanged', {conversations: this.#conversations});
-    return true;
   }
 
-  beginRequest(): number {
-    this.#generation += 1;
-    return this.#generation;
+  #sort(conversations: readonly ConversationSummary[]): ConversationSummary[] {
+    return [...conversations].sort((left, right) => right.updated_at.localeCompare(left.updated_at));
   }
 
-  isCurrentRequest(generation: number): boolean {
-    return generation === this.#generation;
+  #isMissing(error: unknown): boolean {
+    return error instanceof ConversationApiError && error.status === 404;
   }
 
-  beginLiveAnswer(conversationId: string): number {
-    this.#liveAnswerConversationId = conversationId;
-    this.#generation += 1;
-    return this.#generation;
-  }
-
-  finishLiveAnswer(conversationId: string, discardPendingSelection = false): string | null {
-    if (this.#liveAnswerConversationId !== conversationId) return null;
-    this.#liveAnswerConversationId = null;
-    this.#generation += 1;
-    const pendingSelectionId = this.#pendingSelectionId;
-    this.#pendingSelectionId = null;
-    return discardPendingSelection ? null : pendingSelectionId;
-  }
-
-  canRenderHistory(generation: number): boolean {
-    return this.#liveAnswerConversationId === null && generation === this.#generation;
+  #isRouteUnavailable(error: unknown): boolean {
+    return this.#isMissing(error)
+      || (error instanceof ConversationApiError && error.status === 422);
   }
 }
 

@@ -240,7 +240,7 @@ class E2EConversationService:
         self,
         _user: Any,
         *,
-        conversation_id: str,
+        conversation_id: str | None,
         submission_id: str,
         query: str,
         workspaces: Any,
@@ -248,6 +248,25 @@ class E2EConversationService:
         mode: str | None = None,
     ) -> WebAnswerSubmission | None:
         with self._lock:
+            if conversation_id is None:
+                for candidate in self._conversations.values():
+                    for turn in candidate["turns"]:
+                        if turn.submission_id == submission_id:
+                            return WebAnswerSubmission(
+                                run=turn.run,
+                                turn_id=turn.turn_id,
+                                turn_number=turn.turn_number,
+                                conversation=self._summary(candidate),
+                            )
+                now = datetime.now(UTC)
+                conversation_id = str(uuid4())
+                self._conversations[conversation_id] = {
+                    "conversation_id": conversation_id,
+                    "title": None,
+                    "created_at": now,
+                    "updated_at": now,
+                    "turns": [],
+                }
             value = self._conversations.get(conversation_id)
             if value is None:
                 return None

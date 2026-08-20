@@ -3,10 +3,11 @@
 import {html, nothing, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {ConversationSummary} from '../api/conversations.ts';
-import {BusController, LightElement} from '../lib/lit_host.ts';
-import {conversationStore} from '../stores/conversationStore.ts';
-
-export type ConversationListState = 'loading' | 'ready' | 'error' | 'empty-error';
+import {LightElement, StoreController} from '../lib/lit_host.ts';
+import {
+    conversationStore,
+    type ConversationListState,
+} from '../stores/conversationStore.ts';
 
 export interface ConversationIntentDetail {
     conversationId: string;
@@ -47,7 +48,7 @@ export class ConversationList extends LightElement {
         this.busy = false;
         this.openMenuId = null;
         this.renameId = null;
-        new BusController(this, 'conversationListChanged', 'conversationSelected');
+        new StoreController(this, conversationStore);
     }
 
     override connectedCallback(): void {

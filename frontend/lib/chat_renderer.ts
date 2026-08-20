@@ -1,6 +1,9 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {renderMessageAttachmentImages} from '../ui/images.ts';
+import {
+  releaseMessageAttachmentObjectUrls,
+  renderMessageAttachmentImages,
+} from '../ui/images.ts';
 import {renderMath} from './math.ts';
 import {renderDiagrams} from '../ui/mermaid.ts';
 import {bindPrimaryReportControl} from '../ui/report-panel.ts';
@@ -103,7 +106,10 @@ function isDonePayload(value: unknown): value is DonePayload {
 
 function pruneOldMessages(chatMessages: HTMLElement): void {
   while (chatMessages.childElementCount > MAX_CHAT_MESSAGE_NODES) {
-    chatMessages.firstElementChild?.remove();
+    const oldest = chatMessages.firstElementChild;
+    if (!oldest) return;
+    releaseMessageAttachmentObjectUrls(oldest);
+    oldest.remove();
   }
 }
 
@@ -240,6 +246,7 @@ function applyFinalAnswerHtml(turn: ChatTurn, html: string): void {
 export function clearChatViewport(): void {
   const chatMessages = document.getElementById('chat-messages');
   if (!chatMessages) return;
+  releaseMessageAttachmentObjectUrls(chatMessages);
   const welcome = document.getElementById('welcome');
   chatMessages.replaceChildren(...(welcome ? [welcome] : []));
   document.querySelector('.app')?.classList.remove('has-messages');
@@ -329,6 +336,25 @@ export function renderConversationHistoryError(onRetry: () => void): void {
   retry.setAttribute('aria-label', 'Retry loading conversation history');
   retry.addEventListener('click', onRetry);
   state.append(document.createTextNode(' '), retry);
+}
+
+export function renderConversationUnavailable(
+  onNew: () => void,
+  onRecent?: (() => void) | null,
+): void {
+  const state = renderConversationState('Conversation unavailable.', true);
+  if (!state) return;
+  const newChat = document.createElement('button');
+  newChat.type = 'button';
+  newChat.textContent = 'Start a new chat';
+  newChat.addEventListener('click', onNew);
+  state.append(document.createTextNode(' '), newChat);
+  if (!onRecent) return;
+  const recent = document.createElement('button');
+  recent.type = 'button';
+  recent.textContent = 'Open recent conversation';
+  recent.addEventListener('click', onRecent);
+  state.append(document.createTextNode(' '), recent);
 }
 
 export function setAnswerError(turn: ChatTurn, message: unknown): void {

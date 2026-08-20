@@ -201,6 +201,14 @@ export function closePanel(restoreFocus = true): void {
     }
 }
 
+/** Close conversation-scoped Sources/Report while preserving workspace Files. */
+export function closeConversationPanels(): void {
+    if (isSourcesOpen()) closeMainPane(false);
+    closeReportPane(false);
+    syncBodyFlags();
+    applyPanelModality();
+}
+
 export function setupPanel(): void {
     document.getElementById('panel-close-btn')?.addEventListener('click', function() {
         closeMainPane(true);

@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {csrfHeaders} from './csrf';
+import {csrfHeaders} from './csrf.ts';
 
 export interface ConversationSummary {
   conversation_id: string;
@@ -59,9 +59,12 @@ export interface ConversationHistory {
 }
 
 export class ConversationApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
     super(message);
     this.name = 'ConversationApiError';
+    this.status = status;
   }
 }
 

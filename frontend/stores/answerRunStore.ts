@@ -72,6 +72,14 @@ export class AnswerRunStore {
     if (sequence > existing.lastSequence) existing.lastSequence = sequence;
   }
 
+  transfer(fromConversationId: string, toConversationId: string): void {
+    if (fromConversationId === toConversationId) return;
+    const progress = this.runs.get(fromConversationId);
+    if (!progress) return;
+    this.runs.set(toConversationId, progress);
+    this.runs.delete(fromConversationId);
+  }
+
   clear(conversationId: string): void {
     this.runs.delete(conversationId);
   }

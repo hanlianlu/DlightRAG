@@ -31,6 +31,18 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
             "updated_at": timestamp,
         }
 
+    initial = summary(str(uuid4()))
+    state.conversations.append(initial)
+    page.add_init_script(
+        f"""if (location.pathname === '/web/' || location.pathname === '/web') {{
+            history.replaceState(
+                history.state,
+                '',
+                '/web/conversations/{initial["conversation_id"]}',
+            );
+        }}"""
+    )
+
     def handle(route: Route) -> None:
         request = route.request
         path = urlparse(request.url).path
@@ -96,14 +108,22 @@ def _active_id(page: Page) -> str:
 
 
 def _new_conversation(page: Page) -> tuple[str, str]:
+    """Create server test data, then exercise direct route navigation to it."""
     previous_id = _active_id(page)
-    page.locator("#new-conversation-btn").click()
+    created = page.evaluate(
+        """async () => {
+            const response = await fetch('/web/api/conversations', {method: 'POST'});
+            return await response.json();
+        }"""
+    )
+    conversation_id = str(created["conversation_id"])
+    page.goto(f"/web/conversations/{conversation_id}")
     page.wait_for_function(
-        "id => document.querySelector('[aria-current=\"page\"]')?.dataset.conversationId !== id",
-        arg=previous_id,
+        "id => document.querySelector('[aria-current=\"page\"]')?.dataset.conversationId === id",
+        arg=conversation_id,
     )
     page.locator("#new-conversation-btn:not([disabled])").wait_for()
-    return previous_id, _active_id(page)
+    return previous_id, conversation_id
 
 
 def _add_draft_with_image(page: Page, text: str) -> None:
@@ -173,14 +193,9 @@ def test_new_select_rename_delete_survive_reload(page: Page) -> None:
     active = page.locator("[aria-current='page']")
     active.wait_for()
     initial_id = active.get_attribute("data-conversation-id")
-    page.locator("#new-conversation-btn").click()
-    page.wait_for_function(
-        "id => document.querySelector('[aria-current=\"page\"]')?.dataset.conversationId !== id",
-        arg=initial_id,
-    )
-    active = page.locator("[aria-current='page']")
-    first_id = active.get_attribute("data-conversation-id")
-    assert first_id
+    assert initial_id
+    previous_id, first_id = _new_conversation(page)
+    assert previous_id == initial_id
 
     active.get_by_role("button", name="Conversation actions").click()
     page.get_by_role("menuitem", name="Rename").click()
@@ -188,13 +203,8 @@ def test_new_select_rename_delete_survive_reload(page: Page) -> None:
     page.keyboard.press("Enter")
     page.get_by_text("Research notes", exact=True).wait_for()
 
-    page.locator("#new-conversation-btn").click()
-    page.wait_for_function(
-        "id => document.querySelector('[aria-current=\"page\"]')?.dataset.conversationId !== id",
-        arg=first_id,
-    )
-    second_id = page.locator("[aria-current='page']").get_attribute("data-conversation-id")
-    assert second_id and second_id != first_id
+    _, second_id = _new_conversation(page)
+    assert second_id != first_id
     page.get_by_role("button", name="Research notes", exact=True).click()
     page.wait_for_function(
         "id => document.querySelector('[aria-current=\"page\"]')?.dataset.conversationId === id",
@@ -217,6 +227,100 @@ def test_new_select_rename_delete_survive_reload(page: Page) -> None:
     )
     assert all(row["conversation_id"] != first_id for row in state.conversations)
     assert page.locator("[aria-current='page']").get_attribute("data-conversation-id") == second_id
+
+
+@pytest.mark.e2e
+def test_new_chat_is_an_unpersisted_root_route(page: Page) -> None:
+    state = _install_conversation_routes(page)
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    page.get_by_role("button", name="New chat").click()
+
+    page.wait_for_url("**/web/")
+    assert page.locator("[aria-current='page']").count() == 0
+    assert len(state.conversations) == 1
+    page.get_by_text("Ask anything about your documents").wait_for()
+
+
+@pytest.mark.e2e
+def test_conversation_routes_drive_back_forward_and_direct_reload(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.goto("/web/")
+    first_id = _active_id(page)
+    created = page.evaluate(
+        """async () => {
+            const response = await fetch('/web/api/conversations', {method: 'POST'});
+            return await response.json();
+        }"""
+    )
+    second_id = str(created["conversation_id"])
+    page.reload()
+    page.locator(f'[data-conversation-id="{second_id}"] .conversation-select').click()
+    page.wait_for_url(f"**/web/conversations/{second_id}")
+    page.locator(f'[data-conversation-id="{first_id}"] .conversation-select').click()
+    page.wait_for_url(f"**/web/conversations/{first_id}")
+
+    page.go_back()
+    page.wait_for_url(f"**/web/conversations/{second_id}")
+    assert _active_id(page) == second_id
+    page.go_forward()
+    page.wait_for_url(f"**/web/conversations/{first_id}")
+    assert _active_id(page) == first_id
+
+    page.reload()
+    assert _active_id(page) == first_id
+
+
+@pytest.mark.e2e
+def test_unavailable_route_stays_visible_and_offers_a_recent_conversation(page: Page) -> None:
+    state = _install_conversation_routes(page)
+    recent_id = str(state.conversations[0]["conversation_id"])
+
+    page.goto("/web/conversations/not-owned")
+
+    page.get_by_text("Conversation unavailable.").wait_for()
+    assert page.url.endswith("/web/conversations/not-owned")
+    page.get_by_role("button", name="Open recent conversation").click()
+    page.wait_for_url(f"**/web/conversations/{recent_id}")
+    assert _active_id(page) == recent_id
+
+
+@pytest.mark.e2e
+def test_browser_back_respects_the_shared_draft_guard(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.goto("/web/")
+    conversation_id = _active_id(page)
+    page.get_by_role("button", name="New chat").click()
+    page.locator(f'[data-conversation-id="{conversation_id}"] .conversation-select').click()
+    page.get_by_role("textbox", name="Message").fill("keep this route")
+
+    page.go_back()
+    dialog = page.get_by_role("dialog", name="Discard draft?")
+    dialog.get_by_role("button", name="Keep editing").click()
+    page.wait_for_url(f"**/web/conversations/{conversation_id}")
+    page.wait_for_timeout(50)  # let the router consume its restoration popstate
+    assert page.get_by_role("textbox", name="Message").input_value() == "keep this route"
+
+    page.go_back()
+    dialog.get_by_role("button", name="Discard and continue").click()
+    page.wait_for_url("**/web/")
+    page.wait_for_function("document.querySelector('.composer-input').value === ''")
+    assert page.get_by_role("textbox", name="Message").input_value() == ""
+
+
+@pytest.mark.e2e
+def test_workspace_files_panel_survives_conversation_route_changes(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.goto("/web/")
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.locator("#panel.open").wait_for()
+
+    page.get_by_role("button", name="New chat").click()
+
+    page.wait_for_url("**/web/")
+    assert page.locator("#panel").get_attribute("data-panel-kind") == "files"
+    assert page.locator("#panel").evaluate("element => element.classList.contains('open')")
 
 
 @pytest.mark.e2e
@@ -360,7 +464,7 @@ def test_inactive_delete_never_touches_active_draft(page: Page) -> None:
 
 
 @pytest.mark.e2e
-def test_delete_all_conversations_is_quiet_accessible_and_creates_fresh_session(
+def test_delete_all_conversations_is_quiet_accessible_and_returns_to_new_chat(
     page: Page,
 ) -> None:
     state = _install_conversation_routes(page)
@@ -405,10 +509,11 @@ def test_delete_all_conversations_is_quiet_accessible_and_creates_fresh_session(
     dialog.get_by_text("Draft and attachments will also be deleted.").wait_for()
     dialog.get_by_role("button", name="Delete all").click()
 
-    page.wait_for_function("() => document.querySelectorAll('[data-conversation-id]').length === 1")
+    page.wait_for_function("() => document.querySelectorAll('[data-conversation-id]').length === 0")
     page.wait_for_function("document.querySelector('.composer-input').value === ''")
-    assert len(state.conversations) == 1
-    assert page.locator("[aria-current='page']").count() == 1
+    page.wait_for_url("**/web/")
+    assert len(state.conversations) == 0
+    assert page.locator("[aria-current='page']").count() == 0
     assert page.locator("#thumbnail-strip").locator(":scope > *").count() == 0
 
 
@@ -783,7 +888,7 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
     e2e_conversation_service: Any,
 ) -> None:
     turn_count = 40
-    e2e_conversation_service.seed_image_history(turn_count=turn_count)
+    conversation_id = e2e_conversation_service.seed_image_history(turn_count=turn_count)
     thumbnail_requests: list[str] = []
     original_requests: list[str] = []
 
@@ -799,7 +904,7 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
 
     page.on("request", record_image_request)
     page.set_viewport_size({"width": 1440, "height": 720})
-    page.goto("/web/")
+    page.goto(f"/web/conversations/{conversation_id}")
     history_images = page.locator("#chat-messages button[data-full-src] img")
     page.wait_for_function(
         "count => document.querySelectorAll('#chat-messages button[data-full-src] img').length === count",

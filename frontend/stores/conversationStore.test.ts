@@ -1,228 +1,149 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import test from 'node:test';
+import {ConversationApiError, type ConversationHistory, type ConversationSummary} from '../api/conversations.ts';
+import {ConversationStore, type ConversationApi} from './conversationStore.ts';
 
-import { ConversationStore } from './conversationStore.ts';
-
-const originalWindow = globalThis.window;
-
-function installStorage(initial: Record<string, string> = {}): Map<string, string> {
-  const values = new Map(Object.entries(initial));
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: {
-      localStorage: {
-        getItem: (key: string) => values.get(key) ?? null,
-        setItem: (key: string, value: string) => values.set(key, value),
-        removeItem: (key: string) => values.delete(key),
-      },
-    },
-  });
-  return values;
+function summary(id: string, updated = '2026-08-20T00:00:00Z'): ConversationSummary {
+  return {
+    conversation_id: id,
+    title: id,
+    created_at: '2026-08-19T00:00:00Z',
+    updated_at: updated,
+  };
 }
 
-afterEach(() => {
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: originalWindow,
-  });
+function history(id: string): ConversationHistory {
+  return {conversation: summary(id), turns: []};
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return {promise, resolve, reject};
+}
+
+function api(overrides: Partial<ConversationApi> = {}): ConversationApi {
+  return {
+    list: async () => [],
+    history: async (id) => history(id),
+    rename: async (id, title) => ({...summary(id), title}),
+    delete: async () => {},
+    deleteAll: async () => {},
+    ...overrides,
+  };
+}
+
+test('new chat is answerable without inventing or restoring a conversation id', () => {
+  const store = new ConversationStore(api());
+
+  store.openNew();
+
+  assert.equal(store.viewState, 'new');
+  assert.equal(store.canAnswer, true);
+  assert.equal(store.answerConversationId, null);
+  assert.equal(store.activeConversationId, null);
 });
 
-const FIRST = {
-  conversation_id: 'first',
-  title: 'First',
-  created_at: '2026-07-13T08:00:00Z',
-  updated_at: '2026-07-13T10:00:00Z',
-};
+test('list loading is server-owned, sorted, and observable', async () => {
+  const store = new ConversationStore(api({
+    list: async () => [summary('older'), summary('newer', '2026-08-21T00:00:00Z')],
+  }));
+  let changes = 0;
+  store.subscribe(() => { changes += 1; });
 
-const SECOND = {
-  conversation_id: 'second',
-  title: null,
-  created_at: '2026-07-13T09:00:00Z',
-  updated_at: '2026-07-13T11:00:00Z',
-};
+  await store.loadList();
 
-test('conversation store restores only the active server id from local storage', () => {
-  installStorage({'dlightrag.active_conversation_id': 'stored'});
-
-  const store = new ConversationStore();
-
-  assert.equal(store.activeConversationId, 'stored');
-  assert.deepEqual(store.conversations, []);
-  assert.equal(store.history, null);
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['newer', 'older']);
+  assert.equal(store.listState, 'ready');
+  assert.ok(changes >= 2);
 });
 
-test('conversation store resolves initial server selection from its one active id', () => {
-  installStorage({'dlightrag.active_conversation_id': 'second'});
-  const store = new ConversationStore();
-  store.replaceList([FIRST, SECOND]);
+test('opening a route drops a superseded history response', async () => {
+  const first = deferred<ConversationHistory>();
+  const second = deferred<ConversationHistory>();
+  const store = new ConversationStore(api({
+    history: async (id) => id === 'first' ? first.promise : second.promise,
+  }));
 
-  assert.equal(store.initialSelection()?.conversation_id, 'second');
+  const openingFirst = store.open('first');
+  const openingSecond = store.open('second');
+  first.resolve(history('first'));
+  second.resolve(history('second'));
 
-  installStorage({'dlightrag.active_conversation_id': 'expired'});
-  const expired = new ConversationStore();
-  expired.replaceList([FIRST, SECOND]);
-  assert.equal(expired.initialSelection()?.conversation_id, 'first');
-
-  expired.replaceList([]);
-  assert.equal(expired.initialSelection(), null);
+  assert.equal(await openingFirst, 'stale');
+  assert.equal(await openingSecond, 'ready');
+  assert.equal(store.activeConversationId, 'second');
+  assert.equal(store.history?.conversation.conversation_id, 'second');
 });
 
-test('conversation store is the sole authority for request generations', () => {
-  installStorage();
-  const store = new ConversationStore();
-  const stale = store.beginRequest();
-  const current = store.beginRequest();
+test('missing and malformed route ids share one unavailable state', async () => {
+  for (const status of [404, 422]) {
+    const store = new ConversationStore(api({
+      history: async () => { throw new ConversationApiError(status, 'hidden'); },
+    }));
 
-  assert.equal(store.isCurrentRequest(stale), false);
-  assert.equal(store.isCurrentRequest(current), true);
-});
-
-test('conversation store exposes only server projection mutations', () => {
-  installStorage();
-  const store = new ConversationStore();
-
-  for (const mutation of [
-    'replaceList',
-    'select',
-    'setHistory',
-    'upsertSummary',
-    'remove',
-    'beginRequest',
-    'beginLiveAnswer',
-    'finishLiveAnswer',
-    'canRenderHistory',
-    'initialSelection',
-    'isCurrentRequest',
-  ] as const) {
-    assert.equal(typeof store[mutation], 'function', mutation);
+    assert.equal(await store.open('opaque'), 'unavailable');
+    assert.equal(store.viewState, 'unavailable');
+    assert.equal(store.canAnswer, false);
+    assert.equal(store.activeConversationId, 'opaque');
   }
 });
 
-test('stale A failure defers bootstrap fallback B until live cleanup', () => {
-  installStorage();
-  const store = new ConversationStore();
-  store.replaceList([FIRST]);
-  store.select('first');
-  const settledGeneration = store.beginRequest();
-  const settled = {conversation: FIRST, turns: []};
-  assert.equal(store.setHistory(settled, settledGeneration), true);
+test('adopting an atomically created conversation updates routing state without viewport revision', () => {
+  const store = new ConversationStore(api());
+  store.openNew();
+  const before = store.viewRevision;
 
-  store.beginLiveAnswer('first');
-  const lateBootstrapGeneration = store.beginRequest();
-  assert.equal(store.select('second'), false);
+  store.adoptCreatedConversation(summary('created'));
 
-  assert.equal(store.canRenderHistory(lateBootstrapGeneration), false);
-  let attachedViewport = 'live-answer';
-  if (store.setHistory(settled, lateBootstrapGeneration)) attachedViewport = 'history';
-  assert.equal(attachedViewport, 'live-answer');
-  assert.deepEqual(store.history, settled);
-  assert.equal(store.activeConversationId, 'first');
-
-  assert.equal(store.finishLiveAnswer('first'), 'second');
-  assert.equal(store.activeConversationId, 'first');
-  assert.equal(store.canRenderHistory(lateBootstrapGeneration), false);
-
-  const recoveryGeneration = store.beginRequest();
-  assert.equal(store.select('second'), true);
-  assert.equal(store.canRenderHistory(recoveryGeneration), true);
-  assert.equal(store.answerConversationId, null);
-  const fallback = {conversation: SECOND, turns: []};
-  assert.equal(store.setHistory(fallback, recoveryGeneration), true);
-  assert.equal(store.activeConversationId, 'second');
-  assert.equal(store.answerConversationId, 'second');
-  assert.deepEqual(store.history, fallback);
+  assert.equal(store.activeConversationId, 'created');
+  assert.equal(store.answerConversationId, 'created');
+  assert.equal(store.viewRevision, before);
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['created']);
 });
 
-test('saved live A discards fallback B and refreshes A', () => {
-  installStorage();
-  const store = new ConversationStore();
-  store.replaceList([FIRST, SECOND]);
-  store.select('first');
-  store.beginLiveAnswer('first');
+test('background refresh preserves visible history on transient failure', async () => {
+  let fail = false;
+  const store = new ConversationStore(api({
+    history: async (id) => {
+      if (fail) throw new ConversationApiError(503, 'down');
+      return history(id);
+    },
+  }));
+  await store.open('one');
+  const before = store.viewRevision;
+  fail = true;
 
-  store.beginRequest();
-  assert.equal(store.select('second'), false);
-  assert.equal(store.activeConversationId, 'first');
-  assert.equal(store.finishLiveAnswer('first', true), null);
-
-  const savedGeneration = store.beginRequest();
-  assert.equal(store.select('first'), true);
-  const saved = {
-    conversation: {...FIRST, updated_at: '2026-07-13T13:00:00Z'},
-    turns: [],
-  };
-  assert.equal(store.setHistory(saved, savedGeneration), true);
-  assert.equal(store.activeConversationId, 'first');
-  assert.equal(store.answerConversationId, 'first');
-  assert.deepEqual(store.history, saved);
+  assert.equal(await store.refreshActive(), 'error');
+  assert.equal(store.viewState, 'ready');
+  assert.equal(store.history?.conversation.conversation_id, 'one');
+  assert.equal(store.viewRevision, before);
 });
 
-test('ordinary conversation switching blocks answers until history is visible', () => {
-  installStorage();
-  const store = new ConversationStore();
-  store.replaceList([FIRST, SECOND]);
-  store.select('first');
+test('rename validation errors do not masquerade as missing conversations', async () => {
+  const store = new ConversationStore(api({
+    list: async () => [summary('one')],
+    rename: async () => { throw new ConversationApiError(422, 'invalid title'); },
+  }));
+  await store.loadList();
 
-  const generation = store.beginRequest();
-  assert.equal(store.select('second'), true);
-  assert.equal(store.activeConversationId, 'second');
-  assert.equal(store.answerConversationId, null);
-
-  const history = {conversation: SECOND, turns: []};
-  assert.equal(store.setHistory(history, generation), true);
-  assert.equal(store.answerConversationId, 'second');
+  assert.equal(await store.rename('one', ''), 'error');
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['one']);
 });
 
-test('same-conversation history remains a stale render during live ownership', () => {
-  installStorage();
-  const store = new ConversationStore();
-  store.replaceList([FIRST]);
-  store.select('first');
-  store.beginLiveAnswer('first');
+test('delete mutates the server before removing the local summary', async () => {
+  const calls: string[] = [];
+  const store = new ConversationStore(api({
+    list: async () => [summary('one')],
+    delete: async (id) => { calls.push(id); },
+  }));
+  await store.loadList();
 
-  const generation = store.beginRequest();
-  assert.equal(store.select('first'), true);
-  assert.equal(store.canRenderHistory(generation), false);
-  assert.equal(store.finishLiveAnswer('first'), null);
-  assert.equal(store.setHistory({conversation: FIRST, turns: []}, generation), false);
-  assert.equal(store.activeConversationId, 'first');
-});
-
-test('conversation store persists selection and rejects stale history responses', () => {
-  const storage = installStorage();
-  const store = new ConversationStore();
-  store.replaceList([FIRST, SECOND]);
-  store.select('first');
-  const firstGeneration = store.beginRequest();
-  store.select('second');
-  const secondGeneration = store.beginRequest();
-
-  const stale = {conversation: FIRST, turns: []};
-  const current = {conversation: SECOND, turns: []};
-
-  assert.equal(storage.get('dlightrag.active_conversation_id'), 'second');
-  assert.equal(store.setHistory(stale, firstGeneration), false);
-  assert.equal(store.history, null);
-  assert.equal(store.setHistory(current, secondGeneration), true);
-  assert.deepEqual(store.history, current);
-});
-
-test('conversation store upserts authoritative summaries and removes projections', () => {
-  const storage = installStorage();
-  const store = new ConversationStore();
-  store.replaceList([FIRST]);
-  store.select('first');
-
-  store.upsertSummary({...FIRST, title: 'Renamed', updated_at: '2026-07-13T12:00:00Z'});
-  store.upsertSummary(SECOND);
-
-  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['first', 'second']);
-  assert.equal(store.conversations[0].title, 'Renamed');
-  assert.equal(store.remove('first'), true);
-  assert.equal(store.activeConversationId, null);
-  assert.equal(store.history, null);
-  assert.equal(storage.has('dlightrag.active_conversation_id'), false);
-  assert.equal(store.remove('missing'), false);
+  assert.equal(await store.delete('one'), 'ok');
+  assert.deepEqual(calls, ['one']);
+  assert.deepEqual(store.conversations, []);
+  assert.equal(store.mutationPending, false);
 });

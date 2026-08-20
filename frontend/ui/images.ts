@@ -80,6 +80,7 @@ export function renderMessageAttachmentImages(
         if (thumbnailSrc && fullSrc) {
             imageButton.setAttribute('data-action', 'open-lightbox');
             imageButton.setAttribute('data-full-src', fullSrc);
+            if (fullSrc.startsWith('blob:')) imageButton.dataset.liveObjectUrl = fullSrc;
             imgEl.src = thumbnailSrc;
         } else {
             showError();
@@ -90,6 +91,16 @@ export function renderMessageAttachmentImages(
         msgImages.appendChild(card);
     });
     container.appendChild(msgImages);
+}
+
+export function releaseMessageAttachmentObjectUrls(root: ParentNode): void {
+    const urls = new Set<string>();
+    root.querySelectorAll<HTMLElement>('[data-live-object-url]').forEach((element) => {
+        const url = element.dataset.liveObjectUrl;
+        if (url) urls.add(url);
+        delete element.dataset.liveObjectUrl;
+    });
+    for (const url of urls) URL.revokeObjectURL(url);
 }
 
 function _safeImageUrl(src: unknown): URL | null {

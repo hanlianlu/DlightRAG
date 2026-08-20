@@ -8,14 +8,7 @@ pytestmark = pytest.mark.e2e
 
 
 def _open_ready_page(page: Page) -> None:
-    with page.expect_response(
-        lambda response: (
-            response.request.method == "GET" and response.url.endswith("/history") and response.ok
-        ),
-        timeout=10000,
-    ) as history_response:
-        page.goto("/web/")
-    history_response.value.finished()
+    page.goto("/web/")
     page.wait_for_selector(".composer-input", timeout=10000)
 
 

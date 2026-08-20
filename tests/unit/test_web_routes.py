@@ -192,6 +192,22 @@ class TestWebAuth:
         assert resp.status_code == 303
         assert resp.headers["location"].startswith("/web/login")
 
+    async def test_conversation_route_login_redirect_preserves_deep_link(
+        self, test_config: DlightragConfig, mock_application
+    ) -> None:
+        from urllib.parse import parse_qs, urlsplit
+
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+        path = f"/web/conversations/{CONVERSATION_ID}"
+
+        async with _web_client_for(test_config, mock_application) as client:
+            response = await client.get(path)
+
+        assert response.status_code == 303
+        query = parse_qs(urlsplit(response.headers["location"]).query)
+        assert query["next"] == [path]
+
     async def test_source_download_login_redirect_preserves_workspace(
         self, test_config: DlightragConfig, mock_application
     ) -> None:
@@ -370,6 +386,21 @@ class TestWebIndex:
         resp = await client.get("/web/")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
+
+    async def test_explicit_conversation_route_serves_the_same_authenticated_shell(
+        self, client: AsyncClient
+    ) -> None:
+        response = await client.get(f"/web/conversations/{CONVERSATION_ID}")
+
+        assert response.status_code == 200
+        assert 'id="app"' in response.text
+
+    async def test_unknown_web_page_does_not_fall_through_to_the_shell(
+        self, client: AsyncClient
+    ) -> None:
+        response = await client.get("/web/not-a-page")
+
+        assert response.status_code == 404
 
     async def test_contains_workspace_name(
         self, client: AsyncClient, test_config: DlightragConfig

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {LitElement, type ReactiveController, type ReactiveControllerHost} from 'lit';
-import {bus, type DlightragEvents} from '../events/bus.ts';
+import type {SubscribableStore} from '../stores/base.ts';
 
 /**
  * Lit host that renders into itself instead of a shadow root.
@@ -21,21 +21,21 @@ export abstract class LightElement extends LitElement {
     }
 }
 
-/** Re-renders its host on bus events, releasing the subscriptions on removal. */
-export class BusController implements ReactiveController {
+/** Re-renders its host from the focused domain stores it actually reads. */
+export class StoreController implements ReactiveController {
     readonly #host: ReactiveControllerHost;
-    readonly #events: readonly (keyof DlightragEvents)[];
+    readonly #stores: readonly SubscribableStore[];
     #release: (() => void)[] = [];
 
-    constructor(host: ReactiveControllerHost, ...events: (keyof DlightragEvents)[]) {
+    constructor(host: ReactiveControllerHost, ...stores: SubscribableStore[]) {
         this.#host = host;
-        this.#events = events;
+        this.#stores = stores;
         host.addController(this);
     }
 
     hostConnected(): void {
         const rerender = (): void => { this.#host.requestUpdate(); };
-        this.#release = this.#events.map((event) => bus.on(event, rerender));
+        this.#release = this.#stores.map((store) => store.subscribe(rerender));
     }
 
     hostDisconnected(): void {

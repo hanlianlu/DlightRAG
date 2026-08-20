@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {bus} from '../events/bus.ts';
+import {chatSessionStore} from '../stores/chatSessionStore.ts';
 
 const ASKED_STORAGE_KEY = 'dlightrag-notify-asked';
 
@@ -79,7 +79,8 @@ function declineOffer(): void {
 export function setupNotifications(): void {
     if (!supported()) return;
 
-    bus.on('conversationStreamChanged', function({active}) {
+    chatSessionStore.subscribe(function() {
+        const active = chatSessionStore.active;
         if (active) {
             streaming = true;
             missedAnswer = away();

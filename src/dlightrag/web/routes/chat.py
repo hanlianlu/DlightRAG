@@ -61,6 +61,16 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     )
 
 
+@page_router.get("/conversations/{conversation_id}", response_class=HTMLResponse)
+async def conversation_page(
+    conversation_id: str,  # noqa: ARG001 - the browser router owns selection
+    request: Request,
+    workspace: str = Depends(get_workspace),
+):
+    """Serve the temporary shell for one explicit client-side route."""
+    return await index(request, workspace)
+
+
 @router.post("/answer", status_code=202, response_model=AnswerRunDescriptor)
 async def start_answer_run(
     request: Request,

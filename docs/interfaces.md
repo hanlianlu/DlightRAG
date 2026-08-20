@@ -422,6 +422,16 @@ capability; it never contains bearer credentials or edge identity tokens. The
 same projection temporarily feeds the Jinja shell while the Vite/Lit app takes
 over startup ownership.
 
+Browser navigation has two explicit page routes: `/web/` is an unpersisted New
+Chat, while `/web/conversations/{conversation_id}` identifies one durable
+conversation. The URL, not local storage, is the active-conversation authority;
+direct reload and browser Back/Forward therefore reopen the same owner-scoped
+history. A missing, malformed, or foreign id stays on its URL and renders the
+same unavailable state. Navigation detaches any local SSE reader without
+cancelling its run, closes conversation-scoped Sources/Report panels, and keeps
+the workspace-scoped Files panel. An unsent draft guards click, programmatic,
+and browser-history navigation through the same confirmation.
+
 The Web-only conversation lifecycle is server-owned and principal-scoped. The
 browser creates, lists, selects, renames, deletes, and reloads conversations
 through `/web/api/conversations`; it sends the optional `conversation_id`, the

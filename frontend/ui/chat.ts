@@ -22,14 +22,17 @@ import {
     setAnswerRetryable,
 } from '../lib/chat_renderer.ts';
 import type {ChatTurn} from '../lib/chat_renderer.ts';
-import {bus} from '../events/bus.ts';
 import {answerRunStore, payloadFingerprint} from '../stores/answerRunStore.ts';
+import {chatSessionStore} from '../stores/chatSessionStore.ts';
+import {conversationRoute} from '../lib/router.ts';
+import {webRouter} from './router.ts';
 
 // A dropped connection is a transport fault, never a decision about the run, so
 // the browser reattaches from its last durable sequence. The budget bounds
 // consecutive attempts that consume nothing, not reconnects that make progress.
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 500;
+const NEW_CHAT_RUN_KEY = '__new_chat__';
 
 // The POST that turns one submission into a durable run. Only this window may
 // block conversation navigation; following the accepted run never does.
@@ -224,11 +227,12 @@ function beginFollowing(
     runId: string,
     cancelRequested: boolean,
 ): void {
+    submissionPending = false;
     queryInFlight = true;
     queryStopping = cancelRequested;
     currentFollowController = controller;
     currentRunId = runId;
-    bus.emit('conversationStreamChanged', {active: true});
+    chatSessionStore.setActive(true);
 }
 
 /** Release the composer and its Stop affordance; this tab follows nothing now. */
@@ -236,7 +240,7 @@ function endSubmission(): void {
     submissionPending = false;
     queryInFlight = false;
     queryStopping = false;
-    bus.emit('conversationStreamChanged', {active: false});
+    chatSessionStore.setActive(false);
 }
 
 function endFollowing(
@@ -252,29 +256,16 @@ function endFollowing(
     // A finished run retires its submission key, so asking the same question
     // again is a new run rather than a replay of this one.
     answerRunStore.clear(conversationId);
-    bus.emit('conversationAnswerSaved', {conversationId});
+    void conversationStore.refreshActive();
 }
 
 export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
     submissionPending = true;
-    bus.emit('conversationStreamChanged', {active: true});
+    chatSessionStore.setActive(true);
 
-    const conversationId = conversationStore.answerConversationId;
-    if (conversationId) conversationStore.beginLiveAnswer(conversationId);
-    let ownsLiveViewport = conversationId !== null;
-    const releaseLiveViewport = (discardPendingSelection = false): void => {
-        if (!ownsLiveViewport || !conversationId) return;
-        const deferredSelection = conversationStore.finishLiveAnswer(
-            conversationId,
-            discardPendingSelection,
-        );
-        ownsLiveViewport = false;
-        if (deferredSelection) {
-            bus.emit('conversationDeferredSelectionReady', {conversationId: deferredSelection});
-        }
-    };
+    let conversationId = conversationStore.answerConversationId;
 
     const controller = new AbortController();
     let following = false;
@@ -304,7 +295,7 @@ export async function submitQuery(query: string): Promise<void> {
     const attachmentFiles = pendingAttachments.map(function(item) { return item.file; });
 
     try {
-        if (!conversationId) {
+        if (!conversationStore.canAnswer) {
             setAnswerError(
                 turn,
                 'Conversation service is unavailable. Please retry loading the conversation.',
@@ -319,16 +310,17 @@ export async function submitQuery(query: string): Promise<void> {
             }),
             workspaces: activeWorkspaces,
         });
-        if (conversationStore.activeConversationId !== conversationId) {
+        if (conversationStore.answerConversationId !== conversationId) {
             setAnswerError(turn, 'The active conversation changed before this answer started.');
             return;
         }
-        const submissionId = answerRunStore.getOrCreateSubmissionId(conversationId, fingerprint);
+        const runKey = conversationId ?? NEW_CHAT_RUN_KEY;
+        const submissionId = answerRunStore.getOrCreateSubmissionId(runKey, fingerprint);
         const {body: requestBody, headers: requestHeaders} = buildAnswerRequest(
             {
                 query,
                 workspaces: activeWorkspaces,
-                conversationId: conversationStore.activeConversationId,
+                conversationId,
                 submissionId,
                 ...(readStoredAnswerMode() ? {mode: readStoredAnswerMode()!} : {}),
             },
@@ -340,21 +332,34 @@ export async function submitQuery(query: string): Promise<void> {
             headers: {...csrfHeaders(), ...(requestHeaders ?? {})},
             body: requestBody,
         });
-        submissionPending = false;
 
         if (!response.ok) {
-            if (response.status < 500) answerRunStore.clear(conversationId);
+            if (response.status < 500) answerRunStore.clear(runKey);
             setAnswerError(turn, 'Service error. Please try again.');
             return;
         }
         const descriptor = await response.json() as AnswerRunDescriptor;
-        answerRunStore.attachRun(conversationId, descriptor.run_id);
-        conversationStore.upsertSummary(descriptor.conversation);
+        const acceptedConversationId = descriptor.conversation.conversation_id;
+        if (conversationId && acceptedConversationId !== conversationId) {
+            answerRunStore.clear(runKey);
+            setAnswerError(turn, 'The answer was accepted for an unexpected conversation.');
+            return;
+        }
+        answerRunStore.attachRun(runKey, descriptor.run_id);
+        if (!conversationId) {
+            answerRunStore.transfer(runKey, acceptedConversationId);
+            conversationStore.adoptCreatedConversation(descriptor.conversation);
+            conversationId = acceptedConversationId;
+            await webRouter.navigate(conversationRoute(conversationId), {
+                replace: true,
+                notify: false,
+                bypassGuard: true,
+            });
+        } else {
+            conversationStore.upsertSummary(descriptor.conversation);
+        }
         markAnswerPending(turn, descriptor.cancel_requested);
         turn.aiDiv.dataset.runId = descriptor.run_id;
-        // The run is durable history now, so the composer is released and the
-        // rest of this call only follows an object the server already owns.
-        releaseLiveViewport(true);
         beginFollowing(controller, descriptor.run_id, descriptor.cancel_requested);
         following = true;
         finished = await followAnswerRun(turn, conversationId, descriptor.run_id, controller);
@@ -364,7 +369,6 @@ export async function submitQuery(query: string): Promise<void> {
             finished = true;
         }
     } finally {
-        releaseLiveViewport();
         if (following && conversationId) endFollowing(controller, conversationId, finished);
         else endSubmission();
     }
@@ -435,8 +439,9 @@ export function setupQueryForm(): void {
         e.preventDefault();
         cancelQuery();
     });
-    bus.on('conversationStreamChanged', function({active}) {
+    chatSessionStore.subscribe(function() {
         if (!sendBtn) return;
+        const active = chatSessionStore.active;
         sendBtn.classList.toggle('is-stop', active);
         sendBtn.setAttribute('aria-label', active ? 'Stop' : 'Send');
         toggleSendButton();

@@ -3,7 +3,7 @@
 import {html, nothing, svg, type TemplateResult} from 'lit';
 import {repeat} from 'lit/directives/repeat.js';
 import type {WorkspaceRecord} from '../events/bus.ts';
-import {BusController, LightElement} from '../lib/lit_host.ts';
+import {LightElement, StoreController} from '../lib/lit_host.ts';
 import {rovingArrowKeydown} from '../lib/listbox.ts';
 import {createAutoDismiss} from '../lib/popover.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
@@ -31,9 +31,7 @@ export class IngestTarget extends LightElement {
         super();
         this.active = false;
         this.open = false;
-        new BusController(
-            this, 'workspaceCreated', 'workspaceDeleted', 'ingestWorkspaceChanged',
-        );
+        new StoreController(this, workspaceStore, ingestStore);
     }
 
     override disconnectedCallback(): void {

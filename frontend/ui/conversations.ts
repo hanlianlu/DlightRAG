@@ -1,47 +1,37 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import conversationStyles from '../styles/conversations.module.css';
-import {
-    ConversationApiError,
-    createConversation,
-    deleteAllConversations,
-    deleteConversation,
-    getConversationHistory,
-    listConversations,
-    renameConversation,
-} from '../api/conversations.ts';
-import {bus} from '../events/bus.ts';
 import {detachAnswerRun, isSubmissionPending, resumePendingTurn} from './chat.ts';
 import {
+    clearChatViewport,
     renderConversationHistory,
     renderConversationHistoryError,
     renderConversationHistoryLoading,
+    renderConversationUnavailable,
 } from '../lib/chat_renderer.ts';
-import {isAbortError} from '../lib/errors.ts';
+import {conversationRoute, newChatRoute, type WebRoute} from '../lib/router.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import './conversation_list.ts';
 import type {
     ConversationIntentDetail,
-    ConversationListState,
     ConversationRenameDetail,
     ConversationRetryDetail,
 } from './conversation_list.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';
-import {closePanel} from './panel.ts';
+import {closeConversationPanels, closePanel} from './panel.ts';
 import {syncPanelEffectiveWidth} from './resize.ts';
 import {showToast} from './toast.ts';
 import {syncShellInert, wrapTabFocus} from '../lib/dom.ts';
+import {webRouter} from './router.ts';
 
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
 const DESKTOP_MEDIA = '(min-width: 1200px)';
 
 type FocusResolver = () => HTMLElement | null;
 
-let historyController: AbortController | null = null;
-let bootstrapController: AbortController | null = null;
 let pendingLifecycleAction = false;
-let listState: ConversationListState = 'loading';
+let renderedViewRevision = -1;
 let drawerOpen = false;
 let desktopCollapsed = false;
 let drawerReturnFocus: HTMLElement | null = null;
@@ -86,12 +76,6 @@ function clearDraft(): void {
         input.dispatchEvent(new Event('input', {bubbles: true}));
     }
     clearAttachments();
-}
-
-function clearConversationSources(): void {
-    if (document.getElementById('panel')?.dataset.panelKind !== 'sources') return;
-    document.getElementById('panel-content')?.replaceChildren();
-    closePanel();
 }
 
 function resolveConversationActions(conversationId: string): HTMLButtonElement | null {
@@ -175,29 +159,28 @@ function setLifecyclePending(pending: boolean): void {
 
 /** Pushes the shell state the list cannot derive on its own. */
 function syncList(): void {
-    const busy = pendingLifecycleAction;
+    const busy = pendingLifecycleAction || conversationStore.mutationPending;
     resolveNewConversationButton()?.toggleAttribute('disabled', busy);
     resolveDeleteAllButton()?.toggleAttribute('disabled', busy);
     const list = conversationList();
     if (!list) return;
     list.busy = busy;
-    list.listState = listState;
+    list.listState = conversationStore.listState;
 }
 
 async function commitRename(conversationId: string, title: string): Promise<void> {
-    try {
-        conversationStore.upsertSummary(await renameConversation(conversationId, title));
-    } catch (error) {
-        if (error instanceof ConversationApiError && error.status === 404) {
-            const wasActive = conversationStore.activeConversationId === conversationId;
-            conversationStore.remove(conversationId);
-            if (wasActive) await selectFallbackConversation();
-        } else if (error instanceof ConversationApiError && error.status === 422) {
-            showToast('Conversation titles must be 1 to 120 characters.', 5000);
-        } else {
-            showToast('Could not rename the conversation.', 5000);
-        }
+    const result = await conversationStore.rename(conversationId, title);
+    if (result === 'ok') return;
+    if (result === 'missing') {
+        showToast('Conversation unavailable.', 4000);
+        return;
     }
+    showToast(
+        title.trim().length > 120
+            ? 'Conversation titles must be 1 to 120 characters.'
+            : 'Could not rename the conversation.',
+        5000,
+    );
 }
 
 
@@ -283,60 +266,84 @@ function focusTrap(event: KeyboardEvent): void {
     wrapTabFocus(focusable, event);
 }
 
-async function loadConversation(
-    conversationId: string,
-    showLoading: boolean,
-    clearSources: boolean,
-    requestGeneration = conversationStore.beginRequest(),
-): Promise<boolean> {
-    historyController?.abort();
-    // Leaving a conversation stops reading its run; it never stops the run.
-    if (conversationStore.activeConversationId !== conversationId) detachAnswerRun();
-    if (!conversationStore.select(conversationId)) return false;
-    const controller = new AbortController();
-    historyController = controller;
-    syncList();
-    if (clearSources) clearConversationSources();
-    if (showLoading && conversationStore.canRenderHistory(requestGeneration)) {
-        renderConversationHistoryLoading();
+function routeFocusTarget(route: WebRoute): FocusResolver {
+    if (route.kind === 'conversation') {
+        return function() { return resolveConversationSelect(route.conversationId); };
     }
-
-    try {
-        const history = await getConversationHistory(conversationId, controller.signal);
-        if (!conversationStore.isCurrentRequest(requestGeneration)) return false;
-        if (conversationStore.setHistory(history, requestGeneration)) {
-            const pending = renderConversationHistory(history);
-            // A queued or running answer keeps producing on the server; reattach
-            // to its durable events instead of showing a dead placeholder.
-            if (pending) {
-                void resumePendingTurn(pending.turn, conversationId, pending.stored);
-            }
-        }
-        return true;
-    } catch (error) {
-        if (isAbortError(error) || !conversationStore.isCurrentRequest(requestGeneration)) return false;
-        if (error instanceof ConversationApiError && error.status === 404) {
-            conversationStore.remove(conversationId);
-            await selectFallbackConversation();
-            return false;
-        }
-        if (showLoading && conversationStore.canRenderHistory(requestGeneration)) {
-            renderConversationHistoryError(function() {
-                void selectConversation(conversationId);
-            });
-        }
-        return true;
-    } finally {
-        if (historyController === controller) historyController = null;
-    }
+    return resolveNewConversationButton;
 }
 
-export async function selectConversation(
-    conversationId: string,
-    showLoading = true,
-    clearSources = true,
-): Promise<void> {
-    await loadConversation(conversationId, showLoading, clearSources);
+async function guardNavigation(next: WebRoute): Promise<boolean> {
+    if (pendingLifecycleAction || lifecycleBlocked()) return false;
+    if (!hasUnsavedDraft()) return true;
+    const accepted = await confirmDiscardDraft(routeFocusTarget(next));
+    if (accepted) clearDraft();
+    return accepted;
+}
+
+function renderCurrentConversationView(): void {
+    syncList();
+    if (renderedViewRevision === conversationStore.viewRevision) return;
+    renderedViewRevision = conversationStore.viewRevision;
+
+    if (conversationStore.viewState === 'new') {
+        clearChatViewport();
+        return;
+    }
+    if (conversationStore.viewState === 'loading') {
+        renderConversationHistoryLoading();
+        return;
+    }
+    if (conversationStore.viewState === 'ready') {
+        const history = conversationStore.history;
+        if (!history) return;
+        const pending = renderConversationHistory(history);
+        if (pending) {
+            void resumePendingTurn(
+                pending.turn,
+                history.conversation.conversation_id,
+                pending.stored,
+            );
+        }
+        return;
+    }
+    if (conversationStore.viewState === 'unavailable') {
+        const fallback = conversationStore.fallbackConversationId;
+        renderConversationUnavailable(
+            function() { void webRouter.navigate(newChatRoute()); },
+            fallback
+                ? function() { void webRouter.navigate(conversationRoute(fallback)); }
+                : null,
+        );
+        return;
+    }
+    const conversationId = conversationStore.activeConversationId;
+    renderConversationHistoryError(function() {
+        if (conversationId) void conversationStore.open(conversationId);
+        else void conversationStore.loadList();
+    });
+}
+
+async function applyRoute(route: WebRoute): Promise<void> {
+    const previous = conversationStore.activeConversationId;
+    const next = route.kind === 'conversation' ? route.conversationId : null;
+    if (previous !== next) {
+        detachAnswerRun();
+        closeConversationPanels();
+    }
+
+    if (route.kind === 'conversation') {
+        await conversationStore.open(route.conversationId);
+    } else if (route.kind === 'new') {
+        conversationStore.openNew();
+    } else {
+        conversationStore.openNew();
+        renderConversationUnavailable(
+            function() { void webRouter.navigate(newChatRoute(), {replace: true}); },
+            null,
+        );
+    }
+    closeCompactDrawer(false);
 }
 
 async function requestSelectConversation(conversationId: string): Promise<void> {
@@ -345,78 +352,21 @@ async function requestSelectConversation(conversationId: string): Promise<void> 
         focusComposer();
         return;
     }
-    if (
-        pendingLifecycleAction
-        || lifecycleBlocked()
-        || !await confirmDiscardDraft(function() { return resolveConversationSelect(conversationId); })
-    ) return;
-    setLifecyclePending(true);
-    const accepted = await loadConversation(conversationId, true, true);
-    if (accepted) {
-        clearDraft();
+    if (await webRouter.navigate(conversationRoute(conversationId))) {
         closeCompactDrawer(true);
         focusComposer();
     }
-    setLifecyclePending(false);
 }
 
 async function requestNewConversation(): Promise<void> {
-    if (
-        pendingLifecycleAction
-        || lifecycleBlocked()
-        || !await confirmDiscardDraft(resolveNewConversationButton)
-    ) return;
-    setLifecyclePending(true);
-    const requestGeneration = conversationStore.beginRequest();
-    try {
-        const summary = await createConversation();
-        if (!conversationStore.isCurrentRequest(requestGeneration)) return;
-        conversationStore.upsertSummary(summary);
-        listState = 'ready';
-        const accepted = await loadConversation(
-            summary.conversation_id,
-            true,
-            true,
-            requestGeneration,
-        );
-        if (accepted) {
-            clearDraft();
-            closeCompactDrawer(true);
-            focusComposer();
-        }
-    } catch {
-        showToast('Could not create a new conversation.', 5000);
-        if (conversationStore.conversations.length === 0) listState = 'empty-error';
-    } finally {
-        setLifecyclePending(false);
-    }
-}
-
-async function selectFallbackConversation(focusAfter = true): Promise<void> {
-    const fallback = conversationStore.conversations[0];
-    if (fallback) {
-        await loadConversation(fallback.conversation_id, true, true);
-        if (focusAfter) focusComposer();
+    if (webRouter.current.kind === 'new') {
+        closeCompactDrawer(true);
+        focusComposer();
         return;
     }
-    await createFallbackConversation(focusAfter);
-}
-
-async function createFallbackConversation(focusAfter = true): Promise<void> {
-    const requestGeneration = conversationStore.beginRequest();
-    try {
-        const summary = await createConversation();
-        if (!conversationStore.isCurrentRequest(requestGeneration)) return;
-        conversationStore.upsertSummary(summary);
-        listState = 'ready';
-        await loadConversation(summary.conversation_id, true, true, requestGeneration);
-        if (focusAfter) focusComposer();
-    } catch {
-        if (!conversationStore.isCurrentRequest(requestGeneration)) return;
-        listState = 'empty-error';
-        syncList();
-        renderConversationHistoryError(function() { void requestNewConversation(); });
-        showToast('Could not create a replacement conversation.', 5000);
+    if (await webRouter.navigate(newChatRoute())) {
+        closeCompactDrawer(true);
+        focusComposer();
     }
 }
 
@@ -446,28 +396,23 @@ async function requestDelete(conversationId: string): Promise<void> {
     let resolveFinalFocus: FocusResolver = function() {
         return resolveConversationActions(conversationId) || resolveSurvivingConversation();
     };
-    try {
-        await deleteConversation(conversationId);
-        if (wasActive) clearDraft();
-        conversationStore.remove(conversationId);
+    const result = await conversationStore.delete(conversationId);
+    if (result === 'error') {
+        showToast('Could not delete the conversation.', 5000);
+    } else {
         if (wasActive) {
-            clearConversationSources();
-            await selectFallbackConversation(false);
+            clearDraft();
+            closeConversationPanels();
+            const fallback = conversationStore.fallbackConversationId;
+            await webRouter.navigate(
+                fallback ? conversationRoute(fallback) : newChatRoute(),
+                {replace: true, bypassGuard: true},
+            );
         }
         resolveFinalFocus = resolveSurvivingConversation;
-    } catch (error) {
-        if (error instanceof ConversationApiError && error.status === 404) {
-            if (wasActive) clearDraft();
-            conversationStore.remove(conversationId);
-            if (wasActive) await selectFallbackConversation(false);
-            resolveFinalFocus = resolveSurvivingConversation;
-        } else {
-            showToast('Could not delete the conversation.', 5000);
-        }
-    } finally {
-        setLifecyclePending(false);
-        restoreStableFocus(resolveFinalFocus);
     }
+    setLifecyclePending(false);
+    await restoreStableFocus(resolveFinalFocus);
 }
 
 async function requestDeleteAll(): Promise<void> {
@@ -491,54 +436,22 @@ async function requestDeleteAll(): Promise<void> {
 
     setLifecyclePending(true);
     detachAnswerRun();
-    let resolveFinalFocus: FocusResolver = trigger;
-    try {
-        await deleteAllConversations();
-        clearDraft();
-        clearConversationSources();
-        for (const conversation of [...conversationStore.conversations]) {
-            conversationStore.remove(conversation.conversation_id);
-        }
-        listState = 'ready';
-        await createFallbackConversation(false);
-        resolveFinalFocus = resolveSurvivingConversation;
-    } catch {
+    const result = await conversationStore.deleteAll();
+    if (result === 'error') {
         showToast('Could not delete conversations.', 5000);
-    } finally {
-        setLifecyclePending(false);
-        restoreStableFocus(resolveFinalFocus);
+    } else {
+        clearDraft();
+        closeConversationPanels();
+        await webRouter.navigate(newChatRoute(), {replace: true, bypassGuard: true});
     }
+    setLifecyclePending(false);
+    await restoreStableFocus(result === 'error' ? trigger : resolveNewConversationButton);
 }
 
 export async function initializeConversations(): Promise<void> {
-    bootstrapController?.abort();
-    const controller = new AbortController();
-    bootstrapController = controller;
-    const requestGeneration = conversationStore.beginRequest();
-    listState = 'loading';
-    syncList();
-    try {
-        const conversations = await listConversations(controller.signal);
-        if (!conversationStore.isCurrentRequest(requestGeneration)) return;
-        conversationStore.replaceList(conversations);
-        listState = 'ready';
-        let selected = conversationStore.initialSelection();
-        if (!selected) {
-            selected = await createConversation(controller.signal);
-            if (!conversationStore.isCurrentRequest(requestGeneration)) return;
-            conversationStore.upsertSummary(selected);
-        }
-        await loadConversation(selected.conversation_id, true, false, requestGeneration);
-    } catch (error) {
-        if (isAbortError(error) || !conversationStore.isCurrentRequest(requestGeneration)) return;
-        listState = conversationStore.conversations.length > 0 ? 'error' : 'empty-error';
-        syncList();
-        if (conversationStore.conversations.length === 0) {
-            renderConversationHistoryError(function() { void initializeConversations(); });
-        }
-    } finally {
-        if (bootstrapController === controller) bootstrapController = null;
-    }
+    await conversationStore.loadList();
+    await applyRoute(webRouter.current);
+    focusComposer();
 }
 
 export function setupConversations(): void {
@@ -583,15 +496,15 @@ export function setupConversations(): void {
         closeCompactDrawer(false);
     });
     window.addEventListener('resize', applySidebarState);
+    window.addEventListener('beforeunload', function(event) {
+        if (!hasUnsavedDraft()) return;
+        event.preventDefault();
+        event.returnValue = '';
+    });
 
-    // The list re-renders itself from the store; only the in-flight flag is ours.
-    bus.on('conversationAnswerSaved', function({conversationId}) {
-        if (conversationStore.activeConversationId !== conversationId) return;
-        void selectConversation(conversationId, false, false);
-    });
-    bus.on('conversationDeferredSelectionReady', function({conversationId}) {
-        void selectConversation(conversationId, true, true);
-    });
+    conversationStore.subscribe(renderCurrentConversationView);
+    webRouter.setGuard(guardNavigation);
+    webRouter.start(function(route) { return applyRoute(route); });
 
     applySidebarState();
     syncList();
