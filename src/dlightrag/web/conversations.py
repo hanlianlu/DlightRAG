@@ -603,6 +603,7 @@ def project_conversation_turn(
     request = AnswerRunRequest.from_request(run.prepared_input or {})
     answer = ""
     answer_html = ""
+    primary_report: str | None = None
     if run.status == "succeeded" and run.result is not None:
         projected = project_answer_result(
             run.result,
@@ -616,6 +617,8 @@ def project_conversation_turn(
             sources=projected["sources"],
             answer_images=projected["answer_images"],
         )
+        handle = projected.get("primary_report")
+        primary_report = handle if isinstance(handle, str) and handle else None
     return ConversationTurn(
         turn_id=turn.turn_id,
         turn_number=turn.turn_number,
@@ -630,6 +633,7 @@ def project_conversation_turn(
             for attachment in request.attachments
         ],
         answer_html=answer_html,
+        primary_report=primary_report,
         error_kind=run.error_kind,
         error_message=run.error_message,
         created_at=turn.created_at,

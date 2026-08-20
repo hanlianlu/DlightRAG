@@ -23,6 +23,7 @@ class AnswerDoneEvent(ClientContractModel):
     html: str = ""
     answer: str = ""
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
+    primary_report: str | None = None
 
 
 class AnswerErrorEvent(ClientContractModel):

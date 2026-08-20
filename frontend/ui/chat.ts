@@ -349,6 +349,7 @@ export async function submitQuery(query: string): Promise<void> {
         answerRunStore.attachRun(conversationId, descriptor.run_id);
         conversationStore.upsertSummary(descriptor.conversation);
         markAnswerPending(turn, descriptor.cancel_requested);
+        turn.aiDiv.dataset.runId = descriptor.run_id;
         // The run is durable history now, so the composer is released and the
         // rest of this call only follows an object the server already owns.
         releaseLiveViewport(true);

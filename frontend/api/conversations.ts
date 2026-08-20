@@ -32,6 +32,7 @@ export interface ConversationTurn {
   assistant_text: string;
   user_attachments: ConversationAttachmentReference[];
   answer_html: string;
+  primary_report: string | null;
   error_kind: string | null;
   error_message: string | null;
   created_at: string;

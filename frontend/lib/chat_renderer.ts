@@ -3,6 +3,7 @@
 import {renderMessageAttachmentImages} from '../ui/images.ts';
 import {renderMath} from './math.ts';
 import {renderDiagrams} from '../ui/mermaid.ts';
+import {bindPrimaryReportControl} from '../ui/report-panel.ts';
 import {createDocumentChip} from './document_chip.ts';
 import {answerErrorMessage} from './errors.ts';
 import {llmFragmentFromSanitizedHtml} from './safe_html.ts';
@@ -29,6 +30,7 @@ export interface DonePayload {
   status: 'succeeded' | 'cancelled';
   html: string;
   answer: string;
+  primary_report?: string | null;
 }
 
 interface ProgressPayload {
@@ -273,7 +275,9 @@ export function renderConversationHistory(
 export function renderStoredTurn(turn: ChatTurn, stored: ConversationTurn): void {
   clearAnswerReconnect(turn);
   if (stored.status === 'succeeded') {
+    turn.aiDiv.dataset.runId = stored.answer_run_id;
     applyFinalAnswerHtml(turn, stored.answer_html);
+    bindPrimaryReportControl(turn.aiDiv, stored.answer_run_id, stored.primary_report);
     return;
   }
   if (stored.status === 'failed') {
@@ -442,6 +446,11 @@ export function createAnswerRenderer(turn: ChatTurn) {
     }
     fullAnswer = payload.answer;
     applyFinalAnswerHtml(turn, payload.html);
+    bindPrimaryReportControl(
+      turn.aiDiv,
+      turn.aiDiv.dataset.runId || '',
+      payload.primary_report,
+    );
     const live = turn.aiDiv.querySelector('.sr-only');
     if (live) live.textContent = 'Answer ready';
   }

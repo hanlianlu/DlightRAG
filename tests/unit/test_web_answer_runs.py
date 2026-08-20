@@ -251,13 +251,42 @@ async def test_status_projects_the_linked_turn(client: AsyncClient) -> None:
     assert body["user_text"] == "What changed?"
 
 
-@pytest.mark.parametrize("path", ["", "/events"])
+@pytest.mark.parametrize("path", ["", "/events", "/report"])
 async def test_a_run_this_principal_does_not_own_is_404(
     client: AsyncClient, service: AsyncMock, path: str
 ) -> None:
     service.turn_for_run.return_value = None
 
     response = await client.get(f"/web/answer/{RUN_ID}{path}")
+
+    assert response.status_code == 404
+
+
+async def test_the_report_route_returns_sanitized_markdown(
+    client: AsyncClient, service: AsyncMock, application_double: AsyncMock
+) -> None:
+    result = stored_result(answer="")
+    result["primary_report"] = "primary_report"
+    service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
+    application_double.answers.read_artifact = AsyncMock(return_value=b"# Title\n\nBody")
+
+    response = await client.get(f"/web/answer/{RUN_ID}/report")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Title" in response.text
+    assert "Body" in response.text
+    application_double.answers.read_artifact.assert_awaited_once()
+
+
+async def test_the_report_route_is_404_without_a_handle(
+    client: AsyncClient, service: AsyncMock
+) -> None:
+    service.turn_for_run.return_value = linked_turn(
+        answer_run(status="succeeded", result=stored_result())
+    )
+
+    response = await client.get(f"/web/answer/{RUN_ID}/report")
 
     assert response.status_code == 404
 
@@ -518,6 +547,7 @@ def test_the_done_event_is_derived_from_the_canonical_result() -> None:
 
     assert done.status == "succeeded"
     assert done.answer == "Revenue increased [1]."
+    assert done.primary_report is None
     assert "/web/files/raw/report?workspace=default" in done.html
     assert "citation-badge" in done.html
 
@@ -584,10 +614,35 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
     )
 
     assert turn.assistant_text == "Revenue increased [1]."
+    assert turn.primary_report is None
     assert "/web/files/raw/report?workspace=default" in turn.answer_html
     # The turn model never re-exposes stored source or principal state.
     assert "answer_sources" not in turn.model_dump()
     assert "principal_id" not in turn.model_dump_json()
+
+
+def test_a_succeeded_turn_exposes_the_primary_report_handle() -> None:
+    result = stored_result()
+    result["primary_report"] = "primary_report"
+    turn = project_conversation_turn(
+        linked_turn(answer_run(status="succeeded", result=result)),
+    )
+
+    assert turn.primary_report == "primary_report"
+    assert turn.assistant_text == "Revenue increased [1]."
+
+
+def test_the_done_event_carries_the_primary_report_handle() -> None:
+    result = stored_result()
+    result["primary_report"] = "primary_report"
+    done = render_done_event(
+        {"status": "succeeded", "result": result},
+        downloadable_workspaces=None,
+        visual_workspaces=None,
+    )
+
+    assert done.primary_report == "primary_report"
+    assert "primary_report" not in done.html
 
 
 async def test_terminal_attachment_is_read_through_the_answer_service() -> None:

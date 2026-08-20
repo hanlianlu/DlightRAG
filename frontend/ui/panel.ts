@@ -6,6 +6,7 @@ import {closestElement, syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 const PANEL_KEEP_OPEN_SELECTOR = [
     '[data-action="filter-source"]',
     '[data-action="open-ref-source"]',
+    '[data-action="open-primary-report"]',
 ].join(', ');
 const DRAWER_MEDIA = '(max-width: 1199px)';
 
@@ -72,8 +73,13 @@ export function openPanel(title?: string): void {
         const titleEl = document.getElementById('panel-title');
         panel.dataset.panelKind = kind;
         document.body.classList.toggle('files-panel-open', title === 'FILES');
-        panel.setAttribute('aria-label', title === 'FILES' ? 'Files' : 'Sources');
-        if (titleEl) titleEl.textContent = title === 'FILES' ? '' : 'Sources';
+        const labels: Record<string, string> = {
+            FILES: 'Files',
+            SOURCES: 'Sources',
+            REPORT: 'Report',
+        };
+        panel.setAttribute('aria-label', labels[title] || title);
+        if (titleEl) titleEl.textContent = title === 'FILES' ? '' : (labels[title] || title);
         const ingest = document.querySelector('ingest-target');
         if (ingest) ingest.active = title === 'FILES';
     }

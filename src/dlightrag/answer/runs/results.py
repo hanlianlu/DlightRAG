@@ -125,7 +125,20 @@ def project_answer_result(
         downloadable_workspaces=downloadable_workspaces,
         visual_workspaces=visual_workspaces,
     )
+    report_source_payloads = project_source_payloads(
+        load_answer_snapshot(
+            {"sources": stored.get("report_sources") or []},
+            image_url_prefix=IMAGE_URL_PREFIX,
+        ),
+        resolver=source_link_builder,
+        downloadable_workspaces=downloadable_workspaces,
+        visual_workspaces=visual_workspaces,
+    )
     answer = str(stored.get("answer") or "")
+    report_handle = stored.get("primary_report")
+    primary_report = report_handle.strip() if isinstance(report_handle, str) else None
+    if not primary_report:
+        primary_report = None
     images = [
         _public_answer_image(image)
         for image in stored.get("answer_images") or ()
@@ -146,7 +159,8 @@ def project_answer_result(
         "answer_blocks": answer_blocks_from_markdown(answer, images),
         "trace": dict(stored.get("trace") or {}),
         "image_descriptions": list(stored.get("image_descriptions") or ()),
-        "primary_report": stored.get("primary_report"),
+        "primary_report": primary_report,
+        "report_sources": [source.model_dump() for source in report_source_payloads],
         "artifacts": [
             {
                 "resource_id": item.get("resource_id"),

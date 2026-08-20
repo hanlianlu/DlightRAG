@@ -16,6 +16,7 @@ import {setupMathRendering} from './mathjax.ts';
 import {setupNotifications} from './notifications.ts';
 import {setupPanel} from './panel.ts';
 import {setupPanelResize} from './resize.ts';
+import {setupReportPanel} from './report-panel.ts';
 import {setupSourcePanel} from './source-panel.ts';
 import {setupTheme} from './theme.ts';
 import {initWorkspaces} from './workspaces.ts';
@@ -27,6 +28,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initWorkspaces();
     setupPanel();
     setupSourcePanel();
+    setupReportPanel();
     setupFilesPanel();
     setupPanelResize();
     setupImageLightbox();

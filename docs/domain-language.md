@@ -25,8 +25,8 @@ A durable Answer Run that plans, retrieves, and generates without creating an Ag
 _Avoid_: Retrieval, non-durable fast path
 
 **Web Conversation**:
-The browser conversation surface that creates Answer Runs; it is a transport, not a research capability.
-_Avoid_: Web Search, Web, Web Channel when meaning Exa or open-web retrieval
+The browser conversation surface that creates Answer Runs; it is a transport, not a research capability. The thread shows the run's terminal answer; a Primary Report is a separate reading surface the owner opens from that turn.
+_Avoid_: Web Search, Web, Web Channel when meaning Exa or open-web retrieval; chat column as the report
 
 **Web Search**:
 The optional open-web evidence capability used inside an Answer Run.
@@ -149,8 +149,8 @@ An owner-visible output reference created by fenced publication of staged Agent 
 _Avoid_: Spill, Blob when referring to the reference rather than the bytes
 
 **Primary Report**:
-The optional published Markdown document taken from `artifacts/report.md` after citation finalization; its bytes live in the Blob store and the result names it by Resource Handle.
-_Avoid_: answer body, Spill, Compaction Summary, required report
+The optional published Markdown document taken from `artifacts/report.md` after citation finalization; its bytes live in the Blob store and the result names it by Resource Handle. On Web Conversation it is read in the document panel, not as a second chat body.
+_Avoid_: answer body, chat column, Spill, Compaction Summary, required report
 
 **Publication**:
 The fenced terminal transaction that makes staged Agent Workspace files owner-visible as Published Artifacts.

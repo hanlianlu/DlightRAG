@@ -40,6 +40,7 @@ def render_done_event(
         visual_workspaces=visual_workspaces,
     )
     answer = str(projected["answer"])
+    handle = projected.get("primary_report")
     return AnswerDoneEvent(
         status="succeeded",
         html=safe_answer_done(
@@ -49,6 +50,7 @@ def render_done_event(
         ),
         answer=answer,
         answer_images=projected["answer_images"],
+        primary_report=handle if isinstance(handle, str) and handle else None,
     )
 
 

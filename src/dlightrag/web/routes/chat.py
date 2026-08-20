@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.access import AccessAction, WorkspaceRecord, owner_id_from_user
+from dlightrag.answer.runs.results import project_answer_result
+from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.runtime import IdempotencyKeyConflict
 from dlightrag.web.answer_events import browser_frame
@@ -21,6 +23,7 @@ from dlightrag.web.attachment_models import (
 from dlightrag.web.attachment_requests import parse_web_answer_request
 from dlightrag.web.conversation_models import AnswerRunDescriptor, ConversationTurn
 from dlightrag.web.conversations import (
+    WEB_SOURCE_DOWNLOAD_BASE,
     ConversationSubmissionConflict,
     WebAnswerSubmission,
     WebConversationService,
@@ -35,6 +38,7 @@ from dlightrag.web.deps import (
     get_workspace,
     templates,
 )
+from dlightrag.web.safe_html import safe_answer_done
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +204,47 @@ async def cancel_answer_run(
         replace(turn, run=outcome.run),
         downloadable_workspaces=downloadable,
         visual_workspaces=visual,
+    )
+
+
+@router.get("/answer/{run_id}/report", response_class=HTMLResponse)
+async def answer_run_report(
+    run_id: str,
+    request: Request,
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
+) -> HTMLResponse:
+    """Return the sanitized Primary Report HTML for the document panel."""
+    user = getattr(request.state, "user_context", None)
+    turn = await conversation_service.turn_for_run(user, run_id)
+    if turn is None or turn.run.status != "succeeded" or turn.run.result is None:
+        raise HTTPException(status_code=404, detail="Primary report not found")
+    downloadable, visual = await _projection_workspaces(request, turn.run.prepared_input or {})
+    projected = project_answer_result(
+        turn.run.result,
+        source_link_builder=SourceDownloadLinkBuilder(base_url=WEB_SOURCE_DOWNLOAD_BASE),
+        downloadable_workspaces=downloadable,
+        visual_workspaces=visual,
+    )
+    handle = projected.get("primary_report")
+    if not isinstance(handle, str) or not handle:
+        raise HTTPException(status_code=404, detail="Primary report not found")
+    blob = await get_application(request).answers.read_artifact(
+        owner_id=owner_id_from_user(user),
+        run_id=run_id,
+        resource_id=handle,
+    )
+    if blob is None:
+        raise HTTPException(status_code=404, detail="Primary report not found")
+    try:
+        markdown = blob.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="Primary report is not UTF-8") from exc
+    return HTMLResponse(
+        safe_answer_done(
+            answer=markdown,
+            sources=projected["report_sources"],
+            answer_images=[],
+        )
     )
 
 

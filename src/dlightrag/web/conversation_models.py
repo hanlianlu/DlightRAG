@@ -90,6 +90,7 @@ class ConversationTurn(ClientContractModel):
     assistant_text: str
     user_attachments: list[ConversationAttachmentReference] = Field(default_factory=list)
     answer_html: str
+    primary_report: str | None = None
     error_kind: str | None = None
     error_message: str | None = None
     created_at: datetime.datetime
