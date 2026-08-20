@@ -167,7 +167,7 @@ export async function refreshFilePanel(workspace = ingestStore.workspace): Promi
     const request = startPanelRequest(workspace);
     showFilePanelLoading();
     try {
-        const response = await requestFilePanelHtml(request, '/web/files');
+        const response = await requestFilePanelHtml(request, '/web/api/files');
         const html = await response.text();
         applyFilePanelHtml(html, workspace, request);
     } catch (error: unknown) {
@@ -213,7 +213,7 @@ export async function uploadFilesToWorkspace(
     showToast('Uploading ' + name + '...');
 
     try {
-        const response = await fetch('/web/files/upload', {
+        const response = await fetch('/web/api/files/upload', {
             method: 'POST',
             headers: csrfHeaders(),
             body: formData,
@@ -243,7 +243,7 @@ async function deleteFile(filePath: string, trigger: HTMLButtonElement | null = 
 
     const workspace = ingestStore.workspace;
     const request = startPanelRequest(workspace);
-    const url = new URL('/web/files', window.location.origin);
+    const url = new URL('/web/api/files', window.location.origin);
     if (workspace) url.searchParams.set('workspace', workspace);
     url.searchParams.set('file_path', filePath);
 
@@ -290,7 +290,7 @@ async function pollIngestStatus(workspace: string): Promise<void> {
     const controller = new AbortController();
     ingestPollController = controller;
     try {
-        const response = await fetch(filePanelUrl('/web/ingest-status', workspace), {
+        const response = await fetch(filePanelUrl('/web/api/ingest-status', workspace), {
             signal: controller.signal,
         });
         const html = await response.text();

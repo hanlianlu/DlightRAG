@@ -92,7 +92,7 @@ async def test_create_ignores_client_identity_and_returns_server_uuid(
     conversation_service: AsyncMock,
 ) -> None:
     response = await conversation_client.post(
-        "/web/conversations",
+        "/web/api/conversations",
         json={"principal_id": "attacker", "conversation_id": "client-selected"},
     )
 
@@ -107,7 +107,7 @@ async def test_list_returns_only_service_projection(
     conversation_client: AsyncClient,
     conversation_service: AsyncMock,
 ) -> None:
-    response = await conversation_client.get("/web/conversations")
+    response = await conversation_client.get("/web/api/conversations")
 
     assert response.status_code == 200
     assert len(response.json()) == 1
@@ -120,14 +120,14 @@ async def test_history_of_other_principal_is_404(
 ) -> None:
     conversation_service.history.return_value = None
 
-    response = await conversation_client.get(f"/web/conversations/{_CID}/history")
+    response = await conversation_client.get(f"/web/api/conversations/{_CID}/history")
 
     assert response.status_code == 404
 
 
 async def test_rename_validates_trimmed_title(conversation_client: AsyncClient) -> None:
     response = await conversation_client.patch(
-        f"/web/conversations/{_CID}",
+        f"/web/api/conversations/{_CID}",
         json={"title": "   "},
     )
 
@@ -139,7 +139,7 @@ async def test_rename_normalizes_whitespace(
     conversation_service: AsyncMock,
 ) -> None:
     response = await conversation_client.patch(
-        f"/web/conversations/{_CID}",
+        f"/web/api/conversations/{_CID}",
         json={"title": "  Renamed\n chat  "},
     )
 
@@ -151,7 +151,7 @@ async def test_delete_returns_204(
     conversation_client: AsyncClient,
     conversation_service: AsyncMock,
 ) -> None:
-    response = await conversation_client.delete(f"/web/conversations/{_CID}")
+    response = await conversation_client.delete(f"/web/api/conversations/{_CID}")
 
     assert response.status_code == 204
     assert response.content == b""
@@ -164,7 +164,7 @@ async def test_delete_all_returns_204_when_no_conversations_exist(
 ) -> None:
     conversation_service.delete_all.return_value = 0
 
-    response = await conversation_client.delete("/web/conversations")
+    response = await conversation_client.delete("/web/api/conversations")
 
     assert response.status_code == 204
     assert response.content == b""
@@ -172,7 +172,7 @@ async def test_delete_all_returns_204_when_no_conversations_exist(
 
 
 async def test_delete_has_no_messages_subroute(conversation_client: AsyncClient) -> None:
-    response = await conversation_client.delete(f"/web/conversations/{_CID}/messages")
+    response = await conversation_client.delete(f"/web/api/conversations/{_CID}/messages")
 
     assert response.status_code == 404
 
@@ -183,10 +183,10 @@ async def test_delete_has_no_messages_subroute(conversation_client: AsyncClient)
 
 
 _COOKIE_MUTATIONS = (
-    pytest.param("POST", "/web/conversations", None, "create", 201, id="create"),
+    pytest.param("POST", "/web/api/conversations", None, "create", 201, id="create"),
     pytest.param(
         "PATCH",
-        f"/web/conversations/{_CID}",
+        f"/web/api/conversations/{_CID}",
         {"title": "Renamed chat"},
         "rename",
         200,
@@ -194,7 +194,7 @@ _COOKIE_MUTATIONS = (
     ),
     pytest.param(
         "DELETE",
-        f"/web/conversations/{_CID}",
+        f"/web/api/conversations/{_CID}",
         None,
         "delete",
         204,
@@ -253,7 +253,7 @@ async def test_cookie_lifecycle_mutation_rejects_missing_origin(
     cookie_conversation_client: AsyncClient,
     conversation_service: AsyncMock,
 ) -> None:
-    response = await cookie_conversation_client.post("/web/conversations")
+    response = await cookie_conversation_client.post("/web/api/conversations")
 
     assert response.status_code == 403
     conversation_service.create.assert_not_awaited()
@@ -264,7 +264,7 @@ async def test_bearer_lifecycle_mutation_does_not_require_browser_origin(
     conversation_service: AsyncMock,
 ) -> None:
     response = await cookie_conversation_client.post(
-        "/web/conversations",
+        "/web/api/conversations",
         headers={"Authorization": "Bearer secret-token"},
     )
 
@@ -288,7 +288,7 @@ async def test_cookie_web_answer_accepts_exact_origin_independent_of_content_typ
     conversation_service.start_answer.return_value = None
 
     response = await cookie_conversation_client.post(
-        "/web/answer",
+        "/web/api/answer",
         content=json.dumps(_WEB_ANSWER_BODY),
         headers={"Content-Type": content_type, "Origin": "https://app.example.com"},
     )
@@ -316,7 +316,7 @@ async def test_cookie_web_answer_rejects_non_exact_origin_before_service(
         headers["Origin"] = origin
 
     response = await cookie_conversation_client.post(
-        "/web/answer",
+        "/web/api/answer",
         content=json.dumps(_WEB_ANSWER_BODY),
         headers=headers,
     )
@@ -332,7 +332,7 @@ async def test_bearer_web_answer_does_not_require_browser_origin(
     conversation_service.start_answer.return_value = None
 
     response = await cookie_conversation_client.post(
-        "/web/answer",
+        "/web/api/answer",
         json=_WEB_ANSWER_BODY,
         headers={"Authorization": "Bearer secret-token"},
     )
@@ -344,14 +344,14 @@ async def test_bearer_web_answer_does_not_require_browser_origin(
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        pytest.param("POST", "/web/files/upload", id="file-upload"),
+        pytest.param("POST", "/web/api/files/upload", id="file-upload"),
         pytest.param(
             "DELETE",
-            "/web/files?workspace=default&file_path=report.pdf",
+            "/web/api/files?workspace=default&file_path=report.pdf",
             id="file-delete",
         ),
-        pytest.param("POST", "/web/workspaces/create", id="workspace-create"),
-        pytest.param("POST", "/web/workspaces/delete", id="workspace-delete"),
+        pytest.param("POST", "/web/api/workspaces/create", id="workspace-create"),
+        pytest.param("POST", "/web/api/workspaces/delete", id="workspace-delete"),
     ],
 )
 async def test_cookie_web_mutations_reject_missing_origin(
@@ -372,8 +372,8 @@ async def test_cookie_web_mutations_reject_missing_origin(
 @pytest.mark.parametrize(
     ("method", "path", "store_method"),
     (
-        pytest.param("GET", "/web/conversations", "list_conversations", id="read"),
-        pytest.param("POST", "/web/conversations", "create_conversation", id="mutation"),
+        pytest.param("GET", "/web/api/conversations", "list_conversations", id="read"),
+        pytest.param("POST", "/web/api/conversations", "create_conversation", id="mutation"),
     ),
 )
 async def test_store_unavailability_returns_retryable_503(
@@ -474,7 +474,7 @@ async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailabi
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         with pytest.raises(type(store_error), match=str(store_error)):
-            await client.get("/web/conversations")
+            await client.get("/web/api/conversations")
 
 
 def test_browser_contracts_forbid_extra_fields_and_normalize_titles() -> None:

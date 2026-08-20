@@ -10,11 +10,11 @@ def test_rest_source_link_uses_document_id_and_workspace() -> None:
 
 
 def test_web_source_link_uses_web_owned_prefix() -> None:
-    builder = SourceDownloadLinkBuilder(base_url="/web/files/raw")
+    builder = SourceDownloadLinkBuilder(base_url="/web/api/files/raw")
 
     url = builder.resolve("doc-abc", workspace="finance")
 
-    assert url == "/web/files/raw/doc-abc?workspace=finance"
+    assert url == "/web/api/files/raw/doc-abc?workspace=finance"
 
 
 def test_source_link_percent_encodes_identifiers() -> None:

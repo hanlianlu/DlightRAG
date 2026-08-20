@@ -98,15 +98,15 @@ async def client(service: AsyncMock, application_double: AsyncMock, test_config)
 async def test_submission_returns_202_with_the_durable_descriptor(
     client: AsyncClient, service: AsyncMock
 ) -> None:
-    response = await client.post("/web/answer", json=_BODY)
+    response = await client.post("/web/api/answer", json=_BODY)
 
     assert response.status_code == 202
     body = response.json()
     assert body["run_id"] == RUN_ID
     assert body["status"] == "queued"
     assert body["turn_id"] == TURN_ID
-    assert body["events_url"] == f"/web/answer/{RUN_ID}/events"
-    assert body["cancel_url"] == f"/web/answer/{RUN_ID}"
+    assert body["events_url"] == f"/web/api/answer/{RUN_ID}/events"
+    assert body["cancel_url"] == f"/web/api/answer/{RUN_ID}"
     assert body["conversation"]["conversation_id"] == _CID
     # The 202 body is the whole answer contract: nothing is streamed by the
     # request that created the run.
@@ -117,7 +117,7 @@ async def test_submission_returns_202_with_the_durable_descriptor(
 async def test_submission_passes_the_submission_id_as_the_run_key(
     client: AsyncClient, service: AsyncMock
 ) -> None:
-    await client.post("/web/answer", json=_BODY)
+    await client.post("/web/api/answer", json=_BODY)
 
     kwargs = service.start_answer.await_args.kwargs
     assert kwargs["submission_id"] == SUBMISSION_ID
@@ -135,7 +135,7 @@ async def test_submission_canonicalizes_display_workspaces_before_access_and_ser
     monkeypatch.setattr(chat_routes, "enforce_web_access", enforce)
 
     response = await client.post(
-        "/web/answer",
+        "/web/api/answer",
         json={**_BODY, "workspaces": ["Finance Reports"]},
     )
 
@@ -153,7 +153,7 @@ async def test_replaying_a_submission_returns_the_authoritative_run(
         conversation_id=_CID, run=answer_run(status="running")
     )
 
-    response = await client.post("/web/answer", json=_BODY)
+    response = await client.post("/web/api/answer", json=_BODY)
 
     # A replay is accepted work too, so it reports the same 202 as the original
     # submission and simply carries the run's current status.
@@ -212,7 +212,7 @@ async def test_reusing_a_submission_with_different_input_is_409(
 ) -> None:
     service.start_answer.side_effect = error
 
-    response = await client.post("/web/answer", json=_BODY)
+    response = await client.post("/web/api/answer", json=_BODY)
 
     assert response.status_code == 409
 
@@ -222,7 +222,7 @@ async def test_submission_to_an_unknown_conversation_is_404(
 ) -> None:
     service.start_answer.return_value = None
 
-    response = await client.post("/web/answer", json=_BODY)
+    response = await client.post("/web/api/answer", json=_BODY)
 
     assert response.status_code == 404
 
@@ -230,7 +230,7 @@ async def test_submission_to_an_unknown_conversation_is_404(
 async def test_an_empty_question_is_rejected_before_acceptance(
     client: AsyncClient, service: AsyncMock
 ) -> None:
-    response = await client.post("/web/answer", json={**_BODY, "query": "  "})
+    response = await client.post("/web/api/answer", json={**_BODY, "query": "  "})
 
     assert response.status_code == 422
     service.start_answer.assert_not_awaited()
@@ -242,7 +242,7 @@ async def test_an_empty_question_is_rejected_before_acceptance(
 
 
 async def test_status_projects_the_linked_turn(client: AsyncClient) -> None:
-    response = await client.get(f"/web/answer/{RUN_ID}")
+    response = await client.get(f"/web/api/answer/{RUN_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -257,7 +257,7 @@ async def test_a_run_this_principal_does_not_own_is_404(
 ) -> None:
     service.turn_for_run.return_value = None
 
-    response = await client.get(f"/web/answer/{RUN_ID}{path}")
+    response = await client.get(f"/web/api/answer/{RUN_ID}{path}")
 
     assert response.status_code == 404
 
@@ -270,7 +270,7 @@ async def test_the_report_route_returns_sanitized_markdown(
     service.turn_for_run.return_value = linked_turn(answer_run(status="succeeded", result=result))
     application_double.answers.read_artifact = AsyncMock(return_value=b"# Title\n\nBody")
 
-    response = await client.get(f"/web/answer/{RUN_ID}/report")
+    response = await client.get(f"/web/api/answer/{RUN_ID}/report")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
@@ -286,7 +286,7 @@ async def test_the_report_route_is_404_without_a_handle(
         answer_run(status="succeeded", result=stored_result())
     )
 
-    response = await client.get(f"/web/answer/{RUN_ID}/report")
+    response = await client.get(f"/web/api/answer/{RUN_ID}/report")
 
     assert response.status_code == 404
 
@@ -296,7 +296,7 @@ async def test_cancelling_an_unowned_run_never_reaches_answer_service(
 ) -> None:
     service.turn_for_run.return_value = None
 
-    response = await client.delete(f"/web/answer/{RUN_ID}")
+    response = await client.delete(f"/web/api/answer/{RUN_ID}")
 
     assert response.status_code == 404
     application_double.answers.cancel.assert_not_awaited()
@@ -308,7 +308,7 @@ async def test_cancelling_a_running_run_reports_the_pending_request(
     running = answer_run(status="running", cancel_requested_at=datetime.datetime.now(datetime.UTC))
     application_double.answers.cancel.return_value = Mock(outcome="pending", run=running)
 
-    response = await client.delete(f"/web/answer/{RUN_ID}")
+    response = await client.delete(f"/web/api/answer/{RUN_ID}")
 
     assert response.status_code == 202
     assert response.json()["cancel_requested"] is True
@@ -322,7 +322,7 @@ async def test_cancelling_a_terminal_run_is_a_200_no_op(
         outcome="already_terminal", run=answer_run(status="succeeded", result=stored_result())
     )
 
-    response = await client.delete(f"/web/answer/{RUN_ID}")
+    response = await client.delete(f"/web/api/answer/{RUN_ID}")
 
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
@@ -333,7 +333,7 @@ async def test_a_trimmed_event_log_is_410(client: AsyncClient, service: AsyncMoc
         answer_run(status="succeeded", events_trimmed_at=datetime.datetime.now(datetime.UTC))
     )
 
-    response = await client.get(f"/web/answer/{RUN_ID}/events")
+    response = await client.get(f"/web/api/answer/{RUN_ID}/events")
 
     assert response.status_code == 410
 
@@ -365,11 +365,11 @@ async def scoped_client(application_double: AsyncMock, test_config):
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        ("GET", "/web/answer/{run_id}"),
-        ("DELETE", "/web/answer/{run_id}"),
-        ("GET", "/web/answer/{run_id}/events"),
-        ("GET", "/web/runs/{run_id}/attachments/1"),
-        ("GET", "/web/runs/{run_id}/attachments/1/thumbnail"),
+        ("GET", "/web/api/answer/{run_id}"),
+        ("DELETE", "/web/api/answer/{run_id}"),
+        ("GET", "/web/api/answer/{run_id}/events"),
+        ("GET", "/web/api/runs/{run_id}/attachments/1"),
+        ("GET", "/web/api/runs/{run_id}/attachments/1/thumbnail"),
     ],
     ids=["status", "cancel", "events", "attachment", "thumbnail"],
 )
@@ -409,7 +409,7 @@ async def test_the_resume_cursor_comes_from_either_form(
         return _empty_events()
 
     application_double.answers.subscribe.side_effect = _events
-    url = f"/web/answer/{RUN_ID}/events" + (f"?after={query}" if query is not None else "")
+    url = f"/web/api/answer/{RUN_ID}/events" + (f"?after={query}" if query is not None else "")
 
     await client.get(url, headers={"Last-Event-ID": header} if header is not None else None)
 
@@ -432,7 +432,7 @@ async def test_an_unusable_cursor_never_subscribes(
     query: str | None,
     status: int,
 ) -> None:
-    url = f"/web/answer/{RUN_ID}/events" + (f"?after={query}" if query is not None else "")
+    url = f"/web/api/answer/{RUN_ID}/events" + (f"?after={query}" if query is not None else "")
 
     response = await client.get(
         url, headers={"Last-Event-ID": header} if header is not None else None
@@ -520,7 +520,7 @@ async def test_closing_the_event_stream_detaches_without_cancelling(
 
     application_double.answers.subscribe.side_effect = _events
 
-    async with client.stream("GET", f"/web/answer/{RUN_ID}/events") as response:
+    async with client.stream("GET", f"/web/api/answer/{RUN_ID}/events") as response:
         assert response.status_code == 200
         async for _line in response.aiter_lines():
             break
@@ -548,7 +548,7 @@ def test_the_done_event_is_derived_from_the_canonical_result() -> None:
     assert done.status == "succeeded"
     assert done.answer == "Revenue increased [1]."
     assert done.primary_report is None
-    assert "/web/files/raw/report?workspace=default" in done.html
+    assert "/web/api/files/raw/report?workspace=default" in done.html
     assert "citation-badge" in done.html
 
 
@@ -615,7 +615,7 @@ def test_a_succeeded_turn_renders_from_the_run_result() -> None:
 
     assert turn.assistant_text == "Revenue increased [1]."
     assert turn.primary_report is None
-    assert "/web/files/raw/report?workspace=default" in turn.answer_html
+    assert "/web/api/files/raw/report?workspace=default" in turn.answer_html
     # The turn model never re-exposes stored source or principal state.
     assert "answer_sources" not in turn.model_dump()
     assert "principal_id" not in turn.model_dump_json()
@@ -767,8 +767,8 @@ def test_uploads_are_addressed_through_their_run() -> None:
     turn = project_conversation_turn(linked_turn(answer_run(request=request)))
 
     attachment = turn.user_attachments[0]
-    assert attachment.url == f"/web/runs/{RUN_ID}/attachments/1"
-    assert attachment.thumbnail_url == f"/web/runs/{RUN_ID}/attachments/1/thumbnail"
+    assert attachment.url == f"/web/api/runs/{RUN_ID}/attachments/1"
+    assert attachment.thumbnail_url == f"/web/api/runs/{RUN_ID}/attachments/1/thumbnail"
     assert attachment.kind == "image"
     assert attachment.byte_size == 9
     assert "digest" not in attachment.model_dump()

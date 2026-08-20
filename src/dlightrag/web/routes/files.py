@@ -158,7 +158,7 @@ def _file_view_models(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# GET /web/files — file list panel content
+# GET /web/api/files — file list panel content
 # ---------------------------------------------------------------------------
 
 
@@ -209,7 +209,7 @@ async def _file_list_response(request: Request, workspace: str):
 
 
 # ---------------------------------------------------------------------------
-# POST /web/files/upload — non-blocking upload + background ingest
+# POST /web/api/files/upload — non-blocking upload + background ingest
 # ---------------------------------------------------------------------------
 
 
@@ -314,7 +314,7 @@ async def upload_files(
 
 
 # ---------------------------------------------------------------------------
-# GET /web/ingest-status — htmx polling endpoint
+# GET /web/api/ingest-status — htmx polling endpoint
 # ---------------------------------------------------------------------------
 
 
@@ -356,7 +356,7 @@ async def ingest_status(
 
 
 # ---------------------------------------------------------------------------
-# DELETE /web/files
+# DELETE /web/api/files
 # ---------------------------------------------------------------------------
 
 

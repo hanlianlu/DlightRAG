@@ -40,10 +40,10 @@ def _turn(*, answer: str, html: str, primary_report: str | None) -> dict[str, ob
 def _install_routes(page: Page, *, turn: dict[str, object], report_html: str | None) -> None:
     def handle_conversations(route: Route) -> None:
         path = urlparse(route.request.url).path
-        if path == "/web/conversations":
+        if path == "/web/api/conversations":
             route.fulfill(json=[_CONVERSATION])
             return
-        if path == f"/web/conversations/{_CONVERSATION['conversation_id']}/history":
+        if path == f"/web/api/conversations/{_CONVERSATION['conversation_id']}/history":
             route.fulfill(json={"conversation": _CONVERSATION, "turns": [turn]})
             return
         route.continue_()
@@ -54,8 +54,8 @@ def _install_routes(page: Page, *, turn: dict[str, object], report_html: str | N
             return
         route.fulfill(status=200, content_type="text/html; charset=utf-8", body=report_html)
 
-    page.route("**/web/conversations**", handle_conversations)
-    page.route(f"**/web/answer/{_RUN_ID}/report", handle_report)
+    page.route("**/web/api/conversations**", handle_conversations)
+    page.route(f"**/web/api/answer/{_RUN_ID}/report", handle_report)
 
 
 def _open_ready_page(page: Page) -> None:

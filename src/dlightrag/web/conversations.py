@@ -132,7 +132,7 @@ _PRUNE_INTERVAL_SECONDS = 60 * 60
 _PRUNE_BATCH_SIZE = 500
 
 #: Browser answer sources are served through the Web-scoped download route.
-WEB_SOURCE_DOWNLOAD_BASE = "/web/files/raw"
+WEB_SOURCE_DOWNLOAD_BASE = "/web/api/files/raw"
 
 
 def _is_image_mime(mime_type: str | None) -> bool:
@@ -664,7 +664,7 @@ def _attachment_reference(
     attachment: AttachmentReference,
 ) -> ConversationAttachmentReference:
     is_image = _is_image_mime(attachment.mime_type)
-    url = f"/web/runs/{run_id}/attachments/{attachment.ordinal}"
+    url = f"/web/api/runs/{run_id}/attachments/{attachment.ordinal}"
     return ConversationAttachmentReference(
         attachment_id=f"{run_id}:{attachment.ordinal}",
         ordinal=attachment.ordinal,

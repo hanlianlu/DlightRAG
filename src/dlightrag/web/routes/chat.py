@@ -7,19 +7,16 @@ from dataclasses import replace
 from functools import partial
 from typing import Any
 
-from dlightrag_rag.workspaces import normalize_workspace, normalize_workspace_ids
+from dlightrag_rag.workspaces import normalize_workspace_ids
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from dlightrag.access import AccessAction, WorkspaceRecord, owner_id_from_user
+from dlightrag.access import AccessAction, owner_id_from_user
 from dlightrag.answer.runs.results import project_answer_result, project_report_sources
 from dlightrag.answer.sources import SourceDownloadLinkBuilder
 from dlightrag.api.answer_stream import follow_run_frames, resume_cursor
 from dlightrag.runtime import IdempotencyKeyConflict
 from dlightrag.web.answer_events import browser_frame
-from dlightrag.web.attachment_models import (
-    SUPPORTED_DOCUMENT_EXTENSIONS,
-)
 from dlightrag.web.attachment_requests import parse_web_answer_request
 from dlightrag.web.conversation_models import AnswerRunDescriptor, ConversationTurn
 from dlightrag.web.conversations import (
@@ -31,82 +28,36 @@ from dlightrag.web.conversations import (
 )
 from dlightrag.web.deps import (
     enforce_web_access,
-    filter_web_workspace_records,
     get_application,
     get_web_access_gate,
     get_web_conversation_service,
     get_workspace,
     templates,
 )
+from dlightrag.web.routes.bootstrap import (
+    bootstrap_template_context,
+    build_web_bootstrap,
+)
 from dlightrag.web.safe_html import safe_answer_done
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+page_router = APIRouter()
 
 
-@router.get("/", response_class=HTMLResponse)
+@page_router.get("/", response_class=HTMLResponse)
 async def index(request: Request, workspace: str = Depends(get_workspace)):
-    """Main page."""
-
-    application = get_application(request)
-    capabilities = await application.answers.capabilities()
-    workspaces: list[WorkspaceRecord]
-    try:
-        workspaces = await application.corpora.alist_workspace_records()
-    except Exception:
-        workspaces = [
-            {
-                "workspace": workspace,
-                "display_name": workspace,
-                "embedding_model": application.config.embedding.model,
-            }
-        ]
-    workspaces = await filter_web_workspace_records(
+    """Render the temporary Jinja shell from the typed browser bootstrap."""
+    bootstrap = await build_web_bootstrap(
         request,
-        AccessAction.WORKSPACE_QUERY,
-        workspaces,
+        workspace,
+        fallback_to_cookie_workspace=True,
     )
-
-    authorized = [row["workspace"] for row in workspaces]
-    known = set(authorized)
-    active_raw = request.cookies.get("dlightrag_workspace_ids", "")
-    active = [normalize_workspace(item.strip()) for item in active_raw.split(",") if item.strip()]
-    active = [item for item in active if item in known]
-
-    primary = normalize_workspace(request.cookies.get("dlightrag_workspace", workspace))
-    if not active:
-        active = authorized
-    if primary not in known:
-        primary = "default" if "default" in known else (authorized[0] if authorized else "")
-
-    capability = capabilities.answer
-    if capability is None:
-        capability_status = "unknown"
-        effective_current_upload_limit = 0
-    else:
-        capability_status = capability.status
-        effective_current_upload_limit = capability.effective_max_images
-    document_extensions = sorted(SUPPORTED_DOCUMENT_EXTENSIONS)
-
     return templates.TemplateResponse(
         request,
         "index.html",
-        {
-            "workspace": workspace,
-            "workspaces": workspaces,
-            "primary_workspace": primary,
-            "active_workspaces": active,
-            "query_attachment_count_limit": application.config.answer.max_attachments,
-            "query_attachment_image_max_bytes": application.config.answer.max_attachment_bytes,
-            "query_attachment_document_max_bytes": application.config.answer.max_attachment_bytes,
-            "query_attachment_extensions": document_extensions,
-            "query_attachment_image_capability": capability_status,
-            "query_attachment_image_limit": effective_current_upload_limit,
-            "query_attachment_accept": ",".join(
-                ["image/*", *(f".{extension}" for extension in document_extensions)]
-            ),
-        },
+        {"workspace": workspace, **bootstrap_template_context(bootstrap)},
     )
 
 
@@ -299,9 +250,9 @@ def answer_run_descriptor(submission: WebAnswerSubmission) -> AnswerRunDescripto
         turn_id=submission.turn_id,
         turn_number=submission.turn_number,
         submission_id=str(submission.run.idempotency_key or ""),
-        events_url=f"/web/answer/{run_id}/events",
-        status_url=f"/web/answer/{run_id}",
-        cancel_url=f"/web/answer/{run_id}",
+        events_url=f"/web/api/answer/{run_id}/events",
+        status_url=f"/web/api/answer/{run_id}",
+        cancel_url=f"/web/api/answer/{run_id}",
         conversation=submission.conversation,
     )
 

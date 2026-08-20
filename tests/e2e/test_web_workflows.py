@@ -23,7 +23,7 @@ def test_answer_submission_uses_active_conversation_and_restores_saved_history(p
     query = "How does DlightRAG work?"
     composer.fill(query)
 
-    with page.expect_request(lambda request: request.url.endswith("/web/answer")) as captured:
+    with page.expect_request(lambda request: request.url.endswith("/web/api/answer")) as captured:
         page.get_by_label("Send").click()
 
     payload = captured.value.post_data_json
@@ -58,7 +58,7 @@ def test_composing_line_break_does_not_submit_but_plain_line_break_does(page: Pa
     page.on(
         "request",
         lambda request: (
-            answer_requests.append(request.url) if request.url.endswith("/web/answer") else None
+            answer_requests.append(request.url) if request.url.endswith("/web/api/answer") else None
         ),
     )
 
@@ -74,7 +74,7 @@ def test_composing_line_break_does_not_submit_but_plain_line_break_does(page: Pa
     assert answer_requests == []
     expect(composer).to_have_value("IME draft")
 
-    with page.expect_request(lambda request: request.url.endswith("/web/answer")):
+    with page.expect_request(lambda request: request.url.endswith("/web/api/answer")):
         composer.evaluate(
             """element => element.dispatchEvent(new InputEvent('beforeinput', {
                 bubbles: true,

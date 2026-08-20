@@ -35,15 +35,15 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
         request = route.request
         path = urlparse(request.url).path
         method = request.method
-        if path == "/web/conversations" and method == "GET":
+        if path == "/web/api/conversations" and method == "GET":
             route.fulfill(json=state.conversations)
             return
-        if path == "/web/conversations" and method == "POST":
+        if path == "/web/api/conversations" and method == "POST":
             item = summary(str(uuid4()))
             state.conversations.insert(0, item)
             route.fulfill(status=201, json=item)
             return
-        if path == "/web/conversations" and method == "DELETE":
+        if path == "/web/api/conversations" and method == "DELETE":
             if state.delete_status != 204:
                 route.fulfill(
                     status=state.delete_status,
@@ -55,7 +55,7 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
             return
 
         parts = path.split("/")
-        conversation_id = parts[3] if len(parts) > 3 else ""
+        conversation_id = parts[4] if len(parts) > 4 else ""
         item = next(
             (row for row in state.conversations if row["conversation_id"] == conversation_id),
             None,
@@ -83,7 +83,7 @@ def _install_conversation_routes(page: Page) -> ConversationRouteState:
             return
         route.abort()
 
-    page.route("**/web/conversations**", handle)
+    page.route("**/web/api/conversations**", handle)
     return state
 
 
@@ -790,7 +790,7 @@ def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
     def record_image_request(request) -> None:
         path = urlparse(request.url).path
         # Uploads live with the run that accepted them, not with the conversation.
-        if not path.startswith("/web/runs/") or "/attachments/" not in path:
+        if not path.startswith("/web/api/runs/") or "/attachments/" not in path:
             return
         if path.endswith("/thumbnail"):
             thumbnail_requests.append(path)

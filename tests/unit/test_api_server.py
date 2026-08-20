@@ -2153,14 +2153,14 @@ def _echo_length_app(max_bytes: int) -> FastAPI:
         return {"received": len(await request.body())}
 
     @application.post("/answer")
-    @application.post("/web/answer")
+    @application.post("/web/api/answer")
     async def answer(request: Request) -> dict[str, int]:
         return {"received": len(await request.body())}
 
     application.add_middleware(
         RequestBodyLimitMiddleware,
         max_bytes=max_bytes,
-        multipart_path_max_bytes={"/answer": max_bytes, "/web/answer": max_bytes},
+        multipart_path_max_bytes={"/answer": max_bytes, "/web/api/answer": max_bytes},
     )
     return application
 
@@ -2226,7 +2226,7 @@ async def test_an_unmapped_multipart_upload_uses_the_default_cap() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["/answer", "/web/answer"])
+@pytest.mark.parametrize("path", ["/answer", "/web/api/answer"])
 async def test_a_chunked_answer_multipart_is_refused_at_receive_layer(path: str) -> None:
     async def chunks():
         for _ in range(10):

@@ -72,7 +72,7 @@ def dump_answer_snapshot(sources: list[SourceReference]) -> dict[str, Any]:
 def load_answer_snapshot(
     value: Any,
     *,
-    image_url_prefix: str = "/web/images",
+    image_url_prefix: str = "/web/api/images",
 ) -> list[SourceReference]:
     """Restore internal sources and derive managed image routes for this adapter."""
     snapshot = _StoredAnswerSnapshot.model_validate(value)

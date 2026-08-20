@@ -36,7 +36,7 @@ async function post<T>(path: string, body: Record<string, string>, fallback: str
 
 export function createWorkspaceRequest(name: string): Promise<CreatedWorkspace> {
   return post<CreatedWorkspace>(
-    '/web/workspaces/create',
+    '/web/api/workspaces/create',
     {workspace_name: name},
     'Failed to create workspace',
   );
@@ -44,7 +44,7 @@ export function createWorkspaceRequest(name: string): Promise<CreatedWorkspace> 
 
 export function deleteWorkspaceRequest(name: string): Promise<DeletedWorkspace> {
   return post<DeletedWorkspace>(
-    '/web/workspaces/delete',
+    '/web/api/workspaces/delete',
     {workspace_name: name, confirm_name: name},
     'Could not delete workspace.',
   );

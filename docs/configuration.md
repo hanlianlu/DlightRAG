@@ -524,7 +524,7 @@ materialization. DlightRAG never silently retains bytes to rescue an invalid
 request.
 
 REST `GET /files/raw/{document_id}` and Web
-`GET /web/files/raw/{document_id}` are separate authenticated projections. Each
+`GET /web/api/files/raw/{document_id}` are separate authenticated projections. Each
 resolves the exact workspace metadata row server-side, then serves a retained
 local file or redirects through a supported provider locator. Azure uses
 `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain

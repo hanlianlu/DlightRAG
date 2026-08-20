@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-// Builds the `/web/answer` request body for one submission. With no attachments
+// Builds the `/web/api/answer` request body for one submission. With no attachments
 // it posts the compact JSON envelope; with attachments it posts one multipart
 // form carrying the same envelope fields plus repeated `attachments` file parts
 // in user order. The server contract (parse_web_answer_request) reads exactly

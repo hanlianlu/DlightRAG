@@ -140,13 +140,13 @@ def test_a_replayed_submission_never_creates_a_second_turn(page, e2e_base_url):
     replay = page.evaluate(
         """
         async () => {
-          const history = await (await fetch('/web/conversations')).json();
+          const history = await (await fetch('/web/api/conversations')).json();
           const conversation = history[0].conversation_id;
           const turns = await (
-            await fetch(`/web/conversations/${conversation}/history`)
+            await fetch(`/web/api/conversations/${conversation}/history`)
           ).json();
           const turn = turns.turns[0];
-          const response = await fetch('/web/answer', {
+          const response = await fetch('/web/api/answer', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
@@ -158,7 +158,7 @@ def test_a_replayed_submission_never_creates_a_second_turn(page, e2e_base_url):
           });
           const descriptor = await response.json();
           const after = await (
-            await fetch(`/web/conversations/${conversation}/history`)
+            await fetch(`/web/api/conversations/${conversation}/history`)
           ).json();
           return {
             status: response.status,
@@ -218,7 +218,7 @@ def _install_event_transport(
         state["cursors"].append(route.request.headers.get("last-event-id"))
         frames = slices[index] if index < len(slices) else slices[-1]
         if service is not None and any("event: done" in frame for frame in frames):
-            service.finish_run(urlparse(route.request.url).path.split("/")[3])
+            service.finish_run(urlparse(route.request.url).path.split("/")[4])
         route.fulfill(
             status=200,
             content_type="text/event-stream",
@@ -231,8 +231,8 @@ def _install_event_transport(
             state["cancelled"] += 1
         route.continue_()
 
-    page.route("**/web/answer/*/events", handle)
-    page.route("**/web/answer/*", count_cancel)
+    page.route("**/web/api/answer/*/events", handle)
+    page.route("**/web/api/answer/*", count_cancel)
     return state
 
 
@@ -280,7 +280,7 @@ def test_navigating_away_from_a_pending_run_detaches_instead_of_blocking(page: P
     assert transport["cancelled"] == 0
     # The run the other conversation owns is untouched and still pending.
     status = page.evaluate(
-        "id => fetch(`/web/conversations/${id}/history`)"
+        "id => fetch(`/web/api/conversations/${id}/history`)"
         ".then(r => r.json()).then(h => h.turns[0].status)",
         second,
     )

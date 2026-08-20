@@ -82,13 +82,13 @@ def test_index_advertises_one_unified_attachment_policy() -> None:
         assert stale not in html
 
 
-def test_index_route_advertises_exact_backend_attachment_limits() -> None:
-    chat_source = (ROOT / "src/dlightrag/web/routes/chat.py").read_text(encoding="utf-8")
+def test_bootstrap_advertises_exact_backend_attachment_limits() -> None:
+    bootstrap_source = (ROOT / "src/dlightrag/web/routes/bootstrap.py").read_text(encoding="utf-8")
 
-    assert (
-        '"query_attachment_count_limit": application.config.answer.max_attachments,' in chat_source
-    )
-    assert chat_source.count("application.config.answer.max_attachment_bytes,") >= 2
+    assert "count_limit=application.config.answer.max_attachments" in bootstrap_source
+    assert "attachment_limit = application.config.answer.max_attachment_bytes" in bootstrap_source
+    assert "image_max_bytes=attachment_limit" in bootstrap_source
+    assert "document_max_bytes=attachment_limit" in bootstrap_source
 
 
 def test_frontend_submits_only_the_unified_attachments_part() -> None:
@@ -209,7 +209,7 @@ def test_source_panel_requires_download_for_every_authorized_source() -> None:
         id="1",
         title="notes.md",
         source_uri="local://default/notes.md",
-        download_url="/web/files/raw/doc-notes?workspace=default",
+        download_url="/web/api/files/raw/doc-notes?workspace=default",
         chunks=[],
     )
 
@@ -219,7 +219,7 @@ def test_source_panel_requires_download_for_every_authorized_source() -> None:
     )
 
     assert html.count('class="source-action-icon"') == 1
-    assert 'href="/web/files/raw/doc-notes?workspace=default"' in html
+    assert 'href="/web/api/files/raw/doc-notes?workspace=default"' in html
     assert "{% if src.download_url %}" in source_panel_text
 
 
@@ -311,7 +311,7 @@ def test_sanitized_source_download_preserves_accessible_name() -> None:
         id="1",
         title="notes.md",
         source_uri="local://default/notes.md",
-        download_url="/web/files/raw/doc-notes?workspace=default",
+        download_url="/web/api/files/raw/doc-notes?workspace=default",
         chunks=[],
     )
 
@@ -328,7 +328,7 @@ def test_source_titles_fall_back_without_legacy_paths() -> None:
     source = SourceReferencePayload(
         id="1",
         source_uri="local://default/notes.md",
-        download_url="/web/files/raw/doc-notes?workspace=default",
+        download_url="/web/api/files/raw/doc-notes?workspace=default",
         chunks=[],
     )
     partials = ROOT / "src/dlightrag/web/templates/partials"
@@ -350,7 +350,7 @@ def test_source_anchor_allowlist_rejects_unsafe_attributes_and_targets() -> None
     from dlightrag.web.safe_html import sanitize_html_fragment
 
     html = sanitize_html_fragment(
-        '<a href="/web/files/raw/doc-notes" aria-label="Download source" '
+        '<a href="/web/api/files/raw/doc-notes" aria-label="Download source" '
         'onclick="alert(1)" style="display:none" target="_self">Download</a>'
     )
 

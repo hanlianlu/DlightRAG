@@ -67,7 +67,7 @@ async def test_index_page(client):
 
 
 async def test_file_list(client):
-    resp = await client.get("/web/files")
+    resp = await client.get("/web/api/files")
     assert resp.status_code == 200
     assert "report.pdf" in resp.text
     assert "analysis.xlsx" in resp.text

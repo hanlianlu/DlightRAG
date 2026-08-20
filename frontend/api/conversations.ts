@@ -71,12 +71,12 @@ async function responseJson<T>(response: Response, fallback: string): Promise<T>
 }
 
 export async function listConversations(signal?: AbortSignal): Promise<ConversationSummary[]> {
-  const response = await fetch('/web/conversations', {signal});
+  const response = await fetch('/web/api/conversations', {signal});
   return responseJson<ConversationSummary[]>(response, 'Failed to load conversations');
 }
 
 export async function createConversation(signal?: AbortSignal): Promise<ConversationSummary> {
-  const response = await fetch('/web/conversations', {
+  const response = await fetch('/web/api/conversations', {
     method: 'POST',
     headers: csrfHeaders(),
     signal,
@@ -89,7 +89,7 @@ export async function getConversationHistory(
   signal?: AbortSignal,
 ): Promise<ConversationHistory> {
   const id = encodeURIComponent(conversationId);
-  const response = await fetch(`/web/conversations/${id}/history`, {signal});
+  const response = await fetch(`/web/api/conversations/${id}/history`, {signal});
   return responseJson<ConversationHistory>(response, 'Failed to load conversation history');
 }
 
@@ -99,7 +99,7 @@ export async function renameConversation(
   signal?: AbortSignal,
 ): Promise<ConversationSummary> {
   const id = encodeURIComponent(conversationId);
-  const response = await fetch(`/web/conversations/${id}`, {
+  const response = await fetch(`/web/api/conversations/${id}`, {
     method: 'PATCH',
     headers: csrfHeaders('application/json'),
     body: JSON.stringify({title}),
@@ -113,7 +113,7 @@ export async function deleteConversation(
   signal?: AbortSignal,
 ): Promise<void> {
   const id = encodeURIComponent(conversationId);
-  const response = await fetch(`/web/conversations/${id}`, {
+  const response = await fetch(`/web/api/conversations/${id}`, {
     method: 'DELETE',
     headers: csrfHeaders(),
     signal,
@@ -124,7 +124,7 @@ export async function deleteConversation(
 }
 
 export async function deleteAllConversations(signal?: AbortSignal): Promise<void> {
-  const response = await fetch('/web/conversations', {
+  const response = await fetch('/web/api/conversations', {
     method: 'DELETE',
     headers: csrfHeaders(),
     signal,
@@ -139,7 +139,7 @@ export async function getAnswerRun(
   signal?: AbortSignal,
 ): Promise<ConversationTurn> {
   const id = encodeURIComponent(runId);
-  const response = await fetch(`/web/answer/${id}`, {signal});
+  const response = await fetch(`/web/api/answer/${id}`, {signal});
   return responseJson<ConversationTurn>(response, 'Failed to load answer run');
 }
 
@@ -149,7 +149,7 @@ export async function cancelAnswerRun(
   signal?: AbortSignal,
 ): Promise<ConversationTurn> {
   const id = encodeURIComponent(runId);
-  const response = await fetch(`/web/answer/${id}`, {
+  const response = await fetch(`/web/api/answer/${id}`, {
     method: 'DELETE',
     headers: csrfHeaders(),
     signal,

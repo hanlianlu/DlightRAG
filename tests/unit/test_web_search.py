@@ -281,7 +281,7 @@ def test_a_web_passage_survives_the_citation_builder_as_a_real_source() -> None:
         [_hit("https://a/x", "one", title="A page"), _hit("https://a/x", "two", title="A page")]
     )
 
-    (source,) = build_sources_from_chunks(rows, image_url_prefix="/web/images")
+    (source,) = build_sources_from_chunks(rows, image_url_prefix="/web/api/images")
 
     assert source.source_uri == "https://a/x"
     assert source.download_locator == "https://a/x"

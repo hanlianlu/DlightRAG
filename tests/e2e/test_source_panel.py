@@ -32,7 +32,7 @@ def _inject_answer_with_sources(page) -> None:
     with page.expect_response(
         lambda response: (
             response.request.method == "GET"
-            and response.url.endswith(f"/web/conversations/{conversation_id}/history")
+            and response.url.endswith(f"/web/api/conversations/{conversation_id}/history")
             and response.ok
         ),
         timeout=10000,
@@ -101,7 +101,7 @@ def _inject_answer_with_sources(page) -> None:
                     <span class="source-doc-badge">1</span>
                     <span class="source-doc-count">1</span>
                   </button>
-                  <a href="/web/files/raw/doc-report?workspace=default"
+                  <a href="/web/api/files/raw/doc-report?workspace=default"
                      class="source-action-icon"
                      title="Download source"
                      aria-label="Download source"
@@ -225,7 +225,9 @@ def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
 
     assert download.count() == 1
     assert header.locator(":scope > .source-doc-toggle").count() == 1
-    assert download.get_attribute("href").endswith("/web/files/raw/doc-report?workspace=default")
+    assert download.get_attribute("href").endswith(
+        "/web/api/files/raw/doc-report?workspace=default"
+    )
     assert download.get_attribute("aria-label") == "Download source"
     assert download.get_attribute("download") == ""
     download.focus()
@@ -267,10 +269,10 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
 
     def handle_conversations(route):
         path = urlparse(route.request.url).path
-        if path == "/web/conversations":
+        if path == "/web/api/conversations":
             route.fulfill(json=[conversation])
             return
-        if path == "/web/conversations/public-source-history/history":
+        if path == "/web/api/conversations/public-source-history/history":
             route.fulfill(
                 json={
                     "conversation": conversation,
@@ -296,7 +298,7 @@ def test_public_source_link_opens_new_tab_from_source_panel(page):
             return
         route.continue_()
 
-    page.route("**/web/conversations**", handle_conversations)
+    page.route("**/web/api/conversations**", handle_conversations)
     _open_ready_page(page)
     hidden_link = page.locator('.source-data a[aria-label="Open source"]')
     assert hidden_link.get_attribute("target") == "_blank"

@@ -364,7 +364,7 @@ async def test_reader_serves_web_routes() -> None:
     finally:
         config_module._config = original
 
-    assert "/web/answer" in set(app.openapi()["paths"])
+    assert "/web/api/answer" in set(app.openapi()["paths"])
     assert app.state.web_enabled is True
     assert not hasattr(app.state, "web_conversation_service")
 

@@ -202,13 +202,13 @@ class TestWebAuth:
 
         async with _web_client_for(test_config, mock_application) as client:
             response = await client.get(
-                "/web/files/raw/doc-report",
+                "/web/api/files/raw/doc-report",
                 params={"workspace": "finance"},
             )
 
         assert response.status_code == 303
         query = parse_qs(urlsplit(response.headers["location"]).query)
-        assert query["next"] == ["/web/files/raw/doc-report?workspace=finance"]
+        assert query["next"] == ["/web/api/files/raw/doc-report?workspace=finance"]
 
     async def test_simple_invalid_bearer_rejected(
         self, test_config: DlightragConfig, mock_application
@@ -218,7 +218,7 @@ class TestWebAuth:
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
-                "/web/files",
+                "/web/api/files",
                 headers={"Authorization": "Bearer wrong-token"},
             )
 
@@ -263,7 +263,7 @@ class TestWebAuth:
                 data={"token": "secret-token", "next": "/web/"},
             )
             response = await c.get(
-                "/web/files/raw/doc-notes",
+                "/web/api/files/raw/doc-notes",
                 params={"workspace": "default"},
             )
             rest_response = await c.get(
@@ -315,7 +315,7 @@ class TestWebAuth:
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
-                "/web/files",
+                "/web/api/files",
                 headers={"Authorization": "Bearer secret-token"},
             )
 
@@ -329,7 +329,7 @@ class TestWebAuth:
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
-                "/web/files",
+                "/web/api/files",
                 headers={"Authorization": "Bearer not-a-jwt"},
             )
 
@@ -351,7 +351,7 @@ class TestWebAuth:
 
         async with _web_client_for(test_config, mock_application) as c:
             resp = await c.get(
-                "/web/files",
+                "/web/api/files",
                 headers={"Authorization": f"Bearer {token}"},
             )
 
@@ -527,17 +527,107 @@ class TestWebIndex:
 
 
 # ---------------------------------------------------------------------------
+# TestWebBootstrap
+# ---------------------------------------------------------------------------
+
+
+class TestWebBootstrap:
+    async def test_returns_one_typed_authorized_startup_snapshot(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        response = await client.get("/web/api/bootstrap")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "contract_version": 1,
+            "workspaces": [
+                {
+                    "workspace": "default",
+                    "display_name": "Default",
+                    "embedding_model": "voyage-multimodal-3.5",
+                },
+                {
+                    "workspace": "test_ws",
+                    "display_name": "Test Workspace",
+                    "embedding_model": "voyage-multimodal-3.5",
+                },
+            ],
+            "primary_workspace": "default",
+            "active_workspaces": ["default", "test_ws"],
+            "answer_attachments": {
+                "count_limit": 6,
+                "image_max_bytes": 104_857_600,
+                "document_max_bytes": 104_857_600,
+                "extensions": sorted(SUPPORTED_DOCUMENT_EXTENSIONS),
+                "image_capability": "supported",
+                "image_limit": 8,
+                "accept": ",".join(
+                    [
+                        "image/*",
+                        *(f".{extension}" for extension in sorted(SUPPORTED_DOCUMENT_EXTENSIONS)),
+                    ]
+                ),
+            },
+        }
+
+    async def test_filters_saved_scope_and_primary_through_authorized_workspaces(
+        self, client: AsyncClient
+    ) -> None:
+        client.cookies.set("dlightrag_workspace", "deleted")
+        client.cookies.set("dlightrag_workspace_ids", "test_ws,deleted")
+
+        response = await client.get("/web/api/bootstrap")
+
+        assert response.status_code == 200
+        assert response.json()["primary_workspace"] == "default"
+        assert response.json()["active_workspaces"] == ["test_ws"]
+
+    async def test_machine_snapshot_fails_closed_when_workspace_inventory_is_unavailable(
+        self, client: AsyncClient, mock_application
+    ) -> None:
+        mock_application.corpora.alist_workspace_records.side_effect = RuntimeError("database down")
+
+        bootstrap = await client.get("/web/api/bootstrap")
+        legacy_page = await client.get("/web/")
+
+        assert bootstrap.status_code == 503
+        assert bootstrap.json() == {
+            "detail": "Web application bootstrap is unavailable",
+            "error_type": "unavailable",
+        }
+        assert legacy_page.status_code == 200
+        assert 'data-primary="default"' in legacy_page.text
+
+    @pytest.mark.parametrize(
+        "old_path",
+        [
+            "/web/answer",
+            "/web/conversations",
+            "/web/files",
+            "/web/ingest-status",
+            "/web/workspaces/create",
+        ],
+    )
+    async def test_old_browser_data_paths_have_no_compatibility_alias(
+        self, client: AsyncClient, old_path: str
+    ) -> None:
+        response = await client.get(old_path)
+
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # TestWebFiles
 # ---------------------------------------------------------------------------
 
 
 class TestWebFiles:
-    """Tests for GET /web/files and DELETE /web/files."""
+    """Tests for GET /web/api/files and DELETE /web/api/files."""
 
     async def test_file_list_returns_html(
         self, client: AsyncClient, test_config: DlightragConfig
     ) -> None:
-        resp = await client.get("/web/files")
+        resp = await client.get("/web/api/files")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
 
@@ -553,7 +643,7 @@ class TestWebFiles:
             }
         )
 
-        resp = await client.get("/web/files")
+        resp = await client.get("/web/api/files")
 
         assert resp.status_code == 200
         assert ">q4.pdf</span>" in resp.text
@@ -574,7 +664,7 @@ class TestWebFiles:
         mock_application.corpora.list_ingested_files = AsyncMock(return_value=[])
         mock_application.corpora.get_pipeline_status = AsyncMock(return_value={"busy": False})
 
-        resp = await client.get("/web/files", params={"workspace": "cold-ws"})
+        resp = await client.get("/web/api/files", params={"workspace": "cold-ws"})
 
         assert resp.status_code == 200
         assert ">report.pdf</span>" in resp.text
@@ -587,7 +677,7 @@ class TestWebFiles:
     ) -> None:
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
-        resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
+        resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
@@ -601,7 +691,7 @@ class TestWebFiles:
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
         client.cookies.set("dlightrag_workspace", "test_ws")
 
-        resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
+        resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
@@ -616,7 +706,7 @@ class TestWebFiles:
             return_value=["default", "test_fallback_ws"]
         )
 
-        resp = await client.get("/web/files", params={"workspace": "test-fallback-ws"})
+        resp = await client.get("/web/api/files", params={"workspace": "test-fallback-ws"})
 
         assert resp.status_code == 200
         mock_application.corpora.file_panel_snapshot.assert_awaited_once_with("test_fallback_ws")
@@ -626,7 +716,7 @@ class TestWebFiles:
     ) -> None:
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["other_ws"])
 
-        resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
+        resp = await client.get("/web/api/files", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
@@ -638,7 +728,7 @@ class TestWebFiles:
     ) -> None:
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
-        resp = await client.get("/web/ingest-status", params={"workspace": "deleted_ws"})
+        resp = await client.get("/web/api/ingest-status", params={"workspace": "deleted_ws"})
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
@@ -647,7 +737,7 @@ class TestWebFiles:
     async def test_ingest_status_done_preserves_panel_content_container(
         self, client: AsyncClient, test_config: DlightragConfig
     ) -> None:
-        resp = await client.get("/web/ingest-status", params={"workspace": "default"})
+        resp = await client.get("/web/api/ingest-status", params={"workspace": "default"})
 
         assert resp.status_code == 200
         assert resp.headers["hx-retarget"] == "#panel-content"
@@ -667,7 +757,7 @@ class TestWebFiles:
 
         mock_application.corpora.stage_upload_batch = fake_stage_batch
         resp = await client.post(
-            "/web/files/upload",
+            "/web/api/files/upload",
             files=[("files", ("report.pdf", b"%PDF-fake", "application/pdf"))],
         )
 
@@ -687,7 +777,7 @@ class TestWebFiles:
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
-            "/web/files/upload",
+            "/web/api/files/upload",
             data={"workspace": "deleted_ws"},
             files=[("files", ("report.pdf", b"%PDF-fake", "application/pdf"))],
         )
@@ -717,7 +807,7 @@ class TestWebFiles:
     ) -> None:
         resp = await client.request(
             "DELETE",
-            "/web/files",
+            "/web/api/files",
             params={"file_path": "/tmp/test.pdf"},
         )
         assert resp.status_code == 200
@@ -730,7 +820,7 @@ class TestWebFiles:
 
         resp = await client.request(
             "DELETE",
-            "/web/files",
+            "/web/api/files",
             params={"workspace": "deleted_ws", "file_path": "/tmp/test.pdf"},
         )
 
@@ -745,7 +835,7 @@ class TestWebFiles:
 
 
 class TestWebWorkspaceCreate:
-    """Tests for POST /web/workspaces/create."""
+    """Tests for POST /web/api/workspaces/create."""
 
     async def test_create_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
@@ -757,7 +847,7 @@ class TestWebWorkspaceCreate:
             side_effect=[["default", "test_ws"], ["default", "test_ws", "new_workspace"]]
         )
         resp = await client.post(
-            "/web/workspaces/create",
+            "/web/api/workspaces/create",
             data={"workspace_name": "new workspace"},
         )
         assert resp.status_code == 200
@@ -778,7 +868,7 @@ class TestWebWorkspaceCreate:
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
     ) -> None:
         resp = await client.post(
-            "/web/workspaces/create",
+            "/web/api/workspaces/create",
             data={"workspace_name": "default"},
         )
         assert resp.status_code == 409
@@ -798,7 +888,7 @@ class TestWebWorkspaceCreate:
         workspace_name: str,
     ) -> None:
         resp = await client.post(
-            "/web/workspaces/create",
+            "/web/api/workspaces/create",
             data={"workspace_name": workspace_name},
         )
         assert resp.status_code == 400
@@ -806,7 +896,7 @@ class TestWebWorkspaceCreate:
 
 
 class TestWebWorkspaceDelete:
-    """Tests for POST /web/workspaces/delete."""
+    """Tests for POST /web/api/workspaces/delete."""
 
     async def test_delete_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_application
@@ -816,7 +906,7 @@ class TestWebWorkspaceDelete:
         )
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
         resp = await client.post(
-            "/web/workspaces/delete",
+            "/web/api/workspaces/delete",
             data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
         )
         assert resp.status_code == 200
@@ -833,7 +923,7 @@ class TestWebWorkspaceDelete:
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["research"])
 
         resp = await client.post(
-            "/web/workspaces/delete",
+            "/web/api/workspaces/delete",
             data={"workspace_name": "default", "confirm_name": "default"},
         )
 
@@ -852,7 +942,7 @@ class TestWebWorkspaceDelete:
         mock_application.corpora.list_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
-            "/web/workspaces/delete",
+            "/web/api/workspaces/delete",
             data={"workspace_name": "test-fallback-ws", "confirm_name": "test-fallback-ws"},
         )
 
@@ -875,7 +965,7 @@ class TestWebWorkspaceDelete:
         confirm_name: str,
     ) -> None:
         resp = await client.post(
-            "/web/workspaces/delete",
+            "/web/api/workspaces/delete",
             data={"workspace_name": workspace_name, "confirm_name": confirm_name},
         )
         assert resp.status_code == 400
@@ -915,12 +1005,12 @@ class TestSourcePanelTemplate:
                 {
                     "id": "1",
                     "title": "notes.md",
-                    "download_url": "/web/files/raw/doc-notes?workspace=default",
+                    "download_url": "/web/api/files/raw/doc-notes?workspace=default",
                     "chunks": [],
                 }
             ]
         )
 
         assert "notes.md" in rendered
-        assert 'href="/web/files/raw/doc-notes?workspace=default"' in rendered
+        assert 'href="/web/api/files/raw/doc-notes?workspace=default"' in rendered
         assert 'aria-label="Download source"' in rendered

@@ -33,7 +33,7 @@ export function bindPrimaryReportControl(
 }
 
 export async function openPrimaryReport(runId: string): Promise<void> {
-    const response = await fetch(`/web/answer/${encodeURIComponent(runId)}/report`);
+    const response = await fetch(`/web/api/answer/${encodeURIComponent(runId)}/report`);
     if (!response.ok) {
         showToast('Could not open the report.');
         return;

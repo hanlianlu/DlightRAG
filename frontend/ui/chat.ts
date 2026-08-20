@@ -106,7 +106,7 @@ async function followAnswerRun(
         const after = answerRunStore.lastSequence(conversationId, runId);
         let response: Response;
         try {
-            response = await fetch(`/web/answer/${encodeURIComponent(runId)}/events`, {
+            response = await fetch(`/web/api/answer/${encodeURIComponent(runId)}/events`, {
                 signal: controller.signal,
                 headers: after > 0 ? {'Last-Event-ID': String(after)} : undefined,
             });
@@ -335,7 +335,7 @@ export async function submitQuery(query: string): Promise<void> {
             attachmentFiles,
         );
         clearAttachments();
-        const response = await fetch('/web/answer', {
+        const response = await fetch('/web/api/answer', {
             method: 'POST',
             headers: {...csrfHeaders(), ...(requestHeaders ?? {})},
             body: requestBody,

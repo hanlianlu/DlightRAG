@@ -70,9 +70,9 @@ def _request_body_limits(cfg: DlightragConfig) -> tuple[int, dict[str, int]]:
         ),
         {
             "/answer": answer_multipart_max,
-            "/web/answer": answer_multipart_max,
+            "/web/api/answer": answer_multipart_max,
             "/ingest/blob": cfg.max_upload_bytes + _MULTIPART_ENVELOPE_BYTES,
-            "/web/files/upload": cfg.max_upload_batch_bytes + _MULTIPART_ENVELOPE_BYTES,
+            "/web/api/files/upload": cfg.max_upload_batch_bytes + _MULTIPART_ENVELOPE_BYTES,
         },
     )
 

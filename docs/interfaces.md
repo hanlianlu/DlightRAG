@@ -351,7 +351,7 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | Python SDK | — | `AnswerRunClient.answer()` waits for the result | `AnswerRunClient.events()` yields reconnectable durable events |
 | REST API | JSON object | HTTP 202 run descriptor | reconnectable SSE at `/answer/{run_id}/events` |
 | MCP Server | JSON text | descriptor-only, returns immediately | `get_answer_run` / `cancel_answer_run` tools |
-| Web UI | — | HTTP 202 run descriptor | rendered events at `/web/answer/{run_id}/events` |
+| Web UI | — | HTTP 202 run descriptor | rendered events at `/web/api/answer/{run_id}/events` |
 | CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | follows the run, then falls back to status |
 
 ### Contract Terms
@@ -415,17 +415,24 @@ is the sole client action that requests a terminal `cancelled`.
 
 ### Web Conversation Boundary
 
+The authenticated browser starts from one typed `GET /web/api/bootstrap`
+snapshot. It contains only the authorized workspace records and selected scope,
+the primary Files target, answer-attachment limits, and the current image-input
+capability; it never contains bearer credentials or edge identity tokens. The
+same projection temporarily feeds the Jinja shell while the Vite/Lit app takes
+over startup ownership.
+
 The Web-only conversation lifecycle is server-owned and principal-scoped. The
 browser creates, lists, selects, renames, deletes, and reloads conversations
-through `/web/conversations`; it sends only `conversation_id`, the current query,
-current answer attachments, and the selected search workspaces to `/web/answer`.
+through `/web/api/conversations`; it sends only `conversation_id`, the current query,
+current answer attachments, and the selected search workspaces to `/web/api/answer`.
 Conversation IDs are server-generated UUIDs and are never credentials. History
 and attachment reads always filter by both the authenticated principal and
 conversation ID, so another principal receives the same 404 as a missing
 conversation.
 
-`POST /web/answer` creates a core run and returns its 202 descriptor; the browser
-then subscribes to its own owner-scoped `GET /web/answer/{run_id}/events`. That
+`POST /web/api/answer` creates a core run and returns its 202 descriptor; the browser
+then subscribes to its own owner-scoped `GET /web/api/answer/{run_id}/events`. That
 stream follows the same durable event log as the REST stream, with the same
 sequence, `Last-Event-ID` resume, 410-on-trim, and detach semantics, and differs
 only in projection: a browser `done` frame carries rendered presentation
@@ -441,7 +448,7 @@ resubscribe without remembering the original 202. Failed and cancelled turns sta
 visible with their public terminal error until their run is pruned; only
 succeeded turns become model history.
 
-Answer attachment admission completes before `/web/answer` returns. Unsupported,
+Answer attachment admission completes before `/web/api/answer` returns. Unsupported,
 empty, unsafe-name, per-attachment oversized, and over-count uploads return HTTP
 4xx before the run is accepted: a request exceeding `answer.max_attachments`,
 `answer.max_attachment_bytes`, or `answer.max_total_attachment_bytes` is rejected
@@ -485,10 +492,12 @@ accept a server `conversation_id`; historical files are re-sent as current
 `query_images`; that field belongs to `/retrieve` only.
 
 The REST API uses resource-oriented verbs (for example `POST /workspaces`,
-`DELETE /workspaces/{workspace}`), while the `/web/*` surface serves the browser
-(for example `POST /web/workspaces/create`, `POST /web/workspaces/delete`) and
-answers with whatever that page needs — an HTML fragment for panels, JSON for
-state the stores own. Prefer REST or the SDK for programmatic access.
+`DELETE /workspaces/{workspace}`), while the internal `/web/api/*` surface serves
+the browser (for example `POST /web/api/workspaces/create`,
+`POST /web/api/workspaces/delete`) and answers with whatever that page needs —
+temporarily an HTML fragment for legacy panels, otherwise JSON for state the
+browser owns. These browser routes have no compatibility aliases at their old
+`/web/*` paths. Prefer REST or the SDK for programmatic access.
 
 Image support is a deployment capability, not a per-request negotiation, so callers
 discover it up front. REST `GET /health` returns `answer_image_capability`
@@ -854,7 +863,7 @@ Retrieved document images are exposed as route references, not embedded bytes:
 | Interface | Image reference shape | Byte access |
 |---|---|---|
 | REST | `/images/{workspace}/{chunk_id}?size=thumb\|full` in `image_url`, `thumbnail_url`, and `answer_images` | Authenticated REST image route |
-| Web | `/web/images/{workspace}/{chunk_id}?size=thumb\|full` in rendered HTML/SSE payloads | Same-origin Web image route |
+| Web | `/web/api/images/{workspace}/{chunk_id}?size=thumb\|full` in rendered HTML/SSE payloads | Same-origin Web image route |
 | MCP | Same JSON `image_url`/`thumbnail_url` references as REST when a REST image route is reachable | No separate MCP binary stream today |
 | SDK | `answer_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `answer_images` |
 
@@ -948,7 +957,7 @@ HTTP(S) URL. HTTP adapters separately project the internal document ID and
 source workspace to an authorized `download_url`, then look up the locator
 server-side; raw storage locators and workspace-routing fields are never public.
 REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
-`/web/files/raw/{document_id}`. Transport-neutral SDK/MCP payloads leave
+`/web/api/files/raw/{document_id}`. Transport-neutral SDK/MCP payloads leave
 `download_url` null.
 
 ```json
