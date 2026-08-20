@@ -410,7 +410,7 @@ class CompactionCoordinator:
         kwargs: dict[str, Any] = {}
         if self._model_profile.max_output_tokens is not None:
             kwargs["max_tokens"] = self._model_profile.max_output_tokens
-        stream = self._stream_model(messages=messages, model_kwargs=kwargs)  # type: ignore[call-arg]
+        stream = self._stream_model(messages=messages, model_kwargs=kwargs, thinking="off")  # type: ignore[call-arg]
         chunks: list[str] = []
         async for chunk in stream:
             chunks.append(chunk)

@@ -165,6 +165,11 @@ class AnthropicProvider(CompletionProvider):
         super().__init__(**kwargs)
         self._client: Any = None
 
+    def thinking_off_kwargs(self) -> dict[str, Any]:
+        # Native Anthropic disable: the ``thinking`` top-level key accepts a
+        # config dict whose ``type`` is ``disabled``.
+        return {"thinking": {"type": "disabled"}}
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.close()

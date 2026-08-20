@@ -192,6 +192,16 @@ class CompletionProvider(ABC):
     ``json_object`` mode or a strict-mode json_schema via the OpenAI API.
     """
 
+    def thinking_off_kwargs(self) -> dict[str, Any]:
+        """Return model kwargs that disable extended thinking for this provider.
+
+        The default is no knob: providers whose SDKs already default to
+        thinking off (or that have no reasoning surface) return nothing.
+        Providers with a real disable switch override this with their own
+        key shape (see the per-provider docstrings).
+        """
+        return {}
+
     @classmethod
     def declared_model_profile(
         cls,

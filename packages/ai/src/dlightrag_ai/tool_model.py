@@ -5,7 +5,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from typing import Any
+from typing import Any, Literal
 
 from dlightrag_ai.fingerprints import model_fingerprint
 from dlightrag_ai.messages import AssistantTurn, ToolChoice, ToolDefinition
@@ -110,16 +110,21 @@ class ToolModel:
         *,
         messages: list[dict[str, Any]],
         model_kwargs: dict[str, Any] | None = None,
+        thinking: Literal["off"] | None = None,
     ) -> AsyncGenerator[str]:
         """Stream a tools-disabled final answer from a rich tool transcript.
 
         An explicit ``model_kwargs`` replaces the agentic-then-ordinary retry
         sequence with one single attempt using exactly those kwargs: the
-        compaction summarizer uses this to force thinking off and a profile
-        output cap, with no silent empty-output retry.
+        compaction summarizer uses this to force a profile output cap with no
+        silent empty-output retry. ``thinking="off"`` additionally merges the
+        provider's extended-thinking disable switch under those kwargs, so a
+        reasoning model cannot burn the output cap on hidden reasoning.
         """
         return self._scheduler.stream(
-            lambda: self._stream_text(messages=messages, model_kwargs=model_kwargs)
+            lambda: self._stream_text(
+                messages=messages, model_kwargs=model_kwargs, thinking=thinking
+            )
         )
 
     async def _stream_text(
@@ -127,6 +132,7 @@ class ToolModel:
         *,
         messages: list[dict[str, Any]],
         model_kwargs: dict[str, Any] | None = None,
+        thinking: Literal["off"] | None = None,
     ) -> AsyncGenerator[str]:
         record_text = self._telemetry.capture_sensitive_data
         streamed: list[str] = []
@@ -146,9 +152,19 @@ class ToolModel:
             model=self.settings.model,
         ) as observation:
             try:
-                attempts_kwargs = (
-                    (model_kwargs,) if model_kwargs is not None else self._final_attempt_kwargs()
-                )
+                if thinking is not None and thinking != "off":
+                    raise ValueError(f"unsupported thinking mode: {thinking}")
+                if thinking == "off":
+                    attempts_kwargs = (
+                        {
+                            **self._provider.thinking_off_kwargs(),
+                            **(model_kwargs or {}),
+                        },
+                    )
+                elif model_kwargs is not None:
+                    attempts_kwargs = (model_kwargs,)
+                else:
+                    attempts_kwargs = self._final_attempt_kwargs()
                 for attempt_kwargs in attempts_kwargs:
                     attempts += 1
                     attempt_usage: dict[str, Any] = {}

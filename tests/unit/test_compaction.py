@@ -55,7 +55,9 @@ Model chatter that must not be dropped.
 
 
 def _profile() -> ModelProfile:
-    return ModelProfile(context_window_tokens=100_000, max_input_tokens=85_000)
+    return ModelProfile(
+        context_window_tokens=100_000, max_input_tokens=85_000, max_output_tokens=128_000
+    )
 
 
 def _user(session_id: SessionId, content: str) -> UserMessageEntry:
@@ -166,8 +168,10 @@ class _FakeBoundary:
         )
 
 
-def _stream_once(text: str) -> Any:
+def _stream_once(text: str, calls: list[dict[str, Any]] | None = None) -> Any:
     async def stream(*, messages: list[dict[str, Any]], **kwargs: Any):
+        if calls is not None:
+            calls.append(kwargs)
         yield text
 
     return stream
@@ -243,10 +247,11 @@ class TestCoordinatorLoop:
         session_id, entries = _two_exchange_entries()
         boundary = _FakeBoundary(entries)
         await boundary.seed(projection=_seed_projection())
+        stream_calls: list[dict[str, Any]] = []
         coordinator = CompactionCoordinator(
             model_profile=_profile(),
             context_policy=CONTEXT_POLICY,
-            stream_model=_stream_once(_MARKDOWN),
+            stream_model=_stream_once(_MARKDOWN, calls=stream_calls),
         )
         trace: dict[str, Any] = {}
 
@@ -265,6 +270,8 @@ class TestCoordinatorLoop:
         assert summary.paths == ["./notes.txt"]
         assert trace["compactions"][0]["hierarchical"] is False
         assert trace["compactions"][0]["summary_chars"] > 0
+        # The summarizer call is one thinking-off attempt capped at max_output.
+        assert stream_calls == [{"thinking": "off", "model_kwargs": {"max_tokens": 128_000}}]
 
     async def test_exhausted_attempts_fail_loudly(self) -> None:
         boundary = _FakeBoundary([_user(SessionId.new(), "question")])

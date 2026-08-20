@@ -4,7 +4,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -201,6 +201,45 @@ async def test_query_tool_model_streams_final_text_through_owned_provider(monkey
         "temperature": None,
         "model_kwargs": {},
         "usage_holder": {},
+    }
+
+
+async def test_stream_text_thinking_off_merges_provider_switch_under_cap(
+    monkeypatch,
+) -> None:
+    provider = AsyncMock()
+    provider.thinking_off_kwargs = lambda: {"reasoning": {"enabled": False}}
+    seen: dict[str, object] = {}
+
+    async def tokens():
+        yield "summary"
+
+    def stream_tool_text(*_args, **kwargs):
+        seen["kwargs"] = kwargs
+        return tokens()
+
+    provider.stream_tool_text = stream_tool_text
+    monkeypatch.setattr(
+        "dlightrag_ai.tool_model.get_provider",
+        lambda *_args, **_kwargs: provider,
+    )
+    model = ToolModel(_query_settings(), scheduler=ModelScheduler(max_concurrency=1))
+
+    output = [
+        token
+        async for token in model.stream_text(
+            messages=[{"role": "user", "content": "summarize"}],
+            model_kwargs={"max_tokens": 4000},
+            thinking="off",
+        )
+    ]
+
+    assert output == ["summary"]
+    # The explicit cap wins; the provider switch sits underneath it.
+    seen_kwargs = cast(dict[str, Any], seen["kwargs"])
+    assert seen_kwargs["model_kwargs"] == {
+        "reasoning": {"enabled": False},
+        "max_tokens": 4000,
     }
 
 

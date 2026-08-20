@@ -112,6 +112,11 @@ class OpenAICompatibleProvider(CompletionProvider):
         super().__init__(**kwargs)
         self._client: AsyncOpenAI | None = None
 
+    def thinking_off_kwargs(self) -> dict[str, Any]:
+        # The OpenAI-compatible convention used across endpoints (OpenRouter,
+        # xAI, DeepSeek): ``reasoning.enabled`` in the extra body.
+        return {"reasoning": {"enabled": False}}
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.close()
