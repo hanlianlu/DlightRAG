@@ -83,16 +83,15 @@ def test_view_report_opens_the_panel_on_click(page: Page) -> None:
     _open_ready_page(page)
     control = page.get_by_role("button", name="View report")
     control.wait_for(timeout=10000)
-    panel = page.locator("#panel")
-    assert "open" not in (panel.get_attribute("class") or "")
+    assert "open" not in (page.locator("#report-panel").get_attribute("class") or "")
     control.click()
     page.wait_for_function(
-        "document.getElementById('panel')?.classList.contains('open')",
+        "document.getElementById('report-panel')?.classList.contains('open')",
         timeout=10000,
     )
-    assert page.locator("#panel-title").inner_text() == "Report"
-    assert "Quarterly review" in page.locator("#panel-content").inner_text()
-    assert "Long body." in page.locator("#panel-content").inner_text()
+    assert page.locator("#report-panel-title").inner_text() == "Report"
+    assert "Quarterly review" in page.locator("#report-panel-content").inner_text()
+    assert "Long body." in page.locator("#report-panel-content").inner_text()
 
 
 def test_no_report_handle_has_no_control(page: Page) -> None:
@@ -126,7 +125,53 @@ def test_empty_chat_still_shows_the_report_control(page: Page) -> None:
     assert "Only the report." not in page.locator("#chat-messages").inner_text()
     control.click()
     page.wait_for_function(
+        "document.getElementById('report-panel')?.classList.contains('open')",
+        timeout=10000,
+    )
+    assert "Only the report." in page.locator("#report-panel-content").inner_text()
+
+
+def test_report_citation_opens_sources_beside_the_report(page: Page) -> None:
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _install_routes(
+        page,
+        turn=_turn(
+            answer="See the report.",
+            html='<div id="answer-content"><p>See the report.</p></div>',
+            primary_report="primary_report",
+        ),
+        report_html="""
+          <div id="answer-content">
+            <p>See
+              <span class="citation-badge" data-ref="1" data-chunk="1"
+                    data-action="filter-source" role="button" tabindex="0">1</span>.
+            </p>
+          </div>
+          <div class="source-data hidden">
+            <div class="source-doc" data-ref="1">
+              <div class="source-doc-header">
+                <button class="source-doc-toggle" type="button" data-action="toggle-doc">
+                  <span class="source-doc-title">paper.pdf</span>
+                </button>
+              </div>
+              <div class="source-doc-chunks" hidden>
+                <div class="source-chunk" data-ref="1" data-chunk="1">Evidence chunk</div>
+              </div>
+            </div>
+          </div>
+        """,
+    )
+    _open_ready_page(page)
+    page.get_by_role("button", name="View report").click()
+    page.wait_for_function(
+        "document.getElementById('report-panel')?.classList.contains('open')",
+        timeout=10000,
+    )
+    page.locator("#report-panel-content").get_by_role("button", name="1").click()
+    page.wait_for_function(
         "document.getElementById('panel')?.classList.contains('open')",
         timeout=10000,
     )
-    assert "Only the report." in page.locator("#panel-content").inner_text()
+    assert page.locator("#report-panel").evaluate("el => el.classList.contains('open')")
+    assert "See" in page.locator("#report-panel-content").inner_text()
+    assert "paper.pdf" in page.locator("#panel-content").inner_text()

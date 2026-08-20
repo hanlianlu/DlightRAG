@@ -35,7 +35,7 @@ export async function openPrimaryReport(runId: string): Promise<void> {
     const response = await fetch(`/web/answer/${encodeURIComponent(runId)}/report`);
     if (!response.ok) return;
     const html = await response.text();
-    const panelContent = document.getElementById('panel-content');
+    const panelContent = document.getElementById('report-panel-content');
     if (!panelContent) return;
     const fragment = llmFragmentFromSanitizedHtml(html);
     const answerContent = fragment.querySelector('#answer-content');
@@ -45,13 +45,15 @@ export async function openPrimaryReport(runId: string): Promise<void> {
             ...Array.from(answerContent.childNodes).map((node) => node.cloneNode(true)),
         );
     }
-    const sourceData = fragment.querySelector('#source-data');
+    const sourceData = fragment.querySelector('#source-data, .source-data');
     if (sourceData) {
         const copy = sourceData.cloneNode(true) as HTMLElement;
         copy.className = 'source-data hidden';
         copy.removeAttribute('id');
         panelContent.appendChild(copy);
     }
+    const references = fragment.querySelector('.answer-references');
+    if (references) panelContent.appendChild(references.cloneNode(true));
     renderMath(panelContent);
     renderDiagrams(panelContent);
     fixExternalLinks(panelContent);

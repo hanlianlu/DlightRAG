@@ -300,27 +300,27 @@ body.files-panel-open #files-btn {
 
 /* Panel-open layout: primary app chrome shifts left */
 body.panel-open .topbar {
-    margin-right: var(--layout-panel-width);
+    margin-right: var(--layout-side-width);
     transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
 }
 
 body.panel-open .chat-area {
-    margin-right: var(--layout-panel-width);
+    margin-right: var(--layout-side-width);
     transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
 }
 
 body.panel-open .composer {
-    margin-right: var(--layout-panel-width);
+    margin-right: var(--layout-side-width);
     transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
 }
 
 /* Chat content shrinks to fit when panel is open, capped by fluid width */
 body.panel-open .chat-messages {
-    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
+    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-side-width) - 48px));
 }
 
 body.panel-open .composer-inner {
-    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
+    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-side-width) - 48px));
 }
 
 /* Initial: keep the welcome copy visible while nudging the composer upward. */
@@ -535,11 +535,21 @@ body.panel-open .composer-inner {
     border-left: 1px solid var(--color-border-subtle);
     backdrop-filter: blur(20px);
     transform: translateX(100%);
-    transition: transform var(--layout-shell-duration) var(--layout-shell-easing);
-    z-index: 100;
+    transition: transform var(--layout-shell-duration) var(--layout-shell-easing), right var(--layout-shell-duration) var(--layout-shell-easing);
+    z-index: 101;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+}
+
+#report-panel {
+    right: 0;
+    width: var(--report-panel-width);
+    z-index: 100;
+}
+
+body.sources-panel-open #report-panel.open {
+    right: var(--layout-panel-width);
 }
 
 body.conversation-sidebar-open .panel {
@@ -687,6 +697,15 @@ body.conversation-sidebar-open .panel {
         max-width: min(420px, calc(100vw - var(--space-layout)));
         min-width: 0;
         width: min(var(--layout-panel-width), calc(100vw - var(--space-layout)));
+    }
+
+    #report-panel {
+        width: min(var(--report-panel-width), calc(100vw - var(--space-layout)));
+    }
+
+    body.sources-panel-open #report-panel.open,
+    body.files-panel-open #report-panel.open {
+        right: 0;
     }
 
     .panel-resize-handle {

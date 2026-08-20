@@ -1,73 +1,108 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-const STORAGE_KEY = 'dlightrag-panel-width';
+const MAIN_STORAGE_KEY = 'dlightrag-panel-width';
+const REPORT_STORAGE_KEY = 'dlightrag-report-panel-width';
 const MIN_WIDTH = 320;
 const COMPACT_MAX_WIDTH = 420;
+const DRAWER_MEDIA = '(max-width: 1199px)';
 
-let preferredWidth = 0;
+type WidthVar = '--panel-width' | '--report-panel-width';
 
-function cssPanelDefault(): number {
-    const raw = getComputedStyle(document.documentElement).getPropertyValue('--panel-width').trim();
+let mainPreferred = 0;
+let reportPreferred = 0;
+
+function isDrawer(): boolean {
+    return window.matchMedia(DRAWER_MEDIA).matches;
+}
+
+function cssDefault(varName: WidthVar): number {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
     const px = parseInt(raw, 10);
     return !isNaN(px) && px >= MIN_WIDTH ? px : 420;
 }
 
-function getMaxWidth(): number {
-    if (window.innerWidth <= 640) return window.innerWidth;
-    if (window.innerWidth < 1200) return COMPACT_MAX_WIDTH;
+function chatReserve(): number {
     const styles = getComputedStyle(document.documentElement);
     const chatMinWidth = parseFloat(styles.getPropertyValue('--layout-chat-min-width')) || 520;
     const sidebar = document.body.classList.contains('conversation-sidebar-open')
         ? document.getElementById('chat-sidebar')?.getBoundingClientRect().width || 0
         : 0;
-    return Math.max(MIN_WIDTH, Math.floor(window.innerWidth - sidebar - chatMinWidth));
+    return chatMinWidth + sidebar;
 }
 
-function clampWidth(w: number): number {
-    const maxWidth = getMaxWidth();
+function otherOpenWidth(exclude: WidthVar): number {
+    if (exclude === '--panel-width' && document.body.classList.contains('report-panel-open')) {
+        return document.getElementById('report-panel')?.getBoundingClientRect().width || 0;
+    }
+    if (exclude === '--report-panel-width' && (
+        document.body.classList.contains('sources-panel-open')
+        || document.body.classList.contains('files-panel-open')
+    )) {
+        return document.getElementById('panel')?.getBoundingClientRect().width || 0;
+    }
+    return 0;
+}
+
+function getMaxWidth(exclude: WidthVar): number {
+    if (window.innerWidth <= 640) return window.innerWidth;
+    if (window.innerWidth < 1200) return COMPACT_MAX_WIDTH;
+    return Math.max(MIN_WIDTH, Math.floor(window.innerWidth - chatReserve() - otherOpenWidth(exclude)));
+}
+
+function clampWidth(w: number, exclude: WidthVar): number {
+    const maxWidth = getMaxWidth(exclude);
     const minWidth = Math.min(MIN_WIDTH, maxWidth);
     return Math.max(minWidth, Math.min(w, maxWidth));
 }
 
-function loadPreferredWidth(): number {
+function loadPreferred(key: string, varName: WidthVar): number {
     try {
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(key);
         if (saved !== null) {
             const n = parseInt(saved, 10);
             if (!isNaN(n) && n >= MIN_WIDTH) return n;
         }
     } catch (_) { /* localStorage unavailable */ }
-    return cssPanelDefault();
+    return cssDefault(varName);
 }
 
-export function syncPanelEffectiveWidth(): number {
-    const effectiveWidth = clampWidth(preferredWidth);
-    document.documentElement.style.setProperty('--panel-width', effectiveWidth + 'px');
-    return effectiveWidth;
-}
-
-function saveWidth(w: number): void {
+function saveWidth(key: string, w: number): void {
     try {
-        localStorage.setItem(STORAGE_KEY, String(w));
+        localStorage.setItem(key, String(w));
     } catch (_) { /* localStorage unavailable */ }
 }
 
-export function setupPanelResize(): void {
-    const panel = document.getElementById('panel');
-    if (!panel) return;
+function px(varName: WidthVar, preferred: number): number {
+    return clampWidth(preferred, varName);
+}
 
-    preferredWidth = loadPreferredWidth();
-    syncPanelEffectiveWidth();
+export function syncPanelEffectiveWidth(): number {
+    const main = px('--panel-width', mainPreferred);
+    const report = px('--report-panel-width', reportPreferred);
+    document.documentElement.style.setProperty('--panel-width', main + 'px');
+    document.documentElement.style.setProperty('--report-panel-width', report + 'px');
+    let side = 0;
+    if (!isDrawer()) {
+        if (document.getElementById('panel')?.classList.contains('open')) side += main;
+        if (document.getElementById('report-panel')?.classList.contains('open')) side += report;
+    }
+    document.documentElement.style.setProperty('--layout-side-width', side + 'px');
+    return main;
+}
 
+function bindHandle(
+    panel: HTMLElement,
+    widthVar: WidthVar,
+    storageKey: string,
+    preferred: {get: () => number; set: (n: number) => void},
+): void {
     let handle = panel.querySelector('.panel-resize-handle');
     if (!handle) {
         handle = document.createElement('div');
         handle.className = 'panel-resize-handle';
         panel.insertBefore(handle, panel.firstChild);
     }
-    const resizePanel = panel;
     const resizeHandle = handle;
-
     let dragging = false;
     let startX = 0;
     let startWidth = 0;
@@ -84,7 +119,7 @@ export function setupPanelResize(): void {
         dragging = true;
         activePointerId = event.pointerId;
         startX = event.clientX;
-        startWidth = resizePanel.getBoundingClientRect().width;
+        startWidth = panel.getBoundingClientRect().width;
         event.preventDefault();
         if (resizeHandle.setPointerCapture) {
             resizeHandle.setPointerCapture(event.pointerId);
@@ -94,9 +129,9 @@ export function setupPanelResize(): void {
         document.body.style.cursor = 'col-resize';
         document.body.setAttribute('data-resizing', '');
         document.body.classList.add('resizing');
-        resizePanel.style.willChange = 'width';
-        resizePanel.style.backdropFilter = 'none';
-        resizePanel.style.boxShadow = 'none';
+        panel.style.willChange = 'width';
+        panel.style.backdropFilter = 'none';
+        panel.style.boxShadow = 'none';
     }
 
     function onPointerMove(e: Event): void {
@@ -107,8 +142,9 @@ export function setupPanelResize(): void {
         const clientX = event.clientX;
         rafId = requestAnimationFrame(function () {
             const deltaX = startX - clientX;
-            const newWidth = clampWidth(startWidth + deltaX);
-            document.documentElement.style.setProperty('--panel-width', newWidth + 'px');
+            const newWidth = clampWidth(startWidth + deltaX, widthVar);
+            document.documentElement.style.setProperty(widthVar, newWidth + 'px');
+            syncPanelEffectiveWidth();
         });
     }
 
@@ -132,12 +168,12 @@ export function setupPanelResize(): void {
         document.body.style.userSelect = '';
         document.body.style.cursor = '';
         document.body.classList.remove('resizing');
-        resizePanel.style.willChange = '';
-        resizePanel.style.backdropFilter = '';
-        resizePanel.style.boxShadow = '';
-        const finalWidth = resizePanel.getBoundingClientRect().width;
-        preferredWidth = Math.round(finalWidth);
-        saveWidth(preferredWidth);
+        panel.style.willChange = '';
+        panel.style.backdropFilter = '';
+        panel.style.boxShadow = '';
+        const finalWidth = Math.round(panel.getBoundingClientRect().width);
+        preferred.set(finalWidth);
+        saveWidth(storageKey, finalWidth);
         syncPanelEffectiveWidth();
         setTimeout(function () {
             document.body.removeAttribute('data-resizing');
@@ -149,6 +185,25 @@ export function setupPanelResize(): void {
     document.addEventListener('pointerup', finishDrag);
     document.addEventListener('pointercancel', finishDrag);
     window.addEventListener('blur', finishDrag);
+}
 
+export function setupPanelResize(): void {
+    const main = document.getElementById('panel');
+    const report = document.getElementById('report-panel');
+    mainPreferred = loadPreferred(MAIN_STORAGE_KEY, '--panel-width');
+    reportPreferred = loadPreferred(REPORT_STORAGE_KEY, '--report-panel-width');
+    syncPanelEffectiveWidth();
+    if (main) {
+        bindHandle(main, '--panel-width', MAIN_STORAGE_KEY, {
+            get: () => mainPreferred,
+            set: (n) => { mainPreferred = n; },
+        });
+    }
+    if (report) {
+        bindHandle(report, '--report-panel-width', REPORT_STORAGE_KEY, {
+            get: () => reportPreferred,
+            set: (n) => { reportPreferred = n; },
+        });
+    }
     window.addEventListener('resize', syncPanelEffectiveWidth);
 }

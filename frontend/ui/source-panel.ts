@@ -58,17 +58,26 @@ function hideToggleAllButton(): void {
     if (btn) btn.hidden = true;
 }
 
-function findSourceData(answerEl: Element): HTMLElement | null {
-    for (const child of answerEl.children) {
+function findSourceHost(origin: Element): Element | null {
+    return origin.closest(AI_MESSAGE_SELECTOR)
+        || origin.closest('#report-panel')
+        || origin.closest('#report-panel-content');
+}
+
+function findSourceData(host: Element): HTMLElement | null {
+    for (const child of host.children) {
         if (child instanceof HTMLElement && child.classList.contains('source-data')) return child;
+    }
+    if (host.id === 'report-panel' || host.id === 'report-panel-content') {
+        return host.querySelector<HTMLElement>('.source-data');
     }
     return null;
 }
 
-function copySourcePanelFromAnswer(answerEl: Element): boolean {
+function copySourcePanelFromAnswer(host: Element): boolean {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return false;
-    const sourceData = findSourceData(answerEl);
+    const sourceData = findSourceData(host);
     if (!sourceData) return false;
 
     panelContent.replaceChildren();
@@ -111,9 +120,9 @@ function setExpandedSource(ref?: string, chunk?: string): void {
 
 function openRefSource(refItem: HTMLElement): void {
     const ref = refItem.dataset.ref;
-    const answerEl = refItem.closest(AI_MESSAGE_SELECTOR);
-    if (!answerEl) return;
-    if (!copySourcePanelFromAnswer(answerEl)) return;
+    const host = findSourceHost(refItem);
+    if (!host) return;
+    if (!copySourcePanelFromAnswer(host)) return;
     activeCitation = null;
     setExpandedSource(ref);
     openPanel('SOURCES');
@@ -122,9 +131,9 @@ function openRefSource(refItem: HTMLElement): void {
 export function filterSource(badge: HTMLElement): void {
     const ref = badge.dataset.ref;
     const chunk = badge.dataset.chunk;
-    const answerEl = badge.closest(AI_MESSAGE_SELECTOR);
-    if (!answerEl) return;
-    if (!copySourcePanelFromAnswer(answerEl)) return;
+    const host = findSourceHost(badge);
+    if (!host) return;
+    if (!copySourcePanelFromAnswer(host)) return;
     activeCitation = (ref && chunk) ? {ref, chunk} : null;
     setExpandedSource(ref, chunk);
     openPanel('SOURCES');
@@ -211,7 +220,7 @@ export function setupSourcePanel(): void {
 
     document.body.addEventListener('panelOpening', function(e) {
         const title = (e as CustomEvent<{title?: string}>).detail?.title;
-        if (title && title !== 'SOURCES') {
+        if (title === 'FILES') {
             activeCitation = null;
             hideToggleAllButton();
         }
