@@ -19,6 +19,10 @@ from dlightrag.access import (
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.model_settings import authentication_settings
 from dlightrag.web.deps import templates
+from dlightrag.web.edge_identity import (
+    EdgeIdentityError,
+    edge_identity_provider,
+)
 
 WEB_AUTH_COOKIE = "dlightrag_web_auth"
 _PUBLIC_WEB_PATHS = {"/web/login", "/web/logout"}
@@ -185,6 +189,9 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
             return await call_next(request)
 
+        if cfg.web_identity.edge is not None:
+            return await self._dispatch_edge_identity(cfg, request, call_next)
+
         source: str | None = None
         try:
             raw_token, source = _token_from_request(request)
@@ -213,6 +220,23 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         if _is_cookie_web_mutation(request, source) and not _has_exact_same_origin(request):
             return PlainTextResponse("Cross-origin request rejected", status_code=403)
 
+        return await call_next(request)
+
+    async def _dispatch_edge_identity(self, cfg, request: Request, call_next) -> Response:
+        """Resolve the Web caller from the configured edge credential only."""
+        try:
+            provider = edge_identity_provider(cfg.web_identity)
+            identity = provider.authenticate(request)
+        except EdgeIdentityError as exc:
+            return PlainTextResponse(
+                "Authentication required" if exc.http_status == 401 else str(exc),
+                status_code=exc.http_status,
+            )
+        request.state.user_context = UserContext(
+            user_id=identity.subject,
+            auth_mode="jwt",
+            claims=identity.claims,
+        )
         return await call_next(request)
 
 

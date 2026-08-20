@@ -662,6 +662,75 @@ def _redact_dict(data: dict[str, Any], patterns: tuple[str, ...]) -> dict[str, A
     return result
 
 
+class WebIdentitySettings(BaseModel):
+    """Edge-asserted identity source for the Web surface.
+
+    The browser front door already authenticated the human (Cloudflare Access,
+    Azure Easy Auth, or AWS Amplify/CloudFront); the Web surface verifies the
+    edge credential per request and never renders a login page or issues a
+    token of its own. JWKS and issuer values are public material and may live
+    in ``config.yaml``.
+    """
+
+    edge: Literal["cloudflare", "azure", "aws"] | None = Field(
+        default=None,
+        description=(
+            "Edge identity provider. None keeps the existing pasted-token Web "
+            "login (development/operator hatch)."
+        ),
+    )
+    issuer: str | None = Field(
+        default=None,
+        description=(
+            "Expected edge-token issuer: https://<team>.cloudflareaccess.com for "
+            "Cloudflare, https://login.microsoftonline.com/<tenant>/v2.0 for Azure, "
+            "the IdP issuer for AWS."
+        ),
+    )
+    audience: Annotated[str | list[str] | None, NoDecode] = Field(
+        default=None,
+        description="Expected edge-token audience (Cloudflare AUD tag; AAD client id).",
+    )
+    jwks_url: str | None = Field(
+        default=None,
+        description=(
+            "JWKS endpoint for edge-token signing keys. Optional: Cloudflare "
+            "derives its team certs endpoint from the issuer."
+        ),
+    )
+
+    @field_validator("audience", mode="before")
+    @classmethod
+    def _normalize_audience(cls, value: Any) -> str | list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            if not text.startswith("["):
+                return text
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "web_identity.audience string must be a plain audience or a JSON array"
+                ) from exc
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            return value
+        raise ValueError("web_identity.audience must be a string or a list of strings")
+
+    @model_validator(mode="after")
+    def _validate_edge(self) -> Self:
+        if self.edge is None:
+            return self
+        if not self.issuer:
+            raise ValueError("web_identity.edge requires web_identity.issuer")
+        if not self.audience:
+            raise ValueError("web_identity.edge requires web_identity.audience")
+        return self
+
+
 class DlightragConfig(BaseSettings):
     """DlightRAG configuration.
 
@@ -1175,6 +1244,15 @@ class DlightragConfig(BaseSettings):
             "browser front door and direct API clients). Required with jwt_jwks_url."
         ),
     )
+    web_identity: WebIdentitySettings = Field(
+        default_factory=WebIdentitySettings,
+        description=(
+            "Edge-asserted identity for the Web surface. When set, the browser "
+            "front door (Cloudflare Access, Azure Easy Auth, or AWS Amplify/"
+            "CloudFront) already authenticated the human; the Web surface verifies "
+            "the edge credential per request instead of reading a pasted token."
+        ),
+    )
 
     @field_validator("jwt_audience", mode="before")
     @classmethod
@@ -1317,6 +1395,11 @@ class DlightragConfig(BaseSettings):
             raise ValueError("auth_mode='jwt' requires jwt_verification_key or jwt_jwks_url")
         if self.jwt_jwks_url and not (self.jwt_issuer and self.jwt_audience):
             raise ValueError("jwt_jwks_url requires jwt_issuer and jwt_audience")
+        if self.web_identity.edge and self.auth_mode != "jwt":
+            raise ValueError(
+                "web_identity.edge requires auth_mode='jwt': edge-asserted identity "
+                "is a JWT surface, not a 'none'/'simple' login product"
+            )
         if self.mcp_resource_server_url:
             if self.auth_mode != "jwt" or self.mcp_transport != "streamable-http":
                 raise ValueError(
