@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {bus} from '../events/bus.ts';
+import {csrfHeaders} from '../api/csrf.ts';
 import {isAbortError} from '../lib/errors.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
@@ -214,6 +215,7 @@ export async function uploadFilesToWorkspace(
     try {
         const response = await fetch('/web/files/upload', {
             method: 'POST',
+            headers: csrfHeaders(),
             body: formData,
             signal: request.controller.signal,
         });
@@ -252,6 +254,7 @@ async function deleteFile(filePath: string, trigger: HTMLButtonElement | null = 
     try {
         const response = await fetch(url.pathname + url.search, {
             method: 'DELETE',
+            headers: csrfHeaders(),
             signal: request.controller.signal,
         });
         if (isPanelHtmlResponse(response)) {

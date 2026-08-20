@@ -1,5 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {csrfHeaders} from './csrf';
+
 export interface ConversationSummary {
   conversation_id: string;
   title: string | null;
@@ -74,7 +76,11 @@ export async function listConversations(signal?: AbortSignal): Promise<Conversat
 }
 
 export async function createConversation(signal?: AbortSignal): Promise<ConversationSummary> {
-  const response = await fetch('/web/conversations', {method: 'POST', signal});
+  const response = await fetch('/web/conversations', {
+    method: 'POST',
+    headers: csrfHeaders(),
+    signal,
+  });
   return responseJson<ConversationSummary>(response, 'Failed to create conversation');
 }
 
@@ -95,7 +101,7 @@ export async function renameConversation(
   const id = encodeURIComponent(conversationId);
   const response = await fetch(`/web/conversations/${id}`, {
     method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
+    headers: csrfHeaders('application/json'),
     body: JSON.stringify({title}),
     signal,
   });
@@ -107,14 +113,22 @@ export async function deleteConversation(
   signal?: AbortSignal,
 ): Promise<void> {
   const id = encodeURIComponent(conversationId);
-  const response = await fetch(`/web/conversations/${id}`, {method: 'DELETE', signal});
+  const response = await fetch(`/web/conversations/${id}`, {
+    method: 'DELETE',
+    headers: csrfHeaders(),
+    signal,
+  });
   if (!response.ok) {
     throw new ConversationApiError(response.status, 'Failed to delete conversation');
   }
 }
 
 export async function deleteAllConversations(signal?: AbortSignal): Promise<void> {
-  const response = await fetch('/web/conversations', {method: 'DELETE', signal});
+  const response = await fetch('/web/conversations', {
+    method: 'DELETE',
+    headers: csrfHeaders(),
+    signal,
+  });
   if (!response.ok) {
     throw new ConversationApiError(response.status, 'Failed to delete conversations');
   }
@@ -135,6 +149,10 @@ export async function cancelAnswerRun(
   signal?: AbortSignal,
 ): Promise<ConversationTurn> {
   const id = encodeURIComponent(runId);
-  const response = await fetch(`/web/answer/${id}`, {method: 'DELETE', signal});
+  const response = await fetch(`/web/answer/${id}`, {
+    method: 'DELETE',
+    headers: csrfHeaders(),
+    signal,
+  });
   return responseJson<ConversationTurn>(response, 'Failed to stop the answer');
 }

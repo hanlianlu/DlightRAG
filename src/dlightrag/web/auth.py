@@ -3,6 +3,7 @@
 
 import base64
 import binascii
+import secrets
 from collections.abc import Callable
 from urllib.parse import quote, urlsplit
 
@@ -25,6 +26,8 @@ from dlightrag.web.edge_identity import (
 )
 
 WEB_AUTH_COOKIE = "dlightrag_web_auth"
+WEB_CSRF_COOKIE = "dlightrag_web_csrf"
+CSRF_HEADER = "X-CSRF-Token"
 _PUBLIC_WEB_PATHS = {"/web/login", "/web/logout"}
 _WEB_COOKIE_PATH = "/web"
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -101,15 +104,6 @@ def _request_origin(request: Request) -> tuple[str, str, int] | None:
     return request.url.scheme, hostname.lower(), port
 
 
-def _is_cookie_web_mutation(request: Request, source: str | None) -> bool:
-    path = request.url.path
-    return (
-        source == "cookie"
-        and request.method.upper() in _UNSAFE_METHODS
-        and path.startswith("/web/")
-    )
-
-
 def _has_exact_same_origin(request: Request) -> bool:
     origin = request.headers.get("Origin")
     return origin is not None and _origin_tuple(origin) == _request_origin(request)
@@ -161,6 +155,45 @@ def _clear_auth_cookie(response: Response) -> None:
     response.delete_cookie(key=WEB_AUTH_COOKIE, path=_WEB_COOKIE_PATH)
 
 
+def _ensure_csrf_cookie(request: Request, response: Response) -> None:
+    """Issue the JS-readable double-submit token once per browser."""
+    if request.cookies.get(WEB_CSRF_COOKIE):
+        return
+    response.set_cookie(
+        key=WEB_CSRF_COOKIE,
+        value=secrets.token_urlsafe(32),
+        httponly=False,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+        path=_WEB_COOKIE_PATH,
+    )
+
+
+def _csrf_header_matches(request: Request) -> bool:
+    cookie_token = request.cookies.get(WEB_CSRF_COOKIE)
+    if not cookie_token:
+        return True
+    header_token = request.headers.get(CSRF_HEADER, "")
+    return secrets.compare_digest(cookie_token, header_token)
+
+
+def _reject_web_mutation(request: Request) -> bool:
+    """Return True when one unsafe /web request must be rejected.
+
+    Browsers that carry the double-submit cookie must echo it in the header;
+    any Origin header must be exact same-origin. Requests without either
+    (scripted clients without cookies) are left to their bearer credentials.
+    """
+    if request.method.upper() not in _UNSAFE_METHODS:
+        return False
+    if not request.url.path.startswith("/web/"):
+        return False
+    if not _csrf_header_matches(request):
+        return True
+    origin = request.headers.get("Origin")
+    return origin is not None and not _has_exact_same_origin(request)
+
+
 def _browser_missing_auth_response(request: Request) -> Response:
     if request.method.upper() == "GET":
         return RedirectResponse(_login_url(_request_next_path(request)), status_code=303)
@@ -181,7 +214,14 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if not path.startswith("/web") or path in _PUBLIC_WEB_PATHS:
+        if not path.startswith("/web"):
+            return await call_next(request)
+        if path in _PUBLIC_WEB_PATHS:
+            # Login CSRF: a browser-driven login POST must be exact same-origin.
+            if path == "/web/login" and request.method.upper() == "POST":
+                origin = request.headers.get("Origin")
+                if origin is not None and not _has_exact_same_origin(request):
+                    return PlainTextResponse("Cross-origin request rejected", status_code=403)
             return await call_next(request)
 
         cfg = self._config_getter()
@@ -217,10 +257,13 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                 return response
             return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
 
-        if _is_cookie_web_mutation(request, source) and not _has_exact_same_origin(request):
+        if _reject_web_mutation(request):
             return PlainTextResponse("Cross-origin request rejected", status_code=403)
 
-        return await call_next(request)
+        response = await call_next(request)
+        if request.method.upper() == "GET":
+            _ensure_csrf_cookie(request, response)
+        return response
 
     async def _dispatch_edge_identity(self, cfg, request: Request, call_next) -> Response:
         """Resolve the Web caller from the configured edge credential only."""
@@ -238,7 +281,12 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             auth_mode="jwt",
             claims=identity.claims,
         )
-        return await call_next(request)
+        if _reject_web_mutation(request):
+            return PlainTextResponse("Cross-origin request rejected", status_code=403)
+        response = await call_next(request)
+        if request.method.upper() == "GET":
+            _ensure_csrf_cookie(request, response)
+        return response
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -293,4 +341,4 @@ async def logout() -> RedirectResponse:
     return response
 
 
-__all__ = ["WEB_AUTH_COOKIE", "WebAuthMiddleware", "router"]
+__all__ = ["WEB_AUTH_COOKIE", "WEB_CSRF_COOKIE", "WebAuthMiddleware", "router"]

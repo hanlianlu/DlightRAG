@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {csrfHeaders} from '../api/csrf.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';
@@ -336,7 +337,7 @@ export async function submitQuery(query: string): Promise<void> {
         clearAttachments();
         const response = await fetch('/web/answer', {
             method: 'POST',
-            ...(requestHeaders ? {headers: requestHeaders} : {}),
+            headers: {...csrfHeaders(), ...(requestHeaders ?? {})},
             body: requestBody,
         });
         submissionPending = false;

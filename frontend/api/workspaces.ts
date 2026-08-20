@@ -1,5 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {csrfHeaders} from './csrf';
+
 export interface CreatedWorkspace {
   workspace: string;
   display_name: string;
@@ -20,7 +22,7 @@ export class WorkspaceApiError extends Error {
 async function post<T>(path: string, body: Record<string, string>, fallback: string): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    headers: csrfHeaders('application/x-www-form-urlencoded'),
     body: new URLSearchParams(body).toString(),
   });
   if (!response.ok) {
