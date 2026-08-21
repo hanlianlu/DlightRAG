@@ -119,21 +119,13 @@ class AnswerResourceAdmissionError(AnswerInputError):
         )
 
 
-class MemoryWriteRejectedError(AnswerInputError):
-    """A named Memory Write failed the closed checklist."""
-
-    def __init__(self, public_message: str) -> None:
-        super().__init__(public_message, error_kind=MEMORY_WRITE_REJECTED)
-
-
-class MemoryUnavailableError(AnswerInputError):
-    """This principal cannot write or auto-recall Memory Records."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "Long-term memory requires a JWT owner.",
-            error_kind=MEMORY_UNAVAILABLE,
-        )
+# Memory exceptions are canonical in dlightrag_memory so the package can
+# raise them without depending on the root product; root re-exports them for
+# every existing surface that branches on their identity.
+from dlightrag_memory.errors import (  # noqa: E402
+    MemoryUnavailableError,
+    MemoryWriteRejectedError,
+)
 
 
 class InvalidToolConfigurationError(RuntimeError):

@@ -14,7 +14,9 @@ import pytest
 _REPO = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("package_name", ["dlightrag_ai", "dlightrag_agent", "dlightrag_rag"])
+@pytest.mark.parametrize(
+    "package_name", ["dlightrag_ai", "dlightrag_agent", "dlightrag_memory", "dlightrag_rag"]
+)
 def test_workspace_package_root_imports(package_name: str) -> None:
     importlib.import_module(package_name)
 
@@ -108,6 +110,7 @@ def _write_workspace_artifacts(
     root_requires: tuple[str, ...] = (
         "dlightrag-ai[all]==1.9.0",
         "dlightrag-agent-core==1.9.0",
+        "dlightrag-memory==1.9.0",
         "dlightrag-rag-core==1.9.0",
     ),
     ai_include_legal: bool = True,
@@ -135,6 +138,12 @@ def _write_workspace_artifacts(
         distribution="dlightrag-agent-core",
         package="dlightrag_agent",
         requires=("dlightrag-ai==1.9.0",),
+    )
+    _write_wheel(
+        tmp_path,
+        distribution="dlightrag-memory",
+        package="dlightrag_memory",
+        requires=(),
     )
     _write_wheel(
         tmp_path,
@@ -352,6 +361,7 @@ def test_workspace_wheel_verifier_requires_root_ai_extra(tmp_path: Path) -> None
         root_requires=(
             "dlightrag-ai==1.9.0",
             "dlightrag-agent-core==1.9.0",
+            "dlightrag-memory==1.9.0",
             "dlightrag-rag-core==1.9.0",
         ),
     )
@@ -368,6 +378,7 @@ def test_workspace_wheel_verifier_requires_lockstep_dependency_pins(tmp_path: Pa
         root_requires=(
             "dlightrag-ai[all]>=1.9.0",
             "dlightrag-agent-core==1.9.0",
+            "dlightrag-memory==1.9.0",
             "dlightrag-rag-core==1.9.0",
         ),
     )

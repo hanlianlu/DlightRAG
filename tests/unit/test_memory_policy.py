@@ -5,10 +5,8 @@ import pytest
 
 from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
 from dlightrag.answer.memory import (
-    MEMORY_ACTIVE_LIMIT,
     MEMORY_BODY_LIMIT,
     MEMORY_RECALL_LIMIT,
-    MEMORY_WRITES_PER_HOUR,
     MemoryProvenance,
     MemoryRecord,
     MemoryWrite,
@@ -56,12 +54,7 @@ def test_empty_body_and_citation_markers_are_rejected() -> None:
         evaluate_memory_write(_write(body="x" * (MEMORY_BODY_LIMIT + 1)))
 
 
-def test_quota_and_provenance_are_enforced() -> None:
-    with pytest.raises(MemoryWriteRejectedError):
-        evaluate_memory_write(_write(active_count=MEMORY_ACTIVE_LIMIT))
-    evaluate_memory_write(_write(active_count=MEMORY_ACTIVE_LIMIT, supersedes_id="mem-old"))
-    with pytest.raises(MemoryWriteRejectedError):
-        evaluate_memory_write(_write(writes_last_hour=MEMORY_WRITES_PER_HOUR))
+def test_provenance_is_enforced() -> None:
     with pytest.raises(MemoryWriteRejectedError):
         evaluate_memory_write(_write(provenance=MemoryProvenance(run_id="")))
     with pytest.raises(MemoryWriteRejectedError):
@@ -72,15 +65,6 @@ def test_forget_requires_a_target() -> None:
     with pytest.raises(MemoryWriteRejectedError):
         evaluate_memory_write(_write(action="forget", body="", supersedes_id=None))
     evaluate_memory_write(_write(action="forget", body="", supersedes_id="mem-1"))
-    with pytest.raises(MemoryWriteRejectedError):
-        evaluate_memory_write(
-            _write(
-                action="forget",
-                body="",
-                supersedes_id="mem-1",
-                writes_last_hour=MEMORY_WRITES_PER_HOUR,
-            )
-        )
 
 
 def test_auto_recall_keeps_newest_active_within_caps() -> None:

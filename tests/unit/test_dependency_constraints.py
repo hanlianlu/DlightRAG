@@ -77,11 +77,13 @@ def test_workspace_sources_and_lock_are_exact() -> None:
     assert root["tool"]["uv"]["workspace"]["members"] == [
         "packages/ai",
         "packages/agent-core",
+        "packages/memory",
         "packages/rag-core",
     ]
     assert root["tool"]["uv"]["sources"] == {
         "dlightrag-ai": {"workspace": True},
         "dlightrag-agent-core": {"workspace": True},
+        "dlightrag-memory": {"workspace": True},
         "dlightrag-rag-core": {"workspace": True},
     }
 
@@ -95,6 +97,7 @@ def test_workspace_sources_and_lock_are_exact() -> None:
         "dlightrag": {"editable": "."},
         "dlightrag-agent-core": {"editable": "packages/agent-core"},
         "dlightrag-ai": {"editable": "packages/ai"},
+        "dlightrag-memory": {"editable": "packages/memory"},
         "dlightrag-rag-core": {"editable": "packages/rag-core"},
     }
 

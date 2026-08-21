@@ -7,9 +7,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from dlightrag_memory import MemoryProvenance, MemoryRecord
+
 from dlightrag.adapters.postgres._migrations import TableRequirement
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
-from dlightrag.answer.memory import MemoryProvenance, MemoryRecord
 
 _CREATE_MEMORY_RECORDS = """
 CREATE TABLE IF NOT EXISTS dlightrag_answer_memory_records (
@@ -36,21 +37,12 @@ CREATE TABLE IF NOT EXISTS dlightrag_answer_memory_records (
 )
 """
 
-_CREATE_MEMORY_WRITE_LOG = """
-CREATE TABLE IF NOT EXISTS dlightrag_answer_memory_write_log (
-    owner_id    TEXT        NOT NULL,
-    written_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
-"""
-
 _CREATE_MEMORY_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_memory_records_recall "
     "ON dlightrag_answer_memory_records (owner_id, status, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_memory_records_purge "
     "ON dlightrag_answer_memory_records (status, updated_at) "
     "WHERE status = 'superseded'",
-    "CREATE INDEX IF NOT EXISTS idx_dlightrag_answer_memory_write_log_owner "
-    "ON dlightrag_answer_memory_write_log (owner_id, written_at)",
 )
 
 _ALIGN_STATUS_CHECK = (
@@ -63,7 +55,6 @@ _ALIGN_STATUS_CHECK = (
 
 MEMORY_DDL = (
     _CREATE_MEMORY_RECORDS,
-    _CREATE_MEMORY_WRITE_LOG,
     *_CREATE_MEMORY_INDEXES,
     *_ALIGN_STATUS_CHECK,
 )
@@ -96,33 +87,12 @@ MEMORY_SCHEMA_TABLE = TableRequirement(
     ),
 )
 
-MEMORY_WRITE_LOG_TABLE = TableRequirement(
-    name="dlightrag_answer_memory_write_log",
-    columns=("owner_id", "written_at"),
-    indexes=("idx_dlightrag_answer_memory_write_log_owner",),
-)
-
-_COUNT_ACTIVE = """
-SELECT COUNT(*)::int FROM dlightrag_answer_memory_records
-WHERE owner_id = $1 AND status = 'active'
-"""
-
-_COUNT_WRITES = """
-SELECT COUNT(*)::int FROM dlightrag_answer_memory_write_log
-WHERE owner_id = $1 AND written_at >= $2
-"""
-
 _INSERT = """
 INSERT INTO dlightrag_answer_memory_records (
     owner_id, memory_id, kind, body, confidence, run_id, session_id,
     status, supersedes_id, created_at, updated_at
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-"""
-
-_LOG_WRITE = """
-INSERT INTO dlightrag_answer_memory_write_log (owner_id, written_at)
-VALUES ($1, NOW())
 """
 
 _MARK_SUPERSEDED = """
@@ -161,11 +131,6 @@ DELETE FROM dlightrag_answer_memory_records
 WHERE status = 'superseded' AND updated_at < $1
 """
 
-_PRUNE_LOG = """
-DELETE FROM dlightrag_answer_memory_write_log
-WHERE written_at < $1
-"""
-
 
 def _uuid(value: str, *, label: str) -> uuid.UUID:
     try:
@@ -192,6 +157,22 @@ def _row(row: Any) -> MemoryRecord:
     )
 
 
+def _insert_params(record: MemoryRecord) -> tuple[Any, ...]:
+    return (
+        record.owner_id,
+        _uuid(record.memory_id, label="memory_id"),
+        record.kind,
+        record.body,
+        record.confidence,
+        _uuid(record.provenance.run_id, label="run_id"),
+        _uuid(record.provenance.session_id, label="session_id"),
+        record.status,
+        _uuid(record.supersedes_id, label="supersedes_id") if record.supersedes_id else None,
+        record.created_at,
+        record.updated_at,
+    )
+
+
 class PGAnswerMemoryStore(PostgresOperationRunner):
     """Owner-isolated Memory Records in PostgreSQL."""
 
@@ -205,25 +186,12 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
 
         await self._run(_operation)
 
-    async def count_active(self, *, owner_id: str) -> int:
-        async def _operation(conn: Any) -> int:
-            return int(await conn.fetchval(_COUNT_ACTIVE, owner_id) or 0)
-
-        return await self._run(_operation)
-
-    async def count_writes_since(self, *, owner_id: str, since: datetime) -> int:
-        async def _operation(conn: Any) -> int:
-            return int(await conn.fetchval(_COUNT_WRITES, owner_id, since) or 0)
-
-        return await self._run(_operation)
-
     async def insert(self, record: MemoryRecord) -> None:
         params = _insert_params(record)
 
         async def _operation(conn: Any) -> None:
             async with conn.transaction():
                 await conn.execute(_INSERT, *params)
-                await conn.execute(_LOG_WRITE, record.owner_id)
 
         await self._run_once(_operation)
 
@@ -239,7 +207,6 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
                 if str(tag).endswith(" 0"):
                     raise KeyError(old_id)
                 await conn.execute(_INSERT, *params)
-                await conn.execute(_LOG_WRITE, owner_id)
 
         await self._run_once(_operation)
 
@@ -249,10 +216,7 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
         async def _operation(conn: Any) -> bool:
             async with conn.transaction():
                 tag = await conn.execute(_DELETE, owner_id, memory_uuid)
-                removed = not str(tag).endswith(" 0")
-                if removed:
-                    await conn.execute(_LOG_WRITE, owner_id)
-                return removed
+                return not str(tag).endswith(" 0")
 
         return await self._run_once(_operation)
 
@@ -260,10 +224,7 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
         async def _operation(conn: Any) -> int:
             async with conn.transaction():
                 result = await conn.execute(_DELETE_BODY, owner_id, body.strip())
-                deleted = int(str(result).rsplit(" ", 1)[-1])
-                if deleted:
-                    await conn.execute(_LOG_WRITE, owner_id)
-                return deleted
+                return int(str(result).rsplit(" ", 1)[-1])
 
         return await self._run_once(_operation)
 
@@ -290,33 +251,9 @@ class PGAnswerMemoryStore(PostgresOperationRunner):
 
         return await self._run_once(_operation)
 
-    async def prune_write_log(self, *, older_than: datetime) -> int:
-        async def _operation(conn: Any) -> int:
-            result = await conn.execute(_PRUNE_LOG, older_than)
-            return int(str(result).rsplit(" ", 1)[-1])
-
-        return await self._run_once(_operation)
-
-
-def _insert_params(record: MemoryRecord) -> tuple[Any, ...]:
-    return (
-        record.owner_id,
-        _uuid(record.memory_id, label="memory_id"),
-        record.kind,
-        record.body,
-        record.confidence,
-        _uuid(record.provenance.run_id, label="run_id"),
-        _uuid(record.provenance.session_id, label="session_id"),
-        record.status,
-        _uuid(record.supersedes_id, label="supersedes_id") if record.supersedes_id else None,
-        record.created_at,
-        record.updated_at,
-    )
-
 
 __all__ = [
     "MEMORY_DDL",
     "MEMORY_SCHEMA_TABLE",
-    "MEMORY_WRITE_LOG_TABLE",
     "PGAnswerMemoryStore",
 ]

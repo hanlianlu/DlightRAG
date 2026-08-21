@@ -11,6 +11,7 @@ members = [
     "dlightrag",
     "dlightrag-agent-core",
     "dlightrag-ai",
+    "dlightrag-memory",
     "dlightrag-rag-core",
 ]
 
@@ -793,6 +794,7 @@ dependencies = [
     { name = "defusedxml" },
     { name = "dlightrag-agent-core" },
     { name = "dlightrag-ai", extra = ["all"] },
+    { name = "dlightrag-memory" },
     { name = "dlightrag-rag-core" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -847,6 +849,7 @@ requires-dist = [
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "dlightrag-agent-core", editable = "packages/agent-core" },
     { name = "dlightrag-ai", extras = ["all"], editable = "packages/ai" },
+    { name = "dlightrag-memory", editable = "packages/memory" },
     { name = "dlightrag-rag-core", editable = "packages/rag-core" },
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "httpx", specifier = ">=0.28.0" },
@@ -946,6 +949,11 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.0" },
 ]
 provides-extras = ["openai", "anthropic", "gemini", "all"]
+
+[[package]]
+name = "dlightrag-memory"
+version = "1.9.2"
+source = { editable = "packages/memory" }
 
 [[package]]
 name = "dlightrag-rag-core"

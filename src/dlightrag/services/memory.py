@@ -1,19 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Owner management API for Memory Records."""
 
+from typing import Any
+
+from dlightrag_memory import Memory, default_purge_cutoff
+
 from dlightrag.answer.errors import MemoryUnavailableError
 from dlightrag.answer.memory import (
     MEMORY_SUPERSEDE_RETENTION_DAYS,
-    MemoryProvenance,
     MemoryRecord,
-    MemoryWrite,
     memory_owner_allowed,
-)
-from dlightrag.answer.memory_store import (
-    AnswerMemoryStore,
-    commit_memory_write,
-    default_purge_cutoff,
-    write_log_cutoff,
 )
 
 
@@ -22,39 +18,32 @@ class MemoryService:
 
     def __init__(
         self,
-        store: AnswerMemoryStore,
+        store: Any,
         *,
         superseded_retention_days: int = MEMORY_SUPERSEDE_RETENTION_DAYS,
     ) -> None:
-        self._store = store
+        self._memory = Memory(store)
         self._retention_days = superseded_retention_days
 
     async def list_active(self, *, owner_id: str, auth_mode: str) -> tuple[MemoryRecord, ...]:
         if not memory_owner_allowed(auth_mode):
             raise MemoryUnavailableError()
-        return await self._store.list_active(owner_id=owner_id)
+        return await self._memory.list_active(owner_id=owner_id)
 
-    async def forget(self, *, owner_id: str, auth_mode: str, memory_id: str) -> None:
-        await commit_memory_write(
-            self._store,
-            MemoryWrite(
-                owner_id=owner_id,
-                auth_mode=auth_mode,
-                kind="preference",
-                body="",
-                confidence=1.0,
-                provenance=MemoryProvenance(run_id="management", session_id="management"),
-                action="forget",
-                supersedes_id=memory_id,
-            ),
+    async def forget(
+        self, *, owner_id: str, auth_mode: str, memory_id: str, body: str | None = None
+    ) -> None:
+        await self._memory.forget(
+            owner_id=owner_id,
+            auth_mode=auth_mode,
+            memory_id=memory_id,
+            body=body,
         )
 
     async def purge_expired(self) -> int:
-        removed = await self._store.purge_superseded(
+        return await self._memory.purge_superseded(
             older_than=default_purge_cutoff(days=self._retention_days)
         )
-        await self._store.prune_write_log(older_than=write_log_cutoff())
-        return removed
 
 
 __all__ = ["MemoryService"]

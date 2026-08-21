@@ -113,13 +113,8 @@ async def test_service_purge_expired_uses_retention_cutoff() -> None:
         created_at=stale.created_at,
         updated_at=datetime.now(UTC) - timedelta(days=MEMORY_SUPERSEDE_RETENTION_DAYS + 10),
     )
-    store._writes = [
-        ("alpha", datetime.now(UTC) - timedelta(hours=3)),
-        ("alpha", datetime.now(UTC)),
-    ]
     removed = await MemoryService(store).purge_expired()
     assert removed == 1
-    assert len(store._writes) == 1
 
 
 async def test_purge_only_old_superseded_rows() -> None:

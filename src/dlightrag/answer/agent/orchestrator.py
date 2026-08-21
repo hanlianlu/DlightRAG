@@ -42,6 +42,7 @@ from dlightrag_ai.messages import AssistantTurn
 from dlightrag_ai.providers.base import is_provider_context_overflow
 from dlightrag_ai.telemetry import Telemetry
 from dlightrag_ai.tokens import estimate_tokens
+from dlightrag_memory import Memory
 from dlightrag_rag.retrieval import RetrievalContexts
 
 from dlightrag.answer.agent.compaction import CompactionCoordinator
@@ -253,7 +254,7 @@ class AnswerOrchestrator:
         self._memory_host.auth_mode = auth_mode
         self._memory_host.run_id = run_id
         self._memory_host.session_id = session_id
-        self._memory_host.store = store
+        self._memory_host.memory = Memory(store)
 
     def bind_recall(self, text: str) -> None:
         """Attach the non-citable auto-recall block for this run."""

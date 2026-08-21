@@ -30,18 +30,21 @@ _EXPECTED_PACKAGES = {
     "dlightrag": "dlightrag",
     "dlightrag-agent-core": "dlightrag_agent",
     "dlightrag-ai": "dlightrag_ai",
+    "dlightrag-memory": "dlightrag_memory",
     "dlightrag-rag-core": "dlightrag_rag",
 }
 _EXPECTED_DLIGHTRAG_DEPENDENCIES = {
-    "dlightrag": {"dlightrag-agent-core", "dlightrag-ai", "dlightrag-rag-core"},
+    "dlightrag": {"dlightrag-agent-core", "dlightrag-ai", "dlightrag-memory", "dlightrag-rag-core"},
     "dlightrag-agent-core": {"dlightrag-ai"},
     "dlightrag-ai": set(),
+    "dlightrag-memory": set(),
     "dlightrag-rag-core": {"dlightrag-ai"},
 }
 _EXPECTED_EXTRAS = {
     "dlightrag": set(),
     "dlightrag-agent-core": set(),
     "dlightrag-ai": {"all", "anthropic", "gemini", "openai"},
+    "dlightrag-memory": set(),
     "dlightrag-rag-core": set(),
 }
 _WORKSPACE_MANIFESTS = {
@@ -56,6 +59,11 @@ _WORKSPACE_MANIFESTS = {
         "packages/ai",
         "src/dlightrag_ai",
     ),
+    "dlightrag-memory": (
+        Path("packages/memory/pyproject.toml"),
+        "packages/memory",
+        "src/dlightrag_memory",
+    ),
     "dlightrag-rag-core": (
         Path("packages/rag-core/pyproject.toml"),
         "packages/rag-core",
@@ -65,11 +73,13 @@ _WORKSPACE_MANIFESTS = {
 _EXPECTED_WORKSPACE_MEMBERS = [
     "packages/ai",
     "packages/agent-core",
+    "packages/memory",
     "packages/rag-core",
 ]
 _EXPECTED_WORKSPACE_SOURCES = {
     "dlightrag-ai": {"workspace": True},
     "dlightrag-agent-core": {"workspace": True},
+    "dlightrag-memory": {"workspace": True},
     "dlightrag-rag-core": {"workspace": True},
 }
 _ROOT_CONSOLE_SCRIPTS = (
@@ -88,6 +98,7 @@ _REQUIRED_EXTERNAL_PROHIBITIONS = {
     "dlightrag": set(),
     "dlightrag-agent-core": {"lightrag", "asyncpg", "fastapi", "mcp"},
     "dlightrag-ai": {"lightrag", "asyncpg", "fastapi", "mcp"},
+    "dlightrag-memory": {"lightrag", "asyncpg", "fastapi", "mcp"},
     "dlightrag-rag-core": {
         _CONCRETE_LIGHTRAG_BACKEND,
         "asyncpg",
@@ -184,6 +195,46 @@ asyncio.run(main())
 assert all(absent(name) for name in (
     'dlightrag', 'dlightrag_rag', 'lightrag', 'asyncpg',
     'openai', 'anthropic', 'google.genai'
+))
+"""
+)
+
+_MEMORY_SMOKE = (
+    """
+import asyncio
+import importlib
+import pkgutil
+import dlightrag_memory
+from dlightrag_memory import InMemoryMemoryStore, Memory, MemoryProvenance
+
+for module in pkgutil.walk_packages(dlightrag_memory.__path__, prefix='dlightrag_memory.'):
+    importlib.import_module(module.name)
+
+async def main():
+    store = InMemoryMemoryStore()
+    provenance = MemoryProvenance(
+        run_id='11111111-1111-1111-1111-111111111111',
+        session_id='11111111-1111-1111-1111-111111111111',
+    )
+    record = await Memory(store).remember(
+        owner_id='owner-1',
+        auth_mode='jwt',
+        kind='preference',
+        body='Installed memory works.',
+        confidence=1.0,
+        provenance=provenance,
+    )
+    assert record is not None and record.status == 'active'
+    records = await Memory(store).list_active(owner_id='owner-1')
+    assert [item.body for item in records] == ['Installed memory works.']
+
+asyncio.run(main())
+"""
+    + _ABSENT_HELPER
+    + """
+assert all(absent(name) for name in (
+    'dlightrag', 'dlightrag_agent', 'dlightrag_ai', 'dlightrag_rag',
+    'lightrag', 'asyncpg', 'openai', 'anthropic', 'google.genai'
 ))
 """
 )
@@ -648,7 +699,7 @@ def _sdist_facts(
 
 
 def verify_workspace_definition(workspace_root: Path) -> None:
-    """Verify source manifests and uv.lock describe the exact four-package workspace."""
+    """Verify source manifests and uv.lock describe the exact five-package workspace."""
     workspace_root = workspace_root.resolve()
     uv_executable = shutil.which("uv")
     if uv_executable is None:
@@ -707,9 +758,9 @@ def verify_workspace_definition(workspace_root: Path) -> None:
     except (KeyError, TypeError) as exc:
         raise ValueError("root manifest is missing [tool.uv]") from exc
     if root_uv.get("workspace", {}).get("members") != _EXPECTED_WORKSPACE_MEMBERS:
-        raise ValueError("root workspace members differ from the four-package contract")
+        raise ValueError("root workspace members differ from the five-package contract")
     if root_uv.get("sources") != _EXPECTED_WORKSPACE_SOURCES:
-        raise ValueError("root workspace sources differ from the four-package contract")
+        raise ValueError("root workspace sources differ from the five-package contract")
     expected_ai_source = {"dlightrag-ai": {"workspace": True}}
     for distribution in ("dlightrag-agent-core", "dlightrag-rag-core"):
         member_sources = (
@@ -727,7 +778,7 @@ def verify_workspace_definition(workspace_root: Path) -> None:
     if lock.get("requires-python") != "==3.14.*":
         raise ValueError("uv.lock Python requirement differs from workspace manifests")
     if lock.get("manifest", {}).get("members") != list(_EXPECTED_PACKAGES):
-        raise ValueError("uv.lock manifest members differ from the four-package contract")
+        raise ValueError("uv.lock manifest members differ from the five-package contract")
     for distribution, (_, editable_path, _) in _WORKSPACE_MANIFESTS.items():
         matches = [package for package in lock_packages if package.get("name") == distribution]
         if len(matches) != 1:
@@ -752,9 +803,9 @@ def verify_workspace_definition(workspace_root: Path) -> None:
 def verify_dist(dist_dir: Path, *, config_path: Path) -> None:
     wheels = sorted(dist_dir.glob("*.whl"))
     sdists = sorted(dist_dir.glob("*.tar.gz"))
-    if len(wheels) != 4 or len(sdists) != 4:
+    if len(wheels) != 5 or len(sdists) != 5:
         raise ValueError(
-            f"expected four wheels and four sdists, found {len(wheels)} wheels and {len(sdists)} sdists"
+            f"expected five wheels and five sdists, found {len(wheels)} wheels and {len(sdists)} sdists"
         )
 
     facts_by_distribution: dict[str, WheelFacts] = {}
@@ -1114,7 +1165,7 @@ def _smoke_root_interfaces() -> None:
 
 
 def verify_installed(dist_dir: Path) -> None:
-    """Prove this interpreter loaded all four distributions from the current wheels."""
+    """Prove this interpreter loaded all five distributions from the current wheels."""
     dist_dir = dist_dir.resolve()
     repository = dist_dir.parent.resolve()
     versions: set[str] = set()
@@ -1183,6 +1234,7 @@ def smoke_installed(dist_dir: Path, *, config_path: Path) -> None:
         ("ai-all", ("dlightrag-ai[all]",), _AI_ALL_SMOKE),
         ("agent", ("dlightrag-ai", "dlightrag-agent-core"), _AGENT_SMOKE),
         ("rag", ("dlightrag-ai", "dlightrag-rag-core"), _RAG_SMOKE),
+        ("memory", ("dlightrag-memory",), _MEMORY_SMOKE),
     )
     required_distributions = {
         requirement.partition("[")[0]
@@ -1299,7 +1351,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workspace-root",
         type=Path,
-        help="Workspace containing the four manifests and uv.lock (defaults to config parent)",
+        help="Workspace containing the five manifests and uv.lock (defaults to config parent)",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(

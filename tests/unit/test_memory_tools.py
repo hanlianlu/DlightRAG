@@ -4,6 +4,7 @@
 from dataclasses import replace
 
 import pytest
+from dlightrag_memory import Memory
 
 from dlightrag.answer.evidence import EvidenceLedger
 from dlightrag.answer.memory import MemoryProvenance, MemoryWrite
@@ -54,7 +55,7 @@ async def test_forget_miss_is_reported() -> None:
         auth_mode="jwt",
         run_id="11111111-1111-1111-1111-111111111111",
         session_id="22222222-2222-2222-2222-222222222222",
-        store=store,
+        memory=Memory(store),
     )
     tool = forget_tool(host=host)
     result = await tool.execute(ForgetInput(memory_id="33333333-3333-3333-3333-333333333333"))
@@ -68,7 +69,7 @@ async def test_remember_then_forget() -> None:
         auth_mode="jwt",
         run_id="11111111-1111-1111-1111-111111111111",
         session_id="22222222-2222-2222-2222-222222222222",
-        store=store,
+        memory=Memory(store),
     )
     remembered = await remember_tool(host=host).execute(
         RememberInput(kind="preference", body="No email.", confidence=0.9)

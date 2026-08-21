@@ -13,6 +13,7 @@ dependencies = [
     # Workspace cores
     "dlightrag-ai[all]==1.9.2",
     "dlightrag-agent-core==1.9.2",
+    "dlightrag-memory==1.9.2",
     "dlightrag-rag-core==1.9.2",
     # Core RAG
     "lightrag-hku>=1.5.6",
@@ -93,11 +94,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.workspace]
-members = ["packages/ai", "packages/agent-core", "packages/rag-core"]
+members = ["packages/ai", "packages/agent-core", "packages/memory", "packages/rag-core"]
 
 [tool.uv.sources]
 dlightrag-ai = { workspace = true }
 dlightrag-agent-core = { workspace = true }
+dlightrag-memory = { workspace = true }
 dlightrag-rag-core = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
@@ -127,8 +129,24 @@ markers = [
 ]
 
 [tool.importlinter]
-root_packages = ["dlightrag", "dlightrag_ai", "dlightrag_agent", "dlightrag_rag"]
+root_packages = ["dlightrag", "dlightrag_ai", "dlightrag_agent", "dlightrag_memory", "dlightrag_rag"]
 include_external_packages = true
+
+[[tool.importlinter.contracts]]
+id = "memory-package-independence"
+name = "Memory package must remain host-neutral with no product, storage, or transport imports"
+type = "forbidden"
+source_modules = ["dlightrag_memory"]
+forbidden_modules = [
+    "dlightrag",
+    "dlightrag_agent",
+    "dlightrag_ai",
+    "dlightrag_rag",
+    "lightrag",
+    "asyncpg",
+    "fastapi",
+    "mcp",
+]
 
 [[tool.importlinter.contracts]]
 id = "ai-package-independence"
@@ -138,6 +156,7 @@ source_modules = ["dlightrag_ai"]
 forbidden_modules = [
     "dlightrag",
     "dlightrag_agent",
+    "dlightrag_memory",
     "dlightrag_rag",
     "lightrag",
     "asyncpg",
@@ -152,6 +171,7 @@ type = "forbidden"
 source_modules = ["dlightrag_agent"]
 forbidden_modules = [
     "dlightrag",
+    "dlightrag_memory",
     "dlightrag_rag",
     "lightrag",
     "asyncpg",
@@ -167,6 +187,7 @@ source_modules = ["dlightrag_rag"]
 forbidden_modules = [
     "dlightrag",
     "dlightrag_agent",
+    "dlightrag_memory",
     "asyncpg",
     "fastapi",
     "mcp",

@@ -63,6 +63,7 @@ from dlightrag_ai.scheduler import model_call_scope
 from dlightrag_ai.settings import MODEL_ROLE_NAMES, ModelRole
 from dlightrag_ai.telemetry import Telemetry, safe_log_text
 from dlightrag_ai.tokens import estimate_messages_tokens
+from dlightrag_memory import Memory, MemoryStore
 from dlightrag_rag.lifecycle import defer_cancellation
 from dlightrag_rag.pool import WorkspacePool
 from dlightrag_rag.retrieval import (
@@ -89,8 +90,6 @@ from dlightrag.answer.errors import (
 from dlightrag.answer.highlights import SemanticHighlightSettings, enrich_semantic_highlights
 from dlightrag.answer.images import AnswerImageBudget
 from dlightrag.answer.media import answer_images_from_sources
-from dlightrag.answer.memory import render_auto_recall, select_auto_recall
-from dlightrag.answer.memory_store import AnswerMemoryStore
 from dlightrag.answer.mode import ModeResource, ResolvedMode, resource_role
 from dlightrag.answer.model_runtime import AnswerModelRuntime
 from dlightrag.answer.publication import is_empty_answer
@@ -538,7 +537,7 @@ class AnswerExecutor:
         execution_environment: str = "disabled",
         workspace_root: str | None = None,
         working_dir: str = "./dlightrag_storage",
-        memory_store: AnswerMemoryStore | None = None,
+        memory_store: MemoryStore | None = None,
     ) -> None:
         self._store = store
         self._pool = pool
@@ -552,6 +551,7 @@ class AnswerExecutor:
         self._workspace_root_setting = workspace_root
         self._working_dir = working_dir
         self._memory_store = memory_store
+        self._memory = Memory(memory_store) if memory_store is not None else None
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
         with model_call_scope((session.owner_id, session.run_id)):
@@ -659,9 +659,10 @@ class AnswerExecutor:
             model_profiles=model_profiles,
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
-        if self._memory_store is not None and auth_mode == "jwt":
-            active = await self._memory_store.list_active(owner_id=session.owner_id)
-            run.orchestrator.bind_recall(render_auto_recall(select_auto_recall(active)))
+        if self._memory is not None and auth_mode == "jwt":
+            run.orchestrator.bind_recall(
+                await self._memory.standing_text(owner_id=session.owner_id)
+            )
         stream: AsyncIterator[str] | None = None
         try:
             journal = session.execution.session_store

@@ -31,7 +31,6 @@ from dlightrag.adapters.postgres._pool import pg_pool
 from dlightrag.adapters.postgres.memory import (
     MEMORY_DDL,
     MEMORY_SCHEMA_TABLE,
-    MEMORY_WRITE_LOG_TABLE,
 )
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
@@ -957,7 +956,6 @@ ANSWER_RUN_SCHEMA_TABLES = (
         unique=(("owner_id", "run_id", "parent_session_id", "parent_call_id"),),
     ),
     MEMORY_SCHEMA_TABLE,
-    MEMORY_WRITE_LOG_TABLE,
     TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(

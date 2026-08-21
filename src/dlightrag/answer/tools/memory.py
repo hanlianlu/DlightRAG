@@ -3,16 +3,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from dlightrag_agent.tools import AgentTool, ToolResult
+from dlightrag_memory import Memory, MemoryProvenance
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
-from dlightrag.answer.memory import MemoryProvenance, MemoryWrite
-from dlightrag.answer.memory_store import AnswerMemoryStore, commit_memory_write
 
 MemoryKindInput = Literal["preference", "fact"]
 
@@ -45,25 +43,21 @@ class MemoryHost:
     auth_mode: str = "none"
     run_id: str = ""
     session_id: str = ""
-    store: AnswerMemoryStore | None = None
-    commit: Callable[..., Awaitable[Any]] | None = None
+    memory: Memory | None = None
 
 
 def remember_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
         try:
-            written = await _commit(
-                host,
-                MemoryWrite(
-                    owner_id=host.owner_id,
-                    auth_mode=host.auth_mode,
-                    kind=args.kind,
-                    body=args.body,
-                    confidence=args.confidence,
-                    provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
-                    supersedes_id=args.supersedes_id,
-                ),
+            written = await _memory(host).remember(
+                owner_id=host.owner_id,
+                auth_mode=host.auth_mode,
+                kind=args.kind,
+                body=args.body,
+                confidence=args.confidence,
+                provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
+                supersedes_id=args.supersedes_id,
             )
         except (MemoryUnavailableError, MemoryWriteRejectedError) as exc:
             return ToolResult(content=str(exc.public_message))
@@ -87,18 +81,12 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(raw: BaseModel) -> ToolResult:
         args = raw if isinstance(raw, ForgetInput) else ForgetInput.model_validate(raw)
         try:
-            await _commit(
-                host,
-                MemoryWrite(
-                    owner_id=host.owner_id,
-                    auth_mode=host.auth_mode,
-                    kind="preference",
-                    body=args.body or "",
-                    confidence=1.0,
-                    provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
-                    action="forget",
-                    supersedes_id=args.memory_id,
-                ),
+            await _memory(host).forget(
+                owner_id=host.owner_id,
+                auth_mode=host.auth_mode,
+                memory_id=args.memory_id,
+                body=args.body,
+                provenance=MemoryProvenance(run_id=host.run_id, session_id=host.session_id),
             )
         except (MemoryUnavailableError, MemoryWriteRejectedError) as exc:
             return ToolResult(content=str(exc.public_message))
@@ -115,11 +103,11 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
 
 def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
     async def execute(_raw: BaseModel) -> ToolResult:
-        if host.store is None:
+        if host.memory is None:
             return ToolResult(content="Memory store is not bound.")
         if host.auth_mode != "jwt":
             return ToolResult(content="Long-term memory requires a JWT owner.")
-        rows = await host.store.list_active(owner_id=host.owner_id)
+        rows = await host.memory.list_active(owner_id=host.owner_id)
         if not rows:
             return ToolResult(content="No stored memories.")
         lines = [f"- {row.memory_id} ({row.kind}) {row.body}" for row in rows[:50]]
@@ -134,12 +122,10 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
     )
 
 
-async def _commit(host: MemoryHost, write: MemoryWrite) -> Any:
-    if host.commit is not None:
-        return await host.commit(write)
-    if host.store is None:
+def _memory(host: MemoryHost) -> Memory:
+    if host.memory is None:
         raise MemoryWriteRejectedError("Memory store is not bound.")
-    return await commit_memory_write(host.store, write)
+    return host.memory
 
 
 __all__ = [
