@@ -857,7 +857,7 @@ requires-dist = [
     { name = "markitdown", extras = ["docx", "pdf", "pptx", "xlsx"], specifier = ">=0.1.4" },
     { name = "mcp", specifier = ">=2.0.0" },
     { name = "nh3", specifier = ">=0.2" },
-    { name = "numpy", specifier = ">=2.3.0" },
+    { name = "numpy", specifier = ">=2.5.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "pillow", specifier = ">=12.3.0" },

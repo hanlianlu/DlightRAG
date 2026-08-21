@@ -66,7 +66,7 @@ def test_core_distribution_dependencies_follow_import_direction() -> None:
         "httpx>=0.28.0",
         "lingua-language-detector>=2.2.0",
         "lightrag-hku>=1.5.6",
-        "numpy>=2.3.0",
+        "numpy>=2.5.0",
         "pillow>=12.3.0",
         "pydantic>=2.11.0",
     ]
