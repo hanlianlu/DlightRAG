@@ -3,7 +3,7 @@ import {playwrightLauncher} from '@web/test-runner-playwright';
 
 export default {
   files: ['ui/**/*.browser.test.ts'],
-  nodeResolve: true,
+  nodeResolve: {exportConditions: ['browser', 'development']},
   plugins: [
     esbuildPlugin({ts: true, target: 'auto'}),
   ],

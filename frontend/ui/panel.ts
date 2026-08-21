@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 import {closestElement, syncShellInert, wrapTabFocus} from '../lib/dom.ts';
-import {syncPanelEffectiveWidth} from './resize.ts';
+import {syncPanelSplitState} from './split_panel.ts';
 
 // Source links and the report control open panel content, so they must not
 // dismiss the stack first.
@@ -111,7 +111,7 @@ function syncBodyFlags(): void {
     document.body.classList.toggle('report-panel-open', isReportOpen());
     const ingest = document.querySelector('ingest-target');
     if (ingest) ingest.active = Boolean(files);
-    syncPanelEffectiveWidth();
+    syncPanelSplitState();
 }
 
 function openMainPane(title: 'FILES' | 'SOURCES'): void {

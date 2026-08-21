@@ -20,7 +20,7 @@ import type {
 import {hasActiveFileMutation} from './files-panel.ts';
 import {clearAttachments, getPendingAttachments} from './attachments.ts';
 import {closeConversationPanels, closePanel} from './panel.ts';
-import {syncPanelEffectiveWidth} from './resize.ts';
+import {syncPanelSplitState} from './split_panel.ts';
 import {showToast} from './toast.ts';
 import {syncShellInert, wrapTabFocus} from '../lib/dom.ts';
 import {webRouter} from './router.ts';
@@ -202,7 +202,7 @@ function applySidebarState(): void {
 
     document.body.classList.toggle('conversation-sidebar-open', expanded);
     document.body.classList.toggle('conversation-drawer-open', !desktop && drawerOpen);
-    syncPanelEffectiveWidth();
+    syncPanelSplitState();
     open?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     if (toggle) {
         toggle.setAttribute('aria-label', desktop ? 'Collapse conversations' : 'Close conversations');

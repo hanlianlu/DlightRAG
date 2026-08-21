@@ -186,11 +186,9 @@
     --space-layout:       var(--space-l);    /* major layout divisions */
 
     /* ── Layout ── */
-    --panel-width: 420px;  /* files/sources default; resize.js overrides at runtime */
+    --panel-width: 420px;  /* files/sources default; Split Panel overrides at runtime */
     --report-panel-width: 420px;
-    --layout-side-width: 0px;
     --layout-content-width: clamp(340px, 55vw, 880px);
-    --layout-panel-width: var(--panel-width);
     --layout-panel-min: 320px;
     /* ── Radius semantics: B — Soft ── */
     /* Geometry follows surface role; components do not select radii by size. */

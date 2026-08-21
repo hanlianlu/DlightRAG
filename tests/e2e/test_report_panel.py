@@ -206,3 +206,51 @@ def test_report_citation_opens_sources_beside_the_report(page: Page) -> None:
     assert page.locator("#report-panel").evaluate("el => el.classList.contains('open')")
     assert "See" in page.locator("#report-panel-content").inner_text()
     assert "paper.pdf" in page.locator("#panel-content").inner_text()
+
+    assert page.locator(".panel-resize-handle").count() == 0
+    assert (
+        page.locator("#panel-split")
+        .get_by_role("separator", name="Resize Files or Sources")
+        .is_visible()
+    )
+    assert (
+        page.locator("#report-panel-split")
+        .get_by_role("separator", name="Resize Report")
+        .is_visible()
+    )
+    report_box = page.locator("#report-panel").bounding_box()
+    sources_box = page.locator("#panel").bounding_box()
+    assert report_box is not None
+    assert sources_box is not None
+    assert report_box["x"] + report_box["width"] == pytest.approx(sources_box["x"], abs=1)
+
+    report_divider = page.locator("#report-panel-split").get_by_role(
+        "separator", name="Resize Report"
+    )
+    report_divider.focus()
+    report_divider.press("ArrowRight")
+    page.wait_for_function("localStorage.getItem('dlightrag-report-panel-width') !== null")
+    resized_report_box = page.locator("#report-panel").bounding_box()
+    resized_sources_box = page.locator("#panel").bounding_box()
+    assert resized_report_box is not None
+    assert resized_sources_box is not None
+    assert resized_report_box["width"] < report_box["width"]
+    assert resized_report_box["x"] + resized_report_box["width"] == pytest.approx(
+        resized_sources_box["x"], abs=1
+    )
+
+    page.set_viewport_size({"width": 900, "height": 800})
+    page.wait_for_function(
+        "document.querySelector('#panel')?.getAttribute('aria-modal') === 'true'"
+    )
+    compact_app = page.locator(".app-shell").bounding_box()
+    compact_report = page.locator("#report-panel").bounding_box()
+    compact_sources = page.locator("#panel").bounding_box()
+    assert compact_app is not None
+    assert compact_report is not None
+    assert compact_sources is not None
+    assert compact_app["width"] == pytest.approx(900, abs=1)
+    assert compact_report["x"] + compact_report["width"] == pytest.approx(
+        compact_sources["x"], abs=1
+    )
+    assert compact_sources["x"] + compact_sources["width"] == pytest.approx(900, abs=1)

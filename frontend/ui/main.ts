@@ -16,7 +16,7 @@ import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
 import {setupNotifications} from './notifications.ts';
 import {setupPanel} from './panel.ts';
-import {setupPanelResize} from './resize.ts';
+import {setupPanelSplits} from './split_panel.ts';
 import {setupReportPanel} from './report-panel.ts';
 import {setupSourcePanel} from './source-panel.ts';
 import {setupTheme} from './theme.ts';
@@ -30,11 +30,11 @@ document.addEventListener('DOMContentLoaded', function() {
     void app.ready.then(function() {
         setupTheme();
         initWorkspaces();
+        setupPanelSplits();
         setupPanel();
         setupSourcePanel();
         setupReportPanel();
         setupFilesPanel();
-        setupPanelResize();
         setupImageLightbox();
         setupAttachmentInputs();
         setupAnswerModeMenu();

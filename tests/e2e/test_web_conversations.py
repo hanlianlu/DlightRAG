@@ -776,6 +776,15 @@ def test_resizing_open_files_panel_to_compact_keeps_background_inert(page: Page)
 
     assert page.locator("#panel").get_attribute("aria-modal") == "true"
     assert page.locator("#composer").evaluate("element => element.inert") is True
+    outer_split = page.locator("#panel-split").bounding_box()
+    primary_app = page.locator(".app-shell").bounding_box()
+    panel = page.locator("#panel").bounding_box()
+    assert outer_split is not None
+    assert primary_app is not None
+    assert panel is not None
+    assert primary_app["width"] == pytest.approx(outer_split["width"], abs=1)
+    assert panel["width"] == pytest.approx(420, abs=1)
+    assert panel["x"] > outer_split["x"]
 
 
 @pytest.mark.e2e
@@ -788,11 +797,14 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     page.get_by_role("button", name="Collapse conversations").click()
     page.get_by_role("button", name="Files", exact=True).click()
     page.wait_for_timeout(220)
-    handle = page.locator("#panel .panel-resize-handle")
+    assert page.locator(".panel-resize-handle").count() == 0
+    split = page.locator("#panel-split")
+    handle = split.get_by_role("separator", name="Resize Files or Sources")
     handle_box = handle.bounding_box()
     assert handle_box is not None
     page.mouse.move(handle_box["x"] + handle_box["width"] / 2, 180)
     page.mouse.down()
+    page.wait_for_function("document.body.hasAttribute('data-resizing')")
     page.mouse.move(480, 180, steps=8)
     page.mouse.up()
     page.wait_for_function("!document.body.hasAttribute('data-resizing')")
@@ -840,14 +852,15 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     page.set_viewport_size({"width": 1280, "height": 820})
     page.wait_for_timeout(220)
     narrower = shell_geometry()
-    assert narrower["composerWidth"] >= 520
+    # The one-pixel WA divider shares a half pixel with each adjacent track.
+    assert narrower["composerWidth"] >= 519
     assert narrower["composerRight"] == pytest.approx(narrower["panelX"], abs=1)
     assert narrower["effectiveWidth"] == pytest.approx(narrower["panelWidth"], abs=1)
 
     page.set_viewport_size({"width": 1440, "height": 900})
     page.wait_for_timeout(220)
     restored = shell_geometry()
-    assert restored["composerWidth"] >= 520
+    assert restored["composerWidth"] >= 519
     assert restored["composerRight"] == pytest.approx(restored["panelX"], abs=1)
     assert restored["effectiveWidth"] == pytest.approx(restored["panelWidth"], abs=1)
 
@@ -857,6 +870,77 @@ def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page
     assert recollapsed["panelWidth"] == pytest.approx(920, abs=1)
     assert recollapsed["composerWidth"] == pytest.approx(520, abs=1)
     assert recollapsed["composerRight"] == pytest.approx(recollapsed["panelX"], abs=1)
+
+    handle.focus()
+    handle.press("ArrowRight")
+    page.wait_for_function("localStorage.getItem('dlightrag-panel-width') !== '920'")
+    keyboard_resized = shell_geometry()
+    assert keyboard_resized["panelWidth"] < recollapsed["panelWidth"]
+    persisted_width = int(page.evaluate("localStorage.getItem('dlightrag-panel-width')"))
+    assert persisted_width == pytest.approx(keyboard_resized["effectiveWidth"], abs=1)
+
+    handle.press("Enter")
+    page.wait_for_timeout(50)
+    after_enter = shell_geometry()
+    assert after_enter["panelWidth"] == pytest.approx(keyboard_resized["panelWidth"], abs=1)
+    assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == str(persisted_width)
+
+    page.get_by_role("button", name="Close panel").click()
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.wait_for_timeout(50)
+    reopened = shell_geometry()
+    assert reopened["panelWidth"] == pytest.approx(persisted_width, abs=1)
+
+
+@pytest.mark.e2e
+def test_split_panel_supports_touch_resize(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    page.get_by_role("button", name="Collapse conversations").click()
+    page.get_by_role("button", name="Files", exact=True).click()
+
+    divider = page.locator("#panel-split").get_by_role("separator", name="Resize Files or Sources")
+    divider.evaluate(
+        """element => {
+            const touch = new Touch({
+                identifier: 1, target: element, clientX: 1020, clientY: 180,
+            });
+            element.dispatchEvent(new TouchEvent('touchstart', {
+                bubbles: true, cancelable: true,
+                touches: [touch], changedTouches: [touch],
+            }));
+        }"""
+    )
+    page.wait_for_function("document.body.hasAttribute('data-resizing')")
+    page.evaluate(
+        """() => document.dispatchEvent(new PointerEvent('pointermove', {
+            bubbles: true, clientX: 480, clientY: 180,
+            pointerId: 1, pointerType: 'touch',
+        }))"""
+    )
+    page.wait_for_timeout(50)
+    divider.evaluate(
+        """element => {
+            document.dispatchEvent(new PointerEvent('pointerup', {
+                bubbles: true, clientX: 480, clientY: 180,
+                pointerId: 1, pointerType: 'touch',
+            }));
+            const touch = new Touch({
+                identifier: 1, target: element, clientX: 480, clientY: 180,
+            });
+            window.dispatchEvent(new TouchEvent('touchend', {
+                bubbles: true, cancelable: true,
+                touches: [], changedTouches: [touch],
+            }));
+        }"""
+    )
+    page.wait_for_function("!document.body.hasAttribute('data-resizing')")
+    panel = page.locator("#panel").bounding_box()
+    assert panel is not None
+    assert panel["width"] > 800
+    assert int(page.evaluate("localStorage.getItem('dlightrag-panel-width')")) > 800
 
 
 @pytest.mark.e2e

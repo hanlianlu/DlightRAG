@@ -298,31 +298,6 @@ body.files-panel-open #files-btn {
     display: none;
 }
 
-/* Panel-open layout: primary app chrome shifts left */
-body.panel-open .topbar {
-    margin-right: var(--layout-side-width);
-    transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
-}
-
-body.panel-open .chat-area {
-    margin-right: var(--layout-side-width);
-    transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
-}
-
-body.panel-open .composer {
-    margin-right: var(--layout-side-width);
-    transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
-}
-
-/* Chat content shrinks to fit when panel is open, capped by fluid width */
-body.panel-open .chat-messages {
-    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-side-width) - 48px));
-}
-
-body.panel-open .composer-inner {
-    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-side-width) - 48px));
-}
-
 /* Initial: keep the welcome copy visible while nudging the composer upward. */
 .app:not(.has-messages) .chat-area {
     flex: 1;
@@ -521,45 +496,101 @@ body.panel-open .composer-inner {
     margin-bottom: var(--space-inline);
 }
 
-/* === Slide-Out Panel === */
+/* === Right Panel Split Layout === */
 
-.panel {
-    position: fixed;
-    top: 0;
-    right: 0;
-    width: var(--layout-panel-width);
-    max-width: calc(100vw - var(--layout-chat-min-width));
-    min-width: var(--layout-panel-min);
-    height: 100dvh;
-    background: var(--color-bg-surface);
-    border-left: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-docked);
-    backdrop-filter: blur(20px);
-    transform: translateX(100%);
-    transition: transform var(--layout-shell-duration) var(--layout-shell-easing), right var(--layout-shell-duration) var(--layout-shell-easing);
-    z-index: 101;
+.panel-split {
+    --divider-hit-area: 0px;
+    --divider-width: 0px;
+    --max: 100%;
+    --min: 0%;
+    --split-chat-reserve: var(--layout-chat-min-width);
+    --split-other-width: 0px;
+    --wa-color-neutral-border-normal: var(--color-border-subtle);
+    --wa-color-neutral-on-normal: var(--color-text-muted);
+    --wa-focus-ring: 2px solid var(--color-control-ring);
+
+    min-height: 0;
+    min-width: 0;
+}
+
+#panel-split {
+    flex: 1;
+}
+
+#report-panel-split,
+.primary-shell,
+.app-shell {
+    height: 100%;
+    width: 100%;
+}
+
+.primary-shell,
+.app-shell {
+    min-height: 0;
+    min-width: 0;
+}
+
+.app-shell {
     display: flex;
     flex-direction: column;
     overflow: hidden;
 }
 
-#report-panel {
-    right: 0;
-    width: var(--report-panel-width);
-    z-index: 100;
+.panel-split[data-open] {
+    --divider-width: 1px;
+    --max: calc(100% - var(--split-chat-reserve) - var(--split-other-width));
+    --min: var(--layout-panel-min);
 }
 
-body.sources-panel-open #report-panel.open {
+body.report-panel-open #panel-split {
+    --split-other-width: var(--report-panel-width);
+}
+
+body.conversation-sidebar-open .panel-split {
+    --split-chat-reserve: calc(var(--layout-chat-sidebar-width) + var(--layout-chat-min-width));
+}
+
+.panel-split::part(divider) {
+    background: var(--color-border-subtle);
+    opacity: 0;
+    touch-action: none;
+    transition: background 150ms, opacity 150ms;
+}
+
+.panel-split[data-open]:not([disabled]) {
+    --divider-hit-area: var(--space-component);
+}
+
+.panel-split[data-open]:not([disabled])::part(divider) {
+    opacity: 1;
+}
+
+.panel-split[data-open]:not([disabled])::part(divider):hover {
+    background: var(--color-control-ring);
+}
+
+.panel-split[data-open]:not([disabled])::part(divider):focus-visible {
+    background: var(--color-control-ring);
+    outline: 2px solid var(--color-control-ring);
+    outline-offset: -2px;
+}
+
+.panel {
+    background: var(--color-bg-surface);
+    border-left: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-docked);
-    right: var(--layout-panel-width);
-}
-
-body.conversation-sidebar-open .panel {
-    max-width: calc(100vw - var(--layout-chat-sidebar-width) - var(--layout-chat-min-width));
+    backdrop-filter: blur(20px);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+    overflow: hidden;
+    position: relative;
+    width: 100%;
 }
 
 .panel.open {
-    transform: translateX(0);
+    pointer-events: auto;
 }
 
 .panel-header {
@@ -699,38 +730,27 @@ body.conversation-sidebar-open .panel {
 }
 
 @media (width < 1200px) {
+    .app-shell {
+        inset: 0;
+        position: fixed;
+    }
+
     .panel {
-        max-width: min(420px, calc(100vw - var(--space-layout)));
-        min-width: 0;
-        width: min(var(--layout-panel-width), calc(100vw - var(--space-layout)));
+        z-index: 101;
     }
 
-    #report-panel {
-        width: min(var(--report-panel-width), calc(100vw - var(--space-layout)));
-    }
-
-    body.sources-panel-open #report-panel.open,
-    body.files-panel-open #report-panel.open {
-        right: 0;
-    }
-
-    .panel-resize-handle {
-        display: none;
-    }
-
-    body.panel-open .topbar,
-    body.panel-open .chat-area,
-    body.panel-open .composer {
-        margin-right: 0;
-    }
-
-    body.panel-open .chat-messages,
-    body.panel-open .composer-inner {
-        max-width: var(--layout-content-width);
+    .panel-split[data-open] {
+        --divider-width: 0px;
+        --max: min(420px, calc(100% - var(--space-layout)));
+        --min: 0%;
     }
 }
 
 @media (width <= 640px) {
+    .panel-split[data-open] {
+        --max: 100%;
+    }
+
     .topbar {
         gap: var(--space-inline);
     }
@@ -745,16 +765,5 @@ body.conversation-sidebar-open .panel {
 
     .panel {
         border-left: none;
-        max-width: none;
-        width: 100vw;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .panel,
-    body.panel-open .topbar,
-    body.panel-open .chat-area,
-    body.panel-open .composer {
-        transition: none;
     }
 }
