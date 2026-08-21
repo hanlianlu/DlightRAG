@@ -34,7 +34,7 @@ from dlightrag.answer.context import AnswerContextPacker
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.excerpts import build_excerpt_lane_blocks, format_kg_context
 from dlightrag.answer.images import AnswerImageBudget, AnswerImagePolicy
-from dlightrag.answer.memory import apply_standing_memory
+from dlightrag.answer.memory import standing_memory_message
 from dlightrag.answer.prompts import answer_core
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,6 @@ class AnswerSynthesizer:
         """Return the exact zero-evidence final-call serializer for history fitting."""
 
         def measure(history: list[dict[str, Any]]) -> int:
-            system_prompt = apply_standing_memory(answer_core(), memory_text)
             budget = self._image_policy.new_budget()
             empty_contexts: RetrievalContexts = {
                 "chunks": [],
@@ -115,10 +114,11 @@ class AnswerSynthesizer:
                 image_blocks_by_context_key=prepared.chunk_image_blocks,
             )
             messages = self._compose_user_messages(
-                system_prompt,
+                answer_core(),
                 prepared.user_prompt,
                 excerpt_blocks,
                 history_messages=history,
+                memory_text=memory_text,
             )
             return estimate_messages_tokens(messages)
 
@@ -194,7 +194,6 @@ class AnswerSynthesizer:
         original_history = list((conversation_history or PriorTurns()).messages)
 
         def build(history: list[dict[str, Any]]) -> tuple[_PreparedModelCall, int, int]:
-            system_prompt = apply_standing_memory(answer_core(), memory_text)
             budget = self._image_policy.new_budget()
             prepared = self._prepare_prompt_context(query, contexts, image_budget=budget)
             no_context = not any(
@@ -209,10 +208,11 @@ class AnswerSynthesizer:
                 image_blocks_by_context_key=prepared.chunk_image_blocks,
             )
             messages = self._compose_user_messages(
-                system_prompt,
+                answer_core(),
                 prepared.user_prompt,
                 excerpt_blocks,
                 history_messages=history,
+                memory_text=memory_text,
             )
             evidence_tokens = estimate_content_tokens(excerpt_blocks) + estimate_content_tokens(
                 prepared.kg_context
@@ -262,8 +262,13 @@ class AnswerSynthesizer:
         excerpt_blocks: list[dict[str, Any]],
         *,
         history_messages: list[dict[str, Any]],
+        memory_text: str = "",
     ) -> list[dict[str, Any]]:
-        """Place budgeted image blocks into the final message structure."""
+        """Place budgeted image blocks into the final message structure.
+
+        The standing memory block rides as its own user-role message after the
+        current request — never inside the system prompt (Pi/Kimi convention).
+        """
         content: list[dict[str, Any]] = []
         content.extend(excerpt_blocks)
         content.append({"type": "text", "text": user_prompt})
@@ -273,6 +278,9 @@ class AnswerSynthesizer:
         if history_messages:
             messages.extend(history_messages)
         messages.append({"role": "user", "content": content})
+        memory_message = standing_memory_message(memory_text)
+        if memory_message is not None:
+            messages.append(memory_message)
         return messages
 
     @staticmethod

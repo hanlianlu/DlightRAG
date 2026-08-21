@@ -28,6 +28,10 @@ from dlightrag.adapters.postgres._migrations import (
 )
 from dlightrag.adapters.postgres._operations import ConnectionPool, PostgresOperationRunner
 from dlightrag.adapters.postgres._pool import pg_pool
+from dlightrag.adapters.postgres.memory_settings import (
+    MEMORY_SETTINGS_DDL,
+    MEMORY_SETTINGS_SCHEMA_TABLE,
+)
 from dlightrag.adapters.postgres.session_journal import PGJournalStore, PGProgressStore
 from dlightrag.adapters.postgres.workspace import PGWorkspaceStore
 from dlightrag.answer.routing import RoutingAcceptance, RoutingRecord
@@ -582,6 +586,11 @@ ANSWER_RUN_MIGRATIONS = (
         "Reclaim Answer-era memory tables now owned by dlightrag_memory",
         _DROP_LEGACY_MEMORY_TABLES,
     ),
+    Migration(
+        "0004_memory_settings",
+        "Owner-scoped Memory enablement settings",
+        MEMORY_SETTINGS_DDL,
+    ),
 )
 
 ANSWER_RUN_SCHEMA_TABLES = (
@@ -962,6 +971,7 @@ ANSWER_RUN_SCHEMA_TABLES = (
         checks=("dlightrag_answer_child_sessions_status_check",),
         unique=(("owner_id", "run_id", "parent_session_id", "parent_call_id"),),
     ),
+    MEMORY_SETTINGS_SCHEMA_TABLE,
     TableRequirement(
         name="dlightrag_answer_committed_spills",
         columns=(

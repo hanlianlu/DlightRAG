@@ -235,7 +235,8 @@
     height: calc(var(--size-button) + var(--space-tight));
 }
 
-:global(#delete-all-conversations-btn) {
+:global(#delete-all-conversations-btn),
+:global(#memory-settings-btn) {
     align-items: center;
     background: transparent;
     border: 0;
@@ -250,7 +251,8 @@
     text-align: left;
 }
 
-:global(#delete-all-conversations-btn > span) {
+:global(#delete-all-conversations-btn > span),
+:global(#memory-settings-btn > span) {
     grid-area: 1 / 1;
     transition: color 140ms, opacity 140ms, transform 140ms;
 }
@@ -264,6 +266,19 @@
     font-weight: 600;
     opacity: 0;
     transform: translateY(var(--space-inline));
+}
+
+:global(.sidebar-action-label) {
+    color: var(--color-text);
+    font-weight: 600;
+    opacity: 0;
+    transform: translateY(var(--space-inline));
+}
+
+:global(#memory-settings-btn:hover .sidebar-action-label),
+:global(#memory-settings-btn:focus-visible .sidebar-action-label) {
+    opacity: 1;
+    transform: translateY(0);
 }
 
 :global(#delete-all-conversations-btn:hover .conversation-retention-note),

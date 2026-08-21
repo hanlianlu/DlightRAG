@@ -181,7 +181,21 @@ class TestSchema:
             "dlightrag_answer_committed_spills",
             "dlightrag_answer_run_routing",
             "dlightrag_answer_child_sessions",
+            "dlightrag_answer_memory_settings",
         }
+
+    async def test_memory_settings_default_and_roundtrip(self, store, pool) -> None:
+        """Enablement defaults on for absent rows and persists across updates."""
+        from dlightrag.adapters.postgres.memory_settings import PGMemorySettingsStore
+
+        settings = PGMemorySettingsStore(pool=pool)
+
+        assert await settings.enabled(owner_id="alpha") is True
+        await settings.set_enabled(owner_id="alpha", enabled=False)
+        assert await settings.enabled(owner_id="alpha") is False
+        assert await settings.enabled(owner_id="beta") is True
+        await settings.set_enabled(owner_id="alpha", enabled=True)
+        assert await settings.enabled(owner_id="alpha") is True
 
     async def test_run_columns_match_the_contract(self, store, pool) -> None:
         async with pool.acquire() as conn:

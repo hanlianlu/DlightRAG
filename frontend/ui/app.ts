@@ -122,6 +122,10 @@ export class DlApp extends LightElement {
             <span class="conversation-retention-note">Conversation turns stay until run retention (default 365 days) reclaims them.</span>
             <span class="conversation-delete-all-label" aria-hidden="true">Delete all conversations</span>
           </button>
+          <button id="memory-settings-btn" type="button"
+                  aria-label="Memory settings" aria-controls="memory-settings-dialog">
+            <span class="sidebar-action-label" aria-hidden="true">Memory settings</span>
+          </button>
         </nav>
         <div id="conversation-sidebar-backdrop" hidden></div>
 
@@ -336,9 +340,28 @@ export class DlApp extends LightElement {
         <form method="dialog">
           <h2 id="delete-all-conversations-title">Delete all conversations?</h2>
           <p id="delete-all-conversations-draft-warning" hidden>Draft and attachments will also be deleted.</p>
+          <label class="ui-dialog-checkbox">
+            <input type="checkbox" id="delete-all-also-clear-memory" />
+            Also clear Profile memory (remembered preferences and facts)
+          </label>
           <div class="ui-dialog-actions">
             <button type="submit" value="cancel">Cancel</button>
             <button type="submit" value="delete-all" class="ui-dialog-danger">Delete all</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="memory-settings-dialog" aria-labelledby="memory-settings-title">
+        <form method="dialog">
+          <h2 id="memory-settings-title">Cross-conversation memory</h2>
+          <label class="ui-dialog-checkbox">
+            <input type="checkbox" id="memory-enabled-toggle" />
+            Use remembered preferences and facts in answers
+          </label>
+          <p id="memory-active-count" aria-live="polite"></p>
+          <div class="ui-dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button type="submit" value="clear" class="ui-dialog-danger">Clear memory</button>
+            <button type="submit" value="save">Save</button>
           </div>
         </form>
       </dialog>

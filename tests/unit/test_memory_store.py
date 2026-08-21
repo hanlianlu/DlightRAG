@@ -189,3 +189,28 @@ async def test_recall_falls_back_to_the_recency_window_without_search() -> None:
     assert result.candidates == ()
     assert [record.body for record in result.records] == ["No email."]
     assert result.content_chars == len("No email.")
+
+
+async def test_memory_service_settings_and_clear() -> None:
+    from dlightrag.services.memory import InMemoryMemorySettingsStore, MemoryService
+
+    service = MemoryService(InMemoryMemoryStore(), settings_store=InMemoryMemorySettingsStore())
+    owner = dict(owner_id="alpha", auth_mode="jwt")
+
+    settings = await service.settings(**owner)
+    assert settings.enabled is True
+    assert settings.active_count == 0
+
+    await service.set_enabled(**owner, enabled=False)
+    assert (await service.settings(**owner)).enabled is False
+    assert await service.recall_enabled(owner_id="alpha") is False
+
+    # Disabled stops injection, not management.
+    await service.set_enabled(**owner, enabled=True)
+    assert await service.recall_enabled(owner_id="alpha") is True
+
+    # Clear is idempotent and leaves enablement untouched.
+    await service.clear(**owner)
+    await service.clear(**owner)
+    assert (await service.settings(**owner)).active_count == 0
+    assert (await service.settings(**owner)).enabled is True

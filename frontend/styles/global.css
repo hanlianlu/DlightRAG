@@ -296,6 +296,14 @@ mjx-container {
 /* ── Dialog actions ── */
 /* Shared by every confirm dialog so a new one cannot ship without hover. */
 
+.ui-dialog-checkbox {
+    align-items: baseline;
+    display: flex;
+    font-size: var(--font-size-caption);
+    gap: var(--space-tight);
+    margin-block: var(--space-component);
+}
+
 .ui-dialog-actions {
     display: flex;
     gap: var(--space-tight);

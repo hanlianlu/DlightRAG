@@ -87,7 +87,8 @@ def test_auto_recall_keeps_newest_active_within_caps() -> None:
     assert all(record.status == "active" for record in chosen)
     assert chosen[0].memory_id == "19"
     text = render_auto_recall(chosen)
-    assert "not evidence" in text
+    assert "not citable" in text
+    assert "the current request takes priority" in text
     assert "[1]" not in text
     assert render_auto_recall(()) == ""
 

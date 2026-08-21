@@ -1,9 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""REST list and forget for owner-scoped Memory Records."""
+"""REST list, forget, settings, and clear for owner-scoped Memory Records."""
 
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 from dlightrag.access import UserContext, owner_id_from_user
 from dlightrag.answer.errors import MemoryUnavailableError, MemoryWriteRejectedError
@@ -53,6 +54,53 @@ async def forget_memory(
         raise HTTPException(status_code=403, detail=exc.public_message) from exc
     except MemoryWriteRejectedError as exc:
         raise HTTPException(status_code=404, detail=exc.public_message) from exc
+
+
+@router.get("/memory/settings")
+async def memory_settings(
+    request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
+    application = get_application(request)
+    try:
+        settings = await application.memory.settings(
+            owner_id=owner_id_from_user(user), auth_mode=user.auth_mode
+        )
+    except MemoryUnavailableError as exc:
+        raise HTTPException(status_code=403, detail=exc.public_message) from exc
+    return {"enabled": settings.enabled, "active_count": settings.active_count}
+
+
+class MemorySettingsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(description="Whether answer injection may use this owner's memory.")
+
+
+@router.put("/memory/settings")
+async def update_memory_settings(
+    body: MemorySettingsInput, request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
+    application = get_application(request)
+    try:
+        await application.memory.set_enabled(
+            owner_id=owner_id_from_user(user), auth_mode=user.auth_mode, enabled=body.enabled
+        )
+        settings = await application.memory.settings(
+            owner_id=owner_id_from_user(user), auth_mode=user.auth_mode
+        )
+    except MemoryUnavailableError as exc:
+        raise HTTPException(status_code=403, detail=exc.public_message) from exc
+    return {"enabled": settings.enabled, "active_count": settings.active_count}
+
+
+@router.post("/memory/clear", status_code=204)
+async def clear_memory(request: Request, user: UserContext = Depends(get_current_user)) -> None:
+    """Idempotently delete every Memory Record; enablement is untouched."""
+    application = get_application(request)
+    try:
+        await application.memory.clear(owner_id=owner_id_from_user(user), auth_mode=user.auth_mode)
+    except MemoryUnavailableError as exc:
+        raise HTTPException(status_code=403, detail=exc.public_message) from exc
 
 
 __all__ = ["router"]

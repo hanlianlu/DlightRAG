@@ -12,8 +12,10 @@ from dlightrag.answer.tools.composition import compose_research_tools
 from dlightrag.answer.tools.memory import (
     ForgetInput,
     MemoryHost,
+    RecallInput,
     RememberInput,
     forget_tool,
+    recall_memory_tool,
     remember_tool,
 )
 
@@ -78,6 +80,33 @@ async def test_remember_then_forget() -> None:
     forgotten = await forget_tool(host=host).execute(ForgetInput(memory_id=memory_id))
     assert forgotten.content == "Forgotten."
     assert await store.get(owner_id="o", memory_id=memory_id) is None
+
+
+async def test_disabled_memory_rejects_model_tools() -> None:
+    """Disabled stops model writes and recall; the rejection is explicit."""
+    from dlightrag_memory import InMemoryMemoryStore, Memory
+
+    host = MemoryHost(
+        owner_id="o",
+        auth_mode="jwt",
+        run_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        memory=Memory(InMemoryMemoryStore()),
+        enabled=False,
+    )
+
+    remembered = await remember_tool(host=host).execute(
+        RememberInput(kind="preference", body="No email.", confidence=0.9)
+    )
+    assert "disabled" in remembered.content
+
+    forgotten = await forget_tool(host=host).execute(
+        ForgetInput(memory_id="33333333-3333-3333-3333-333333333333")
+    )
+    assert "disabled" in forgotten.content
+
+    recalled = await recall_memory_tool(host=host).execute(RecallInput())
+    assert "disabled" in recalled.content
 
 
 async def test_supersede_rejects_other_owner() -> None:

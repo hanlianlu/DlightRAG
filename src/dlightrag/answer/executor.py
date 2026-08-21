@@ -539,6 +539,7 @@ class AnswerExecutor:
         workspace_root: str | None = None,
         working_dir: str = "./dlightrag_storage",
         memory_store: MemoryStore | None = None,
+        memory_recall_enabled: Callable[..., Awaitable[bool]] | None = None,
     ) -> None:
         self._store = store
         self._pool = pool
@@ -553,6 +554,7 @@ class AnswerExecutor:
         self._working_dir = working_dir
         self._memory_store = memory_store
         self._memory = Memory(memory_store) if memory_store is not None else None
+        self._memory_recall_enabled = memory_recall_enabled
 
     async def execute(self, session: RunSession) -> Mapping[str, Any]:
         with model_call_scope((session.owner_id, session.run_id)):
@@ -660,12 +662,20 @@ class AnswerExecutor:
             model_profiles=model_profiles,
         )
         auth_mode = str((session.prepared_input or {}).get("auth_mode") or "none")
+        recall_allowed = True
         if self._memory is not None and auth_mode == "jwt":
-            run.orchestrator.bind_recall(
-                render_auto_recall(
-                    select_auto_recall(await self._memory.list_active(owner_id=session.owner_id))
-                )
+            recall_allowed = (
+                self._memory_recall_enabled is None
+                or await self._memory_recall_enabled(owner_id=session.owner_id)
             )
+            if recall_allowed:
+                run.orchestrator.bind_recall(
+                    render_auto_recall(
+                        select_auto_recall(
+                            await self._memory.list_active(owner_id=session.owner_id)
+                        )
+                    )
+                )
         stream: AsyncIterator[str] | None = None
         try:
             journal = session.execution.session_store
@@ -703,6 +713,7 @@ class AnswerExecutor:
                     run_id=session.run_id,
                     session_id=session_id.value,
                     store=self._memory_store,
+                    enabled=recall_allowed,
                 )
                 run.orchestrator.bind_delegate(
                     parent_session_id=session_id,

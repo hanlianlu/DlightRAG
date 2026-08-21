@@ -247,6 +247,7 @@ class AnswerOrchestrator:
         run_id: str,
         session_id: str,
         store: Any,
+        enabled: bool = True,
     ) -> None:
         if self._memory_host is None:
             return
@@ -255,6 +256,7 @@ class AnswerOrchestrator:
         self._memory_host.run_id = run_id
         self._memory_host.session_id = session_id
         self._memory_host.memory = Memory(store)
+        self._memory_host.enabled = enabled
 
     def bind_recall(self, text: str) -> None:
         """Attach the non-citable auto-recall block for this run."""

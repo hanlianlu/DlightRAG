@@ -109,6 +109,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
     from dlightrag.adapters.postgres.answer_runs import PGAnswerRunStore
     from dlightrag.adapters.postgres.corpus import PGCorpusBackendFactory, PGReadinessProbe
     from dlightrag.adapters.postgres.file_panel import PGFilePanelStore
+    from dlightrag.adapters.postgres.memory_settings import PGMemorySettingsStore
     from dlightrag.adapters.postgres.pg_metadata_index import PGMetadataIndex
     from dlightrag.adapters.postgres.retrieval import PGWorkspaceSchemaLookup
     from dlightrag.adapters.postgres.web_conversations import PGWebConversationStore
@@ -243,6 +244,12 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         retention_seconds=config.runtime.answer_run_retention_days * 24 * 3600
     )
     memory_store = PostgresMemoryStore(pool_factory=_operational_pool_factory())
+    memory_settings = PGMemorySettingsStore()
+    memory = MemoryService(
+        memory_store,
+        settings_store=memory_settings,
+        superseded_retention_days=config.runtime.answer_run_retention_days,
+    )
     coordinator = RunCoordinator(
         store=run_store,
         executor=AnswerExecutor(
@@ -258,6 +265,7 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
             workspace_root=config.agent.workspace_root,
             working_dir=config.working_dir,
             memory_store=memory_store,
+            memory_recall_enabled=memory.recall_enabled,
         ),
         answer_worker_concurrency=config.runtime.answer_worker_concurrency,
     )
@@ -281,10 +289,6 @@ def _compose(config: DlightragConfig) -> _ApplicationComponents:
         model_fingerprint_for_role=lambda role: model_fingerprint(
             model_settings_for_role(config, role)
         ),
-    )
-    memory = MemoryService(
-        memory_store,
-        superseded_retention_days=config.runtime.answer_run_retention_days,
     )
     web_store = PGWebConversationStore(run_store=run_store)
     return _ApplicationComponents(

@@ -11,6 +11,7 @@ from .chat import router as chat_api_router
 from .conversations import router as conversations_router
 from .files import router as files_router
 from .images import router as images_router
+from .memory import router as memory_router
 from .workspaces import router as workspaces_router
 
 router = APIRouter(prefix="/web", tags=["web"])
@@ -23,6 +24,7 @@ api_router.include_router(chat_api_router)
 api_router.include_router(conversations_router)
 api_router.include_router(images_router)
 api_router.include_router(files_router)
+api_router.include_router(memory_router)
 api_router.include_router(workspaces_router)
 router.include_router(api_router)
 

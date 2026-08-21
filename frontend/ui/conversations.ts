@@ -2,6 +2,7 @@
 
 import conversationStyles from '../styles/conversations.module.css';
 import {detachAnswerRun, isSubmissionPending, resumePendingTurn} from './chat.ts';
+import {clearMemory} from '../api/memory.ts';
 import {
     clearChatViewport,
     renderConversationHistory,
@@ -118,7 +119,7 @@ async function restoreStableFocus(resolveTarget: FocusResolver): Promise<void> {
     resolveTarget()?.focus();
 }
 
-function dialogResult(
+export function dialogResult(
     dialog: HTMLDialogElement,
     resolveReturnTarget: FocusResolver,
 ): Promise<string> {
@@ -434,6 +435,10 @@ async function requestDeleteAll(): Promise<void> {
     if (!dialog || await dialogResult(dialog, trigger) !== 'delete-all') return;
     if (lifecycleBlocked()) return;
 
+    const alsoClearMemory = (
+        document.getElementById('delete-all-also-clear-memory') as HTMLInputElement | null
+    )?.checked;
+
     setLifecyclePending(true);
     detachAnswerRun();
     const result = await conversationStore.deleteAll();
@@ -442,6 +447,13 @@ async function requestDeleteAll(): Promise<void> {
     } else {
         clearDraft();
         closeConversationPanels();
+        if (alsoClearMemory) {
+            try {
+                await clearMemory();
+            } catch {
+                showToast('Conversations deleted; could not clear Profile memory.', 5000);
+            }
+        }
         await webRouter.navigate(newChatRoute(), {replace: true, bypassGuard: true});
     }
     setLifecyclePending(false);

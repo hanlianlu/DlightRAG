@@ -11,6 +11,7 @@ import {setupAttachmentInputs} from './attachments.ts';
 import {setupAnswerModeMenu} from './answer_mode.ts';
 import {setupQueryForm} from './chat.ts';
 import {setupConversations} from './conversations.ts';
+import {setupMemorySettings} from './memory.ts';
 import {setupFilesPanel} from './files-panel.ts';
 import {setupImageLightbox} from './images.ts';
 import {setupMathRendering} from './mathjax.ts';
@@ -35,6 +36,7 @@ document.addEventListener('DOMContentLoaded', function() {
         setupSourcePanel();
         setupReportPanel();
         setupFilesPanel();
+        setupMemorySettings();
         setupImageLightbox();
         setupAttachmentInputs();
         setupAnswerModeMenu();

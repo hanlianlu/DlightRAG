@@ -12,7 +12,7 @@ from dlightrag_rag.sourcing.source_contract import safe_source_filename
 from dlightrag.answer.citations.indexer import CitationIndexer
 from dlightrag.answer.errors import AnswerInputOverflowError
 from dlightrag.answer.evidence import EvidenceLedger
-from dlightrag.answer.memory import apply_standing_memory
+from dlightrag.answer.memory import standing_memory_message
 from dlightrag.answer.prompts import (
     CONTROL_TURN_INSTRUCTION,
     FINAL_TURN_INSTRUCTION,
@@ -162,10 +162,7 @@ class ContextAssembler:
         *,
         tool_schema_tokens: int = 0,
     ) -> list[dict[str, Any]]:
-        system = {
-            "role": "system",
-            "content": _with_memory(agent_control_prompt(), self._memory_text),
-        }
+        system = {"role": "system", "content": agent_control_prompt()}
         head = self._head(system, episode.messages())
         messages = list(head)
         if evidence.row_count:
@@ -176,6 +173,9 @@ class ContextAssembler:
                 tool_schema_tokens=tool_schema_tokens,
             )
             messages.append({"role": "user", "content": blocks})
+        memory_message = standing_memory_message(self._memory_text)
+        if memory_message is not None:
+            messages.append(memory_message)
         return messages
 
     def _build_answer_turn(
@@ -183,10 +183,13 @@ class ContextAssembler:
         evidence: EvidenceLedger,
         episode: SessionEpisode,
     ) -> tuple[list[dict[str, Any]], CitationIndexer]:
-        system = {"role": "system", "content": _with_memory(answer_core(), self._memory_text)}
+        system = {"role": "system", "content": answer_core()}
         head = self._head(system, episode.last_exchange)
         blocks, indexer = self._pack(evidence, head=head, final=True)
         messages = [*head, {"role": "user", "content": blocks}]
+        memory_message = standing_memory_message(self._memory_text)
+        if memory_message is not None:
+            messages.append(memory_message)
         self._check(messages)
         return messages, indexer
 
@@ -272,10 +275,6 @@ def _empty_tool_message(call: dict[str, Any]) -> dict[str, Any]:
         "name": str(function.get("name") or ""),
         "content": "",
     }
-
-
-def _with_memory(prompt: str, memory_text: str) -> str:
-    return apply_standing_memory(prompt, memory_text)
 
 
 def _resource_manifest_context(manifest: tuple[ResourceManifestEntry, ...]) -> str:

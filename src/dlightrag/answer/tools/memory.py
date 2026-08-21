@@ -49,6 +49,7 @@ class MemoryHost:
     run_id: str = ""
     session_id: str = ""
     memory: Memory | None = None
+    enabled: bool = True
 
 
 def remember_tool(*, host: MemoryHost) -> AgentTool:
@@ -56,6 +57,8 @@ def remember_tool(*, host: MemoryHost) -> AgentTool:
         args = raw if isinstance(raw, RememberInput) else RememberInput.model_validate(raw)
         if not memory_owner_allowed(host.auth_mode):
             return ToolResult(content="Long-term memory requires a JWT owner.")
+        if not host.enabled:
+            return ToolResult(content="Memory is disabled for this owner.")
         try:
             written = await _memory(host).remember(
                 owner_id=host.owner_id,
@@ -88,6 +91,8 @@ def forget_tool(*, host: MemoryHost) -> AgentTool:
         args = raw if isinstance(raw, ForgetInput) else ForgetInput.model_validate(raw)
         if not memory_owner_allowed(host.auth_mode):
             return ToolResult(content="Long-term memory requires a JWT owner.")
+        if not host.enabled:
+            return ToolResult(content="Memory is disabled for this owner.")
         try:
             await _memory(host).forget(
                 owner_id=host.owner_id,
@@ -114,6 +119,8 @@ def recall_memory_tool(*, host: MemoryHost) -> AgentTool:
             return ToolResult(content="Memory store is not bound.")
         if not memory_owner_allowed(host.auth_mode):
             return ToolResult(content="Long-term memory requires a JWT owner.")
+        if not host.enabled:
+            return ToolResult(content="Memory is disabled for this owner.")
         rows = await host.memory.list_active(owner_id=host.owner_id)
         if not rows:
             return ToolResult(content="No stored memories.")
